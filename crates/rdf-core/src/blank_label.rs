@@ -131,9 +131,12 @@
 //! have explicit recourse operations -- `canonical_relabel`, `skolemize` and
 //! `deskolemize` in [`crate::ir`] -- which rewrite the dataset before egress
 //! so the labels in the document are the caller's, not the codec's.
-//! Canonicalization's `c14n{n}` labels are legal in every alphabet and outside
-//! the reserved namespace, so the encoding is the identity on them and their
-//! bytes never move.
+//! The RDFC-1.0 family's `c14n{n}` labels are legal in every alphabet and
+//! outside the reserved namespace, so the encoding is the identity on them and
+//! their bytes never move. The default family's decimal labels (`0`, `1`, …)
+//! are legal `BLANK_NODE_LABEL`s, so the Turtle family writes them unchanged;
+//! an `NCName` cannot start with a digit, so RDF/XML encodes them like any
+//! other label it cannot spell.
 //!
 //! # Relabeling vs. canonicalization: consistent doctrines, different roles
 //!
@@ -143,11 +146,12 @@
 //! byte-identical output, and two non-isomorphic graphs must not collide).
 //! Relabeling a canonical label to dodge an alphabet constraint would be
 //! indistinguishable, downstream, from silently changing which graph the
-//! identity was computed over. It never needs to: canonicalization mints
-//! `c14n0`, `c14n1`, … labels (see [`crate::ir::canon`]) whose ASCII letters
-//! and digits are a subset of every alphabet this module defines, so a
-//! canonical label is legal everywhere and [`encode_blank_label`] is the
-//! identity on it.
+//! identity was computed over. It never needs to: the identity is the digest,
+//! never a label spelling. RDFC-1.0 mints `c14n0`, `c14n1`, … labels (see
+//! [`crate::rdfc12`]) whose ASCII letters and digits are a subset of every
+//! alphabet this module defines; the default family's decimal labels are
+//! output only and are encoded like any other label where an alphabet cannot
+//! spell them.
 
 use std::borrow::Cow;
 

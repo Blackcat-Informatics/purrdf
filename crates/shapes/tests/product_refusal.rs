@@ -210,10 +210,7 @@ fn product_for(shapes: Shapes) -> Vec<u8> {
     PreparedShapes::new(Arc::new(shapes))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable")
 }
@@ -224,10 +221,7 @@ fn to_product_for_host(body: &str, host: &HostBindings<'_>) -> Vec<u8> {
         .to_product_for_host(
             &ShapesProfile::CORE,
             host,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable")
 }
@@ -240,10 +234,7 @@ fn product_for_host(shapes: Shapes, implementation_identity: &[u8]) -> Vec<u8> {
         .to_product_with_implementation_identity(
             &ShapesProfile::CORE,
             implementation_identity,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the fixture is representable")
 }
@@ -291,7 +282,7 @@ fn rebuild(bytes: &[u8]) -> Result<PreparedShapes, ShapesProductError> {
 /// Open and certify `bytes`.
 fn certify(bytes: &[u8]) -> Result<(), ShapesProductError> {
     ShapesProduct::open(bytes)?.certify(&mut purrdf_core::CanonicalizationControl::new(
-        purrdf_core::RDFC_V2_CORPUS_POLICY,
+        purrdf_core::CANON_CORPUS_POLICY,
         None,
     ))
 }
@@ -1735,10 +1726,7 @@ fn refuses_writing_a_product_that_cannot_name_its_implementations() {
     let error = PreparedShapes::new(Arc::new(native_plain_shapes()))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect_err("an injected population with no identity is not writable");
     assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);
@@ -1759,7 +1747,7 @@ fn refuses_writing_a_product_that_cannot_name_its_implementations() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1777,7 +1765,7 @@ fn refuses_writing_a_product_that_cannot_name_its_implementations() {
                 &ShapesProfile::CORE,
                 b"",
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1795,10 +1783,7 @@ fn accepts_writing_an_identified_injected_population_neighbour() {
         .to_product_with_implementation_identity(
             &ShapesProfile::CORE,
             IMPL_A,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("an injected population with an identity is writable");
     opened(&bytes);

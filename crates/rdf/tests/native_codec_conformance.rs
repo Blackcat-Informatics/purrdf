@@ -251,7 +251,7 @@ fn round_trip(ds: &RdfDataset, media_type: &str, base: &str) -> Result<bool, Str
     Ok(datasets_isomorphic(
         ds,
         &reparsed,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap())
 }
@@ -299,7 +299,7 @@ fn run_case(case: &Case) -> Outcome {
                     &ds,
                     &rds,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

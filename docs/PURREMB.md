@@ -14,7 +14,7 @@ PURREMB is the binary format carried by files whose conventional extension is
 `.purremb`. A PURREMB artifact is a deterministic, memory-map-friendly embedding
 projection over one exact `.purrpck` or five-file Columnar source. It binds vector rows to stable
 subjects, records the complete vector-generation contract, and carries integrity
-evidence without changing the source RDF dataset, its RDFC identity, or the
+evidence without changing the source RDF dataset, its canonical identity, or the
 native source wire formats.
 
 The exact stored vector matrix is authoritative for the embedding projection.
@@ -38,7 +38,7 @@ the caller. PurRDF supplies no ontology-specific identifier or default vocabular
 PURREMB v1 provides:
 
 - exact binding to all bytes of one pack or Columnar source and to its independently
-  certified RDFC digest;
+  certified RDF digest;
 - corpus, document, and chunk subjects whose text remains external and
   content-addressed;
 - RDF 1.2 dataset, graph, statement, reifier, annotation, and term subjects,
@@ -201,7 +201,7 @@ The fixed header is 128 bytes:
 | Offset | Width | Field | v1 requirement |
 | ---: | ---: | --- | --- |
 | 0 | 8 | `magic` | ASCII `PURREMB1` |
-| 8 | 4 | `version` | `1` |
+| 8 | 4 | `version` | `1` or `2`, section 4.2.1; a writer emits `2` |
 | 12 | 4 | `header_length` | `128` |
 | 16 | 4 | `flags` | `0` |
 | 20 | 4 | `section_count` | `10..=65535` |
@@ -212,6 +212,30 @@ The fixed header is 128 bytes:
 | 56 | 8 | `file_length` | `trailer_offset + 64` and exact input length |
 | 64 | 32 | `artifact_root` | section 4.6 |
 | 96 | 32 | `source_exact_digest` | exact source SHA-256 |
+
+#### 4.2.1 Format versions
+
+The framing, every section layout and every other rule in this document are the
+same in both versions. The version selects only the canonical run that records
+the identities derived from the source dataset:
+
+| Version | Certified RDF digest and source dataset target | Blank-node target labels |
+| ---: | --- | --- |
+| `1` | SHA-256 of the RDFC-1.0 canonical N-Quads of the source (the `purrdf-rdfc12` run of PurRDF 4.x) | the `c14nN` labels of that run |
+| `2` | BLAKE3 digest of the canonical line sequence of the source (`nested-refinement-labelling`, version `1`) | the decimal labels of that labelling (`0`, `1`, and so on) |
+
+A writer MUST emit version `2`. A reader MUST accept versions `1` and `2`,
+MUST refuse any other value as an unsupported version, and MUST refuse a file
+whose header and trailer name different versions. Source verification recomputes
+the certified RDF digest and the blank-node labels with the run the version names;
+a version-`1` file therefore keeps verifying against the pack or Columnar files it
+was written for. A version-`1` digest is never equal to a version-`2` digest of
+the same dataset, so relabelling a file's version without recomputing its source
+identities makes source verification fail with a certified-RDF digest mismatch.
+
+The reader of PurRDF 4.x accepts only version `1`: its structural open refuses a
+version-`2` file with the unsupported-version error naming `2`, before reading any
+section.
 
 ### 4.3 Directory entry
 
@@ -271,7 +295,7 @@ The fixed trailer is 64 bytes:
 | Offset | Width | Field | v1 requirement |
 | ---: | ---: | --- | --- |
 | 0 | 8 | `magic` | ASCII `PURREND1` |
-| 8 | 4 | `version` | `1` |
+| 8 | 4 | `version` | equal to the header `version` |
 | 12 | 4 | `trailer_length` | `64` |
 | 16 | 8 | `file_length` | equal to the header and exact input length |
 | 24 | 32 | `artifact_root` | equal to the header root |
@@ -312,11 +336,11 @@ The `SOURCE` section is exactly 128 bytes:
 | 16 | 4 | `source_format` | `1` for `.purrpck` v1; `2` for Columnar schema v1 |
 | 20 | 4 | `reserved` | zero |
 | 24 | 32 | `source_exact_digest` | `SHA256(all source bytes)` |
-| 56 | 32 | `certified_rdf_digest` | independently verified RDFC SHA-256 |
+| 56 | 32 | `certified_rdf_digest` | independently verified canonical RDF digest of the file's version (section 4.2.1) |
 | 88 | 32 | `dataset_target_id` | one `RDF_DATASET` target |
 | 120 | 8 | `reserved` | zero |
 
-`RDFC_CERTIFIED` is always set in v1. The exact digest MUST equal the duplicate in
+`RDFC_CERTIFIED` is always set. The exact digest MUST equal the duplicate in
 the file header. The certified digest is obtained by independently reconstructing
 and canonicalizing the actual source dataset, not merely by trusting a stored
 claim. The referenced dataset target MUST encode the same certified digest.
@@ -326,7 +350,7 @@ are the exact canonical five-file manifest defined in
 [COLUMNAR.md](COLUMNAR.md#exact-file-source-manifest). The manifest is derived
 from all five actual files, including valid zero-row Parquet files. Its length
 and SHA-256 bind the physical files; a complete strict Columnar read and native
-`purrdf-rdfc12` canonicalization independently certify RDF identity. A certificate
+canonicalization by the run the file's version names (section 4.2.1) independently certify RDF identity. A certificate
 MUST NOT accept caller-supplied manifest, digest or ordinal claims as evidence.
 
 The exact digest and the certified RDF digest answer different questions. Two
@@ -705,7 +729,7 @@ multiple families is valid only when each family derives the same
 ### 8.6 RDF dataset target
 
 An `RDF_DATASET` identity block contains exactly tag 1 `DIGEST32`, the certified
-RDFC digest from the `SOURCE` section. The exact source digest is deliberately
+RDF digest from the `SOURCE` section. The exact source digest is deliberately
 absent: RDF identity remains stable while byte-level source attachment remains
 strict.
 
@@ -729,7 +753,7 @@ canonicalization; RDF term identity preserves the lexical form.
 Blank labels are generated by the same independent canonicalization run that
 certified the source and are scoped by the dataset target. Source-local blank
 labels never enter identity. The canonical label is stored without the `_:`
-prefix.
+prefix, and is the label of the run the file's version names (section 4.2.1).
 
 A triple term refers recursively to existing term targets. Its predicate target
 is an IRI. Recursive triple terms form an acyclic graph. RDF-star input is
@@ -1279,7 +1303,9 @@ Records are strictly increasing by `binding_id`. Contract blocks occur in record
 order with minimal 8-byte alignment and zero padding. Flag bit 0 is
 `CERTIFIED_RDF_PRESENT`; all other bits are zero. If absent, the certified digest
 is all zero. If present, the bound artifact is an exact `.purrpck` v1 file and the
-field is its independently verified RDFC SHA-256. Other artifact formats remain
+field is the digest that pack's own header records, independently verified by the
+function its pack format version names; it does not depend on the PURREMB version.
+Other artifact formats remain
 eligible for exact binding but do not carry this core-certified flag.
 
 Scope codes are:
@@ -1492,7 +1518,7 @@ separate coarse-prefix and full-prefix indexes; their distinct `VectorSpaceId`,
 A structural open over an immutable `&[u8]` performs enough validation that every
 subsequent accessor is bounds-safe and panic-free:
 
-1. header magic, version, fixed lengths, flags, count limit, arithmetic, and exact
+1. header magic, version (`1` or `2`, equal to the trailer's), fixed lengths, flags, count limit, arithmetic, and exact
    file length;
 1. directory ordering, known-section cardinality and flags, extension rules,
    canonical offsets, alignment, non-overlap, zero padding, and trailer framing;
@@ -1540,7 +1566,7 @@ SHA-256, the declared native format, independent native RDF verification, the
 certified RDF digest, the dataset target, and every recognized source-local
 ordinal. Columnar certification completes every strict reader check, including
 all blob payloads. An exact mismatch may stop verification before decoding and is reported without
-substituting an RDFC comparison. RDFC and ordinal mismatches have distinct errors.
+substituting an RDF comparison. RDF and ordinal mismatches have distinct errors.
 
 Source verification does not change matrix access or construct an access typestate.
 The report records the independently verified RDF digest and checked ordinal count,

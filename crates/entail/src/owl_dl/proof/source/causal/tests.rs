@@ -49,10 +49,7 @@ fn public_causal_keys_preserve_cross_datatype_values_and_refuse_a_distinct_neigh
         }
         let mut producer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.entails(&axiom).unwrap();
@@ -61,10 +58,7 @@ fn public_causal_keys_preserve_cross_datatype_values_and_refuse_a_distinct_neigh
         };
         let mut consumer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         consumer.prepare(&question).unwrap();
@@ -135,14 +129,14 @@ fn public_causal_counting_checks_reachable_merge_closure_and_generated_inequalit
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
     assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -267,20 +261,14 @@ fn public_causal_counting_retains_original_head_and_generated_births() {
         let source = f.freeze();
         let producer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
         assert_eq!(*answer.answer(), crate::reasoner::Verdict::False);
         let consumer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let ctx = consumer.borrowed_proof_context().unwrap();
@@ -368,10 +356,7 @@ fn public_causal_reserved_birth_retains_native_predecessor_and_original_descript
         let (source, spy) = reserved_source(named_partner, blank);
         let producer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = producer.consistency();
@@ -379,10 +364,7 @@ fn public_causal_reserved_birth_retains_native_predecessor_and_original_descript
         let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
         let consumer = Reasoner::with_proofs(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let ctx = consumer.borrowed_proof_context().unwrap();
@@ -475,7 +457,7 @@ fn public_causal_reserved_nested_origin_retains_original_parent_descriptor() {
     let (source, spy) = nested_reserved_source();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -486,7 +468,7 @@ fn public_causal_reserved_nested_origin_retains_original_parent_descriptor() {
     let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -537,7 +519,7 @@ fn public_causal_reserved_rejects_unsaturated_blocked_completion() {
     let (source, _) = nested_reserved_source();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -602,7 +584,7 @@ fn public_causal_reserved_rejects_malformed_introduction_inventory() {
     let (source, _) = reserved_source(false, false);
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -659,13 +641,13 @@ fn public_causal_reserved_introduction_rejects_forged_nonblockable_target() {
     let (source, _) = reserved_source(false, false);
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -756,7 +738,7 @@ fn public_causal_merge_closes_every_nominal_branch_and_rejects_wrong_prefix() {
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -764,7 +746,7 @@ fn public_causal_merge_closes_every_nominal_branch_and_rejects_wrong_prefix() {
     let proof = ServiceProof::decode(&answer.proof().unwrap().encode()).unwrap();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -836,14 +818,14 @@ fn public_causal_refuses_missing_and_unclosed_support_with_original_native_error
     let source = contradiction();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
     let proof = answer.proof().unwrap();
     let mut ctx = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .proof_context()
@@ -990,7 +972,7 @@ fn public_causal_cancellation_preserves_the_original_native_refusal() {
     let source = contradiction();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
@@ -1000,7 +982,7 @@ fn public_causal_cancellation_preserves_the_original_native_refusal() {
         &source,
         crate::owl_dl::bounds::SchemaPreparationBudget::default(),
         stop.clone(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -1043,14 +1025,14 @@ fn public_causal_branches_bind_original_alternatives_and_keep_node_scopes_separa
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
     let proof = answer.proof().unwrap();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -1146,13 +1128,13 @@ fn public_causal_key_memberships_retain_original_branch_graphs_and_source_scope(
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();
@@ -1257,13 +1239,13 @@ fn public_causal_schema_excludes_unused_checked_implications() {
     let source = f.freeze();
     let producer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let answer = producer.consistency();
     let consumer = Reasoner::with_proofs(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let ctx = consumer.borrowed_proof_context().unwrap();

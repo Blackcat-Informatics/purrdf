@@ -294,7 +294,7 @@ fn context(rows: usize, dims: usize, prefix: usize) -> Context {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _source_bytes) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");

@@ -76,7 +76,7 @@ fn run_reasoning<T>(
 #[wasm_bindgen]
 #[derive(Debug)]
 pub struct RegimeClosure {
-    /// The materialized dataset as canonical (RDFC-1.0) N-Quads.
+    /// The materialized dataset as canonical line-sequence N-Quads.
     nquads: purrdf_core::Canonicalized,
     /// The run's reasoning report, in the boundary's byte-stable rendering.
     report: String,
@@ -93,7 +93,7 @@ impl RegimeClosure {
     }
 
     /// The materialized dataset — every input quad plus every inferred triple —
-    /// as canonical (RDFC-1.0) N-Quads.
+    /// as canonical line-sequence N-Quads.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn nquads(&self) -> String {
@@ -306,7 +306,7 @@ pub fn entail_extensions(regime: &str) -> Result<Vec<String>, JsValue> {
 /// the module by `purrdf-validate`, and the C-ABI crate's Rust test, the
 /// `purrdf-validate` Rust test and this entry point all call the SAME checker
 /// over the SAME bytes. Running it here executes the entailment chase, the
-/// RDFC-1.0 canonical serializer and the report renderer on `wasm32` — different
+/// canonical line-sequence serializer and the report renderer on `wasm32` — different
 /// pointer width, different `usize`, different map iteration — and compares the
 /// result byte for byte against what the native build produced. A host that
 /// diverges fails here in the same words it fails natively.
@@ -398,7 +398,7 @@ impl ReasoningAnswer {
     /// The service's answer.
     ///
     /// Line-oriented and byte-stable. A dataset-valued answer
-    /// (`entailExtractModule`, `entailJustify`) is canonical (RDFC-1.0) N-Quads
+    /// (`entailExtractModule`, `entailJustify`) is canonical line-sequence N-Quads
     /// instead.
     #[wasm_bindgen(getter)]
     #[must_use]
@@ -745,7 +745,7 @@ pub(crate) fn extract_module_impl(
 /// `signature` is one N-Triples term per line (blank lines ignored). `method` is
 /// `bot`, `top` or `star`; an unknown spelling throws with the accepted set named.
 ///
-/// The answer is the module as canonical (RDFC-1.0) N-Quads — the same serializer
+/// The answer is the module as canonical line-sequence N-Quads — the same serializer
 /// `entailMaterialize` uses. The certificate's `conservative` line says whether the
 /// module is the minimal one or a sound SUPERSET, which is what a caller sizing a
 /// module needs to know.

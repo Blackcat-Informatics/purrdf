@@ -830,10 +830,7 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
     let bytes = preparation
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let admitted = ShapesProduct::open(&bytes)
@@ -849,7 +846,7 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -866,7 +863,7 @@ fn selected_execution_preserves_prepared_product_bytes_and_restore_provenance() 
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

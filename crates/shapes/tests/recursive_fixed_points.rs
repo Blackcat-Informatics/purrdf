@@ -354,10 +354,7 @@ fn products_retain_declared_cycles_after_native_projection_drops_the_edge() {
     let bytes = prepared
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let dataset = parse_turtle_to_dataset("", None).unwrap();
@@ -1221,7 +1218,7 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -1298,7 +1295,7 @@ fn named_conformance_keeps_original_reports_through_product_restore() {
                         .to_product(
                             &ShapesProfile::CORE,
                             &mut purrdf_core::CanonicalizationControl::new(
-                                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                purrdf_core::CANON_CORPUS_POLICY,
                                 None
                             )
                         )
@@ -2179,7 +2176,7 @@ fn named_where_targets_rebind_original_reports_after_product_restore() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -2253,7 +2250,7 @@ fn named_where_targets_rebind_original_reports_after_product_restore() {
                             .to_product(
                                 &ShapesProfile::CORE,
                                 &mut purrdf_core::CanonicalizationControl::new(
-                                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                                    purrdf_core::CANON_CORPUS_POLICY,
                                     None
                                 )
                             )
@@ -2779,7 +2776,7 @@ fn selected_entries_refuse_unproved_original_scopes() {
                 .to_product(
                     &ShapesProfile::CORE,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

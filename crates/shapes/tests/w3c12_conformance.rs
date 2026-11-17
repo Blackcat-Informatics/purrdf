@@ -29,7 +29,7 @@
 //!   no other departure from exact equality.
 //! * **`sht:Infer`** — the shapes graph's rules run through
 //!   [`purrdf_shapes::apply_rules`] over the data graph, and the inferred graph
-//!   must equal `data ⊎ expected` under RDF isomorphism (RDFC-1.0 canonical
+//!   must equal `data ⊎ expected` under RDF isomorphism (canonical
 //!   N-Quads, as the SHACL Rules harness compares). The expectation is the inline
 //!   triple list, `rdf:nil`, or a result file; `sht:Failure` expects an error.
 //! * **`srlt:*`** — the seven SPARQL 1.2 RL test types, routed to [`run_srl`].
@@ -399,7 +399,7 @@ fn expected_triples(expected: &InferExpected) -> Result<Arc<RdfDataset>, String>
             // Each expected triple goes into the layer a parsed graph would put it in:
             // `r rdf:reifies <<( s p o )>>` declares a reifier, a triple about a reifier
             // is its annotation, anything else is a quad. Comparing an RDF 1.2 graph
-            // under RDFC-1.0 compares those layers, so building every expected triple
+            // under canonical comparison compares those layers, so building every expected triple
             // as a quad would compare a graph with its reifications as plain triples
             // against the same graph parsed.
             let reifies = |p: &Term, o: &Term| {
@@ -465,13 +465,13 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
     let expected_full = merge(base.as_ref(), expected_triples(&tc.expected)?.as_ref())?;
     let produced_owner = try_canonicalize(
         inferred.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let produced = produced_owner.nquads();
     let expected_owner = try_canonicalize(
         expected_full.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let expected = expected_owner.nquads();
@@ -519,7 +519,7 @@ fn run_infer(tc: &InferCase) -> Result<(), String> {
 /// An evaluation entry is checked by the same function, runs SPARQL 1.2 RL's infer
 /// operation over `srlt:data`, and compares the INFERENCE graph — "The result of an
 /// evaluation test is the inference graph" — with `mf:result` under RDF isomorphism
-/// (RDFC-1.0 canonical N-Quads).
+/// (canonical N-Quads).
 fn run_srl(tc: &SrlCase) -> Result<(), String> {
     let text = fs::read_to_string(&tc.ruleset)
         .map_err(|e| format!("cannot read {}: {e}", tc.ruleset.display()))?;
@@ -570,7 +570,7 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let produced_owner = try_canonicalize(
                 produced.as_ref(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -579,7 +579,7 @@ fn run_srl(tc: &SrlCase) -> Result<(), String> {
             let expected_owner = try_canonicalize(
                 expected.as_ref(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )

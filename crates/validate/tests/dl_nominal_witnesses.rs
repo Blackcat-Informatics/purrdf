@@ -334,10 +334,7 @@ fn every_absorbed_witness_shape_decides_consistent() {
             &[],
             0,
             0,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the ontology reverse-maps");
         assert_eq!(answer.answer(), "consistency true\n", "{name}: the verdict");
@@ -402,10 +399,7 @@ fn every_other_witness_order_loses_one_of_these() {
             &[],
             0,
             0,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the ontology reverse-maps");
         assert_eq!(answer.answer(), verdict, "{name}: the verdict");

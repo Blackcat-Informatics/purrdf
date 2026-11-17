@@ -497,7 +497,7 @@ fn product_validations(
         &[],
         &[],
         None,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("packed");
     let identity = crate::shacl::product_explain_impl(&product)
@@ -799,10 +799,7 @@ fn tool_verdicts(pattern: &str, value: &str, law: Option<&str>) -> [ToolVerdict;
             None,
             owned(law),
             purrdf_validate::query::CoordinateInputs::default(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .map(|entailment| entailment.ntriples().contains(hit))
         .map_err(message),

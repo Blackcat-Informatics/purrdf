@@ -7,7 +7,7 @@ use purrdf_core::ContentDigest;
 use purrdf_core::embedding::{
     ArtifactRoot, DigestKind, EmbeddingError, PURREMB_DIRECTORY_ENTRY_LENGTH,
     PURREMB_FILE_ALIGNMENT, PURREMB_HEADER_LENGTH, PURREMB_MAGIC, PURREMB_MAX_SECTION_COUNT,
-    PURREMB_TRAILER_LENGTH, PURREMB_TRAILER_MAGIC, PURREMB_VERSION, SECTION_CRITICAL,
+    PURREMB_TRAILER_LENGTH, PURREMB_TRAILER_MAGIC, PURREMB_VERSION_LABELLING, SECTION_CRITICAL,
     SECTION_DERIVED, SECTION_EXTENSION_MIN, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD,
     SECTION_MATRIX_DATA, SECTION_SOURCE, SectionKey, derive_artifact_root, put_u32, put_u64,
 };
@@ -251,7 +251,7 @@ impl FileLayout {
     pub(super) fn header(&self, root: ArtifactRoot) -> [u8; PURREMB_HEADER_LENGTH as usize] {
         let mut output = [0u8; PURREMB_HEADER_LENGTH as usize];
         output[0..8].copy_from_slice(&PURREMB_MAGIC);
-        put_u32(&mut output, 8, PURREMB_VERSION);
+        put_u32(&mut output, 8, PURREMB_VERSION_LABELLING);
         put_u32(&mut output, 12, PURREMB_HEADER_LENGTH);
         put_u32(&mut output, 16, 0);
         put_u32(
@@ -275,7 +275,7 @@ impl FileLayout {
     pub(super) fn trailer(&self, root: ArtifactRoot) -> [u8; PURREMB_TRAILER_LENGTH as usize] {
         let mut output = [0u8; PURREMB_TRAILER_LENGTH as usize];
         output[0..8].copy_from_slice(&PURREMB_TRAILER_MAGIC);
-        put_u32(&mut output, 8, PURREMB_VERSION);
+        put_u32(&mut output, 8, PURREMB_VERSION_LABELLING);
         put_u32(&mut output, 12, PURREMB_TRAILER_LENGTH);
         put_u64(&mut output, 16, self.file_length);
         output[24..56].copy_from_slice(root.as_bytes());

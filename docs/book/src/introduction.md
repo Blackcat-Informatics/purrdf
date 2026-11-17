@@ -58,9 +58,9 @@ reimplemented per language.
   Every syntax resolves relative IRI references through one RFC 3986 layer,
   and a relative reference with no base in scope is a hard error.
   See [Base IRIs & Relative References](concepts/base-iris.md).
-- **Canonicalization** — W3C RDFC-1.0 on the RDF 1.1 subset; over RDF 1.2
-  constructs, either the flat form (RDFC-1.0 over `rdf:reifies` triples) or the
-  first-party `purrdf-rdfc12` profile, named apart — plus dataset diff and
+- **Canonicalization** — the canonical line sequence of the nested-refinement
+  labelling, with decimal blank-node labels and a BLAKE3 digest, over RDF 1.2
+  constructs included; W3C RDFC-1.0 by name under `rdfc12` — plus dataset diff and
   isomorphism. See [Canonicalization & Diff](concepts/canonicalization.md).
 - **Projections & carriers** — deterministic LPG, CSVW, OBO Graphs,
   dataset-description, and research-object projections, each with a located

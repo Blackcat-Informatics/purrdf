@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # `make cnschema-probe` reproduces the pinned cnSchema 4.0 round-trip evidence:
-# fetch the pinned export by digest, canonicalize it (RDFC-1.0), re-import the
+# fetch the pinned export by digest, canonicalize it (canonical line sequence), re-import the
 # canonical N-Quads, canonicalize again, and assert the source SHA-256, the
 # canonical-N-Quads SHA-256 (identical on both legs), and the exact quad count
 # all still match the constants pinned in scripts/cnschema-probe.py. Without a

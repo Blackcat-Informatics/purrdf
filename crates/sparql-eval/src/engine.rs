@@ -9832,7 +9832,7 @@ mod tests {
             purrdf_core::try_canonicalize(
                 &out,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -9840,10 +9840,10 @@ mod tests {
             .nquads(),
             "<http://ex/a> <http://ex/from> <http://ex/g1> <http://ex/audit> .\n\
              <http://ex/a> <http://ex/from> <http://ex/g2> <http://ex/audit> .\n\
-             <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g1> .\n\
-             <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g2> .\n\
              <http://ex/a> <http://ex/seen> <http://ex/x> <http://ex/g1> .\n\
-             <http://ex/a> <http://ex/seen> <http://ex/y> <http://ex/g2> .\n"
+             <http://ex/a> <http://ex/seen> <http://ex/y> <http://ex/g2> .\n\
+             <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g1> .\n\
+             <http://ex/a> <http://ex/seen> <http://ex/shared> <http://ex/g2> .\n"
         );
     }
 

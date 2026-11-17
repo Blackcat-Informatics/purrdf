@@ -323,10 +323,7 @@ fn a_rule_fires_at_an_explicit_shape_target() {
                 .expect("rules run");
         purrdf_rdf::try_canonicalize(
             entailed.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     };

@@ -36,7 +36,7 @@ fn rules(text: &str) -> String {
 
 /// Parse, check and infer; successful original fixtures also compare compact output.
 fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
-    use purrdf_core::{CanonHash, TripleDataset, try_canonicalize_flat_view};
+    use purrdf_core::{TripleDataset, try_canonicalize_checked_view};
 
     let document = srl::parse_and_check(&rules(rule_text), None)?;
     let source = data(ttl);
@@ -52,23 +52,15 @@ fn infer(rule_text: &str, ttl: &str) -> Result<Vec<[Term; 3]>, SrlError> {
     let materialized = purrdf_core::dataset_from_view(&actual.read().unwrap())
         .expect("inferred triple read materializes before retaining canonical output");
     assert_eq!(
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             &*materialized,
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),
-        try_canonicalize_flat_view(
+        try_canonicalize_checked_view(
             expected.as_ref(),
-            CanonHash::Sha256,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),

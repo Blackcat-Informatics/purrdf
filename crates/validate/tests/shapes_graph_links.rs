@@ -510,7 +510,7 @@ fn a_product_holds_every_graph_it_absorbed() {
         &importer,
         Some(base),
         table,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("packed");
     let options = SarifOptions::default();
@@ -543,7 +543,7 @@ fn a_product_holds_every_graph_it_absorbed() {
         LOCAL_SHAPES,
         Some(base),
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("packed");
     let refused = validate_with_shapes_product(&bare, &linking(&[lib]), &options)

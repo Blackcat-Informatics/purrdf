@@ -54,7 +54,7 @@ fn build_fixture(extension_flags: u32) -> CorpusFixture {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty RDF source");
     let (source, _) = CertifiedEmbeddingSource::from_dataset(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
     let dataset_target = source.dataset_target(true).expect("dataset target");

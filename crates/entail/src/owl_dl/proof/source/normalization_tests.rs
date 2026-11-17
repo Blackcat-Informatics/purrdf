@@ -42,7 +42,7 @@ fn both_sides_split_without_renumbering_or_replacing_the_original_source() {
     let input = f.freeze();
     let ctx = Reasoner::with_proofs(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .proof_context()
@@ -100,7 +100,7 @@ fn internalization_partial_absorption_and_range_keep_separate_source_licenses() 
     f.edge(p, rdfs::RANGE, a);
     let ctx = Reasoner::with_proofs(
         &f.freeze(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .proof_context()
@@ -152,7 +152,7 @@ fn equivalent_and_subclass_axioms_do_not_lose_their_distinct_original_spellings(
     f.edge(a, owl::EQUIVALENT_CLASS, b);
     let ctx = Reasoner::with_proofs(
         &f.freeze(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .proof_context()

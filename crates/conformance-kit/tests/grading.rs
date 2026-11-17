@@ -15,10 +15,7 @@ fn empty_and_unbound_rows_are_observable() {
             &[],
             &[],
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -29,10 +26,7 @@ fn empty_and_unbound_rows_are_observable() {
             &[],
             &[vec![]],
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -44,10 +38,7 @@ fn empty_and_unbound_rows_are_observable() {
             &vars,
             &[],
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -58,10 +49,7 @@ fn empty_and_unbound_rows_are_observable() {
             &vars,
             &[vec![None]],
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -70,10 +58,7 @@ fn empty_and_unbound_rows_are_observable() {
             &["x".into(), "x".into()],
             &[],
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -107,7 +92,7 @@ fn scope_partition_and_global_row_links_are_observable() {
         &vars,
         &renamed,
         false,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let collapsed = vec![renamed[0].clone(), renamed[0].clone()];
@@ -118,10 +103,7 @@ fn scope_partition_and_global_row_links_are_observable() {
             &vars,
             &collapsed,
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -137,10 +119,7 @@ fn scope_partition_and_global_row_links_are_observable() {
             &vars,
             &broken,
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -172,10 +151,7 @@ fn nested_triples_share_the_same_global_bijection() {
             &vars,
             &bad,
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -192,7 +168,7 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
         &["b".into(), "a".into()],
         &right,
         false,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let sequence = vec![vec![Some(a)], vec![Some(b)]];
@@ -203,7 +179,7 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
         &["x".into()],
         &reversed,
         false,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert!(
@@ -213,10 +189,7 @@ fn header_order_is_metadata_and_row_order_is_explicit() {
             &["x".into()],
             &reversed,
             true,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -265,7 +238,7 @@ fn report_only_relabelling_cannot_excuse_a_wrong_source_focus() {
     report::compare_graphs(
         &reports[0],
         &reports[1],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let sources = [report::SourceContext {
@@ -308,17 +281,14 @@ fn report_only_relabelling_cannot_excuse_a_wrong_source_focus() {
     report::compare_contextual(
         ctx(0, &expected),
         ctx(1, &good),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert!(
         report::compare_contextual(
             ctx(0, &expected),
             ctx(1, &wrong),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -422,7 +392,7 @@ fn report_policy_preserves_obligations_and_path_topology() {
         unlinked_context(&expected),
         unlinked_context(&good),
         policy,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     for replacement in ["sh:resultPath (ex:q ex:p)", "sh:resultPath (ex:p ex:p)"] {
@@ -435,7 +405,7 @@ fn report_policy_preserves_obligations_and_path_topology() {
                 unlinked_context(&bad),
                 policy,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -453,10 +423,7 @@ fn report_policy_preserves_obligations_and_path_topology() {
                 allow_unstated_source_constraint: true,
                 ..policy
             },
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -468,10 +435,7 @@ fn report_policy_preserves_obligations_and_path_topology() {
             unlinked_context(&expected),
             unlinked_context(&duplicate),
             policy,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -492,7 +456,7 @@ fn optional_details_are_selected_per_corresponding_result() {
         unlinked_context(&expected),
         unlinked_context(&good),
         policy,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let missing = parsed_report(
@@ -503,10 +467,7 @@ fn optional_details_are_selected_per_corresponding_result() {
             unlinked_context(&expected),
             unlinked_context(&missing),
             policy,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -564,7 +525,7 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
     report::compare_contextual(
         context(&expected, &expected_links),
         context(&actual, &actual_links),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let mut wrong = actual_links.clone();
@@ -573,10 +534,7 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
         report::compare_contextual(
             context(&expected, &expected_links),
             context(&actual, &wrong),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -594,10 +552,7 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
                 sources: &separate,
                 ..context(&actual, &actual_links)
             },
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -606,10 +561,7 @@ fn deliberate_shared_domain_allows_only_cross_role_aliases() {
         report::compare_contextual(
             context(&expected, &expected_links),
             context(&actual, &duplicate),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -646,10 +598,7 @@ fn composite_literals_share_direct_and_nested_blank_identity() {
             &header,
             &different,
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -682,7 +631,7 @@ fn composite_blank_renaming_is_global_across_permuted_rows() {
         &["direct".into(), "list".into()],
         &renamed,
         false,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
 }
@@ -697,10 +646,7 @@ fn source_metadata_and_empty_graph_declarations_are_observable() {
         report::compare_graphs(
             &empty,
             &declared,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -710,7 +656,7 @@ fn source_metadata_and_empty_graph_declarations_are_observable() {
     report::compare_graphs(
         &declared,
         &b.freeze().unwrap(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let source = report::SourceContext {
@@ -1130,7 +1076,7 @@ fn deep_terms_respect_kernel_admission_without_stack_recursion() {
         &variables,
         &deep,
         false,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("finite deep terms admitted by the kernel canonicalize");
     let expected = [nested("source", BlankScope(11), 16)];
@@ -1141,7 +1087,7 @@ fn deep_terms_respect_kernel_admission_without_stack_recursion() {
         &variables,
         &actual,
         false,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     actual[0][0] = Some(TermValue::Blank {
@@ -1155,10 +1101,7 @@ fn deep_terms_respect_kernel_admission_without_stack_recursion() {
             &variables,
             &actual,
             false,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .is_err()
     );
@@ -1301,10 +1244,10 @@ purrdf_testkit::prop_test! {
             TermValue::Blank { scope, .. } => TermValue::Blank { label: format!("renamed{}", scope.ordinal()), scope: BlankScope(offset) },
             value => value.clone(),
         })).collect::<Vec<_>>()).collect();
-        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &renamed, false, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).is_ok());
+        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &renamed, false, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).is_ok());
         let mut lost = renamed;
         lost.pop();
-        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &lost, false, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).is_err());
+        purrdf_testkit::prop_assert!(bag::compare_solutions(&variables, &rows, &variables, &lost, false, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).is_err());
     }
 }
 

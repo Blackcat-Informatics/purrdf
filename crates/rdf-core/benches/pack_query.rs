@@ -181,7 +181,7 @@ fn bench_named_graphs(c: &mut Bench) {
                     PackBuilder::build_bytes(
                         &ds,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -191,10 +191,7 @@ fn bench_named_graphs(c: &mut Bench) {
         });
         let bytes = PackBuilder::build_bytes(
             &ds,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("graph-heavy packs");
         let pack = PackView::from_bytes(&bytes).expect("pack opens");
@@ -237,7 +234,7 @@ fn bench_build_bytes(c: &mut Bench) {
                 PackBuilder::build_bytes(
                     &ds,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -254,7 +251,7 @@ fn bench_from_bytes(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_from_bytes");
@@ -270,7 +267,7 @@ fn bench_restore_pack(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_restore");
@@ -286,7 +283,7 @@ fn bench_quads_for_pattern(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("representative dataset packs");
     let pack = PackView::from_bytes(&bytes).expect("pack opens");
@@ -348,7 +345,7 @@ fn bench_verify_pack(c: &mut Bench) {
     let ds = build_dataset();
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("representative dataset packs");
     let mut group = c.benchmark_group("pack_query_verify");
@@ -358,7 +355,7 @@ fn bench_verify_pack(c: &mut Bench) {
                 verify_pack(
                     &bytes,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

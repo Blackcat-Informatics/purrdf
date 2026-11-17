@@ -129,34 +129,35 @@ fn iri_and_rdf_producers_keep_original_causes_and_context() {
     ));
 }
 
-fn flat_canonicalization_returns_the_native_reserved_vocabulary_refusal() {
-    let rejected = format!("{}foreign", purrdf_core::RESERVED_NAMESPACE);
-    let text = format!("<{rejected}> <urn:p> <urn:o> .");
-    let dataset =
-        purrdf_slice::rdf_query::Dataset::parse_turtle(text.as_bytes(), None, "reserved").unwrap();
-    let error = dataset
-        .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
-            purrdf_core::RDFC_V2_CORPUS_POLICY,
-            None,
-        ))
-        .unwrap_err();
-    drop(dataset);
-    drop(text);
-    let captured = Capture::read(&error);
-    assert_eq!(captured.code, "canonical-reserved");
-    assert!(
-        matches!(captured.child("cause").field("iri"), ErrorValue::Iri(value) if value == rejected)
-    );
-    let accepted = purrdf_slice::rdf_query::Dataset::parse_turtle(
+/// A stop signal that is already latched: every canonicalization it controls refuses.
+#[derive(Debug)]
+struct Latched;
+
+impl purrdf_core::StopSignal for Latched {
+    fn stopped(&self) -> bool {
+        true
+    }
+}
+
+fn flat_canonicalization_returns_the_native_stopped_refusal() {
+    let dataset = purrdf_slice::rdf_query::Dataset::parse_turtle(
         b"<urn:s> <urn:p> <urn:o> .",
         None,
-        "accepted",
+        "stopped",
     )
     .unwrap();
+    let error = dataset
+        .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
+            purrdf_core::CANON_CORPUS_POLICY,
+            Some(&Latched),
+        ))
+        .unwrap_err();
+    assert!(matches!(error, purrdf_rdf::CanonError::Stopped));
+    assert_eq!(Capture::read(&error).code, "canonical-stopped");
     assert_eq!(
-        accepted
+        dataset
             .canonical_nquads_flat(&mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_core::CANON_CORPUS_POLICY,
                 None
             ))
             .unwrap()
@@ -188,7 +189,7 @@ purrdf_testkit::harness_main!(
     native_io_ownership_conversion_never_renders_the_original_cause,
     artifact_json_retains_the_original_invalid_member_after_input_disposal,
     iri_and_rdf_producers_keep_original_causes_and_context,
-    flat_canonicalization_returns_the_native_reserved_vocabulary_refusal,
+    flat_canonicalization_returns_the_native_stopped_refusal,
     #[cfg(not(target_arch = "wasm32"))]
     missing_retrieval_path_keeps_the_original_native_path_and_io_kind,
 );

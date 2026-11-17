@@ -161,7 +161,8 @@ mod tests {
             .push_quad(subject, predicate, predicate, None)
             .unwrap();
         let dataset = builder.freeze().unwrap();
-        let reserved = purrdf_core::check_admissible(&dataset).expect_err("reserved subject");
+        let reserved =
+            purrdf_core::rdfc12::check_admissible(&dataset).expect_err("reserved subject");
         assert!(
             matches!(&reserved, purrdf_core::CanonError::ReservedVocabulary(_)),
             "{reserved:?}"

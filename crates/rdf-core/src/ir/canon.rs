@@ -161,6 +161,7 @@ mod rendering;
 use purrdf_lex::allocation::{Admission, Memory};
 use purrdf_lex::walk::WorkList;
 mod control;
+pub mod labelled;
 mod memo;
 use control::SearchRun;
 pub use control::{
@@ -1216,6 +1217,19 @@ fn relabel_recording(
     .issue_labels()?
     .canonical
     .issued;
+    rebuild_with_labels(ds, &labels, record, run)
+}
+
+/// Rewrite `ds` with each blank node of `labels` at its label and every other
+/// term unchanged, reaching inside composite literals so an embedded blank
+/// node takes the same label as the node elsewhere. The one rewrite both
+/// canonical families share.
+fn rebuild_with_labels(
+    ds: &RdfDataset,
+    labels: &BTreeMap<TermId, Box<str>>,
+    record: impl FnMut(RelabelSource<'_>, TermId),
+    run: &SearchRun<'_>,
+) -> Result<RdfDataset, CanonError> {
     // Declaration-only blank graphs are invisible to canonicalization (they own
     // no statement), so continue the canonical numbering over them in a
     // value-deterministic order.
@@ -1240,7 +1254,7 @@ fn relabel_recording(
     let result = rebuild_dataset(
         ds,
         &mut CanonicalRelabeler {
-            labels: &labels,
+            labels,
             extra,
             record,
             stop: run.stop(),
@@ -2700,7 +2714,7 @@ pub enum CanonError<E = Infallible> {
     /// Logical capacity or physical storage refusal during the rewrite.
     Storage(purrdf_lex::allocation::StorageError),
     /// The n-degree search's call/permutation budget was exhausted.
-    BudgetExceeded(BudgetExceeded),
+    BudgetExceeded(Box<BudgetExceeded>),
     /// The input carries an IRI in the profile's reserved namespace.
     ReservedVocabulary(ReservedVocabulary),
     /// The backing dataset refused a read or scoped scratch admission.
@@ -2714,6 +2728,10 @@ pub enum CanonError<E = Infallible> {
     CounterCapacity,
     /// The source cannot retain an owned canonical result or refusal.
     OwnedWorkspaceUnavailable,
+    /// The nested-refinement labelling refused the input: the typed refusal of
+    /// its definition (`input`, `graph`, `width` or `limit`). Only the default
+    /// canonicalization family returns it.
+    Refused(Box<crate::canonical_labelling::Refusal>),
     /// The source spelled one term with a different length when it was read
     /// again during the same run. A source must present the same dataset for the
     /// whole of a run; this refusal detects only a change of length, not a
@@ -2725,13 +2743,14 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
     purrdf_hash::error_visit! {
         Invalid(cause) => "canonical-invalid" { "cause" => Cause(cause) },
         Storage(cause) => "canonical-storage" { "cause" => Cause(cause) },
-        BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause) },
+        BudgetExceeded(cause) => "canonical-budget" { "cause" => Cause(cause.as_ref()) },
         ReservedVocabulary(cause) => "canonical-reserved" { "cause" => Cause(cause) },
         Read(cause) => "canonical-read" { "cause" => Cause(cause) },
         OwnedAdmission(cause) => "canonical-owned-admission" { "cause" => Cause(cause) },
         Stopped => "canonical-stopped" {},
         CounterCapacity => "canonical-counter-capacity" {},
         OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
+        Refused(refusal) => "canonical-refused" { "code" => Unsigned(u128::from(refusal.code())) },
         SourceInconsistent => "canonical-source-inconsistent" {},
     }
 }
@@ -2754,6 +2773,13 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
             Self::OwnedWorkspaceUnavailable => {
                 f.write_str("canonical payload requires source-owned workspace admission")
             }
+            Self::Refused(refusal) => {
+                write!(
+                    f,
+                    "the canonical labelling refused the input: {}",
+                    labelled::refusal_name(refusal.as_ref())
+                )
+            }
             Self::SourceInconsistent => f.write_str(
                 "the source spelled a term with a different length when it was read again",
             ),
@@ -2766,12 +2792,13 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
         match self {
             Self::Invalid(error) => Some(error),
             Self::Storage(error) => Some(error),
-            Self::BudgetExceeded(err) => Some(err),
+            Self::BudgetExceeded(err) => Some(err.as_ref()),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
             Self::Stopped
             | Self::CounterCapacity
             | Self::OwnedWorkspaceUnavailable
+            | Self::Refused(_)
             | Self::SourceInconsistent => None,
         }
     }
@@ -2780,7 +2807,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
 purrdf_lex::variant_from!(impl<E> CanonError<E> {
     Storage(purrdf_lex::allocation::StorageError),
     Invalid(crate::RdfDiagnostic),
-    BudgetExceeded(BudgetExceeded),
+    BudgetExceeded(Box<BudgetExceeded>),
     ReservedVocabulary(ReservedVocabulary)
 });
 
@@ -2798,6 +2825,7 @@ impl CanonError {
             Self::Stopped => CanonError::Stopped,
             Self::CounterCapacity => CanonError::CounterCapacity,
             Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
+            Self::Refused(refusal) => CanonError::Refused(refusal),
             Self::SourceInconsistent => CanonError::SourceInconsistent,
         }
     }
@@ -3096,12 +3124,12 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     path,
                     groups,
                 });
-                CanonError::BudgetExceeded(BudgetExceeded {
+                CanonError::BudgetExceeded(Box::new(BudgetExceeded {
                     blank_count: self.blanks.len(),
                     limit,
                     work: self.run.work(),
                     context,
-                })
+                }))
             }
         })
     }
@@ -6482,7 +6510,7 @@ mod tests {
         );
         assert_eq!(
             canonicalized.presentation(),
-            CanonPresentation::Overlay,
+            Some(CanonPresentation::Overlay),
             "an overlay-producing entry point must report the Overlay presentation on its result"
         );
     }
@@ -6518,7 +6546,7 @@ mod tests {
         );
         assert_eq!(
             flat.presentation(),
-            CanonPresentation::FlatAssertion,
+            Some(CanonPresentation::FlatAssertion),
             "a flat-producing entry point must report the FlatAssertion presentation on its result"
         );
     }

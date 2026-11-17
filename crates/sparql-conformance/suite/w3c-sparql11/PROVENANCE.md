@@ -67,7 +67,7 @@ implemented now and none is ledgered.
 ## Full W3C UPDATE-eval groups (commit `426c7df`)
 
 Eleven update groups are vendored verbatim and run through the harness's
-UPDATE-eval path (`SparqlEngine::update` → RDFC-1.0 canonical post-state diff).
+UPDATE-eval path (`SparqlEngine::update` → canonical post-state diff).
 All 102 UPDATE-eval cases pass outright; the ledger holds no `update-semantics`
 entry.
 

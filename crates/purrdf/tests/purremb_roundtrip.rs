@@ -15,8 +15,19 @@ use purrdf::{
 use purrdf_core::distance::{Arithmetic as _, Exact};
 use purrdf_core::purremb_fixture::Identities;
 
+/// The canonical artifact the writer emits: format version 2.
 fn golden_path() -> std::path::PathBuf {
-    purrdf_testkit::paths::workspace_root!().join("crates/rdf-core/tests/goldens/purremb_v1.bin")
+    purrdf_testkit::paths::workspace_root!().join("crates/rdf-core/tests/goldens/purremb_v2.bin")
+}
+
+/// The artifact PurRDF 4.x wrote for the same fixture, frozen as the evidence that a
+/// valid 4.x embedding keeps verifying. It is never regenerated: format version 1.
+fn version_one_golden() -> Vec<u8> {
+    std::fs::read(
+        purrdf_testkit::paths::workspace_root!()
+            .join("crates/rdf-core/tests/goldens/purremb_v1.bin"),
+    )
+    .expect("checked-in 4.x PURREMB golden")
 }
 
 struct Fixture {
@@ -62,16 +73,20 @@ fn family_contract() -> EmbeddingFamilyContract {
     }
 }
 
-fn build_fixture(reverse_input: bool) -> Fixture {
+fn source_dataset() -> std::sync::Arc<purrdf_core::RdfDataset> {
     let mut rdf = RdfDatasetBuilder::new();
     let subject = rdf.intern_iri("https://example.org/rdf/subject").unwrap();
     let predicate = rdf.intern_iri("https://example.org/rdf/predicate").unwrap();
     let object = rdf.intern_iri("https://example.org/rdf/object").unwrap();
     rdf.push_quad(subject, predicate, object, None).unwrap();
-    let rdf = rdf.freeze().expect("valid RDF 1.2 dataset");
+    rdf.freeze().expect("valid RDF 1.2 dataset")
+}
+
+fn build_fixture(reverse_input: bool) -> Fixture {
+    let rdf = source_dataset();
     let (source, source_bytes) = CertifiedEmbeddingSource::from_dataset(
         &rdf,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("source pack");
 
@@ -203,7 +218,7 @@ fn typed_round_trip_verifies_source_and_matryoshka_views() {
     let source_report = verify_embedding_source(
         &view,
         EmbeddingSource::Purrpck(&fixture.source_bytes),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("certified source verification");
     assert_eq!(source_report.ordinals_checked(), 1);
@@ -290,4 +305,72 @@ fn canonical_artifact_matches_checked_in_golden() {
     ) {
         panic!("{error}");
     }
+}
+
+/// The header's `version` field and the trailer's, four little-endian bytes each.
+const HEADER_VERSION_OFFSET: usize = 8;
+const PACK_VERSION_OFFSET: usize = 8;
+/// The pack header's `rdfc_digest` field: 32 bytes at offset 32.
+const PACK_RDFC_DIGEST_OFFSET: usize = 32;
+
+fn control() -> purrdf_core::CanonicalizationControl<'static> {
+    purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
+}
+
+/// The pack PurRDF 4.x wrote for the fixture dataset: the current pack with its
+/// header version set to 1 and its digest replaced by the RDFC-1.0 SHA-256. Its
+/// exact SHA-256 must equal the one the frozen 4.x artifact recorded.
+fn version_one_pack() -> Vec<u8> {
+    let rdf = source_dataset();
+    let mut pack = purrdf_core::PackBuilder::build_bytes(&rdf, &mut control()).expect("pack");
+    let legacy = purrdf_core::rdfc12::try_canonical_sha256_view(
+        &rdf,
+        purrdf_core::rdfc12::CanonHash::Sha256,
+        &mut control(),
+    )
+    .expect("RDFC-1.0 digest");
+    pack[PACK_VERSION_OFFSET..PACK_VERSION_OFFSET + 4].copy_from_slice(&1u32.to_le_bytes());
+    pack[PACK_RDFC_DIGEST_OFFSET..PACK_RDFC_DIGEST_OFFSET + 32].copy_from_slice(legacy.as_bytes());
+    pack
+}
+
+/// Format version 2 is what the writer emits, and a 4.x (version 1) artifact keeps
+/// verifying: its source digest is recomputed with the RDFC-1.0 run that wrote it.
+/// The same 4.x bytes relabelled version 2 are refused, because the version selects
+/// the digest law rather than being ignored.
+#[test]
+fn version_one_embedding_verifies_by_its_rdfc12_digest_and_version_selects_the_law() {
+    let current = build_fixture(false);
+    let current_view = EmbeddingView::from_bytes(&current.artifact_bytes).expect("v2 opens");
+    assert_eq!(current_view.format_version(), 2);
+
+    let v1_bytes = version_one_golden();
+    let mut v1 = EmbeddingView::from_bytes(&v1_bytes).expect("a 4.x artifact opens");
+    assert_eq!(v1.format_version(), 1);
+    verify_embedding(&mut v1).expect("a 4.x artifact verifies whole");
+    let pack = version_one_pack();
+    let report = verify_embedding_source(&v1, EmbeddingSource::Purrpck(&pack), &mut control())
+        .expect("a 4.x source digest is recomputed by RDFC-1.0");
+    assert_eq!(report.ordinals_checked(), 1);
+
+    let mut relabelled = v1_bytes;
+    let trailer = usize::try_from(purrdf_core::purremb_fixture::read_u64(&relabelled, 48))
+        .expect("trailer offset");
+    purrdf_core::purremb_fixture::put_u32(&mut relabelled, HEADER_VERSION_OFFSET, 2);
+    purrdf_core::purremb_fixture::put_u32(&mut relabelled, trailer + 8, 2);
+    purrdf_core::purremb_fixture::reseal(&mut relabelled, &[]);
+    let mut v2 = EmbeddingView::from_bytes(&relabelled).expect("relabelled framing is valid");
+    verify_embedding(&mut v2).expect("sections are untouched");
+    let refused = verify_embedding_source(&v2, EmbeddingSource::Purrpck(&pack), &mut control())
+        .expect_err("a RDFC-1.0 digest is not a version-2 digest");
+    assert!(
+        matches!(
+            refused,
+            purrdf::SourceAttachmentError::Embedding(purrdf_core::EmbeddingError::DigestMismatch {
+                kind: purrdf_core::embedding::DigestKind::CertifiedRdf,
+                ..
+            })
+        ),
+        "{refused:?}"
+    );
 }

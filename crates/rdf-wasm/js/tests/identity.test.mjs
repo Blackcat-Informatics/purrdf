@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // Node real-execution conformance for the graph-IDENTITY surface reached through the
-// PUBLIC package root — `Dataset.canonicalize()` (RDFC-1.0 canonical N-Quads) and
+// PUBLIC package root — `Dataset.canonicalize()` (canonical line-sequence N-Quads) and
 // `Dataset.isomorphic(other)` (graph isomorphism under blank-node relabeling), exactly
 // as the docs playground's identity/diff pane calls them.
 
@@ -69,33 +69,24 @@ test("canonicalize() is stable and identifies isomorphic graphs byte-for-byte", 
 
 // ── canonicalize() throws a JsError on a refusal, rather than aborting ──────────
 //
-// `urn:purrdf:rdfc:` is the canonicalization overlay's OWN reserved namespace (see
-// crates/rdf-core/src/ir/canon.rs). Only the two exact sentinel shapes the overlay
-// itself lowers are admitted — in particular `<urn:purrdf:rdfc:reifies>` as a
-// predicate whose object is a TRIPLE TERM. Spelling the same reserved predicate with
-// a plain IRI object (no triple term) is not one of those shapes, so it is refused:
-// accepting it would let a structurally different graph canonicalize to the exact
-// bytes a genuine reifier binding would, which is an identity collision. Before this
-// surface threw a `JsError` for the refusal, it aborted the wasm process instead.
-const RESERVED_PREDICATE_PLAIN_OBJECT = `@prefix ex: <http://example.org/> .
-ex:r <urn:purrdf:rdfc:reifies> ex:o .
-`;
+// The 13-node circulant of quadratic residues, in both directions, cannot be
+// labelled without a search, so the finite bound "0" trips the labelling's typed
+// `limit` refusal, which crosses the boundary as a thrown `JsError`. The same input
+// completes under "unlimited", and a two-node cycle needs no search, so the same
+// bound "0" admits it: the refusal is the input's, not the bound's. Before this
+// surface threw a `JsError` for a refusal, it aborted the wasm process instead.
+const CIRCULANT = Array.from({ length: 13 }, (_, u) => Array.from({ length: 13 - u - 1 }, (_, k) => u + k + 1)
+  .filter((v) => [1, 3, 4, 9, 10, 12].includes((v - u) % 13))
+  .map((v) => `_:v${u} <http://example.org/p> _:v${v} .\n_:v${v} <http://example.org/p> _:v${u} .\n`).join("")).join("");
 
-// The valid neighbour: an IRI adjacent to the reserved namespace (a DIFFERENT
-// `urn:purrdf:` sub-namespace, not `urn:purrdf:rdfc:`) in the exact same shape.
-// Over-refusal is the mirror bug of silent acceptance, so this must still
-// canonicalize, and the IRI must survive into the output untouched.
-const NEIGHBOURING_ORDINARY_PREDICATE = `@prefix ex: <http://example.org/> .
-ex:r <urn:purrdf:other:annotation> ex:o .
-`;
-
-test("canonicalize() throws on a reserved-vocabulary IRI, naming it, rather than aborting", () => {
-  const refused = Dataset.parse(RESERVED_PREDICATE_PLAIN_OBJECT, "turtle");
-  assert.throws(() => canonicalValue(refused.canonicalize("unlimited")), /urn:purrdf:rdfc:reifies/);
+test("canonicalize() throws on the labelling limit, naming it, rather than aborting", () => {
+  const refused = Dataset.parse(CIRCULANT, "turtle");
+  assert.throws(() => canonicalValue(refused.canonicalize("0")), /labelling refused/);
 });
 
-test("an ordinary IRI neighbouring the reserved namespace still canonicalizes", () => {
-  const ok = Dataset.parse(NEIGHBOURING_ORDINARY_PREDICATE, "turtle");
-  const canon = canonicalValue(ok.canonicalize("unlimited"));
-  assert.ok(canon.includes("urn:purrdf:other:annotation"), canon);
+test("canonicalize() still completes the neighbours of the refused input", () => {
+  const cycle = Dataset.parse("_:a <http://example.org/p> _:b .\n_:b <http://example.org/p> _:a .\n", "turtle");
+  assert.ok(canonicalValue(cycle.canonicalize("0")).startsWith("_:0 "));
+  const canon = canonicalValue(Dataset.parse(CIRCULANT, "turtle").canonicalize("unlimited"));
+  assert.ok(canon.startsWith("_:0 "), canon);
 });

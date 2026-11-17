@@ -844,14 +844,14 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
     };
     let mut reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("regular source");
     let answer = reasoner.entails(&axiom).expect("recorded answer");
     assert_eq!(*answer.answer(), Verdict::True);
     let mut consumer = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("independent reverse mapping");
     consumer.prepare(&question).expect("query preparation");
@@ -863,10 +863,7 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
             &question,
             Some(answer.certificate()),
             &context,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("independent original-inclusion replay");
 
@@ -880,7 +877,7 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
     let altered = altered.finish();
     let mut checker = Reasoner::with_proofs(
         &altered,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("regular changed RBox");
     checker.prepare(&question).expect("same question");
@@ -893,7 +890,7 @@ fn recorded_chain_consequence_replays_against_the_original_rbox() {
                 Some(answer.certificate()),
                 &changed_context,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 ),
             )
@@ -1047,10 +1044,7 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
         let dataset = o.finish();
         let mut reasoner = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("fixed top alias");
         let axiom = assertion("newSubject", "universalAlias", "newObject");
@@ -1061,10 +1055,7 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
         };
         let mut consumer = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("source context");
         consumer.prepare(&question).expect("query roots");
@@ -1077,7 +1068,7 @@ fn fixed_top_aliases_without_a_chain_reach_query_only_individuals() {
                 Some(answer.certificate()),
                 &consumer.proof_context().expect("checking context"),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -1151,7 +1142,7 @@ fn role_language_work_exhaustion_is_unknown_never_a_consistency_proof() {
     let dataset = o.finish();
     let reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("regular source")
     .with_work_cap(1);
@@ -1311,7 +1302,7 @@ fn class_expression_role_refusals_retain_original_source_terms() {
                     Reasoner::with_proofs(
                         &dataset,
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )

@@ -4,33 +4,33 @@
 //! RDF canonicalization for the `purrdf` Python extension through
 //! the `canonicalize_quads` wrapper and caller-selected search control.
 //!
-//! All canonicalization runs the **native full W3C RDFC-1.0** engine
-//! (`purrdf_core::ir::canon`) under the caller's explicit search policy.
+//! All canonicalization runs the default native engine, the nested-refinement
+//! labelling (`purrdf_core::ir::canon`), under the caller's explicit search policy.
 
 use purrdf_core::{CanonError, Canonicalized, FastHasher, FastMap, TermRef, try_canonicalize};
 
 use super::term::quad_to_string;
 use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
-/// Canonicalize a quad set's blank-node labels under native RDFC-1.0, returning the
-/// quads with canonical (`_:c14nN`) blanks, sorted by their N-Quads string. The
+/// Canonicalize a quad set's blank-node labels under the default labelling, returning the
+/// quads with canonical (decimal) blanks, sorted by their N-Quads string. The
 /// caller's literal/IRI term forms are preserved exactly (only blanks are relabeled).
 /// The caller owns the search policy and cancellation control.
 ///
 /// `quads` is wholly caller-supplied (`Dataset.canonicalize()`'s own content), so this
 /// goes through the fallible, non-panicking [`try_canonicalize`] rather than
-/// `canonicalize`: a reserved-vocabulary or budget-exhausting quad set must come back
+/// `canonicalize`: a quad set the labelling refuses must come back
 /// as an `Err` value across the Python boundary, never abort the process.
 ///
 /// # Errors
-/// [`CanonError::ReservedVocabulary`] if any term is an IRI in PurRDF's RDFC-1.0
-/// reserved namespace; [`CanonError::BudgetExceeded`] if the n-degree search's
-/// call/permutation budget is exhausted first.
+/// [`CanonError::Refused`] when the labelling refuses the input, including its
+/// `limit` refusal under the caller's finite bound.
 pub(super) fn canonicalize_quads(
     quads: &[RdfQuad],
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<Vec<RdfQuad>, CanonError> {
-    let ds = flat_dataset_from_quads(quads).expect("native RDFC-1.0: flat freeze of valid quads");
+    let ds = flat_dataset_from_quads(quads)
+        .expect("native canonicalization: flat freeze of valid quads");
     let canon = try_canonicalize(&ds, control)?;
     let map = label_map(&ds, &canon);
     let mut out: Vec<RdfQuad> = quads.iter().map(|q| relabel_quad(q, &map)).collect();
@@ -39,7 +39,7 @@ pub(super) fn canonicalize_quads(
     Ok(out)
 }
 
-/// Map each original blank-node label to its canonical `c14nN` label.
+/// Map each original blank-node label to its canonical decimal label.
 fn label_map<'a>(ds: &'a RdfDataset, c: &'a Canonicalized) -> FastMap<&'a str, &'a str> {
     let mut map = FastMap::with_capacity_and_hasher(c.label_count(), FastHasher::default());
     for (tid, label) in c.labels() {
@@ -70,7 +70,7 @@ fn relabel_term(term: &RdfTerm, map: &FastMap<&str, &str>) -> RdfTerm {
         RdfTerm::BlankNode(label) => match map.get(label.as_str()) {
             Some(canon) => RdfTerm::BlankNode((*canon).to_owned()),
             None => unreachable!(
-                "RDFC-1.0 labels every blank node; missing canonical label for _:{label}"
+                "The labelling labels every blank node; missing canonical label for _:{label}"
             ),
         },
         RdfTerm::Triple(t) => RdfTerm::triple(RdfTriple::new(

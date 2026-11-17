@@ -727,7 +727,7 @@ impl<T> Certified<T> {
 struct Recording {
     /// The producer-independent identity of the ontology every run of this session is about.
     ///
-    /// A BLAKE3 over the dataset's RDFC-1.0 canonical N-Quads, computed once per recording
+    /// A BLAKE3 over the dataset's canonical line sequence, computed once per recording
     /// [`Reasoner`](super::Reasoner) and never on the non-recording path — which is the
     /// single most expensive thing proof recording costs, and the reason it is opt-in.
     input: [u8; 32],

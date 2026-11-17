@@ -8,7 +8,9 @@
 **Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 3 &nbsp;·&nbsp;
 **编辑：** Patrick Audley，Blackcat Informatics® Inc.
 
-这两个值不仅写在文档里，也可从库中读取：`purrdf_core::CANON_PROFILE_ID` 和 `purrdf_core::CANON_PROFILE_VERSION`。使用方因此可以断言，实际链接的构建实现的正是自己固定的 profile。
+**5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文的标识符、版本和向量均未改变。
+
+这两个值不仅写在文档里，也可从库中读取：`purrdf_core::rdfc12::CANON_PROFILE_ID` 和 `purrdf_core::rdfc12::CANON_PROFILE_VERSION`。使用方因此可以断言，实际链接的构建实现的正是自己固定的 profile。
 
 ## 摘要
 
@@ -85,7 +87,7 @@ canon(parse(canon(D))) == canon(D)
 
 ### 3.3 平铺断言表示
 
-每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view`、`try_flat_digest_view` 和 `try_flat_blake3_view`。§3 的输出形式也有独立名称，由 `purrdf_core::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`try_canonicalize`、`try_canonicalize_view`、`try_canonicalize_graph_view` 等）固定使用这种叠加表示。
+每个可接纳的 RDF 1.2 陈述层，除了 §3 的输出形式之外，还有第二种书写形式：**平铺断言表示**。其标识由 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID` / `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` 导出，可通过 `purrdf_core::try_canonicalize_flat_view` 及其名称含 `_flat_` 的对应入口调用，包括 `try_canonicalize_flat_graph_view`、`check_admissible_flat_view`、`try_flat_digest_view` 和 `try_flat_blake3_view`。§3 的输出形式也有独立名称，由 `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID` / `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` 导出；名称**不含** `flat` 的入口（`try_canonicalize`、`try_canonicalize_view`、`try_canonicalize_graph_view` 等）固定使用这种叠加表示。
 
 两种表示回答的是同一问题：“这个**可接纳的** RDF 1.2 陈述层生成哪些规范字节？”它们以不同书写形式表达**相同的可接纳内容**。表示选择与可接纳性相互独立：§4 的保留词汇和 §5 的拒绝规则不随调用方选择的表示而改变。不同之处仅在于：已接纳的具体化节点或注解行最终**如何输出**。
 
@@ -182,8 +184,7 @@ urn:purrdf:rdfc:
 
 每个执行搜索的入口都要求调用方提供 `CanonicalizationControl`，并明确选择
 `SearchPolicy::Finite(u64)` 或 `SearchPolicy::Unlimited`。没有隐式有限上限，也没有
-默认策略。历史常量 `RDFC_V2_CORPUS_POLICY` 仅供显式选择有限值使用，包括核对未更改的版本 2
-固定语料时的 `RDFC_V2_CORPUS_POLICY`。
+默认策略。历史常量 `RDFC_V2_CORPUS_POLICY` 仅供显式选择有限值使用，包括核对固定语料。
 
 RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各计一次，包括随后剪枝的排列。
 接纳事件之前检查调用方的停止信号。有限上限拒绝下一个事件时不增加计费；无限策略去掉逻辑
@@ -227,23 +228,13 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 
 **不会**改变输出的变更，例如重构、加快搜索或使诊断消息更清晰，不递增版本。这样版本号才值得固定；如果每次发布都改变版本，它就不能向使用方传达任何信息。
 
-### 7.1 历史
-
-| 版本 | 变更 |
-|---|---|
-| 1 | 初始 profile |
-| 3 | §6 要求显式有限或无限搜索策略及实际执行证据，成功输出字节不变 |
-| 2 | 收窄 §5：§3 展开所生成的两种四元组形状会折叠回陈述层，而不是被拒绝，使规范化对自身输出具有幂等性（§3.1） |
-
-版本 2 **没有改变任何输出字节**：版本 1 接纳的每个输入，生成的规范字节都与版本 1 完全相同。改变的是拒绝规则，而拒绝也是使用方固定的契约的一部分。版本 1 拒绝的两类输入现在可以规范化，因此仅这一变化就已按 §7 第三项要求递增版本。
-
 ## 8. 规范性测试向量语料
 
 语料位于 `vectors/rdf12-canon/`，并且已经**冻结**：每个载荷字节都由每次构建检查的 SHA-256 清单覆盖（`scripts/check-corpus-frozen.py`），所以静默修改期望结果会导致失败，而不是让检查通过。
 
 它涵盖契约的两面：必须规范化为精确字节的黄金样本，以及必须返回精确错误变体判别值的投毒输入，包括 §5.3 指定的位置。两个样本从可接纳一侧检验 §3.1 的边界：每个样本将一种可折叠形状书写为普通四元组，并固定其规范化后的陈述层行。这样，折叠是被实际检验的性质，而非仅有声明，不能静默扩大或收窄。样本目录和文件格式见 `vectors/rdf12-canon/README.md`。
 
-该语料有自己的内容寻址身份，由 `purrdf_core::CANON_CORPUS_DIGEST` 导出，并由测试框架断言。使用方可以固定 **(profile id, profile version, corpus digest)**，并对实际链接的产物验证这三个值。
+该语料有自己的内容寻址身份，由 `purrdf_core::rdfc12::CANON_CORPUS_DIGEST` 导出，并由测试框架断言。使用方可以固定 **(profile id, profile version, corpus digest)**，并对实际链接的产物验证这三个值。
 
 ## 9. 使用方固定哪些值
 
@@ -251,11 +242,11 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 
 | 字段 | 来源 |
 |---|---|
-| profile 标识符 | `purrdf_core::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile 版本 | `purrdf_core::CANON_PROFILE_VERSION` → `2` |
-| 表示 | `purrdf_core::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::CANON_PRESENTATION_OVERLAY_VERSION` → `1`）或 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`）（§3.3） |
+| profile 标识符 | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
+| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
+| 表示 | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`）或 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`）（§3.3） |
 | 散列算法 | `CanonHash::Sha256` 或 `CanonHash::Sha384`（§2） |
-| 语料摘要 | `purrdf_core::CANON_CORPUS_DIGEST`（§8） |
+| 语料摘要 | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST`（§8） |
 | 发布版本 | 读取上述值时所依据的带标签发布版本 |
 
 对实际链接的构建运行 §8 语料，会把这一组固定值变成验证凭据：它表明该构建生成 profile 规定的字节，并拒绝 profile 禁止的输入。
@@ -264,4 +255,4 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 
 执行配置还需固定每次运行的搜索策略和计费规则版本，并从控制器回执读取实际工作。
 相同有限值具有相同策略身份，无论该数值来自哪个便利常量。输出 BLAKE3 摘要与 RDFC 标签
-哈希分别记录，两者承担不同工作。固定版本 2 语料仍使用显式有限历史值，载荷及摘要不改写。
+哈希分别记录，两者承担不同工作。固定语料仍使用显式有限历史值，载荷及摘要不改写。

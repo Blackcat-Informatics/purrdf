@@ -82,7 +82,7 @@ fn entail(shapes_ttl: &str, data_ttl: &str) -> purrdf_core::Canonicalized {
     .expect("rules run");
     try_canonicalize(
         entailed.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
 }
@@ -587,10 +587,7 @@ fn a_prepared_product_carries_computed_values() {
     let bytes = fresh
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the shapes graph packs");
     let restored = ShapesProduct::open(&bytes)
@@ -620,10 +617,7 @@ fn a_prepared_product_carries_computed_values() {
             )
             .expect("rules run")
             .as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     };
@@ -729,14 +723,14 @@ fn a_rule_s_own_sh_deactivated_is_a_boolean() {
     assert!(error.contains("Inference Rules"), "{error}");
     let off_owner = try_canonicalize(
         run("true").expect("a boolean loads").as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let off = off_owner.nquads();
     assert!(!off.contains("seen"), "{off}");
     let on_owner = try_canonicalize(
         run("false").expect("a boolean loads").as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let on = on_owner.nquads();

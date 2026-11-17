@@ -345,10 +345,9 @@ bytes with optional extra prefix mappings.
 `Dataset.canonicalize(canonical_search="unlimited")` relabels blank nodes in
 place and returns a `CanonicalResult` whose `value` is `None`. Refusal leaves the
 dataset unchanged. `RdfDataset.to_nquads(canonical_search="unlimited")` returns
-canonical N-Quads in its result's `value`, using the flat assertion presentation.
-It agrees with RDFC-1.0 on the RDF 1.1 subset; the RDF 1.2 profile has its own
-reserved-vocabulary, statement-layer and refusal contract. Do not label an RDF
-1.2 digest as RDFC-1.0.
+canonical N-Quads in its result's `value`: the canonical line sequence of the
+nested-refinement labelling, with decimal blank-node labels. It is not the W3C
+RDFC-1.0 document, so do not label its digest as RDFC-1.0.
 
 Both calls require an explicit `canonical_search`: `"unlimited"` or a canonical
 unsigned decimal `u64` string for a finite per-run limit. Both accept an optional

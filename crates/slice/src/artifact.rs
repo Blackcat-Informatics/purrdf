@@ -115,7 +115,7 @@ pub struct ArtifactRecord {
     pub media_type: String,
     /// SHA-256 hex digest of the raw file bytes (64 lowercase hex chars).
     pub raw_digest: String,
-    /// For RDF artifacts: SHA-256 hex of the canonical N-Triples (sorted).
+    /// For RDF artifacts: Lowercase hex of the BLAKE3 digest of the canonical line sequence.
     ///
     /// `None` means **this file is not RDF**, and nothing else. It is a discriminant on
     /// the artifact's KIND, never a report that computing the digest was attempted and

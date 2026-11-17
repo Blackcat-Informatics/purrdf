@@ -24,7 +24,7 @@
 //! §3.2 ("Further normalization MUST NOT be performed") and pinned against by the
 //! W3C JSON-LD REC vectors, which require `<http://a/bb/ccc/../d;p?q>` to survive
 //! intact. Resolving it under a base and not without one would mean identical
-//! document bytes denoting two different graphs with two different RDFC-1.0 digests,
+//! document bytes denoting two different graphs with two different canonical digests,
 //! so the rule lives in ONE place (this module's private `Reference` classifier) that
 //! all three entry points share.
 //!
@@ -790,7 +790,7 @@ impl BaseScope {
             // resolving an absolute reference through §5.2.2 with a base but not
             // without one is what made `<http://a/b/../c>` intern as
             // `http://a/c` in one and `http://a/b/../c` in the other — identical
-            // bytes, two graphs, two RDFC-1.0 digests.
+            // bytes, two graphs, two canonical digests.
             Reference::Absolute(iri) => Ok(iri),
             Reference::Relative(iri) => match self.current() {
                 Some(scoped) => {

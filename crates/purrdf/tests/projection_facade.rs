@@ -40,10 +40,7 @@ fn umbrella_facade_projects_and_lifts_without_subcrate_imports() {
         datasets_isomorphic(
             &dataset,
             &lifted.dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );

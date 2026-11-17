@@ -2366,24 +2366,24 @@ fn canonical_without_to_emits_canonical_nquads() {
     );
 }
 
-/// `--canonical` on a dataset carrying the canonicalizer's OWN reserved vocabulary
-/// (`urn:purrdf:rdfc:...`) is a REFUSED conversion, reported as an ordinary runtime
-/// error (exit 1, a diagnostic on stderr) — not a process abort. This is the CLI's
-/// untrusted-input contract for `--canonical`: `try_canonicalize_flat_view`'s refusal
-/// comes back as a value the CLI maps into [`CliError::Runtime`], never a panic that
-/// would take the whole process down over a caller-supplied document.
+/// `--canonical` runs the default canonical family, which reserves no vocabulary: a
+/// dataset that uses the `urn:purrdf:rdfc:` namespace as ordinary IRIs converts, its
+/// IRIs pass through unchanged, and its blank node takes the decimal label `_:0`.
+/// The RDFC-1.0 family, reachable only through `purrdf_core::rdfc12`, still refuses
+/// that namespace; `rdf12_canon_profile` proves the refusal for every position, so
+/// the two families are pinned from both sides.
 #[test]
-fn canonical_refuses_reserved_vocabulary_without_aborting() {
+fn canonical_default_family_accepts_the_rdfc_namespace_as_ordinary_iris() {
     let canonical_receipt_dir = purrdf_testkit::temp_dir!().expect("canonical receipt directory");
     let canonical_receipt_1 = canonical_receipt_dir.path().join("request-1.json");
 
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
-    const RESERVED_VOCAB_NQUADS: &str = concat!(
-        "<http://example.org/s> <http://example.org/p> ",
-        "<urn:purrdf:rdfc:sentinel> .\n",
+    const NAMESPACE_NQUADS: &str = concat!(
+        "_:b <http://example.org/p> <urn:purrdf:rdfc:sentinel> .\n",
+        "<http://example.org/s> <urn:purrdf:rdfc:reifies> _:b .\n",
     );
-    let seed = write_file(dir, "reserved.nq", RESERVED_VOCAB_NQUADS);
+    let seed = write_file(dir, "reserved.nq", NAMESPACE_NQUADS);
     let out = path(dir, "out.canon");
     let o = run(&[
         "convert",
@@ -2401,20 +2401,18 @@ fn canonical_refuses_reserved_vocabulary_without_aborting() {
     ]);
     assert_eq!(
         o.status.code(),
-        Some(1),
-        "a reserved-vocabulary dataset must be refused as an ordinary runtime failure, \
-         not abort the process: {}",
+        Some(0),
+        "the default family reserves no vocabulary, so the dataset converts: {}",
         stderr(&o)
     );
+    let text = std::fs::read_to_string(&out).expect("canonical output");
     assert!(
-        !stderr(&o).is_empty(),
-        "the refusal must carry a diagnostic on stderr"
+        text.contains("<urn:purrdf:rdfc:sentinel>") && text.contains("<urn:purrdf:rdfc:reifies>"),
+        "the namespace's IRIs must pass through unchanged: {text}"
     );
     assert!(
-        stderr(&o).contains("urn:purrdf:rdfc:sentinel"),
-        "the diagnostic must NAME the offending reserved IRI, not just fail — a \
-         regression to a bare error would still exit 1: {}",
-        stderr(&o)
+        text.contains("_:0") && !text.contains("c14n"),
+        "the blank node takes the decimal label of the line sequence: {text}"
     );
 }
 

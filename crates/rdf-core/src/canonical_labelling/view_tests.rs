@@ -13,8 +13,8 @@ use purrdf_testkit::error_capture::CallerRefusal;
 
 use super::reference;
 use super::{
-    InputReason, Labelled, Limit, Line, LineSet, Record, Refusal, Term, ViewError, admit,
-    compare_view, compare_view_with_memory, label, lines_of_view, write_label,
+    InputReason, Labelled, Limit, Line, LineSet, Record, Refusal, Scope, Term, ViewError, admit,
+    compare_view, compare_view_with_memory, label, label_view, lines_of_view, write_label,
 };
 use crate::{
     BlankScope, CanonicalizationControl, DatasetView, GraphMatch, QuadIds, RdfDataset,
@@ -519,4 +519,78 @@ fn an_admitted_comparison_that_ends_in_an_error_returns_its_grant() {
         compare_view_with_memory(view.as_ref(), &[], &mut control, Limit::ENGINE, &mut memory);
     assert_eq!(stopped.err(), Some(ViewError::Stopped));
     assert_eq!(memory.admitted_bytes(), 0);
+}
+
+/// The digest of the empty input, fixed by the definition (3.3).
+const EMPTY_DIGEST: &str = "bf4b40a613c1cc97ababeccefc1c1c810dde52818d8928603f2180376f06fb5e";
+
+fn hex(digest: &[u8; 32]) -> String {
+    purrdf_hash::hex::Digest32::new(*digest).to_hex()
+}
+
+fn entry(view: &RdfDataset, scope: Scope<'_>) -> super::Labelling<TermId> {
+    label_view(view, &[], scope, Limit::ENGINE, None).expect("labelled")
+}
+
+/// Route independence over a view: renaming every blank node of a dataset
+/// changes no position, no line and no digest, and every blank node of the view
+/// is placed at a distinct position of `0..n`.
+#[test]
+fn a_renamed_dataset_has_the_same_lines_and_every_blank_node_a_distinct_position() {
+    let cycle_abcd = cycle();
+    let cycle_wxyz = dataset(&[
+        ("w", "<p>", "x"),
+        ("x", "<p>", "y"),
+        ("y", "<p>", "z"),
+        ("z", "<p>", "w"),
+    ]);
+    let (one, other) = (
+        entry(&cycle_abcd, Scope::Dataset),
+        entry(&cycle_wxyz, Scope::Dataset),
+    );
+    assert_eq!(one.labelled().digest, other.labelled().digest);
+    assert_eq!(one.labelled().lines, other.labelled().lines);
+    let mut positions: Vec<u64> = one.view_positions().map(|(_, position)| position).collect();
+    positions.sort_unstable();
+    assert_eq!(positions, [0, 1, 2, 3]);
+    // A path of the same four nodes is another dataset.
+    let path = dataset(&[("a", "<p>", "b"), ("b", "<p>", "c"), ("c", "<p>", "d")]);
+    assert_ne!(
+        entry(&path, Scope::Dataset).labelled().digest,
+        one.labelled().digest
+    );
+}
+
+/// A graph scope labels the statements of one named graph with the graph slot
+/// erased, and a graph the view does not use labels no line: the neighbouring
+/// valid cases of the refusal-free path.
+#[test]
+fn a_graph_scope_labels_only_that_graph_and_an_unused_graph_labels_nothing() {
+    let mut builder = RdfDatasetBuilder::new();
+    let g = id_of(&mut builder, "<g>");
+    for (s, o) in [("a", "b"), ("b", "c"), ("c", "a")] {
+        let (s, p, o) = (
+            id_of(&mut builder, s),
+            id_of(&mut builder, "<p>"),
+            id_of(&mut builder, o),
+        );
+        builder.push_quad(s, p, o, Some(g)).expect("pushes");
+    }
+    let (x, p, y) = (
+        id_of(&mut builder, "x"),
+        id_of(&mut builder, "<p>"),
+        id_of(&mut builder, "y"),
+    );
+    builder.push_quad(x, p, y, None).expect("pushes");
+    let view = builder.freeze().expect("freezes");
+    let scoped = entry(&view, Scope::Graph("http://example.org/g"));
+    let alone = dataset(&[("a", "<p>", "b"), ("b", "<p>", "c"), ("c", "<p>", "a")]);
+    assert_eq!(
+        scoped.labelled().digest,
+        entry(&alone, Scope::Dataset).labelled().digest
+    );
+    assert_eq!(scoped.view_positions().count(), 3);
+    let unused = entry(&view, Scope::Graph("http://example.org/absent"));
+    assert_eq!(unused.lines().len(), 0);
+    assert_eq!(hex(&unused.labelled().digest), EMPTY_DIGEST);
 }

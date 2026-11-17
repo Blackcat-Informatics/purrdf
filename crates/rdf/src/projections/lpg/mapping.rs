@@ -843,7 +843,7 @@ mod tests {
                 &dataset,
                 &lifted.dataset,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -898,10 +898,7 @@ mod tests {
 
         let pack = PackBuilder::build_bytes(
             &first,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("pack");
         let view = PackView::from_bytes(&pack).expect("pack view");
@@ -1167,7 +1164,7 @@ mod tests {
                 &dataset,
                 &lifted.dataset,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -1206,7 +1203,7 @@ mod tests {
             let config = config(1_000);
             let first = project_lpg(dataset.as_ref(), &config).expect("project");
             let lifted = lift_lpg(&first.graph, &config).expect("lift");
-            prop_assert!(datasets_isomorphic(&dataset, &lifted.dataset, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).unwrap());
+            prop_assert!(datasets_isomorphic(&dataset, &lifted.dataset, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).unwrap());
             let second = project_lpg(lifted.dataset.as_ref(), &config).expect("reproject");
             prop_assert_eq!(first.graph, second.graph);
         }

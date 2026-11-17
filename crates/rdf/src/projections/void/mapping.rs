@@ -887,10 +887,7 @@ mod tests {
         let reversed = dataset_from_quads(&reversed_quads).expect("reversed source");
         let pack = PackBuilder::build_bytes(
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("pack");
         let packed = PackView::from_bytes(&pack).expect("pack view");
@@ -923,7 +920,7 @@ mod tests {
                     resident.dataset.as_ref(),
                     &reparsed,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

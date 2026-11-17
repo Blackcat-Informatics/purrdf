@@ -80,9 +80,10 @@ ownership and native error handling.
   `snapshot()`, `match()` and applied synchronous/asynchronous UPDATEs preserve it.
   Missing remembered graph targets are errors unless `SILENT`; use `DROP` when
   removing the graph itself is intended. Policy is not serialized into RDF.
-- **Graph identity** — `Dataset.canonicalize()` returns the RDFC-1.0 canonical, flat
-  N-Quads for the graph; `Dataset.isomorphic(other)` decides RDF graph equality under
-  blank-node relabeling (an exact oracle backed by full RDFC-1.0 canonicalization).
+- **Graph identity** — `Dataset.canonicalize()` returns the canonical line-sequence
+  N-Quads for the graph, with decimal blank-node labels; `Dataset.isomorphic(other)`
+  decides RDF graph equality under blank-node relabeling (an exact oracle backed by
+  the same canonical labelling).
 - **Visualization** — `Dataset.visualModel(options?)` returns the renderer-neutral
   RDF 1.2 statement model; `visualExport` adds the semantic scene, deterministic
   geometry, hashes, diagnostics, and element index; `visualSvg` returns a
@@ -279,7 +280,7 @@ denial, an endpoint's failure, and a request served while a long query runs.
 - A quoted-triple term as a quad **object** round-trips through every format
   this surface accepts — `turtle`, `trig`, `ntriples`, `nquads`, `jsonld`,
   `yamlld`, and `rdfxml` (via `rdf:parseType="Triple"`) — byte-identically
-  under RDFC-1.0 canonicalization.
+  under canonicalization.
 
 ## Building
 

@@ -149,10 +149,7 @@ pub fn qualify_resident_envelope(actual_hundred_thousand: bool) -> Result<String
             workload,
             profile,
             &window,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let measured = window.close();
         let metrics = result.map_err(|error| JsError::new(&error))?;

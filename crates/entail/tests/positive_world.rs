@@ -11,9 +11,9 @@ use std::sync::{
 
 use purrdf_core::term_fixture::{BudgetedView, ProbeFault, build_page, intern_value, iri};
 use purrdf_core::{
-    CanonicalizationControl, DatasetStateDigest, DatasetView, FallibleDatasetView, GraphMatch,
-    QuadIds, RDFC_V2_CORPUS_POLICY, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue,
-    ViewOperationStatus,
+    CANON_CORPUS_POLICY, CanonicalizationControl, DatasetStateDigest, DatasetView,
+    FallibleDatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef,
+    TermValue, ViewOperationStatus,
 };
 use purrdf_entail::reasoner::{
     DlAxiom, PositiveUpdateRefusal, PositiveWorld, PositiveWorldError, PositiveWorldLimits,
@@ -22,7 +22,7 @@ use purrdf_entail::reasoner::{
 use purrdf_iri::vocab::{owl, rdf, rdfs};
 
 fn control() -> CanonicalizationControl<'static> {
-    CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+    CanonicalizationControl::new(CANON_CORPUS_POLICY, None)
 }
 
 fn limits() -> PositiveWorldLimits {

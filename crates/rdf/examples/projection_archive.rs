@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if !datasets_isomorphic(
         &dataset,
         &lifted.dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )? {
         return Err("projection round trip changed the RDF dataset".into());
     }

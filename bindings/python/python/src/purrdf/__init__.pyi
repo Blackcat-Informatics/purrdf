@@ -1713,8 +1713,8 @@ class RdfDataset:
     def quad_count(self) -> int: ...
     def term_count(self) -> int: ...
     def __len__(self) -> int: ...
-    # Canonical flat N-Quads under the shipped RDF 1.2 profile (RDFC-1.0 on its
-    # RDF 1.1 subset) — the readable surface of a frozen
+    # The canonical line sequence of the nested-refinement labelling, spelled as
+    # N-Quads 1.2 with decimal blank-node labels — the readable surface of a frozen
     # dataset, and the same serializer the shared string boundary uses. N-Triples
     # is a syntactic subset, so a default-graph-only dataset serializes to a valid
     # N-Triples document; one that names graphs keeps the graph term. There is

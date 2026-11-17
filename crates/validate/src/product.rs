@@ -1220,7 +1220,7 @@ mod tests {
     #[test]
     fn recursive_catalog_pack_retains_the_original_structured_failure() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let refusal = pack_shapes_product(
             "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
@@ -1244,7 +1244,7 @@ mod tests {
     #[test]
     fn recursion_options_reach_both_catalog_pack_paths_before_admission() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         use purrdf_shapes::engine::ValidationOptions;
         use purrdf_shapes::recursion::{RecursionOptions, RecursionSemantics};
@@ -1312,7 +1312,7 @@ mod tests {
     #[test]
     fn a_product_round_trips_through_every_reader() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         admit_shapes_product(&product).expect("admit");
@@ -1346,7 +1346,7 @@ mod tests {
     #[test]
     fn a_product_validation_honours_the_request_disallow_set() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let warning = SHAPES.replace(
             "sh:path ex:age ;",
@@ -1389,7 +1389,7 @@ mod tests {
     #[test]
     fn a_corrupt_product_is_refused_on_a_named_dimension() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
 
@@ -1410,7 +1410,7 @@ mod tests {
     #[test]
     fn a_shapes_parse_failure_names_no_dimension() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let refusal =
             pack_shapes_product("@@@ not turtle", None, &[], &mut control).expect_err("refused");
@@ -1439,7 +1439,7 @@ mod tests {
     #[test]
     fn the_dataset_entry_point_matches_the_text_entry_point_byte_for_byte() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let via_text =
             pack_shapes_product(SHAPES, None, &[], &mut control).expect("text entry point");
@@ -1471,7 +1471,7 @@ mod tests {
     #[test]
     fn the_dataset_entry_point_matches_the_text_entry_point_with_a_base() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let base = Some("https://example.org/shapes");
         let via_text =
@@ -1501,7 +1501,7 @@ mod tests {
     #[test]
     fn refuses_an_unresolved_import_with_the_typed_import_error() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let refusal = pack_shapes_product(SHAPES_WITH_UNRESOLVED_IMPORT, None, &[], &mut control)
             .expect_err("an unresolved owl:imports is refused");
@@ -1520,7 +1520,7 @@ mod tests {
     #[test]
     fn a_supplied_import_is_packed_into_the_product() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         const LIB: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
             @prefix ex: <http://example.org/> .\n\
@@ -1560,7 +1560,7 @@ mod tests {
     #[test]
     fn merged_vocabulary_packs() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let merged = format!("{SHACL_TTL}\n{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{SHAPES}");
         let product = pack_shapes_product(&merged, None, &[], &mut control)
@@ -1580,7 +1580,7 @@ mod tests {
     #[test]
     fn unresolved_import_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let partial = format!("{SHNEX_TTL}\n{SHNEX_SPARQL_TTL}\n{SHAPES}");
         let refusal = pack_shapes_product(&partial, None, &[], &mut control)
@@ -1600,7 +1600,7 @@ mod tests {
     #[test]
     fn a_self_import_packs_under_its_own_base() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         const DOC: &str = "http://example.org/shapes/doc";
         let own = format!(
@@ -1632,7 +1632,7 @@ mod tests {
     #[test]
     fn accepts_a_graph_with_no_imports_neighbour() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         pack_shapes_product(SHAPES, None, &[], &mut control)
             .expect("a graph with no owl:imports still packs");
@@ -1732,7 +1732,7 @@ mod tests {
     #[test]
     fn refuses_a_product_that_is_not_the_expected_one() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let held = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         let wanted =
@@ -1756,7 +1756,7 @@ mod tests {
     #[test]
     fn accepts_the_expected_product_neighbour() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         let selector = parse_identity_digest(&rendered_selector(&product))
@@ -1787,7 +1787,7 @@ mod tests {
     #[test]
     fn refuses_a_rebuild_validation_that_is_not_the_expected_one() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let held = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         let wanted =
@@ -1816,7 +1816,7 @@ mod tests {
     #[test]
     fn accepts_the_expected_product_neighbour_on_rebuild_validation() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         let selector = parse_identity_digest(&rendered_selector(&product))
@@ -1843,7 +1843,7 @@ mod tests {
     #[test]
     fn the_rendered_selector_is_the_accepted_selector() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         let rendered = rendered_selector(&product);
@@ -1869,7 +1869,7 @@ mod tests {
     #[test]
     fn refuses_a_rebuilt_product_that_is_not_the_expected_one() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let held = pack_shapes_product(SHAPES, None, &[], &mut control).expect("shapes pack");
         let wanted =
@@ -1893,7 +1893,7 @@ mod tests {
     #[test]
     fn accepts_the_expected_product_neighbour_on_rebuild() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         use purrdf_shapes::engine;
 
@@ -1937,7 +1937,7 @@ mod tests {
     #[test]
     fn refuses_a_restore_under_another_implementation_build() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product =
             pack_with_native(BUILD_A, &mut control).expect("a named injected population packs");
@@ -1971,7 +1971,7 @@ mod tests {
     #[test]
     fn accepts_the_same_implementation_build_neighbour() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let product =
             pack_with_native(BUILD_A, &mut control).expect("a named injected population packs");
@@ -2019,7 +2019,7 @@ mod tests {
     #[test]
     fn refuses_packing_an_injected_population_with_no_build() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let prepared = prepared_with_native();
         let refusal = prepared_to_product(&prepared, &mut control)
@@ -2042,7 +2042,7 @@ mod tests {
     #[test]
     fn accepts_packing_a_named_injected_population_neighbour() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         prepared_to_product_with_implementations(&prepared_with_native(), BUILD_A, &mut control)
             .expect("an injected population with a named build is writable");
@@ -2058,7 +2058,7 @@ mod tests {
     #[test]
     fn refuses_a_selector_that_is_not_a_digest() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for bad in ["", "not-a-digest", "abc", &"f".repeat(63), &"f".repeat(65)] {
             let why = parse_identity_digest(bad).expect_err("a non-digest selector is refused");

@@ -7,8 +7,9 @@
 //! Lowering is outside the definition (its section 11): this is the one rule
 //! by which PurRDF supplies lines for a dataset view.
 //!
-//! * Each quad becomes a `quad` line.
-//! * Each row of the reifier side table, `(reifier, rdf:reifies, triple term,
+//! * Each distinct quad becomes a `quad` line; a view that visits a row
+//!   again repeats nothing, because a statement is a set member.
+//! * Each distinct row of the reifier side table, `(reifier, rdf:reifies, triple term,
 //!   graph)`, becomes a `reifier-binding` line of the reifier, the triple term
 //!   and the graph.
 //! * Each distinct row of the annotation side table becomes an `annotation`
@@ -21,28 +22,47 @@
 //!   becomes an `empty-graph` line.
 //! * Each caller [`Record`] becomes a `record` line. A record denotes nothing:
 //!   it adds no graph and no `empty-graph` line.
+//! * A composite literal (`cdt:List` or `cdt:Map`) whose lexical form names a
+//!   blank node is not a constant leaf. Its leaf is the blank leaf of a
+//!   composite node, one node per literal value, and the first time a line
+//!   holds it, one `record` line ties the node to its text and to the blank
+//!   nodes the text names: the payload is
+//!   [`composite_payload`](super::document::composite_payload) of the
+//!   datatype and the text around the embedded tokens, and the terms are the
+//!   composite node, then the blank node of each token in order, repeats
+//!   kept. An embedded label denotes the blank node of the view with the same
+//!   `(label, scope)` ([`crate::cdt_blank`]), so it takes part in the
+//!   labelling like a label in any other position. A composite literal that
+//!   names no blank node is a constant leaf like any other literal.
 //!
 //! A blank node's source identifier is its scope ordinal, four bytes
 //! big-endian, followed by its label bytes, so two blank nodes are one node
 //! exactly when their `(label, scope)` are equal; a blank node of a record is
-//! the view's blank node of the same `(label, scope)`. Terms are lowered
-//! straight into tokens over a heap work list: no nested term is built and
-//! none is walked on the machine stack.
+//! the view's blank node of the same `(label, scope)`. A composite node's
+//! source identifier is four zero bytes, `0xFF` and its literal's encoding,
+//! which no `(label, scope)` spells. Terms are lowered straight into tokens
+//! over a heap work list: no nested term is built and none is walked on the
+//! machine stack.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
+use super::document::{
+    Composites, DocumentError, composite_payload, composite_source, is_composite_source,
+};
 use super::lines::{
     Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
     Tok, iri_encoding, literal_encoding,
 };
 use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
+use crate::cdt_blank::cdt_blank_segments;
 use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
 
+use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 use crate::{
-    CanonError, CanonHash, CanonicalizationControl, ContentDigest, DatasetView, RdfTextDirection,
-    StopSignal, TermLookupError, TermValue, try_canonical_sha256_view,
+    BlankScope, CanonError, CanonicalizationControl, ContentDigest, DatasetView, RdfTextDirection,
+    StopSignal, TermLookupError, TermValue,
 };
 
 /// A caller's record beside a view: an opaque payload, compared whole and never
@@ -142,12 +162,56 @@ const fn variant_of(value: &TermValue) -> GraphTerm {
     }
 }
 
+/// The source identifier of the blank node `(label, scope)`.
+fn blank_source(label: &str, scope: BlankScope) -> Vec<u8> {
+    let mut source = Vec::with_capacity(4 + label.len());
+    source.extend_from_slice(&scope.ordinal().to_be_bytes());
+    source.extend_from_slice(label.as_bytes());
+    source
+}
+
+/// Which statements of a view become lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Scope<'a> {
+    /// Every statement and every named graph of the view.
+    Dataset,
+    /// The statements asserted in the named graph with this IRI, each lowered
+    /// with its graph slot absent. A reifier or annotation row belongs to the
+    /// graph its own graph slot names. A graph the view does not use names no
+    /// rows: the result is the labelling of no line. No `empty-graph` line is
+    /// produced, because the graph is not a graph of the lines.
+    Graph(&'a str),
+}
+
+/// A [`Scope`] resolved against a view.
+#[derive(Clone, Copy)]
+enum Selection<Id> {
+    Dataset,
+    /// The id of the selected graph, or none when the view holds no such term.
+    Graph(Option<Id>),
+}
+
+/// What a selection does with a row.
+#[derive(Clone, Copy)]
+enum Slot<Id> {
+    /// The row is lowered with this graph slot.
+    Kept(Option<Id>),
+    /// The row is not of the selection.
+    Left,
+}
+
 struct Lowering<'a, 's, D: DatasetView> {
     view: &'a D,
+    selection: Selection<D::Id>,
     stop: Option<&'s dyn StopSignal>,
     admitter: Admitter,
     /// The graphs carried by a statement line, by view identifier.
     carried: BTreeSet<D::Id>,
+    /// The composite nodes whose `record` line is already lowered.
+    composites: BTreeSet<usize>,
+    /// The `record` lines of composite nodes a line just reached, pushed after
+    /// that line.
+    pending: Vec<Vec<Tok>>,
 }
 
 impl<D: DatasetView> Lowering<'_, '_, D> {
@@ -159,8 +223,13 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
         }
     }
 
-    /// The tokens of `value` in walk order, and its variant.
-    fn value(&mut self, value: &TermValue, out: &mut Vec<Tok>) -> GraphTerm {
+    /// The tokens of `value` in walk order, and its variant. A composite node
+    /// reached for the first time queues its `record` line in `pending`.
+    fn value(
+        &mut self,
+        value: &TermValue,
+        out: &mut Vec<Tok>,
+    ) -> Result<GraphTerm, ViewError<D::ReadError>> {
         let interner = &mut self.admitter.interner;
         let mut pending = vec![value];
         while let Some(value) = pending.pop() {
@@ -185,13 +254,30 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                         language.as_deref().map(str::as_bytes),
                         direction,
                     );
-                    out.push(Tok::Const(interner.constant(&encoding)));
+                    let cut =
+                        cdt_blank_segments(lexical_form, datatype).map_err(ViewError::Storage)?;
+                    if cut.blanks.is_empty() {
+                        out.push(Tok::Const(interner.constant(&encoding)));
+                        continue;
+                    }
+                    let node = interner.node(&composite_source(&encoding));
+                    out.push(Tok::Blank(node));
+                    if self.composites.insert(node) {
+                        let mut record = Vec::new();
+                        interner.record_head(
+                            &composite_payload(datatype, &cut.segments),
+                            cut.blanks.len() + 1,
+                            &mut record,
+                        );
+                        record.push(Tok::Blank(node));
+                        for (label, scope) in &cut.blanks {
+                            record.push(Tok::Blank(interner.node(&blank_source(label, *scope))));
+                        }
+                        self.pending.push(record);
+                    }
                 }
                 TermValue::Blank { label, scope } => {
-                    let mut source = Vec::with_capacity(4 + label.len());
-                    source.extend_from_slice(&scope.ordinal().to_be_bytes());
-                    source.extend_from_slice(label.as_bytes());
-                    out.push(Tok::Blank(interner.node(&source)));
+                    out.push(Tok::Blank(interner.node(&blank_source(label, *scope))));
                 }
                 TermValue::Triple { s, p, o } => {
                     out.push(Tok::Tag(TAG_TRIPLE));
@@ -199,7 +285,22 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                 }
             }
         }
-        variant_of(value)
+        Ok(variant_of(value))
+    }
+
+    /// Push the `record` lines of the composite nodes the last line reached.
+    fn flush_composites(&mut self) {
+        for tokens in std::mem::take(&mut self.pending) {
+            self.admitter.push(
+                tokens,
+                Facts {
+                    slots_ok: true,
+                    zero_count: false,
+                    carried: None,
+                    held: None,
+                },
+            );
+        }
     }
 
     /// The tokens of the term `id`, and its variant.
@@ -212,7 +313,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
             TermLookupError::ForeignId => ViewError::ForeignId,
             TermLookupError::Read(error) => ViewError::Read(error),
         })?;
-        Ok(self.value(&value, out))
+        self.value(&value, out)
     }
 
     /// The graph slot of a line: its tokens, and the graph term it carries.
@@ -262,35 +363,61 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                 held: None,
             },
         );
+        self.flush_composites();
         Ok(())
+    }
+
+    /// The graph slot a row of graph `g` is lowered with, or [`Slot::Left`]
+    /// when the selection leaves the row out.
+    fn slot(&self, g: Option<D::Id>) -> Slot<D::Id> {
+        match self.selection {
+            Selection::Dataset => Slot::Kept(g),
+            Selection::Graph(Some(selected)) if g == Some(selected) => Slot::Kept(None),
+            Selection::Graph(_) => Slot::Left,
+        }
     }
 
     fn lower(&mut self, records: &[Record<'_>]) -> Result<(), ViewError<D::ReadError>> {
         let view = self.view;
+        // A view may visit a physical row more than once; a statement and a
+        // reifier binding are set members, so each is lowered once. An
+        // annotation row is not a set member: its multiplicity is its count.
+        let mut statements = BTreeSet::new();
         for q in view.quads() {
-            self.row(Kind::Quad, None, &[q.s, q.p, q.o], GraphTerm::Iri, q.g)?;
+            if let Slot::Kept(g) = self.slot(q.g)
+                && statements.insert((q.s, q.p, q.o, g))
+            {
+                self.row(Kind::Quad, None, &[q.s, q.p, q.o], GraphTerm::Iri, g)?;
+            }
         }
         // A reifier row is `(reifier, rdf:reifies, triple term, graph)`.
+        let mut bindings = BTreeSet::new();
         for q in view.reifier_quads() {
-            self.row(
-                Kind::ReifierBinding,
-                None,
-                &[q.s, q.o],
-                GraphTerm::Triple,
-                q.g,
-            )?;
+            if let Slot::Kept(g) = self.slot(q.g)
+                && bindings.insert((q.s, q.o, g))
+            {
+                self.row(
+                    Kind::ReifierBinding,
+                    None,
+                    &[q.s, q.o],
+                    GraphTerm::Triple,
+                    g,
+                )?;
+            }
         }
         // One line per distinct annotation row, its count the row's multiplicity.
         let mut annotations: BTreeMap<_, u64> = BTreeMap::new();
         for q in view.annotation_quads() {
-            let rows = annotations.entry((q.s, q.p, q.o, q.g)).or_default();
-            *rows = rows.saturating_add(1);
+            if let Slot::Kept(g) = self.slot(q.g) {
+                let rows = annotations.entry((q.s, q.p, q.o, g)).or_default();
+                *rows = rows.saturating_add(1);
+            }
         }
         for ((s, p, o, g), count) in annotations {
             self.row(Kind::Annotation, Some(count), &[s, p, o], GraphTerm::Iri, g)?;
         }
         for g in view.named_graphs() {
-            if self.carried.contains(&g) {
+            if matches!(self.selection, Selection::Graph(_)) || self.carried.contains(&g) {
                 continue;
             }
             self.poll()?;
@@ -306,6 +433,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                     held,
                 },
             );
+            self.flush_composites();
         }
         for record in records {
             self.poll()?;
@@ -314,7 +442,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                 .interner
                 .record_head(record.payload, record.terms.len(), &mut tokens);
             for term in record.terms {
-                self.value(term, &mut tokens);
+                self.value(term, &mut tokens)?;
             }
             self.admitter.push(
                 tokens,
@@ -325,6 +453,7 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
                     held: None,
                 },
             );
+            self.flush_composites();
         }
         Ok(())
     }
@@ -333,14 +462,25 @@ impl<D: DatasetView> Lowering<'_, '_, D> {
 /// The lowered lines of `view` and `records`, before admission.
 fn lowered<D: DatasetView>(
     view: &D,
+    scope: Scope<'_>,
     records: &[Record<'_>],
     stop: Option<&dyn StopSignal>,
 ) -> Result<Admission, ViewError<D::ReadError>> {
+    let selection = match scope {
+        Scope::Dataset => Selection::Dataset,
+        Scope::Graph(iri) => Selection::Graph(
+            view.term_id_by_value(&TermValue::Iri(iri.to_owned()))
+                .map_err(ViewError::Read)?,
+        ),
+    };
     let mut lowering = Lowering {
         view,
+        selection,
         stop,
         admitter: Admitter::default(),
         carried: BTreeSet::new(),
+        composites: BTreeSet::new(),
+        pending: Vec::new(),
     };
     match view.checked_read(|_| lowering.lower(records)) {
         Err(error) => Err(ViewError::Read(error)),
@@ -365,7 +505,7 @@ pub fn lines_of_view<D: DatasetView>(
     view: &D,
     records: &[Record<'_>],
 ) -> Result<LineSet, ViewError<D::ReadError>> {
-    lowered(view, records, None)?
+    lowered(view, Scope::Dataset, records, None)?
         .into_result()
         .map_err(ViewError::Refused)
 }
@@ -422,7 +562,7 @@ pub fn compare_view<D: DatasetView>(
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, records, stop)?
+    let lines = lowered(view, Scope::Dataset, records, stop)?
         .into_result()
         .map_err(ViewError::Refused)?;
     let labelled = label_lines(&lines, limit, stop)?;
@@ -480,7 +620,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, records, stop)?
+    let lines = lowered(view, Scope::Dataset, records, stop)?
         .into_result()
         .map_err(ViewError::Refused)?;
     let bytes = lines
@@ -500,6 +640,162 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
             labelled,
             admitted_bytes: bytes,
         }),
+        Err(error) => {
+            // A refusal of the refund cannot replace the error that ended the
+            // run: the grant stays outstanding with the caller's account.
+            let _ = memory.release_bytes(bytes);
+            Err(error)
+        }
+    }
+}
+
+/// A labelled view: the admitted lines, their labelling, and the view's own
+/// identifier of each blank node.
+#[derive(Clone, Debug)]
+pub struct Labelling<Id> {
+    lines: LineSet,
+    labelled: Labelled,
+    blanks: Vec<Option<Id>>,
+}
+
+impl<Id: Copy> Labelling<Id> {
+    /// The admitted lines the labelling was computed over.
+    #[must_use]
+    pub const fn lines(&self) -> &LineSet {
+        &self.lines
+    }
+
+    /// The labelling of [`Self::lines`]: positions, identities, the canonical
+    /// line sequence, its digest and the structural record.
+    #[must_use]
+    pub const fn labelled(&self) -> &Labelled {
+        &self.labelled
+    }
+
+    /// The view's identifier of the blank node with index `node` in
+    /// [`Self::lines`] (index `i` of [`Labelled::placements`]). `None` for a
+    /// blank node that only a [`Record`] mentions, and for a composite node:
+    /// the view does not hold it.
+    #[must_use]
+    pub fn blank_id(&self, node: usize) -> Option<Id> {
+        self.blanks.get(node).copied().flatten()
+    }
+
+    /// Every blank node of the view that occurs in a line, as
+    /// `(view identifier, position)` in node order.
+    pub fn view_positions(&self) -> impl Iterator<Item = (Id, u64)> + '_ {
+        self.blanks
+            .iter()
+            .zip(&self.labelled.placements)
+            .filter_map(|(id, placement)| id.map(|id| (id, placement.position)))
+    }
+
+    /// The literal each composite node of the canonical line sequence spells.
+    pub(crate) fn composites(&self) -> Result<Composites, DocumentError> {
+        let positions: BTreeSet<u64> = (0..self.lines.blank_nodes())
+            .filter(|&node| is_composite_source(self.lines.source(node)))
+            .map(|node| self.labelled.placements[node].position)
+            .collect();
+        Composites::of(&self.labelled.lines, |position| {
+            positions.contains(&position)
+        })
+    }
+}
+
+/// The labelling of admitted `lines`, with the view's identifier of each
+/// blank node.
+fn labelling_of<D: DatasetView>(
+    view: &D,
+    lines: LineSet,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
+    let labelled = label_lines(&lines, limit, stop)?;
+    let mut blanks = Vec::with_capacity(lines.blank_nodes());
+    for node in 0..lines.blank_nodes() {
+        let source = lines.source(node);
+        let id = match source.split_first_chunk::<4>() {
+            Some((ordinal, label)) => match std::str::from_utf8(label) {
+                Ok(label) => view
+                    .term_id_by_value(&TermValue::Blank {
+                        label: label.to_owned(),
+                        scope: BlankScope(u32::from_be_bytes(*ordinal)),
+                    })
+                    .map_err(ViewError::Read)?,
+                Err(_) => None,
+            },
+            None => None,
+        };
+        blanks.push(id);
+    }
+    Ok(Labelling {
+        lines,
+        labelled,
+        blanks,
+    })
+}
+
+/// Label the lines of `view` and `records` within `scope`, with the engine's
+/// own `limit` and the caller's `stop` signal (polled while the rows are
+/// lowered and at every call of the engine).
+///
+/// Positions are those of the lines of this scope and records together; they
+/// are never mixed with the positions of another scope or record set. The
+/// labelling does not meter its storage; use [`label_view_with_memory`] where
+/// the caller admits the working state of a computation.
+///
+/// # Errors
+/// As [`lines_of_view`], and [`ViewError::Stopped`] when `stop` is set. A
+/// refusal is [`ViewError::Refused`] with the typed refusal of the
+/// definition, [`Refusal::Limit`] included.
+pub fn label_view<D: DatasetView>(
+    view: &D,
+    records: &[Record<'_>],
+    scope: Scope<'_>,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
+    let lines = lowered(view, scope, records, stop)?
+        .into_result()
+        .map_err(ViewError::Refused)?;
+    labelling_of(view, lines, limit, stop)
+}
+
+/// A labelling and the bytes of working state still granted for it.
+type LabellingWithBytes<Id> = (Labelling<Id>, usize);
+
+/// [`label_view`] with the working state of the labelling admitted once, before
+/// the engine starts, through the caller's `memory`, as
+/// [`compare_view_with_memory`] does. On success the grant stays outstanding and
+/// its size is returned: release that many bytes when the labelling is dropped.
+/// On any error the grant is returned before the error is.
+///
+/// # Errors
+/// As [`label_view`], and [`ViewError::Storage`] when the admission refuses or
+/// the sum of the bytes passes the word.
+pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
+    view: &D,
+    records: &[Record<'_>],
+    scope: Scope<'_>,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+    memory: &mut Memory<'_, S>,
+) -> Result<LabellingWithBytes<D::Id>, ViewError<D::ReadError>> {
+    let lines = lowered(view, scope, records, stop)?
+        .into_result()
+        .map_err(ViewError::Refused)?;
+    let bytes = lines
+        .footprint_bytes()
+        .zip(optimised::working_bytes(&lines))
+        .and_then(|(held, working)| held.checked_add(working))
+        .ok_or(ViewError::Storage(StorageError::SizeOverflow))?;
+    memory
+        .admission_mut()
+        .checkpoint(0)
+        .map_err(ViewError::Storage)?;
+    memory.add_bytes(bytes).map_err(ViewError::Storage)?;
+    match labelling_of(view, lines, limit, stop) {
+        Ok(labelling) => Ok((labelling, bytes)),
         Err(error) => {
             // A refusal of the refund cannot replace the error that ended the
             // run: the grant stays outstanding with the caller's account.

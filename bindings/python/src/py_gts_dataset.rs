@@ -23,7 +23,7 @@ use pyo3::types::{PyBytes, PyDict, PyString};
 use crate::py_gts::rdf_format;
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
-use crate::{CanonHash, RdfLookaside, gts_write, try_canonicalize_flat_view};
+use crate::{RdfLookaside, canonical_flat_nquads, gts_write};
 
 /// A Python handle to a frozen [`crate::RdfDataset`].
 #[pyclass(name = "RdfDataset", frozen)]
@@ -118,9 +118,9 @@ impl PyRdfDataset {
         self.inner.quad_count()
     }
 
-    /// Serialize this immutable dataset to the shipped profile's canonical flat N-Quads.
-    /// It agrees with RDFC-1.0 on the RDF 1.1 subset; RDF 1.2 statements follow
-    /// the separate [`purrdf_core::CANON_PROFILE_ID`] contract.
+    /// Serialize this immutable dataset to the canonical line sequence of the
+    /// nested-refinement labelling, spelled as N-Quads 1.2 with decimal blank-node
+    /// labels.
     ///
     /// The readable surface of a frozen dataset: without it a handle returned by
     /// `purrdf.entail.materialize` can be counted but never inspected. The output
@@ -135,10 +135,10 @@ impl PyRdfDataset {
     /// `to_ntriples` spelling would misdescribe. There is deliberately no alias:
     /// one serializer, one name.
     ///
-    /// This handle can wrap arbitrary caller-supplied bytes, so a refusal (reserved
-    /// vocabulary, or n-degree search budget exhaustion) is raised as an ordinary
-    /// `ValueError` via the typed [`try_canonicalize_flat_view`] path, never a process
-    /// abort.
+    /// This handle can wrap arbitrary caller-supplied bytes, so a refusal (the
+    /// labelling's typed `input`, `graph`, `width` or `limit` refusal) is raised as an
+    /// ordinary `ValueError` via the typed [`canonical_flat_nquads`] path, never a
+    /// process abort.
     #[pyo3(signature = (*, canonical_search, cancel=None))]
     fn to_nquads(
         &self,
@@ -147,7 +147,7 @@ impl PyRdfDataset {
         cancel: Option<&crate::py_store::PyCancellationToken>,
     ) -> PyResult<crate::py_canonical::PyCanonicalResult> {
         let (text, receipts) = crate::py_canonical::run(py, canonical_search, cancel, |control| {
-            try_canonicalize_flat_view(self.inner.as_ref(), CanonHash::Sha256, control)
+            canonical_flat_nquads(self.inner.as_ref(), control)
         })?;
         crate::py_canonical::finish(py, text.nquads(), receipts)
     }

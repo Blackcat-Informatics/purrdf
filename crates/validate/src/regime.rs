@@ -235,7 +235,7 @@ pub fn parse_regime(name: &str) -> Result<Regime, ReasoningError> {
 /// The canonical result retains its original storage reservation.
 #[derive(Debug, Clone)]
 pub struct RegimeClosure {
-    /// The materialized dataset as canonical (RDFC-1.0) N-Quads.
+    /// The materialized dataset as canonical N-Quads.
     nquads: purrdf_core::Canonicalized,
     /// The run's [`ReasoningReport`], rendered by [`render_reasoning_report`].
     report: String,
@@ -250,7 +250,7 @@ impl Eq for RegimeClosure {}
 
 impl RegimeClosure {
     /// The materialized dataset — every input quad plus every inferred triple —
-    /// as canonical (RDFC-1.0) N-Quads.
+    /// as canonical N-Quads.
     #[must_use]
     pub fn nquads(&self) -> &str {
         self.nquads.nquads()
@@ -274,8 +274,8 @@ impl RegimeClosure {
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged. The closure is the input dataset plus every triple the regime's
-/// implemented rules infer, serialized through the native RDFC-1.0 flat
-/// serializer (deterministic, blank-node-canonical).
+/// implemented rules infer, serialized as its canonical document (the canonical
+/// line sequence spelled as N-Quads 1.2: deterministic, blank-node-canonical).
 ///
 /// # `program` — the regime's own input, not an option
 ///
@@ -313,10 +313,10 @@ impl RegimeClosure {
 /// * A malformed input document (the native codec's own diagnostic).
 /// * An exhausted evaluation ceiling or a dataset that cannot be frozen (the
 ///   `purrdf-entail` error).
-/// * A materialized closure carrying a reserved-vocabulary IRI, or one that
-///   exhausts the RDFC-1.0 n-degree search budget — the document is wholly
+/// * A materialized closure the canonical labelling refuses, such as one that
+///   exhausts its limit — the document is wholly
 ///   caller-supplied, so this refusal comes back as an `Err` (via
-///   [`purrdf_core::try_canonicalize_flat_view`]) rather than panicking.
+///   [`purrdf_core::try_canonicalize_checked_view`]) rather than panicking.
 ///
 /// # Examples
 ///
@@ -328,7 +328,7 @@ impl RegimeClosure {
 ///     <http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
 ///
-/// let closed = materialize_to_nquads_string("rdfs", data, "", &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("rdfs closure");
+/// let closed = materialize_to_nquads_string("rdfs", data, "", &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("rdfs closure");
 /// // rdfs9 re-types the instance.
 /// assert!(closed.nquads().contains(
 ///     "<http://example.org/x> \
@@ -627,7 +627,7 @@ pub fn materialize_to_nquads_string_with(
     // The materialized closure is wholly caller-supplied (the document parsed above),
     // so it goes through the typed, non-panicking canonicalization entry point rather
     // than `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
-    // reserved-vocabulary or budget-exhausting closure must come back as an `Err`
+    // labelling refusal (such as its limit) must come back as an `Err`
     // value across the wasm/Python/C-ABI boundary, not abort the process.
     let nquads = caller_flat_nquads(
         closure.as_ref(),
@@ -641,8 +641,8 @@ pub fn materialize_to_nquads_string_with(
 }
 
 /// Canonicalize `dataset` — content the CALLER supplied or that was derived from
-/// content the caller supplied — as flat N-Quads, refusing a reserved-vocabulary
-/// or search-budget-exhausting result as a value rather than the panic
+/// content the caller supplied — as canonical N-Quads, refusing a result the
+/// canonical labelling refuses (such as one past its limit) as a value rather than the panic
 /// [`purrdf_rdf::canonical_flat_nquads`] raises for the same refusal.
 ///
 /// `context` opens the diagnostic (e.g. `"extract-module"`, or
@@ -653,8 +653,7 @@ fn caller_flat_nquads(
     context: &str,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<purrdf_core::Canonicalized, crate::canonical::CanonicalServiceError> {
-    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256, control)
-    {
+    match purrdf_core::try_canonicalize_checked_view(dataset, control) {
         Ok(canonicalized) => Ok(canonicalized),
         Err(purrdf_core::ViewCanonError::Refused(err)) => {
             Err(crate::canonical::CanonicalServiceError::Canonical {
@@ -1690,7 +1689,7 @@ impl<A: AsRef<str>> ReasoningAnswer<A> {
     ///
     /// Line-oriented and byte-stable, in the grammar the service's entry point
     /// documents. A dataset-valued answer ([`extract_module_to_string`],
-    /// [`justify_to_string`]) is canonical (RDFC-1.0) N-Quads instead.
+    /// [`justify_to_string`]) is canonical N-Quads instead.
     #[must_use]
     pub fn answer(&self) -> &str {
         self.answer.as_ref()
@@ -2224,7 +2223,7 @@ fn proof_body_bytes(text: &str, line: usize) -> Result<Vec<u8>, ProofDocumentErr
 /// purrdf-dl-proof 1
 /// service <name>                  (one of PROOF_SERVICE_NAMES)
 /// availability recorded
-/// input <64 lowercase hex>        (the ontology's RDFC-1.0 identity)
+/// input <64 lowercase hex>        (the ontology's canonical line-sequence digest)
 /// digest <64 lowercase hex>       (BLAKE3 over the canonical bytes below)
 /// trust-base <a,b,c>              (what a verification of this proof RESTS ON)
 /// runs <n>                        (tableau runs the service made)
@@ -2588,7 +2587,7 @@ impl ReasonerSession {
     }
 
     /// The ontology this session reasons over — the premise merged with its imports closure
-    /// when [`Self::open_premise`] resolved one — as canonical (RDFC-1.0) N-Quads.
+    /// when [`Self::open_premise`] resolved one — as canonical N-Quads.
     ///
     /// This is a data export, not a copy of the native checking context: canonical
     /// ordering can change first-seen DL term identifiers. Check a proof against
@@ -2596,8 +2595,8 @@ impl ReasonerSession {
     ///
     /// # Errors
     ///
-    /// A dataset refused canonicalization (a reserved-vocabulary IRI, or one that exhausts
-    /// the RDFC-1.0 search budget).
+    /// A dataset refused canonicalization (the canonical labelling's typed refusal,
+    /// such as its limit).
     pub fn premise_nquads(
         &self,
         control: &mut purrdf_core::CanonicalizationControl<'_>,
@@ -3006,7 +3005,7 @@ impl ReasonerSession {
 ///
 /// let data = "<http://example.org/x> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
-/// let decided = consistency_to_string(data, &[], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("reverse-maps");
+/// let decided = consistency_to_string(data, &[], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("reverse-maps");
 /// assert_eq!(decided.answer(), "consistency true\n");
 /// // The certificate is never optional and never claims more than it decided: `decided`
 /// // is reported here only because the boundary list beside it is, in fact, empty.
@@ -3023,11 +3022,11 @@ impl ReasonerSession {
 /// let lib = "<http://example.org/A> \
 ///     <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/B> .\n";
 /// let with_import = consistency_to_string(
-///     importing, &[("http://example.org/lib", lib)], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)
+///     importing, &[("http://example.org/lib", lib)], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
 /// ).expect("decides");
 /// assert_eq!(with_import.answer(), "consistency false\n");
 /// // …and without the document the question is refused, never answered over less.
-/// assert!(consistency_to_string(importing, &[], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).is_err());
+/// assert!(consistency_to_string(importing, &[], &[], 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).is_err());
 /// ```
 pub fn consistency_to_string(
     document: &str,
@@ -3156,7 +3155,7 @@ pub fn instances_to_string(
 /// // Not asserted, and entailed.
 /// let asked = "<http://example.org/tom> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .\n";
-/// let decided = entails_to_string(data, asked, 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("decides");
+/// let decided = entails_to_string(data, asked, 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("decides");
 /// assert!(decided.answer().starts_with("entails true\n"));
 /// assert!(decided.answer().contains("\naxiom ClassAssertion\n"));
 /// ```
@@ -3269,7 +3268,7 @@ fn render_profile_certificate(certificate: &ProfileCertificate) -> String {
 /// `signature` is one N-Triples term per non-blank line. `method` is `bot`, `top`
 /// or `star` — see [`MODULE_METHOD_NAMES`].
 ///
-/// The answer is the extracted module as canonical (RDFC-1.0) N-Quads, exactly as
+/// The answer is the extracted module as canonical N-Quads, exactly as
 /// [`materialize_to_nquads_string`]'s closure is, so the two dataset-valued
 /// services serialize through one path.
 ///
@@ -3327,7 +3326,7 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, ReasoningError> {
 /// chase lane's genuinely derivational explanation and for why the two are
 /// different kinds of thing rather than two spellings of one.
 ///
-/// The answer is the justification's axioms as canonical (RDFC-1.0) N-Quads: a
+/// The answer is the justification's axioms as canonical N-Quads: a
 /// justification introduces no term at all, so it is emitted as an ordinary RDF 1.2
 /// dataset holding exactly the axioms already present in the input.
 ///
@@ -3377,7 +3376,7 @@ fn parse_module_method(name: &str) -> Result<ModuleMethod, ReasoningError> {
 ///      <http://example.org/Fish> <{sub}> <http://example.org/Animal> .\n"
 /// );
 /// let asked = format!("<http://example.org/Cat> <{sub}> <http://example.org/Animal> .\n");
-/// let why = justify_to_string(&data, &asked, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("entailed");
+/// let why = justify_to_string(&data, &asked, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("entailed");
 /// // The chain, and NOT the sibling.
 /// assert_eq!(why.answer().lines().count(), 2);
 /// assert!(why.certificate().contains("\nsufficient true\n"));
@@ -4783,7 +4782,7 @@ impl ReasonerSession {
 ///
 /// let data = "<http://example.org/Cat> \
 ///     <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n";
-/// let proved = prove_to_string(data, "consistency", "", 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("decides");
+/// let proved = prove_to_string(data, "consistency", "", 0, 0, &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("decides");
 /// assert_eq!(proved.answer(), "consistency true\n");
 /// assert!(proved.proof_document().starts_with("purrdf-dl-proof 1\n"));
 /// assert!(proved.proof_document().contains("\navailability recorded\n"));
@@ -4795,7 +4794,7 @@ impl ReasonerSession {
 ///     "",
 ///     proved.answer(),
 ///     proved.certificate(),
-///     proved.proof_document(), &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)
+///     proved.proof_document(), &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
 /// )
 /// .expect("a genuine proof checks");
 /// assert!(checked.starts_with("purrdf-dl-proof-check 1\n"));
@@ -5865,6 +5864,21 @@ pub fn check_absent_proof_is_not_verifiable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A latched stop signal: every canonicalization it controls refuses.
+    #[derive(Debug)]
+    struct Latched;
+
+    impl purrdf_core::StopSignal for Latched {
+        fn stopped(&self) -> bool {
+            true
+        }
+    }
+
+    /// A control whose stop is already latched.
+    fn stopped_control() -> purrdf_core::CanonicalizationControl<'static> {
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, Some(&Latched))
+    }
     use purrdf_core::TermBox;
 
     #[test]
@@ -5967,7 +5981,7 @@ mod tests {
     #[test]
     fn a_session_answers_the_same_as_a_fresh_one_whatever_ran_before() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let mut session = ReasonerSession::open(SCHEMA, 0, 0).expect("parses");
         // Deliberately interleaved: the two `&mut self` services run BETWEEN the three
@@ -6101,7 +6115,7 @@ mod tests {
     #[test]
     fn the_golden_vector_matches() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         check_regime_golden_vectors(&mut control).expect("the regime golden vector");
     }
@@ -6183,7 +6197,7 @@ mod tests {
     #[test]
     fn an_inconsistent_input_is_refused_with_its_report() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         check_inconsistent_refusal(&mut control).expect("the inconsistent refusal");
     }
@@ -6199,7 +6213,7 @@ mod tests {
     #[test]
     fn the_withheld_surrogate_count_moves_with_the_lane() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let mut withheld = |regime: &str| -> u64 {
             let report = materialize_to_nquads_string(regime, SCHEMA, "", &mut control)
@@ -6233,7 +6247,7 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let error = {
             let offered = String::from("rdfs-plus");
@@ -6275,7 +6289,7 @@ mod tests {
     #[test]
     fn every_regime_spelling_materializes() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (name, program) in REGIME_CALLS {
             let closed = materialize_to_nquads_string(name, SCHEMA, program, &mut control)
@@ -6302,7 +6316,7 @@ mod tests {
     #[test]
     fn a_rule_document_belongs_to_rif_and_is_refused_elsewhere() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (name, _) in REGIME_CALLS {
             if name == "rif" {
@@ -6333,31 +6347,24 @@ mod tests {
     /// migration off the panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper
     /// closes.
     #[test]
-    fn a_reserved_vocabulary_closure_is_refused_as_a_value_not_a_panic() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    fn a_stopped_closure_is_refused_as_a_value_not_a_panic() {
+        let mut control = stopped_control();
 
-        let document = format!(
-            "<http://example.org/s> <http://example.org/p> <{}bad> .\n",
-            purrdf_core::RESERVED_NAMESPACE
-        );
-        let error = materialize_to_nquads_string("simple", &document, "", &mut control).expect_err(
-            "a document carrying a reserved-vocabulary IRI must refuse canonicalization \
-             as a value, not panic",
-        );
+        let document = "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n";
+        let error = materialize_to_nquads_string("simple", document, "", &mut control)
+            .expect_err("a stopped canonicalization must refuse as a value, not panic");
         assert!(
             error.to_string().contains("refused canonicalization"),
             "{error}"
         );
     }
 
-    /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
-    /// reserved prefix) in the exact same shape still materializes — the refusal
-    /// above is not an over-refusal of ordinary documents.
+    /// The valid neighbour of the refusal above: the same shape, with no stop
+    /// latched, still materializes — the refusal above is not an over-refusal.
     #[test]
-    fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_materializes() {
+    fn an_unstopped_closure_neighbouring_the_stopped_one_still_materializes() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let document = "<http://example.org/s> <http://example.org/p> <http://example.org/bad> .\n";
         let closed = materialize_to_nquads_string("simple", document, "", &mut control)
@@ -6369,7 +6376,7 @@ mod tests {
     #[test]
     fn a_rif_import_is_refused_with_its_location() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let importing = RIF_PROGRAM.replace(
             "<payload>",
@@ -6392,7 +6399,7 @@ mod tests {
     #[test]
     fn the_rif_lane_entails_under_the_supplied_rules() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let closed =
             materialize_to_nquads_string("rif", SCHEMA, RIF_PROGRAM, &mut control).expect("rif");
@@ -6421,7 +6428,7 @@ mod tests {
     #[test]
     fn the_closure_infers_under_rdfs_and_not_under_simple() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let typed = "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .";
@@ -6444,7 +6451,7 @@ mod tests {
     #[test]
     fn a_named_graph_survives_the_boundary() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let quads = "<http://example.org/x> <http://example.org/p> <http://example.org/y> \
                      <http://example.org/g> .\n";
@@ -6460,7 +6467,7 @@ mod tests {
     #[test]
     fn a_malformed_document_is_an_error() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(
             materialize_to_nquads_string("rdfs", "this is not n-quads\n", "", &mut control)
@@ -6477,7 +6484,7 @@ mod tests {
     #[test]
     fn the_rendering_is_byte_stable_across_calls() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (regime, program) in REGIME_CALLS {
             let first = materialize_to_nquads_string(regime, SCHEMA, program, &mut control)
@@ -6501,7 +6508,7 @@ mod tests {
     #[test]
     fn the_rendering_has_the_documented_shape() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (regime, program) in REGIME_CALLS {
             let report = materialize_to_nquads_string(regime, SCHEMA, program, &mut control)
@@ -6540,7 +6547,7 @@ mod tests {
     #[test]
     fn the_missing_lines_are_the_inventory_difference() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (regime, program) in REGIME_CALLS {
             let defined_set = rules_string(regime).expect("known");
@@ -6589,7 +6596,7 @@ mod tests {
     #[ignore = "writes the committed golden vector; run deliberately"]
     fn regenerate_regime_golden_vectors() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/regime-boundary.vectors");
@@ -6721,7 +6728,7 @@ mod tests {
     #[test]
     fn boundary_lines_carry_the_reason() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let report = materialize_to_nquads_string("rdfs", SCHEMA, "", &mut control)
             .expect("rdfs")
@@ -6752,7 +6759,7 @@ mod tests {
     #[test]
     fn the_contract_hash_distinguishes_the_calculi() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let mut hash_of = |regime: &str| -> String {
             materialize_to_nquads_string(regime, SCHEMA, "", &mut control)
@@ -6804,17 +6811,6 @@ mod tests {
     /// `A ⊑ C` — asserted nowhere, entailed by the chain.
     const CHAIN_AXIOM: &str = "<http://example.org/A> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
-
-    /// [`TAXONOMY`], with `B` replaced by a reserved-vocabulary IRI
-    /// ([`purrdf_core::RESERVED_NAMESPACE`]). `A ⊑ B` and `B ⊑ C` still hold, so
-    /// both the `A`-seeded module and [`CHAIN_AXIOM`]'s justification (which needs
-    /// exactly that chain) carry the reserved IRI through to their output dataset.
-    const TAXONOMY_RESERVED: &str = "\
-<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <urn:purrdf:rdfc:B> .
-<urn:purrdf:rdfc:B> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
-<http://example.org/D> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .
-<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .
-";
 
     /// Every service, as `(name, produced)`, over `document`.
     ///
@@ -6893,7 +6889,7 @@ mod tests {
     #[test]
     fn counting_on_inverse_is_decided_by_nominal_introduction() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let ifp = "<http://example.org/ssn> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
@@ -6976,7 +6972,7 @@ _:c <http://www.w3.org/2002/07/owl#maxCardinality> \
     #[test]
     fn counting_boundaries_refuse_or_exhaust_but_never_answer_wrongly() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let restriction = |kind: &str, n: &str| {
             format!(
@@ -7071,7 +7067,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn every_service_carries_its_certificate() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (service, produced) in every_service(TAXONOMY, &mut control) {
             let produced = produced.unwrap_or_else(|error| panic!("{service}: {error}"));
@@ -7127,7 +7123,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn the_two_lanes_render_different_certificates() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let chase =
             materialize_to_nquads_string("owl-rl", TAXONOMY, "", &mut control).expect("owl-rl");
@@ -7148,7 +7144,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn the_dl_renderings_are_byte_stable_across_calls() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let first: Vec<_> = every_service(TAXONOMY, &mut control)
             .into_iter()
@@ -7170,7 +7166,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn classify_emits_the_closure_and_its_reduction() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let answer = classify_to_string(TAXONOMY, 0, 0, &mut control)
             .expect("classify")
@@ -7199,7 +7195,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn realize_marks_the_most_specific_type() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let answer = realize_to_string(TAXONOMY, 0, 0, &mut control)
             .expect("realize")
@@ -7234,7 +7230,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn instances_retrieves_through_the_hierarchy() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let answer = instances_to_string(TAXONOMY, "<http://example.org/C>", 0, 0, &mut control)
             .expect("instances")
@@ -7261,7 +7257,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn the_axiom_encoding_is_the_owl_2_rdf_mapping() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let cases = [
             (RDFS_SUBCLASS_OF, "SubClassOf"),
@@ -7292,7 +7288,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn entails_decides_both_directions() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let entailed =
             entails_to_string(TAXONOMY, CHAIN_AXIOM, 0, 0, &mut control).expect("decides");
@@ -7312,7 +7308,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn an_exhausted_budget_is_unknown_and_never_false() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let starved =
             entails_to_string(TAXONOMY, CHAIN_AXIOM, 1, 0, &mut control).expect("decides nothing");
@@ -7344,7 +7340,7 @@ _:r <http://www.w3.org/2002/07/owl#{kind}> \
     #[test]
     fn incomplete_direct_services_refuse_with_the_original_certificate() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let omitted = r#"
 <http://example.org/C> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Class> .
@@ -7419,7 +7415,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn an_unsatisfiable_ontology_is_refused_rather_than_answered_vacuously() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let detected = consistency_to_string(UNSATISFIABLE, &[], &[], 0, 0, &mut control)
             .expect("consistency answers");
@@ -7500,7 +7496,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn extract_module_is_smaller_than_the_ontology() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let extracted =
             extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", "bot", &mut control)
@@ -7551,7 +7547,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn an_unknown_module_method_names_the_accepted_set() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let error =
             extract_module_to_string(TAXONOMY, "", "nested", &mut control).expect_err("unknown");
@@ -7562,22 +7558,15 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     }
 
     /// The ontology document is wholly caller-supplied, so an extracted module
-    /// carrying a reserved-vocabulary IRI must refuse canonicalization as an
-    /// `Err` VALUE — through [`ReasonerSession::extract_module`]'s
-    /// [`purrdf_core::try_canonicalize_flat_view`] migration — rather than
-    /// panicking through [`purrdf_rdf::canonical_flat_nquads`].
+    /// whose canonicalization is stopped must refuse as an `Err` VALUE through
+    /// [`ReasonerSession::extract_module`], never panic.
     #[test]
-    fn extract_module_refuses_a_reserved_vocabulary_module_as_a_value() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    fn extract_module_refuses_a_stopped_canonicalization_as_a_value() {
+        let mut control = stopped_control();
 
-        let error = extract_module_to_string(
-            TAXONOMY_RESERVED,
-            "<http://example.org/A>\n",
-            "bot",
-            &mut control,
-        )
-        .expect_err("a module carrying a reserved-vocabulary IRI must refuse, not panic");
+        let error =
+            extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", "bot", &mut control)
+                .expect_err("a stopped canonicalization must refuse, not panic");
         assert!(
             error.to_string().contains("refused canonicalization"),
             "{error}"
@@ -7589,7 +7578,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn extract_module_still_admits_the_ordinary_taxonomy() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let extracted =
             extract_module_to_string(TAXONOMY, "<http://example.org/A>\n", "bot", &mut control)
@@ -7597,33 +7586,22 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
         assert!(extracted.answer().contains("<http://example.org/A>"));
     }
 
-    /// `proofs = true` pays for an EXTRA producer-independent identity beyond the one
-    /// [`extract_module_refuses_a_reserved_vocabulary_module_as_a_value`] exercises: the
-    /// ontology's own identity and the extracted module's, both bound into the recorded
-    /// proof term by `purrdf_entail::reasoner::module::extract_module_with_proofs`. Before
-    /// this migrated off the panicking `purrdf_entail::ontology_identity` onto
-    /// `try_ontology_identity`, a reserved-vocabulary ontology asked for WITH proofs aborted
-    /// the process instead of refusing as a value — reachable from
-    /// `Reasoner(data, proofs=True).extract_module(...)` at the Python/wasm/C-ABI
-    /// boundaries. This is that refusal, named.
+    /// `proofs = true` pays for an EXTRA producer-independent identity beyond the
+    /// one a plain extraction computes: the ontology's own identity and the
+    /// extracted module's. A stop that lands there must refuse as a value too.
     #[test]
-    fn extract_module_with_proofs_refuses_a_reserved_vocabulary_ontology_as_a_value() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    fn extract_module_with_proofs_refuses_a_stopped_canonicalization_as_a_value() {
+        let mut control = stopped_control();
 
-        let session = ReasonerSession::open_with_proofs(TAXONOMY_RESERVED, 0, 0)
-            .expect("a reserved-vocabulary document still PARSES");
+        let session = ReasonerSession::open_with_proofs(TAXONOMY, 0, 0)
+            .expect("the ordinary document parses");
         let error = session
             .extract_module("<http://example.org/A>\n", "bot", &mut control)
-            .expect_err(
-                "a reserved-vocabulary ontology asked for WITH proofs must refuse \
-                 canonicalization as a value, not panic",
-            );
+            .expect_err("a stopped canonicalization asked for WITH proofs must refuse as a value");
         assert!(
             error.to_string().contains("refused canonicalization"),
             "{error}"
         );
-        assert!(error.to_string().contains("urn:purrdf:rdfc:B"), "{error}");
     }
 
     /// The valid neighbour of the refusal above: the same seed/method WITH proofs, over
@@ -7632,7 +7610,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn extract_module_with_proofs_still_admits_the_ordinary_taxonomy() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let session =
             ReasonerSession::open_with_proofs(TAXONOMY, 0, 0).expect("an ordinary document parses");
@@ -7651,7 +7629,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn justify_re_decides_both_halves_of_its_claim() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let why = justify_to_string(TAXONOMY, CHAIN_AXIOM, &mut control).expect("entailed");
         // The chain, and NOT the sibling: two axioms of the four.
@@ -7681,7 +7659,7 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
     #[test]
     fn an_unentailed_axiom_has_no_justification() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let reversed = "<http://example.org/C> \
 <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/A> .\n";
@@ -7690,31 +7668,26 @@ _:facet <http://www.w3.org/2001/XMLSchema#pattern> "[0-9]+"^^<http://www.w3.org/
         assert!(error.to_string().contains("does not entail"), "{error}");
     }
 
-    /// The ontology document is wholly caller-supplied, so a justification
-    /// carrying a reserved-vocabulary IRI must refuse canonicalization as an
-    /// `Err` VALUE — through [`ReasonerSession::justify`]'s
-    /// [`purrdf_core::try_canonicalize_flat_view`] migration — rather than
-    /// panicking through [`purrdf_rdf::canonical_flat_nquads`].
+    /// A justification whose canonicalization is stopped must refuse as an `Err`
+    /// VALUE through [`ReasonerSession::justify`], never panic.
     #[test]
-    fn justify_refuses_a_reserved_vocabulary_justification_as_a_value() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    fn justify_refuses_a_stopped_canonicalization_as_a_value() {
+        let mut control = stopped_control();
 
-        let error = justify_to_string(TAXONOMY_RESERVED, CHAIN_AXIOM, &mut control).expect_err(
-            "a justification carrying a reserved-vocabulary IRI must refuse, not panic",
-        );
+        let error = justify_to_string(TAXONOMY, CHAIN_AXIOM, &mut control)
+            .expect_err("a stopped canonicalization must refuse, not panic");
         assert!(
             error.to_string().contains("refused canonicalization"),
             "{error}"
         );
     }
 
-    /// The valid neighbour of the refusal above: the ORDINARY [`TAXONOMY`] (no
-    /// reserved IRI), same axiom, still justifies successfully.
+    /// The valid neighbour of the refusal above: the same axiom, with no stop
+    /// latched, still justifies successfully.
     #[test]
     fn justify_still_admits_the_ordinary_taxonomy() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let why = justify_to_string(TAXONOMY, CHAIN_AXIOM, &mut control)
             .expect("an ordinary taxonomy must still justify");
@@ -9038,7 +9011,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     #[test]
     fn materialization_and_consistency_close_over_the_import_table() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let imports = [("http://example.org/schema", IMPORTED_SCHEMA)];
         let limits = MaterializeLimits::default();
@@ -9421,7 +9394,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     #[test]
     fn malformed_boundary_input_is_an_error() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(
             consistency_to_string("this is not n-quads\n", &[], &[], 0, 0, &mut control).is_err()
@@ -9599,7 +9572,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         }));
         let answer = on_the_smallest_stack(move || {
             let mut control =
-                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+                purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
             consistency_to_string(&ontology, &[], &[], 0, 0, &mut control)
                 .map(|decided| decided.answer().to_owned())
         })
@@ -9634,7 +9607,7 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
         );
         let refused = on_the_smallest_stack(move || {
             let mut control =
-                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+                purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
             consistency_to_string(&chain, &[], &[], 0, 0, &mut control)
         })
         .expect_err("a 2 000-deep class expression is past the ceiling");
@@ -9651,7 +9624,7 @@ _:b <http://www.w3.org/2002/07/owl#datatypeComplementOf> _:a .\n\
 <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
         let refused = on_the_smallest_stack(move || {
             let mut control =
-                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+                purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
             consistency_to_string(cycle, &[], &[], 0, 0, &mut control)
         })
         .expect_err("a data range cannot be its own complement");
@@ -9702,7 +9675,7 @@ mod proof_tests {
     #[test]
     fn the_dl_proof_golden_vector_matches_natively() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         check_dl_proof_golden_vectors(&mut control).expect("the DL proof golden vector");
     }
@@ -9712,7 +9685,7 @@ mod proof_tests {
     #[test]
     fn an_absent_proof_is_never_presented_as_a_verified_one_natively() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         check_absent_proof_is_not_verifiable(&mut control).expect("the absent-proof refusal");
     }
@@ -9725,7 +9698,7 @@ mod proof_tests {
     #[test]
     fn every_proof_bearing_service_produces_a_checkable_proof() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let questions = every_question();
         assert_eq!(
@@ -9781,7 +9754,7 @@ mod proof_tests {
     #[test]
     fn a_proved_session_answers_exactly_what_an_unproved_one_answers() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (service, argument) in every_question() {
             let mut plain = ReasonerSession::open(TAXONOMY, 0, 0).expect("parses");
@@ -9842,7 +9815,7 @@ mod proof_tests {
     #[test]
     fn a_recorded_zero_run_proof_is_a_different_document_from_an_absent_one() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let argument = "method bot\n<http://example.org/Cat>";
         let proved = prove_to_string(TAXONOMY, "extract-module", argument, 0, 0, &mut control)
@@ -9896,7 +9869,7 @@ mod proof_tests {
     #[test]
     fn a_session_that_records_nothing_refuses_to_prove() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let refusal = ReasonerSession::open(TAXONOMY, 0, 0)
             .expect("parses")
@@ -9909,7 +9882,7 @@ mod proof_tests {
     #[test]
     fn a_proof_for_another_ontology_is_refused_at_the_boundary() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let proved =
             prove_to_string(TAXONOMY, "consistency", "", 0, 0, &mut control).expect("decides");
@@ -9931,7 +9904,7 @@ mod proof_tests {
     #[test]
     fn an_entails_proof_for_another_axiom_is_refused_at_the_boundary() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let proved =
             prove_to_string(TAXONOMY, "entails", AXIOM, 0, 0, &mut control).expect("decides");
@@ -9958,7 +9931,7 @@ mod proof_tests {
     #[test]
     fn a_proof_that_does_not_cover_the_answer_beside_it_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let proved =
             prove_to_string(TAXONOMY, "classify", "", 0, 0, &mut control).expect("classifies");
@@ -9990,7 +9963,7 @@ mod proof_tests {
     #[test]
     fn a_rewritten_proof_header_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let proved =
             prove_to_string(TAXONOMY, "realize", "", 0, 0, &mut control).expect("realizes");
@@ -10025,7 +9998,7 @@ mod proof_tests {
     #[test]
     fn a_proof_body_edited_by_one_hex_digit_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let proved =
             prove_to_string(TAXONOMY, "entails", AXIOM, 0, 0, &mut control).expect("decides");
@@ -10054,7 +10027,7 @@ mod proof_tests {
     #[test]
     fn a_proof_body_that_is_not_lowercase_hex_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let proved =
             prove_to_string(TAXONOMY, "consistency", "", 0, 0, &mut control).expect("decides");
@@ -10101,7 +10074,7 @@ mod proof_tests {
     #[test]
     fn an_undecided_proof_needs_the_certificate_it_arrived_beside() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let starved = prove_to_string(TAXONOMY, "consistency", "", 1, 0, &mut control)
             .expect("decides nothing");
@@ -10146,7 +10119,7 @@ mod proof_tests {
     #[test]
     fn a_receipt_checked_against_another_runs_certificate_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let starved = prove_to_string(TAXONOMY, "consistency", "", 1, 0, &mut control)
             .expect("decides nothing");
@@ -10169,7 +10142,7 @@ mod proof_tests {
     #[test]
     fn scalar_proofs_bind_all_three_verdicts() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let inconsistent = concat!(
             "<http://example.org/Cat> <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/Dog> .\n",
@@ -10259,7 +10232,7 @@ mod proof_tests {
     #[test]
     fn scalar_answer_subjects_cannot_be_substituted() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (service, argument) in [
             ("class-satisfiability", "<http://example.org/Cat>"),
@@ -10288,7 +10261,7 @@ mod proof_tests {
     #[test]
     fn a_rendered_proof_is_byte_identical_run_to_run() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for (service, argument) in every_question() {
             let first =
@@ -10307,7 +10280,7 @@ mod proof_tests {
     #[test]
     fn an_argument_a_service_does_not_take_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for service in ["consistency", "classify", "realize"] {
             let refusal = prove_to_string(
@@ -10330,7 +10303,7 @@ mod proof_tests {
     #[test]
     fn an_unknown_proof_service_names_the_accepted_set() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let refusal = prove_to_string(TAXONOMY, "justify", "", 0, 0, &mut control)
             .expect_err("not a proof service");
@@ -10346,7 +10319,7 @@ mod proof_tests {
     #[test]
     fn a_document_that_is_not_a_proof_is_refused() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         for text in [
             "",

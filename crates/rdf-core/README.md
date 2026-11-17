@@ -32,15 +32,13 @@ crate everything else in the workspace builds on. It owns:
 - **Structured diagnostics** — typed `RdfDiagnostic`s with source locations;
   deliberately SARIF-free (the SARIF boundary is
   [`purrdf-validate`](https://crates.io/crates/purrdf-validate)).
-- **Canonicalization** — `canonicalize` is the first-party `purrdf-rdfc12` v2
-  profile: W3C RDFC-1.0 in full, plus a lowering of reifiers and annotations
-  into a reserved `urn:purrdf:rdfc:` namespace (input already carrying it is
-  refused, except in the two shapes the profile itself emits, which fold back —
-  so the canonical document re-canonicalizes to itself). It agrees with
-  RDFC-1.0 byte for byte on the RDF 1.1 subset, which
-  the W3C fixture suite gates; a digest over its RDF 1.2 output must not be
-  labelled RDFC-1.0 (`CANON_PROFILE_ID`/`CANON_PROFILE_VERSION` name the
-  profile at runtime). Plus dataset diff and isomorphism checks.
+- **Canonicalization** — `try_canonicalize` produces the canonical line
+  sequence of the nested-refinement labelling (`CANON_LABELLING_NAME`,
+  `CANON_LABELLING_VERSION`), spelled as N-Quads 1.2 with decimal blank-node
+  labels, and `try_canonical_digest_view` its 32-byte BLAKE3 digest. Reifiers,
+  annotations, triple terms and declared empty graphs take part, and no
+  vocabulary is reserved. W3C RDFC-1.0 and the recompute of digests recorded by
+  4.x are under `rdfc12`. Plus dataset diff and isomorphism checks.
 - **Complete dataset state identity** — additive `DatasetStateDigest` includes
   empty named declarations and distinct ordinary/reifier/annotation roles under
   one global blank bijection, including nested and CDT positions. See the

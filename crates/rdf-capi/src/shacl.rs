@@ -3323,10 +3323,7 @@ ex:StatusShape a sh:NodeShape ;
             RuleLimits::default(),
             None,
             purrdf_validate::query::CoordinateInputs::default(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("entailment produced");
         let text_owner = bytes.ntriples;
@@ -3353,7 +3350,7 @@ ex:StatusShape a sh:NodeShape ;
                 None,
                 purrdf_validate::query::CoordinateInputs::default(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -3368,18 +3365,12 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         purrdf_validate::certify_shapes_product(
             &product,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("certified");
         let described = String::from_utf8(open_product_bytes(&product).expect("opened"))
@@ -3406,10 +3397,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         wrong_magic[0] = b'X';
@@ -3444,10 +3432,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         admit_product_bytes(&product, DATA).expect("the unmodified product still validates");
@@ -3478,10 +3463,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         let wanted = rendered_selector(
@@ -3491,7 +3473,7 @@ ex:StatusShape a sh:NodeShape ;
                 None,
                 &[],
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -3524,10 +3506,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         let own = purrdf_validate::parse_identity_digest(&rendered_selector(&product))
@@ -3555,10 +3534,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         let own = std::ffi::CString::new(rendered_selector(&product)).expect("no interior NUL");
@@ -3623,10 +3599,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         let wanted = rendered_selector(
@@ -3636,7 +3609,7 @@ ex:StatusShape a sh:NodeShape ;
                 None,
                 &[],
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -3673,10 +3646,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         let own = purrdf_validate::parse_identity_digest(&rendered_selector(&product))
@@ -3713,10 +3683,7 @@ ex:StatusShape a sh:NodeShape ;
             None,
             None,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("product encoded");
         let own = std::ffi::CString::new(rendered_selector(&product)).expect("no interior NUL");

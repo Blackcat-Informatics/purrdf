@@ -3,7 +3,7 @@
 
 //! Freeze native positive-envelope bytes for the exact packaged host probe.
 
-use purrdf_core::{CanonicalizationControl, RDFC_V2_CORPUS_POLICY};
+use purrdf_core::{CANON_CORPUS_POLICY, CanonicalizationControl};
 use purrdf_iri::vocab::rdf;
 use purrdf_lex::json::{Object, Value, write_pretty};
 use purrdf_validate::regime::{PositiveReasonerSession, positive_limits_from_json};
@@ -25,12 +25,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         0,
         None,
-        &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
     )?;
     let (producer, _) = producer.class_satisfiability("<urn:query>")?;
     let (producer, _) = producer.advance(
         &latest,
-        &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
     )?;
     let (_, answer) = producer.entails(&axiom)?;
     if !answer.answer().starts_with("entails true\n") {
@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         0,
         0,
         None,
-        &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
     )?;
     let report = consumer.check_positive_proof(
         "entails",
@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         answer.answer(),
         answer.certificate(),
         proof,
-        &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
     )?;
     let value = Value::from(
         Object::new()

@@ -122,7 +122,7 @@ fn two_co_typed_copies_decide_inside_both_budgets() {
         &[],
         0,
         0,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
@@ -158,7 +158,7 @@ fn ten_co_typed_copies_decide_inside_the_derived_work_cap() {
         &[],
         0,
         0,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the ontology reverse-maps");
     // The messages name what failed rather than formatting the certificate: the verdict and
@@ -198,7 +198,7 @@ fn ten_co_typed_copies_answer_unknown_at_a_narrowed_work_cap() {
         &[],
         0,
         NARROWED_WORK_CAP,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
@@ -246,10 +246,7 @@ fn the_exhausted_answer_is_identical_twice() {
             &[],
             0,
             NARROWED_WORK_CAP,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the ontology reverse-maps")
     };

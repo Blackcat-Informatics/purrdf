@@ -24,7 +24,7 @@ PURREMB `source_format = 2` 通过以下规范二进制清单绑定实际的五�
 
 记录严格采用 `Table::ALL` 顺序：`terms.parquet`、`quads.parquet`、`reifiers.parquet`、`annotations.parquet`、`blobs.parquet`。文件名使用 `purrdf_hash::frame::frame_le` 定界，无填充及尾随数据。所有文件均须包含，包括有效的零行 Parquet 文件；缺失文件不是空表。
 
-`source_manifest` 从 `ParquetFiles` 计算这些字节，但不验证 Parquet 或认证 RDF。认证先完成严格的原生读取，包括每个 blob 摘要，再使用 `purrdf-rdfc12` 对重建的 RDF 数据集独立规范化。PURREMB 保存清单的字节长度和 `SHA256(manifest bytes)`，与认证的 RDF 摘要分开。
+`source_manifest` 从 `ParquetFiles` 计算这些字节，但不验证 Parquet 或认证 RDF。认证先完成严格的原生读取，包括每个 blob 摘要，再使用默认的规范行序列对重建的 RDF 数据集独立规范化。PURREMB 保存清单的字节长度和 `SHA256(manifest bytes)`，与认证的 RDF 摘要分开。
 
 `read_with_ordinals` 完成与 `read` 相同的严格读取，仅保留请求的原始项、四元组、具体化绑定及注释行，行号从零开始。证据使用读取器显式的来源字典到内核映射，始终绑定实际重建的数据集。内核 ID 和最终迭代次序不是来源序号。空请求不保留陈述行证据；完成请求不能跳过后续行、表或 blob 的验证。
 

@@ -6,23 +6,23 @@
 //! A canonical document is a stored content identity, and a caller meters it
 //! through two things this file pins from the public surface: how often the
 //! caller's stop signal is polled, and the largest reservation each admission
-//! account ever asks its provider for. Document rows are frozen against the values
-//! the previous document construction produced: the poll count and the phase
-//! boundary must not move, and a reservation may only shrink. Digest-only rows
-//! record the digest route's own totals and keep the earlier maxima as the bound.
+//! account ever asks its provider for. Every row is frozen against what the
+//! canonical labelling engine produced: the poll count and the phase boundary
+//! must not move, and a reservation may only shrink.
 
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+use purrdf_hash::hex::Digest32;
+
 use purrdf_core::{
-    BlankScope, CanonHash, CanonPhase, CanonicalizationControl, ContentDigest, DatasetView,
-    FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds, RDFC_V2_CORPUS_POLICY,
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, StopSignal,
-    TermId, TermRef, TermValue, ViewOperationStatus, WorkspaceReservation,
-    try_canonical_blake3_view, try_canonical_sha256_view, try_canonicalize_flat_view,
-    try_canonicalize_sha256_view, try_canonicalize_view, try_flat_blake3_view,
-    try_flat_digest_view, try_graph_digest_view,
+    BlankScope, CANON_CORPUS_POLICY, CanonPhase, CanonicalizationControl, ContentDigest,
+    DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, RdfStoreCapabilities, RdfTextDirection, StopSignal, TermId,
+    TermRef, TermValue, ViewOperationStatus, WorkspaceReservation,
+    try_canonical_digest_checked_view, try_canonical_digest_view, try_canonicalize_checked_view,
+    try_canonicalize_digest_view, try_canonicalize_view, try_graph_digest_view,
 };
 
 const GRAPH: &str = "https://example.org/g/1";
@@ -307,72 +307,57 @@ impl StopSignal for Polls {
 /// Every canonical entry that builds the document, and the digest entries over it.
 #[derive(Debug, Clone, Copy)]
 enum Entry {
-    OverlayDocument,
-    FlatDocument,
-    FlatSha256,
-    OverlaySha256,
-    FlatBlake3,
-    OverlayBlake3,
-    OverlayDocumentAndSha256,
-    GraphSha256,
+    Document,
+    CheckedDocument,
+    Digest,
+    CheckedDigest,
+    DocumentAndDigest,
+    Graph,
 }
 
-const ALL_ENTRIES: [Entry; 8] = [
-    Entry::OverlayDocument,
-    Entry::FlatDocument,
-    Entry::FlatSha256,
-    Entry::OverlaySha256,
-    Entry::FlatBlake3,
-    Entry::OverlayBlake3,
-    Entry::OverlayDocumentAndSha256,
-    Entry::GraphSha256,
+const ALL_ENTRIES: [Entry; 6] = [
+    Entry::Document,
+    Entry::CheckedDocument,
+    Entry::Digest,
+    Entry::CheckedDigest,
+    Entry::DocumentAndDigest,
+    Entry::Graph,
 ];
 
 impl Entry {
     /// Entries that return only a digest, so build no document.
     const fn digest_only(self) -> bool {
-        !matches!(
-            self,
-            Self::OverlayDocument | Self::FlatDocument | Self::OverlayDocumentAndSha256
-        )
+        matches!(self, Self::Digest | Self::CheckedDigest | Self::Graph)
     }
 }
 
-/// The run's output identity: a digest of the document, or the digest itself.
+/// The run's output identity: a digest of the document text, or the digest the
+/// entry returns.
 fn run(
     entry: Entry,
     view: &Recording,
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<String, String> {
-    let hash = CanonHash::Sha256;
-    let sha = |digest: ContentDigest| digest.to_hex();
+    let hex = |digest: Digest32| purrdf_hash::hex::encode(digest.as_bytes());
+    let text = |nquads: &str| ContentDigest::of(nquads.as_bytes()).to_hex();
     match entry {
-        Entry::OverlayDocument => try_canonicalize_view(view, hash, control)
-            .map(|d| sha(ContentDigest::of(d.nquads().as_bytes())))
+        Entry::Document => try_canonicalize_view(view, control)
+            .map(|d| text(d.nquads()))
             .map_err(|e| format!("{e:?}")),
-        Entry::FlatDocument => try_canonicalize_flat_view(view, hash, control)
-            .map(|d| sha(ContentDigest::of(d.nquads().as_bytes())))
+        Entry::CheckedDocument => try_canonicalize_checked_view(view, control)
+            .map(|d| text(d.nquads()))
             .map_err(|e| format!("{e:?}")),
-        Entry::FlatSha256 => try_flat_digest_view(view, hash, control)
-            .map(sha)
+        Entry::Digest => try_canonical_digest_view(view, control)
+            .map(hex)
             .map_err(|e| format!("{e:?}")),
-        Entry::OverlaySha256 => try_canonical_sha256_view(view, hash, control)
-            .map(sha)
+        Entry::CheckedDigest => try_canonical_digest_checked_view(view, control)
+            .map(hex)
             .map_err(|e| format!("{e:?}")),
-        Entry::FlatBlake3 => try_flat_blake3_view(view, hash, control)
-            .map(|d| purrdf_hash::hex::encode(&d))
+        Entry::DocumentAndDigest => try_canonicalize_digest_view(view, control)
+            .map(|(_, digest)| hex(digest))
             .map_err(|e| format!("{e:?}")),
-        Entry::OverlayBlake3 => try_canonical_blake3_view(view, hash, control)
-            .map(|d| purrdf_hash::hex::encode(&d))
-            .map_err(|e| format!("{e:?}")),
-        Entry::OverlayDocumentAndSha256 => try_canonicalize_sha256_view(view, hash, control)
-            .map(|(document, digest)| {
-                assert_eq!(digest, ContentDigest::of(document.nquads().as_bytes()));
-                sha(digest)
-            })
-            .map_err(|e| format!("{e:?}")),
-        Entry::GraphSha256 => try_graph_digest_view(view, GRAPH, control)
-            .map(sha)
+        Entry::Graph => try_graph_digest_view(view, GRAPH, control)
+            .map(hex)
             .map_err(|e| format!("{e:?}")),
     }
 }
@@ -389,7 +374,7 @@ fn measure(entry: Entry, dataset: &Arc<RdfDataset>) -> Measured {
     let view = Recording::new(dataset, u64::MAX, u64::MAX);
     let polls = Polls::counting();
     let mut control =
-        CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
+        CanonicalizationControl::new(CANON_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
     let digest = run(entry, &view, &mut control).expect("an unconstrained run succeeds");
     let total_polls = polls.seen.load(Ordering::Relaxed);
     // The phase boundary: the smallest stop whose receipt says `Output`.
@@ -398,7 +383,7 @@ fn measure(entry: Entry, dataset: &Arc<RdfDataset>) -> Measured {
         let mid = low + (high - low) / 2;
         let polls = Polls::stopping_at(mid);
         let mut control =
-            CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
+            CanonicalizationControl::new(CANON_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
         let probe = Recording::new(dataset, u64::MAX, u64::MAX);
         let stopped = run(entry, &probe, &mut control);
         assert!(
@@ -420,14 +405,14 @@ fn measure(entry: Entry, dataset: &Arc<RdfDataset>) -> Measured {
     }
 }
 
-/// One entry over one fixture, as the previous document construction (one owned
-/// line per component, then a whole-document copy) measured it.
+/// One entry over one fixture, as the labelling engine measured it.
 struct Frozen {
     fixture: &'static str,
     entry: Entry,
     /// Every poll of the caller's stop signal, start to finish.
     polls: usize,
-    /// The smallest stop that the run's receipt places in the output phase.
+    /// The smallest stop that the run's receipt places in the output phase;
+    /// the poll total for an entry that never reaches it.
     first_output: usize,
     /// The largest reservation the scratch account asked of its provider.
     scratch: u64,
@@ -435,254 +420,152 @@ struct Frozen {
     owned: u64,
     /// SHA-256 of the canonical document (or the digest the entry returns).
     digest: &'static str,
-    /// What the same entry asked of the scratch account when it built the document.
-    before_scratch: u64,
-    /// What the same entry asked of the owned account when it built the document.
-    before_owned: u64,
 }
 
 const FROZEN: &[Frozen] = &[
     Frozen {
         fixture: "blank_free",
-        entry: Entry::OverlayDocument,
-        polls: 1092,
-        first_output: 547,
-        scratch: 11364,
+        entry: Entry::Document,
+        polls: 183,
+        first_output: 63,
+        scratch: 67416,
         owned: 6044,
         digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
-        before_scratch: 11364,
-        before_owned: 6044,
     },
     Frozen {
         fixture: "blank_free",
-        entry: Entry::FlatDocument,
-        polls: 1092,
-        first_output: 547,
-        scratch: 11364,
+        entry: Entry::CheckedDocument,
+        polls: 183,
+        first_output: 63,
+        scratch: 67416,
         owned: 6044,
         digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
-        before_scratch: 11364,
-        before_owned: 6044,
     },
     Frozen {
         fixture: "blank_free",
-        entry: Entry::FlatSha256,
-        polls: 1092,
-        first_output: 547,
-        scratch: 8742,
+        entry: Entry::Digest,
+        polls: 62,
+        first_output: 62,
+        scratch: 67416,
         owned: 0,
-        digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
-        before_scratch: 8742,
-        before_owned: 6044,
+        digest: "88a6fd566ab8882bc31c618498d1cd180ad8a813c4f4585ea5717ebd3cafed53",
     },
     Frozen {
         fixture: "blank_free",
-        entry: Entry::OverlaySha256,
-        polls: 1092,
-        first_output: 547,
-        scratch: 8742,
+        entry: Entry::CheckedDigest,
+        polls: 62,
+        first_output: 62,
+        scratch: 67416,
         owned: 0,
-        digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
-        before_scratch: 8742,
-        before_owned: 6044,
+        digest: "88a6fd566ab8882bc31c618498d1cd180ad8a813c4f4585ea5717ebd3cafed53",
     },
     Frozen {
         fixture: "blank_free",
-        entry: Entry::FlatBlake3,
-        polls: 1092,
-        first_output: 547,
-        scratch: 8742,
-        owned: 0,
-        digest: "7e8a5d1e3084a3037568be98a21d0eda48a9c55aa4a7632fe563f196380f8d33",
-        before_scratch: 8742,
-        before_owned: 6044,
-    },
-    Frozen {
-        fixture: "blank_free",
-        entry: Entry::OverlayBlake3,
-        polls: 1092,
-        first_output: 547,
-        scratch: 8742,
-        owned: 0,
-        digest: "7e8a5d1e3084a3037568be98a21d0eda48a9c55aa4a7632fe563f196380f8d33",
-        before_scratch: 8742,
-        before_owned: 6044,
-    },
-    Frozen {
-        fixture: "blank_free",
-        entry: Entry::OverlayDocumentAndSha256,
-        polls: 1094,
-        first_output: 547,
-        scratch: 8742,
+        entry: Entry::DocumentAndDigest,
+        polls: 183,
+        first_output: 63,
+        scratch: 67416,
         owned: 6044,
-        digest: "ffa5774c571d3645ac144ea04f63f63c73b6f5121fc23e5e204f60d772834c25",
-        before_scratch: 8742,
-        before_owned: 6044,
+        digest: "88a6fd566ab8882bc31c618498d1cd180ad8a813c4f4585ea5717ebd3cafed53",
     },
     Frozen {
         fixture: "blank_free",
-        entry: Entry::GraphSha256,
-        polls: 173,
-        first_output: 88,
-        scratch: 1846,
+        entry: Entry::Graph,
+        polls: 12,
+        first_output: 12,
+        scratch: 10396,
         owned: 0,
-        digest: "6a35ad0beede68e7bef06e8fe10ec0695b772d6573510147afd85d2221dd9f1a",
-        before_scratch: 1846,
-        before_owned: 964,
+        digest: "763ec20a96475f19a075fcca8d06f0a0815a73d96ebd5513f1302028672928f1",
     },
     Frozen {
         fixture: "reifier",
-        entry: Entry::OverlayDocument,
-        polls: 1804,
-        first_output: 1183,
-        scratch: 10112,
-        owned: 6068,
-        digest: "6de62d050e54492c976ae2a54621f77469ff3d960cd73a8950da52c9515ff399",
-        before_scratch: 10112,
-        before_owned: 6068,
+        entry: Entry::Document,
+        polls: 185,
+        first_output: 73,
+        scratch: 72558,
+        owned: 4948,
+        digest: "cd4bdc4e32befd000e1bc050486e7d8779799483c6749635f91f5d7cb2dd6a26",
     },
     Frozen {
         fixture: "reifier",
-        entry: Entry::FlatDocument,
-        polls: 1776,
-        first_output: 1183,
-        scratch: 7600,
-        owned: 5228,
-        digest: "af5cdb72d4b9ee9995853807bdcf6d74eabed2a7e2bc50781cd44eae165c4b5f",
-        before_scratch: 7600,
-        before_owned: 5228,
+        entry: Entry::CheckedDocument,
+        polls: 185,
+        first_output: 73,
+        scratch: 72558,
+        owned: 4948,
+        digest: "cd4bdc4e32befd000e1bc050486e7d8779799483c6749635f91f5d7cb2dd6a26",
     },
     Frozen {
         fixture: "reifier",
-        entry: Entry::FlatSha256,
-        polls: 1776,
-        first_output: 1183,
-        scratch: 7094,
+        entry: Entry::Digest,
+        polls: 72,
+        first_output: 72,
+        scratch: 72558,
         owned: 0,
-        digest: "af5cdb72d4b9ee9995853807bdcf6d74eabed2a7e2bc50781cd44eae165c4b5f",
-        before_scratch: 7094,
-        before_owned: 5228,
+        digest: "442726b364df93606a2ca4587dddb76bded5a657f76b40b3c0b7ed92f61cbeee",
     },
     Frozen {
         fixture: "reifier",
-        entry: Entry::OverlaySha256,
-        polls: 1804,
-        first_output: 1183,
-        scratch: 6962,
+        entry: Entry::CheckedDigest,
+        polls: 72,
+        first_output: 72,
+        scratch: 72558,
         owned: 0,
-        digest: "6de62d050e54492c976ae2a54621f77469ff3d960cd73a8950da52c9515ff399",
-        before_scratch: 6962,
-        before_owned: 6068,
+        digest: "442726b364df93606a2ca4587dddb76bded5a657f76b40b3c0b7ed92f61cbeee",
     },
     Frozen {
         fixture: "reifier",
-        entry: Entry::FlatBlake3,
-        polls: 1776,
-        first_output: 1183,
-        scratch: 7094,
+        entry: Entry::DocumentAndDigest,
+        polls: 185,
+        first_output: 73,
+        scratch: 72558,
+        owned: 4948,
+        digest: "442726b364df93606a2ca4587dddb76bded5a657f76b40b3c0b7ed92f61cbeee",
+    },
+    Frozen {
+        fixture: "mixed",
+        entry: Entry::Document,
+        polls: 71,
+        first_output: 25,
+        scratch: 30102,
+        owned: 1706,
+        digest: "45079cc266622600dbfa6af35620f7a29d895d41bc6f963c0442e58400d45283",
+    },
+    Frozen {
+        fixture: "mixed",
+        entry: Entry::CheckedDocument,
+        polls: 71,
+        first_output: 25,
+        scratch: 30102,
+        owned: 1706,
+        digest: "45079cc266622600dbfa6af35620f7a29d895d41bc6f963c0442e58400d45283",
+    },
+    Frozen {
+        fixture: "mixed",
+        entry: Entry::Digest,
+        polls: 24,
+        first_output: 24,
+        scratch: 30102,
         owned: 0,
-        digest: "53b31cae2c52621681e220eb75f4f9d1f3f1206c09cd200565aa966fb8c0a7e8",
-        before_scratch: 7094,
-        before_owned: 5228,
+        digest: "2e249f53ad1954ddc9082d057576bbb0fb75097e0be868e07684302fccb1154b",
     },
     Frozen {
-        fixture: "reifier",
-        entry: Entry::OverlayBlake3,
-        polls: 1804,
-        first_output: 1183,
-        scratch: 6962,
+        fixture: "mixed",
+        entry: Entry::CheckedDigest,
+        polls: 24,
+        first_output: 24,
+        scratch: 30102,
         owned: 0,
-        digest: "1e4b1695a8742d61aaf49c04752e6414815bd008dd41ccc33a9e21259f9a0fc6",
-        before_scratch: 6962,
-        before_owned: 6068,
-    },
-    Frozen {
-        fixture: "reifier",
-        entry: Entry::OverlayDocumentAndSha256,
-        polls: 1806,
-        first_output: 1183,
-        scratch: 6962,
-        owned: 6068,
-        digest: "6de62d050e54492c976ae2a54621f77469ff3d960cd73a8950da52c9515ff399",
-        before_scratch: 6962,
-        before_owned: 6068,
+        digest: "2e249f53ad1954ddc9082d057576bbb0fb75097e0be868e07684302fccb1154b",
     },
     Frozen {
         fixture: "mixed",
-        entry: Entry::OverlayDocument,
-        polls: 986,
-        first_output: 750,
-        scratch: 2848,
-        owned: 1917,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
-        before_scratch: 2848,
-        before_owned: 1917,
-    },
-    Frozen {
-        fixture: "mixed",
-        entry: Entry::FlatDocument,
-        polls: 986,
-        first_output: 750,
-        scratch: 2848,
-        owned: 1917,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
-        before_scratch: 2848,
-        before_owned: 1917,
-    },
-    Frozen {
-        fixture: "mixed",
-        entry: Entry::FlatSha256,
-        polls: 986,
-        first_output: 750,
-        scratch: 2514,
-        owned: 0,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
-        before_scratch: 2514,
-        before_owned: 1917,
-    },
-    Frozen {
-        fixture: "mixed",
-        entry: Entry::OverlaySha256,
-        polls: 986,
-        first_output: 750,
-        scratch: 2514,
-        owned: 0,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
-        before_scratch: 2514,
-        before_owned: 1917,
-    },
-    Frozen {
-        fixture: "mixed",
-        entry: Entry::FlatBlake3,
-        polls: 986,
-        first_output: 750,
-        scratch: 2514,
-        owned: 0,
-        digest: "75a612f366688be11eaad6977a483e2fcbcd9eadc4427f1d1dcbfec626e82d5c",
-        before_scratch: 2514,
-        before_owned: 1917,
-    },
-    Frozen {
-        fixture: "mixed",
-        entry: Entry::OverlayBlake3,
-        polls: 986,
-        first_output: 750,
-        scratch: 2514,
-        owned: 0,
-        digest: "75a612f366688be11eaad6977a483e2fcbcd9eadc4427f1d1dcbfec626e82d5c",
-        before_scratch: 2514,
-        before_owned: 1917,
-    },
-    Frozen {
-        fixture: "mixed",
-        entry: Entry::OverlayDocumentAndSha256,
-        polls: 988,
-        first_output: 750,
-        scratch: 2514,
-        owned: 1917,
-        digest: "fe631726a55ce26676ac35d64a600f6a9603f52cd5a7255625da5f714b6a2f7b",
-        before_scratch: 2514,
-        before_owned: 1917,
+        entry: Entry::DocumentAndDigest,
+        polls: 71,
+        first_output: 25,
+        scratch: 30102,
+        owned: 1706,
+        digest: "2e249f53ad1954ddc9082d057576bbb0fb75097e0be868e07684302fccb1154b",
     },
 ];
 
@@ -695,11 +578,9 @@ fn dataset_of(fixture: &str) -> Arc<RdfDataset> {
 
 /// A caller meters canonicalization through its stop signal, so the number of
 /// polls and where the output phase begins are part of what a run promises.
-/// Document entries keep the checkpoints the caller already budgets for; digest
-/// entries hash lines as they are produced and build no document, so their
-/// totals are two lower than when the document was built first, with the phase
-/// boundary unmoved. The digest is the stored content identity and must not move
-/// for any entry.
+/// Digest entries build no document, so the output phase is their last poll;
+/// document entries poll once per line of the document after it begins. The
+/// digest is the stored content identity and must not move for any entry.
 #[test]
 fn stop_checkpoints_and_identity_match_the_frozen_construction() {
     for row in FROZEN {
@@ -730,36 +611,30 @@ fn provider_reservations_never_exceed_the_frozen_maxima() {
         );
         assert!(measured.owned_max <= row.owned, "owned maximum of {at}");
         let capped = Recording::new(&dataset, row.scratch, row.owned);
-        let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
         let digest = run(row.entry, &capped, &mut control)
             .unwrap_or_else(|error| panic!("{at} refused at the frozen ceiling: {error}"));
         assert_eq!(digest, row.digest, "identity of {at} at the ceiling");
     }
 }
 
-/// A stop that lands on any of the last polls of a digest run, the combined
-/// document-and-digest run included, refuses in the output phase with one
-/// receipt that says the run did not complete. A caller that cancels a long
-/// digest must be told the output, not the search, was interrupted.
+/// A stop that lands on any of the last polls of a run refuses with one
+/// receipt that says the run did not complete. A run that builds the document
+/// reports the output phase; a digest run ends inside the labelling, which
+/// reports an earlier phase, and never the output.
 #[test]
-fn a_stop_on_the_last_polls_of_a_digest_run_ends_in_the_output_phase() {
+fn a_stop_on_the_last_polls_of_a_run_refuses_with_an_incomplete_receipt() {
     for (fixture, dataset) in fixtures() {
         for entry in ALL_ENTRIES
             .into_iter()
-            .filter(|e| e.digest_only() || matches!(e, Entry::OverlayDocumentAndSha256))
-            // The graph entry names a graph only the first fixture holds; an absent graph
-            // is the unchanged empty-document shortcut, which stops before output.
-            .filter(|e| !matches!(e, Entry::GraphSha256) || fixture == "blank_free")
+            // The graph entry names a graph only the first fixture holds.
+            .filter(|e| !matches!(e, Entry::Graph) || fixture == "blank_free")
         {
             let counted = measure(entry, &dataset);
-            for n in [
-                counted.total_polls - 2,
-                counted.total_polls - 1,
-                counted.total_polls,
-            ] {
+            for n in counted.total_polls - 2..=counted.total_polls {
                 let polls = Polls::stopping_at(n);
                 let mut control = CanonicalizationControl::new(
-                    RDFC_V2_CORPUS_POLICY,
+                    CANON_CORPUS_POLICY,
                     Some(&polls as &dyn StopSignal),
                 );
                 let view = Recording::new(&dataset, u64::MAX, u64::MAX);
@@ -770,57 +645,62 @@ fn a_stop_on_the_last_polls_of_a_digest_run_ends_in_the_output_phase() {
                 assert!(run(entry, &view, &mut control).is_err(), "{at} refuses");
                 let receipts = control.receipts();
                 assert_eq!(receipts.len(), 1, "one receipt for {at}");
-                assert_eq!(receipts[0].phase, CanonPhase::Output, "phase of {at}");
+                assert_eq!(
+                    receipts[0].phase == CanonPhase::Output,
+                    !entry.digest_only(),
+                    "phase of {at}"
+                );
                 assert!(!receipts[0].completed, "{at} did not complete");
             }
         }
     }
 }
 
-/// A digest-only run stops charging the provider for a document it does not
-/// build. Against what the same entry asked when it built the document, neither
-/// account asks for more, the owned account asks for strictly less, and a run
-/// still succeeds with both accounts capped at the earlier maxima.
+/// A digest-only run does not charge the provider for a document it does not
+/// build. Measured against the document entry over the same fixture, neither
+/// account asks for more, and a run still succeeds with both accounts capped
+/// at the document run's maxima.
 #[test]
-fn a_digest_run_asks_its_provider_for_no_more_than_the_document_run_did() {
-    for row in FROZEN.iter().filter(|row| row.entry.digest_only()) {
-        let at = format!("{} {:?}", row.fixture, row.entry);
-        let dataset = dataset_of(row.fixture);
-        let measured = measure(row.entry, &dataset);
-        assert!(
-            measured.scratch_max <= row.before_scratch,
-            "scratch of {at}"
-        );
-        assert!(measured.owned_max <= row.before_owned, "owned of {at}");
-        assert!(
-            measured.owned_max < row.before_owned || row.before_owned == 0,
-            "the document charge of {at} is gone"
-        );
-        let capped = Recording::new(&dataset, row.before_scratch, row.before_owned);
-        let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
-        let digest = run(row.entry, &capped, &mut control)
-            .unwrap_or_else(|error| panic!("{at} refused at the earlier ceiling: {error}"));
-        assert_eq!(
-            digest, row.digest,
-            "identity of {at} at the earlier ceiling"
-        );
+fn a_digest_run_asks_its_provider_for_no_more_than_the_document_run() {
+    for (fixture, dataset) in fixtures() {
+        let document = measure(Entry::Document, &dataset);
+        for entry in [Entry::Digest, Entry::CheckedDigest] {
+            let at = format!("{fixture} {entry:?}");
+            let measured = measure(entry, &dataset);
+            assert!(
+                measured.scratch_max <= document.scratch_max,
+                "scratch of {at}"
+            );
+            assert!(measured.owned_max <= document.owned_max, "owned of {at}");
+            let capped = Recording::new(&dataset, document.scratch_max, document.owned_max);
+            let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
+            let digest = run(entry, &capped, &mut control)
+                .unwrap_or_else(|error| panic!("{at} refused at the document ceiling: {error}"));
+            assert_eq!(digest, measured.digest, "identity of {at} at the ceiling");
+        }
     }
 }
 
-/// A view with no owned workspace is refused by a digest run exactly as by a
-/// document run, and the neighbouring view that has one succeeds.
+/// A document run needs an owned workspace and is refused without one; a
+/// digest run builds no document, asks for none and succeeds on the same view.
+/// The neighbouring view that has an owned workspace succeeds for every entry.
 #[test]
-fn a_digest_run_without_an_owned_workspace_is_refused_like_a_document_run() {
+fn only_a_document_run_needs_an_owned_workspace() {
     let dataset = blank_free();
     for entry in ALL_ENTRIES {
-        let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
         let without = Recording::without_owned(&dataset);
-        let refused = run(entry, &without, &mut control).expect_err("refused");
-        assert!(
-            refused.contains("OwnedWorkspaceUnavailable"),
-            "{entry:?}: {refused}"
-        );
-        let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+        let outcome = run(entry, &without, &mut control);
+        if entry.digest_only() {
+            outcome.expect("a digest run needs no owned workspace");
+        } else {
+            let refused = outcome.expect_err("refused");
+            assert!(
+                refused.contains("OwnedWorkspaceUnavailable"),
+                "{entry:?}: {refused}"
+            );
+        }
+        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
         let with = Recording::new(&dataset, u64::MAX, u64::MAX);
         run(entry, &with, &mut control).expect("the neighbouring view succeeds");
     }
@@ -843,16 +723,14 @@ fn a_stop_during_a_line_of_several_blocks_is_honoured_by_every_digest_entry() {
     let dataset = b.freeze().unwrap();
     for entry in ALL_ENTRIES
         .into_iter()
-        .filter(|e| e.digest_only() || matches!(e, Entry::OverlayDocumentAndSha256))
-        .filter(|e| !matches!(e, Entry::GraphSha256))
+        .filter(|e| e.digest_only() || matches!(e, Entry::DocumentAndDigest))
+        .filter(|e| !matches!(e, Entry::Graph))
     {
         let counted = measure(entry, &dataset);
         for n in 1..=counted.total_polls {
             let polls = Polls::stopping_at(n);
-            let mut control = CanonicalizationControl::new(
-                RDFC_V2_CORPUS_POLICY,
-                Some(&polls as &dyn StopSignal),
-            );
+            let mut control =
+                CanonicalizationControl::new(CANON_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
             let view = Recording::new(&dataset, u64::MAX, u64::MAX);
             assert!(
                 run(entry, &view, &mut control).is_err(),
@@ -862,7 +740,7 @@ fn a_stop_during_a_line_of_several_blocks_is_honoured_by_every_digest_entry() {
         }
         let polls = Polls::stopping_at(counted.total_polls + 1);
         let mut control =
-            CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
+            CanonicalizationControl::new(CANON_CORPUS_POLICY, Some(&polls as &dyn StopSignal));
         let view = Recording::new(&dataset, u64::MAX, u64::MAX);
         assert_eq!(run(entry, &view, &mut control).unwrap(), counted.digest);
     }

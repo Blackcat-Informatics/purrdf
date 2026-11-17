@@ -267,10 +267,7 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
         if datasets_isomorphic(
             &actual,
             &expected,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
         {
@@ -283,7 +280,7 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
                 canonical_flat_nquads(
                     &expected,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -292,7 +289,7 @@ fn pinned_w3c_to_rdf_vectors_match_the_independent_nquads_oracle() {
                 canonical_flat_nquads(
                     &actual,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

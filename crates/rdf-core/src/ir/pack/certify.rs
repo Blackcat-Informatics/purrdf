@@ -8,9 +8,11 @@
 //!
 //! # Why a second, independent digest recompute
 //!
-//! [`super::container::PackBuilder::build_bytes`] stores a SHA-256 digest of the SOURCE dataset's
-//! `purrdf-rdfc12` canonical N-Quads in the container header (see
-//! [`super::container`]'s module docs, the `rdfc_digest` header field). That value
+//! [`super::container::PackBuilder::build_bytes`] stores the canonical digest of the SOURCE
+//! dataset in the container header (see [`super::container`]'s module docs, the
+//! `rdfc_digest` header field): for format version 2, the digest of its canonical line
+//! sequence; for a format version 1 pack written by 4.x, the SHA-256 of its
+//! `purrdf-rdfc12` canonical N-Quads. That value
 //! is trusted data written once at build time — nothing re-derives it from the
 //! pack's own sections afterward. [`verify_pack`] closes that gap: it walks the
 //! opened [`PackView`] through the [`crate::DatasetView`] seam, RE-INTERNS every
@@ -28,9 +30,9 @@
 //! [`crate::ir::canon`]'s `collect_components` folds THREE sources into the
 //! canonical form: the dataset's base quads, its reifier bindings, and its
 //! statement annotations (see that module's `SUBSUME + EXTEND` doc section —
-//! reifiers/annotations fold into the hash via reserved `urn:purrdf:rdfc:`
-//! sentinel predicates/graphs, so the reifier COUNT and annotation PRESENCE are
-//! observable in the canonical digest). A reconstruction that only replayed
+//! reifiers/annotations take part in the canonical line sequence as their own
+//! lines, so the reifier COUNT and annotation PRESENCE are observable in the
+//! canonical digest). A reconstruction that only replayed
 //! [`DatasetView::quads`] and dropped the side-tables would digest a
 //! *different*, lossy dataset and never match the stored certificate. This module
 //! therefore also replays [`DatasetView::reifier_quads`] and
@@ -44,8 +46,10 @@ use std::sync::Arc;
 use purrdf_hash::hex::Digest32;
 
 use crate::dataset_view::DatasetView;
+use crate::ir::canon::labelled::try_canonical_digest_view;
 use crate::ir::import::{DatasetImportError, DatasetImporter};
-use crate::{CanonHash, RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
+use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
+use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic};
 
 use super::container::{PackError, PackView};
 
@@ -112,14 +116,15 @@ purrdf_lex::variant_from!(impl<E> DatasetMaterializationError<E> {
 // PackDigest
 // ---------------------------------------------------------------------------
 
-/// A verified SHA-256 `purrdf-rdfc12` digest: the output of [`verify_pack`] on success.
+/// A verified canonical digest: the output of [`verify_pack`] on success.
 ///
-/// NOT an RDFC-1.0 digest, and never to be labelled one. It is computed through
-/// [`crate::try_canonicalize_with`] — the [`crate::CANON_PROFILE_ID`] profile, whose
-/// output agrees with RDFC-1.0 byte for byte ONLY on the RDF 1.1 subset (no reifiers,
-/// no annotations, no triple terms, no reserved IRIs). On anything else the bytes
-/// differ, and the profile REFUSES input RDFC-1.0 would accept. See
-/// `docs/RDF12-CANON-PROFILE.md` §1.
+/// For a format version 2 pack it is the digest of the canonical line sequence of
+/// the nested-refinement labelling ([`crate::try_canonical_digest_view`]). For a
+/// format version 1 pack it is the SHA-256 `purrdf-rdfc12` digest 4.x recorded,
+/// computed through [`crate::rdfc12::try_canonical_sha256_view`]: NOT an RDFC-1.0
+/// digest, and never to be labelled one, because the profile's output agrees with
+/// RDFC-1.0 byte for byte ONLY on the RDF 1.1 subset (see
+/// `docs/RDF12-CANON-PROFILE.md` §1).
 ///
 /// Distinct from a bare `[u8; 32]` so a caller cannot confuse an UNVERIFIED digest
 /// (e.g. one merely read off [`PackView::rdfc_digest`] without recomputing it) with
@@ -242,7 +247,7 @@ fn reconstruct_into<D: DatasetView>(
 /// point, NOT `push_quad`), and statement annotations
 /// ([`DatasetView::annotation_quads`]) — so the RDF-1.2 overlay survives the round
 /// trip losslessly (a view with no side-tables simply replays zero of them). Blank
-/// `(label, scope)` identity round-trips unchanged; RDFC-1.0 isomorphism is
+/// `(label, scope)` identity round-trips unchanged; graph isomorphism is
 /// therefore preserved (see the [module docs](self)). Declaration-only named
 /// graphs are replayed too. Source locations and non-RDF lookaside records are
 /// outside `DatasetView`; their owners must carry them separately.
@@ -312,13 +317,15 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 /// Open, structurally verify, and CERTIFY a pack: [`PackView::from_bytes`] first
 /// (magic/version/every section's SHA-256/each submodule's own structural
 /// validation), then independently reconstruct the dataset the pack claims to
-/// encode and recompute its `purrdf-rdfc12` SHA-256 digest, then compare that recompute
-/// to the pack's own stored `rdfc_digest` header field.
+/// encode and recompute its canonical digest with the function its format version
+/// names (the line-sequence digest for version 2, the `purrdf-rdfc12` SHA-256 for
+/// version 1), then compare that recompute to the pack's own stored `rdfc_digest`
+/// header field.
 ///
 /// A pack that passes both checks is a **certified read-only projection**: its
 /// contents are byte-intact (per-section integrity) AND its claimed dataset
-/// identity is genuinely reproducible from those contents (the RDFC-1.0 recompute)
-/// — not merely a header field nothing else corroborates.
+/// identity is genuinely reproducible from those contents (the canonical
+/// recompute) — not merely a header field nothing else corroborates.
 ///
 /// # Errors
 ///
@@ -337,8 +344,9 @@ pub fn restore_pack(bytes: &[u8]) -> Result<Arc<RdfDataset>, PackError> {
 ///   cross-section role constraints, and untrusted bytes must fail closed
 ///   rather than hang or panic even when they trip it.
 /// - [`PackError::CanonRefused`] if canonicalization refuses the reconstructed
-///   dataset — its call budget exhausted by a pathologically symmetric blank graph,
-///   or an IRI found in the profile's reserved namespace. Untrusted input fails
+///   dataset — the labelling's limit (or, for version 1, the call budget)
+///   exhausted by a pathologically symmetric blank graph, or, for version 1, an
+///   IRI found in the profile's reserved namespace. Untrusted input fails
 ///   closed here rather than hanging, panicking, or certifying a forgeable identity.
 /// - [`PackError::RdfcDigestMismatch`] if the independently recomputed digest
 ///   disagrees with the pack's stored `rdfc_digest` header field — the pack's
@@ -351,10 +359,17 @@ pub fn verify_pack(
 
     let reconstructed = dataset_from_view(&view).map_err(PackError::Materialization)?;
 
-    let canonicalized =
-        crate::try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
+    // A version-1 pack recorded its digest under RDFC-1.0, so it is recomputed with
+    // that function; a version-2 pack recorded the canonical line-sequence digest.
+    let computed = if view.is_rdfc12() {
+        let canonicalized = try_canonical_sha256_view(&*reconstructed, CanonHash::Sha256, control)
             .map_err(PackError::CanonRefused)?;
-    let computed = *canonicalized.as_bytes();
+        *canonicalized.as_bytes()
+    } else {
+        *try_canonical_digest_view(&*reconstructed, control)
+            .map_err(PackError::CanonRefused)?
+            .as_bytes()
+    };
 
     let expected = view.rdfc_digest();
     if computed != expected {

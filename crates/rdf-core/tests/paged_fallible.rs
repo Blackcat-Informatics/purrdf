@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use purrdf_core::{
-    CanonHash, DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider,
-    PageFault, PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset,
-    PagedQueryError, PagedQueryEvidence, PagedQueryLimits, RdfDataset, RdfDatasetBuilder,
-    StopCause, TermValue, ViewCanonError, ViewOperationStatus, try_canonicalize_flat_view,
+    DatasetView, DrainCheckpoint, FallibleDatasetView, GraphMatch, InMemoryPageProvider, PageFault,
+    PageGeneration, PageId, PageMaterialization, PageProvider, PagedDataset, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, RdfDataset, RdfDatasetBuilder, StopCause, TermValue,
+    ViewCanonError, ViewOperationStatus, try_canonicalize_checked_view,
 };
 
 fn failed_status(
@@ -494,7 +494,7 @@ fn every_read_path_shares_one_operation_cache_and_evidence() {
 }
 
 // ---------------------------------------------------------------------------
-// Flat-assertion view-canon over a REAL fallible view: `try_canonicalize_flat_view`
+// Flat-assertion view-canon over a REAL fallible view: `try_canonicalize_checked_view`
 // (and its two-checkpoint completeness law) exercised through `PagedQueryView`
 // rather than through the in-`purrdf-core` unit-level probe double. This is the
 // same `checkpointed_drain` law `crates/rdf-core/src/ir/canon.rs`'s
@@ -556,7 +556,7 @@ impl PageProvider for SucceedsThenFaultsSecondPageProvider {
     }
 }
 
-/// `try_canonicalize_flat_view` over a view that is `Ready` at the FIRST checkpoint
+/// `try_canonicalize_checked_view` over a view that is `Ready` at the FIRST checkpoint
 /// (nothing read yet) but whose backing provider faults reading its second page:
 /// the SECOND checkpoint observes the fault, so the refusal carries
 /// `DrainCheckpoint::After` with the view's own typed error and evidence — never a
@@ -578,10 +578,9 @@ fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_n
         "the view must certify Ready before any row is drained"
     );
 
-    match try_canonicalize_flat_view(
+    match try_canonicalize_checked_view(
         &view,
-        CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     ) {
         Err(ViewCanonError::NotReady {
             checkpoint,
@@ -615,7 +614,7 @@ fn flat_view_canon_over_a_paged_view_ready_at_start_then_faulting_mid_drain_is_n
     }
 }
 
-/// `try_canonicalize_flat_view` over a view whose backing provider has ALREADY
+/// `try_canonicalize_checked_view` over a view whose backing provider has ALREADY
 /// drifted generation before a single row is drained: the FIRST checkpoint catches
 /// it, the refusal carries `DrainCheckpoint::Before`, and — because the fault is
 /// caught before the drain ever starts — no page materialization is attempted at
@@ -632,10 +631,9 @@ fn flat_view_canon_over_a_paged_view_already_failed_before_the_drain_does_no_wor
     let calls_before_canon = provider.calls.load(Ordering::Relaxed);
 
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
-    match try_canonicalize_flat_view(
+    match try_canonicalize_checked_view(
         &view,
-        CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     ) {
         Err(ViewCanonError::NotReady {
             checkpoint,

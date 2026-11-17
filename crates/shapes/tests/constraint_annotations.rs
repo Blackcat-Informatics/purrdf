@@ -539,10 +539,7 @@ fn annotations_survive_the_prepared_product() {
     let product = PreparedShapes::new(Arc::new(shapes))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("the annotated shapes pack");
     let restored = ShapesProduct::open(&product)
@@ -709,10 +706,7 @@ fn a_restored_preparation_takes_the_request_set() {
     let product = PreparedShapes::new(Arc::new(shapes))
         .to_product(
             &ShapesProfile::CORE,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("packs");
     let restored = || {

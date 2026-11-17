@@ -75,7 +75,7 @@ fn compiled_surface() -> purrdf_shapes::SchemaCompilation {
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("ontology-complete compilation")
 }
@@ -367,7 +367,7 @@ fn complete() -> (
         "",
         ONTOLOGY,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
 }
 
@@ -400,7 +400,7 @@ fn ontology_with_every_anonymous_class_expression_compiles() {
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("anonymous class expressions are modelled, not refused");
     assert!(compilation.compiled.schema_json.contains("\"Person\""));
@@ -963,7 +963,7 @@ fn shaped_only_mode_excludes_every_component() {
         "",
         ONTOLOGY,
         SchemaSurfaceMode::ShapedOnly,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert_ne!(report.axioms.len(), 0);
     for axiom in &report.axioms {
@@ -983,7 +983,7 @@ fn direct_shacl_shapes_stay_authoritative_over_restrictions() {
             sh:property [ sh:path ex:name ; sh:datatype xsd:string ] .",
         ONTOLOGY,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let name = format!("some(<{EX}name>,<http://www.w3.org/2001/XMLSchema#string>)");
     assert_eq!(
@@ -1036,10 +1036,7 @@ fn a_subclass_shape_is_not_overridden_by_an_inherited_disjunction() {
             shape,
             INHERITED_DISJUNCTION,
             SchemaSurfaceMode::OntologyComplete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let schema = &compilation.compiled.schema_json;
         let on_b = outcomes(&report, "B", &disjunction);
@@ -1096,7 +1093,7 @@ fn a_subclass_projects_an_inherited_disjunction_its_owner_cannot() {
             sh:property [ sh:path ex:p ; sh:datatype xsd:integer ] .",
         INHERITED_DISJUNCTION,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let disjunction = format!(
         "union(some(<{EX}p>,<http://www.w3.org/2001/XMLSchema#integer>),\
@@ -1167,7 +1164,7 @@ fn facets_on_a_defined_datatype_restrict_its_definition() {
         "",
         ontology,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let schema = &compilation.compiled.schema_json;
     // A pattern has no exact form over the integers `ex:Percent` is defined
@@ -1248,7 +1245,7 @@ fn iri_only_ontologies_report_no_class_expressions() {
         "",
         IRI_ONLY,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert_eq!(report.axioms.len(), 0);
     let shapes = shapes("");
@@ -1261,7 +1258,7 @@ fn iri_only_ontologies_report_no_class_expressions() {
             ontology.as_ref(),
             SchemaSurfaceMode::OntologyComplete,
         ),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("IRI-only compilation");
     assert_eq!(plain.compiled.schema_json, compilation.compiled.schema_json);
@@ -1305,18 +1302,12 @@ fn iri_only_output() -> String {
         let request = SchemaCompileRequest::new(&shapes, &namespaces, ontology.as_ref(), mode);
         let compiled = compile_schema(
             &request,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("IRI-only compilation");
         let (with_report, report) = compile_schema_with_class_expressions(
             &request,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("IRI-only compilation");
         assert!(report.axioms.is_empty(), "{name}: no class expressions");
@@ -1532,7 +1523,7 @@ fn ontology_complete_output_reads_back_through_every_importer() {
              [ a owl:Restriction ; owl:onProperty ex:m ; owl:cardinality 1 ] .
          ex:m a owl:DatatypeProperty , owl:FunctionalProperty ; rdfs:range xsd:float .",
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     import_compiled_schema(&single.compiled, &import).expect("the literal fragment reads back");
     let graphql = emit_graphql(&single.compiled, &graphql_config()).expect("GraphQL emits");
@@ -1550,7 +1541,7 @@ fn ontology_complete_output_reads_back_through_every_importer() {
              [ a owl:Restriction ; owl:onProperty ex:p ; owl:someValuesFrom ex:A ] .
          ex:p a owl:ObjectProperty .",
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let imported =
         import_compiled_schema(&small.compiled, &import).expect("the existential reads back");
@@ -1602,7 +1593,7 @@ fn compilation_manifest_and_emitters_are_deterministic() {
         "",
         &reversed,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert_eq!(first.compiled.schema_json, permuted.compiled.schema_json);
     assert_eq!(first.coverage.to_json(), permuted.coverage.to_json());
@@ -1618,7 +1609,7 @@ fn universal_restriction_to_owl_nothing_forbids_the_property() {
         "",
         ontology,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let schema = &compilation.compiled.schema_json;
     assert!(!accepts(schema, "A", "ex:a a ex:A ; ex:p ex:b .", "a"));
@@ -1644,7 +1635,7 @@ fn a_restricted_property_is_judged_on_its_class_outside_its_domain() {
         "",
         ontology,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let schema = &compilation.compiled.schema_json;
     assert!(!accepts(
@@ -1687,13 +1678,13 @@ fn thousands_of_restricted_classes_on_shared_properties_scale_linearly() {
         "",
         &shared_restriction_ontology(250),
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let large = compile_both(
         "",
         &shared_restriction_ontology(2_000),
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let ratio = |measure: fn(
         &(
@@ -1795,7 +1786,7 @@ fn reported_outcomes_match_every_emitter_on_an_agent_provenance_slice() {
         "",
         AGENT_PROVENANCE_SLICE,
         SchemaSurfaceMode::OntologyComplete,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let compiled = &compilation.compiled;
     let schema: Value = purrdf_lex::json::read(&compiled.schema_json).expect("schema JSON");
@@ -1956,10 +1947,7 @@ fn a_gene_ontology_sized_tree_references_inherited_restrictions() {
             "",
             &ontology_tree(classes),
             SchemaSurfaceMode::OntologyComplete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let bytes = compilation.compiled.schema_json.len()
             + compilation.coverage.to_json().len()
@@ -2006,10 +1994,7 @@ fn a_four_thousand_deep_subclass_chain_compiles_and_validates() {
             "",
             &subclass_chain(classes),
             SchemaSurfaceMode::OntologyComplete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let bytes = compilation.compiled.schema_json.len()
             + compilation.coverage.to_json().len()
@@ -2064,10 +2049,7 @@ fn graphql_names_literal_enumerations_beside_their_array_form() {
             "",
             ontology,
             SchemaSurfaceMode::OntologyComplete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let graphql = emit_graphql(&compilation.compiled, &graphql_config())
             .expect("a literal enumeration emits");
@@ -2089,7 +2071,7 @@ fn graphql_names_literal_enumerations_beside_their_array_form() {
             sh:property [ sh:path ex:e ; sh:in ( \"x\" \"y\" ) ] .",
         "",
         SchemaSurfaceMode::ShapedOnly,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let graphql = emit_graphql(&compilation.compiled, &graphql_config())
         .expect("an sh:in enumeration is a GraphQL enum");
@@ -2195,10 +2177,7 @@ fn every_schema_cell_that_admits_xml_reports_unchecked_representation() {
             shape,
             source,
             mode,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
         assert_eq!(
@@ -2266,10 +2245,7 @@ fn public_member_count_shapes_do_not_claim_an_xml_exclusion() {
             &ontology,
             &namespaces(),
             SchemaSurfaceMode::OntologyComplete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
         assert_eq!(
@@ -2305,10 +2281,7 @@ fn xml_exclusion_controls_keep_their_exact_shape_coverage() {
             &shape,
             "ex:C a owl:Class . ex:p a owl:DatatypeProperty .",
             SchemaSurfaceMode::OntologyComplete,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let cell = coverage_cell(&compilation, &iri("p"), &iri("C"));
         assert_eq!(
@@ -2366,7 +2339,7 @@ fn an_external_shape_cell_reports_xml_approximation_at_its_actual_validator() {
         &parse(""),
         &namespaces,
         SchemaSurfaceMode::ShapedOnly,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let cell = coverage_cell(&compilation, &iri("p"), class);
     assert_eq!(cell.status, SchemaCoverageStatus::HasShape);

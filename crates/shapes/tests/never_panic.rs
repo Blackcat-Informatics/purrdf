@@ -326,7 +326,7 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
     let bound = refused.bind_shared_dataset(Arc::clone(&data)).err();
     let product = refused.to_product(
         &ShapesProfile::CORE,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let terms = purrdf_shapes::path::eval(data.as_ref(), &focus, &path);
     let ids = purrdf_shapes::path::eval_ids(data.as_ref(), &focus, &path);
@@ -368,7 +368,7 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -388,7 +388,7 @@ fn preparation_refusal_cannot_become_an_empty_path_or_product() {
             .to_product(
                 &ShapesProfile::CORE,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

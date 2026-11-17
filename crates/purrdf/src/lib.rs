@@ -845,7 +845,7 @@ mod tests {
         let empty = RdfDatasetBuilder::new().freeze().expect("empty dataset");
         let pack = PackBuilder::build_bytes(
             &empty,
-            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
         )
         .expect("pack empty dataset");
         let restored = restore_pack(&pack).expect("restore empty dataset");
@@ -860,7 +860,7 @@ mod tests {
         let base = canonical_paged_seal(
             restored.as_ref(),
             page_rows,
-            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
         )
         .expect("empty paged base");
         let mut stack = PagedStack::new(vec![Arc::new(base)]).expect("root stack API");
@@ -888,7 +888,7 @@ mod tests {
                 .compact(
                     PagedQueryLimits::UNBOUNDED,
                     page_rows,
-                    &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
+                    &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None)
                 )
                 .expect("root canonical fold")
                 .page_count(),

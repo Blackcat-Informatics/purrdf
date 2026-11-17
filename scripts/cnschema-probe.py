@@ -4,8 +4,8 @@
 
 """Reproduce the pinned cnSchema 4.0 round-trip probe (`make cnschema-probe`).
 
-The probe: read the pinned cnSchema 4.0 JSON-LD export, emit RDFC-1.0
-canonical N-Quads, re-import those N-Quads, and canonicalize again. All three
+The probe: read the pinned cnSchema 4.0 JSON-LD export, emit the canonical
+N-Quads document (the canonical line sequence), re-import those N-Quads, and canonicalize again. All three
 identities are pinned below: the source bytes, the canonical N-Quads digest
 (which both legs must produce, proving a lossless round-trip), and the quad
 count.
@@ -50,8 +50,8 @@ EXPORT_URL = (
 )
 # SHA-256 of the source export bytes.
 SOURCE_SHA256 = "92329fd996672b7ffdceda283da8c9006853bce8bd232a6ee35df62e301c444a"
-# SHA-256 of the RDFC-1.0 canonical N-Quads — identical on both legs.
-CANONICAL_SHA256 = "8a4b7c1178e920f2bbe8be3f0944ab29892c8b723710dc91038098520e23c4cd"
+# SHA-256 of the canonical N-Quads document, identical on both legs.
+CANONICAL_SHA256 = "3b77c3e5329fae038e3a90d879fd53337dd17cc5deab06c82a16b276f231d2be"
 QUAD_COUNT = 40_936
 
 CACHE = REPO_ROOT / "target" / "cnschema-probe"
@@ -77,7 +77,7 @@ def verify_digest(path: Path, expected: str, label: str) -> None:
 def count_nquads_lines(path: Path) -> int:
     """Count newline-terminated lines in a canonical N-Quads file.
 
-    RDFC-1.0 canonical N-Quads emits exactly one statement per line with no
+    The canonical N-Quads document emits exactly one statement per line with no
     embedded newlines inside a term, so a line count *is* a quad count for
     this format. That equivalence is specific to canonical N-Quads: it would
     silently mis-count for any format whose output can wrap a term across
@@ -146,7 +146,7 @@ def fetch_export() -> Path:
 
 def convert_canonical(purrdf: list[str], source: Path, out: Path, from_format: str) -> None:
     subprocess.run(
-        [*purrdf, "convert", "--from", from_format, "--canonical", str(source), str(out)],
+        [*purrdf, "convert", "--from", from_format, "--canonical", str(source), str(out), "--canonical-search", "unlimited", "--canonicalization-receipts", "-"],
         check=True,
         cwd=REPO_ROOT,
     )

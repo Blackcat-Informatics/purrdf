@@ -472,7 +472,7 @@ impl PyStore {
     }
 }
 
-/// An in-memory quad set supporting RDFC-1.0 canonicalization (`Dataset`).
+/// An in-memory quad set supporting canonicalization (`Dataset`).
 ///
 /// # Absoluteness holds here too
 ///
@@ -486,7 +486,7 @@ impl PyStore {
 /// That is deliberate rather than incidental. `NamedNode("foo")` is constructible — the
 /// term constructors are string carriers and do not resolve anything — so without this
 /// check a relative IRI could reach `canonicalize`, which would hash it and hand back a
-/// stable RDFC-1.0 label for a term whose identity is unknowable. "Nothing invalid
+/// stable canonical label for a term whose identity is unknowable. "Nothing invalid
 /// escapes because there is no serializer here" is not the invariant; being
 /// unrepresentable from every ingress is.
 #[pyclass(name = "Dataset")]
@@ -532,10 +532,11 @@ impl PyDataset {
         self.checked_insert(quad.inner.clone())
     }
 
-    /// Canonicalize blank-node labels under the caller's search policy (native RDFC-1.0).
+    /// Canonicalize blank-node labels under the caller's search policy (the default nested-refinement
+    /// labelling).
     ///
-    /// Raises `ValueError` if this dataset's content is refused canonicalization (a
-    /// reserved-vocabulary IRI, or an n-degree search that exhausts its budget) — this
+    /// Raises `ValueError` if this dataset's content is refused canonicalization (the
+    /// labelling's typed `input`, `graph`, `width` or `limit` refusal) — this
     /// dataset's content is wholly caller-supplied, so the refusal comes back as an
     /// ordinary Python exception via the typed [`purrdf_core::try_canonicalize`] path,
     /// never a process abort. The dataset is left unchanged when it raises.

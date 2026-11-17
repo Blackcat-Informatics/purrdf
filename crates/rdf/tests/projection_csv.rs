@@ -54,10 +54,7 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
             &lift_lpg(&generic_graph, &config)
                 .expect("generic lift")
                 .dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );
@@ -77,10 +74,7 @@ fn public_csv_surfaces_round_trip_without_hidden_vocabulary() {
         datasets_isomorphic(
             &dataset,
             &lift_lpg(&neo4j_graph, &config).expect("Neo4j lift").dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );

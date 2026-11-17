@@ -15,7 +15,7 @@
 //! purrdf.gts via `flattened_dataset_from_bytes` and runs only the native engine.
 //!
 //! Determinism contract: every golden is byte-stable across runs. CONSTRUCT/DESCRIBE
-//! goldens are RDFC-1.0 canonical N-Quads; SELECT goldens are the SORTED multiset of
+//! goldens are canonical N-Quads; SELECT goldens are the SORTED multiset of
 //! `row_key` lines; ASK goldens are `true`/`false`. Re-running the example must
 //! produce NO git diff.
 
@@ -216,7 +216,7 @@ fn write_result_golden(
             let nquads_owner = try_canonicalize(
                 graph,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )?;

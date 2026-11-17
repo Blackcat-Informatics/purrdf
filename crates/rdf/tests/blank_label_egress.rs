@@ -115,7 +115,7 @@ fn every_hostile_label_serializes_and_reparses_isomorphically() {
                     &ds,
                     &reparsed,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -208,7 +208,7 @@ fn distinct_blank_nodes_never_conflate_on_egress() {
                 &ds,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -245,7 +245,7 @@ fn co_reference_survives_escaping() {
                 &ds,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -330,7 +330,7 @@ fn the_dotted_family_stays_distinct_and_verbatim_on_the_wire() {
                 &ds,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

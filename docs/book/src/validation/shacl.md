@@ -1048,7 +1048,7 @@ axioms outside the fragment do not create fields.
 `SchemaCoverageReport` accounts for every catalogued property once, including
 exclusions, with sorted per-class outcomes and source-axiom provenance.
 `SchemaCompileRequest::coverage_report` can produce it before emission. The
-request cache key binds RDFC-1.0 identities for the shapes and ontology graphs,
+request cache key binds canonical identities for the shapes and ontology graphs,
 caller namespaces, mode, value-vocabulary marker, compiler/policy salts, and
 the fixed ceilings: 65,536 properties, 65,536 classes, 1,048,576 relation or
 coverage cells, 16,777,216 class-hierarchy memberships, and expression depth
@@ -1781,7 +1781,7 @@ serializing.
 The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, the
 vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and a
 first-party frozen corpus of 73 cases with byte-frozen expected reports; SHACL
-Rules output is compared to expected inferred graphs by RDFC-1.0 isomorphism.
+Rules output is compared to expected inferred graphs by graph isomorphism.
 The parser is also held to the SHACL 1.2 specification's own SHACL-for-SHACL
 shapes graph: over every first-party and W3C shapes graph and a set of
 generated mutants, it refuses a graph exactly when `shacl-shacl.ttl` reports a

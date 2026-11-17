@@ -623,10 +623,7 @@ mod tests {
         // wrapper is sound here.
         let nt_owner = ::purrdf_rdf::canonical_flat_nquads(
             dataset.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("serialize");
         let nt = nt_owner.nquads();

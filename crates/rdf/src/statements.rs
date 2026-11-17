@@ -12,7 +12,7 @@
 //! IR flattened back to a flat quad stream) into RDF 1.2 triple terms.
 //!
 //! Both emitters write full-IRI Turtle (no prefix compaction); the drift gate
-//! compares RDFC-1.0 canonical quad sets (graph isomorphism), so banners and
+//! compares canonical quad sets (graph isomorphism), so banners and
 //! prefixes are immaterial — the triple/reifier/annotation *structure* is what
 //! must round-trip losslessly, verified by construction — never a silent drop.
 //!

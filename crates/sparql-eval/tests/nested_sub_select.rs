@@ -133,10 +133,7 @@ fn three_directly_nested_sub_selects_answer_exactly() {
     assert_eq!(
         purrdf_core::try_canonicalize(
             &graph,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
         .nquads(),

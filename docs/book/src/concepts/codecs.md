@@ -184,7 +184,7 @@ the packed bytes, with no decompression or materialization step first.
 Reach for a pack when a dataset is done changing and needs to be distributed,
 archived, or served at a scale where re-parsing text on every load is too
 slow: RDF 1.2 (named graphs, quoted triples, reifiers, annotations) is fully
-supported, and `verify_pack` independently recomputes the dataset's RDFC-1.0
+supported, and `verify_pack` independently recomputes the dataset's canonical
 digest from the pack's own decoded contents — a **certified read-only
 projection**, not merely a compressed file. The library never memory-maps a
 pack itself (every published crate stays `wasm32-unknown-unknown`-clean); a
@@ -201,7 +201,7 @@ or a Columnar schema version 1 dataset. Pack attachments bind the pack's exact
 SHA-256; Columnar attachments bind the canonical manifest of all five actual
 files. Neither changes the source or its RDF canonical identity. The sorted
 section directory binds finite dense `f32` or `f64` matrices to this exact
-source identity, an independently verified RDFC digest, complete
+source identity, an independently verified canonical digest, complete
 model and processing contracts, stable target sets, and per-section plus
 whole-artifact integrity evidence. The `purrdf::embedding` facade owns source
 certification and construction. `EmbeddingBuilder` accepts unordered rows;

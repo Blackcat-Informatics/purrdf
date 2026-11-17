@@ -43,7 +43,7 @@ fn manifest() -> PathBuf {
 #[test]
 fn sparql_cdt_corpus() {
     let mut control =
-        purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
     let manifest = manifest();
     assert!(

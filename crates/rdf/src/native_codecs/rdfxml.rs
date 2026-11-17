@@ -11,7 +11,7 @@
 //! [`fold_statement_layer`](super::parse::fold_statement_layer)) and serializing from
 //! the first-party [`SerGraph`](super::ser_model::SerGraph). It is fully purrdf-gts
 //! free; byte-identity with the purrdf-gts path that produced the conformance and
-//! regenerate corpora is held by the W3C RDF/XML suite + RDFC-1.0 + round-trip tests.
+//! regenerate corpora is held by the W3C RDF/XML suite + canonical round-trip tests.
 //!
 //! ## Parse: XML → frozen IR through the shared statement-layer fold
 //!
@@ -2196,7 +2196,7 @@ mod tests {
                 &ds,
                 &reparsed,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )

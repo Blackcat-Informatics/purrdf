@@ -48,8 +48,9 @@
 //! * `--entailment REGIME` materializes the regime's closure over the view (through
 //!   the same `EntailmentPlan` `reason` resolves, so `--rules` means the same thing
 //!   here), and its reasoning report is surfaced under `--report`.
-//! * `--canonical` emits the RDFC-1.0 canonical N-Quads document
-//!   ([`purrdf_rdf::try_canonicalize_flat_view`]) rather than the `--to` format.
+//! * `--canonical` emits the canonical N-Quads document (the canonical line
+//!   sequence spelled as N-Quads 1.2, with decimal blank-node labels)
+//!   ([`purrdf_rdf::try_canonicalize_checked_view`]) rather than the `--to` format.
 //!   Canonical output is always N-Quads, so `--canonical` lets you OMIT `--to` — and
 //!   refuses it by name (see [`run`]) rather than silently ignoring a `--to` naming a
 //!   different format, exactly as it refuses `--jsonld-options`. A refusal (reserved
@@ -62,7 +63,7 @@ use std::sync::Arc;
 use purrdf_core::{LossLedger, RdfDataset};
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::SourceFormat;
-use purrdf_rdf::{CanonHash, ViewCanonError, try_canonicalize_flat_view};
+use purrdf_rdf::{ViewCanonError, try_canonicalize_checked_view};
 
 use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
@@ -130,7 +131,7 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) imports: &'a [String],
     /// Per-IRI YAML-LD controls for premise RDF imports.
     pub(crate) import_yamlld_input_options: &'a [String],
-    /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
+    /// Whether `--canonical` was set (emit the canonical N-Quads document).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
@@ -344,7 +345,7 @@ fn refuse_inapplicable_combinations(
     // could mistake for a format that was honored.
     if options.canonical && options.to.is_some() {
         return Err(CliError::Usage(
-            "--canonical emits RDFC-1.0 canonical N-Quads unconditionally, so a --to \
+            "--canonical emits canonical line-sequence N-Quads unconditionally, so a --to \
              naming a different target format would be accepted and never read: drop \
              one of the two"
                 .to_owned(),
@@ -389,7 +390,7 @@ fn run_with_transforms(
     canonical: &mut crate::canonical::Request,
 ) -> Result<(), CliError> {
     let target_format = if options.canonical {
-        // `--canonical` writes RDFC-1.0 canonical N-Quads unconditionally, so the egress
+        // `--canonical` writes the canonical N-Quads document unconditionally, so the egress
         // leg is N-Quads whatever else was named — and N-Quads can express no base.
         refuse_unconsumable_base(
             sources,
@@ -470,25 +471,24 @@ fn run_with_transforms(
         }
     };
 
-    // Then canonicalize: RDFC-1.0 canonical N-Quads always override `--to`. The typed
+    // Then canonicalize: the canonical N-Quads document always overrides `--to`. The typed
     // view-canon entry point, not the trusted-caller wrapper: `--canonical` reads
     // arbitrary caller-supplied documents, so a refusal (reserved vocabulary, or
     // n-degree search budget exhaustion) must come back as a value this CLI reports,
     // never as a process abort.
     if options.canonical {
-        let nquads =
-            match try_canonicalize_flat_view(&dataset, CanonHash::Sha256, canonical.control()?) {
-                Ok(canonicalized) => canonicalized,
-                Err(ViewCanonError::Refused(err)) => return Err(CliError::native(err)),
-                Err(ViewCanonError::NotReady { error, .. }) => match error {
+        let nquads = match try_canonicalize_checked_view(&dataset, canonical.control()?) {
+            Ok(canonicalized) => canonicalized,
+            Err(ViewCanonError::Refused(err)) => return Err(CliError::native(err)),
+            Err(ViewCanonError::NotReady { error, .. }) => match error {
                 // LAW: an owned `Arc<RdfDataset>`'s `FallibleDatasetView::Error` is
                 // `Infallible` — the frozen dataset never faults, so this arm is
                 // unreachable by construction.
             },
-            };
+        };
         sink::write_out_with_request(output, nquads.nquads().as_bytes(), canonical)?;
-        // The RDFC-1.0 canonical N-Quads document flattens the RDF 1.2 statement
-        // overlay into plain triples; it is a lossless re-rendering, so the only
+        // The canonical document spells the RDF 1.2 reifier and annotation rows
+        // as plain statements; its line sequence is a lossless re-rendering, so the only
         // entries are whatever reading the sources already dropped.
         return ledger::surface(ledger_target, &read_ledger);
     }

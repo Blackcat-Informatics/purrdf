@@ -2203,10 +2203,7 @@ mod tests {
         let resident = project_obo_graphs(dataset.as_ref(), &configuration).expect("resident");
         let pack = PackBuilder::build_bytes(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("pack");
         let view = PackView::from_bytes(&pack).expect("view");

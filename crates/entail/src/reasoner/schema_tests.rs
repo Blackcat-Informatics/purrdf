@@ -201,7 +201,7 @@ fn a_class_name_does_not_assert_an_inhabitant_but_the_question_supplies_one() {
     let dataset = shared_schema(2, 0, true);
     let mut reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert!(reasoner.schema_bounds(&term("A")).is_some());
@@ -211,7 +211,7 @@ fn a_class_name_does_not_assert_an_inhabitant_but_the_question_supplies_one() {
     let proof = checked(
         &dataset,
         &answer,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     assert!(
         proof
@@ -276,10 +276,7 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
         let dataset = fixture.freeze();
         let reasoner = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = reasoner.consistency();
@@ -291,10 +288,7 @@ fn asserted_subsumed_equivalent_role_derived_and_existential_membership_are_chec
         let proof = checked(
             &dataset,
             &answer,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
         let (run, step) = proof
             .runs()
@@ -349,10 +343,7 @@ fn qualified_containment_is_directional_and_has_no_unrelated_transfer() {
         let dataset = fixture.freeze();
         let reasoner = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let expected = if relation == 1 || relation == 2 {
@@ -371,7 +362,7 @@ fn qualified_containment_is_directional_and_has_no_unrelated_transfer() {
                 &dataset,
                 &answer,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             );
@@ -401,10 +392,7 @@ fn exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer() {
         let dataset = fixture.freeze();
         let reasoner = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let evidence = reasoner
@@ -421,10 +409,7 @@ fn exact_data_spaces_and_finite_extents_are_prepared_without_opaque_transfer() {
         checked(
             &dataset,
             &answer,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
     }
     let mut fixture = Fixture::default();
@@ -476,10 +461,7 @@ fn exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges() {
         let dataset = fixture.freeze();
         let reasoner = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let answer = reasoner.consistency();
@@ -497,7 +479,7 @@ fn exact_qualifier_and_role_sources_are_part_of_the_bound_not_current_edges() {
                 &dataset,
                 &answer,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             );
@@ -579,7 +561,7 @@ fn actual_long_datatype_temporaries_share_the_preparation_owner() {
     let dataset = fixture.freeze();
     let reasoner = Reasoner::with_proofs(
         &dataset,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert_eq!(
@@ -591,7 +573,7 @@ fn actual_long_datatype_temporaries_share_the_preparation_owner() {
     checked(
         &dataset,
         &answer,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     let window = CurrentThreadWindow::open();
     let mut preparation = crate::owl_dl::bounds::Preparation::default();
@@ -675,14 +657,14 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
     let original = shared_schema(1, 1, true);
     let original_reasoner = Reasoner::with_proofs(
         &original,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let original_answer = original_reasoner.consistency();
     let proof = checked(
         &original,
         &original_answer,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     );
     for revised in [
         shared_schema(1, 0, true),
@@ -691,10 +673,7 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
     ] {
         let checker = Reasoner::with_proofs(
             &revised,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert_eq!(*checker.consistency().answer(), Verdict::True);
@@ -707,7 +686,7 @@ fn retraction_purge_and_source_replacement_cannot_reuse_a_prepared_proof() {
                     Some(original_answer.certificate()),
                     &context,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -750,10 +729,7 @@ fn refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_s
         let mut reasoner = Reasoner::with_proofs_and_preparation_budget(
             &dataset,
             budget,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert!(reasoner.schema_preparation().obstruction.is_some());
@@ -805,10 +781,7 @@ fn refused_entries_are_typed_incomplete_and_sufficient_retry_finishes_the_same_s
         checked(
             &dataset,
             &completed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         );
     }
 }
@@ -858,18 +831,12 @@ fn cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises
         let dataset = shared_schema(4, 16, contradictory);
         let prepared = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let mut reference = Reasoner::with_proofs(
             &dataset,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         reference.kb.schema_reference = true;
@@ -887,7 +854,7 @@ fn cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises
                 &dataset,
                 &actual,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             );
@@ -895,7 +862,7 @@ fn cached_and_uncached_native_membership_paths_agree_and_check_the_same_premises
                 &dataset,
                 &expected,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             );

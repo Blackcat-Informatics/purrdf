@@ -53,10 +53,7 @@ fn public_visitor_and_sink_surfaces_are_bidirectional_and_stable() {
         datasets_isomorphic(
             &dataset,
             &reparsed,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap()
     );

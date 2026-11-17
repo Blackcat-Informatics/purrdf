@@ -297,7 +297,7 @@ subject therefore carries its label into the sort key, into the document table,
 and into both fingerprints. **Two isomorphic datasets parsed from differently
 labelled sources produce different document ids and different fingerprints.**
 
-This crate does not canonicalize blank nodes. RDFC-1.0 canonicalization lives in
+This crate does not canonicalize blank nodes. Canonicalization lives in
 `purrdf-core`, is a substantially more expensive operation, and has its own
 contract; silently invoking it here would make index construction pay that cost
 without asking. The honest statement is that ids and digests are a pure function

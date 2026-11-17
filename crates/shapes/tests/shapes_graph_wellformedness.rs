@@ -1371,10 +1371,7 @@ fn a_string_rule_deactivation_is_refused_and_boolean_true_deactivates_the_rule()
         let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("rules run");
         purrdf_rdf::try_canonicalize(
             entailed.as_ref(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap()
     };
@@ -1938,7 +1935,7 @@ fn an_af_graph_with_functions_rules_and_node_expressions_loads_and_runs() {
     let entailed = purrdf_shapes::entail_dataset(input.as_ref(), &shapes).expect("the rules run");
     let nquads_owner = purrdf_rdf::try_canonicalize(
         entailed.as_ref(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let nquads = nquads_owner.nquads();

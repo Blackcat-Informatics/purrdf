@@ -694,7 +694,7 @@ mod tests {
                 &semantic,
                 projected.dataset.as_ref(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None
                 )
             )
@@ -723,7 +723,7 @@ mod tests {
                     mapped.dataset.as_ref(),
                     &reparsed,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -755,7 +755,7 @@ mod tests {
                     constructed.dataset.as_ref(),
                     &reparsed,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

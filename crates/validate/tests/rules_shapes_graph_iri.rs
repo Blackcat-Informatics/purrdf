@@ -122,7 +122,7 @@ fn entailment_sees_the_shapes_graph_iri_it_is_given() {
         Some(GRAPH),
         DATA,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("entails");
     let with = with_owner.nquads();
@@ -134,7 +134,7 @@ fn entailment_sees_the_shapes_graph_iri_it_is_given() {
         None,
         DATA,
         &[],
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("entails");
     let without = without_owner.nquads();
@@ -147,10 +147,7 @@ fn entailment_sees_the_shapes_graph_iri_it_is_given() {
             None,
             DATA,
             &[],
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .expect("entails")
         .nquads()

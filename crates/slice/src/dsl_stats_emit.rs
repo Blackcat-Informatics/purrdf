@@ -160,10 +160,7 @@ mod tests {
         let got = emit_dsl_stats(
             &root,
             &vocab,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("emit dsl stats");
         let committed_path = root

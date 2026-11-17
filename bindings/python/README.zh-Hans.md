@@ -14,7 +14,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 </p>
 
 PurRDF 是一个从零实现、依赖极简的 [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/)
-引擎——解析器与序列化器、SPARQL、SHACL、ShEx、RDFC-1.0 规范化，以及 GTS 图传输
+引擎——解析器与序列化器、SPARQL、SHACL、ShEx、规范化，以及 GTS 图传输
 容器——以 Rust 编写，并原样带入 Python、JavaScript 与 C（GTS 容器可从 Python 与 C 访问；JavaScript 包并不
 暴露它）。`purrdf` 包是这同一个引擎
 的 Python 接口：在每种语言中都是同样的、字节级一致的语义，包括大多数现有库尚未承载

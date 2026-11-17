@@ -8,10 +8,8 @@
 //! `purrdf_shacl_entail_to_ntriples`, `purrdf-wasm`'s `shacl_entail`, and
 //! `purrdf-python`'s `shacl.entail` each call
 //! [`entail_to_ntriples_string`] and add only their own platform wrapping (a
-//! caller-owned buffer, a `JsError`, a GIL release plus a `ValueError`). The
-//! Python binding used to inline the two-line body instead; the golden in
-//! [`PYTHON_BINDING_GOLDEN`] pins the bytes that inline copy produced, so the
-//! re-point is provably byte-identical rather than merely believed to be.
+//! caller-owned buffer, a `JsError`, a GIL release plus a `ValueError`).
+//! [`PYTHON_BINDING_GOLDEN`] pins the canonical document they all return.
 //!
 //! The entailment twin of [`crate::shacl::validate_to_sarif_string`]: where the
 //! validation boundary runs the SHACL engine and renders a
@@ -24,7 +22,7 @@
 //! platform-specific wrapping (buffer, `JsValue`, `str`).
 //!
 //! Wasm-clean: pure in-memory string work over the wasm-clean SHACL engine and
-//! the native RDFC-1.0 serializer — no new dependencies and no ambient I/O.
+//! the native canonical serializer — no new dependencies and no ambient I/O.
 //!
 //! [`engine::entail_graphs`]: purrdf_shapes::engine::entail_graphs
 
@@ -199,11 +197,11 @@ fn entail_with<E: From<ShapesError>>(
 /// two graphs, runs the shapes graph's rules layer by layer as SHACL 1.2 Inference
 /// Rules executes them (run-once rules once, iterating rules until an iteration
 /// infers nothing new, in `sh:order` groups), and renders the
-/// resulting dataset via the native RDFC-1.0 flat serializer (deterministic,
-/// blank-node-canonical), returning a `String` error (the engine's own
+/// resulting dataset as its canonical document (the canonical line sequence
+/// spelled as N-Quads 1.2: deterministic, blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
 ///
-/// The writer is [`purrdf_core::try_canonicalize_flat_view`], which is
+/// The writer is [`purrdf_core::try_canonicalize_checked_view`], which is
 /// graph-CARRYING — it spells out a fourth term for any row in a named graph, and
 /// it re-materializes the RDF 1.2 statement layer in the graph that asserted it.
 /// The result is nonetheless N-Triples, byte for byte, and that is a property of
@@ -215,9 +213,9 @@ fn entail_with<E: From<ShapesError>>(
 /// silent drop.
 ///
 /// Both inputs are wholly caller-supplied, so this function calls the typed,
-/// non-panicking [`purrdf_core::try_canonicalize_flat_view`] rather than the
-/// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a reserved-vocabulary
-/// or search-budget refusal comes back as an `Err` value across the
+/// non-panicking [`purrdf_core::try_canonicalize_checked_view`] rather than the
+/// panicking [`purrdf_rdf::canonical_flat_nquads`] wrapper: a labelling refusal
+/// (such as its limit) comes back as an `Err` value across the
 /// wasm/Python/C-ABI boundary instead of aborting the process.
 ///
 /// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]): an
@@ -230,8 +228,8 @@ fn entail_with<E: From<ShapesError>>(
 /// fails to parse, or rule application fails (an illegal head term, an unresolvable `sh:condition`,
 /// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
 /// term-generating round limit or another evaluation limit); or a diagnostic naming the
-/// refusal if the materialized dataset carries a reserved-vocabulary IRI or
-/// exhausts the RDFC-1.0 n-degree search budget.
+/// refusal if the canonical labelling refuses the materialized dataset, such as
+/// when it exhausts its limit.
 ///
 /// # Examples
 ///
@@ -247,7 +245,7 @@ fn entail_with<E: From<ShapesError>>(
 /// let data = "<http://example.org/alice> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
 ///
-/// let nt = entail_to_ntriples_string(shapes, None, data, &[], &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None)).expect("entailment produced");
+/// let nt = entail_to_ntriples_string(shapes, None, data, &[], &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)).expect("entailment produced");
 /// assert!(nt.nquads().contains("<http://example.org/adult>"));
 /// ```
 pub fn entail_to_ntriples_string(
@@ -315,10 +313,9 @@ fn canonical_ntriples(
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
-    // reserved-vocabulary or budget-exhausting document must come back as an `Err`
+    // labelling refusal (such as its limit) must come back as an `Err`
     // value, not abort the process.
-    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256, control)
-    {
+    match purrdf_core::try_canonicalize_checked_view(dataset, control) {
         Ok(canonicalized) => Ok(canonicalized),
         Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Canonical(err)),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
@@ -342,7 +339,7 @@ pub const PYTHON_BINDING_GOLDEN_SHAPES: &str = "@prefix sh: <http://www.w3.org/n
 /// The data graph of the Python-binding byte-identity golden.
 ///
 /// Two targets (so the rule fires more than once) and a blank node (so the
-/// RDFC-1.0 canonical relabelling is exercised, which is the part of the output
+/// canonical labelling is exercised, which is the part of the output
 /// most likely to move if the two spellings ever stopped agreeing).
 pub const PYTHON_BINDING_GOLDEN_DATA: &str = "<http://example.org/alice> \
     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
@@ -350,19 +347,16 @@ pub const PYTHON_BINDING_GOLDEN_DATA: &str = "<http://example.org/alice> \
     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n\
     <http://example.org/bob> <http://example.org/knows> _:b0 .\n";
 
-/// The exact bytes `purrdf-python`'s `shacl.entail` produced for
-/// [`PYTHON_BINDING_GOLDEN_SHAPES`] / [`PYTHON_BINDING_GOLDEN_DATA`] while it
-/// still inlined `engine::entail_graphs` + `canonical_flat_nquads` itself.
-///
-/// Captured by running that inline sequence verbatim *before* the binding was
-/// re-pointed at [`entail_to_ntriples_string`], so the equality test below is a
-/// before/after comparison rather than a restatement of the current code.
+/// The exact canonical document `shacl.entail` produces for
+/// [`PYTHON_BINDING_GOLDEN_SHAPES`] / [`PYTHON_BINDING_GOLDEN_DATA`]: the canonical line
+/// sequence of the entailed dataset, one statement per line in canonical order, its blank
+/// node written `_:0`.
 pub const PYTHON_BINDING_GOLDEN: &str = "\
+<http://example.org/bob> <http://example.org/adult> <http://example.org/yes> .
+<http://example.org/bob> <http://example.org/knows> _:0 .
+<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
 <http://example.org/alice> <http://example.org/adult> <http://example.org/yes> .
 <http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
-<http://example.org/bob> <http://example.org/adult> <http://example.org/yes> .
-<http://example.org/bob> <http://example.org/knows> _:c14n0 .
-<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
 ";
 
 #[cfg(test)]
@@ -383,7 +377,7 @@ mod tests {
     #[test]
     fn entail_materializes_the_inferred_triple() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let nt_owner = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
             .expect("entailment produced");
@@ -442,7 +436,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn entail_is_bounded_by_the_four_limits_named_in_each_hosts_terms() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let one = |pick: usize| {
             let mut limits = RuleLimits::default();
@@ -505,7 +499,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn entail_is_deterministic() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let a_owner = entail_to_ntriples_string(SHAPES, None, DATA, &[], &mut control)
             .expect("entailment produced");
@@ -519,7 +513,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     #[test]
     fn malformed_shapes_is_an_error() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         assert!(
             entail_to_ntriples_string("@@@ not turtle", None, DATA, &[], &mut control).is_err()
@@ -527,40 +521,41 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
     }
 
     /// Both `shapes_ttl` and `data_nt` are wholly caller-supplied (they cross the
-    /// wasm/Python/C-ABI boundary as-is), so a materialized dataset carrying a
-    /// reserved-vocabulary IRI ([`purrdf_core::RESERVED_NAMESPACE`]) must come
-    /// back as an `Err` VALUE rather than aborting the process — the gap this
-    /// function's migration off the panicking [`purrdf_rdf::canonical_flat_nquads`]
-    /// wrapper closes.
+    /// wasm/Python/C-ABI boundary as-is), so a canonicalization that is stopped
+    /// must come back as an `Err` VALUE rather than aborting the process.
     #[test]
-    fn entail_refuses_a_reserved_vocabulary_dataset_as_a_value_not_a_panic() {
-        let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+    fn entail_refuses_a_stopped_canonicalization_as_a_value_not_a_panic() {
+        #[derive(Debug)]
+        struct Latched;
+        impl purrdf_core::StopSignal for Latched {
+            fn stopped(&self) -> bool {
+                true
+            }
+        }
+        let mut control = purrdf_core::CanonicalizationControl::new(
+            purrdf_core::CANON_CORPUS_POLICY,
+            Some(&Latched),
+        );
 
         let data = "<http://example.org/alice> <http://example.org/knows> \
-            <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control).expect_err(
-            "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
-             as a value, not panic",
-        );
+            <http://example.org/bob> .\n";
+        let error = entail_to_ntriples_string(SHAPES, None, data, &[], &mut control)
+            .expect_err("a stopped canonicalization must refuse as a value, not panic");
         assert!(
             matches!(
                 &error,
-                ShapesError::Canonical(purrdf_core::CanonError::ReservedVocabulary(refusal))
-                    if refusal.iri() == "urn:purrdf:rdfc:bad"
-                        && refusal.position() == purrdf_core::TermPosition::Object
+                ShapesError::Canonical(purrdf_core::CanonError::Stopped)
             ),
             "{error}"
         );
     }
 
-    /// The valid neighbour of the refusal above: an ORDINARY object IRI (no
-    /// reserved prefix) in the exact same shape still entails successfully — the
-    /// refusal above is not an over-refusal of ordinary documents.
+    /// The valid neighbour of the refusal above: the exact same shape, with no stop
+    /// latched, still entails successfully.
     #[test]
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_entails() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <http://example.org/bad> .\n";
@@ -570,19 +565,12 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         assert!(nt.contains("http://example.org/bad"));
     }
 
-    /// Re-pointing `purrdf-python`'s `shacl.entail` at this function changed no
-    /// bytes.
-    ///
-    /// [`PYTHON_BINDING_GOLDEN`] was captured by running the binding's OLD inline
-    /// body — `purrdf_shapes::engine::entail_graphs(data, shapes, None)` followed by
-    /// `purrdf_rdf::canonical_flat_nquads(dataset.as_ref())`, in that order —
-    /// against these two fixtures before the edit. Asserting the shared function
-    /// reproduces it is therefore a before/after equality, and it is the fixture
-    /// a later refactor of either spelling has to keep satisfying.
+    /// The entailment boundary returns the pinned canonical document: every host
+    /// that calls it receives these bytes.
     #[test]
-    fn the_python_binding_repoint_is_byte_identical() {
+    fn the_entailment_boundary_returns_the_pinned_canonical_document() {
         let mut control =
-            purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
 
         let produced_owner = entail_to_ntriples_string(
             PYTHON_BINDING_GOLDEN_SHAPES,
@@ -597,7 +585,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         // The golden is not vacuous: the rule fired for both targets, and the
         // blank node really was canonically relabelled.
         assert_eq!(produced.matches("<http://example.org/adult>").count(), 2);
-        assert!(produced.contains("_:c14n0"));
+        assert!(produced.contains("_:0"));
         assert!(!produced.contains("_:b0"));
     }
 }

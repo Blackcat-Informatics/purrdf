@@ -32,7 +32,7 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
     // Build the pack, open a read-only view over it, and reconstruct a concrete dataset.
     let bytes = PackBuilder::build_bytes(
         &ds,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build");
     let view = PackView::from_bytes(&bytes).expect("pack opens");
@@ -43,10 +43,7 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
         datasets_isomorphic(
             &rebuilt,
             &ds,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(), // deref-coerces Arc<RdfDataset> -> &RdfDataset
         "reconstruction must be isomorphic to the source dataset"
@@ -57,7 +54,7 @@ fn dataset_from_view_roundtrips_the_full_fixture() {
     //    the two datasets canonicalize identically (base quads + reifier + annotations).
     let rebuilt_bytes = PackBuilder::build_bytes(
         &rebuilt,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build from reconstruction");
     let rebuilt_view = PackView::from_bytes(&rebuilt_bytes).expect("rebuilt pack opens");
@@ -92,7 +89,7 @@ fn restore_pack_roundtrips_the_full_fixture() {
     let source = build_fixture();
     let bytes = PackBuilder::build_bytes(
         &source,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("pack build");
     let restored = restore_pack(&bytes).expect("pack restores");
@@ -101,10 +98,7 @@ fn restore_pack_roundtrips_the_full_fixture() {
         datasets_isomorphic(
             &restored,
             &source,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None
-            )
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None)
         )
         .unwrap(),
         "restore_pack must preserve the source dataset"

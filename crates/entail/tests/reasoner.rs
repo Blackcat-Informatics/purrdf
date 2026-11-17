@@ -1397,7 +1397,7 @@ fn a_module_entails_everything_the_full_ontology_entails_over_its_signature() {
                 &terms,
                 method,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -1423,7 +1423,7 @@ fn an_axiom_whose_only_signature_contact_is_inside_its_complex_left_side_is_kept
         &zoo(),
         &[iri("eats")],
         purrdf_entail::ModuleMethod::Bot,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("extract");
     let module = extracted.module();
@@ -1456,7 +1456,7 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
         &full,
         &seed,
         purrdf_entail::ModuleMethod::Bot,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("extract");
     let bot_signature: Vec<String> = bot.signature().iter().map(show).collect();
@@ -1473,7 +1473,7 @@ fn bot_follows_the_chain_upward_and_top_follows_it_downward() {
         &full,
         &seed,
         purrdf_entail::ModuleMethod::Top,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("extract");
     let top_signature: Vec<String> = top.signature().iter().map(show).collect();
@@ -1495,7 +1495,7 @@ fn a_module_carries_the_whole_class_expression_under_a_kept_axiom() {
         &full,
         &seed,
         purrdf_entail::ModuleMethod::Bot,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("extract");
     // `Cat ⊑ ∃eats.Fish` is kept, so the restriction's THREE defining triples must all be
@@ -1538,7 +1538,7 @@ fn a_construct_locality_does_not_decide_is_kept_conservatively_and_reported() {
         &full,
         &[iri("Cat")],
         purrdf_entail::ModuleMethod::Bot,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("extract");
     let reported: Vec<(String, String)> = extracted
@@ -1567,7 +1567,7 @@ fn an_empty_seed_extracts_an_empty_module() {
         &zoo(),
         &[],
         purrdf_entail::ModuleMethod::Star,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .expect("extract");
     assert_eq!(extracted.axioms(), 0);
@@ -1584,20 +1584,14 @@ fn module_extraction_is_reproducible() {
             &full,
             &seed,
             method,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extract");
         let two = purrdf_entail::extract_module(
             &full,
             &seed,
             method,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .expect("extract");
         assert_eq!(one.signature(), two.signature());
@@ -2237,7 +2231,7 @@ fn query_only_roles_preserve_source_support_boundaries_and_proof_replay() {
             });
             let property = TermValue::Iri(role.to_owned());
             let mut control =
-                purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None);
+                purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
             for axiom in [
                 DlAxiom::ObjectPropertyAssertion {
                     subject: iri("a"),
@@ -2371,7 +2365,7 @@ fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
             let mut producer = Reasoner::with_proofs(
                 &input,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -2385,7 +2379,7 @@ fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
             let original_input = Reasoner::with_proofs(
                 &input,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -2396,7 +2390,7 @@ fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
             let mut consumer = Reasoner::with_proofs(
                 &input,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -2415,7 +2409,7 @@ fn bottom_roles_are_empty_through_assertions_subroles_and_restrictions() {
                     Some(answer.certificate()),
                     &context,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -2809,7 +2803,7 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
     ]);
     let mut producer = Reasoner::with_proofs(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let question = producer.object_property_classification_question().unwrap();
@@ -2822,7 +2816,7 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
         .unwrap();
     let mut consumer = Reasoner::with_proofs(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     consumer.prepare(&question).unwrap();
@@ -2832,15 +2826,12 @@ fn object_property_classification_proofs_replay_and_boundaries_refuse_directness
             &question,
             Some(answer.certificate()),
             &consumer.proof_context().unwrap(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
     let mut wrong = Reasoner::with_proofs(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     assert!(
@@ -2914,7 +2905,7 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
         &input,
         purrdf_entail::reasoner::SchemaPreparationBudget::default(),
         signal.clone(),
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let question = reference.object_property_classification_question().unwrap();
@@ -2932,10 +2923,7 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
             &input,
             purrdf_entail::reasoner::SchemaPreparationBudget::default(),
             signal.clone(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         signal.arm(cut);
@@ -2954,7 +2942,7 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
                 let mut consumer = Reasoner::with_proofs(
                     &input,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )
@@ -2967,7 +2955,7 @@ fn object_property_cancellation_preserves_partial_proof_coverage() {
                         Some(answer.certificate()),
                         &consumer.proof_context().unwrap(),
                         &mut purrdf_core::CanonicalizationControl::new(
-                            purrdf_core::RDFC_V2_CORPUS_POLICY,
+                            purrdf_core::CANON_CORPUS_POLICY,
                             None,
                         ),
                     )
@@ -3124,10 +3112,7 @@ fn class_analysis_proof_binds_both_source_universes() {
     for (residual, input) in [(false, kittens()), (true, class_analysis_nominal())] {
         let producer = Reasoner::with_proofs(
             &input,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let question = producer.class_analysis_question();
@@ -3140,10 +3125,7 @@ fn class_analysis_proof_binds_both_source_universes() {
             .unwrap();
         let mut consumer = Reasoner::with_proofs(
             &input,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         consumer.prepare(&question).unwrap();
@@ -3154,17 +3136,14 @@ fn class_analysis_proof_binds_both_source_universes() {
                 Some(answer.certificate()),
                 &consumer.proof_context().unwrap(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
             .unwrap();
         let mut wrong = Reasoner::with_proofs(
             &input,
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         assert!(
@@ -3183,7 +3162,7 @@ fn class_analysis_proof_binds_both_source_universes() {
                     Some(answer.certificate()),
                     &producer.borrowed_proof_context().unwrap(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -3229,7 +3208,7 @@ fn class_analysis_retains_native_refusals_and_joint_directness() {
     let input = class_analysis_nominal();
     let producer = Reasoner::with_proofs(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap()
     .with_work_cap(1);
@@ -3242,7 +3221,7 @@ fn class_analysis_retains_native_refusals_and_joint_directness() {
     assert!(answer.direct_types().is_err());
     let mut consumer = Reasoner::with_proofs(
         &input,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
     )
     .unwrap();
     let question = producer.class_analysis_question();
@@ -3255,10 +3234,7 @@ fn class_analysis_retains_native_refusals_and_joint_directness() {
             &question,
             Some(answer.certificate()),
             &consumer.proof_context().unwrap(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
 }
@@ -3274,10 +3250,7 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
             &input,
             purrdf_entail::reasoner::SchemaPreparationBudget::default(),
             signal.clone(),
-            &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
-                None,
-            ),
+            &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
         )
         .unwrap();
         let question = reference.class_analysis_question();
@@ -3292,7 +3265,7 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
                 purrdf_entail::reasoner::SchemaPreparationBudget::default(),
                 signal.clone(),
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -3313,7 +3286,7 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
             let mut consumer = Reasoner::with_proofs(
                 &input,
                 &mut purrdf_core::CanonicalizationControl::new(
-                    purrdf_core::RDFC_V2_CORPUS_POLICY,
+                    purrdf_core::CANON_CORPUS_POLICY,
                     None,
                 ),
             )
@@ -3326,7 +3299,7 @@ fn class_analysis_cancellation_preserves_joint_certificate_and_positive_coverage
                     Some(answer.certificate()),
                     &consumer.proof_context().unwrap(),
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None,
                     ),
                 )

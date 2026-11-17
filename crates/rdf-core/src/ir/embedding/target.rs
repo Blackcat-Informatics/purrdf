@@ -320,7 +320,8 @@ impl TextChunkTarget {
 /// Certified RDF dataset subject.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfDatasetTarget {
-    /// Independently certified RDFC SHA-256.
+    /// Independently certified RDF digest of the run the format version names
+    /// (version 1: the RDFC-1.0 SHA-256 of the source; version 2: the BLAKE3 digest of its canonical line sequence).
     pub rdfc_digest: [u8; 32],
 }
 

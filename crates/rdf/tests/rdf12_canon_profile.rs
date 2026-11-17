@@ -37,13 +37,13 @@ use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use purrdf_rdf::{
+use purrdf_rdf::rdfc12::{
     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
-    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonError,
-    CanonHash, CanonPresentation, RESERVED_NAMESPACE, RdfDatasetBuilder, TermPosition,
-    ViewCanonError, parse_dataset, try_canonicalize_flat_view, try_canonicalize_with,
+    CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonHash,
+    CanonPresentation, RESERVED_NAMESPACE, try_canonicalize_flat_view, try_canonicalize_with,
 };
+use purrdf_rdf::{CanonError, RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset};
 use purrdf_testkit::golden::regenerating;
 use purrdf_testkit::paths::workspace_root;
 use sha2::{Digest, Sha256};
@@ -136,7 +136,10 @@ fn run_case(case: &Case) -> Result<purrdf_core::Canonicalized, String> {
     match try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     ) {
         Ok(canonicalized) => Ok(canonicalized),
         Err(CanonError::ReservedVocabulary(err)) => {
@@ -264,7 +267,10 @@ fn refusal_of(turtle: &str) -> CanonError {
     match try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     ) {
         Err(err) => err,
         Ok(canonicalized) => panic!(
@@ -297,7 +303,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
     let lowered_owner = try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a genuine reifier canonicalizes");
     let lowered = lowered_owner.nquads();
@@ -316,7 +325,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
     let folded_owner = try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a quad in the exact emitted shape folds rather than refusing");
     let folded = folded_owner.nquads();
@@ -337,7 +349,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_row_it_spells() {
             &reparsed,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
@@ -395,7 +407,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     let lowered_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a genuine reifier canonicalizes under the flat presentation");
     let lowered = lowered_owner.nquads();
@@ -414,7 +429,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     let folded_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect(
         "a quad in the exact emitted shape folds rather than refusing, under the \
@@ -442,7 +460,7 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
             &*reparsed,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
@@ -464,7 +482,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     match try_canonicalize_flat_view(
         &*near_miss,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     ) {
         Err(ViewCanonError::Refused(CanonError::ReservedVocabulary(err))) => {
             assert_eq!(err.iri(), "urn:purrdf:rdfc:reifies");
@@ -487,7 +508,10 @@ fn a_spelled_reifier_co_canonicalizes_with_the_flat_row_it_spells() {
     let admitted = try_canonicalize_flat_view(
         &*neighbour,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("the exact folded shape must be admitted, not refused");
     assert!(admitted.nquads().contains(RDF_REIFIES));
@@ -513,7 +537,10 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
     let lowered_owner = try_canonicalize_flat_view(
         &*native,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a genuine annotation canonicalizes under the flat presentation");
     let lowered = lowered_owner.nquads();
@@ -529,7 +556,10 @@ fn a_spelled_annotation_co_canonicalizes_with_the_flat_row_it_spells() {
     let folded_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect(
         "a quad in the exact emitted shape folds rather than refusing, under the \
@@ -597,26 +627,26 @@ fn the_profile_identity_is_readable_from_the_api() {
             &empty,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
         .expect("empty dataset canonicalizes")
         .presentation(),
-        CanonPresentation::Overlay
+        Some(CanonPresentation::Overlay)
     );
     assert_eq!(
         try_canonicalize_flat_view(
             &*empty,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None
             )
         )
         .expect("empty dataset canonicalizes")
         .presentation(),
-        CanonPresentation::FlatAssertion
+        Some(CanonPresentation::FlatAssertion)
     );
 }
 
@@ -633,14 +663,20 @@ fn flat_view_leaves_an_ordinary_quad_unchanged() {
     let overlay_owner = try_canonicalize_with(
         &dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("plain RDF 1.1 canonicalizes under the overlay presentation");
     let overlay = overlay_owner.nquads();
     let flat_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("plain RDF 1.1 canonicalizes under the flat presentation");
     let flat = flat_owner.nquads();
@@ -676,7 +712,10 @@ fn a_named_graph_reifier_lowers_to_flat_rdf_reifies_in_its_declaring_graph() {
     let flat_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a named-graph reifier canonicalizes under the flat presentation");
     let flat = flat_owner.nquads();
@@ -719,7 +758,10 @@ fn a_named_graph_annotation_lowers_to_a_flat_row_in_its_own_graph() {
     let flat_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a named-graph annotation canonicalizes under the flat presentation");
     let flat = flat_owner.nquads();
@@ -752,7 +794,10 @@ fn a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation() {
     let single_owner = try_canonicalize_flat_view(
         &*dataset,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a genuine reifier canonicalizes under the flat presentation");
     let single = single_owner.nquads();
@@ -772,7 +817,10 @@ fn a_doubly_spelled_reifier_row_is_emitted_once_under_the_flat_presentation() {
     let doubled_owner = try_canonicalize_flat_view(
         &*dataset2,
         CanonHash::Sha256,
-        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::RDFC_V2_CORPUS_POLICY, None),
+        &mut purrdf_core::CanonicalizationControl::new(
+            purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
+            None,
+        ),
     )
     .expect("a reifier binding spelled both ways still canonicalizes");
     let doubled = doubled_owner.nquads();
@@ -810,7 +858,7 @@ fn no_corpus_golden_leaks_the_reserved_namespace_under_the_flat_presentation() {
             &*dataset,
             CanonHash::Sha256,
             &mut purrdf_core::CanonicalizationControl::new(
-                purrdf_core::RDFC_V2_CORPUS_POLICY,
+                purrdf_rdf::rdfc12::RDFC_V2_CORPUS_POLICY,
                 None,
             ),
         )

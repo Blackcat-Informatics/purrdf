@@ -8,6 +8,37 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: canonical output is the nested-refinement labelling.** The
+  default canonicalization family in Rust, Python, WebAssembly, C and the CLI
+  routes to `(nested-refinement-labelling, 1)`. The canonical document is the
+  canonical line sequence spelled as N-Quads 1.2 with decimal blank-node labels
+  (`_:0`, `_:1`), in the order of the sequence, and the canonical digest is the
+  32-byte BLAKE3 digest of that sequence. Every canonical document and digest
+  for a dataset with blank nodes, reifiers, annotations or a declared empty
+  graph changes, and digests change for every dataset. RDFC-1.0 stays a named
+  entry point under `purrdf_core::rdfc12`, and the W3C suite is unchanged; the
+  4.x algorithm stays callable there as the read-side recompute of stored
+  digests. The default entry points no longer refuse the reserved `urn:purrdf:rdfc:`
+  vocabulary. A finite search bound maps onto the engine's limit and a refusal
+  is the typed `limit` outcome (`CanonError::Refused`). PACK writes format
+  version 2 with the line-sequence digest and still reads version 1;
+  `verify_pack` recomputes each version with the function that recorded it.
+  PURREMB writes format version 2, whose certified RDF digest and blank-node
+  target labels come from the labelling, and still reads version 1, which is
+  recomputed with the 4.x function; a 4.x reader refuses a version-2 file as an
+  unsupported version. The 4.x PURREMB reference file stays as `purremb_v1.bin`
+  beside a new `purremb_v2.bin`, and the entail goldens and the proof, product
+  and regime vectors move with the digest. Columnar files record no canonical
+  digest. GTS compaction certificates carry a `refold_canon` field
+  (`rdfc10-sha256` or `nrl1-lines-sha256`, absent meaning `rdfc10-sha256`);
+  `compact_and_certify_versioned` writes `nrl1-lines-sha256`, verifiers
+  recompute with the named function, an unknown value is a typed refusal, and
+  `compose_versioned` refuses certificates that differ. The pack's embedded
+  `stream:contentRefoldDigest` stays RDFC-1.0. A composite literal whose text
+  holds blank-node labels takes part in the labelling as a graph node, so those
+  blank nodes keep their identity in the canonical document. See the
+  [5.0 migration guide](docs/MIGRATION-5.0.md).
+
 - **An unreadable stack floor refuses instead of switching the guard off
   (breaking):** when the operating system would not report a native thread's
   stack bounds (`pthread_getattr_np` and its siblings can fail under memory

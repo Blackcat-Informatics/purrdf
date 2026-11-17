@@ -33,12 +33,11 @@ loss ledger) and adds what the kernel deliberately leaves out:
 - **RDF 1.2 statement layer** — reifier bindings and annotations survive every
   star-capable round-trip; star-incapable projections drop them *loudly*, with
   the realized count handed to the loss ledger.
-- **Canonicalization entry points** — `canonical_flat_nquads`, W3C RDFC-1.0
-  over the statement layer flattened to plain `rdf:reifies`/annotation
-  triples, and `canonicalize`, the first-party `purrdf-rdfc12` v2 profile
-  (RDFC-1.0 plus a reserved-namespace lowering of reifiers and annotations;
-  byte-identical to RDFC-1.0 only on the RDF 1.1 subset; idempotent over its
-  own output).
+- **Canonicalization entry points** — `canonical_flat_nquads` and
+  `try_canonicalize` return the canonical line sequence of the nested-refinement
+  labelling, spelled as N-Quads 1.2 with decimal blank-node labels.
+  `canonical_flat_nquads_with` and the `rdfc12` module run W3C RDFC-1.0 and
+  recompute digests recorded by 4.x.
 - **GTS adapters** — import/export between `RdfDataset` and the
   [`purrdf-gts`](https://crates.io/crates/purrdf-gts) container, including
   snapshot composition and content-chain verification.

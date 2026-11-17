@@ -113,7 +113,7 @@ fn render(result: &SparqlResult) -> String {
                 purrdf_core::try_canonicalize(
                     graph,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )
@@ -136,7 +136,7 @@ fn render(result: &SparqlResult) -> String {
                 purrdf_core::try_canonicalize(
                     aux,
                     &mut purrdf_core::CanonicalizationControl::new(
-                        purrdf_core::RDFC_V2_CORPUS_POLICY,
+                        purrdf_core::CANON_CORPUS_POLICY,
                         None
                     )
                 )

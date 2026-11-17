@@ -108,13 +108,31 @@ mod tests {
 
     use super::*;
 
+    /// The 13-node circulant of quadratic residues, in both directions, as
+    /// N-Triples: the labelling cannot finish it without a search, so a bound
+    /// of zero trips the engine's limit.
+    fn residue_circulant() -> std::ffi::CString {
+        let squares: Vec<usize> = (1..13).map(|x| x * x % 13).collect();
+        let mut lines = Vec::new();
+        for u in 0..13 {
+            for v in u + 1..13 {
+                if squares.contains(&((v - u) % 13)) {
+                    lines.push(format!("_:v{u} <http://example.org/p> _:v{v} .\n"));
+                    lines.push(format!("_:v{v} <http://example.org/p> _:v{u} .\n"));
+                }
+            }
+        }
+        std::ffi::CString::new(lines.concat()).expect("no interior NUL")
+    }
+
     #[test]
     fn c_search_refusal_preserves_outputs_and_the_successful_neighbor_has_separate_evidence() {
         let mut document = Output::default();
         let mut report = Output::default();
         let mut evidence = Output::default();
         let mut error = null_mut();
-        let input = c"_:a <http://example.org/p> _:b .\n_:b <http://example.org/p> _:a .\n";
+        let circulant = residue_circulant();
+        let input = circulant.as_c_str();
         unsafe {
             let status = purrdf_entail_materialize_to_nquads(
                 input.as_ptr(),
@@ -144,7 +162,7 @@ mod tests {
             let native = CStr::from_ptr(purrdf_error_native_cause_json(error))
                 .to_str()
                 .unwrap();
-            assert!(native.contains("budget"), "{native}");
+            assert!(native.contains("canonical-refused"), "{native}");
             purrdf_error_free(error);
             error = null_mut();
             let status = purrdf_entail_materialize_to_nquads(
@@ -171,7 +189,7 @@ mod tests {
             assert!(!document.0.is_null() && !report.0.is_null() && !evidence.0.is_null());
             let document_buffer = document.0.as_ref().expect("successful document output");
             let document_text = std::str::from_utf8(document_buffer.as_bytes()).unwrap();
-            assert!(document_text.starts_with("_:c14n"), "{document_text}");
+            assert!(document_text.starts_with("_:0 "), "{document_text}");
             let evidence_buffer = evidence.0.as_ref().expect("successful receipt output");
             let receipts = std::str::from_utf8(evidence_buffer.as_bytes()).unwrap();
             assert!(
@@ -188,10 +206,7 @@ mod tests {
         let mut evidence = Output::default();
         let mut error = null_mut();
         unsafe {
-            let source = std::ffi::CString::new(
-                "<urn:purrdf:rdfc:private> <http://example.org/p> <http://example.org/o> .",
-            )
-            .unwrap();
+            let source = residue_circulant();
             let status = purrdf_entail_materialize_to_nquads(
                 source.as_ptr(),
                 c"simple".as_ptr(),
@@ -206,7 +221,7 @@ mod tests {
                 null(),
                 &raw mut document.0,
                 &raw mut report.0,
-                c"unlimited".as_ptr(),
+                c"0".as_ptr(),
                 null(),
                 &raw mut evidence.0,
                 &raw mut error,
@@ -216,11 +231,15 @@ mod tests {
             let native = CStr::from_ptr(purrdf_error_native_cause_json(error))
                 .to_str()
                 .unwrap();
-            assert!(native.contains("urn:purrdf:rdfc:private"), "{native}");
+            assert!(native.contains("canonical-refused"), "{native}");
             let error_ref = error.as_ref().expect("native canonical refusal");
             assert!(matches!(
                 native_canonical_cause(error_ref),
-                Some(purrdf_core::CanonError::ReservedVocabulary(_))
+                Some(purrdf_core::CanonError::Refused(refusal))
+                    if matches!(
+                        **refusal,
+                        purrdf_core::canonical_labelling::Refusal::Limit { .. }
+                    )
             ));
             purrdf_error_free(error);
             error = null_mut();
