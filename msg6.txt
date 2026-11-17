@@ -1,0 +1,19 @@
+Carry the canonical switch through `purrdf-rdf` and the PACK container
+
+`purrdf-rdf` re-exports the new canonical names and the `rdfc12` module.
+`canonical_flat_nquads` returns the canonical document of the labelling, and
+`canonical_flat_nquads_with` is the RDFC-1.0 entry by name. The flat-view
+benches and the tests of the RDFC-1.0 flat presentation call it through
+`rdfc12`. The streamed-digest test is removed because the digest is now of the
+line sequence, not of the document bytes.
+
+The PACK container writes format version 2, whose header holds the digest of
+the canonical line sequence, and still reads version 1. `verify_pack`
+recomputes a version-1 digest with the RDFC-1.0 function that recorded it and a
+version-2 digest with the labelling, and `PackView::format_version` reports
+which. The earlier writer's bytes stay pinned through the version-1 reading of
+the new frame, and a new golden fixes the version-2 bytes.
+
+GTS compaction certificates and the refold digest stay on RDFC-1.0, because
+the frozen GTS vectors are compared byte for byte and the wire format is
+governed in `gmeow-gts`.

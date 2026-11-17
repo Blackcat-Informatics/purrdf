@@ -1,0 +1,3602 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+export type LiteralDirection = "ltr" | "rtl";
+
+export type TermType =
+  | "NamedNode"
+  | "BlankNode"
+  | "Literal"
+  | "Variable"
+  | "DefaultGraph"
+  | "Quad";
+
+export interface DirectionalLanguage {
+  readonly language: string;
+  readonly direction: LiteralDirection;
+}
+
+export type LanguageOrDatatype =
+  | string
+  | NamedNode
+  | DirectionalLanguage
+  | null
+  | undefined;
+
+export type QuadGraph = NamedNode | BlankNode | DefaultGraph;
+export type RdfTerm = NamedNode | BlankNode | Literal | Variable | DefaultGraph | QuotedTriple;
+export type QueryGraphFormat =
+  | "turtle"
+  | "ttl"
+  | "ntriples"
+  | "nt"
+  | "nquads"
+  | "nq"
+  | "trig"
+  | "rdfxml"
+  | "jsonld"
+  | "text/turtle"
+  | "application/n-triples"
+  | "application/n-quads"
+  | "application/trig"
+  | "application/rdf+xml"
+  | "application/ld+json";
+/** Results aliases are case-insensitive at runtime and ignore surrounding whitespace. */
+export type QueryResultsFormat =
+  | "json"
+  | "srj"
+  | "sparql-json"
+  | "sparql-xml"
+  | "xml"
+  | "csv"
+  | "tsv"
+  | "application/sparql-results+json"
+  | "application/sparql-results+xml"
+  | "text/csv"
+  | "text/tab-separated-values";
+export type QueryRawFormat = QueryGraphFormat | QueryResultsFormat;
+
+/**
+ * One execution governor's ceiling. The engine's ceilings are 64-bit integers, so the
+ * boundary type is `bigint`; a `number` (or an integral numeric string) is coerced for
+ * you. Every ceiling is INCLUSIVE — consumption equal to it is admitted — and `0` is a
+ * valid ceiling that trips on the first charged unit of work. Omit the key (or pass
+ * `null`/`undefined`) to leave the dimension metered without a reachable ceiling.
+ * A negative value is refused.
+ */
+export type GovernorCeiling = number | bigint | string;
+
+/**
+ * The ceilings and stop sources one governed call runs under.
+ *
+ * These are enforced ONLY by `queryGoverned` / `updateGoverned`. Passing one to an
+ * ungoverned call (`query`, `select`, `ask`, `construct`, `describe`, `update`,
+ * `queryRaw`, `explainQuery`) throws rather than running with no ceiling at all.
+ */
+export interface GovernorOptions {
+  /**
+   * Remove resource ceilings and accounting explicitly; cannot accompany a resource cap.
+   * Deadlines and cancellation remain active.
+   */
+  readonly noCeiling?: boolean;
+  /** Abstract execution steps, priced by the engine's charge schedule. */
+  readonly fuel?: GovernorCeiling | null;
+  /**
+   * A wall-clock evaluation budget in milliseconds. `0` expires on the first poll.
+   *
+   * The deadline is read from `Date.now()`. On Cloudflare Workers that clock does not
+   * advance during CPU-bound execution — it moves only across I/O — so on the
+   * synchronous calls (`queryGoverned`, `updateGoverned`, …) a deadline cannot trip
+   * during CPU-bound work there. Use the asynchronous twins (`queryGovernedAsync`, …),
+   * which check the deadline at every yield and every host effect, where the clock
+   * moves.
+   */
+  readonly deadlineMs?: GovernorCeiling | null;
+  /**
+   * Units committed to the query form's own answer sequence: one solution row for
+   * SELECT, one output statement for CONSTRUCT/DESCRIBE (an ordinary triple, an RDF 1.2
+   * reifier binding, or an annotation), and nothing at all for ASK.
+   *
+   * Never `LIMIT`: `LIMIT` is query semantics and applies before this cap is tested.
+   * Not accepted by `updateGoverned`, which has no answer sequence to bound.
+   */
+  readonly maxAnswers?: GovernorCeiling | null;
+  /** The largest single intermediate bag, in cells (`rows * columns`). */
+  readonly maxIntermediateCells?: GovernorCeiling | null;
+  /** Bytes minted into the per-query scratch arena by value-constructing operations. */
+  readonly maxScratchBytes?: GovernorCeiling | null;
+  /** Requests issued to remote or federated endpoints. */
+  readonly maxRemoteRequests?: GovernorCeiling | null;
+  /** Inclusive logical user-function depth; the default is thirty-two. */
+  readonly maxUdfDepth?: GovernorCeiling | null;
+  /** Remove the logical depth ceiling. Cannot be combined with maxUdfDepth. */
+  readonly unlimitedUdfDepth?: boolean;
+  /** A cancellation bit the host can flip. The engine is handed a share of it. */
+  readonly cancel?: CancellationToken | null;
+}
+
+/**
+ * The stable name of a dated native XPath regex law: XPath F&O 2.0 Second Edition
+ * (14 December 2010) or XPath F&O 3.1 (21 March 2017). Both admit backreferences; only
+ * the 3.1 law admits non-capturing groups and the `q` flag. Names are matched exactly —
+ * no case folding, abbreviation or undated alias — and any other string is refused with
+ * the code `purrdf-wasm-options`, naming the accepted ones.
+ */
+export type XPathRegexLaw = "xpath-2.0-2010-12-14" | "xpath-3.1-2017-03-21";
+
+/**
+ * The stable id of one exact, dated SHACL law: the 2017 Recommendation
+ * (`shacl-rec-2017-07-20`), the SHACL 1.2 working draft (`shacl-wd-2026-09-18`) or the
+ * data-shapes editor's draft the W3C SHACL 1.2 test suite is graded under
+ * (`shacl-ed-2026-10-16`). Ids are matched exactly; any other string is refused with the
+ * `unsupported-profile` status, and no nearby edition is substituted.
+ */
+export type ShaclLaw = "shacl-rec-2017-07-20" | "shacl-wd-2026-09-18" | "shacl-ed-2026-10-16";
+
+interface EvaluationOptions {
+  readonly base?: string | null;
+  /**
+   * The dated native XPath law `REGEX` and `REPLACE` evaluate under, by its stable name.
+   * Honoured by every evaluating entry point and its asynchronous twin; omitted, the
+   * compatibility regex is unchanged. The law runs under finite production bounds: a
+   * pattern its grammar refuses is an ordinary expression error, while a resource
+   * refusal (an oversized pattern, a runaway match) throws — or rejects — with the
+   * resource's own code (`xpath-pattern-bytes`, `xpath-match-steps`, …) and never
+   * becomes an unbound, `false` or partial answer.
+   */
+  readonly xpathRegex?: XPathRegexLaw | null;
+}
+
+export interface QueryOptions extends EvaluationOptions, QueryCoordinateOptions {}
+
+/** Exact execution coordinates apply to the complete UPDATE request. */
+export interface UpdateOptions extends EvaluationOptions, QueryCoordinateOptions {}
+
+/**
+ * Anchors the additive `purrdf` provenance extension on a SELECT/ASK result
+ * serialized to SPARQL-results JSON/XML, under this `prefix`/`iri`. Honored ONLY by
+ * `queryRaw` — the one entry point that serializes to a raw wire-format document;
+ * `select`/`ask`/`construct`/`describe`/`update`/`explainQuery` return typed objects
+ * with no document to anchor an extension in, exactly like `QueryRawOptions.format`
+ * beside them. There is no default namespace (PurRDF mints no vocabulary IRIs of its
+ * own) — omit this and the output stays pure W3C. Read the extension back with
+ * `provenanceFromJson`/`provenanceFromXml` under the SAME `prefix`/`iri`.
+ */
+export interface ProvenanceNamespaceOption {
+  readonly prefix: string;
+  readonly iri: string;
+}
+
+/**
+ * Registers purrdf's first-party statistical aggregate set (`MEDIAN`, `PERCENTILE`,
+ * `STDDEV`, `STDDEV_POP`, `VARIANCE`, `VAR_POP`, `MODE`, `FIRST`, `LAST`, `TOPK`) under
+ * this IRI namespace, so the query text can call `AGG(<{NAMESPACE}NAME>, args…)`, e.g.
+ * `AGG(<https://ex.example/agg#MEDIAN>, ?x)`. There is no default namespace — omit this
+ * and every one of the ten names is an ordinary unregistered custom-aggregate IRI,
+ * refused at parse time exactly as before.
+ *
+ * Reachable through `queryGoverned`/`updateGoverned`/`queryEntailmentGoverned` (the entry
+ * points that take a `QueryOptions` registry): naming it on `query`/`select`/`ask`/
+ * `construct`/`describe`/`update`/`queryRaw`/`explainQuery` throws rather than silently
+ * doing nothing.
+ *
+ * This is the CLOSED, namespace-only statistical set. The GENERAL custom-aggregate seam
+ * (an arbitrary host `init`/`step`/`combine`/`finish` closure) is Rust-host-only and has
+ * no string-shaped surface — it cannot cross into JavaScript at all, with or without this
+ * flag.
+ */
+export interface AggregateNamespaceOption {
+  readonly aggregateNamespace?: string | null;
+}
+
+export interface GovernedQueryOptions
+  extends QueryOptions,
+    GovernorOptions,
+    AggregateNamespaceOption {}
+
+export interface GovernedUpdateOptions
+  extends UpdateOptions, GovernorOptions, AggregateNamespaceOption {}
+
+export interface EntailmentQueryOptions extends GovernedQueryOptions {
+  /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
+  readonly program?: string | null;
+  /**
+   * The dataset's `owl:imports` table, as two PARALLEL arrays of the same length: entry `i`
+   * declares that the ontology IRI `importIris[i]` denotes the N-Quads document
+   * `importDocuments[i]`. OWL 2 defines an ontology's imports closure to BE the ontology,
+   * so the closure the query runs over is materialized over the dataset merged with every
+   * document the table supplies. An `owl:imports` the table does not resolve, and the
+   * dataset does not already hold, throws by name — never a closure of a smaller premise —
+   * and so does an entry the closure never reaches. Omitted, the table is empty.
+   */
+  readonly importIris?: readonly string[] | null;
+  /** The documents of the import table, parallel to `importIris`. */
+  readonly importDocuments?: readonly string[] | null;
+  /**
+   * The IRIs the dataset was read from; an `owl:imports` of one names the dataset itself
+   * and resolves in place. Omitted, none.
+   */
+  readonly premiseIris?: readonly string[] | null;
+  /**
+   * The closure's stored-fact limit for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, as
+   * `entailMaterialize` takes it; omitted, no logical ceiling. A closure past
+   * it throws naming `queryEntailmentGoverned's maxStoredFacts`.
+   */
+  readonly maxStoredFacts?: bigint | number | null;
+  /**
+   * The closure's join-step limit (unlimited when omitted); a closure past it throws naming
+   * `queryEntailmentGoverned's maxJoinSteps`.
+   */
+  readonly maxJoinSteps?: bigint | number | null;
+  /** Maximum bytes of interned term spellings in the entailment closure. */
+  readonly maxTermArenaBytes?: bigint | number | null;
+}
+
+export interface QueryRawOptions extends QueryOptions {
+  readonly format?: QueryRawFormat | string | null;
+  readonly provenanceNamespace?: ProvenanceNamespaceOption | null;
+}
+
+/** Which kind of governor stopped an execution. */
+export type TrippedGovernorKind = "budget" | "stopped" | "refused" | "unknown";
+
+/** The governor that stopped one execution. */
+export interface TrippedGovernor {
+  /**
+   * `"budget"` (a ceiling was reached), `"stopped"` (a stop signal fired), `"refused"`
+   * (the planner's estimate already exceeded a ceiling, so nothing ran), or `"unknown"`
+   * for a governor a future engine adds that this build cannot name.
+   */
+  readonly kind: TrippedGovernorKind;
+  /**
+   * The stable kebab-case discriminant, e.g. `"fuel-exhausted"`,
+   * `"answer-cap-exhausted"`, `"deadline-exceeded"`, `"cancelled"`. A pinned contract:
+   * match on this rather than on the prose of `message`.
+   */
+  readonly label: string;
+  /** The governed dimension, e.g. `"fuel"`. Absent when a stop signal fired. */
+  readonly dimension?: string;
+  /** The inclusive ceiling in force. Absent when a stop signal fired. */
+  readonly limit?: bigint;
+  /** Consumption charged before the refused work — a measurement, on `"budget"` only. */
+  readonly consumed?: bigint;
+  /** The planner's estimate — NOT a measurement, on `"refused"` only. */
+  readonly estimate?: bigint;
+  /** `"cancelled"` or `"deadline-exceeded"`, on `"stopped"` only. */
+  readonly cause?: string;
+  /** A human-readable rendering. Prose, not a contract. */
+  readonly message: string;
+}
+
+/**
+ * One governed execution's receipt: what it was allowed and what it spent, on the
+ * complete path as well as the exhausted one.
+ *
+ * Both maps are keyed by the engine's own dimension labels (`governorDimensions()`). A
+ * dimension the caller declined reads `2n ** 64n - 2n` — metered, at a ceiling no
+ * execution can reach.
+ */
+export interface GovernorEvidence {
+  readonly isComplete: boolean;
+  readonly consumed: Readonly<Record<string, bigint>>;
+  readonly limits: Readonly<Record<string, bigint>>;
+  /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed; empty when none failed. */
+  readonly silenced: readonly SilencedInvocation[];
+  /**
+   * Every XPath F&O numeric error the execution absorbed into an unbound value (an
+   * expression error is not a query error), counted per code: `1/0` counts under
+   * `"err:FOAR0001"`. Keyed by every code `expressionErrorCodes()` names, zero for a
+   * code that never occurred.
+   */
+  readonly expressionErrors: Readonly<Record<string, bigint>>;
+}
+
+/** Why a silenced invocation failed. */
+export type SilencedKind =
+  | "transport"
+  | "decode"
+  | "disabled"
+  | "unconfigured"
+  | "denied"
+  | "host-denied"
+  | "not-an-iri"
+  | "fault";
+
+/**
+ * One invocation a `SILENT` clause absorbed: a `SERVICE SILENT` that answered the single
+ * empty solution (SPARQL 1.1 Federated Query §3.2), or a `LOAD SILENT` that succeeded
+ * with nothing loaded (SPARQL 1.1 Update §3.1.4). The answer is the one the
+ * specification requires; this record is how a host tells it from an endpoint that
+ * answered with nothing to add.
+ */
+export type SilencedInvocation =
+  | {
+      readonly target: "service";
+      /** The endpoint IRI, or a non-IRI endpoint value in N-Triples form. */
+      readonly endpoint: string;
+      readonly kind: SilencedKind;
+      /** The error the invocation would have raised without `SILENT`. */
+      readonly message: string;
+    }
+  | {
+      readonly target: "load";
+      /** The `LOAD` source IRI. */
+      readonly iri: string;
+      readonly kind: SilencedKind;
+      readonly message: string;
+    };
+
+/**
+ * What a truncated execution's rows bound relative to the query's true answer: a
+ * certified lower bound (`"certain"`, safe to admit as answers), a certified upper bound
+ * (`"at-most"`, sound only for "definitely not an answer"), or neither (`"unknown"`, in
+ * which case NO row is handed over and `barrier` names the operator that withheld them).
+ */
+export type PartialCertainty = "certain" | "at-most" | "unknown";
+
+export interface PartialAnswers {
+  readonly certainty: PartialCertainty;
+  readonly isCertain: boolean;
+  /**
+   * Whether these rows are the true answer's FIRST rows, in order. This licenses
+   * resumption under a deterministic ceiling; wall-deadline reruns are fresh. Absent on
+   * `"unknown"`.
+   */
+  readonly isPositionalPrefix?: boolean;
+  /** The algebra operator that withheld the rows, on `"unknown"` only. */
+  readonly barrier?: string;
+  /** The rows in hand. Absent on `"unknown"`. */
+  readonly result?: QueryResult;
+}
+
+/**
+ * The outcome of one governed query: a complete answer, or an exhausted budget carrying
+ * the partial answers the execution actually reached.
+ *
+ * Exactly two shapes, and NEITHER is a thrown error. A governor trip is not a failure:
+ * throwing it would discard the rows the budget already paid for and tell the caller the
+ * engine misbehaved.
+ */
+/** Actual execution coordinates; decimal seed strings retain every unsigned bit. */
+export type ExecutionReceipt =
+  | { readonly state: "not-started" }
+  | {
+      readonly state: "started";
+      readonly now: string;
+      readonly entropySeed: string;
+      readonly suppliedNow: boolean;
+      readonly suppliedEntropySeed: boolean;
+      readonly executionIdentity: string | null;
+      readonly snapshotIdentity: string | null;
+    };
+
+export interface QueryOutcome {
+  readonly executionReceipt: ExecutionReceipt;
+  readonly isComplete: boolean;
+  /** The COMPLETE result. Absent when a governor stopped the execution. */
+  readonly result?: QueryResult;
+  /** What the rows the execution reached bound. Absent when it completed. */
+  readonly partial?: PartialAnswers;
+  /** The governor that stopped the execution. Absent when it completed. */
+  readonly tripped?: TrippedGovernor;
+  /** This execution's consumption and ceilings, on both paths. */
+  readonly evidence: GovernorEvidence;
+}
+
+/** Both phases of a governed entailment-aware query, without an answers-only state. */
+export interface EntailmentQueryOutcome {
+  readonly phase: "answered" | "closure-stopped";
+  readonly isComplete: boolean;
+  /** Phase-two outcome. Absent when closure stopped before any query ran. */
+  readonly outcome?: QueryOutcome;
+  /** Reasoning report for the queried closure. Absent when no closure was produced. */
+  readonly report?: string;
+  /** The governor that stopped either phase. */
+  readonly tripped?: TrippedGovernor;
+}
+
+/**
+ * The outcome of one governed SPARQL UPDATE. Deliberately without a partial arm: a
+ * query's partial answer is a certifiable thing, a partial mutation is not.
+ * `isApplied === false` means NOTHING applied, never "not all of it applied".
+ */
+export interface UpdateOutcome {
+  readonly executionReceipt: ExecutionReceipt;
+  readonly isApplied: boolean;
+  readonly tripped?: TrippedGovernor;
+  readonly evidence: GovernorEvidence;
+}
+
+/** Closed, versioned options document consumed by the shared Rust JSON-LD engine. */
+export type JsonLdSerializeOptions =
+  | { readonly version: 1; readonly mode: "expanded"; readonly yaml_schema_url?: string }
+  | { readonly version: 1; readonly mode: "derived"; readonly yaml_schema_url?: string }
+  | {
+      readonly version: 1;
+      readonly mode: "context";
+      readonly prefixes?: Readonly<Record<string, string>>;
+      readonly context?: unknown;
+      readonly document_iri?: string;
+      readonly registry?: Readonly<Record<string, unknown>>;
+      readonly yaml_schema_url?: string;
+    };
+
+export type QueryBindingRow = Record<string, RdfTerm | undefined>;
+
+export interface QueryBindingRows extends IterableIterator<QueryBindingRow> {
+  /** Total row count, including rows already consumed. */
+  readonly length: number;
+  /** Rows not yet consumed. */
+  readonly remaining: number;
+  /** Move one row out by result index. Each index can be consumed once. */
+  take(index: number): QueryBindingRow | undefined;
+  /** Materialize all remaining rows and exhaust the stream. */
+  toArray(): QueryBindingRow[];
+  /** Release unconsumed wasm result storage. */
+  free(): void;
+}
+
+export interface SelectResult {
+  readonly executionReceipt?: ExecutionReceipt;
+  readonly kind: "select";
+  readonly variables: string[];
+  readonly rowCount: number;
+  readonly rows: QueryBindingRows;
+  /** Release unconsumed wasm result storage. */
+  free(): void;
+}
+
+export interface AskResult {
+  readonly executionReceipt?: ExecutionReceipt;
+  readonly kind: "ask";
+  readonly boolean: boolean;
+}
+
+export interface GraphResult {
+  readonly executionReceipt?: ExecutionReceipt;
+  readonly kind: "graph";
+  readonly dataset: Dataset;
+}
+
+export interface RawQueryResult { readonly body: string; readonly executionReceipt: ExecutionReceipt; }
+export interface RawQueryBytesResult { readonly body: Uint8Array; readonly executionReceipt: ExecutionReceipt; }
+export interface AppliedUpdateResult { readonly dataset: Dataset; readonly executionReceipt: ExecutionReceipt; }
+
+export type QueryResult = SelectResult | AskResult | GraphResult;
+
+export type VisualMode = "compact" | "incidence" | "table";
+export type VisualLabelPolicy = "compact" | "full";
+export type VisualTableField =
+  | "statement"
+  | "assertedIn"
+  | "reifiers"
+  | "annotations"
+  | "referencedBy"
+  | "depth"
+  | "diagnostics";
+
+export interface VisualVocabularyMapping {
+  readonly prefix: string;
+  readonly namespace: string;
+}
+
+export interface VisualRoleRule {
+  readonly predicateIri: string;
+  readonly role: string;
+}
+
+export interface VisualLayoutOptions {
+  readonly margin?: number;
+  readonly rankSpacing?: number;
+  readonly nodeSpacing?: number;
+  readonly componentSpacing?: number;
+  readonly componentWrapWidth?: number;
+  readonly crossingSweeps?: number;
+  readonly maxNodeWidth?: number;
+}
+
+export interface VisualSvgOptions {
+  readonly embedMetadata?: boolean;
+  readonly includeStyles?: boolean;
+  readonly title?: string;
+}
+
+export interface VisualizationOptions {
+  readonly mode?: VisualMode;
+  readonly focus?: string | null;
+  readonly roleRules?: readonly VisualRoleRule[];
+  readonly vocabulary?: readonly VisualVocabularyMapping[];
+  readonly graph?: string | null;
+  readonly graphs?: readonly string[];
+  readonly labelPolicy?: VisualLabelPolicy;
+  readonly maxStatements?: number;
+  readonly maxTerms?: number;
+  readonly tableFields?: readonly VisualTableField[];
+  readonly layout?: VisualLayoutOptions;
+  readonly svg?: VisualSvgOptions;
+}
+
+export type VisualValueRef =
+  | { readonly kind: "term"; readonly id: string }
+  | { readonly kind: "statement"; readonly id: string };
+
+export type VisualTermValue =
+  | { readonly kind: "iri"; readonly value: string }
+  | { readonly kind: "blank"; readonly label: string; readonly scope: number }
+  | {
+      readonly kind: "literal";
+      readonly lexical_form: string;
+      readonly datatype: string;
+      readonly language: string | null;
+      readonly direction: LiteralDirection | null;
+    };
+
+export interface VisualTerm {
+  readonly id: string;
+  readonly value: VisualTermValue;
+  readonly label: string;
+  readonly roles: readonly unknown[];
+}
+
+export interface VisualStatement {
+  readonly id: string;
+  readonly subject: VisualValueRef;
+  readonly predicate: string;
+  readonly object: VisualValueRef;
+  readonly asserted_in: readonly string[];
+  readonly nesting_depth: number;
+  readonly incoming_references: number;
+  readonly dialect: "rdf12" | "symmetricRdf12" | "generalizedRdf";
+  readonly roles: readonly unknown[];
+}
+
+export type VisualRelation =
+  | {
+      readonly kind: "reifies";
+      readonly id: string;
+      readonly reifier: string;
+      readonly statement: string;
+      readonly graph: string;
+    }
+  | {
+      readonly kind: "annotation";
+      readonly id: string;
+      readonly reifier: string;
+      readonly predicate: string;
+      readonly object: VisualValueRef;
+      readonly graph: string;
+    };
+
+export interface VisualDiagnostic {
+  readonly id: string;
+  readonly code: string;
+  readonly message: string;
+  readonly target: string | null;
+  readonly dialect: VisualStatement["dialect"];
+}
+
+export interface VisualModel {
+  readonly terms: readonly VisualTerm[];
+  readonly statements: readonly VisualStatement[];
+  readonly assertions: readonly Readonly<Record<string, unknown>>[];
+  readonly relations: readonly VisualRelation[];
+  readonly graphs: readonly Readonly<Record<string, unknown>>[];
+  readonly references: readonly Readonly<Record<string, unknown>>[];
+  readonly table: Readonly<Record<string, unknown>>;
+  readonly diagnostics: readonly VisualDiagnostic[];
+}
+
+export interface VisualScene {
+  readonly schema_version: "purrdf-viz-scene-1";
+  readonly mode: VisualMode;
+  readonly nodes: readonly Readonly<Record<string, unknown>>[];
+  readonly edges: readonly Readonly<Record<string, unknown>>[];
+  readonly groups: readonly Readonly<Record<string, unknown>>[];
+  readonly legend: readonly Readonly<Record<string, unknown>>[];
+  readonly table: Readonly<Record<string, unknown>> | null;
+}
+
+export interface VisualLayout {
+  readonly schema_version: "purrdf-viz-layout-1";
+  readonly mode: VisualMode;
+  readonly width: number;
+  readonly height: number;
+  readonly nodes: readonly Readonly<Record<string, unknown>>[];
+  readonly edges: readonly Readonly<Record<string, unknown>>[];
+  readonly table: Readonly<Record<string, unknown>> | null;
+  readonly legend: readonly Readonly<Record<string, unknown>>[];
+}
+
+export interface VisualExport {
+  readonly schema_version: "purrdf-viz-export-1";
+  readonly spec: Readonly<Record<string, unknown>>;
+  readonly spec_hash: string;
+  readonly model_hash: string;
+  readonly scene_hash: string;
+  readonly model: VisualModel;
+  readonly scene: VisualScene;
+  readonly layout: VisualLayout;
+  readonly element_index: readonly Readonly<Record<string, unknown>>[];
+  readonly diagnostics: readonly VisualDiagnostic[];
+}
+
+export interface VisualSvgDocument {
+  readonly svg: string;
+  readonly export: VisualExport;
+}
+
+export class Term {
+  private constructor();
+  free(): void;
+  readonly termType: TermType;
+  readonly value: string;
+  readonly language: string;
+  readonly direction: "" | LiteralDirection;
+  readonly datatype: NamedNode | undefined;
+  readonly subject: RdfTerm | undefined;
+  readonly predicate: NamedNode | undefined;
+  readonly object: RdfTerm | undefined;
+  readonly graph: DefaultGraph | undefined;
+  equals(other: Term | null | undefined): boolean;
+}
+
+export interface NamedNode extends Term {
+  readonly termType: "NamedNode";
+  readonly value: string;
+  readonly language: "";
+  readonly direction: "";
+  readonly datatype: undefined;
+}
+
+export interface BlankNode extends Term {
+  readonly termType: "BlankNode";
+  readonly value: string;
+  readonly language: "";
+  readonly direction: "";
+  readonly datatype: undefined;
+}
+
+export interface Literal extends Term {
+  readonly termType: "Literal";
+  readonly value: string;
+  readonly language: string;
+  readonly direction: "" | LiteralDirection;
+  readonly datatype: NamedNode;
+}
+
+export interface Variable extends Term {
+  readonly termType: "Variable";
+  readonly value: string;
+  readonly language: "";
+  readonly direction: "";
+  readonly datatype: undefined;
+}
+
+export interface DefaultGraph extends Term {
+  readonly termType: "DefaultGraph";
+  readonly value: "";
+  readonly language: "";
+  readonly direction: "";
+  readonly datatype: undefined;
+}
+
+export interface QuotedTriple extends Term {
+  readonly termType: "Quad";
+  readonly value: "";
+  readonly language: "";
+  readonly direction: "";
+  readonly datatype: undefined;
+  readonly subject: RdfTerm;
+  readonly predicate: NamedNode;
+  readonly object: RdfTerm;
+  readonly graph: DefaultGraph;
+}
+
+export class Quad {
+  private constructor();
+  free(): void;
+  readonly termType: "Quad";
+  readonly value: "";
+  readonly subject: RdfTerm;
+  readonly predicate: NamedNode;
+  readonly object: RdfTerm;
+  readonly graph: QuadGraph;
+  asTerm(): QuotedTriple;
+  equals(other: Quad | null | undefined): boolean;
+}
+
+export class DataFactory {
+  constructor();
+  namedNode(value: string): NamedNode;
+  blankNode(value?: string | null): BlankNode;
+  literal(value: string, languageOrDatatype?: LanguageOrDatatype): Literal;
+  typedLiteral(value: string, datatype: NamedNode): Literal;
+  directionalLiteral(
+    value: string,
+    language: string,
+    direction: LiteralDirection,
+  ): Literal;
+  variable(value: string): Variable;
+  defaultGraph(): DefaultGraph;
+  quad(
+    subject: RdfTerm,
+    predicate: NamedNode,
+    object: RdfTerm,
+    graph?: QuadGraph | null,
+  ): Quad;
+  quotedTriple(subject: RdfTerm, predicate: NamedNode, object: RdfTerm): QuotedTriple;
+  fromTerm<T extends Term>(original: T): T;
+  fromQuad(original: Quad): Quad;
+  dataset(quads?: Iterable<Quad> | null): Dataset;
+}
+
+export class Dataset implements Iterable<Quad> {
+  /** Omitted or true remembers empty named graphs; false selects row-driven existence. */
+  constructor(rememberEmptyGraphs?: boolean);
+  static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean, inputOptions?: string | null): Dataset;
+  /** The policy retained by snapshots, matches and applied synchronous/asynchronous UPDATEs. */
+  readonly rememberEmptyGraphs: boolean;
+  static from(quads?: Iterable<Quad> | null): Dataset;
+  readonly size: number;
+  add(quad: Quad): this;
+  delete(quad: Quad): this;
+  has(quad: Quad): boolean;
+  match(
+    subject?: Term | null,
+    predicate?: Term | null,
+    object?: Term | null,
+    graph?: Term | null,
+  ): Dataset;
+  quads(): Quad[];
+  project(profile: ProjectionProfile, configJson: string): ProjectionPackage;
+  projectWithAssets(
+    profile: "ro-crate-1.3",
+    configJson: string,
+    assetsArchive: Uint8Array,
+  ): ProjectionPackage;
+  visualModel(options?: VisualizationOptions | null): VisualModel;
+  visualExport(options?: VisualizationOptions | null): VisualExport;
+  visualSvg(options?: VisualizationOptions | null): VisualSvgDocument;
+  /**
+   * The writer-native lane: emits everything the target's writer has a surface for
+   * and throws for what it does not. The RDF-1.2 statement layer survives Turtle,
+   * N-Triples, N-Quads and TriG (`<<( … )>>`), RDF/XML (`rdf:parseType="Triple"`)
+   * and JSON-LD / YAML-LD (`@triple`); `trix` and `hextuples` have no triple-term
+   * surface and throw rather than drop it silently. A single-graph target emits the
+   * default graph alone.
+   *
+   * `base` is the document base the output is written under — the egress mirror of
+   * `parse`'s. A syntax that can express a base (Turtle, TriG, RDF/XML, JSON-LD,
+   * YAML-LD) writes it and relativizes against it; one that cannot (N-Triples,
+   * N-Quads, TriX, HexTuples) emits absolute IRIs, the only spelling those grammars
+   * admit. A base that is not an absolute IRI throws whatever the format; omitting it
+   * emits absolute IRIs. No base is ever fabricated.
+   */
+  serialize(format: string, base?: string | null): string;
+  /**
+   * `serialize` delivered a window at a time instead of as one string.
+   *
+   * The bytes are identical; only the delivery differs. Peak memory tracks the
+   * serializer's staging window rather than the document, so a dataset whose
+   * rendering would not fit in one JS string can still be written out.
+   *
+   * `sink` is duck-typed — anything with `write(chunk: Uint8Array)` — which is the
+   * shape a `WritableStreamDefaultWriter`, a Node `Writable`, and a two-line array
+   * collector already have. Nothing about it is a PurRDF type.
+   *
+   * A `write` that throws aborts the serialization and the throw reaches you, rather
+   * than being swallowed into a truncated document.
+   *
+   * `base` carries the same meaning it does on `serialize`.
+   */
+  serializeToSink(
+    format: string,
+    base: string | null | undefined,
+    sink: { write(chunk: Uint8Array): void },
+  ): void;
+  /**
+   * The transcode lane: the declared format contract plus the realized loss.
+   * Byte-identical to `serialize(format, base)` for a star-capable target; for
+   * `rdfxml`, `trix` and `hextuples` it projects the RDF-1.2 statement layer to base
+   * quads and counts it instead of throwing.
+   *
+   * `base` carries the same meaning it does on `serialize`.
+   */
+  serializeWithLoss(format: string, base?: string | null): SerializeLoss;
+  /**
+   * `base` is the document base the output is written under: both JSON-LD and
+   * YAML-LD can express one, so it reaches the emitted `@context` as `@base` and
+   * document-position `@id`s are compacted against it. A base the supplied context
+   * already declares wins. A base that is not an absolute IRI throws; omitting it
+   * emits absolute IRIs. No base is ever fabricated.
+   */
+  serializeConfigured(
+    format: "jsonld" | "yamlld" | string,
+    optionsJson: string,
+    base?: string | null,
+  ): string;
+  serializeWithContext(
+    format: "jsonld" | "yamlld" | string,
+    context: CompiledJsonLdContext,
+    yamlSchemaUrl?: string | null,
+    base?: string | null,
+  ): string;
+  /**
+   * `xpathRegex` selects the dated native XPath law `REGEX`/`REPLACE` evaluate under, as
+   * {@link QueryOptions.xpathRegex} does.
+   */
+  query(sparql: string, base?: string | null, xpathRegex?: XPathRegexLaw | null, now?: string | null, entropySeed?: bigint | number | null): RawQueryResult;
+  /**
+   * The asynchronous twin of `query`: the same document (SPARQL Results JSON for
+   * SELECT/ASK, Turtle — TriG for a result carrying a named graph — for
+   * CONSTRUCT/DESCRIBE), evaluated as an asynchronous job, so `options` can supply the
+   * `SERVICE`/`LOAD` handlers and an `AbortSignal`. Needs JSPI — see `hasAsyncQueries`.
+   */
+  queryAsync(sparql: string, options?: AsyncQueryOptions | null): Promise<RawQueryResult>;
+  /**
+   * This dataset's identity: unique within the wasm instance, fixed for its lifetime,
+   * never reused.
+   */
+  readonly id: bigint;
+  /**
+   * How many mutations this dataset's content has seen. Advances on every `add`/`delete`
+   * that changed the effective set and on every applied UPDATE; reading, querying and
+   * serializing never move it. An asynchronous UPDATE captures it when it starts and
+   * refuses to commit if it has moved since.
+   */
+  readonly generation: bigint;
+  /**
+   * An independent dataset holding this one's current content, with an identity of its
+   * own at generation zero. Later changes to either leave the other as it is.
+   */
+  snapshot(): Dataset;
+  /**
+   * Canonical N-Quads of the flat assertion projection (the canonical line
+   * sequence of the nested-refinement labelling, with decimal blank-node
+   * labels).
+   *
+   * Throws when canonicalization refuses the dataset — the labelling's typed
+   * `input`, `graph`, `width` or `limit` refusal, the last when the caller's
+   * finite bound is exhausted by a pathologically symmetric blank graph. The
+   * refusal is a thrown `Error` naming the cause; it never aborts the
+   * module.
+   */
+  canonicalize(canonicalSearch: string, cancel?: CancellationToken): CanonicalResult<string>;
+  isomorphic(other: Dataset, canonicalSearch: string, cancel?: CancellationToken): CanonicalResult<boolean>;
+  toStream(): AsyncIterableIterator<Quad>;
+  [Symbol.iterator](): IterableIterator<Quad>;
+  free(): void;
+}
+
+/**
+ * One serialized document plus the realized loss of producing it, partitioned by
+ * cause — the return of `Dataset#serializeWithLoss`.
+ *
+ * The counts partition the loss, so their sum is the total and no row is charged
+ * twice: reading one alone cannot distinguish "nothing was lost" from "the loss was
+ * charged to a cause I am not reading". Every count is REALIZED — what this document
+ * actually discarded — not the static pair contract `lossMatrixJson` describes.
+ */
+export class SerializeLoss {
+  /**
+   * The serialized document. Identical to what `serialize(format)` returns for a
+   * star-capable target; for `rdfxml`, `trix` and `hextuples` it is the contract's
+   * projected document instead — the statement layer reduced to base quads and
+   * charged to `statementRowsDropped`.
+   */
+  readonly text: string;
+  /**
+   * RDF-1.2 statement-layer rows dropped because the target cannot represent quoted
+   * triples. `0` for star-capable formats. Rows dropped for being scoped to a named
+   * graph are counted by `namedGraphRowsDropped` instead, never here and never twice.
+   */
+  readonly statementRowsDropped: number;
+  /**
+   * Object literals whose RDF-1.2 base direction the target has no surface for.
+   * `0` for every direction-capable format.
+   */
+  readonly directionalLiteralsDropped: number;
+  /**
+   * Rows the single-graph flattening dropped because the target has no named-graph
+   * construct. `0` for every dataset-capable format. The rows are DROPPED, not
+   * folded into the default graph.
+   */
+  readonly namedGraphRowsDropped: number;
+  /**
+   * Declared named graphs holding no row that the target has no spelling for
+   * (`nquads`, `hextuples` and every single-graph syntax), so the document omits
+   * them. They own no row, so no other count sees them. `0` for `trig`, `trix`,
+   * `jsonld` and `yamlld`, which write an empty graph, and for a dataset that
+   * declares none.
+   */
+  readonly emptyNamedGraphsDropped: number;
+  free(): void;
+}
+
+export class CompiledJsonLdContext {
+  constructor(optionsJson: string);
+  canonicalContextJson(): string;
+  free(): void;
+}
+
+export type ProjectionProfile =
+  | "lpg-csv"
+  | "neo4j-csv"
+  | "open-cypher"
+  | "graphml"
+  | "csvw-exact"
+  | "csvw-terms"
+  | "okf-terms"
+  | "obo-graphs"
+  | "skos"
+  | "croissant-1.1"
+  | "ro-crate-1.3"
+  | "datacite-4.6"
+  | "dcat-3"
+  | "dcat-rdf"
+  | "void"
+  | "frictionless-data-package-1";
+
+export type LiftProfile = Exclude<
+  ProjectionProfile,
+  "csvw-terms" | "okf-terms" | "obo-graphs" | "skos" | "dcat-rdf" | "void"
+>;
+
+export interface ProjectionLossLedger {
+  schema_version: 1;
+  losses: Array<{
+    code: string;
+    from: string;
+    to: string;
+    intentional: boolean;
+    note: string;
+    location?: string;
+  }>;
+}
+
+export class ProjectionPackage {
+  private constructor();
+  readonly profile: ProjectionProfile;
+  readonly archive: Uint8Array;
+  readonly lossLedgerJson: string;
+  free(): void;
+}
+
+export class ProjectionLift {
+  private constructor();
+  readonly lossLedgerJson: string;
+  takeDataset(): Dataset | undefined;
+  free(): void;
+}
+
+/** A computed YAML source root and an ordinary mutable Dataset. */
+export class YamlSourceExport {
+  private constructor();
+  readonly root: string;
+  /** Move the Dataset out once. It survives freeing this result. */
+  takeDataset(): Dataset | undefined;
+  free(): void;
+}
+
+/** Original diagnostic-backed native failure and its retained admission. */
+export class YamlSourceCause {
+  private constructor();
+  /** Typed native fields, including exact codes and byte/line/column positions. */
+  readonly json: string;
+  free(): void;
+}
+
+export interface NativeDiagnosticFailure extends Error {
+  readonly code: string;
+  readonly diagnostic: object;
+  readonly nativeCauseJson?: string;
+  /** Free this owned cause when it is no longer needed. */
+  readonly nativeCause?: YamlSourceCause;
+}
+
+export interface YamlSourceFailure extends NativeDiagnosticFailure {}
+
+/**
+ * Expand original JSON-LD/YAML-LD bytes using closed version-one request JSON
+ * bytes, returning expanded JSON document text without an RDF dataset.
+ * Request decoding/context compilation precedes source capture. Buffers must be
+ * Uint8Array views over non-shared ArrayBuffer storage; detached views refuse.
+ * Host buffers/string glue, admitted bridge copies, request, native expansion
+ * and bounded output storage have separate authorities.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function expandDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Compact source bytes under the required output_context expression in the
+ * version-one request. Null is an explicit context reset. Input buffers and
+ * native error/cause ownership follow expandDocument. Output-context compilation
+ * follows expansion so output_base input uses the effective document base.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function compactDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Flatten source bytes, returning an expanded array when output_context is absent
+ * or null; a non-null expression applies ordinary compaction exactly once.
+ * Input buffers and native error/cause ownership follow expandDocument.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function flattenDocument(source: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Frame separate source/frame bytes under a closed version-one request. The one
+ * format and Basic YAML profile govern both documents with separate native parses.
+ * Request checks/context compilation precede either admitted document capture.
+ * Output context comes only from the frame's own @context. Buffers, returned text
+ * and retained native-cause ownership follow expandDocument.
+ * @throws {NativeDiagnosticFailure | TypeError} Original native and host refusals.
+ */
+export function frameDocument(source: Uint8Array, frame: Uint8Array, requestJson: Uint8Array): string;
+
+/**
+ * Export original YAML bytes under an explicit absolute source IRI and a closed
+ * version-one native profile encoded as UTF-8 JSON bytes. The profile requires
+ * version, name, profile_version and vocabulary; bounds are optional.
+ *
+ * Rust checks the 16 KiB profile cap before copying profile bytes, decodes the
+ * profile, then checks its source-byte cap before copying source bytes. Captured
+ * buffers must be Uint8Array views over non-shared ArrayBuffer storage; detached
+ * or invalidated views throw. Copies use fallible admitted native storage held
+ * through the operation. Host buffers/string glue, bridge copies, Dataset
+ * ownership and native phase accounts remain separate.
+ *
+ * @throws {YamlSourceFailure | TypeError} Native refusals retain typed causes;
+ *   host buffer failures are caught exceptions and leave the instance reusable.
+ */
+export function yamlSourceExport(
+  source: Uint8Array,
+  sourceIri: string,
+  profileJson: Uint8Array,
+): YamlSourceExport;
+
+/**
+ * Reconstruct the current native Dataset snapshot under an explicit root/profile.
+ * Returns independently owned original bytes after native verification succeeds.
+ * Profile admission matches yamlSourceExport; snapshot and decode/reparse accounts
+ * remain separate. Later Dataset mutations cannot change the returned Uint8Array.
+ */
+export function yamlSourceReconstruct(
+  dataset: Dataset,
+  root: string,
+  profileJson: Uint8Array,
+): Uint8Array;
+
+/**
+ * One closure of one document under one SPARQL entailment regime: the canonical
+ * N-Quads and the byte-stable rendered reasoning report. Returned by
+ * `entailMaterialize`.
+ */
+/**
+ * Required canonicalSearch values are "unlimited" or canonical unsigned decimal u64
+ * text, without leading zeros. Each constituent run has an independent ceiling.
+ * Synchronous calls block callbacks on the same JavaScript event loop; cancellation
+ * observes an already signaled token, and does not promise same-event-loop preemption.
+ */
+export class CanonicalResult<T = unknown> {
+  readonly value: T;
+  readonly canonicalizationJson: string;
+  free(): void;
+}
+
+/** Original native failure ownership, including its retained admission grant. */
+export class CanonicalCause {
+  readonly json: string;
+  free(): void;
+}
+
+/** A canonicalizing request's refusal, with evidence even when no run started. */
+export interface CanonicalizationFailure extends Error {
+  readonly canonicalizationJson: string;
+  readonly nativeCauseJson?: string;
+  /** Free this owned native cause when the refusal is no longer needed. */
+  readonly nativeCause?: CanonicalCause | YamlSourceCause;
+}
+
+export class RegimeClosure {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
+  private constructor();
+  /** The materialized dataset (input quads + inferred triples) as canonical N-Quads. */
+  readonly nquads: string;
+  /** What the run did: rules fired, rules missing, boundaries, budget, contract hash. */
+  readonly report: string;
+  free(): void;
+}
+
+/**
+ * One reasoning service's answer and the certificate of the run that produced it.
+ * Returned by the Description-Logic services `entailConsistency`, `entailClassify`,
+ * `entailRealize`, `entailInstances`, `entailEntails`, `entailProfile`,
+ * `entailExtractModule`, `entailJustify` and `entailExplainConclusion`, and by the
+ * regime services `entailCertainAnswers`, `entailGraphEntails` and
+ * `entailVerifyEntailment`.
+ */
+export class ReasoningAnswer {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
+  private constructor();
+  /**
+   * The service's answer, in the service's own line-oriented rendering. A
+   * dataset-valued answer (`entailExtractModule`, `entailJustify`) is canonical
+   * (RDFC-1.0) N-Quads instead.
+   */
+  readonly answer: string;
+  /**
+   * How completely the service decided, in one of THREE certificate grammars —
+   * which one is a property of the service, so read it off the call rather than
+   * sniffing the string:
+   *
+   * - `purrdf-dl-certificate 1` — the tableau services `entailConsistency`,
+   *   `entailClassify`, `entailRealize`, `entailInstances` and `entailEntails`.
+   * - `purrdf-reasoning-report 4` — the entailment-regime services
+   *   `entailCertainAnswers`, `entailGraphEntails` and `entailVerifyEntailment`,
+   *   which run the regime's rule table rather than a tableau.
+   * - that service's own grammar — the three that run neither (`entailProfile`,
+   *   `entailExtractModule`, `entailExplainConclusion`).
+   */
+  readonly certificate: string;
+  /**
+   * The PROOF TERM of the run that produced this answer, as a `purrdf-dl-proof 1`
+   * document — the thing `entailCheckProof` takes.
+   *
+   * Never the empty string. Recording is OPT-IN, so an answer from an `entail*`
+   * function or from a `new Reasoner(...)` session reads
+   * `purrdf-dl-proof 1\navailability not-recorded\n`, which says NOTHING WAS
+   * MEASURED. A recorded proof says `availability recorded`; a recorded proof with
+   * `runs 0` says something different again — that the service is syntactic, so there
+   * was no search to check. Three states, three documents, and `entailCheckProof`
+   * refuses the first by name.
+   *
+   * Ask for one with `entailProve(...)` or `Reasoner.withProofs(...)`.
+   */
+  readonly proof: string;
+  free(): void;
+}
+
+/** Actual native source work, transported without narrowing its counters. */
+export class PositiveUpdateWork {
+  private constructor();
+  readonly borrowedTermLookups: bigint;
+  readonly retainedRowProbes: bigint;
+  readonly scannedRows: bigint;
+  readonly copiedTerms: bigint;
+  readonly newRows: bigint;
+  readonly newGraphs: bigint;
+  readonly interpretedDefaultRows: bigint;
+  readonly identityRecomputed: boolean;
+  readonly canonicalizationJson: string;
+  free(): void;
+}
+
+/** A recorded positive world opened by Reasoner.withPositiveProofs.
+ * Mutating failures consume this owner, including malformed policies and inputs.
+ * Consistency and independent proof checking are read-only. The opening token
+ * governs the complete lifetime; freeing that token wrapper does not cancel it. */
+export class PositiveReasoner {
+  private constructor();
+  readonly canonicalizationJson: string;
+  advance(document: string, canonicalSearch: string): PositiveUpdateWork;
+  /** A stopped search returns the native unknown answer and budget-exhausted certificate. */
+  consistency(canonicalSearch: string): ReasoningAnswer;
+  classSatisfiability(class_: string, canonicalSearch: string): ReasoningAnswer;
+  entails(axiom: string, canonicalSearch: string): ReasoningAnswer;
+  instances(class_: string, canonicalSearch: string): ReasoningAnswer;
+  checkPositiveProof(service: ProofService | string, argument: string, answer: string, certificate: string, proof: string, canonicalSearch: string): CanonicalResult<string>;
+  work(): PositiveUpdateWork;
+  free(): void;
+}
+
+/**
+ * A reasoning session over one ontology.
+ *
+ * Every `entail*` function takes the document as a string and rebuilds everything it
+ * needs, so asking three questions parses and reverse-maps the ontology three times.
+ * This class holds the parsed document instead: constructing it parses once, the first
+ * question needing a knowledge base reverse-maps once, and later questions reuse both.
+ * That matters more in a browser than anywhere else — this cost lands on the main
+ * thread.
+ *
+ * The methods answer exactly what the same-named functions answer; they are the same
+ * shared boundary session those functions now wrap.
+ *
+ * The constructor does NOT reason. `profile` answers for any parseable document, so
+ * building the knowledge base eagerly would make it inherit every way that can fail;
+ * an ontology whose knowledge base cannot be built still constructs and throws on the
+ * first question that needs one.
+ */
+export class Reasoner {
+  /**
+   * @param document N-Quads (or N-Triples).
+   * @param stepCap Narrows the per-decision tableau step cap for every question asked
+   *   through this session. 0 means the knowledge base's own cap, NOT a cap of zero
+   *   steps, and it can only narrow.
+   * @param workCap Narrows the per-decision WORK cap on the same rule — the cap on the
+   *   matcher, scan, closure and clone work done INSIDE a round, which a rounds cap
+   *   cannot see.
+   */
+  constructor(document: string, stepCap: number, workCap: number);
+  /**
+   * A session that RECORDS a proof term for every service that has one.
+   *
+   * The session-level opt-in. `new Reasoner(...)` records nothing; this records, so
+   * every answer it hands back carries a real `.proof` document instead of the
+   * `availability not-recorded` one, and `prove` becomes callable. It changes nothing a
+   * service decides: every `.answer` and `.certificate` is byte-identical.
+   */
+  static withProofs(document: string, stepCap: number, workCap: number): Reasoner;
+  /** Open a recorded positive world. The required JSON fields historySteps,
+   * sourceTerms, sourceRows, questionBytes, metadataBytes and metadataWork are
+   * canonical decimal strings, with checked conversion to this target's width.
+   * The optional token is transferred into the session and governs its complete
+   * lifetime. Pass token.share() to retain a caller handle to the same bit. */
+  static withPositiveProofs(document: string, limits: string, stepCap: number, workCap: number, canonicalSearch: string, cancel?: CancellationToken): PositiveReasoner;
+  /** Whether this session records proof terms — true only for `withProofs`. */
+  recordsProofs(): boolean;
+  /**
+   * Answer `service` about `argument`, with its proof. See {@link entailProve}.
+   *
+   * Throws on a session that records nothing: open it with `Reasoner.withProofs`.
+   */
+  prove(service: ProofService | string, argument: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  consistency(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  classify(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  realize(canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  instances(class_: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  entails(axiom: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  profile(): ReasoningAnswer;
+  extractModule(signature: string, method: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  justify(axiom: string, canonicalSearch: string, cancel?: CancellationToken): ReasoningAnswer;
+  explainConclusion(regime: string, conclusion: string): ReasoningAnswer;
+  free(): void;
+}
+
+/**
+ * How a blank node's scope crosses to JS in the typed results of a {@link QueryEngine}.
+ *
+ * The engine holds a blank node as a label and a scope, so two nodes that share a label
+ * in different scopes are two nodes. `"keep"` (the default) preserves that: a scoped
+ * blank crosses as its deterministic scope envelope, an unscoped blank keeps its bare
+ * label, and two blank nodes that share a label in different scopes stay two nodes in
+ * JS. `"merge"` drops the scope: every blank crosses as its bare label, so nodes that
+ * share a label in different scopes are ONE node in JS. `"merge"` is lossy by
+ * declaration, for a caller that wants the labels the data was written with.
+ */
+export type BlankScopeMode = "keep" | "merge";
+
+/** Immutable strict native geographic profile and scalar/batch request session. */
+export class GeoSession {
+  /** Omitted profile selects the standard CRS84 profile; invalid input throws. */
+  constructor(profile?: string | null);
+  /** Canonical strict version-one profile, including its explicit limits. */
+  profile(): string;
+  /**
+   * Return canonical JSON for completed and semantic refusal outcomes.
+   * Operational refusal throws before another JSON envelope is allocated.
+   */
+  call(request: string): string;
+  /** Construct immutable ordered buckets from a strict point-index request. */
+  pointIndex(request: string): GeoPointIndex;
+  free(): void;
+}
+
+/** Reusable immutable native point index created by GeoSession.pointIndex. */
+export class GeoPointIndex {
+  /** Search under the native physical/reported law; operational refusal throws. */
+  call(request: string): string;
+  free(): void;
+}
+
+export class QueryEngine {
+  constructor();
+  /** Select this immutable profile for future operations; started jobs keep their snapshot. */
+  setGeoSession(session: GeoSession): void;
+  /** Select strict profile JSON; invalid input leaves the current selection intact. */
+  setGeoProfile(profile: string): void;
+  /**
+   * How a blank node's scope crosses to JS in the typed results this engine returns:
+   * see {@link BlankScopeMode}. It applies to `query`, `select`, `queryGoverned` and
+   * `queryEntailmentGoverned`, and a job started with a `…Async` twin takes the value in
+   * force when it begins. `queryRaw` serializations are unaffected. Assigning any other
+   * string throws, with the code `purrdf-wasm-options`, and leaves the mode unchanged.
+   *
+   * @defaultValue `"keep"`
+   */
+  blankScope: BlankScopeMode;
+  /**
+   * The precision of every `xsd:integer`/`xsd:decimal` quotient (`/` and `AVG`) this
+   * engine forms, in its one text form: `"exact"`, `"N"` (`N` fractional digits
+   * truncated toward zero), `"N:ROUNDING"` or `"exact-or-N[:ROUNDING]"`, with `ROUNDING` one of `toward-zero`,
+   * `away-from-zero`, `floor`, `ceiling`, `half-even`, `half-away-from-zero`,
+   * `half-toward-zero`, `half-ceiling` or `half-floor`. Reading it answers the selected
+   * policy. Under `"exact"` a quotient with no finite decimal expansion (`1/3`)
+   * is a SPARQL expression error — unbound, like `1/0`, and counted as `err:FOAR0002` in
+   * a governed outcome's `evidence.expressionErrors` — while a terminating one (`1/8`)
+   * answers exactly.
+   *
+   * It applies to every query, update, explain, governed, entailment and serialized
+   * entry of this engine, and a job started with a `…Async` twin takes the policy in
+   * force when it begins. `Dataset.query` runs under the default. Assigning text in no
+   * accepted form throws, with the code `purrdf-wasm-options`, and leaves the policy
+   * unchanged.
+   *
+   * @defaultValue `"exact-or-18:half-even"`
+   */
+  divisionPolicy: string;
+  query(dataset: Dataset, sparql: string, options?: QueryOptions | null): QueryResult;
+  select(dataset: Dataset, sparql: string, options?: QueryOptions | null): SelectResult;
+  ask(dataset: Dataset, sparql: string, options?: QueryOptions | null): AskResult;
+  construct(dataset: Dataset, sparql: string, options?: QueryOptions | null): GraphResult;
+  describe(dataset: Dataset, sparql: string, options?: QueryOptions | null): GraphResult;
+  update(dataset: Dataset, sparql: string, options?: UpdateOptions | null): AppliedUpdateResult;
+  queryRaw(dataset: Dataset, sparql: string, options?: QueryRawOptions | null): RawQueryResult;
+  /**
+   * Run a SPARQL query under caller-supplied execution governors.
+   *
+   * A tripped governor is an OUTCOME, not a throw: check `isComplete`, read `result`
+   * when it holds, and read `tripped` with `partial` when it does not. Only a parse
+   * error, an evaluation error, or a malformed ceiling throws.
+   *
+   * `options.aggregateNamespace` registers purrdf's first-party statistical aggregate
+   * set — see {@link AggregateNamespaceOption}.
+   *
+   * On Cloudflare Workers `Date.now()` does not advance during CPU-bound execution, so
+   * `options.deadlineMs` cannot trip here while the query computes; use
+   * `queryGovernedAsync` there (see {@link GovernorOptions.deadlineMs}).
+   */
+  queryGoverned(
+    dataset: Dataset,
+    sparql: string,
+    options?: GovernedQueryOptions | null,
+  ): QueryOutcome;
+  /**
+   * Run a governed query over the named entailment closure. The answer and reasoning
+   * report travel together; a closure-phase stop carries neither.
+   *
+   * `options.aggregateNamespace` behaves exactly as on {@link queryGoverned}: it registers
+   * purrdf's first-party statistical aggregate set for the closure query's PARSE and its
+   * evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches the entailment-aware lane
+   * exactly as it reaches the ordinary one.
+   *
+   * `options.importIris`/`importDocuments`/`premiseIris` are the dataset's `owl:imports`
+   * table: the closure is materialized over the dataset's imports closure, and an import
+   * the table does not resolve throws by name.
+   */
+  queryEntailmentGoverned(
+    dataset: Dataset,
+    sparql: string,
+    entailment: string,
+    options?: EntailmentQueryOptions | null,
+  ): EntailmentQueryOutcome;
+  /**
+   * Apply a SPARQL UPDATE under caller-supplied execution governors. A tripped request
+   * applies NOTHING and leaves `dataset` exactly as it was found. `maxAnswers` is
+   * refused: an UPDATE has no answer sequence to bound.
+   *
+   * `options.aggregateNamespace` behaves exactly as on {@link queryGoverned}, reachable
+   * from a `DELETE`/`INSERT … WHERE` clause through a nested `SELECT … GROUP BY` — the
+   * only place SPARQL UPDATE's grammar admits an aggregate.
+   */
+  updateGoverned(
+    dataset: Dataset,
+    sparql: string,
+    options?: GovernedUpdateOptions | null,
+  ): UpdateOutcome;
+  /**
+   * The engine's charge ledger for a query, rendered as text: the join orders it chose,
+   * the plan estimates it surveyed, and what each algebra node actually cost. This is how
+   * a budget is sized before it is set — the query runs metered, not bounded, so the
+   * numbers are measurements rather than predictions.
+   */
+  explainQuery(dataset: Dataset, sparql: string, options?: QueryOptions | null): RawQueryResult;
+  queryRawConfigured(
+    dataset: Dataset,
+    sparql: string,
+    base: string | null | undefined,
+    format: "jsonld" | "yamlld" | string,
+    optionsJson: string,
+    xpathRegex?: XPathRegexLaw | null,
+    now?: string | null,
+    entropySeed?: bigint | number | null,
+  ): RawQueryResult;
+  queryRawWithContext(
+    dataset: Dataset,
+    sparql: string,
+    base: string | null | undefined,
+    format: "jsonld" | "yamlld" | string,
+    context: CompiledJsonLdContext,
+    yamlSchemaUrl?: string | null,
+    xpathRegex?: XPathRegexLaw | null,
+    now?: string | null,
+    entropySeed?: bigint | number | null,
+  ): RawQueryResult;
+
+  // The asynchronous twins. Each runs the operation its synchronous twin runs, over a
+  // snapshot of `dataset` taken when the call starts, as a job that suspends on the
+  // host's `SERVICE`/`LOAD` handlers and yields to the event loop while it evaluates; each
+  // resolves to exactly the shape its synchronous twin returns. They need JSPI — see
+  // `hasAsyncQueries` — and reject with the reason before touching wasm where it is
+  // missing. Rejections: an option the twin would ignore is a `TypeError`; a parse or
+  // evaluation failure (including a `SERVICE`/`LOAD` with no handler, and a result of the
+  // wrong kind) is an `Error` with the synchronous twin's message — a request too deep
+  // for the job's stack included: each job runs on a stack region exactly as large as the
+  // module's own shadow stack, so the parser's and the evaluator's refusals
+  // (`native-sparql-query-parse`/`native-sparql-update-parse`,
+  // `native-sparql-evaluation-stack-exhausted`) and `native-sparql-host-stack-exhausted`
+  // (the fixed budget kept under the JavaScript engine's call stack, which V8 sizes the
+  // same for a job as for the synchronous lane) are the synchronous twin's refusals word
+  // for word; a cancellation through `signal` rejects with
+  // an `AbortError` carrying `signal.reason` as `cause` (`TimeoutError` for a timeout
+  // signal); a handler that threw, rejected or
+  // answered something unrecognizable fails its own invocation (`native-sparql-host-fault`
+  // or `native-sparql-load-fault` without `SILENT`); a fault — a broken delivery protocol,
+  // or frames no stack check guards running outside the job's region or past its base —
+  // is an `Error` with the fault's text. Errors built by the twin carry
+  // the job's `evidence.async` (see `AsyncJobError`). The governed twins report a governor
+  // trip — a deadline or an abort included — as an outcome, never a rejection. A job that
+  // traps poisons the instance, and so does a
+  // trap, a Rust panic or a JavaScript exception thrown through wasm frames in any
+  // synchronous call: every job in flight rejects with the poison error, and from then on
+  // every asynchronous twin and `ready()` reject with it, while every synchronous call
+  // into the instance — on objects created before the trap too — traps at the instance's
+  // entry with a `WebAssembly.RuntimeError`; `free()` and `[Symbol.dispose]()` return
+  // without entering it and release nothing. The instance cannot be used again, and only a
+  // fresh JavaScript realm (a new page, Worker isolate or process) can load the package
+  // again.
+
+  /** The twin of `query`. */
+  queryAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<QueryResult>;
+  /** The twin of `select`. */
+  selectAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<SelectResult>;
+  /** The twin of `ask`. */
+  askAsync(dataset: Dataset, sparql: string, options?: AsyncQueryOptions | null): Promise<AskResult>;
+  /** The twin of `construct`. */
+  constructAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<GraphResult>;
+  /** The twin of `describe`. */
+  describeAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<GraphResult>;
+  /**
+   * The twin of `queryRaw` — and, with `optionsJson` (which needs `format`), of
+   * `queryRawConfigured`.
+   */
+  queryRawAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryRawOptions | null,
+  ): Promise<RawQueryResult>;
+  /** `queryRawAsync` delivered as the document's UTF-8 bytes, for a host that sends them on. */
+  queryRawBytesAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryRawOptions | null,
+  ): Promise<RawQueryBytesResult>;
+  /** The twin of `queryRawWithContext`. */
+  queryRawWithContextAsync(
+    dataset: Dataset,
+    sparql: string,
+    format: "jsonld" | "yamlld" | string,
+    context: CompiledJsonLdContext,
+    options?: AsyncQueryRawWithContextOptions | null,
+  ): Promise<RawQueryResult>;
+  /**
+   * The twin of `queryGoverned`. `deadlineMs` spans the time spent awaiting the host's
+   * handlers as well as evaluation.
+   */
+  queryGovernedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncGovernedQueryOptions | null,
+  ): Promise<AsyncQueryOutcome>;
+  /**
+   * A governed query whose complete answer is a document in the format negotiated from
+   * `accept` (an HTTP `Accept` header; absent means the SPARQL Protocol defaults) — the
+   * query a SPARQL Protocol endpoint answers. The format is chosen once the result exists,
+   * so a CONSTRUCT/DESCRIBE result carrying named graphs is offered only in the syntaxes
+   * that can hold them (TriG, N-Quads, JSON-LD). When `accept` allows none of those, it
+   * rejects with a `NotAcceptableError` naming them. A governor trip is an outcome, as on
+   * `queryGovernedAsync`. It has no synchronous twin.
+   */
+  queryGovernedNegotiatedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncNegotiatedQueryOptions | null,
+  ): Promise<AsyncNegotiatedQueryOutcome>;
+  /** The twin of `queryEntailmentGoverned`. */
+  queryEntailmentGovernedAsync(
+    dataset: Dataset,
+    sparql: string,
+    entailment: string,
+    options?: AsyncEntailmentQueryOptions | null,
+  ): Promise<AsyncEntailmentQueryOutcome>;
+  /**
+   * The twin of `explainQuery`: resolves to the same rendered charge ledger. EXPLAIN
+   * evaluates the query to measure it, so the measuring run is a job like any other — it
+   * suspends on `resolveService`, yields to the event loop every `yieldEveryPolls` polls,
+   * and stops on `signal` — and a `SERVICE` clause the synchronous twin refuses for want
+   * of a source is explained over the host's answer. It takes no ceiling: the run is
+   * metered, never bounded, exactly as the synchronous twin's is. A deadline is a
+   * `signal` (`AbortSignal.timeout(ms)`), and a stop rejects rather than resolving to the
+   * ledger of a truncated run.
+   */
+  explainQueryAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncQueryOptions | null,
+  ): Promise<RawQueryResult>;
+  /**
+   * The twin of `update`: resolves to `dataset` once the update is applied. One
+   * asynchronous update of a dataset may be in flight at a time: beginning another while
+   * it runs rejects at once with the code `native-sparql-update-in-flight`, applying and
+   * asking nothing. The update reads a snapshot and is applied only if `dataset` was not
+   * mutated while it ran; otherwise it rejects with the same code and applies nothing.
+   */
+  updateAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: AsyncUpdateOptions | null,
+  ): Promise<AppliedUpdateResult>;
+  /**
+   * The twin of `updateGoverned`, claiming and applied as `updateAsync` is. `maxAnswers`
+   * is refused, exactly as on `updateGoverned`.
+   */
+  updateGovernedAsync(
+    dataset: Dataset,
+    sparql: string,
+    options?: (GovernedUpdateOptions & AsyncHostOptions) | null,
+  ): Promise<AsyncUpdateOutcome>;
+  free(): void;
+}
+
+/** The `capabilities` a service profile may grant. */
+export type ServiceCapabilityName = "query" | "network" | "credentials";
+
+/**
+ * One service's profile, as `ServiceCatalog.addService`/`setFallback` take it
+ * (`JSON.stringify` it). A host-resolved request needs `query` and `network`; a
+ * `credential` also needs `credentials`. `headers` are `[name, value]` pairs because order
+ * and repeated names are significant. Unknown keys and capability names are refused.
+ */
+export interface ServiceProfileJson {
+  readonly capabilities: readonly ServiceCapabilityName[];
+  readonly headers?: readonly (readonly [string, string])[];
+  readonly credential?: { readonly header: string; readonly value: string };
+  readonly userAgent?: string;
+  readonly timeoutMs?: number;
+}
+
+/**
+ * The per-service policy host-resolved `SERVICE` requests and `LOAD` fetches are
+ * authorized against, before the host is ever called: deny by default, one profile per
+ * endpoint (or `LOAD` source), an optional fallback. A `SERVICE` needs `query` and
+ * `network`; a `LOAD` — and every location it is redirected to — needs `network`. A
+ * profile's `timeoutMs` (1 to 2 147 483 647) bounds each request to it. A denial fails
+ * the request; under `SERVICE SILENT`/`LOAD SILENT` it is the join identity or a success
+ * with nothing loaded, recorded on the evidence's `silenced`. Pass it to an asynchronous
+ * twin as `catalog` (it is copied; the catalog stays usable); it needs a `resolveService`
+ * or `resolveLoad` handler to govern.
+ */
+export class ServiceCatalog {
+  /** An empty catalog: every service is denied. */
+  constructor();
+  /**
+   * Register `profileJson` (a `ServiceProfileJson` document) for `endpoint`, replacing any
+   * earlier one.
+   *
+   * @throws {PurrdfError} `purrdf-wasm-options`: a profile that is not a valid document.
+   */
+  addService(endpoint: string, profileJson: string): void;
+  /** Apply `profileJson` to every service with no entry of its own. */
+  setFallback(profileJson: string): void;
+  /** An independent copy of this catalog: later changes to either leave the other as it is. */
+  copy(): ServiceCatalog;
+  free(): void;
+}
+
+/**
+ * Every error the package throws for a failure it classifies carries the stable code it
+ * is reported under: an engine diagnostic's own (`native-sparql-query-parse`,
+ * `native-sparql-load-denied`, …), a stop's or a fault's (`native-sparql-cancelled`,
+ * `native-sparql-host-fault`, …), or one of the package's own refusals
+ * (`purrdf-wasm-options`, `purrdf-wasm-usage`, …). Switch on `code`, never on `message`.
+ */
+export interface PurrdfError extends Error {
+  readonly executionReceipt?: ExecutionReceipt;
+  readonly executionReceiptJson?: string;
+  readonly code: string;
+  /**
+   * Original `purrdf-diagnostic-v1` record for native semantic or resource failure. Its optional
+   * `capacity` record carries `space`, `attempted` and `limit`; both counts are exact
+   * decimal strings. Original line positions are exact decimal strings.
+   */
+  readonly diagnostic?: {
+    readonly schema: "purrdf-diagnostic-v1";
+    readonly severity: string;
+    readonly code: string;
+    readonly message: string;
+    readonly location?: {
+      readonly path?: string;
+      readonly logical?: string;
+      readonly subject?: string;
+      readonly line?: string;
+      readonly column?: number;
+      readonly gtsTermId?: string;
+      readonly gtsQuadIndex?: string;
+      readonly gtsReifierId?: string;
+      readonly gtsFrameIndex?: string;
+      readonly gtsSegmentIndex?: string;
+    };
+    readonly capacity?: {
+      readonly space: string;
+      readonly attempted: string;
+      readonly limit: string;
+    };
+  };
+  /**
+   * The failure's typed condition, when it carries one. A SPARQL parse failure
+   * (`code` `native-sparql-query-parse` or `native-sparql-update-parse`) carries its
+   * `sparql-parse-*` identity and typed parameters, so its kind and byte offset are read
+   * without parsing `message`. `undefined` for a failure without a typed presentation.
+   */
+  readonly presentation?: DiagnosticPresentation;
+}
+
+/**
+ * One typed argument of a `DiagnosticPresentation`. Integers are exact decimal strings,
+ * so a 64-bit offset survives a binary64 `number`.
+ */
+export type DiagnosticParameterValue =
+  | { readonly kind: "text"; readonly value: string }
+  | { readonly kind: "unsigned"; readonly value: string }
+  | { readonly kind: "signed"; readonly value: string }
+  | { readonly kind: "boolean"; readonly value: boolean }
+  | { readonly kind: "character"; readonly value: string };
+
+/**
+ * A failure's typed condition: its stable `messageId` (`sparql-parse-lex`,
+ * `sparql-parse-syntax`, `sparql-parse-unsupported`, `sparql-parse-iri`,
+ * `sparql-parse-cdt-arity`, …), its named typed `parameters`, and, when present, a
+ * nested `detail` of the same shape: an IRI refusal's own `iri-*` condition, such as
+ * `iri-bad-percent-encoding` with its unsigned `offset`. The same record the C ABI's
+ * `purrdf_error_presentation_json` returns under `presentation`.
+ */
+export interface DiagnosticPresentation {
+  readonly messageId: string;
+  readonly parameters: { readonly [name: string]: DiagnosticParameterValue };
+  readonly detail?: DiagnosticPresentation;
+}
+
+/**
+ * The HTTP problem (RFC 9457) a failed operation is answered with, as
+ * `SparqlProtocolRequest.problemFor` decides it (a wasm handle: `free()` it).
+ */
+export interface FailureProblem {
+  /** The response status. */
+  readonly status: number;
+  /** `application/problem+json`. */
+  readonly contentType: string;
+  /**
+   * Whether the failure is the host's own: its real error belongs in the host's log under
+   * a correlation id, which `body` must be given.
+   */
+  readonly internal: boolean;
+  /**
+   * The problem document: `type`, `title`, `status`, `detail` and `code`, plus
+   * `correlationId` for an internal failure and `offered` for a `406`.
+   *
+   * @throws {Error} An internal failure without a `correlationId`.
+   */
+  body(correlationId?: string | null): string;
+  free(): void;
+}
+
+/** A result shape the SPARQL Protocol negotiates formats for. */
+export type ProtocolResultKind = "solutions" | "boolean" | "graph" | "dataset";
+
+/** A format token `SparqlProtocolRequest#negotiate` returns. */
+export type ProtocolFormat =
+  | "json"
+  | "xml"
+  | "csv"
+  | "tsv"
+  | "turtle"
+  | "trig"
+  | "ntriples"
+  | "nquads"
+  | "jsonld";
+
+/**
+ * The `Error` `SparqlProtocolRequest` throws for a request that is not a SPARQL 1.1
+ * Protocol operation: `name` is the refusal's stable identifier (e.g.
+ * `"MissingOperation"`, `"UnsupportedContentType"`, `"MalformedOperation"`), `status`
+ * the HTTP status it maps to (`405` for a method, `415` for a `Content-Type`, `400`
+ * otherwise), and `parameter` the protocol parameter at fault, when there is one.
+ */
+export interface SparqlProtocolError extends Error {
+  readonly status: 400 | 405 | 415;
+  readonly parameter?: string;
+}
+
+/**
+ * One SPARQL 1.1 Protocol operation read from an HTTP request: `GET ?query=`, `POST
+ * application/sparql-query`, `POST application/sparql-update`, and `POST
+ * application/x-www-form-urlencoded` (`query=` / `update=`), with the dataset parameters.
+ * Every protocol decision is made in Rust; a refusal throws a `SparqlProtocolError`.
+ */
+export class SparqlProtocolRequest {
+  private constructor();
+  /**
+   * Read one operation from a request's method, `Content-Type` header, query string
+   * (without the leading `?`) and body bytes.
+   *
+   * @throws {SparqlProtocolError} A request that is not a protocol operation.
+   */
+  static parse(
+    method: string,
+    contentType: string | null | undefined,
+    queryString: string | null | undefined,
+    body: Uint8Array,
+  ): SparqlProtocolRequest;
+  /** The media type of a format token `negotiate` returns; `undefined` for any other string. */
+  static formatMediaType(token: string): string | undefined;
+  /** The media types a result of `kind` is offered in, in server preference order. */
+  static offeredMediaTypes(kind: ProtocolResultKind): string[];
+  /** The `detail` of a `406` for a result of `kind`, naming the formats that can carry it. */
+  static notAcceptableDetail(kind: ProtocolResultKind): string;
+  /**
+   * The HTTP problem a failed operation is answered with: `error` is what it rejected
+   * with, read for its `code` and `message`; `cancelled` says the request's own signal
+   * stopped it. An error without a string `code` is an exception nothing classified — the
+   * host's own fault.
+   */
+  static problemFor(error: unknown, cancelled: boolean): FailureProblem;
+  /**
+   * The HTTP problem a governed operation a governor stopped is answered with: a
+   * ceiling's `422` carrying its `dimension`, `limit` and `consumed` or `estimate`, or
+   * the `503` of a stop signal's `cause`; the problem's `code` is the governor's label.
+   *
+   * @throws {Error} A record that describes no governor this build names.
+   */
+  static problemForTrip(tripped: TrippedGovernor): FailureProblem;
+  /** The reason phrase of an HTTP `status` — an `about:blank` problem's `title`. */
+  static statusTitle(status: number): string | undefined;
+  readonly kind: "query" | "update";
+  /** The operation text as the request carried it. */
+  readonly text: string;
+  /**
+   * The query's result kind from its query form, or `undefined` for an update.
+   *
+   * @throws {SparqlProtocolError} `MalformedOperation` when no query form follows the prologue.
+   */
+  readonly resultKind: "solutions" | "boolean" | "graph" | undefined;
+  readonly hasDatasetParameters: boolean;
+  readonly defaultGraphUris: string[];
+  readonly namedGraphUris: string[];
+  readonly usingGraphUris: string[];
+  readonly usingNamedGraphUris: string[];
+  /** Parameters the protocol does not define, as flattened `[name, value, …]` pairs in request order. */
+  readonly extraParameters: string[];
+  /**
+   * The operation text to evaluate: the dataset parameters applied, and the whole text
+   * parsed under the engine's reading, so a malformed operation is refused here.
+   *
+   * @throws {SparqlProtocolError} `MalformedOperation` or `UsingConflictsWithClause`.
+   */
+  effectiveText(): string;
+  /**
+   * The format token to answer this query in, negotiated from an `Accept` header (absent
+   * means the protocol default), or `undefined` when none is acceptable — a `406`.
+   *
+   * @throws {Error} On an update, which has no result to negotiate.
+   */
+  negotiate(accept?: string | null): ProtocolFormat | undefined;
+  free(): void;
+}
+
+/**
+ * A `SERVICE` effect, as `resolveService` receives it: the SPARQL Protocol POST to issue.
+ * `headers` are the catalog profile's headers and then its credential header, in sending
+ * order (append each pair; a repeated name must not be merged); empty without a catalog.
+ */
+export interface AsyncServiceRequest {
+  readonly kind: "service";
+  readonly endpoint: string;
+  /** The forwarded query text (`SELECT * WHERE { … }` for a plain group). */
+  readonly queryText: string;
+  readonly accept: string;
+  readonly contentType: string;
+  readonly userAgent: string;
+  /** The profile's per-request timeout (or the default), in milliseconds. */
+  readonly timeoutMs: number;
+  readonly headers: [string, string][];
+  /** Whether a shared cache may answer the request or keep its answer: `false` when it carries a credential. */
+  readonly cacheable: boolean;
+}
+
+/**
+ * One hop of a `LOAD`, as `resolveLoad` receives it: the `GET` to issue. The job has
+ * authorized `iri` against its catalog; `userAgent`, `headers` and `timeoutMs` are that
+ * source's profile's (none, and the default timeout, without a catalog).
+ */
+export interface AsyncLoadRequest {
+  readonly kind: "load";
+  /** The source, or the location a redirect named, resolved. */
+  readonly iri: string;
+  /** Every RDF syntax a `LOAD` parses, as an `Accept` header value. */
+  readonly accept: string;
+  readonly userAgent: string | undefined;
+  readonly headers: [string, string][];
+  readonly timeoutMs: number;
+}
+
+/** Either effect a host handler can receive. */
+export type AsyncEffectRequest = AsyncServiceRequest | AsyncLoadRequest;
+
+/**
+ * What `resolveService` is told beside the request.
+ *
+ * One job asks once for a request it repeats with the same `silent` and
+ * `maxIntermediateCells` when the first answer was rows; a failure or a fault is asked
+ * again.
+ * Concurrent jobs share one call through the same `resolveService` only when the request,
+ * `silent` and `maxIntermediateCells` are identical and the joining job's deadline falls
+ * no later than the call's own. The call's own deadline is its start plus the
+ * `remainingDeadlineMs` it was told; a job without a deadline joins only a call told none.
+ * Every other job gets its own call and its own context. Every waiting job receives the
+ * shared answer as it stands. `LOAD` requests are never shared or reused.
+ */
+export interface AsyncResolverContext {
+  /**
+   * Aborts once no job waits on the call: every waiting job was cancelled, or reached its
+   * request's timeout or its deadline. For a call several jobs share, it aborts only once
+   * every one of them has stopped waiting.
+   */
+  readonly signal: AbortSignal;
+  /** Milliseconds left before the job's deadline, when it has one. For a shared call, the deadline of the job that started it. */
+  readonly remainingDeadlineMs: number | undefined;
+  /** Whether the clause is `SERVICE SILENT` — for information only: an empty answer is not the host's to invent. */
+  readonly silent: boolean;
+  /**
+   * The query's inclusive intermediate-cell ceiling, when the caller actually configured
+   * one. `undefined` for an ungoverned query and for a governed one that set no cell
+   * ceiling — never a metering bookkeeping sentinel.
+   */
+  readonly maxIntermediateCells: bigint | undefined;
+}
+
+/** What `resolveLoad` is told beside the request. */
+export interface AsyncLoadContext {
+  /** Aborts when the job is cancelled, or at the request's timeout or the job's deadline. */
+  readonly signal: AbortSignal;
+}
+
+/**
+ * A redirect `resolveLoad` answers with (`location` as the response sent it): the job
+ * resolves it against the hop's IRI, authorizes the target against its catalog and asks
+ * for it as a fresh hop, up to five hops.
+ */
+export interface LoadRedirect {
+  readonly kind: "redirect";
+  readonly location: string;
+}
+
+/**
+ * A typed failure a handler returns (never throws): `"transport"` — unreachable or
+ * unreadable — or `"denied"` — the host's policy refused it. Either fails the request;
+ * under `SERVICE SILENT` either is the join identity and under `LOAD SILENT` a success
+ * with nothing loaded, recorded on the evidence's `silenced`.
+ */
+export interface ServiceFailure {
+  /**
+   * `"transport"`: the endpoint or source could not be reached or read. `"denied"`: the
+   * host's own policy refused the request. `"fault"`: the handler could not answer it
+   * (the failure a throw, a rejection or an unrecognized answer is delivered as).
+   */
+  readonly kind: "transport" | "denied" | "fault";
+  readonly message: string;
+}
+
+/**
+ * `resolveService`'s answer: SPARQL Results JSON (bytes or text), a `Response` (a non-ok
+ * status is a transport failure), or a typed failure. A throw, a rejection or any other
+ * value is the handler's fault: that invocation fails with kind `"fault"`, which
+ * `SERVICE SILENT` answers with the join identity and records on the evidence's
+ * `silenced`, and which without `SILENT` fails the query with `native-sparql-host-fault`.
+ */
+export type AsyncServiceAnswer = Uint8Array | ArrayBuffer | string | Response | ServiceFailure;
+
+/** A `LOAD` document with its media type (or any format name `Dataset.parse` accepts). */
+export type AsyncLoadDocument =
+  | { readonly bytes: Uint8Array | ArrayBuffer; readonly mediaType: string; readonly base?: string }
+  | { readonly text: string; readonly mediaType: string; readonly base?: string };
+
+/**
+ * `resolveLoad`'s answer: a document (its `base` defaults to the IRI), a `Response` (its
+ * `Content-Type` names the media type), a `Dataset`, a redirect, or a typed failure. A
+ * bare string or bytes carry no media type and are the handler's fault, as a throw or a
+ * rejection is: the `LOAD` fails with `native-sparql-load-fault`, and `LOAD SILENT`
+ * loads nothing and records the invocation with kind `"fault"`. A document that does not
+ * parse is the `LOAD`'s decode failure (`native-sparql-load-decode`).
+ */
+export type AsyncLoadAnswer = AsyncLoadDocument | Response | Dataset | LoadRedirect | ServiceFailure;
+
+export type AsyncServiceResolver = (
+  request: AsyncServiceRequest,
+  ctx: AsyncResolverContext,
+) => AsyncServiceAnswer | Promise<AsyncServiceAnswer>;
+
+export type AsyncLoadResolver = (
+  request: AsyncLoadRequest,
+  ctx: AsyncLoadContext,
+) => AsyncLoadAnswer | Promise<AsyncLoadAnswer>;
+
+/** The options every asynchronous twin accepts beside its operation's own. */
+export interface AsyncHostOptions {
+  /** Answers each `SERVICE` effect. Without it a `SERVICE` fails as it does synchronously: an error, and under `SILENT` the join identity. */
+  readonly resolveService?: AsyncServiceResolver | null;
+  /** Answers each `LOAD` effect. Without it a `LOAD` fails as it does synchronously: an error, and under `SILENT` a success with nothing loaded. */
+  readonly resolveLoad?: AsyncLoadResolver | null;
+  /** Cancels the job; an already-aborted signal rejects before the job begins. */
+  readonly signal?: AbortSignal | null;
+  /** Governor polls between yields to the event loop: an integer ≥ 0 (0 yields at every poll). Default 65 536. */
+  readonly yieldEveryPolls?: number | null;
+  /** The policy host-resolved `SERVICE` requests and `LOAD` fetches are authorized against. Needs a handler to govern. */
+  readonly catalog?: ServiceCatalog | null;
+  /** Endpoints answered in process from a snapshot of a dataset, with no host call. */
+  readonly localServices?: Readonly<Record<string, Dataset>> | null;
+  /** Not accepted: cancel an asynchronous twin through `signal`. */
+  readonly cancel?: never;
+}
+
+/** Caller inputs for query, UPDATE or rule execution; omitted fields retain native defaults. */
+export interface QueryCoordinateOptions {
+  /** Exact native xsd:dateTime, including fractional seconds and the declared timezone. */
+  readonly now?: string | null;
+  /** Unsigned 64-bit seed: bigint, or a non-negative safe integral number. Zero is supplied. */
+  readonly entropySeed?: bigint | number | null;
+}
+
+export interface AsyncQueryOptions extends QueryOptions, AsyncHostOptions, QueryCoordinateOptions {}
+
+export interface AsyncQueryRawOptions extends QueryRawOptions, AsyncHostOptions, QueryCoordinateOptions {
+  /**
+   * A `JsonLdSerializeOptions` document (`JSON.stringify` it) configuring a JSON-LD or
+   * YAML-LD `format`, as `queryRawConfigured` takes it. Needs `format`; not combinable
+   * with `provenanceNamespace`.
+   */
+  readonly optionsJson?: string | null;
+}
+
+export interface AsyncQueryRawWithContextOptions extends QueryOptions, AsyncHostOptions, QueryCoordinateOptions {
+  readonly yamlSchemaUrl?: string | null;
+}
+
+export interface AsyncGovernedQueryOptions
+  extends QueryOptions,
+    QueryCoordinateOptions,
+    Omit<GovernorOptions, "cancel">,
+    AggregateNamespaceOption,
+    AsyncHostOptions {}
+
+export interface AsyncEntailmentQueryOptions extends AsyncGovernedQueryOptions {
+  /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
+  readonly program?: string | null;
+  /** The dataset's `owl:imports` table's IRIs, exactly as on `EntailmentQueryOptions`. */
+  readonly importIris?: readonly string[] | null;
+  /** The documents of the import table, parallel to `importIris`. */
+  readonly importDocuments?: readonly string[] | null;
+  /** The IRIs the dataset was read from, exactly as on `EntailmentQueryOptions`. */
+  readonly premiseIris?: readonly string[] | null;
+  /** The closure's stored-fact limit, exactly as on `EntailmentQueryOptions`. */
+  readonly maxStoredFacts?: bigint | number | null;
+  /** The closure's join-step limit, exactly as on `EntailmentQueryOptions`. */
+  readonly maxJoinSteps?: bigint | number | null;
+  /** The closure's term-arena byte limit, exactly as on `EntailmentQueryOptions`. */
+  readonly maxTermArenaBytes?: bigint | number | null;
+}
+
+export interface AsyncUpdateOptions extends UpdateOptions, AsyncHostOptions {}
+
+export interface AsyncNegotiatedQueryOptions extends AsyncGovernedQueryOptions {
+  /** The client's `Accept` header; absent means the SPARQL Protocol defaults. */
+  readonly accept?: string | null;
+}
+
+/**
+ * What one asynchronous job did: counts from the runtime, times in milliseconds.
+ * `stackHighWaterBytes` is the deepest below its top that the job's stack region was
+ * used; the region is exactly as large as the module's own shadow stack. Freezing the dataset before the job and serializing its result
+ * after do not yield; `freezeMs` and `serializeMs` show what they cost.
+ */
+export interface AsyncEvidence {
+  readonly polls: number;
+  readonly yields: number;
+  readonly serviceEffects: number;
+  readonly loadEffects: number;
+  readonly stackHighWaterBytes: number;
+  readonly serviceWaitMs: number;
+  readonly loadWaitMs: number;
+  readonly yieldWaitMs: number;
+  readonly freezeMs: number;
+  readonly evaluateMs: number;
+  readonly serializeMs: number;
+  /** Every invocation a `SERVICE SILENT` or `LOAD SILENT` absorbed during the job. */
+  readonly silenced: readonly SilencedInvocation[];
+  /**
+   * Every XPath F&O numeric error the job's evaluations absorbed into an unbound value,
+   * summed per code and keyed by every code `expressionErrorCodes()` names. A number,
+   * like every other count of the job's evidence, so the job's evidence serializes to JSON.
+   */
+  readonly expressionErrors: Readonly<Record<string, number>>;
+}
+
+export interface AsyncGovernorEvidence extends GovernorEvidence {
+  readonly async: AsyncEvidence;
+}
+
+/** `queryGovernedAsync`'s outcome: a `QueryOutcome` whose evidence carries the job's. */
+export interface AsyncQueryOutcome extends QueryOutcome {
+  readonly evidence: AsyncGovernorEvidence;
+}
+
+/**
+ * `queryEntailmentGovernedAsync`'s outcome. The job's evidence covers both phases, so it
+ * is on the outcome itself; an answered query outcome carries the same record.
+ */
+export interface AsyncEntailmentQueryOutcome extends EntailmentQueryOutcome {
+  readonly outcome?: AsyncQueryOutcome;
+  readonly evidence: { readonly async: AsyncEvidence };
+}
+
+/** A negotiated query's complete answer, serialized. */
+export interface NegotiatedBody {
+  /** The document's UTF-8 bytes. */
+  readonly bytes: Uint8Array;
+  readonly format: ProtocolFormat;
+  /** The document's media type, for a `Content-Type` header. */
+  readonly mediaType: string;
+}
+
+/**
+ * `queryGovernedNegotiatedAsync`'s outcome: a complete answer as a document, or an
+ * exhausted budget carrying the typed partial answers it reached. Never a thrown trip.
+ */
+export interface AsyncNegotiatedQueryOutcome {
+  readonly executionReceipt: ExecutionReceipt;
+  readonly isComplete: boolean;
+  /** The complete answer. Absent when a governor stopped the execution. */
+  readonly body?: NegotiatedBody;
+  /** What the rows the execution reached bound. Absent when it completed. */
+  readonly partial?: PartialAnswers;
+  /** The governor that stopped the execution. Absent when it completed. */
+  readonly tripped?: TrippedGovernor;
+  readonly evidence: AsyncGovernorEvidence;
+}
+
+/** `updateGovernedAsync`'s outcome: an `UpdateOutcome` whose evidence carries the job's. */
+export interface AsyncUpdateOutcome extends UpdateOutcome {
+  readonly evidence: AsyncGovernorEvidence;
+}
+
+/**
+ * The shape of an error an asynchronous twin builds for a job that failed: `name` is
+ * `"Error"` for a failure or a fault, `"AbortError"` for a cancellation without a
+ * `signal.reason`, `"TimeoutError"` for an ungoverned job's deadline, and
+ * `"NotAcceptableError"` for a negotiated query whose result no acceptable format can carry.
+ * A cancellation rejects with an AbortError carrying the original `signal.reason` as its cause.
+ * `code` is the stable code the failure is reported under (see `PurrdfError`).
+ */
+export interface AsyncJobError extends PurrdfError {
+  readonly evidence: { readonly async: AsyncEvidence };
+}
+
+/**
+ * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
+ * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`/`clearTimeout`, which every job
+ * yields to the event loop through, and the loaded module has a stack region to give each
+ * job (its shadow stack is laid out as the asynchronous lane assumes). Where it is
+ * `false`, every asynchronous twin rejects with the reason before touching wasm; the
+ * synchronous API is unaffected.
+ */
+export function hasAsyncQueries(): boolean;
+
+/**
+ * The size, in bytes, of the stack region every asynchronous job runs on: the module's own
+ * shadow stack, so a request the synchronous lane evaluates the asynchronous lane evaluates
+ * too. Throws, with the host-fault code, when the module's memory layout is not the
+ * stack-first one the asynchronous lane runs on.
+ */
+export function asyncStackRegionBytes(): number;
+
+/**
+ * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)
+ * bounds how many asynchronous jobs may be in flight at once; a twin started beyond it
+ * rejects. Unknown keys are refused.
+ */
+export function configureAsync(options: { readonly maxConcurrentJobs?: number }): void;
+
+/**
+ * A cancellation bit the host can flip, shared with every governed call it is handed to.
+ *
+ * Latching by construction: the bit only ever moves from clear to set, and nothing clears
+ * it. Build a fresh token per query rather than reusing one.
+ *
+ * A synchronous governed call holds the thread for its whole duration, so a token flipped
+ * on that same thread cannot run until the call returns and is never observed by it. For
+ * a synchronous call the token is for the two shapes that genuinely work: cancelling
+ * BEFORE the call, and cancelling a worker's query from another thread that shares the
+ * token. Both report the same `"cancelled"` trip.
+ *
+ * The asynchronous twins (`queryAsync`, `queryGovernedAsync`, …) are different: a job
+ * gives the event loop back at every yield and every host effect, so the page's own code
+ * does run mid-query. They are cancelled through an `AbortSignal` passed as `signal`,
+ * observed at the next yield or effect — a token is neither needed nor accepted there
+ * (passing `cancel` to an asynchronous twin is a `TypeError`).
+ */
+export class CancellationToken {
+  constructor();
+  /** Cancel every governed call holding this token. Idempotent, never reversible. */
+  cancel(): void;
+  readonly isCancelled: boolean;
+  /** A second handle onto the SAME bit — not a copy of it. */
+  share(): CancellationToken;
+  free(): void;
+}
+
+export class Sink {
+  constructor();
+  push(quad: Quad): void;
+  finish(): Dataset;
+  free(): void;
+}
+
+/**
+ * The engine's governed resource dimensions, by their stable kebab-case labels, in the
+ * engine's own declaration order — the keys of every `GovernorEvidence` map.
+ */
+export function governorDimensions(): string[];
+
+/**
+ * The XPath F&O error codes, `err:`-prefixed (`"err:FOAR0001"`), in the engine's own
+ * declaration order — the keys of every `expressionErrors` map.
+ */
+export function expressionErrorCodes(): string[];
+
+/**
+ * The `queryHash`/`engine` halves of a decoded additive `purrdf` provenance
+ * extension — `undefined` in a slot the document omitted, or in both when no member
+ * was present under `prefix` at all.
+ */
+export class ProvenanceInfo {
+  private constructor();
+  readonly queryHash?: string;
+  readonly engine?: string;
+  free(): void;
+}
+
+/**
+ * Decode the additive `purrdf` provenance extension a SPARQL-results JSON document
+ * carries under the namespace `prefix`/`iri` — the inverse of `queryRaw`'s
+ * `provenanceNamespace` option. A document with no member under `prefix` decodes to
+ * an empty {@link ProvenanceInfo} rather than throwing.
+ *
+ * @throws {Error} An invalid `prefix`/`iri`, malformed JSON, or a member under
+ *   `prefix` whose shape does not match the writer's.
+ */
+export function provenanceFromJson(json: string, prefix: string, iri: string): ProvenanceInfo;
+
+/** The XML twin of {@link provenanceFromJson}. */
+export function provenanceFromXml(xml: string, prefix: string, iri: string): ProvenanceInfo;
+
+/**
+ * Instantiate the wasm module. Idempotent: there is one instance per JavaScript realm. In
+ * Node the bytes are read from the colocated file; elsewhere pass the bytes, a URL or a
+ * compiled `WebAssembly.Module` (or omit it to fetch the colocated `.wasm`). Must be
+ * awaited once before any other API is used.
+ *
+ * @throws {Error} Once a trap or a Rust panic has poisoned the instance (see the
+ *   asynchronous twins on `QueryEngine`): the instance cannot be used again, and only a
+ *   fresh JavaScript realm (a new page, Worker isolate or process) can load the package
+ *   again.
+ */
+export function ready(
+  wasmBytesOrUrl?: BufferSource | URL | string | WebAssembly.Module,
+): Promise<void>;
+export function datasetToStream(dataset: Dataset): AsyncIterableIterator<Quad>;
+export function streamToDataset(
+  quadStream: AsyncIterable<Quad> | Iterable<Quad>,
+): Promise<Dataset>;
+export function liftProjection(
+  archive: Uint8Array,
+  profile: LiftProfile,
+  configJson: string,
+): ProjectionLift;
+/**
+ * The CLI/C-ABI/Python/JS spellings of the SPARQL entailment regimes. ALL SEVEN
+ * materialize through `entailMaterialize`; none is refused for being the regime
+ * it is. One of them — `"rif"` — needs an extra INPUT rather than permission,
+ * and the `program` argument is where it goes — see `entailMaterialize`.
+ */
+export type EntailmentRegime =
+  | "simple"
+  | "rdf"
+  | "rdfs"
+  | "owl-rl"
+  | "owl-direct"
+  | "rif"
+  | "d";
+
+/**
+ * Close `document` (N-Quads, which accepts N-Triples) under `regime`.
+ *
+ * `program` is the regime's own rule document. `"rif"` entails under the
+ * *caller's* rules, which PurRDF does not declare, so its `program` is a
+ * normative RIF-in-XML document; every other regime's rule table is the
+ * specification's, so its `program` is `""` and a non-empty one throws rather
+ * than being silently discarded.
+ *
+ * `"owl-direct"` takes no program either: its extra input is a *query's* class
+ * expressions, and this is a document boundary with no query, so it runs the
+ * query-independent tableau augmentation.
+ *
+ * `maxStoredFacts` bounds the facts each evaluation store may hold and `maxJoinSteps` the
+ * candidate solutions the rules may enumerate, for the `"rdf"`, `"rdfs"`, `"owl-rl"` and
+ * `"d"` regimes. Omitted settings impose no logical capacity ceiling. A run past either throws
+ * naming the limit, the numbers and the argument that raises it; the report's
+ * `contract-hash` names the calculus under the limits in force.
+ *
+ * `importIris`, `importDocuments` and `premiseIris` are `entailCertainAnswers`'s: OWL 2
+ * defines an ontology's imports closure to BE the ontology, so a document carrying an
+ * `owl:imports` is closed over the merge of itself and every N-Quads document the table
+ * supplies. An import the table does not resolve, and the document does not already hold,
+ * throws by name, and so does an entry the closure never reaches. `[]`, `[]`, `[]` is the
+ * ordinary "imports nothing" case; all three are required.
+ */
+export function entailMaterialize(
+  document: string,
+  regime: EntailmentRegime | string,
+  program: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts: bigint | undefined,
+  maxJoinSteps: bigint | undefined,
+  /** Retained term-surface bytes; omitted, no logical ceiling. */
+  maxTermArenaBytes: bigint | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): RegimeClosure;
+export function entailRules(regime: EntailmentRegime | string): string[];
+export function entailImplementedRules(regime: EntailmentRegime | string): string[];
+/**
+ * The rules this build fires BEYOND `regime`'s specification table.
+ *
+ * Disjoint from both `entailRules` and `entailImplementedRules`: the normative table
+ * is a statement about the specification and does not move because this build fires a
+ * sound rule the table happens not to list. `[]` for a lane with nothing added to it.
+ */
+export function entailExtensions(regime: EntailmentRegime | string): string[];
+export function entailCheckGoldenVectors(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+export function entailCheckInconsistentRefusal(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+
+/**
+ * Run the committed proof golden-vector artifact through this build and throw on the
+ * first byte that differs.
+ *
+ * The wasm half of the CROSS-HOST byte-stability assertion for the proof surface: the
+ * native, C-ABI and PyO3 hosts run the same checker over the same committed bytes, and
+ * a rendered proof carries the proof term's own canonical encoding, so a divergence
+ * here is a divergence in the TERM rather than in a rendering of one.
+ */
+export function entailCheckProofGoldenVectors(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+
+/**
+ * Prove that an answer nobody asked to record is NOT presentable as a verified one,
+ * and throw if it is.
+ *
+ * An unrecorded answer must carry `availability not-recorded`, `entailCheckProof` must
+ * refuse that document by name, and the same question asked WITH a proof must check.
+ */
+export function entailCheckAbsentProof(
+
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+
+/** The seven Description-Logic services a proof term can be about. */
+export type ProofService =
+  | "consistency"
+  | "class-satisfiability"
+  | "classify"
+  | "realize"
+  | "instances"
+  | "entails"
+  | "extract-module";
+
+/**
+ * `entailProve(document, service, argument, stepCap, workCap)` → a `ReasoningAnswer`
+ * whose `.proof` is the run's `purrdf-dl-proof 1` document.
+ *
+ * THE OPT-IN. Every other `entail*` function records nothing, so a caller who does not
+ * want a proof runs exactly the search they ran before. `.answer` and `.certificate`
+ * are byte-identical to the same question asked without a proof.
+ *
+ * `argument` is the question's own input: empty for `consistency`/`classify`/`realize`
+ * (a non-empty one throws rather than being discarded), ONE N-Triples term for
+ * `class-satisfiability`/`instances`, ONE triple for `entails`, and a
+ * `method <bot|top|star>` line followed by one term per line for `extract-module`.
+ */
+export function entailProve(
+  document: string,
+  service: ProofService | string,
+  argument: string,
+  stepCap: number,
+  workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailCheckProof(document, service, argument, answer, certificate, proof)` → the
+ * `purrdf-dl-proof-check 1` report, or a throw naming the rejection.
+ *
+ * THE CHECKER. Nothing in it trusts the producer: the ontology is parsed from
+ * `document`, the question is re-derived from `service` and `argument`, the claims are
+ * read back out of `answer`'s own grammar, and the checking context comes from a
+ * reverse mapping this call performs itself.
+ *
+ * `answer` and `certificate` may be empty, and each empty one is a WEAKER check that
+ * says so: with no answer the report reads `answer not-checked`, and with no
+ * certificate a proof carrying a stopping receipt is refused.
+ *
+ * Throws for a proof document that says `availability not-recorded`.
+ */
+export function entailCheckProof(
+  document: string,
+  service: ProofService | string,
+  argument: string,
+  answer: string,
+  certificate: string,
+  proof: string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<string>;
+
+/** The `bot`/`top`/`star` locality-module extraction methods `entailExtractModule` accepts. */
+export type ModuleExtractionMethod = "bot" | "top" | "star";
+
+/**
+ * `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap, workCap)`
+ * → is the knowledge base consistent?
+ *
+ * `importIris`, `importDocuments` and `premiseIris` are `entailCertainAnswers`'s: OWL 2
+ * defines an ontology's imports closure to BE the ontology, so consistency is decided for
+ * the ontology merged with every document the table supplies, and the certificate then
+ * names `ontology-import-resolved`. An import the table does not resolve throws by name —
+ * never a verdict over a smaller ontology — and so does an entry the closure never reaches.
+ *
+ * `stepCap` narrows the per-decision tableau step cap and `workCap` the per-decision
+ * WORK cap; `0` means the knowledge base's own cap for either, not a cap of zero, and
+ * both can only narrow. The two bound different quantities: `stepCap` bounds derivation
+ * ROUNDS, `workCap` the matcher, scan, closure and clone work done inside them — which a
+ * rounds cap structurally cannot see. The one DL service that answers for an
+ * unsatisfiable ontology, because it is the one that detects one.
+ *
+ * Throws if `document` fails to parse or the reverse mapping fails.
+ */
+export function entailConsistency(
+  document: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  stepCap: number,
+  workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailClassify(document, stepCap, workCap)` → the entailed subsumption hierarchy over the
+ * ontology's named classes: `equivalent`, `subclass` (the full transitively-closed
+ * relation), `direct` (its transitive reduction) and `unsatisfiable` lines.
+ *
+ * Throws on a malformed document, or on an ontology with no model.
+ */
+export function entailClassify(
+  document: string,
+  stepCap: number,
+  workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailRealize(document, stepCap, workCap)` → the entailed types of the ontology's named
+ * individuals, and the most specific of them (`type` then `direct-type` lines).
+ *
+ * Throws on a malformed document or an ontology with no model.
+ */
+export function entailRealize(
+  document: string,
+  stepCap: number,
+  workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailInstances(document, classTerm, stepCap, workCap)` → the named individuals entailed
+ * to be instances of `classTerm`, as `instance <term>` lines.
+ *
+ * `classTerm` is ONE N-Triples term — `"<http://example.org/Cat>"`, angle brackets
+ * included. A class the ontology never mentions is not an error: the empty answer
+ * for it is a real answer.
+ *
+ * Throws on a malformed document, a `classTerm` that is not one N-Triples term, or
+ * an ontology with no model.
+ */
+export function entailInstances(
+  document: string,
+  classTerm: string,
+  stepCap: number,
+  workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailEntails(document, axiom, stepCap, workCap)` → does the ontology entail `axiom`?
+ *
+ * `axiom` is ONE triple of the OWL 2 RDF mapping, in N-Triples syntax; seven
+ * reserved predicates select the seven named axiom kinds and any other predicate is
+ * an object-property assertion. The answer is `entails true|false|unknown` followed
+ * by the axiom as it was read.
+ *
+ * Throws on a malformed document, an `axiom` that is not one triple, or an ontology
+ * with no model.
+ */
+export function entailEntails(
+  document: string,
+  axiom: string,
+  stepCap: number,
+  workCap: number,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailProfile(document)` → which OWL 2 profiles the ontology is provably in
+ * (`certified <profile>` lines, most restrictive first), and what blocked the
+ * others. Purely syntactic: no tableau, no closure, no budget.
+ *
+ * Throws on a malformed document.
+ */
+export function entailProfile(document: string): ReasoningAnswer;
+
+/**
+ * `entailExtractModule(document, signature, method)` → the locality module of the
+ * ontology for a seed signature, as canonical line-sequence N-Quads.
+ *
+ * `signature` is one N-Triples term per line (blank lines ignored). `method` is
+ * `bot`, `top` or `star`; an unknown spelling throws with the accepted set named.
+ */
+export function entailExtractModule(
+  document: string,
+  signature: string,
+  method: ModuleExtractionMethod | string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailJustify(document, axiom)` → WHY a Description-Logic axiom is entailed: a
+ * minimal subset of the ontology (as canonical N-Quads) that still entails it.
+ *
+ * Throws if the ontology does not entail the axiom, or if the tableau could not
+ * decide it.
+ */
+export function entailJustify(
+  document: string, axiom: string,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ReasoningAnswer;
+
+/**
+ * `entailExplainConclusion(document, regime, conclusion)` → WHY one triple of a
+ * chase closure holds: which rules, from which premises.
+ *
+ * `conclusion` is ONE N-Quads statement; its graph, if it names one, selects the
+ * closure to explain.
+ *
+ * Throws for `rdf` and `rdfs` (four of whose rules conclude about a fresh blank
+ * node with no checkable proof term), or for a conclusion that is neither asserted
+ * nor derived.
+ */
+export function entailExplainConclusion(
+  document: string,
+  regime: EntailmentRegime | string,
+  conclusion: string,
+): ReasoningAnswer;
+
+/**
+ * `entailCertainAnswers(regime, document, pattern, importIris, importDocuments)` → the
+ * substitutions the knowledge base ENTAILS the pattern under, as `var` and `row` lines.
+ *
+ * A certain answer is true in every model, not merely present in one closure, which is
+ * what SPARQL's entailment regimes define the answers to a basic graph pattern to be.
+ *
+ * `pattern` is N-Triples with `?name` in any position, the PREDICATE included. A blank
+ * node in it is a NON-DISTINGUISHED variable — constrained by the match, not projected,
+ * not a column. A variable inside an RDF 1.2 triple term is an ordinary variable: it
+ * binds, it is a column, and one NAME is one VARIABLE wherever it was written, so a
+ * pattern using it above and below the triple-term boundary is joined rather than split
+ * into two. A predicate variable is projected like any other, and under `owl-rl` it
+ * also renders a `limit`: it ranges over the whole predicate vocabulary, including the
+ * schema predicates and the constructs the mechanisms beyond the rule table decide, and
+ * the closure holds neither.
+ *
+ * A `limit` line says the row set may not be EXHAUSTIVE; no `limit` lines is the claim
+ * that it is. The certificate is a `purrdf-reasoning-report 4` block.
+ *
+ * `importIris` and `importDocuments` are the caller's `owl:imports` table, as two
+ * PARALLEL arrays of equal length: entry `i` declares that the ontology IRI
+ * `importIris[i]` denotes the N-Quads document `importDocuments[i]`. A premise carrying
+ * an `owl:imports` states that its axioms are its own PLUS those of the documents it
+ * names, so this is where those documents go — and the `owl:imports` triple stays exactly
+ * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve,
+ * and the premise does not already hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or
+ * an `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import; an entry
+ * the premise's import closure never names throws too, since it would be read and never used. Two empty
+ * arrays are the ordinary *imports nothing* case; both are required, not defaulted, and
+ * resolution is transitive to a fixpoint.
+ *
+ * Two arrays are the shape rather than one array of `[iri, document]` pairs because
+ * wasm-bindgen has no ABI for a nested string array; it is the same parallel-array
+ * convention the C ABI uses.
+ *
+ * Throws on an unknown regime, on `owl-direct` or `rif`, on a malformed document,
+ * pattern or import document, on import arrays of different lengths, on a duplicate or
+ * empty import IRI, on a pattern that names a graph, on an `owl:imports` the table does
+ * not resolve and the premise does not hold, and on an inconsistent premise.
+ *
+ * `premiseIris` are the IRIs the premise document was read from — its retrieval IRI or
+ * parse base, when the host knows one. Each is the premise's own IRI: an `owl:imports` on
+ * one of them, like one on the premise's `owl:Ontology` header or on a `sh:ShapesGraph` it
+ * declares (`sh:RulesGraph` and subclasses included), is an import, while one on any other
+ * node — one that is only a `sh:DataGraph` among them — is a premise triple. An `owl:imports` of one of them names the premise
+ * itself and is resolved in place. The empty array is the ordinary case for bare text;
+ * like the import arrays it is required, in the same position on every host.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
+ * A run past a limit throws naming this function's corresponding argument.
+ */
+export function entailCertainAnswers(
+  regime: EntailmentRegime | string,
+  document: string,
+  pattern: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
+): ReasoningAnswer;
+
+/**
+ * `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments)` → does
+ * the premise entail the conclusion GRAPH under the regime's rule table?
+ *
+ * NOT `entailEntails`, which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM and
+ * renders a `purrdf-dl-certificate 1`. This asks the regime's RULE TABLE about a
+ * conclusion GRAPH and renders a `purrdf-reasoning-report 4`.
+ *
+ * The answer opens `mechanism <name>` — which of the seven mechanisms reached the verdict.
+ * `composite` is two or more of the others folded over one conclusion, and such an answer
+ * lists one `constituent <name>` line per contributor.
+ * THREE verdicts, never two: `not-entailed` is a PROOF, and `undecided` is what an
+ * incomplete procedure is entitled to say instead.
+ *
+ * `importIris`/`importDocuments` are `entailCertainAnswers`'s, and apply to the PREMISE:
+ * the conclusion is a graph to match rather than an ontology to close.
+ *
+ * Throws as `entailCertainAnswers`.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
+ * A run past a limit throws naming this function's corresponding argument.
+ */
+export function entailGraphEntails(
+  regime: EntailmentRegime | string,
+  premise: string,
+  conclusion: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
+): ReasoningAnswer;
+
+/**
+ * `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments)` →
+ * `entailGraphEntails` with the warrant RE-DECIDED, without running a reasoner.
+ *
+ * `warrant absent` / `verified not-applicable` is a `not-entailed` or an `undecided`:
+ * there is no evidence to re-decide, and a `false` there would read as a failed check
+ * rather than as an absent one.
+ *
+ * `importIris`/`importDocuments` are `entailCertainAnswers`'s. The re-check runs against
+ * the premise AS WRITTEN, which is a stronger check than one only re-decidable against a
+ * graph the library assembled.
+ *
+ * Throws as `entailCertainAnswers`.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, no logical ceiling.
+ * `maxTermArenaBytes` bounds retained term surfaces (unlimited when omitted).
+ * A run past a limit throws naming this function's corresponding argument.
+ */
+export function entailVerifyEntailment(
+  regime: EntailmentRegime | string,
+  premise: string,
+  conclusion: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
+  maxTermArenaBytes?: bigint,
+): ReasoningAnswer;
+
+/**
+ * A shapes graph's `owl:imports` closure is not in hand, or the import table cannot be
+ * used — the one refusal every shapes-graph function throws, on every PurRDF host alike.
+ *
+ * Every function that takes a Turtle shapes graph takes the caller's `owl:imports` table
+ * as two trailing parallel arrays, `importIris` and `importDocuments`: entry `i` declares
+ * that `importIris[i]` names the Turtle document `importDocuments[i]`, parsed with that
+ * IRI as its base. An `owl:imports` is an import only on the shapes graph's own IRI
+ * (`shapesBase`, or the document's own `@base`), on an `owl:Ontology` header, on a
+ * `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming one of
+ * those as its `owl:versionIRI`; on any other node — one that is only a `sh:DataGraph`
+ * among them — it is data. An import is resolved by a table entry, by `shapesBase` (or the
+ * document's own `@base`) naming the imported document, or by the closure declaring it
+ * (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose `owl:versionIRI` is
+ * `<X>`). Anything else throws this class rather than validating a smaller shapes graph than the
+ * one named. PurRDF fetches nothing; omitted arrays are an empty table, which still
+ * enforces the rule.
+ *
+ * `kind` is the matchable half: `"unresolved-import"` (pass the named documents),
+ * `"unreached-import"` (a table entry neither an import nor a data-graph link names),
+ * `"incompatible-import-versions"` (the closure holds two versions of one series, or a
+ * graph another declares `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1 —
+ * `iris` are the conflicting documents), `"invalid-import"` (a key that is not an absolute IRI, a key named twice, or a document
+ * that is not Turtle), `"unresolved-shapes-graph-link"` (the data graph links a graph with
+ * `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in
+ * `importIris` / `importDocuments`), `"unheld-shapes-graph-link"` (a prepared product does
+ * not hold a graph the data graph links) or `"invalid-shapes-graph-link"` (a data-graph
+ * `sh:shapesGraph` value that is not an IRI). `iris` are the IRIs (or values) it names. `message` is prose; do not match on it. Like every other class
+ * in this package the instance owns wasm memory — call `free()` when done.
+ */
+export class ShaclImportError {
+  /** Free this owned native cause after inspecting its typed JSON fields. */
+  readonly nativeCause?: YamlSourceCause;
+  readonly nativeCauseJson?: string;
+  readonly kind:
+    | "unresolved-import"
+    | "unreached-import"
+    | "incompatible-import-versions"
+    | "invalid-import"
+    | "unresolved-shapes-graph-link"
+    | "unheld-shapes-graph-link"
+    | "invalid-shapes-graph-link";
+  readonly iris: string[];
+  readonly message: string;
+  toString(): string;
+  free(): void;
+}
+
+/**
+ * Entail `dataNt` under `shapesTtl`, returning a `ShaclEntailment`: `ntriples`, the
+ * materialized dataset (the base graph plus every SHACL-AF `sh:rule` inference), and
+ * `diagnostics`, the shapes graph's mandatory diagnostics.
+ *
+ * `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
+ * against. A browser or Node host has no retrieval IRI of its own, so PurRDF will not
+ * invent one: omit it and a relative reference throws rather than being mis-parsed.
+ * `dataNt` needs no counterpart — N-Triples admits no relative IRI by grammar.
+ *
+ * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+ * `ShaclImportError`): an imported document's rules run.
+ *
+ * `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+ * `shaclApplyRules` takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it. A
+ * relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
+ * variable.
+ *
+ * `maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps` are
+ * the four rule-evaluation limits, exactly as `shaclApplyRules` takes them and with the
+ * same defaults: 16384 term-generating rounds, max(65536, 4 × N) generated terms for N
+ * distinct input terms, 131072 stored facts and 1048576 join steps on this target. A run
+ * past one throws naming the limit, the numbers and the argument that raises it
+ * (`shaclEntail's maxStoredFacts`, …).
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) every pattern the
+ * run evaluates is decided under: the `REGEX`/`REPLACE` of a `sh:SPARQLRule`, a SHACL-AF function or a node
+ * expression, and the `sh:pattern` of a rule condition. Omitted, the compatibility pattern behaviour is
+ * unchanged. A name that selects no law throws, naming the accepted ones. A pattern the
+ * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
+ * throws with the resource's code and no dataset.
+ */
+/** Exact `now` and unsigned `entropySeed` follow XPath; null or omission selects each native default independently. */
+export function shaclEntail(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  maxTermGeneratingRounds: bigint | undefined,
+  maxGeneratedTerms: bigint | undefined,
+  maxStoredFacts: bigint | undefined,
+  maxJoinSteps: bigint | undefined,
+  xpathRegex: XPathRegexLaw | undefined,
+  now: string | null | undefined,
+  entropySeed: bigint | number | null | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): ShaclEntailment;
+
+/**
+ * The outcome of `shaclEntail`. Like every other class in this package it owns wasm
+ * memory: call `free()`.
+ */
+export class ShaclEntailment {
+  /** Ordered per-run canonical-search receipts with exact decimal-string counters. */
+  readonly canonicalizationJson: string;
+  readonly executionReceiptJson: string;
+  free(): void;
+  /**
+   * The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
+   * N-Triples.
+   */
+  readonly ntriples: string;
+  /**
+   * The shapes graph's mandatory diagnostics: one `ShaclDiagnostic` (`rule`, `shape`) per
+   * shape with an empty `sh:in` or `sh:xone` list, which every run reports.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
+ * The outcome of `shaclApplyRules`. Like every other class in this package it owns
+ * wasm memory: call `free()`.
+ */
+export class ShaclRulesInference {
+  readonly executionReceiptJson: string;
+  free(): void;
+  /**
+   * The INFERENCE GRAPH — the inferred triples only, never the data graph — as
+   * N-Triples 1.2, one triple per line, in canonical order.
+   */
+  readonly inferred: string;
+  /**
+   * The proof of every inferred triple, or `undefined` when `explain` was not set:
+   * `derived S P O .`, then `  rule R` and one `  premise S P O .` per fact the rule's
+   * body matched, or `  data-block` for a SPARQL 1.2 RL data-block triple.
+   */
+  readonly proof?: string;
+  /**
+   * The shapes graph's mandatory diagnostics: one `ShaclDiagnostic` (`rule` —
+   * `in-minListLength` or `xone-minListLength` — and `shape`) per shape with an empty
+   * `sh:in` or `sh:xone` list, which every run reports. Empty for an `srl` rule set, which
+   * has no shapes graph.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
+ * Run exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
+ * Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
+ * `srl`. Naming neither or both throws. `shapesBase` / `srlBase` are the documents' base
+ * IRIs.
+ *
+ * `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?, importIris?,
+ * importDocuments?, shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?,
+ * maxStoredFacts?, maxJoinSteps?)`: the import table, then `shapesGraph`, then the four
+ * rule-evaluation limits, in the order `shaclEntail` takes them.
+ *
+ * `maxTermGeneratingRounds` bounds the evaluation rounds that infer a term the graph did
+ * not hold (default 16384), and `maxGeneratedTerms` the terms inferred beyond the input's
+ * (default max(65536, 4 × N) for N distinct input terms). A run past either throws naming
+ * the limit, the numbers, the rules that inferred a new term last, and the argument that
+ * raises it.
+ *
+ * `maxStoredFacts` bounds the facts the evaluation store may hold — the data graph, a rule
+ * set's data and every inferred triple — and `maxJoinSteps` the candidate solutions the
+ * rule bodies may enumerate. Omitted settings impose no logical capacity ceiling. A run past either throws naming the limit, the numbers and
+ * the argument that raises it.
+ *
+ * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
+ * `owl:imports` table (Turtle documents, see `ShaclImportError`) beside `shapesTtl`, the
+ * rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+ * imported document's rules run. An import no entry supplies, and an entry the import
+ * closure never names, throw.
+ *
+ * `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+ * `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound
+ * to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
+ * against `shapesBase`; omitted, `$shapesGraph` is an ordinary variable. Naming one beside
+ * `srl` throws: a SPARQL 1.2 RL rule set has no shapes graph.
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) every pattern the
+ * run evaluates is decided under: the `REGEX`/`REPLACE` of a SHACL rule, a SHACL-AF function, a node expression or
+ * a SPARQL 1.2 RL filter or assignment, and the `sh:pattern` of a rule condition. Omitted, the compatibility pattern behaviour is
+ * unchanged. A name that selects no law throws, naming the accepted ones. A pattern the
+ * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
+ * throws with the resource's code and no inference.
+ */
+/** Exact `now` and unsigned `entropySeed` follow XPath; null or omission selects each native default independently. */
+export function shaclApplyRules(
+  dataNt: string,
+  shapesTtl?: string,
+  srl?: string,
+  shapesBase?: string,
+  srlBase?: string,
+  explain?: boolean,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+  maxTermGeneratingRounds?: bigint,
+  maxGeneratedTerms?: bigint,
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
+  xpathRegex?: XPathRegexLaw,
+  now?: string | null,
+  entropySeed?: bigint | number | null,
+): ShaclRulesInference;
+
+/**
+ * The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check its
+ * level asks for. Like every other class in this package it owns wasm memory: call
+ * `free()`.
+ */
+export class ShaclRulesCheck {
+  free(): void;
+  /** The level the rule set passed. */
+  readonly level: SrlCheckLevel;
+  /**
+   * Every rule of the combined rule set — the rule set's own, then every imported rule —
+   * described by its IRI or by where it is written.
+   */
+  readonly rules: string[];
+  /** The number of data-block triples of the combined rule set. */
+  readonly dataTriples: number;
+  /** The IRIs of the imported rule sets, each once, in the order they were read. */
+  readonly imported: string[];
+  /** The `VERSION` labels, in document order. */
+  readonly versions: string[];
+  /** The number of stratification layers, or `undefined` below `"stratified"`. */
+  readonly strata?: number;
+  /** The one-line summary every PurRDF host reports. */
+  readonly summary: string;
+}
+
+/**
+ * How far `shaclCheckRules` checks a SPARQL 1.2 RL rule set, each level including the
+ * ones before it.
+ */
+export type SrlCheckLevel = "syntax" | "well-formed" | "stratified";
+
+/**
+ * Check the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the `IMPORTS`
+ * closure resolved from `importIris` / `importDocuments` (rule-set texts, as
+ * `shaclApplyRules` takes them), well-formedness and stratification — every static check
+ * `shaclApplyRules` applies before it runs — with no data graph read and no rule run.
+ * `srlBase` is the rule set's base IRI.
+ *
+ * `level` is how far the check goes: `"syntax"` (the grammar, for the rule set and every
+ * document its imports read), `"well-formed"` (every rule, imported ones included, is
+ * well formed) or `"stratified"` (the combined rule set can be stratified); omitted,
+ * `"stratified"`. Any other name throws.
+ *
+ * Throws, naming the stage, for a rule set a check refuses: a syntax error, an import the
+ * table does not supply or an entry its closure never names, an ill-formed rule, a rule
+ * set that cannot be stratified.
+ */
+export function shaclCheckRules(
+  srl: string,
+  srlBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  level?: SrlCheckLevel,
+): ShaclRulesCheck;
+
+/**
+ * One mandatory diagnostic of a shapes graph — a shape whose `sh:in` or `sh:xone` list is
+ * empty — as the structured value every host carries: the rule, then the shape. Like every
+ * other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclDiagnostic {
+  free(): void;
+  /** The syntax rule's id: `in-minListLength` or `xone-minListLength`. */
+  readonly rule: string;
+  /** The shape whose list is empty, as an N-Triples term (`<iri>` or `_:label`). */
+  readonly shape: string;
+}
+
+/**
+ * The outcome of `shaclEvalNodeExpr`. Like every other class in this package it owns wasm
+ * memory: call `free()`.
+ */
+export class ShaclNodeExprOutcome {
+  free(): void;
+  /** The output nodes, as N-Triples 1.2 terms in sequence order. */
+  readonly outputs: string[];
+  /**
+   * The shapes graph's mandatory diagnostics — one per shape of its `owl:imports` closure
+   * with an empty `sh:in` or `sh:xone` list — which every run reports. They change no
+   * output.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
+ * Evaluate ONE node expression of the Turtle shapes graph against a focus node of the
+ * N-Triples data graph — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph,
+ * focusNode, scope)` — returning a `ShaclNodeExprOutcome`: `outputs`, its output nodes as
+ * N-Triples 1.2 terms in the order the expression's sequence semantics define, and
+ * `diagnostics`, the shapes graph's mandatory diagnostics.
+ *
+ * The expression is named exactly one way. `expr` is an absolute IRI or `"_:label"` for a
+ * blank node the shapes document labels so. Otherwise `expr` is `undefined` and either
+ * `exprAt` names a node and `exprVia` the predicate IRIs a walk from it follows, each
+ * step reaching exactly one value (how an anonymous `[ … ]` expression is named), or
+ * `exprTurtle` is the expression as a Turtle document, read under the shapes document's
+ * prefixes and base and merged into the shapes graph, whose one root blank node is the
+ * expression. `focus` is an absolute IRI or any N-Triples term; `scope` is an array of
+ * `"NAME=TERM"` bindings read by `shnex:var "NAME"`. Throws on none or several
+ * selectors, a walk step reaching no value or several, an inline document without
+ * exactly one root, a label the shapes document never wrote, a binding named
+ * `focusNode` or bound twice, and any parse or evaluation failure.
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) every pattern the
+ * run evaluates is decided under: the `sh:pattern` of a filter shape, and the `REGEX`/`REPLACE` of a function call
+ * or a SPARQL-based expression. Omitted, the compatibility pattern behaviour is
+ * unchanged. A name that selects no law throws, naming the accepted ones. A pattern the
+ * law's grammar refuses behaves as an ill-formed pattern always does; a resource refusal
+ * throws with the resource's code and no output.
+ */
+export function shaclEvalNodeExpr(
+  shapesTtl: string,
+  dataNt: string,
+  expr: string | undefined,
+  focus: string,
+  scope?: readonly string[],
+  shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  exprAt?: string,
+  exprVia?: readonly string[],
+  exprTurtle?: string,
+  xpathRegex?: XPathRegexLaw,
+): ShaclNodeExprOutcome;
+
+/**
+ * The cold-certify report of a shapes graph, returned by `shaclLintShapes`. Like every
+ * other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclLintReport {
+  free(): void;
+  /**
+   * No finding: the loader accepted the graph, every `shacl-shacl.ttl` result is
+   * superseded (flagged there, well-formed SHACL 1.2 Core), no unexecuted query
+   * violates a pre-binding restriction and no mandatory diagnostic applies.
+   */
+  readonly clean: boolean;
+  /**
+   * One for a load refusal, plus every `shacl-shacl.ttl` result no supersession covers,
+   * plus every unexecuted query that violates a pre-binding restriction, plus every
+   * mandatory diagnostic (an empty `sh:in` or `sh:xone` list).
+   */
+  readonly findings: number;
+  /** The loader's refusal, or `undefined` when it accepted the graph. */
+  readonly loadError?: string;
+  /**
+   * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl`,
+   * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
+   * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
+   * declared for a built-in component), `unexecuted` (`violation DECLARATION`, one per
+   * query that violates a pre-binding restriction and that nothing executes),
+   * `diagnostics` (`diagnostic RULE SHAPE`, one per shape whose `sh:in` or `sh:xone`
+   * list is empty, `RULE` being `in-minListLength` or `xone-minListLength`; each a
+   * finding, and the `shacl-shacl` warning on the same list is marked `diagnosed RULE`
+   * and not counted) and `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
+   * `owl:imports` triple of the closure whose subject is no anchor of its document — not
+   * the IRI it was read or imported under, not an ontology header, not a shapes graph —
+   * so it is data and imported nothing; never a finding) sections, then `findings N` and
+   * `clean true|false`.
+   */
+  readonly report: string;
+}
+
+/**
+ * Certify a Turtle shapes graph COLD — its whole `owl:imports` closure: the loader's
+ * verdict, every result of validating it against the W3C `shacl-shacl.ttl`, and which
+ * implementation every node-expression function call binds to. Throws a
+ * `ShaclImportError` when the closure is not in hand — never a report about the
+ * importing document alone — and otherwise only when the document is not Turtle.
+ * `shapesGraph` configures the loader as `purrdf shapes lint --shapes-graph` does (see
+ * `shaclValidateToSarif`).
+ */
+export function shaclLintShapes(
+  shapesTtl: string,
+  shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+): ShaclLintReport;
+/**
+ * A SHACL severity IRI. The five built-in levels SHACL 1.2 Core names, most severe
+ * first; any other IRI is a custom severity and is carried verbatim.
+ */
+export type ShaclSeverity =
+  | "http://www.w3.org/ns/shacl#Violation"
+  | "http://www.w3.org/ns/shacl#Warning"
+  | "http://www.w3.org/ns/shacl#Info"
+  | "http://www.w3.org/ns/shacl#Debug"
+  | "http://www.w3.org/ns/shacl#Trace"
+  | (string & {});
+
+/** One `sh:resultMessage` in a SARIF result's `properties.shaclMessages`. */
+export interface ShaclSarifMessage {
+  text: string;
+  language?: string;
+  direction?: "ltr" | "rtl";
+  /** Present only for a datatype other than `xsd:string` / the language strings. */
+  datatype?: string;
+}
+
+/**
+ * Validate `dataNt` (N-Triples) against `shapesTtl` (Turtle), returning a SARIF 2.1.0
+ * JSON log. `shapesBase` carries the meaning it does on `shaclEntail`.
+ *
+ * `conformanceDisallows` is the conformance-disallow set: the severities whose results
+ * make the data non-conforming. Omitted, it is SHACL's default set (`sh:Violation`,
+ * `sh:Warning`, `sh:Info`); an empty array or a value that is not an absolute IRI
+ * throws. The log's run carries `properties.shaclConforms` (boolean),
+ * `properties.shaclConformanceDisallows` (the set the report was judged against) and
+ * `properties.shaclShapesGraphWellFormed` (the report's `sh:shapesGraphWellFormed`:
+ * `true` for every report a validation produced),
+ * because the results alone cannot say whether the data conforms: an `sh:Debug` or
+ * `sh:Trace` result is SARIF `kind: "informational"` with `level: "none"` and appears in
+ * the log of a conforming report, its IRI kept in `properties.shaclSeverity`.
+ * A result's `message.text` is its untagged `sh:resultMessage` when it has one (else
+ * the first in canonical order); whenever that text alone would lose something —
+ * several messages, a language tag, a direction, an `rdf:HTML` message — the result's
+ * `properties.shaclMessages` lists EVERY message as `ShaclSarifMessage`.
+ *
+ * The shapes graph's mandatory diagnostics — one per shape with an empty `sh:in` or
+ * `sh:xone` list — ride in `invocations[0].toolExecutionNotifications`, never among the
+ * results: each a SARIF notification at `level: "note"` whose `descriptor` names the rule
+ * (`in-minListLength`, `xone-minListLength`) in `tool.driver.notifications` and whose one
+ * logical location (`kind: "shape"`) is the shape. They change neither the verdict nor
+ * the results.
+ *
+ * `shapesGraph` is the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf validate
+ * --shapes-graph` names it: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {
+ * … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
+ * Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
+ * resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
+ *
+ * `subClassOfInShapesGraph` is SHACL 1.2 Core section 6.3's parameter of that name:
+ * `true` reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data
+ * graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit
+ * class targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`). Omitted or `false`,
+ * the specification's default: the data graph alone. Only class membership changes;
+ * `rdf:type` triples are always read from the data graph.
+ *
+ * `xpathRegex` is the dated native XPath law (see {@link XPathRegexLaw}) `sh:pattern`, and
+ * the `REGEX`/`REPLACE` of SPARQL-based targets, constraints and SHACL-AF functions,
+ * evaluate under. Omitted, the compatibility pattern behaviour is unchanged. A name that
+ * selects no law throws, naming the accepted ones. A pattern the law's grammar refuses
+ * stays an ordinary validation result; a resource refusal throws with the resource's code
+ * and no report.
+ *
+ * `shaclProfile` is the exact dated SHACL law the validation runs under (see
+ * {@link ShaclLaw}), the same law the CLI selects as `purrdf validate --shacl-profile`.
+ * Omitted, the compatibility law runs, unchanged. An id that names no law throws with the
+ * `unsupported-profile` status; a shapes graph the law's text refuses (the working draft
+ * refuses a prefix declared through a version-IRI path that the editor's draft admits)
+ * throws at load; and an `xpathRegex` that names a law other than the one the dated SHACL
+ * law requires throws.
+ */
+export function shaclValidateToSarif(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string,
+  conformanceDisallows?: readonly ShaclSeverity[],
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+  subClassOfInShapesGraph?: boolean,
+  xpathRegex?: XPathRegexLaw,
+  shaclProfile?: ShaclLaw,
+): string;
+
+/**
+ * The outcome of `shaclValidateChangesToSarif`: the SARIF log, and the SCOPE that
+ * log describes.
+ *
+ * Read `bounded` before the log, because it decides what the log MEANS. `true`: the
+ * log covers the focus nodes the change could move — for those nodes it is
+ * identical, results and ordering alike, to a full validation of the mutated graph
+ * — and is silent about a pre-existing violation the change cannot reach, so an
+ * empty log means *this change introduced no violation*. `false`: the shapes graph
+ * reads through SPARQL query text, no bounded footprint exists for it, the call
+ * fell back to a FULL validation of the mutated graph, and an empty log means *the
+ * graph conforms*. Handing back the log alone would leave a caller to assume one of
+ * the two, and the weaker reading is the dangerous one.
+ *
+ * Like every other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclChangeValidation {
+  free(): void;
+  /** The SARIF 2.1.0 JSON log. See `bounded` for what it describes. */
+  readonly sarif: string;
+  /** Whether the change's footprint could be bounded. */
+  readonly bounded: boolean;
+  /**
+   * How many focus nodes the change was expanded into, or `undefined` on the
+   * fallback — "every focus node in the graph" is not a number, and collapsing
+   * the two would make a fallback look like a large bounded expansion.
+   */
+  readonly focusNodes?: number;
+  /**
+   * Which construct made this shapes graph's change footprint unbounded, or
+   * `undefined` when it was bounded. It names what to change to get incremental
+   * validation back.
+   */
+  readonly reason?: string;
+}
+
+/**
+ * Validate a CHANGE to `dataNt` rather than the whole graph: `addedNt` is the rows
+ * joining it and `removedNt` the rows leaving it, each an N-Triples string or
+ * omitted. The engine expands the change into the focus nodes it can move and
+ * re-validates exactly those.
+ *
+ * Both halves are real: a verdict moves when a row leaves the graph as readily as
+ * when one joins. Additions apply before removals, so a change naming the same row
+ * on both halves settles on *removed*; a removal naming a row `dataNt` does not
+ * carry retracts nothing rather than throwing.
+ *
+ * `shapesBase` carries the same meaning it does on `shaclValidateToSarif`.
+ */
+export function shaclValidateChangesToSarif(
+  shapesTtl: string,
+  dataNt: string,
+  addedNt?: string,
+  removedNt?: string,
+  shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  /** The shapes-graph IRI, exactly as `shaclValidateToSarif` takes it. */
+  shapesGraph?: string,
+  /** The dated pattern law, exactly as `shaclValidateToSarif` takes it. */
+  xpathRegex?: XPathRegexLaw,
+): ShaclChangeValidation;
+
+/**
+ * A refusal from the prepared-shapes-product admission boundary, thrown by every
+ * `shaclProduct*` function and by `shaclPackProduct`.
+ *
+ * `dimension` is the stable, matchable half — one of the codec's pinned kebab-case
+ * labels — and `undefined` when the failure happened before any product existed (a
+ * shapes or data document that did not parse was never admitted). Branch on it:
+ * `stage-id` means re-pack, `container-digest` means the bytes are corrupt in place,
+ * and `function-registry` means the caller's own configuration differs from the one
+ * the product was prepared against, which re-packing will not fix.
+ *
+ * `code` is the stable code of a refusal that is not about the product: a resource
+ * refusal of the selected `xpathRegex` law carries its resource's own code
+ * (`xpath-pattern-bytes`, `xpath-match-steps`, …) — the `code` a SPARQL entry's `Error`
+ * carries for the same refusal — and every other refusal `undefined`.
+ *
+ * `message` is prose that names the fix; do not match on it. Like every other class
+ * in this package the instance owns wasm memory — call `free()` when done.
+ */
+export class ShaclProductRefusal {
+  readonly dimension: string | undefined;
+  readonly code: string | undefined;
+  readonly message: string;
+  toString(): string;
+  free(): void;
+}
+
+/**
+ * Compile a Turtle shapes graph into a prepared product: the parse-and-analyze work
+ * `shaclValidateToSarif` performs on every call, done ONCE and written to a
+ * digest-chained container that `shaclProductValidateToSarif` restores.
+ *
+ * `shapesBase` is recorded in the product, so a restore resolves the document's
+ * relative IRI references identically without the document. Byte-deterministic:
+ * identical inputs produce identical bytes, so a content-addressed cache key over
+ * the result is stable.
+ *
+ * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+ * `ShaclImportError`); the product carries the merged closure, so a restore needs no
+ * documents.
+ *
+ * `shapesGraph` (see `shaclValidateToSarif`) is recorded in the product and bound by
+ * its identity, as `purrdf shacl pack --shapes-graph` records it; a restore exposes the
+ * shapes graph under it.
+ *
+ * Throws a `ShaclImportError` when the shapes graph's `owl:imports` closure is not in
+ * hand, and a `ShaclProductRefusal` otherwise.
+ */
+export function shaclPackProduct(
+  shapesTtl: string,
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<Uint8Array>;
+
+/**
+ * What a prepared product says it was compiled from, as deterministic `key value`
+ * lines, WITHOUT admitting it: the format version, the stage id and whether this
+ * build knows it, the identity digest and every labelled identity component, then
+ * the recorded base, `sh:shapesGraph` IRI and prefix map.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductExplain(product: Uint8Array): string;
+
+/**
+ * Corroborate a prepared product's carried shapes dataset against the canonical
+ * identity its own binding claims. The codec's COLD path — canonicalization over
+ * blank nodes can cost more than the shapes parse a product exists to eliminate — so
+ * call it from a build step or a test, never before each validation.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductCertify(
+  product: Uint8Array,
+  canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<void>;
+
+/**
+ * Restore a prepared product and validate an N-Triples data graph with it, returning
+ * the SARIF 2.1.0 log `shaclValidateToSarif` would have returned for the shapes graph
+ * the product was packed from.
+ *
+ * Admission runs first and in full: framing, every section digest, the whole-container
+ * digest, then the stage id, profile and complete input binding. A product prepared
+ * under a different prefix map, base, vocabulary or registry is refused rather than
+ * validated into a report about a shapes graph nobody asked for.
+ *
+ * `xpathRegex` selects the dated pattern law exactly as `shaclValidateToSarif` takes it,
+ * on this and the three other product entries; the product itself is unchanged by it.
+ *
+ * Throws a `ShaclProductRefusal`: a name that selects no law, and a resource refusal of
+ * the selected law, carry `dimension === undefined`, since neither is an admission
+ * dimension of the product; the resource refusal carries its resource's code as `code`.
+ */
+export function shaclProductValidateToSarif(
+  product: Uint8Array,
+  dataNt: string,
+  xpathRegex?: XPathRegexLaw,
+): string;
+
+/**
+ * The forward-compatibility twin of `shaclProductValidateToSarif`: restore a
+ * prepared product by RE-DERIVING its preparation from the shapes dataset it
+ * carries, rather than admitting its memo, and validate an N-Triples data graph
+ * with it.
+ *
+ * `shaclProductValidateToSarif` refuses a product whose stage id this guest does
+ * not know with `dimension === "stage-id"`; this is the remedy it names. No RDF
+ * text is parsed and no file is read — the dataset travels inside the product
+ * under the envelope's own digests.
+ *
+ * Also correct, and does the identical work, over a CURRENT product whose stage
+ * id this guest already knows: rebuilding re-derives from the SAME carried
+ * dataset `shaclProductValidateToSarif` restores a memo of, so the two reach the
+ * byte-identical report. This is a second door onto one product, never a
+ * second, divergent answer.
+ *
+ * Throws a `ShaclProductRefusal`.
+ */
+export function shaclProductValidateToSarifRebuild(
+  product: Uint8Array,
+  dataNt: string,
+  xpathRegex?: XPathRegexLaw,
+): string;
+
+/**
+ * `shaclProductValidateToSarifRebuild`, bound to the product you meant.
+ *
+ * The forward-compatibility rescue is not a reason to stop asking *is this the
+ * product the host meant?* — a product fetched over the network or read out of
+ * a cache under a stage id this guest does not recognize is still just bytes
+ * that could be the wrong ones. The 32-byte comparison runs FIRST, ahead of the
+ * re-derivation, exactly as it does on `shaclProductValidateToSarifExpecting`.
+ *
+ * `expectIdentity` carries the same meaning it does there — the 64 hexadecimal
+ * digits `shaclProductExplain` prints on its `identity-digest` line, passed
+ * back unchanged.
+ *
+ * Throws a `ShaclProductRefusal`: `dimension === "shapes-graph"` when the
+ * product carries a different binding, and `dimension === undefined` when
+ * `expectIdentity` is not 64 hexadecimal digits, because no product was
+ * inspected in that case.
+ */
+export function shaclProductValidateToSarifRebuildExpecting(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  xpathRegex?: XPathRegexLaw,
+): string;
+
+/**
+ * `shaclProductValidateToSarif`, bound to the product you meant.
+ *
+ * Everything the unbound call checks is a question about the executing guest — its
+ * build, its registries, its class analysis. None of them asks whether these are the
+ * bytes the host wanted, because nothing in a product states which product was meant.
+ * A host that fetches a product, reads one out of a cache, or builds its path from
+ * configuration has no other way to say so, and the wrong product validates silently.
+ *
+ * `expectIdentity` is the 64 hexadecimal digits `shaclProductExplain` prints on its
+ * `identity-digest` line, passed back unchanged.
+ *
+ * Throws a `ShaclProductRefusal`: `dimension === "shapes-graph"` when the product
+ * carries a different binding, and `dimension === undefined` when `expectIdentity` is
+ * not 64 hexadecimal digits, because no product was inspected in that case.
+ */
+export function shaclProductValidateToSarifExpecting(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  xpathRegex?: XPathRegexLaw,
+): string;
+
+/**
+ * The host options a SHACL asynchronous twin accepts, and nothing else. A synchronous
+ * SHACL entry takes no ceiling, so neither does its twin: a deadline is a `signal`
+ * (`AbortSignal.timeout(ms)`). Document and limit arguments stay positional; XPath law and execution inputs
+ * travel in the options object.
+ */
+export interface AsyncShaclOptions extends AsyncHostOptions {
+  readonly now?: never;
+  readonly entropySeed?: never;
+}
+
+/** Execution inputs apply only to the entailment and rule-application twins. */
+export interface AsyncShaclRuleOptions extends AsyncHostOptions, QueryCoordinateOptions {
+  readonly xpathRegex?: XPathRegexLaw | null;
+  readonly shaclProfile?: never;
+}
+
+/**
+ * The options of a SHACL validation or node-expression twin: the host options, and `xpathRegex`, the dated pattern law its
+ * synchronous twin takes as its trailing argument. It travels in the options object so
+ * the options keep following the positional arguments.
+ */
+export interface AsyncShaclValidationOptions extends AsyncShaclOptions {
+  readonly xpathRegex?: XPathRegexLaw | null;
+  /**
+   * The exact dated SHACL law (see {@link ShaclLaw}), which only `shaclValidateToSarifAsync`
+   * takes, as its synchronous twin takes it as its last argument. Another twin refuses it by
+   * name rather than ignoring it.
+   */
+  readonly shaclProfile?: ShaclLaw | null;
+}
+
+/**
+ * The asynchronous twin of `shaclValidateToSarif`, over exactly its arguments: resolves
+ * to the same SARIF 2.1.0 JSON string, byte for byte, or rejects with the same error —
+ * a `ShaclImportError` for an `owl:imports` closure not in hand.
+ *
+ * SHACL evaluates SPARQL — `sh:SPARQLTarget` queries, SHACL-SPARQL constraints and
+ * validators, SHACL-AF node expressions and rules — so the validation runs as a job like
+ * every other evaluating twin: the job yields to the event loop every `yieldEveryPolls`
+ * polls and stops on `signal`. The signal is polled between focus nodes as well as inside
+ * queries, so a validation with no SPARQL in it still yields and stops. SHACL-SPARQL
+ * admits no `SERVICE` in any query, so a shapes graph with one is refused while it
+ * loads, on either lane, and `resolveService` is never asked. A stop rejects — with the
+ * signal's reason, or its `TimeoutError` — and never resolves to the report of a
+ * validation that did not finish.
+ */
+export function shaclValidateToSarifAsync(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase?: string | null,
+  conformanceDisallows?: readonly ShaclSeverity[] | null,
+  importIris?: readonly string[] | null,
+  importDocuments?: readonly string[] | null,
+  shapesGraph?: string | null,
+  subClassOfInShapesGraph?: boolean | null,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<string>;
+
+/**
+ * The asynchronous twin of `shaclValidateChangesToSarif`, over exactly its arguments:
+ * resolves to the same `ShaclChangeValidation` (call `free()` on it), under the job
+ * semantics `shaclValidateToSarifAsync` describes.
+ */
+export function shaclValidateChangesToSarifAsync(
+  shapesTtl: string,
+  dataNt: string,
+  addedNt?: string | null,
+  removedNt?: string | null,
+  shapesBase?: string | null,
+  importIris?: readonly string[] | null,
+  importDocuments?: readonly string[] | null,
+  shapesGraph?: string | null,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<ShaclChangeValidation>;
+
+/**
+ * The asynchronous twin of `shaclEntail`, over exactly its arguments: resolves to the
+ * same `ShaclEntailment` (call `free()` on it). A `sh:SPARQLRule`'s CONSTRUCT and every
+ * node expression run as the job's queries, and the signal is polled between the focus
+ * nodes of every rule.
+ */
+export function shaclEntailAsync(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase: string | null | undefined,
+  importIris: readonly string[] | null | undefined,
+  importDocuments: readonly string[] | null | undefined,
+  shapesGraph: string | null | undefined,
+  maxTermGeneratingRounds: bigint | null | undefined,
+  maxGeneratedTerms: bigint | null | undefined,
+  maxStoredFacts: bigint | null | undefined,
+  maxJoinSteps: bigint | null | undefined,
+  canonicalSearch: string,
+  options?: AsyncShaclRuleOptions | null,
+): Promise<ShaclEntailment>;
+
+/**
+ * The asynchronous twin of `shaclApplyRules`, over exactly its arguments: resolves to the
+ * same `ShaclRulesInference` (call `free()` on it). A `sh:SPARQLRule`'s CONSTRUCT and
+ * every node expression run as the job's queries.
+ */
+export function shaclApplyRulesAsync(
+  dataNt: string,
+  shapesTtl?: string | null,
+  srl?: string | null,
+  shapesBase?: string | null,
+  srlBase?: string | null,
+  explain?: boolean | null,
+  importIris?: readonly string[] | null,
+  importDocuments?: readonly string[] | null,
+  shapesGraph?: string | null,
+  maxTermGeneratingRounds?: bigint | null,
+  maxGeneratedTerms?: bigint | null,
+  maxStoredFacts?: bigint | null,
+  maxJoinSteps?: bigint | null,
+  options?: AsyncShaclRuleOptions | null,
+): Promise<ShaclRulesInference>;
+
+/**
+ * The asynchronous twin of `shaclEvalNodeExpr`, over exactly its arguments: resolves to
+ * the same `ShaclNodeExprOutcome` — the output nodes as N-Triples 1.2 terms and the shapes
+ * graph's mandatory diagnostics (call `.free()` on it). A SPARQL-based node expression runs
+ * as the job's query.
+ */
+export function shaclEvalNodeExprAsync(
+  shapesTtl: string,
+  dataNt: string,
+  expr: string | undefined | null,
+  focus: string,
+  scope?: readonly string[] | null,
+  shapesBase?: string | null,
+  importIris?: readonly string[] | null,
+  importDocuments?: readonly string[] | null,
+  exprAt?: string | null,
+  exprVia?: readonly string[] | null,
+  exprTurtle?: string | null,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<ShaclNodeExprOutcome>;
+
+/**
+ * The asynchronous twin of `shaclProductValidateToSarif`: resolves to the same SARIF
+ * string, or rejects with the same `ShaclProductRefusal` the synchronous twin throws
+ * (its `evidence.async` added, as on every asynchronous rejection).
+ */
+export function shaclProductValidateToSarifAsync(
+  product: Uint8Array,
+  dataNt: string,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifRebuild`. */
+export function shaclProductValidateToSarifRebuildAsync(
+  product: Uint8Array,
+  dataNt: string,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifExpecting`. */
+export function shaclProductValidateToSarifExpectingAsync(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<string>;
+
+/** The asynchronous twin of `shaclProductValidateToSarifRebuildExpecting`. */
+export function shaclProductValidateToSarifRebuildExpectingAsync(
+  product: Uint8Array,
+  dataNt: string,
+  expectIdentity: string,
+  options?: AsyncShaclValidationOptions | null,
+): Promise<string>;
+
+export function version(): string;
+
+/**
+ * The XSD canonical lexical form of `lexical` read as the datatype IRI `datatype`
+ * (`"+007"` as `xsd:integer` is `"7"`, `"1.50"` as `xsd:decimal` is `"1.5"`). Integers
+ * and decimals are exact at any length, so the result can be handed to `BigInt` or a
+ * decimal library without losing digits. `undefined` when `datatype` is not an XSD
+ * datatype the engine maps, or `lexical` is not in its lexical space.
+ */
+export function xsdCanonicalLexical(lexical: string, datatype: string): string | undefined;
+
+/**
+ * Compare two typed values in the XSD value space: `-1` when the left value is the
+ * smaller, `0` when they are equal, `1` when it is the larger. Numeric datatypes compare
+ * across each other, exactly at any length. `undefined` when either datatype is not an
+ * XSD datatype the engine maps, either lexical form is not in its datatype's lexical
+ * space, or the values are incomparable (a `NaN`, or a number against a string).
+ */
+export function xsdValueCompare(
+  leftLexical: string,
+  leftDatatype: string,
+  rightLexical: string,
+  rightDatatype: string,
+): -1 | 0 | 1 | undefined;

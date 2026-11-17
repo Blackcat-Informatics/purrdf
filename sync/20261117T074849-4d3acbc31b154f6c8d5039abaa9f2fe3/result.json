@@ -1,0 +1,27 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1351-switch-canonical-output-to-the-new",
+  "branch": "paudley/1351-switch-canonical-output-to-the-new",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "b25058a72e4a96729cd7b395764a5bd1bc18f506",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1351-switch-canonical-output-to-the-new/.stage/switch-canonical-output-to-the-new/sync/20261117T074849-4d3acbc31b154f6c8d5039abaa9f2fe3",
+  "conflicts": [
+    "CHANGELOG.md",
+    "crates/rdf-wasm/js/index.d.ts",
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "fc4dd01d6469888a8e5ac417c5d16f75a09d4212",
+  "merge_bases": [
+    "da17e2c1219ac918dcbe9e2ee00343b08fa46e58",
+    "756052e8d269fbc3daf54720cd08f4288e7be13b"
+  ],
+  "merge_index": "5fe254bed1e9ed8d18551b0fcdeeace59e7293ffbccf7481db46d973a268715d",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'crates/rdf-wasm/js/index.d.ts'\nRecorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "6182ce4ab8d426c2b2e16a12913053d237cc7e20",
+  "candidate_patch": "candidate-f58ea263332c4f9e94854e2ab3d8b273.patch",
+  "validation_records": [],
+  "commit": "58d261ce4e4067a07c0a5b18e33c2b7f46761e07",
+  "tree": "6182ce4ab8d426c2b2e16a12913053d237cc7e20"
+}

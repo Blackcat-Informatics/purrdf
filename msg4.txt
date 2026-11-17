@@ -1,0 +1,18 @@
+Route the `purrdf-core` canonical entry points through the labelling engine
+
+The root canonical functions (`try_canonicalize`, `try_canonicalize_view`,
+`try_canonical_digest_view`, `try_graph_digest_view`, the checked variants,
+`canonical_relabel` and `canonical_relabel_with_mapping`) now run the
+nested-refinement labelling and return its canonical document and the digest
+of its line sequence as a `Digest32`. The RDFC-1.0 functions stay reachable
+only under `rdfc12`, with their `CanonHash` argument.
+
+A composite literal is read as a literal: the labels spelled in its text are
+text, relabeling copies it as written, and `datasets_isomorphic` no longer
+pre-rejects on the dictionary blank count. A reserved-namespace IRI is
+ordinary data. Receipts gain `SearchEvent::LabellingUnit`, and the result
+reports no presentation (`None`) for the line-sequence document.
+
+The accounting test is rewritten from the engine's own poll and reservation
+counts, the search differential that pinned the old search is removed, and the
+identity fixtures that moved by design are updated.

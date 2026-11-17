@@ -1,0 +1,3 @@
+Name the RDFC-1.0 family as its own module
+
+`purrdf_core::rdfc12` (and `purrdf_rdf::rdfc12`) re-exports the present canonicalization functions, constants and types under one explicit name. The W3C suite and the frozen profile corpus tests call it. Behavior and bytes are unchanged; the legacy names leave the crate root when the default family moves to the nested-refinement labelling.

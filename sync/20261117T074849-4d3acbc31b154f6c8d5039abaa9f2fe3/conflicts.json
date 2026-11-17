@@ -1,0 +1,62 @@
+{
+  "CHANGELOG.md": [
+    {
+      "mode": "100644",
+      "oid": "cfc7bce5f38278df1ef0c1a9aab1624001db12f3",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "b084fb9fba5098da197613556bdf8d2e3c7d0db0",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "2c2c944a9061441c2a9271983111625fa6bebb5b",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "crates/rdf-wasm/js/index.d.ts": [
+    {
+      "mode": "100644",
+      "oid": "aebbecf3864af2e3fbb758403185233c5420206c",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "9c715dfd8b8a2dff37a6d7359841e392cc6087aa",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "1f9e8c8076a99429045e6edfefc35f34fdf66674",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ],
+  "helpers-ledger.toml": [
+    {
+      "mode": "100644",
+      "oid": "1ce7828144d2f04bc4bc162f4411683a0ded8e67",
+      "stage": 1,
+      "content": "inputs/2-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "fc3541cc62e35666f38fa48964065b5134557f84",
+      "stage": 2,
+      "content": "inputs/2-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "f4879a077c3406e540271c3be506d753e473bf5c",
+      "stage": 3,
+      "content": "inputs/2-3.bin"
+    }
+  ]
+}

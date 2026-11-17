@@ -1,0 +1,3 @@
+Admit a typed labelling entry over a dataset view
+
+`purrdf_core::canonical_labelling::label_view` lowers a dataset view and the caller's records within a `Scope` (the whole dataset, or one named graph with its graph slot erased) and labels the lines with the engine's own limit and the caller's stop signal. The returned `Labelling` holds the admitted lines, the labelling, and the view's own identifier of every blank node, so a caller can map positions back to the view without parsing a label. A graph the view does not use labels no line and has the digest of the empty input. Tests: a renamed dataset has the same lines and a distinct position per blank node while a path of the same nodes does not, and a graph scope matches the same statements held alone.

@@ -1,0 +1,3 @@
+Spell the canonical line sequence as N-Quads 1.2
+
+`write_document` and `write_line` in `purrdf_core::canonical_labelling` read the line encodings of the canonical sequence by the rules of 3.7 and write one statement per line in the order of the sequence, not in the order of the spelled text. A binding is `reifier rdf:reifies triple`, an annotation is one statement whatever its count, a blank node is `_:` and its position in decimal, and an `empty-graph` or `record` line has no spelling and is not written. Bytes that are not one whole encoding are refused as a typed `DocumentError`. A golden pins the document of one line of every kind, and a test shows a truncated, over-long and `free`-bearing encoding refused beside the whole encoding spelled.

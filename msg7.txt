@@ -1,0 +1,23 @@
+Move the higher crates onto the new canonical output
+
+Entail, shapes, slice, columnar, the umbrella crate, the SPARQL evaluator and
+conformance harness, the conformance kit and the validate boundary call the
+default canonical family without a hash argument, and read its 32-byte digest.
+
+* Receipts: the host receipt JSON names the nested-refinement labelling, its
+  version and the `line-sequence` presentation, adds the `labelling_unit`
+  event and the two line-digest outputs. The legacy `rdfc` arm keeps its
+  constants through `rdfc12`.
+* Duplicate visits: a view may visit a quad or reifier row more than once;
+  both are set members, so the lowering admits each once. Annotation rows
+  still carry their repeat in the count.
+* Refusals: the default family has no reserved namespace, so the comparison
+  screen admits every IRI and the refusal tests use a latched stop signal
+  with a neighbouring valid run. Limit refusals use the 13-node circulant.
+  `CanonError` boxes the budget and labelling refusals so the error types
+  that wrap it keep their size.
+* Composite literals: one test pair shows that a blank label inside a
+  composite literal is text, not a node, while a graph-level label change
+  is an isomorphism.
+
+Golden vectors owned by these crates are regenerated in the next step.

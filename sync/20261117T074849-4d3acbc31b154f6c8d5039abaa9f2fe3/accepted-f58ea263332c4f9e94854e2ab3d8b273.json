@@ -1,0 +1,20 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-f58ea263332c4f9e94854e2ab3d8b273/0.bin"
+  },
+  {
+    "path": "crates/rdf-wasm/js/index.d.ts",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-f58ea263332c4f9e94854e2ab3d8b273/1.bin"
+  },
+  {
+    "path": "helpers-ledger.toml",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-f58ea263332c4f9e94854e2ab3d8b273/2.bin"
+  }
+]

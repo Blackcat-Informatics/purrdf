@@ -1,0 +1,6 @@
+Pin the labelling identity and its receipt in `purrdf-core`
+
+A run of the default canonical entry points records one receipt naming the
+nested-refinement labelling and its version, completing in the output phase
+and charging labelled units rather than RDFC frames. The test pins the name,
+the version, the line-sequence presentation identifier and that receipt.

@@ -1,0 +1,10 @@
+/// The bytes the labelling's working state is bounded by, for the caller's
+/// admission: the lowered lines and the arrays the engine builds before it
+/// starts. `None` when the sum passes the word.
+pub(crate) fn admission_bytes(labelling: &LineSet) -> Option<usize> {
+    labelling
+        .footprint_bytes()
+        .zip(optimised::working_bytes(labelling))
+        .and_then(|(held, working)| held.checked_add(working))
+}
+

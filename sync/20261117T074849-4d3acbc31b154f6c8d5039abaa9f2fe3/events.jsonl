@@ -1,0 +1,6 @@
+{"time": "2026-11-17T07:48:49.179941+00:00", "status": "started"}
+{"time": "2026-11-17T07:48:50.282875+00:00", "status": "merging"}
+{"time": "2026-11-17T07:48:51.620732+00:00", "status": "conflicted"}
+{"time": "2026-11-17T07:48:51.746946+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'crates/rdf-wasm/js/index.d.ts'\nRecorded preimage for 'helpers-ledger.toml'\n"}
+{"time": "2026-11-17T08:05:58.475166+00:00", "status": "committing", "candidate_tree": "6182ce4ab8d426c2b2e16a12913053d237cc7e20", "candidate_patch": "candidate-f58ea263332c4f9e94854e2ab3d8b273.patch", "validation_records": []}
+{"time": "2026-11-17T08:06:48.161587+00:00", "status": "completed", "commit": "58d261ce4e4067a07c0a5b18e33c2b7f46761e07", "tree": "6182ce4ab8d426c2b2e16a12913053d237cc7e20"}
