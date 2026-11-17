@@ -1,0 +1,18 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 5bda8001c33f6eb6777456b95d4a39c86cfddb42
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1354
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1354
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: d16eb62baa1042fb76b11b0d1925c9260fff32e7
+GhpRsq-Head-Ref: paudley/1339-canonical-labelling-is-factorial-in
+GhpRsq-Head-OID: 5bda8001c33f6eb6777456b95d4a39c86cfddb42
+GhpRsq-Result-Tree: f378b1c0763bd945cbf12823c257c1c93946c9da
+GhpRsq-Result-Commit: b2c87cf0644de5500b2c6bda82d6ed41ac5b95f3
+GhpRsq-Parent-Hashes: 5bda8001c33f6eb6777456b95d4a39c86cfddb42
+GhpRsq-Squash-Notes-SHA256: f278485b2e7e5cdf28fc125aa3adb79a20536197dd63b0cc899377706f2e84d0
+GhpRsq-Stage-Evidence: none
