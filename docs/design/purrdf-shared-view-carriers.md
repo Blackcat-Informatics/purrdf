@@ -196,7 +196,9 @@ text, and is unchanged where the two texts agree, for example for an empty
 dataset. The fold runs over, in a fixed order:
 
 1. the canonical line-sequence document of the RDF surface,
-2. each lookaside resource's content digest, collected and sorted,
+2. each lookaside resource's identity (its name, else IRI, else path) with its
+   content digest (empty when none is declared), as pairs sorted by identity
+   then digest,
 3. each blob's content digest in the store, sorted,
 4. the provenance sidecar's runtime-id-free public projection.
 

@@ -227,6 +227,12 @@ payload is matched by shape:
 |---|---|---|---|
 | `CanonError::BudgetExceeded` | `BudgetExceeded` | `Box<BudgetExceeded>` | Field and method access through a binding still compiles by auto-dereference. Where the value is moved or named by type, write `*budget`; through a reference, `**budget`. A pattern that destructures the payload's fields matches `budget` and reads the fields from it. Construction wraps the value with `Box::new`, and the conversion is `From<Box<BudgetExceeded>>`, replacing `From<BudgetExceeded>` |
 
+A method whose return type changed:
+
+| Method | 4.x return | 5.0 return | A 4.x caller |
+|---|---|---|---|
+| `Canonicalized::presentation` | `CanonPresentation` | `Option<rdfc12::CanonPresentation>` | Handle `None`, which a result of the default family returns because its line sequence has one presentation (`CANON_PRESENTATION_LINES_ID`). A result of an `rdfc12` function returns `Some` with the 4.x value |
+
 Variants added to enums that were already `#[non_exhaustive]` (no change
 needed where a wildcard arm exists): `CanonError::Refused` and
 `CanonError::SourceInconsistent`; `purrdf_rdf::gts_certify::CertifyError::CanonMismatch`;

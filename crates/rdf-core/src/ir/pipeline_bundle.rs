@@ -33,8 +33,10 @@
 //! ## Content addressing
 //!
 //! [`PipelineBundle::digest`] is a SHA-256 fold over, in a fixed order:
-//! 1. the canonical N-Quads hash of the dataset ([`try_canonicalize_view`]),
-//! 2. each lookaside resource's `content_digest` (collected and SORTED),
+//! 1. the canonical document text of the dataset ([`try_canonicalize_view`]),
+//! 2. each lookaside resource's identity (its name, else IRI, else path) with
+//!    its `content_digest` (empty when none is declared), as pairs SORTED by
+//!    identity then digest,
 //! 3. each blob's [`ContentDigest`] in the store (SORTED),
 //! 4. the provenance's runtime-id-free PUBLIC projection
 //!    ([`DatasetProvenance::public_projection`]).
@@ -1195,8 +1197,8 @@ impl<H> PipelineBundle<H> {
     }
 
     /// The content [`ContentDigest`] of this bundle: a SHA-256 fold over the
-    /// dataset's canonical hash, the SORTED lookaside resource digests, the SORTED
-    /// blob digests, and the runtime-id-free public provenance projection. The
+    /// dataset's canonical document text, the SORTED lookaside resource identities
+    /// and digests, the SORTED blob digests, and the runtime-id-free public provenance projection. The
     /// typed-handle lane contributes NOTHING (see the module docs).
     ///
     /// # Errors

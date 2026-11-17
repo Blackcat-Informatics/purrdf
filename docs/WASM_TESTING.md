@@ -114,10 +114,12 @@ and results so an empty JSON envelope cannot satisfy result transport.
 The packaged case `isomorphic refusal crosses the wasm boundary as a JavaScript
 Error` in `canonicalization-host-error.test.mjs` exercises the wasm-bindgen
 `JsError` construction/import and JavaScript exception prototype. It distinguishes
-a caught host Error from a WASM trap, transports an exact maximum `u64` policy
-as text, and keeps an owned native cause readable after its dataset wrapper is
-freed. Native Rust owns the underlying reserved-vocabulary refusal semantics.
-Run only this named package case for those host obligations.
+a caught host Error from a WASM trap, transports the finite bound `0` as text
+into the error's canonicalization record, and keeps an owned native cause
+readable after its dataset wrapper is freed. Its valid neighbour compares the
+same 13-node circulant under the unlimited policy and succeeds. Native Rust owns
+the underlying labelling-limit refusal semantics. Run only this named package
+case for those host obligations.
 
 The packaged case `an unsupported format crosses the wasm boundary as a JavaScript
 Error` in `roundtrip.test.mjs` exercises the format resolver's wasm-only
