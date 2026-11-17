@@ -567,4 +567,23 @@ mod tests {
         assert_eq!(new.label(&id), Some("0"));
         assert_ne!(old_digest, new_digest);
     }
+
+    /// The labels a reader recomputes for a blank-node target follow the file's
+    /// format version: `c14nN` for a version 1 file, the decimal label for a
+    /// version 2 file. A swapped branch would misname every blank target.
+    #[test]
+    fn the_labels_a_reader_recomputes_follow_the_format_version() {
+        let mut builder = RdfDatasetBuilder::new();
+        let blank = builder.intern_blank("b", BlankScope::DEFAULT).unwrap();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder.intern_iri("https://example.org/o").unwrap();
+        builder.push_quad(blank, predicate, object, None).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let mut control =
+            purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+        let old = canonical_labels(&dataset, PURREMB_VERSION, &mut control).unwrap();
+        let new = canonical_labels(&dataset, PURREMB_VERSION_LABELLING, &mut control).unwrap();
+        assert_eq!(old.label(&blank), Some("c14n0"));
+        assert_eq!(new.label(&blank), Some("0"));
+    }
 }

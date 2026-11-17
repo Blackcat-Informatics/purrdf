@@ -1503,8 +1503,9 @@ fn source_with_blanks(byte: u8, kid: &str) -> Vec<u8> {
     w.into_bytes()
 }
 
-/// The 5.0 writer records `nrl1-lines-sha256`: the certificate verifies when
-/// the digests are recomputed with the labelling and not with RDFC-1.0, its
+/// The 5.0 writer records `nrl1-lines-sha256`: the certificate's refold digests
+/// equal the digests recomputed with the labelling and differ from the RDFC-1.0
+/// ones (verification itself compares pre against post under one function), its
 /// bytes carry the `refold_canon` field (pinned byte for byte), and the
 /// `rdfc10-sha256` type refuses to read it while reading the certificate of
 /// the 4.x writer.
