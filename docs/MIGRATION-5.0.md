@@ -189,7 +189,19 @@ The functions that kept their root names (`try_canonicalize`,
 `try_canonicalize_view`, `try_canonicalize_graph_view`, `try_graph_digest_view`,
 `check_admissible`, `check_admissible_view`, `canonical_relabel` and
 `canonical_relabel_with_mapping`) now run the labelling. Their RDFC-1.0
-counterparts of the same names are under `rdfc12`.
+counterparts of the same names are under `rdfc12`. Three of them changed
+signature, and one relaxed a bound:
+
+| Root function | 4.x signature | 5.0 signature | A 4.x caller |
+|---|---|---|---|
+| `try_canonicalize_view` | `(view, hash, control)` | `(view, control)` | Drop the `hash` argument; to keep the 4.x result call `rdfc12::try_canonicalize_view(view, hash, control)` |
+| `try_canonicalize_graph_view` | `(view, graph, hash, control)` | `(view, graph, control)` | Drop the `hash` argument; the 4.x result is `rdfc12::try_canonicalize_graph_view(view, graph, hash, control)` |
+| `try_graph_digest_view` | returns SHA-256 `ContentDigest` | returns BLAKE3 `Digest32` | Read the 32 bytes through `Digest32`; the 4.x SHA-256 value is `rdfc12::try_graph_digest_view(view, graph, control)` |
+| `check_admissible_view` | `D: DatasetView<ReadError = Infallible>`, returns `Result<(), CanonError>` | `D: DatasetView`, returns `Result<(), CanonError<D::ReadError>>` | No change for a view whose read error is `Infallible`; it now admits any view and reports its read error |
+
+`try_canonicalize`, `check_admissible`, `canonical_relabel` and
+`canonical_relabel_with_mapping` keep their signatures and change only what they
+compute.
 
 ## Containers
 

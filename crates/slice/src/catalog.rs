@@ -619,7 +619,8 @@ fn hex_sha256(bytes: &[u8]) -> String {
     purrdf_hash::hex::encode(&digest)
 }
 
-/// The semantic (canonical N-Triples) digest of one RDF artifact.
+/// The semantic digest of one RDF artifact: the lowercase hex of the BLAKE3 digest
+/// of its canonical line sequence.
 ///
 /// # Errors
 ///

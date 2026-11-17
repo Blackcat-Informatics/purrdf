@@ -33,7 +33,7 @@ The most relevant security surface for this project is **parsing untrusted data*
 - **RDF text codecs** — Turtle/TriG/N-Triples/N-Quads tokenization, RDF/XML parsing
   (entity and nesting handling), and JSON-LD/YAML-LD ingestion; resource-exhaustion
   inputs (deeply nested structures, pathological literals, blank-node graphs that
-  stress RDFC-1.0 canonicalization).
+  stress canonicalization).
 - **SPARQL** — query parsing and evaluation over untrusted queries (parser recursion,
   pathological property paths, regex built-ins), and the injectable SERVICE seam.
 - **GTS container** — CBOR decoding, zstd decompression (decompression-bomb inputs),

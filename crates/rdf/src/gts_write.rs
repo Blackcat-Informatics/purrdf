@@ -293,11 +293,11 @@ mod tests {
     }
 
     /// Re-render the round-tripped GTS graph to N-Quads through the kernel's own IR
-    /// importer + RDFC-1.0 canonicalizer — never the purrdf-gts codec (purrdf-gts is the
+    /// importer + canonicalizer — never the purrdf-gts codec (purrdf-gts is the
     /// purrdf.gts container layer only, and rdf-core is the kernel below
     /// purrdf, so the native `serialize_dataset` is out of reach here). For the
     /// single-quad fixtures below the canonical document is identical to the written
-    /// quad line; multi-quad callers get a deterministic bytewise-sorted document.
+    /// quad line; multi-quad callers get a deterministic canonical document.
     fn roundtrip_nquads(dataset: &RdfDataset, profile: &str) -> purrdf_core::Canonicalized {
         let graph = roundtrip(dataset, &RdfLookaside::default(), profile);
         let bundle =

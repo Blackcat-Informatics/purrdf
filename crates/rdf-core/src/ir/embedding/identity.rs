@@ -160,7 +160,8 @@ identity_type!(
     ArtifactRoot
 );
 identity_type!(
-    /// Claimed or verified RDFC SHA-256 bytes carried by PURREMB metadata.
+    /// Claimed or verified certified-RDF digest bytes carried by PURREMB metadata
+    /// (version 1: the RDFC-1.0 SHA-256 of the source; version 2: the BLAKE3 digest of its canonical line sequence).
     RdfcDigest
 );
 

@@ -30,9 +30,9 @@
 //! [`crate::ir::canon`]'s `collect_components` folds THREE sources into the
 //! canonical form: the dataset's base quads, its reifier bindings, and its
 //! statement annotations (see that module's `SUBSUME + EXTEND` doc section —
-//! reifiers/annotations fold into the hash via reserved `urn:purrdf:rdfc:`
-//! sentinel predicates/graphs, so the reifier COUNT and annotation PRESENCE are
-//! observable in the canonical digest). A reconstruction that only replayed
+//! reifiers/annotations take part in the canonical line sequence as their own
+//! lines, so the reifier COUNT and annotation PRESENCE are observable in the
+//! canonical digest). A reconstruction that only replayed
 //! [`DatasetView::quads`] and dropped the side-tables would digest a
 //! *different*, lossy dataset and never match the stored certificate. This module
 //! therefore also replays [`DatasetView::reifier_quads`] and
@@ -247,7 +247,7 @@ fn reconstruct_into<D: DatasetView>(
 /// point, NOT `push_quad`), and statement annotations
 /// ([`DatasetView::annotation_quads`]) — so the RDF-1.2 overlay survives the round
 /// trip losslessly (a view with no side-tables simply replays zero of them). Blank
-/// `(label, scope)` identity round-trips unchanged; RDFC-1.0 isomorphism is
+/// `(label, scope)` identity round-trips unchanged; graph isomorphism is
 /// therefore preserved (see the [module docs](self)). Declaration-only named
 /// graphs are replayed too. Source locations and non-RDF lookaside records are
 /// outside `DatasetView`; their owners must carry them separately.

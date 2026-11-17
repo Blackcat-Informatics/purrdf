@@ -15,7 +15,7 @@
 //! The emitter is intentionally *cosmetic-agnostic*: it emits FULL `<iri>` forms
 //! everywhere (no prefix compaction). Banners / `@prefix` blocks are not the
 //! emitter's concern — a caller may prepend a literal header. The drift gate
-//! that guards the artifacts compares RDFC-1.0 canonical quad sets (graph
+//! that guards the artifacts compares canonical quad sets (graph
 //! isomorphism), so prefix compaction and comment banners are immaterial; the
 //! triple/reifier/annotation *structure* is what must round-trip.
 //!

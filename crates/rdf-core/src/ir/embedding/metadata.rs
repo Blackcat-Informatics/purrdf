@@ -733,7 +733,7 @@ pub struct ExternalBinding {
     artifact_sha256: ContentDigest,
     /// Exact external byte length.
     artifact_length: u64,
-    /// Independently computed external RDFC digest, when present.
+    /// Independently computed external certified RDF digest, when present.
     certified_rdf_digest: Option<RdfcDigest>,
     /// Digest of the canonical contract block.
     contract_digest: ExternalContractDigest,
@@ -836,7 +836,7 @@ impl ExternalBinding {
         self.artifact_length
     }
 
-    /// Independently verified external RDFC digest, when present.
+    /// Independently verified external certified RDF digest, when present.
     #[must_use]
     pub const fn certified_rdf_digest(&self) -> Option<RdfcDigest> {
         self.certified_rdf_digest

@@ -227,7 +227,7 @@ ownership, and all limits. Complete examples are in
   `directionalLiteralsDropped`, `namedGraphRowsDropped`). A single-graph target drops
   every named graph and a star-incapable one drops the RDF 1.2 statement layer; these
   counts are how many, partitioned so their sum is the total.
-- `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — RDFC-1.0 canonical N-Quads
+- `Dataset.canonicalize()` / `Dataset.isomorphic(other)` — canonical line-sequence N-Quads
   and RDF graph-identity (isomorphism under blank-node relabeling).
 - `Dataset.project(profile, configJson)` / `liftProjection(archive, profile,
   configJson)` — canonical graph/tabular/research-object USTAR carriers with structured,

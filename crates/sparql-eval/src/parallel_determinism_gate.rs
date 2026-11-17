@@ -475,7 +475,7 @@ fn eval_forced(
 /// variant carries: SELECT compares `(variables, rows)` (rows in the exact
 /// row order the engine returned — this is the whole point, since fork-join
 /// order-stability is the property under test), ASK compares the bare bool,
-/// and CONSTRUCT/DESCRIBE compare canonical N-Quads (RDFC-1.0 blank-node
+/// and CONSTRUCT/DESCRIBE compare canonical N-Quads (canonical blank-node
 /// canonicalization; `TermId`s from the two independently-evaluated queries
 /// are never expected to match, only the abstract graph they denote).
 #[derive(Debug)]

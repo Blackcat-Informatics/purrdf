@@ -26,7 +26,7 @@
 //! - [`Phase::Parse`] / [`Phase::Syntax`] are **byte-sensitive** — they include
 //!   the *raw* artifact digest, so a comment-only edit *does* change them.
 //! - [`Phase::Reason`] is **semantics-sensitive** — it includes the *semantic*
-//!   (canonical N-Triples) digest and **excludes raw bytes / comments**, so a
+//!   (canonical line sequence) digest and **excludes raw bytes / comments**, so a
 //!   comment-only edit that leaves the canonical RDF unchanged produces the
 //!   **same** reasoning key (the headline acceptance).
 //! - [`Phase::Shacl`] reasons over semantic module/data + shapes (semantic).
@@ -386,7 +386,7 @@ pub fn product_unit(
 
 /// Select the per-artifact digest a phase folds. Byte-sensitive phases fold the
 /// **raw** digest (comments matter); semantics-sensitive phases fold the
-/// **semantic** (canonical N-Triples) digest (comments do not). This single
+/// **semantic** (canonical line sequence) digest (comments do not). This single
 /// selection is the mechanism behind the comment-only reasoning invariance.
 fn phase_artifact_digest(phase: Phase, artifact: &ArtifactRecord) -> Result<String, SliceError> {
     if phase.is_byte_sensitive() {

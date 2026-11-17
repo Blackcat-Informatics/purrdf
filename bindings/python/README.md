@@ -11,7 +11,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 </p>
 
 PurRDF is a from-scratch, dependency-light [RDF 1.2](https://www.w3.org/TR/rdf12-concepts/)
-engine — parsers and serializers, SPARQL, SHACL, ShEx, RDFC-1.0 canonicalization, and the
+engine — parsers and serializers, SPARQL, SHACL, ShEx, canonicalization, and the
 GTS graph-transport container — written in Rust and carried verbatim into Python, JavaScript,
 and C (the GTS container reaches Python and C; the JavaScript package does not expose
 it). The `purrdf` package is the Python surface of that one engine: the same

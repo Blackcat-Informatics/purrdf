@@ -14,7 +14,7 @@ PURREMB is the binary format carried by files whose conventional extension is
 `.purremb`. A PURREMB artifact is a deterministic, memory-map-friendly embedding
 projection over one exact `.purrpck` or five-file Columnar source. It binds vector rows to stable
 subjects, records the complete vector-generation contract, and carries integrity
-evidence without changing the source RDF dataset, its RDFC identity, or the
+evidence without changing the source RDF dataset, its canonical identity, or the
 native source wire formats.
 
 The exact stored vector matrix is authoritative for the embedding projection.
@@ -38,7 +38,7 @@ the caller. PurRDF supplies no ontology-specific identifier or default vocabular
 PURREMB v1 provides:
 
 - exact binding to all bytes of one pack or Columnar source and to its independently
-  certified RDFC digest;
+  certified RDF digest;
 - corpus, document, and chunk subjects whose text remains external and
   content-addressed;
 - RDF 1.2 dataset, graph, statement, reifier, annotation, and term subjects,
@@ -729,7 +729,7 @@ multiple families is valid only when each family derives the same
 ### 8.6 RDF dataset target
 
 An `RDF_DATASET` identity block contains exactly tag 1 `DIGEST32`, the certified
-RDFC digest from the `SOURCE` section. The exact source digest is deliberately
+RDF digest from the `SOURCE` section. The exact source digest is deliberately
 absent: RDF identity remains stable while byte-level source attachment remains
 strict.
 
@@ -1566,7 +1566,7 @@ SHA-256, the declared native format, independent native RDF verification, the
 certified RDF digest, the dataset target, and every recognized source-local
 ordinal. Columnar certification completes every strict reader check, including
 all blob payloads. An exact mismatch may stop verification before decoding and is reported without
-substituting an RDFC comparison. RDFC and ordinal mismatches have distinct errors.
+substituting an RDF comparison. RDF and ordinal mismatches have distinct errors.
 
 Source verification does not change matrix access or construct an access typestate.
 The report records the independently verified RDF digest and checked ordinal count,

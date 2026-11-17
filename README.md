@@ -532,7 +532,7 @@ contracts and the implemented surfaces above are the basis for that growth.
   [Simplified Chinese](https://blackcat-informatics.github.io/purrdf/zh-Hans/).
 - [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
   parse, query, validate, serialize and compare graphs locally in the browser.
-- [Migration to 4.0](./docs/MIGRATION-4.0.md), [migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
+- [Migration to 5.0](./docs/MIGRATION-5.0.md), [migration to 4.0](./docs/MIGRATION-4.0.md), [migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
 - [GTS](./docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
   [RDF 1.2 canonicalization](./docs/RDF12-CANON-PROFILE.md),
   [storage contracts](./crates/rdf-core/STORAGE.md) and

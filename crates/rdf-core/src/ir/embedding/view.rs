@@ -140,7 +140,8 @@ impl SourceView {
         self.source_exact_digest
     }
 
-    /// Independently claimed RDFC SHA-256.
+    /// Independently claimed certified RDF digest
+    /// (version 1: the RDFC-1.0 SHA-256 of the source; version 2: the BLAKE3 digest of its canonical line sequence).
     #[must_use]
     pub const fn certified_rdf_digest(self) -> [u8; 32] {
         self.certified_rdf_digest

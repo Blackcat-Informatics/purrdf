@@ -3447,7 +3447,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
             _flow(
                 r"(?P<evalnodeexpr>\d+) `sht:EvalNodeExpr` \(output compared term for "
                 r"term,[\s\S]*?(?P<infer>\d+) `sht:Infer` \(inferred graph compared by "
-                r"RDFC-1.0 isomorphism\) and (?P<srl>\d+) SPARQL 1.2 RL tests"
+                r"graph isomorphism\) and (?P<srl>\d+) SPARQL 1.2 RL tests"
             ),
             {
                 "evalnodeexpr": counts["evalnodeexpr"],

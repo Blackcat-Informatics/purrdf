@@ -36,7 +36,7 @@
 //! 3. parses `expected-inferred.ttl` (the derived delta) and merges it onto the
 //!    same projected base to reconstruct the expected full graph
 //!    `base ⊎ expected-derived`;
-//! 4. canonicalizes (RDFC-1.0) BOTH full graphs and compares the canonical
+//! 4. canonicalizes BOTH full graphs and compares the canonical
 //!    N-Quads strings, so blank labels — including `freeze`'s standardize-apart
 //!    relabeling and any freshly minted CONSTRUCT blanks — never cause a false
 //!    mismatch (RDF isomorphism). Comparing full graphs (rather than a raw quad

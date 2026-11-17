@@ -9,7 +9,7 @@
 //! scope as the surrounding document** — exactly as a bare `_:b` written in a
 //! subject or object position does. This module is the one place that fact is
 //! implemented, and every ingress path, the canonical labelling's lowering, the
-//! RDFC-1.0 canonicalizer and the whole-dataset rewriters route through it.
+//! RDFC-1.0 family and the whole-dataset rewriters route through it.
 //!
 //! # The scoping rule
 //!
@@ -619,7 +619,7 @@ pub fn rewrite_cdt_terms_with_memory<'a, S: Admission + ?Sized>(
 /// returns the full replacement element text — `_:other` to rename it, or
 /// `<iri>` to skolemize it away.
 ///
-/// Used by the whole-dataset rewriters (RDFC-1.0 relabeling, skolemization and
+/// Used by the whole-dataset rewriters (canonical relabeling, skolemization and
 /// its inverse) so a blank node embedded in a composite literal is rewritten in
 /// lockstep with the same node written as a term. A rewriter that skipped this
 /// would leave the embedded occurrence DANGLING: pointing at a label the

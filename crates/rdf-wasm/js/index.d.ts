@@ -877,7 +877,7 @@ export class Dataset implements Iterable<Quad> {
    */
   contentIdentity(): string;
   /**
-   * Canonical N-Quads of the flat assertion projection (the canonical line
+   * Canonical N-Quads of the dataset (the canonical line
    * sequence of the nested-refinement labelling, with decimal blank-node
    * labels).
    *
