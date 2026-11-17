@@ -140,6 +140,9 @@ fn rename_invariance_all_phases() {
 /// Every phase's source-unit key is frozen over a fixed slice: each root is the Merkle
 /// root over that phase's leaf, so the five pins hold the five phase domains and the
 /// Merkle-root domain. A moved root invalidates every build cache already on disk.
+/// The shapes and reasoning roots fold the artifacts' canonical semantic digest,
+/// which is the BLAKE3 digest of the canonical line sequence, so those two roots
+/// belong to that canonical output; the byte-sensitive roots do not.
 #[test]
 fn every_phase_key_is_frozen() {
     let iri = format!("{NS}slice/alpha");
@@ -172,11 +175,11 @@ fn every_phase_key_is_frozen() {
         ),
         (
             Phase::Shacl,
-            "f7646fbf6e3a0d8b5002ce55186cbc1c8acbc6d18bbd1c3ad8e3393b38e77f79",
+            "cf10b12de40570d691c2ab1af04d25d1074839d2d1573ee2db6b3e1684fbbd0b",
         ),
         (
             Phase::Reason,
-            "c3f426e57271d6c6ce404a317594d859548847f2bc9c4e4840a7cf07b43a7cf1",
+            "59c4d0b9baa9dd420b9a5aa39497a2e553deedca3eac54bfd8f6229148897eaa",
         ),
         (
             Phase::Bundle,
