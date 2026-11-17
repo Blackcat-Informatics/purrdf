@@ -1867,7 +1867,8 @@ pub(crate) fn label_set(
 /// of the lines with every leaf free, proportional to the blank occurrences
 /// (each one counted, so a record that repeats a node is charged for every
 /// repetition), the line tokens, the vertices (7.12) and the structs each top
-/// component holds. It is the admission of [`compare_view_with_memory`](super::compare_view_with_memory); the
+/// component holds. It is the admission of
+/// [`compare_view_with_memory`](super::compare_view_with_memory); the
 /// certificates and nested instances held while a search runs are not metered
 /// beyond it. `None` when the bound passes the word.
 pub(crate) fn working_bytes(set: &LineSet) -> Option<usize> {

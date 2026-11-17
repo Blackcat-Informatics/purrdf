@@ -698,27 +698,30 @@ fn lowered_in<D: DatasetView, S: StorageAdmission + ?Sized>(
 }
 
 /// Admit the working state of `lines` beyond the `charged` bytes already
-/// admitted while lowering, and return the whole grant.
+/// admitted while lowering, and return the lines with the whole grant. A
+/// refusal destroys `lines` before it returns what was admitted.
 fn grant<E, S: StorageAdmission + ?Sized>(
-    lines: &LineSet,
+    lines: LineSet,
     charged: usize,
     memory: &mut Memory<'_, S>,
-) -> Result<usize, ViewError<E>> {
-    let fail = |memory: &mut Memory<'_, S>, error| {
-        let _ = memory.release_bytes(charged);
-        Err(ViewError::Storage(error))
-    };
+) -> Result<(LineSet, usize), ViewError<E>> {
     let Some(bytes) = lines
         .footprint_bytes()
-        .zip(optimised::working_bytes(lines))
+        .zip(optimised::working_bytes(&lines))
         .and_then(|(held, working)| held.checked_add(working))
     else {
-        return fail(memory, StorageError::SizeOverflow);
+        drop(lines);
+        let _ = memory.release_bytes(charged);
+        return Err(ViewError::Storage(StorageError::SizeOverflow));
     };
     let rest = bytes.saturating_sub(charged);
     match memory.add_bytes(rest) {
-        Ok(()) => Ok(charged.saturating_add(rest)),
-        Err(error) => fail(memory, error),
+        Ok(()) => Ok((lines, charged.saturating_add(rest))),
+        Err(error) => {
+            drop(lines);
+            let _ = memory.release_bytes(charged);
+            Err(ViewError::Storage(error))
+        }
     }
 }
 
@@ -730,15 +733,18 @@ fn grant<E, S: StorageAdmission + ?Sized>(
 /// lowered lines and an upper bound of the arrays the engine builds for the
 /// components and their first calls, proportional to the incidences, the
 /// constant leaf occurrences, the vertices and the structs each top component
-/// holds (7.12 of the definition). A refusal of the admission is [`ViewError::Storage`] and
-/// nothing is labelled. On success the grant stays with the returned
+/// holds (7.12 of the definition). A refusal of the admission is
+/// [`ViewError::Storage`] and nothing is labelled. On success the grant stays with the returned
 /// [`Comparison`], whose `admitted_bytes` states it: release that many bytes
 /// when the comparison is dropped. On any other error the grant is returned
-/// before the error is. The present canonical form, the temporary encoding
-/// of one literal while it is interned, and the certificates and nested
-/// instances held while a search runs are not metered: the admission is the
-/// bound of the up-front working state, and the engine holds nothing else of
-/// that order before it starts.
+/// before the error is. Not metered: the present canonical form, the temporary
+/// encoding of one literal while it is interned, the second copy of each
+/// constant and node held by the interning index, the token copies the
+/// admission of lines keeps to detect repeats (together about the size of the
+/// admitted lines again, at the peak of lowering), and the certificates and
+/// nested instances held while a search runs. The admission is the bound of the
+/// up-front working state, and the engine holds nothing else of that order
+/// before it starts.
 ///
 /// # Errors
 /// As [`compare_view`], and [`ViewError::Storage`] when the admission refuses
@@ -757,7 +763,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
     let (lines, charged) = lowered_in(view, Scope::Dataset, records, stop, memory)?;
-    let bytes = grant(&lines, charged, memory)?;
+    let (lines, bytes) = grant(lines, charged, memory)?;
     match label_lines(&lines, limit, stop) {
         Ok(labelled) => Ok(Comparison {
             present: outcome,
@@ -909,7 +915,7 @@ pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> Result<LabellingWithBytes<D::Id>, ViewError<D::ReadError>> {
     let (lines, charged) = lowered_in(view, scope, records, stop, memory)?;
-    let bytes = grant(&lines, charged, memory)?;
+    let (lines, bytes) = grant(lines, charged, memory)?;
     match labelling_of(view, lines, limit, stop) {
         Ok(labelling) => Ok((labelling, bytes)),
         Err(error) => {
