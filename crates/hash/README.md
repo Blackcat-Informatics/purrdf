@@ -582,6 +582,8 @@ source on every run.
 | `b"gts-segment-heads-v1"` | `SEGMENT_HEADS_DOMAIN` | `crates/gts/src/replication.rs` |
 | `b"lexical-transparent-controls-letter-dot-colon-v3"` | `LEXICAL_LAW` | `crates/text/src/profile.rs` |
 | `b"merkle-root\x1f"` | `MERKLE_ROOT_DOMAIN` | `crates/slice/src/cache.rs` |
+| `b"nested-refinement-labelling 1 component"` | `COMPONENT_CONTEXT` | `crates/rdf-core/src/canonical_labelling/mod.rs` |
+| `b"nested-refinement-labelling 1 lines"` | `LINES_CONTEXT` | `crates/rdf-core/src/canonical_labelling/mod.rs` |
 | `b"path-snapshot-edge-set-v1"` | `PATH_SNAPSHOT_DOMAIN_V1` | `crates/sparql-eval/src/path_relation.rs` |
 | `b"path-witness-identifier-v1"` | `PATH_ID_DOMAIN_V1` | `crates/sparql-eval/src/path_relation.rs` |
 | `b"phase:bundle"` | `BUNDLE_PHASE` | `crates/slice/src/cache.rs` |
