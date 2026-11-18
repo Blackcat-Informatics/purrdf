@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1332-iri-normalize-removes-a-percent-encoded",
+  "branch": "paudley/1332-iri-normalize-removes-a-percent-encoded",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "2fa55753006a497d6863223f8f6c7829b26b5caf",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1332-iri-normalize-removes-a-percent-encoded/.stage/sync/sync/20261118T135301-816f3c0195404d6cb6a62789c1fd4da9",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "c2bdbb06a04d561b426d8c0e397f11ecbdcad8fa",
+  "merge_bases": [
+    "0a8364d36adda52eaed3c3fc7c033330a7aebae3"
+  ],
+  "merge_index": "18d8c9430d09674a065de7dd4d4eff19d45ff562ebcd87016f6243146ed79cc1",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "c1c53f962588eecd1b28820a924f1f1596546afe",
+  "candidate_patch": "candidate-460b8245d44f4e799a04001aee84bd3f.patch",
+  "stdout_log": "commit-460b8245d44f4e799a04001aee84bd3f.stdout.log",
+  "stderr_log": "commit-460b8245d44f4e799a04001aee84bd3f.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 151.95300453700474,
+  "commit": "4fb2346706dd7066c3004423ffb559634f545311",
+  "tree": "c1c53f962588eecd1b28820a924f1f1596546afe",
+  "exit_code": 0
+}

@@ -1,0 +1,2447 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index c10462d11..f371e5010 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -22,6 +22,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   was `//h/x` and is `//h/%2E%2E/x`. A literal dot segment is removed as before,
+   and a segment that only contains an encoded dot (`x%2e`) decodes as before. A
+   caller that stored such normal forms holds the old spelling.
++- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
++  IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
++  N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
++  `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
++  for every caller; the C1 controls stay raw. The canonical IRI writer escapes
++  exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
++  carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
++  Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
++  (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
++  `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
++  the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
++  literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
++  because it was taken over a non-conforming spelling; every other stored digest
++  recomputes unchanged. The readers affected are the PACK version 1
++  `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
++  source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
++  over binary lines and does not move; the 5.0 document spells those characters
++  as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
++  SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
+ - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
+   admits the executed SRL program against the declarations before it compiles,
+   so a rule that derives a protected predicate is refused as
+diff --git README.md README.md
+index 4962e15eb..4eaa2be30 100644
+--- README.md
++++ README.md
+@@ -535,6 +535,7 @@ contracts and the implemented surfaces above are the basis for that growth.
+ - [Migration to 5.0](./docs/MIGRATION-5.0.md), [migration to 4.0](./docs/MIGRATION-4.0.md), [migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
+ - [GTS](./docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
+   [RDF 1.2 canonicalization](./docs/RDF12-CANON-PROFILE.md),
++  [canonical labelling of blank nodes](./docs/design/purrdf-canonical-labelling.md),
+   [storage contracts](./crates/rdf-core/STORAGE.md) and
+   [release process](./docs/RELEASE.md).
+ 
+diff --git crates/lex/src/iri_escape.rs crates/lex/src/iri_escape.rs
+index 689573c11..2016efd3d 100644
+--- crates/lex/src/iri_escape.rs
++++ crates/lex/src/iri_escape.rs
+@@ -34,37 +34,98 @@
+ //! [`find_first_candidate`], the chunked scan for the bytes that can begin an
+ //! escaped scalar, copying every run between two escapes whole.
+ //!
+-//! # The one scalar range egress adds, and why
++//! # Two escape sets, one per carrier
+ //!
+-//! [`is_iriref_escape_required`] is [`crate::terminals::is_iriref_forbidden`]
+-//! widened by exactly `[#x7F-#x9F]` — DEL and the C1 control block. Those are
+-//! **lawful raw** in an `IRIREF` body and the ingress predicate rightly permits
+-//! them; they are escaped on the way out because this workspace's serialized
+-//! output is embedded verbatim inside an XML text node by the CL-dialect
+-//! carrier, and an XML processor normalizes or replaces raw C1 code points on
+-//! read. Escaping them is what makes serialize-then-parse a round trip across
+-//! that carrier. Nothing else is added: U+00A0 NO-BREAK SPACE, U+2000-U+200A,
+-//! U+2028, U+2029 and U+3000 all ride VERBATIM, because they are `ucschar`
+-//! under RFC 3987 §2.2 and an `IRIREF` body is content rather than a token
+-//! boundary.
++//! An `IRIREF` writer is free to escape more than the production forbids, so
++//! which set a writer uses is a choice of **carrier**, and each carrier names
++//! the rule it follows:
+ //!
++//! * [`Carrier::Canonical`] is exactly the production's exclusions: `[#x00-#x20]`
++//!   and the nine delimiters ``< > " { } | ^ ` \``, the set
++//!   [`crate::terminals::is_iriref_forbidden`] answers. Its rule is the `IRIREF`
++//!   production of RDF 1.2 N-Quads and N-Triples (section 2, grammar). The canonical
++//!   forms of those two languages (section 3 of each) say nothing about escaping in
++//!   an IRI, so the canonical document escapes what the grammar requires and nothing
++//!   else: DEL and the C1 block, which `IRIREF` admits and which match the XML 1.1
++//!   `Char` production, ride raw, exactly as U+00A0 does.
++//! * [`Carrier::Xml`] is the same set widened by exactly `[#x7F-#x9F]`, DEL and the
++//!   C1 control block. Those are lawful raw in an `IRIREF` body and are escaped
++//!   because serialized output of this carrier is embedded verbatim in an XML text
++//!   node, and an XML processor normalizes or replaces raw C1 code points on read.
++//!   Escaping them is what makes serialize-then-parse a round trip across that
++//!   carrier. Its rule is XML 1.0 section 2.2 (`Char`, with the C1 controls
++//!   discouraged) and XML 1.1 section 2.11 (NEL rewriting).
++//!
++//! Nothing else is added to either: U+00A0 NO-BREAK SPACE, U+2000-U+200A, U+2028,
++//! U+2029 and U+3000 ride VERBATIM in both, because they are `ucschar` under RFC
++//! 3987 section 2.2 and an `IRIREF` body is content rather than a token boundary.
+ //! The widening is written as the enumerated range it is, not as
+-//! [`char::is_control`]. The two happen to agree here only because
+-//! `char::is_control` is `[#x00-#x1F] ∪ [#x7F-#x9F]` and the first half is
+-//! already inside `[#x00-#x20]`; saying so with a Unicode property would leave
+-//! a reader unable to tell which half of the answer came from the grammar and
+-//! which from the carrier.
++//! [`char::is_control`], so a reader can tell which half of the answer came from
++//! the grammar and which from the carrier.
++//!
++//! The `_for` forms ([`is_iriref_escape_required_for`], [`push_escaped_for`],
++//! [`escape_for`]) name the carrier. [`crate::term_syntax::write_iri`] and every
++//! canonical or hashed form use [`Carrier::Canonical`]; the Turtle emitter and
++//! renderer of `purrdf-core` and the N-Triples writer of the native codecs feed
++//! the CL-dialect carrier and name [`Carrier::Xml`] (a literal's datatype
++//! included, through [`crate::term_syntax::write_literal_for`]); the SHACL path
++//! renderer of `purrdf-validate`, whose string is a SARIF `logicalLocation`, names
++//! it to keep its bytes stable. The
++//! unqualified functions are the [`Carrier::Xml`] set, kept for existing callers;
++//! new code names its carrier. Both carriers share one candidate scan,
++//! [`find_first_candidate`], whose stops are a superset of either set, so a
++//! canonical writer decides the scalar at the `0xC2` lead byte and keeps the C1
++//! block raw.
+ 
+ use crate::terminals::{ByteClass, byte_run_count};
+ use crate::text_out::TextOut;
+ use std::borrow::Cow;
+ 
+-/// DEL and the C1 control block, `[#x7F-#x9F]` — the single range this egress
+-/// law adds to the ingress production. Lawful raw inside an `IRIREF`, escaped
+-/// anyway so the bytes survive an XML text node.
++/// DEL and the C1 control block, `[#x7F-#x9F]` — the single range the
++/// [`Carrier::Xml`] set adds to the production's exclusions. Lawful raw inside
++/// an `IRIREF`, escaped anyway so the bytes survive an XML text node.
+ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
+ 
+-/// Whether an `IRIREF` writer must emit `c` as a `UCHAR` escape rather than raw.
++/// The carrier an `IRIREF` body is escaped for. Each is a specification's
++/// constraint, not a style; see the [module docs](self).
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum Carrier {
++    /// The canonical form of RDF 1.2 N-Quads and N-Triples: exactly the scalars
++    /// the `IRIREF` production excludes, DEL and the C1 block raw.
++    Canonical,
++    /// Text embedded in an XML document: the production's exclusions and the
++    /// range `[#x7F-#x9F]`.
++    Xml,
++}
++
++/// Whether an `IRIREF` writer for `carrier` must emit `c` as a `UCHAR` escape
++/// rather than raw.
++///
++/// [`Carrier::Canonical`] answers [`crate::terminals::is_iriref_forbidden`] and
++/// nothing else; [`Carrier::Xml`] adds DEL and the C1 control block.
++///
++/// ```
++/// use purrdf_lex::iri_escape::{Carrier, is_iriref_escape_required_for};
++///
++/// assert!(is_iriref_escape_required_for(' ', Carrier::Canonical));
++/// assert!(is_iriref_escape_required_for('<', Carrier::Canonical));
++/// // DEL and the C1 block: raw in the canonical form, escaped for XML.
++/// assert!(!is_iriref_escape_required_for('\u{7F}', Carrier::Canonical));
++/// assert!(!is_iriref_escape_required_for('\u{85}', Carrier::Canonical));
++/// assert!(is_iriref_escape_required_for('\u{85}', Carrier::Xml));
++/// // The neighbour past the C1 block is raw in both.
++/// assert!(!is_iriref_escape_required_for('\u{A0}', Carrier::Canonical));
++/// assert!(!is_iriref_escape_required_for('\u{A0}', Carrier::Xml));
++/// ```
++#[inline]
++#[must_use]
++pub const fn is_iriref_escape_required_for(c: char, carrier: Carrier) -> bool {
++    crate::terminals::is_iriref_forbidden(c)
++        || matches!(carrier, Carrier::Xml) && C1_AND_DEL.0 <= c && c <= C1_AND_DEL.1
++}
++
++/// Whether an `IRIREF` writer for [`Carrier::Xml`] must emit `c` as a `UCHAR`
++/// escape rather than raw: [`is_iriref_escape_required_for`] with that carrier.
+ ///
+ /// This is the union of two enumerated sets and nothing else:
+ ///
+@@ -72,8 +133,8 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
+ ///   control **plus the SPACE**) and the nine reserved delimiters
+ ///   ``< > " { } | ^ ` \``, which the grammar forbids raw;
+ /// * `C1_AND_DEL` — `[#x7F-#x9F]`, DEL and the C1 control block, which the
+-///   grammar PERMITS raw and which this workspace escapes anyway for XML
+-///   transport (see the [module docs](self)).
++///   grammar PERMITS raw and which this carrier escapes for XML transport (see
++///   the [module docs](self)).
+ ///
+ /// Every scalar at or above U+00A0 answers `false`: that includes the whole
+ /// non-ASCII Unicode whitespace block, which is content inside an `IRIREF` body
+@@ -97,7 +158,7 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
+ #[inline]
+ #[must_use]
+ pub const fn is_iriref_escape_required(c: char) -> bool {
+-    crate::terminals::is_iriref_forbidden(c) || (C1_AND_DEL.0 <= c && c <= C1_AND_DEL.1)
++    is_iriref_escape_required_for(c, Carrier::Xml)
+ }
+ 
+ /// The bytes that can begin a scalar [`is_iriref_escape_required`] answers
+@@ -108,7 +169,10 @@ pub const fn is_iriref_escape_required(c: char) -> bool {
+ /// Derived from the predicate itself, so the scan and the law cannot drift: the
+ /// ASCII half is the predicate over every ASCII scalar, and the one lead byte is
+ /// the lead of the non-ASCII half (`C1_AND_DEL` lies wholly inside the two-byte
+-/// sequences led by `0xC2`, which a const assertion below pins).
++/// sequences led by `0xC2`, which a const assertion below pins). This is the
++/// [`Carrier::Xml`] set, a superset of [`Carrier::Canonical`]'s, so one scan
++/// serves both: a canonical writer meets `0xC2` as a candidate that needs no
++/// escape and keeps the run whole.
+ const CANDIDATE_TABLE: [u8; 256] = {
+     let mut table = [0_u8; 256];
+     let mut b = 0_u8;
+@@ -203,7 +267,7 @@ fn push_uchar<W: TextOut + ?Sized>(ch: char, out: &mut W) {
+ ///
+ /// `at` is a char boundary. A candidate that needs no escape (a non-C1 scalar
+ /// led by `0xC2`, such as U+00A0) stays inside the run it interrupts.
+-fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W) {
++fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, carrier: Carrier, out: &mut W) {
+     let bytes = iri.as_bytes();
+     let mut run_start = at;
+     while at < bytes.len() {
+@@ -221,7 +285,7 @@ fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W)
+             .next()
+             .expect("a candidate offset is a char boundary");
+         at = hit + ch.len_utf8();
+-        if is_iriref_escape_required(ch) {
++        if is_iriref_escape_required_for(ch, carrier) {
+             out.push_str(&iri[run_start..hit]);
+             push_uchar(ch, out);
+             if out.failed() {
+@@ -233,12 +297,13 @@ fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W)
+     out.push_str(&iri[run_start..]);
+ }
+ 
+-/// Append `iri` to `out` as an `IRIREF` body: every scalar
++/// Append `iri` to `out` as an `IRIREF` body for [`Carrier::Xml`]: every scalar
+ /// [`is_iriref_escape_required`] answers `true` for rides as its `\u00XX`
+-/// `UCHAR`, and every other scalar rides verbatim.
++/// `UCHAR`, and every other scalar rides verbatim. [`push_escaped_for`] is the
++/// form that names the carrier.
+ ///
+-/// The emission of the canonical N-Quads writer and the entailment surface
+-/// writer; one scan with bulk copies of the clean runs.
++/// The emission of the Turtle writer and of the XML carriers; one scan with
++/// bulk copies of the clean runs.
+ ///
+ /// ```
+ /// use purrdf_lex::iri_escape::push_escaped;
+@@ -248,10 +313,27 @@ fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W)
+ /// assert_eq!(out, "urn:ex:a\\u0020b\\u003C\\u0085\\u003E\u{a0}");
+ /// ```
+ pub fn push_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
+-    push_escaped_from(iri, 0, out);
++    push_escaped_for(iri, Carrier::Xml, out);
+ }
+ 
+-/// `iri` as an `IRIREF` body, borrowed when no scalar needs an escape.
++/// Append `iri` to `out` as an `IRIREF` body for `carrier`: every scalar
++/// [`is_iriref_escape_required_for`] answers `true` for rides as its `\u00XX`
++/// `UCHAR` in upper-case hex, and every other scalar rides verbatim. The
++/// emission of the canonical form uses [`Carrier::Canonical`].
++///
++/// ```
++/// use purrdf_lex::iri_escape::{Carrier, push_escaped_for};
++///
++/// let mut out = String::new();
++/// push_escaped_for("urn:ex:a b<\u{85}>\u{7f}\u{a0}", Carrier::Canonical, &mut out);
++/// assert_eq!(out, "urn:ex:a\\u0020b\\u003C\u{85}\\u003E\u{7f}\u{a0}");
++/// ```
++pub fn push_escaped_for<W: TextOut + ?Sized>(iri: &str, carrier: Carrier, out: &mut W) {
++    push_escaped_from(iri, 0, carrier, out);
++}
++
++/// `iri` as an `IRIREF` body for [`Carrier::Xml`], borrowed when no scalar needs
++/// an escape. [`escape_for`] is the form that names the carrier.
+ ///
+ /// The same bytes as [`push_escaped`]. The scan that finds the first escaped
+ /// scalar is the scan that emits, so a value that needs escaping is still read
+@@ -267,6 +349,22 @@ pub fn push_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
+ /// ```
+ #[must_use]
+ pub fn escape(iri: &str) -> Cow<'_, str> {
++    escape_for(iri, Carrier::Xml)
++}
++
++/// `iri` as an `IRIREF` body for `carrier`, borrowed when no scalar needs an
++/// escape. The same bytes as [`push_escaped_for`].
++///
++/// ```
++/// use std::borrow::Cow;
++/// use purrdf_lex::iri_escape::{Carrier, escape_for};
++///
++/// // DEL is raw for the canonical form and escaped for XML.
++/// assert!(matches!(escape_for("urn:ex:\u{7f}", Carrier::Canonical), Cow::Borrowed(_)));
++/// assert_eq!(escape_for("urn:ex:\u{7f}", Carrier::Xml), "urn:ex:\\u007F");
++/// ```
++#[must_use]
++pub fn escape_for(iri: &str, carrier: Carrier) -> Cow<'_, str> {
+     let bytes = iri.as_bytes();
+     let mut at = 0;
+     while let Some(offset) = find_first_candidate(&bytes[at..]) {
+@@ -275,10 +373,10 @@ pub fn escape(iri: &str) -> Cow<'_, str> {
+             .chars()
+             .next()
+             .expect("a candidate offset is a char boundary");
+-        if is_iriref_escape_required(ch) {
++        if is_iriref_escape_required_for(ch, carrier) {
+             let mut out = String::with_capacity(iri.len() + 8);
+             out.push_str(&iri[..hit]);
+-            push_escaped_from(iri, hit, &mut out);
++            push_escaped_from(iri, hit, carrier, &mut out);
+             return Cow::Owned(out);
+         }
+         at = hit + ch.len_utf8();
+@@ -289,7 +387,8 @@ pub fn escape(iri: &str) -> Cow<'_, str> {
+ #[cfg(test)]
+ mod tests {
+     use super::{
+-        CANDIDATE_TABLE, escape, find_first_candidate, is_iriref_escape_required, push_escaped,
++        CANDIDATE_TABLE, Carrier, escape, escape_for, find_first_candidate,
++        is_iriref_escape_required, is_iriref_escape_required_for, push_escaped, push_escaped_for,
+     };
+     use purrdf_testkit::rng::SplitMix64;
+     use std::borrow::Cow;
+@@ -340,6 +439,72 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn the_carriers_differ_at_del_and_the_c1_block_and_nowhere_else() {
++        for c in all_scalars() {
++            assert_eq!(
++                is_iriref_escape_required_for(c, Carrier::Xml)
++                    != is_iriref_escape_required_for(c, Carrier::Canonical),
++                matches!(c, '\u{7F}'..='\u{9F}'),
++                "{c:?}"
++            );
++        }
++        // Refused-side case and its valid neighbour, executed on the writer: DEL
++        // and NEL are raw canonically and escaped for XML, and U+00A0 is raw in both.
++        for (raw, xml) in [
++            ("\u{7f}", "\\u007F"),
++            ("\u{85}", "\\u0085"),
++            ("\u{9f}", "\\u009F"),
++        ] {
++            let iri = format!("urn:ex:{raw}x");
++            assert!(matches!(
++                escape_for(&iri, Carrier::Canonical),
++                Cow::Borrowed(_)
++            ));
++            assert_eq!(escape_for(&iri, Carrier::Xml), format!("urn:ex:{xml}x"));
++        }
++        let neighbour = "urn:ex:\u{a0}x";
++        assert!(matches!(
++            escape_for(neighbour, Carrier::Canonical),
++            Cow::Borrowed(_)
++        ));
++        assert!(matches!(
++            escape_for(neighbour, Carrier::Xml),
++            Cow::Borrowed(_)
++        ));
++    }
++
++    #[test]
++    fn the_canonical_writer_agrees_with_the_per_scalar_oracle() {
++        let alphabet = alphabet();
++        let mut rng = SplitMix64::new(0x001E_1E5C_A9E0_0002);
++        for len in (0..=70).chain([127, 128, 129, 255]) {
++            for _ in 0..20 {
++                let iri: String = (0..len)
++                    .map(|_| {
++                        if rng.below_usize(6) == 0 {
++                            alphabet[rng.below_usize(alphabet.len())]
++                        } else {
++                            'a'
++                        }
++                    })
++                    .collect();
++                let mut expected = String::new();
++                for ch in iri.chars() {
++                    if crate::terminals::is_iriref_forbidden(ch) {
++                        let _ = write!(expected, "\\u{:04X}", ch as u32);
++                    } else {
++                        expected.push(ch);
++                    }
++                }
++                let mut pushed = String::new();
++                push_escaped_for(&iri, Carrier::Canonical, &mut pushed);
++                assert_eq!(pushed, expected, "{iri:?}");
++                assert_eq!(escape_for(&iri, Carrier::Canonical), expected, "{iri:?}");
++            }
++        }
++    }
++
+     #[test]
+     fn non_ascii_whitespace_rides_verbatim() {
+         // The refusal side would be a silent round-trip break rather than a
+diff --git crates/lex/src/literal_escape.rs crates/lex/src/literal_escape.rs
+index 0d42a395a..6a113ef3e 100644
+--- crates/lex/src/literal_escape.rs
++++ crates/lex/src/literal_escape.rs
+@@ -24,21 +24,26 @@
+ //!
+ //! | [`Carrier`] | `"` `\` | LF | CR TAB BS FF | other C0, DEL | C1 (U+0080-U+009F) | U+FFFE, U+FFFF |
+ //! |---|---|---|---|---|---|---|
+-//! | [`Canonical`](Carrier::Canonical) | ECHAR | `\n` | ECHAR | `\u00XX` | raw | raw |
++//! | [`Canonical`](Carrier::Canonical) | ECHAR | `\n` | ECHAR | `\u00XX` | raw | `\uFFFE` `\uFFFF` |
+ //! | [`Xml`](Carrier::Xml) | ECHAR | `\n` | ECHAR | `\u00XX` | `\u00XX` | `\uFFFE` `\uFFFF` |
+ //! | [`TurtleLong`](Carrier::TurtleLong) | see below | raw | ECHAR | `\u00XX` | `\u00XX` | `\uFFFE` `\uFFFF` |
+ //!
+-//! * **`Canonical`** is the RDF 1.2 N-Triples canonical form (N-Triples 1.2
+-//!   §4 "Canonical N-Triples"): `"`, `\`, LF, CR, TAB, BACKSPACE and FORM FEED
+-//!   as their `ECHAR`, every other scalar below U+0020 and U+007F as `UCHAR`
+-//!   with upper-case hex, and every other scalar raw. That last clause keeps
+-//!   the C1 block raw, as the W3C RDFC-1.0 suite pins (test060).
++//! * **`Canonical`** is the canonical form of RDF 1.2 N-Quads (section 3, "A
++//!   Canonical form of N-Quads") and of RDF 1.2 N-Triples (section 3): `"`,
++//!   `\`, LF, CR, TAB, BACKSPACE and FORM FEED as their `ECHAR`, every other
++//!   scalar below U+0020 and U+007F as `UCHAR` with upper-case hex, and U+FFFE
++//!   and U+FFFF as `UCHAR` too, because both sections require that a character
++//!   not matching the XML 1.1 `Char` production (which ends at U+FFFD in the
++//!   basic plane) is written as `UCHAR`. Every other scalar is raw. That
++//!   keeps the C1 block raw: XML 1.1 `Char` admits U+0080 to U+009F, and the
++//!   W3C RDFC-1.0 suite pins it (test060).
+ //! * **`Xml`** is the canonical form for a literal whose serialized text is
+ //!   embedded in an XML text node or attribute (RDF/XML and TriX text, the
+-//!   CL-dialect payload). XML 1.0 §2.2 `Char` excludes U+FFFE and U+FFFF and
+-//!   discourages the C1 controls, and XML 1.1 §2.11 rewrites NEL (U+0085) on
+-//!   read, so those scalars ride as `UCHAR` and the literal survives the round
+-//!   trip through the carrier. Everything else is `Canonical`.
++//!   CL-dialect payload). XML 1.0 §2.2 `Char` discourages the C1 controls
++//!   and XML 1.1 §2.11 rewrites NEL (U+0085) on read, so the C1 scalars ride
++//!   as `UCHAR` in addition to what `Canonical` already escapes, and the
++//!   literal survives the round trip through the carrier. Everything else is
++//!   `Canonical`.
+ //! * **`TurtleLong`** is the body of a Turtle long string, `"""…"""`
+ //!   (Turtle 1.2 `STRING_LITERAL_LONG_QUOTE` `[25]`), whose grammar admits a
+ //!   raw LINE FEED, so a multi-line value stays readable. Every other scalar
+@@ -50,11 +55,12 @@
+ //! # The scan
+ //!
+ //! Each carrier has one chunked [`ByteClass`] kernel over the bytes that can
+-//! begin an escaped scalar; the runs between two stops are copied whole. The
+-//! [`Canonical`](Carrier::Canonical) kernel, [`find_first_literal_escape`], is
+-//! all-ASCII, so every stop is an escape. The other two also stop at the lead
+-//! bytes `0xC2` (the C1 block) and `0xEF` (U+FFFE, U+FFFF) and at `"`, which are
+-//! candidates: the scalar there is decided before anything is emitted.
++//! begin an escaped scalar; the runs between two stops are copied whole. Every
++//! kernel stops at the lead byte `0xEF` (U+FFFE, U+FFFF), and the
++//! [`Xml`](Carrier::Xml) and [`TurtleLong`](Carrier::TurtleLong) kernels also
++//! at `0xC2` (the C1 block). [`TurtleLong`](Carrier::TurtleLong) stops at `"`
++//! too. A lead byte is a candidate, not a verdict: the scalar there is decided
++//! before anything is emitted.
+ 
+ use std::borrow::Cow;
+ 
+@@ -65,10 +71,11 @@ use crate::text_out::TextOut;
+ /// constraint, not a style; see the [module docs](self) for the table.
+ #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+ pub enum Carrier {
+-    /// The RDF 1.2 N-Triples canonical form: C1 raw.
++    /// The canonical form of RDF 1.2 N-Quads and N-Triples (section 3 of
++    /// each): U+FFFE and U+FFFF as `UCHAR`, C1 raw.
+     Canonical,
+-    /// The canonical form for text embedded in an XML 1.0 document: C1, U+FFFE
+-    /// and U+FFFF as `UCHAR`.
++    /// The canonical form for text embedded in an XML 1.0 document: the
++    /// `Canonical` escapes and the C1 controls as `UCHAR`.
+     Xml,
+     /// The body of a Turtle `"""…"""` long string: the `Xml` rules with LINE
+     /// FEED raw and `"` escaped only where it would close the string.
+@@ -80,8 +87,9 @@ const C1_LEAD: u8 = 0xC2;
+ /// The UTF-8 lead byte of U+F000-U+FFFF, the block holding U+FFFE and U+FFFF.
+ const NONCHAR_LEAD: u8 = 0xEF;
+ 
+-/// The bytes the canonical form escapes: `"`, `\`, the C0 controls and DEL.
+-/// Every member is ASCII and every member is escaped.
++/// The bytes the canonical form escapes or can escape: `"`, `\`, the C0
++/// controls and DEL (every one an escape), and the lead byte of the block
++/// holding U+FFFE and U+FFFF (a candidate).
+ const CANONICAL_TABLE: [u8; 256] = {
+     let mut table = [0_u8; 256];
+     let mut b = 0;
+@@ -92,15 +100,15 @@ const CANONICAL_TABLE: [u8; 256] = {
+     table[b'"' as usize] = 1;
+     table[b'\\' as usize] = 1;
+     table[0x7F] = 1;
++    table[NONCHAR_LEAD as usize] = 1;
+     table
+ };
+ 
+-/// The canonical bytes plus the two lead bytes whose blocks hold the scalars
+-/// an XML carrier escapes.
++/// The canonical bytes plus the lead byte of the block holding the C1
++/// controls, which an XML carrier escapes.
+ const XML_TABLE: [u8; 256] = {
+     let mut table = CANONICAL_TABLE;
+     table[C1_LEAD as usize] = 1;
+-    table[NONCHAR_LEAD as usize] = 1;
+     table
+ };
+ 
+@@ -118,13 +126,15 @@ const XML: ByteClass<{ byte_run_count(&XML_TABLE) }> = ByteClass::from_table(XML
+ const TURTLE_LONG: ByteClass<{ byte_run_count(&TURTLE_LONG_TABLE) }> =
+     ByteClass::from_table(TURTLE_LONG_TABLE);
+ 
+-/// The offset of the first byte of `bytes` the [`Canonical`](Carrier::Canonical)
+-/// form escapes (`"`, `\`, a C0 control or DEL), or `None` when the whole value
+-/// rides verbatim.
++/// The offset of the first byte of `bytes` that can begin a scalar the
++/// [`Canonical`](Carrier::Canonical) form escapes, or `None` when the whole
++/// value rides verbatim.
+ ///
+-/// Every stop is an escape and every stop is ASCII, so the offset is a char
+-/// boundary of a `str`'s bytes. The chunked kernel of [`ByteClass`]: sixteen-byte
+-/// packed compares on every target with a vector unit.
++/// A candidate, not a verdict: an ASCII stop (`"`, `\`, a C0 control or DEL)
++/// is always an escape, and at the lead byte `0xEF` only U+FFFE and U+FFFF are.
++/// Every stop is a lead byte or an ASCII byte, so the offset is a char boundary
++/// of a `str`'s bytes. The chunked kernel of [`ByteClass`]: sixteen-byte packed
++/// compares on every target with a vector unit.
+ ///
+ /// ```
+ /// use purrdf_lex::literal_escape::find_first_literal_escape;
+@@ -133,6 +143,8 @@ const TURTLE_LONG: ByteClass<{ byte_run_count(&TURTLE_LONG_TABLE) }> =
+ /// assert_eq!(find_first_literal_escape(b"say \"hi\""), Some(4));
+ /// // The C1 block rides raw in the canonical form.
+ /// assert_eq!(find_first_literal_escape("a\u{85}".as_bytes()), None);
++/// // U+FFFF is led by 0xEF, a candidate.
++/// assert_eq!(find_first_literal_escape("a\u{ffff}".as_bytes()), Some(1));
+ /// ```
+ #[inline(never)]
+ #[must_use]
+@@ -143,8 +155,9 @@ pub fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
+ /// The offset of the first byte of `bytes` that can begin a scalar the
+ /// [`Xml`](Carrier::Xml) carrier escapes, or `None` when none can.
+ ///
+-/// A candidate, not a verdict: at `0xC2` only a C1 control is escaped and at
+-/// `0xEF` only U+FFFE and U+FFFF; every ASCII stop is an escape.
++/// The [`find_first_literal_escape`] class plus `0xC2`. A candidate, not a
++/// verdict: at `0xC2` only a C1 control is escaped and at `0xEF` only U+FFFE and
++/// U+FFFF; every ASCII stop is an escape.
+ ///
+ /// ```
+ /// use purrdf_lex::literal_escape::find_first_xml_carrier_escape;
+@@ -297,8 +310,8 @@ fn write_from<W: TextOut + ?Sized>(
+ /// use purrdf_lex::literal_escape::{Carrier, write};
+ ///
+ /// let mut out = String::new();
+-/// write("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é", Carrier::Canonical, &mut out);
+-/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é");
++/// write("a\"b\\c\n\u{8}\u{1}\u{7f}\u{85}é\u{fffe}", Carrier::Canonical, &mut out);
++/// assert_eq!(out, "a\\\"b\\\\c\\n\\b\\u0001\\u007F\u{85}é\\uFFFE");
+ ///
+ /// out.clear();
+ /// write("\u{85}\u{ffff}", Carrier::Xml, &mut out);
+@@ -358,7 +371,7 @@ mod tests {
+         let v = u32::from(c);
+         let control = v < 0x20 || v == 0x7F;
+         match carrier {
+-            Carrier::Canonical => control,
++            Carrier::Canonical => control || v == 0xFFFE || v == 0xFFFF,
+             Carrier::Xml | Carrier::TurtleLong => {
+                 control || (0x80..=0x9F).contains(&v) || v == 0xFFFE || v == 0xFFFF
+             }
+@@ -466,7 +479,7 @@ mod tests {
+     }
+ 
+     #[test]
+-    fn canonical_form_uses_every_echar_and_keeps_c1_raw() {
++    fn canonical_form_uses_every_echar_escapes_the_noncharacters_and_keeps_c1_raw() {
+         let mut out = String::new();
+         write(
+             "\"\\\n\r\t\u{8}\u{c}\u{0}\u{1f}\u{7f}",
+@@ -474,11 +487,21 @@ mod tests {
+             &mut out,
+         );
+         assert_eq!(out, "\\\"\\\\\\n\\r\\t\\b\\f\\u0000\\u001F\\u007F");
+-        // C1 raw, per RDFC-1.0 test060; U+FFFE and U+FFFF raw too.
++        // C1 raw, per RDFC-1.0 test060; U+FFFE and U+FFFF are the one escaped
++        // part of the high block, per N-Quads 1.2 section 3.
+         assert_eq!(
+             escape("\u{80}\u{85}\u{9f}\u{fffe}\u{ffff}", Carrier::Canonical),
+-            "\u{80}\u{85}\u{9f}\u{fffe}\u{ffff}"
++            "\u{80}\u{85}\u{9f}\\uFFFE\\uFFFF"
+         );
++        assert_eq!(escape("a\u{fffe}b", Carrier::Canonical), "a\\uFFFEb");
++        // The neighbours on the far side of each edge ride raw, so the escape
++        // is exactly the two noncharacters and not the whole 0xEF block.
++        for raw in ["\u{fffd}", "\u{f000}", "\u{feff}", "\u{ffef}", "\u{fdd0}"] {
++            assert!(
++                matches!(escape(raw, Carrier::Canonical), Cow::Borrowed(_)),
++                "{raw:?}"
++            );
++        }
+     }
+ 
+     #[test]
+@@ -558,12 +581,11 @@ mod tests {
+         for b in 0..=u8::MAX {
+             let i = usize::from(b);
+             let canonical = CANONICAL_TABLE[i] != 0;
+-            assert_eq!(canonical, b < 0x20 || b == b'"' || b == b'\\' || b == 0x7F);
+             assert_eq!(
+-                XML_TABLE[i] != 0,
+-                canonical || b == 0xC2 || b == 0xEF,
+-                "{b:#04X}"
++                canonical,
++                b < 0x20 || b == b'"' || b == b'\\' || b == 0x7F || b == 0xEF
+             );
++            assert_eq!(XML_TABLE[i] != 0, canonical || b == 0xC2, "{b:#04X}");
+             assert_eq!(
+                 TURTLE_LONG_TABLE[i] != 0,
+                 XML_TABLE[i] != 0 && b != b'\n',
+diff --git crates/lex/src/term_syntax.rs crates/lex/src/term_syntax.rs
+index 1bdd2b4b0..d8d1ff6a4 100644
+--- crates/lex/src/term_syntax.rs
++++ crates/lex/src/term_syntax.rs
+@@ -7,11 +7,14 @@
+ //!
+ //! # The contract
+ //!
+-//! This is the canonical term form of RDF 1.2 N-Triples (N-Triples 1.2 §4
+-//! "Canonical N-Triples"), which Turtle, TriG, N-Quads and SPARQL all accept
+-//! for a term:
++//! This is the canonical term form of RDF 1.2 N-Quads (section 3, "A Canonical
++//! form of N-Quads") and RDF 1.2 N-Triples (section 3), which Turtle, TriG
++//! and SPARQL all accept for a term:
+ //!
+-//! * an IRI is `<` + its body through [`crate::iri_escape`] + `>`;
++//! * an IRI is `<` + its body through the
++//!   [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier of
++//!   [`crate::iri_escape`] + `>`: escaped exactly where the `IRIREF`
++//!   production forbids a scalar;
+ //! * a literal is `"` + its lexical form through the
+ //!   [`Canonical`](Carrier::Canonical) carrier of [`crate::literal_escape`] +
+ //!   `"`, then `@lang`, `@lang--dir` or `^^<datatype>`. A literal whose
+@@ -44,7 +47,8 @@ pub const TRIPLE_TERM_CLOSE: &str = ")>>";
+ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+ 
+ /// Append `iri` as an `IRIREF`: `<`, the body escaped by
+-/// [`crate::iri_escape::push_escaped`], `>`.
++/// [`crate::iri_escape::push_escaped_for`] with the
++/// [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier, `>`.
+ ///
+ /// ```
+ /// use purrdf_lex::term_syntax::write_iri;
+@@ -54,8 +58,30 @@ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+ /// assert_eq!(out, "<http://example.org/a\\u0020b>");
+ /// ```
+ pub fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
++    write_iri_for(iri, crate::iri_escape::Carrier::Canonical, out);
++}
++
++/// Append `iri` as an `IRIREF` for `carrier`: `<`, the body escaped by
++/// [`crate::iri_escape::push_escaped_for`], `>`. [`write_iri`] is the
++/// canonical carrier; a writer whose text is embedded in an XML text node names
++/// [`Xml`](crate::iri_escape::Carrier::Xml), which also escapes DEL and the C1
++/// controls.
++///
++/// ```
++/// use purrdf_lex::iri_escape::Carrier;
++/// use purrdf_lex::term_syntax::write_iri_for;
++///
++/// let mut out = String::new();
++/// write_iri_for("urn:ex:\u{85}", Carrier::Xml, &mut out);
++/// assert_eq!(out, "<urn:ex:\\u0085>");
++/// ```
++pub fn write_iri_for<W: TextOut + ?Sized>(
++    iri: &str,
++    carrier: crate::iri_escape::Carrier,
++    out: &mut W,
++) {
+     out.push('<');
+-    crate::iri_escape::push_escaped(iri, out);
++    crate::iri_escape::push_escaped_for(iri, carrier, out);
+     out.push('>');
+ }
+ 
+@@ -90,6 +116,38 @@ pub fn write_literal<W: TextOut + ?Sized>(
+     lang: Option<&str>,
+     dir: Option<&str>,
+     out: &mut W,
++) {
++    write_literal_for(
++        lexical_form,
++        datatype,
++        crate::iri_escape::Carrier::Canonical,
++        lang,
++        dir,
++        out,
++    );
++}
++
++/// Append a literal in its canonical form with the datatype `IRIREF` escaped for
++/// `datatype_carrier`: [`write_literal`] is this with the canonical carrier. A
++/// writer whose IRIs are all spelled for XML names
++/// [`Xml`](crate::iri_escape::Carrier::Xml) here so its datatype IRIs match its
++/// other IRIs. The lexical form is always the canonical literal spelling.
++///
++/// ```
++/// use purrdf_lex::iri_escape::Carrier;
++/// use purrdf_lex::term_syntax::write_literal_for;
++///
++/// let mut out = String::new();
++/// write_literal_for("1", "urn:dt:\u{85}", Carrier::Xml, None, None, &mut out);
++/// assert_eq!(out, "\"1\"^^<urn:dt:\\u0085>");
++/// ```
++pub fn write_literal_for<W: TextOut + ?Sized>(
++    lexical_form: &str,
++    datatype: &str,
++    datatype_carrier: crate::iri_escape::Carrier,
++    lang: Option<&str>,
++    dir: Option<&str>,
++    out: &mut W,
+ ) {
+     debug_assert!(
+         dir.is_none() || lang.is_some(),
+@@ -107,7 +165,7 @@ pub fn write_literal<W: TextOut + ?Sized>(
+         }
+     } else if datatype != XSD_STRING {
+         out.push_str("^^");
+-        write_iri(datatype, out);
++        write_iri_for(datatype, datatype_carrier, out);
+     }
+ }
+ 
+@@ -182,6 +240,18 @@ mod tests {
+             literal("a\"b\\\u{8}\u{85}", &format!("{XSD}string"), None, None),
+             "\"a\\\"b\\\\\\b\u{85}\""
+         );
++        // A scalar outside XML 1.1 `Char` is a UCHAR.
++        assert_eq!(
++            literal("a\u{fffe}\u{ffff}b", &format!("{XSD}string"), None, None),
++            "\"a\\uFFFE\\uFFFFb\""
++        );
++    }
++
++    #[test]
++    fn an_iri_escapes_what_the_production_forbids_and_keeps_del_and_c1_raw() {
++        let mut out = String::new();
++        write_iri("urn:ex:a\u{7f}\u{85}\u{a0}b c", &mut out);
++        assert_eq!(out, "<urn:ex:a\u{7f}\u{85}\u{a0}b\\u0020c>");
+     }
+ 
+     #[test]
+diff --git crates/rdf-core/src/canonical_labelling/document.rs crates/rdf-core/src/canonical_labelling/document.rs
+index b99773d1a..2f3d7c9bb 100644
+--- crates/rdf-core/src/canonical_labelling/document.rs
++++ crates/rdf-core/src/canonical_labelling/document.rs
+@@ -30,6 +30,12 @@
+ //! blank node `_:` and its position ([`Composites`]); no label spells the
+ //! composite node itself.
+ //!
++//! Terms are spelled as the canonical form of RDF 1.2 N-Quads (section 3): an
++//! IRI escapes exactly what `IRIREF` forbids, and U+FFFE and U+FFFF in a
++//! literal are `\uFFFE` and `\uFFFF`, since neither matches the XML 1.1 `Char`
++//! production. DEL and the C1 controls ride raw. The digest is over the binary
++//! line encodings, so these spellings do not move it.
++//!
+ //! The encoding is read by the rules of 3.7 and Lemma E; nothing here parses a
+ //! label.
+ 
+diff --git crates/rdf-core/src/canonical_labelling/document_tests.rs crates/rdf-core/src/canonical_labelling/document_tests.rs
+index 0d43a8630..d9d0e82b6 100644
+--- crates/rdf-core/src/canonical_labelling/document_tests.rs
++++ crates/rdf-core/src/canonical_labelling/document_tests.rs
+@@ -112,3 +112,39 @@ fn bytes_that_are_not_a_line_encoding_are_refused_and_the_whole_encoding_is_not(
+         Err(DocumentError::Tag(0x04))
+     );
+ }
++
++/// N-Quads 1.2 section 3 writes a character outside XML 1.1 `Char` as `UCHAR`,
++/// so the document spells U+FFFE and U+FFFF in a literal as escapes while the
++/// line encoding, which is what the digest covers, keeps their UTF-8 bytes.
++/// The neighbours U+FFFD and the C1 control U+0085 stay raw in the document.
++#[test]
++fn the_document_escapes_noncharacters_and_the_digest_input_does_not() {
++    let lexical = "a\u{fffe}b\u{ffff}c\u{fffd}d\u{85}e";
++    let sequence = [Line::Quad {
++        subject: iri("s"),
++        predicate: iri("p"),
++        object: Term::typed(lexical.as_bytes(), XSD_STRING),
++        graph: None,
++    }];
++    let (_, labelled) = label(&sequence).expect("labelled");
++    let mut document = String::new();
++    write_document(&labelled.lines, &mut document).expect("spelled");
++    assert_eq!(
++        document,
++        "<http://example.org/s> <http://example.org/p> \"a\\uFFFEb\\uFFFFc\u{fffd}d\u{85}e\" .\n"
++    );
++    let encoding = labelled.lines.first().expect("one line");
++    let holds = |needle: &[u8]| encoding.windows(needle.len()).any(|w| w == needle);
++    assert!(holds("\u{fffe}".as_bytes()) && holds("\u{ffff}".as_bytes()));
++    assert!(!holds(b"\\uFFFE"));
++    // The digest is the key-derived hash of the line count and the binary
++    // lines, so the escapes of the document are not in it.
++    let mut message = (labelled.lines.len() as u64).to_be_bytes().to_vec();
++    for line in &labelled.lines {
++        message.extend_from_slice(line);
++    }
++    assert_eq!(
++        labelled.digest,
++        super::digest_of(super::LINES_CONTEXT, &message)
++    );
++}
+diff --git crates/rdf-core/src/ir/canon.rs crates/rdf-core/src/ir/canon.rs
+index 913761b00..b9b770163 100644
+--- crates/rdf-core/src/ir/canon.rs
++++ crates/rdf-core/src/ir/canon.rs
+@@ -248,7 +248,7 @@ pub const CANON_PROFILE_ID: &str = "purrdf-rdfc12";
+ /// together: the first two say which algorithm was agreed, and this says which
+ /// evidence was agreed to demonstrate it.
+ pub const CANON_CORPUS_DIGEST: &str =
+-    "b9f367a47ebbf389f76efddb083040dae77b1987f96709bebb8af9fdb5818d3d";
++    "b57bacfc3877e8db1500d0e9fe983aa3b7f463c312df0da1f6007337e019201d";
+ 
+ /// The version of [`CANON_PROFILE_ID`] this build implements.
+ ///
+@@ -270,7 +270,13 @@ pub const CANON_CORPUS_DIGEST: &str =
+ /// **v2 → v3**: caller-selected finite or unlimited search replaces the fixed
+ /// ceiling. Typed execution receipts bind the effective configuration and actual
+ /// charged events; successful canonical bytes are unchanged.
+-pub const CANON_PROFILE_VERSION: u32 = 3;
++///
++/// **v3 → v4**: the canonical form of RDF 1.2 N-Quads (section 3) writes U+FFFE
++/// and U+FFFF in a literal as `\uFFFE` and `\uFFFF`, since neither matches the XML
++/// 1.1 `Char` production. Canonical bytes, and so the digest, move only for a
++/// dataset holding one of those two characters in a literal; every other dataset
++/// canonicalizes to the bytes it did under v3.
++pub const CANON_PROFILE_VERSION: u32 = 4;
+ 
+ /// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
+ /// (reifiers, annotations) rendered through this profile's reserved sentinel IRIs
+@@ -5773,7 +5779,7 @@ mod tests {
+     #[test]
+     fn the_profile_identity_and_the_reserved_namespace_are_consistent() {
+         assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
+-        assert_eq!(CANON_PROFILE_VERSION, 3);
++        assert_eq!(CANON_PROFILE_VERSION, 4);
+         assert!(SENTINEL_REIFIES.starts_with(RESERVED_NAMESPACE));
+         assert!(SENTINEL_ANNOTATION_GRAPH.starts_with(RESERVED_NAMESPACE));
+     }
+@@ -8155,7 +8161,7 @@ mod tests {
+             complete.receipts()[0].configuration,
+             SearchConfiguration::Rdfc {
+                 output: CanonOutput::Blake3Digest,
+-                profile_version: 3,
++                profile_version: 4,
+                 ..
+             }
+         ));
+diff --git crates/rdf-core/src/turtle.rs crates/rdf-core/src/turtle.rs
+index 861ca6fce..8b43e5a15 100644
+--- crates/rdf-core/src/turtle.rs
++++ crates/rdf-core/src/turtle.rs
+@@ -49,11 +49,18 @@ use crate::{
+     blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
+ };
+ use purrdf_lex::term_syntax::{
+-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
++    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri_for, write_literal_for,
+ };
+ use purrdf_xsd::datatype::XSD_STRING;
+ use std::borrow::Cow;
+ 
++/// Append an `IRIREF` for the XML carrier: this emitter's artifacts are embedded
++/// in XML text by the CL-dialect carrier, so DEL and the C1 controls are escaped
++/// as well as what `IRIREF` forbids.
++fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
++    write_iri_for(iri, purrdf_lex::iri_escape::Carrier::Xml, out);
++}
++
+ /// The blank-node label this emitter writes after `_:` for an OWNED-model term:
+ /// the caller's label when it is already legal under the exact W3C
+ /// Turtle/SPARQL `BLANK_NODE_LABEL` production, otherwise the deterministic,
+@@ -94,7 +101,7 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
+ }
+ 
+ /// Append an [`RdfLiteral`] in its canonical term form through
+-/// [`write_literal`]: `"lex"`, `"lex"@lang`, `"lex"@lang--dir` or
++/// [`write_literal_for`]: `"lex"`, `"lex"@lang`, `"lex"@lang--dir` or
+ /// `"lex"^^<datatype>`, with an `xsd:string` datatype left unwritten.
+ ///
+ /// A base direction exists only beside a language tag (RDF 1.2 Concepts §3.3);
+@@ -102,9 +109,10 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
+ /// of any RDF 1.2 literal, so it is not written.
+ fn write_owned_literal<W: TextOut + ?Sized>(literal: &RdfLiteral, out: &mut W) {
+     let language = literal.language.as_deref();
+-    write_literal(
++    write_literal_for(
+         &literal.lexical_form,
+         literal.datatype.as_deref().unwrap_or(XSD_STRING),
++        purrdf_lex::iri_escape::Carrier::Xml,
+         language,
+         literal
+             .direction
+@@ -176,9 +184,10 @@ pub fn try_write_view_term<D: crate::DatasetView, W: TextOut + ?Sized>(
+                 let TermRef::Iri(datatype) = datatype_guard.term() else {
+                     return Err(crate::TermLookupError::ForeignId);
+                 };
+-                write_literal(
++                write_literal_for(
+                     lexical,
+                     datatype,
++                    purrdf_lex::iri_escape::Carrier::Xml,
+                     language,
+                     direction.map(crate::RdfTextDirection::as_str),
+                     out,
+@@ -1026,7 +1035,10 @@ mod tests {
+             RdfTerm::Triple(triple) => format!(
+                 "<<( {} <{}> {} )>>",
+                 reference_render(&triple.subject, display),
+-                purrdf_lex::iri_escape::escape(&triple.predicate),
++                purrdf_lex::iri_escape::escape_for(
++                    &triple.predicate,
++                    purrdf_lex::iri_escape::Carrier::Xml
++                ),
+                 reference_render(&triple.object, display)
+             ),
+             leaf if display => display_term(leaf),
+@@ -1044,7 +1056,10 @@ mod tests {
+                 format!(
+                     "<<( {} <{}> {} )>>",
+                     reference_dataset_term(dataset, s),
+-                    purrdf_lex::iri_escape::escape(predicate),
++                    purrdf_lex::iri_escape::escape_for(
++                        predicate,
++                        purrdf_lex::iri_escape::Carrier::Xml
++                    ),
+                     reference_dataset_term(dataset, o)
+                 )
+             }
+diff --git crates/rdf-core/src/turtle_render.rs crates/rdf-core/src/turtle_render.rs
+index ebf3d3522..c92f3db2f 100644
+--- crates/rdf-core/src/turtle_render.rs
++++ crates/rdf-core/src/turtle_render.rs
+@@ -32,7 +32,7 @@ use crate::model::RdfTextDirection;
+ use crate::{FastMap, FastSet, RdfDataset, TermId, TermRef};
+ use purrdf_iri::{PrefixMap, contract_where};
+ use purrdf_lex::literal_escape::{self, Carrier};
+-use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri};
++use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri_for};
+ 
+ use purrdf_iri::vocab::rdf::NS as RDF;
+ use purrdf_xsd::datatype::XSD_NS as XSD;
+@@ -541,7 +541,8 @@ impl<'a> Renderer<'a> {
+             return curie;
+         }
+         let mut out = String::with_capacity(iri.len() + 2);
+-        write_iri(iri, &mut out);
++        // The rendering feeds the CL-dialect carrier, so the XML set.
++        write_iri_for(iri, purrdf_lex::iri_escape::Carrier::Xml, &mut out);
+         out
+     }
+ 
+diff --git crates/rdf/src/gts_import_graph.rs crates/rdf/src/gts_import_graph.rs
+index bd0a61575..3749bfd69 100644
+--- crates/rdf/src/gts_import_graph.rs
++++ crates/rdf/src/gts_import_graph.rs
+@@ -517,6 +517,27 @@ mod tests {
+         assert_eq!(err.code, "gts-iri-missing-value");
+     }
+ 
++    /// An IRI holding DEL or a C1 control is refused on import, and the
++    /// neighbour holding U+00A0 (the first `ucschar`) imports.
++    #[test]
++    fn del_and_c1_in_an_iri_are_refused_and_no_break_space_is_not() {
++        let import = |inner: &str| {
++            let mut graph = Graph::default();
++            graph
++                .terms
++                .push(iri_term(&format!("http://example.org/a{inner}b")));
++            graph.terms.push(iri_term("http://example.org/p"));
++            graph.terms.push(iri_term("http://example.org/o"));
++            graph.quads.push((0, 1, 2, None));
++            import_gts_graph(graph)
++        };
++        for inner in ["\u{7f}", "\u{80}", "\u{9f}"] {
++            let err = import(inner).expect_err(&format!("imported {inner:?}"));
++            assert_eq!(err.code, "iri-disallowed-char", "{inner:?}: {err}");
++        }
++        assert!(import("\u{a0}").is_ok());
++    }
++
+     /// A nested quoted-triple term survives the consuming path: the outer triple's
+     /// object IS the inner triple term.
+     #[test]
+diff --git crates/rdf/src/native_codecs/ser_model.rs crates/rdf/src/native_codecs/ser_model.rs
+index 2c53c48c5..12692421a 100644
+--- crates/rdf/src/native_codecs/ser_model.rs
++++ crates/rdf/src/native_codecs/ser_model.rs
+@@ -390,10 +390,15 @@ pub(super) fn spell_iri<'a>(iri: &'a str, base: Option<&BaseIri>) -> Cow<'a, str
+         .map_or(Cow::Borrowed(iri), Cow::Owned)
+ }
+ 
+-/// Append an `IRIREF` token — [`term_syntax::write_iri`] — spelling the IRI against
++/// Append an `IRIREF` token — [`term_syntax::write_iri_for`] with the XML
++/// carrier, which also escapes DEL and the C1 controls — spelling the IRI against
+ /// `base` per [`spell_iri`].
+ fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&BaseIri>) {
+-    term_syntax::write_iri(&spell_iri(iri, base), out);
++    term_syntax::write_iri_for(
++        &spell_iri(iri, base),
++        purrdf_lex::iri_escape::Carrier::Xml,
++        out,
++    );
+ }
+ 
+ /// Append one term's N-Triples surface to `out`.
+@@ -1492,7 +1497,10 @@ pub(crate) mod term_walk_tests {
+                 let _ = write!(
+                     out,
+                     "<{}>",
+-                    purrdf_lex::iri_escape::escape(t.value.as_deref().unwrap_or(""))
++                    purrdf_lex::iri_escape::escape_for(
++                        t.value.as_deref().unwrap_or(""),
++                        purrdf_lex::iri_escape::Carrier::Xml,
++                    )
+                 );
+             }
+             SerTermKind::Bnode => {
+diff --git crates/rdf/tests/canonical_noncharacters.rs crates/rdf/tests/canonical_noncharacters.rs
+new file mode 100644
+index 000000000..9f28a3624
+--- /dev/null
++++ crates/rdf/tests/canonical_noncharacters.rs
+@@ -0,0 +1,82 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! U+FFFE and U+FFFF in a literal through the canonical entry points.
++//!
++//! The 5.0 canonical document spells them as `UCHAR` (N-Quads 1.2 section 3: a
++//! character outside the XML 1.1 `Char` production), its digest is over binary
++//! lines and is the same from every entry point, and the retained 4.x
++//! `purrdf-rdfc12` output escapes them too (profile version 4), so a 4.x digest
++//! recorded over the raw spelling no longer recomputes for such a dataset.
++
++use purrdf_core::ContentDigest;
++use purrdf_core::{
++    CANON_CORPUS_POLICY, CanonicalizationControl, try_canonical_digest_view,
++    try_canonicalize_digest_view,
++};
++use purrdf_rdf::rdfc12::{
++    CanonHash, RDFC_V2_CORPUS_POLICY, try_canonical_sha256_view, try_canonicalize_flat_view,
++    try_canonicalize_graph_view, try_canonicalize_with, try_flat_blake3_view, try_flat_digest_view,
++    try_graph_digest_view,
++};
++use purrdf_rdf::{TermValue, parse_dataset};
++
++const SOURCE: &str =
++    "<http://example.org/s> <http://example.org/p> \"a\\uFFFEb\\uFFFFc\\u0085\" .\n";
++const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
++
++#[test]
++fn the_document_escapes_the_noncharacters_and_every_digest_entry_agrees() {
++    let dataset = parse_dataset(SOURCE.as_bytes(), "application/n-quads", None).expect("parses");
++    let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
++    let (canonical, digest) =
++        try_canonicalize_digest_view(&dataset, &mut control).expect("canonicalizes");
++    assert_eq!(
++        canonical.nquads(),
++        "<http://example.org/s> <http://example.org/p> \"a\\uFFFEb\\uFFFFc\u{85}\" .\n"
++    );
++
++    let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
++    let alone = try_canonical_digest_view(&dataset, &mut control).expect("digest");
++    assert_eq!(alone.as_bytes(), digest.as_bytes());
++
++    // The spelled line parses back to the same literal.
++    let reparsed =
++        parse_dataset(canonical.nquads().as_bytes(), "application/n-quads", None).expect("reads");
++    let literal = TermValue::typed_literal("a\u{fffe}b\u{ffff}c\u{85}", XSD_STRING);
++    assert!(dataset.term_id_by_value(&literal).is_some());
++    assert!(reparsed.term_id_by_value(&literal).is_some());
++}
++
++/// Each digest entry of the retained 4.x path is the hash of its own document
++/// for a dataset holding the noncharacters, so no entry spells them differently.
++#[test]
++fn every_4x_digest_entry_equals_the_hash_of_its_document() {
++    let source = format!(
++        "{SOURCE}<http://example.org/s> <http://example.org/p> \"x\\uFFFEy\" <http://example.org/g> .\n"
++    );
++    let dataset = parse_dataset(source.as_bytes(), "application/n-quads", None).expect("parses");
++    let control = || CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
++    let hash = CanonHash::Sha256;
++
++    let overlay = try_canonicalize_with(&dataset, hash, &mut control()).expect("overlay");
++    assert!(overlay.nquads().contains("\\uFFFE"));
++    let digest = try_canonical_sha256_view(&*dataset, hash, &mut control()).expect("digest");
++    assert_eq!(digest, ContentDigest::of(overlay.nquads().as_bytes()));
++
++    let graph = "http://example.org/g";
++    let document =
++        try_canonicalize_graph_view(&*dataset, graph, hash, &mut control()).expect("graph");
++    let digest = try_graph_digest_view(&*dataset, graph, &mut control()).expect("graph digest");
++    assert_eq!(digest, ContentDigest::of(document.nquads().as_bytes()));
++
++    let flat = try_canonicalize_flat_view(&*dataset, hash, &mut control()).expect("flat");
++    assert!(flat.nquads().contains("\\uFFFE"));
++    let digest = try_flat_digest_view(&*dataset, hash, &mut control()).expect("flat digest");
++    assert_eq!(digest, ContentDigest::of(flat.nquads().as_bytes()));
++    let streamed = try_flat_blake3_view(&*dataset, hash, &mut control()).expect("flat blake3");
++    assert_eq!(
++        streamed,
++        *purrdf_hash::blake3::hash(flat.nquads().as_bytes()).as_bytes()
++    );
++}
+diff --git crates/rdf/tests/iri_ingress_controls.rs crates/rdf/tests/iri_ingress_controls.rs
+new file mode 100644
+index 000000000..1ca119cc5
+--- /dev/null
++++ crates/rdf/tests/iri_ingress_controls.rs
+@@ -0,0 +1,59 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! An IRI holding DEL or a C1 control is refused at every ingress with the
++//! shared diagnostic code, beside a neighbour holding U+00A0 that is accepted.
++//! RFC 3987 `ucschar` starts at U+00A0, and the canonical document escapes
++//! only what `IRIREF` forbids, so this refusal is what keeps a DEL or C1
++//! scalar out of a canonical line.
++
++use purrdf_core::ir::RdfDatasetBuilder;
++use purrdf_rdf::{TermValue, parse_dataset};
++
++/// The code `purrdf-iri` owns for a scalar an IRI may not hold.
++const DISALLOWED: &str = "iri-disallowed-char";
++
++/// DEL, the first and last C1 control, each raw and as a `UCHAR` escape the
++/// grammar decodes to the same scalar; and the neighbour past the C1 block.
++const REFUSED: [&str; 6] = [
++    "\u{7f}", "\u{80}", "\u{9f}", "\\u007F", "\\u0080", "\\u009F",
++];
++const ACCEPTED: &str = "\u{a0}";
++
++fn statement(inner: &str) -> String {
++    format!("<http://example.org/a{inner}b> <http://example.org/p> <http://example.org/o> .")
++}
++
++#[test]
++fn text_codecs_refuse_del_and_c1_and_accept_no_break_space() {
++    for media_type in ["application/n-quads", "text/turtle"] {
++        for inner in REFUSED {
++            let err = parse_dataset(statement(inner).as_bytes(), media_type, None)
++                .expect_err(&format!("{media_type} admitted {inner:?}"));
++            assert_eq!(err.code, DISALLOWED, "{media_type} {inner:?}: {err}");
++        }
++        let dataset = parse_dataset(statement(ACCEPTED).as_bytes(), media_type, None)
++            .unwrap_or_else(|e| panic!("{media_type} refused U+00A0: {e}"));
++        let iri = format!("http://example.org/a{ACCEPTED}b");
++        assert!(dataset.term_id_by_value(&TermValue::iri(&iri)).is_some());
++    }
++}
++
++#[test]
++fn the_builder_refuses_del_and_c1_and_accepts_no_break_space() {
++    let freeze = |inner: &str| {
++        let mut b = RdfDatasetBuilder::new();
++        let s = b
++            .intern_iri(&format!("http://example.org/a{inner}b"))
++            .unwrap();
++        let p = b.intern_iri("http://example.org/p").unwrap();
++        let o = b.intern_iri("http://example.org/o").unwrap();
++        b.push_quad(s, p, o, None).unwrap();
++        b.freeze()
++    };
++    for inner in ["\u{7f}", "\u{80}", "\u{9f}"] {
++        let err = freeze(inner).expect_err(&format!("builder admitted {inner:?}"));
++        assert_eq!(err.code, DISALLOWED, "{inner:?}: {err}");
++    }
++    assert!(freeze(ACCEPTED).is_ok());
++}
+diff --git crates/rdf/tests/rdf12_canon_profile.rs crates/rdf/tests/rdf12_canon_profile.rs
+index a76c8d58d..7c0e92bdc 100644
+--- crates/rdf/tests/rdf12_canon_profile.rs
++++ crates/rdf/tests/rdf12_canon_profile.rs
+@@ -1,7 +1,7 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v3.
++//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v4.
+ //!
+ //! The corpus at `vectors/rdf12-canon/` is the executable half of
+ //! `docs/RDF12-CANON-PROFILE.md`: every clause a consumer pins is a case here, so a
+@@ -613,7 +613,7 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
+ #[test]
+ fn the_profile_identity_is_readable_from_the_api() {
+     assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
+-    assert_eq!(CANON_PROFILE_VERSION, 3);
++    assert_eq!(CANON_PROFILE_VERSION, 4);
+     assert_eq!(CANON_PRESENTATION_OVERLAY_ID, "overlay");
+     assert_eq!(CANON_PRESENTATION_OVERLAY_VERSION, 1);
+     assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_ID, "flat-assertion");
+diff --git crates/shapes/src/term.rs crates/shapes/src/term.rs
+index 08a9c6419..0907cf089 100644
+--- crates/shapes/src/term.rs
++++ crates/shapes/src/term.rs
+@@ -39,7 +39,7 @@ use ::purrdf_rdf::blank_label::ESCAPE_MARKER;
+ use ::purrdf_rdf::{BlankScope, RdfLiteral, TermRef};
+ use ::purrdf_rdf::{RdfTextDirection, TermId, TermValue};
+ use purrdf_core::SmallVec;
+-use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required};
++use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required_for};
+ use purrdf_lex::literal_escape::{self, Carrier, find_first_literal_escape};
+ use purrdf_lex::term_syntax::{self, TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN};
+ use purrdf_lex::text_out::TextOut;
+@@ -406,12 +406,15 @@ impl<'a> CanonicalBytes<'a> {
+     /// Stream the next piece of the literal body `text`: a clean run whole, or
+     /// the one scalar at its head through [`literal_escape::write`].
+     ///
+-    /// Every stop of the canonical kernel is an ASCII byte that is escaped, so
+-    /// the scalar at a stop is one byte long.
++    /// A stop of the canonical kernel is a candidate: an ASCII byte that is
++    /// escaped, or the lead byte of the block holding U+FFFE and U+FFFF, whose
++    /// scalar rides through [`literal_escape::write`] as well and comes out raw
++    /// unless it is one of those two.
+     fn advance_literal(&mut self, text: &'a str) {
+         match find_first_literal_escape(text.as_bytes()) {
+             Some(0) => {
+-                let (head, rest) = text.split_at(1);
++                let scalar = text.chars().next().expect("a candidate begins a scalar");
++                let (head, rest) = text.split_at(scalar.len_utf8());
+                 self.parts.push(CanonicalPart::Escaped(rest));
+                 self.pending.clear();
+                 literal_escape::write(head, Carrier::Canonical, &mut self.pending);
+@@ -425,17 +428,21 @@ impl<'a> CanonicalBytes<'a> {
+     }
+ 
+     /// Stream the next piece of the `IRIREF` body `text`: a clean run whole, or
+-    /// the one scalar at its head, through [`iri_escape::push_escaped`] when the
+-    /// law escapes it.
++    /// the one scalar at its head, through [`iri_escape::push_escaped_for`] when
++    /// the canonical carrier's law escapes it.
+     fn advance_iri(&mut self, text: &'a str) {
+         match find_first_candidate(text.as_bytes()) {
+             Some(0) => {
+                 let scalar = text.chars().next().expect("a candidate begins a scalar");
+                 let (head, rest) = text.split_at(scalar.len_utf8());
+                 self.parts.push(CanonicalPart::Iri(rest));
+-                if is_iriref_escape_required(scalar) {
++                if is_iriref_escape_required_for(scalar, iri_escape::Carrier::Canonical) {
+                     self.pending.clear();
+-                    iri_escape::push_escaped(head, &mut self.pending);
++                    iri_escape::push_escaped_for(
++                        head,
++                        iri_escape::Carrier::Canonical,
++                        &mut self.pending,
++                    );
+                 } else {
+                     self.parts.push(CanonicalPart::Raw(head.as_bytes()));
+                 }
+@@ -1914,7 +1921,12 @@ pub(crate) mod term_walk_tests {
+     }
+ 
+     fn reference_display(term: &Term) -> String {
+-        let iri = |iri: &str| format!("<{}>", purrdf_lex::iri_escape::escape(iri));
++        let iri = |iri: &str| {
++            format!(
++                "<{}>",
++                purrdf_lex::iri_escape::escape_for(iri, purrdf_lex::iri_escape::Carrier::Canonical)
++            )
++        };
+         match term {
+             Term::NamedNode(n) => iri(&n.0),
+             Term::BlankNode(b) => format!("_:{b}"),
+diff --git crates/sparql-conformance/tests/cdt_lexical_divergence.rs crates/sparql-conformance/tests/cdt_lexical_divergence.rs
+index d0f482c11..d7baafcc6 100644
+--- crates/sparql-conformance/tests/cdt_lexical_divergence.rs
++++ crates/sparql-conformance/tests/cdt_lexical_divergence.rs
+@@ -517,7 +517,7 @@ fn the_recovery_resolves_datatypes_the_way_the_parser_does() {
+ /// published space" a claim about a KNOWN population rather than about
+ /// whatever the walk happened to reach. Re-derive this number from a run,
+ /// never guess it, and check the other three in the same run.
+-const EXPECTED_TOKENIZED_FILES: usize = 4310;
++const EXPECTED_TOKENIZED_FILES: usize = 4311;
+ /// Of those, how many the lexer REFUSED. Every one is text-checked for the
+ /// SEP-0009 namespace instead of being graded, so this number is the exact size
+ /// of the scan's ungraded remainder.
+diff --git crates/validate/src/path_syntax.rs crates/validate/src/path_syntax.rs
+index 17eab9982..19d859b0c 100644
+--- crates/validate/src/path_syntax.rs
++++ crates/validate/src/path_syntax.rs
+@@ -17,7 +17,11 @@ use purrdf_shapes::shapes::Path;
+ #[must_use]
+ pub fn render_path(path: &Path) -> String {
+     match path {
+-        Path::Predicate(p) => format!("<{}>", purrdf_core::iri_escape::escape(p.as_str())),
++        // The string is a SARIF `logicalLocation`; the XML set keeps its bytes stable.
++        Path::Predicate(p) => format!(
++            "<{}>",
++            purrdf_core::iri_escape::escape_for(p.as_str(), purrdf_core::iri_escape::Carrier::Xml)
++        ),
+         Path::Inverse(inner) => format!("^{}", grouped(inner)),
+         Path::Sequence(parts) => join(parts, "/"),
+         Path::Alternative(parts) => join(parts, "|"),
+diff --git docs/MIGRATION-5.0.md docs/MIGRATION-5.0.md
+index 4efbe7480..b1a5306c3 100644
+--- docs/MIGRATION-5.0.md
++++ docs/MIGRATION-5.0.md
+@@ -23,8 +23,11 @@ digests before opening a 4.x artifact.
+   blank node.
+ - RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
+   algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
+-  read-side recompute of stored 4.x digests. No writer records a 4.x digest in a
+-  new artifact. A GTS compaction certificate names the function that recorded its
++  read-side recompute of stored 4.x digests (profile version 4). A stored 4.x
++  digest of a dataset holding U+FFFE or U+FFFF in a literal no longer recomputes,
++  because it was computed over a spelling that does not conform to the canonical
++  form of RDF 1.2 N-Quads; every other stored digest recomputes unchanged. No
++  writer records a 4.x digest in a new artifact. A GTS compaction certificate names the function that recorded its
+   refold digests (see "Containers").
+ - The search bound is a limit on the engine's own work. Refusal is the labelling's
+   typed `limit` outcome.
+@@ -125,6 +128,15 @@ and a triple term as `<<( s p o )>>`. Each line is spelled as:
+ - `annotation`: `reifier p o [g] .`, once, whatever its count
+ - `empty-graph` and `record`: nothing
+ 
++The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
++U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
++XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
++where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
++raw. The digest is over the binary line encodings and does not depend on these
++spellings. The retained 4.x `purrdf-rdfc12` output spells U+FFFE and U+FFFF the
++same way (profile version 4), so a stored 4.x digest of a dataset holding either
++in a literal no longer recomputes; see "Stored digests".
++
+ A composite node is spelled as its literal, with each token `ki` replaced by
+ `_:` and the position of the blank node it names. No label spells a composite
+ node, so the labels of one document can skip a number.
+@@ -138,7 +150,10 @@ and are never parsed back.
+ 
+ A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
+ overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
+-dataset. To check one, recompute it with the 4.x function:
++dataset. To check one, recompute it with the 4.x function. A digest of a dataset
++holding U+FFFE or U+FFFF in a literal does not recompute, because it was taken
++over the raw spelling that profile version 3 wrote; every other stored 4.x digest
++recomputes unchanged:
+ 
+ - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
+   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
+@@ -147,7 +162,8 @@ dataset. To check one, recompute it with the 4.x function:
+   `purrdf_rdf::rdfc12`, with the same name and signature it had at the crate
+   root. See "Items that left the crate root".
+ 
+-The 4.x path behaves as it always did: labels are `c14nN`, the hash is the
++The 4.x path behaves as it did, apart from the spelling of U+FFFE and U+FFFF in
++a literal (profile version 4; see "Stored digests"): labels are `c14nN`, the hash is the
+ caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
+ `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
+ reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
+@@ -246,14 +262,17 @@ lost or retyped a public field, and none of these enums lost a variant.
+ - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
+   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
+   reader accepts both, and `verify_pack` recomputes each version with the function
+-  that recorded it. Because the line sequence holds a line for each declared empty
++  that recorded it; a version `1` `rdfc_digest` of a dataset holding U+FFFE or
++  U+FFFF in a literal does not recompute. Because the line sequence holds a line for each declared empty
+   graph, a pack that declares an empty graph now has a different digest from the
+   same pack without the declaration; under version `1` they were equal.
+ - **GTS compaction certificates.** A certificate's canonical CBOR map carries a
+   `refold_canon` text field naming the function that computed its refold digests:
+   `rdfc10-sha256` (the 4.x RDFC-1.0 flat form) or `nrl1-lines-sha256` (SHA-256 of
+   the default-family canonical document). An absent field means `rdfc10-sha256`,
+-  so every certificate written by 4.x reads unchanged, and an `rdfc10-sha256`
++  so every certificate written by 4.x reads unchanged (its refold digests still
++  recompute, except for a dataset holding U+FFFE or U+FFFF in a literal), and an
++  `rdfc10-sha256`
+   certificate is written without the field, byte for byte as 4.x wrote it.
+   `compact_and_certify_versioned` writes `nrl1-lines-sha256` and returns a
+   `VersionedCertificate { canon, certificate }`; `compact_and_certify` keeps its
+@@ -266,21 +285,26 @@ lost or retyped a public field, and none of these enums lost a variant.
+   `CompactionCertificate::from_canonical_cbor` refuses a certificate that is not
+   `rdfc10-sha256` (`rdf-certificate-cbor-unexpected-canon`); read a certificate of
+   either kind with `VersionedCertificate::from_canonical_cbor`. The digest the
+-  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest, because
++  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest (it now
++  follows profile version 4 for such a dataset), because
+   the GTS wire format is governed in `gmeow-gts`; both writers author the same
+   pack bytes.
+ - **Columnar.** The five-table Parquet files record no canonical digest, only
+   content digests of blobs and of the manifest. They are unchanged.
+ - **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest
+   and the blank-node target identities carry canonical labels. Format version `1`
+-  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels. The 5.0
++  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels (a source digest
++  of a dataset holding U+FFFE or U+FFFF in a literal does not recompute). The 5.0
+   writer emits format version `2`, whose digest is the line-sequence digest and
+   whose labels are the labelling's decimal labels. Nothing else in the framing or
+   the sections changes. The reader accepts both versions and refuses any other,
+   and a file whose header and trailer name different versions. Source
+   verification recomputes the digest and the labels with the run the version
+   names, so a 4.x embedding keeps verifying against the pack or Columnar files it
+-  was written for. The same file with its version byte changed to `2` is refused
++  was written for, except for a dataset holding U+FFFE or U+FFFF in a literal,
++  whose version `1` source digest no longer recomputes. Version `1` blank-node
++  labels (`c14nN`) can also move for such a dataset, because the first-degree
++  hashes of RDFC-1.0 include the spelling of an adjacent literal. The same file with its version byte changed to `2` is refused
+   as a certified-RDF digest mismatch. A newly written artifact differs from the
+   4.x artifact of the same inputs in the header and trailer version fields, the
+   source digest, the dataset target identity, every blank-node target identity
+diff --git docs/RDF12-CANON-PROFILE.md docs/RDF12-CANON-PROFILE.md
+index 68bc50879..9090e066d 100644
+--- docs/RDF12-CANON-PROFILE.md
++++ docs/RDF12-CANON-PROFILE.md
+@@ -5,14 +5,20 @@
+ 
+ English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
+ 
+-**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 3 &nbsp;·&nbsp;
++**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 4 &nbsp;·&nbsp;
+ **Editor:** Patrick Audley, Blackcat Informatics® Inc.
+ 
+ **Standing in 5.0.** The default canonical output of PurRDF is no longer this
+ profile: it is the canonical line sequence of the nested-refinement labelling
+ (see the [5.0 migration guide](MIGRATION-5.0.md)). This profile stays callable,
+ under `purrdf_core::rdfc12`, as the read-side recompute of every digest recorded
+-before 5.0, and its identifier, version and vectors below are unchanged.
++before 5.0, with the identifier and version below. A digest recorded under
++version 3 of a dataset holding U+FFFE or U+FFFF in a literal no longer
++recomputes, because it was taken over a spelling that does not conform to the
++canonical form of RDF 1.2 N-Quads; every other recorded digest recomputes
++unchanged. The affected readers are the PACK version 1 `rdfc_digest`,
++`rdfc10-sha256` compaction certificates, PURREMB version 1 source digests and the
++embedded `stream:contentRefoldDigest`.
+ 
+ Both values are readable from the library rather than only from this document —
+ `purrdf_core::rdfc12::CANON_PROFILE_ID` and `purrdf_core::rdfc12::CANON_PROFILE_VERSION` — so a
+@@ -493,6 +499,10 @@ diagnostic message — does not increment it. That restraint is what makes the
+ number worth pinning: a version that changed on every release would tell a
+ consumer nothing.
+ 
++| Version | Change | Inputs whose output moves |
++|---|---|---|
++| 4 | U+FFFE and U+FFFF in a literal are written as `\uFFFE` and `\uFFFF` (N-Quads 1.2 §3: a character outside XML 1.1 `Char` is a `UCHAR`) | datasets holding either character in a literal; no other |
++
+ ## 8. Normative vector corpus
+ 
+ The corpus lives at `vectors/rdf12-canon/` and is **frozen**: every payload byte is
+@@ -522,7 +532,7 @@ artifact it actually linked:
+ | Field | Source |
+ |---|---|
+ | profile id | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
+-| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
++| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `4` |
+ | presentation | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
+ | hash algorithm | `CanonHash::Sha256` or `CanonHash::Sha384` (§2) |
+ | corpus digest | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST` (§8) |
+diff --git docs/RDF12-CANON-PROFILE.zh-Hans.md docs/RDF12-CANON-PROFILE.zh-Hans.md
+index d970f3167..cce7897f2 100644
+--- docs/RDF12-CANON-PROFILE.zh-Hans.md
++++ docs/RDF12-CANON-PROFILE.zh-Hans.md
+@@ -5,10 +5,10 @@
+ 
+ [English](RDF12-CANON-PROFILE.md) | 简体中文
+ 
+-**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 3 &nbsp;·&nbsp;
++**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 4 &nbsp;·&nbsp;
+ **编辑：** Patrick Audley，Blackcat Informatics® Inc.
+ 
+-**5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文的标识符、版本和向量均未改变。
++**5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文为标识符和版本。若数据集的字面量含 U+FFFE 或 U+FFFF，则按版本 3 记录的摘要不再能重新计算，因为它基于不符合 RDF 1.2 N-Quads 规范形式的写法；其他已记录的摘要重新计算结果不变。受影响的读取方包括 PACK 版本 1 的 `rdfc_digest`、`rdfc10-sha256` 压缩证书、PURREMB 版本 1 的来源摘要，以及内嵌的 `stream:contentRefoldDigest`。
+ 
+ 这两个值不仅写在文档里，也可从库中读取：`purrdf_core::rdfc12::CANON_PROFILE_ID` 和 `purrdf_core::rdfc12::CANON_PROFILE_VERSION`。使用方因此可以断言，实际链接的构建实现的正是自己固定的 profile。
+ 
+@@ -228,6 +228,10 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各
+ 
+ **不会**改变输出的变更，例如重构、加快搜索或使诊断消息更清晰，不递增版本。这样版本号才值得固定；如果每次发布都改变版本，它就不能向使用方传达任何信息。
+ 
++| 版本 | 变更 | 输出会改变的输入 |
++|---|---|---|
++| 4 | 字面量中的 U+FFFE 和 U+FFFF 写为 `\uFFFE` 和 `\uFFFF`（N-Quads 1.2 §3：不属于 XML 1.1 `Char` 的字符写为 `UCHAR`） | 字面量中含有这两个字符之一的数据集；其他数据集不变 |
++
+ ## 8. 规范性测试向量语料
+ 
+ 语料位于 `vectors/rdf12-canon/`，并且已经**冻结**：每个载荷字节都由每次构建检查的 SHA-256 清单覆盖（`scripts/check-corpus-frozen.py`），所以静默修改期望结果会导致失败，而不是让检查通过。
+@@ -243,7 +247,7 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各
+ | 字段 | 来源 |
+ |---|---|
+ | profile 标识符 | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
+-| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
++| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `4` |
+ | 表示 | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`）或 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`）（§3.3） |
+ | 散列算法 | `CanonHash::Sha256` 或 `CanonHash::Sha384`（§2） |
+ | 语料摘要 | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST`（§8） |
+diff --git docs/design/purrdf-canonical-labelling.md docs/design/purrdf-canonical-labelling.md
+new file mode 100644
+index 000000000..629f2061a
+--- /dev/null
++++ docs/design/purrdf-canonical-labelling.md
+@@ -0,0 +1,440 @@
++<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca> -->
++<!-- SPDX-License-Identifier: CC-BY-4.0 -->
++
++# Canonical labelling of blank nodes
++
++This document records the design of the canonical labelling of blank nodes,
++`nested-refinement-labelling` version `1`, and the research behind it: the problem
++and its measurements, the requirements and their sources, the published work
++consulted, each choice with the alternatives weighed, the status of each claim,
++the open questions and the consequences for consumers.
++
++**Status: provisional.** The definition is provisional until two independent
++implementations agree on shared vectors. This repository holds one definition
++implemented twice (a reference engine and an optimised engine). Both are held to
++each other, but they share a reader of the specification and are not independent
++in the sense that matters. The document is updated as the design settles.
++
++The normative statement is the frozen specification, revision 3.11, SHA-256
++`a2dc6ea69735f62cde18be17bc14890d89b4416e8dcf3bba42e3cfe55e283c15` (the identity
++recorded in [`MIGRATION-5.0.md`](../MIGRATION-5.0.md)). The specification text is
++not part of this repository. What this repository carries is the implementation
++(`crates/rdf-core/src/canonical_labelling/`), the worked examples that revision
++states (`crates/rdf-core/src/canonical_labelling/vectors/`), and the lowering and spelling rules of the migration guide.
++This document describes the design and its evidence; it does not restate the
++specification.
++
++## 1. The problem
++
++### 1.1 What RDFC-1.0 does with tied blank nodes
++
++RDFC-1.0 [1] labels blank nodes in two stages. *Hash First Degree Quads* hashes,
++for each blank node, the quads that mention it with that node and every other
++blank node replaced by two markers. A node whose hash is unique is named at once,
++in hash order. *Hash N-Degree Quads* handles the nodes whose first-degree hashes
++tie. For one node it groups the related blank nodes by the hash of their relation,
++tries every permutation of each group, recurses into the members not yet named and
++keeps the lexicographically least path.
++
++A group of `g` related nodes with equal relation hashes therefore costs at least
++`g!` permutations at one level, and each permutation recurses into the members'
++own neighbourhoods, so the factors multiply down a tree. Nothing in the algorithm
++separates like siblings by what lies beneath them: it permutes them. Colour
++refinement (section 4) separates such siblings in a few rounds when their
++subtrees differ. The Recommendation states that the algorithm "can behave poorly"
++on some inputs, requires implementations to defend against denial-of-service attacks and notes
++that calls to *Hash N-Degree Quads* may be limited [1, section 4.4.3]. Section 7.1
++of the Recommendation (non-normative) discusses poison datasets. It names no
++structural remedy.
++
++The 4.x engine of this repository ran RDFC-1.0 and extended it to the RDF 1.2
++constructs RDFC-1.0 does not address, by spelling reifier bindings and annotations
++as quads that carry reserved IRIs (`docs/RDF12-CANON-PROFILE.md`). It defended
++itself with a caller's budget and a typed refusal.
++
++### 1.2 The measured case
++
++A tree of 246 blank nodes inside a dataset of 186,485 blank nodes took nearly all
++of the 4.x engine's search work: 306.8 million charged units of the 4.x charging
++law (one unit per *Hash N-Degree Quads* frame entered and one per permutation
++attempted), measured on a debug build. The dataset is private and is not
++reproduced. A synthetic tree of the same shape has 246 blank nodes and 491
++statements: two hubs, each with ten children that differ only in the length of the
++chain below them. Its cost needs the hub to be not unique at first degree. Only
++unit counts are recorded; no time measurement is part of this document or of the
++acceptance of the work.
++
++The shape is ordinary. It needs a blank node with several blank children that look
++alike at first degree and differ further down, which a record with repeated
++sub-records, a list of alike blank items or a repeated annotation pattern
++produces. Hogan's survey of blank nodes in 43.6 million web documents found
++blank-node structure mostly trivial with hard cases rare but present: the largest
++document held 254,288 blank nodes, one held a 16-clique of indistinguishable blank
++nodes, and with automorphism pruning disabled 971 graphs did not finish within the
++author's limit [3]. No published measurement covers RDF 1.2 structure (reifiers,
++annotations, nested triple terms); none was found.
++
++### 1.3 Counts of the new engine
++
++`cargo bench -p purrdf-core --bench canonical_labelling`
++(`crates/rdf-core/benches/canonical_labelling.rs`) labels named shapes in a
++separate process and reports counts only: no clock is read and nothing asserts a
++threshold. The counts below come from one run at the head this document was
++written against, with the default scale (1,000 for the first three shapes).
++`explored units` is the optimised engine's work units over the calls it explored,
++summed over all four parts (start, refine, fix, entries); the limit counts every
++part except start. `reference units` is the same figure for the reference engine
++over the same input. The
++allocation columns come from the counting allocator over admission and search.
++
++| Shape | Nodes | Lines | Guaranteed | Branching calls | Explored units | Reference units | Allocations | Requested bytes | Retained bytes |
++|---|---:|---:|---|---:|---:|---:|---:|---:|---:|
++| path | 1,000 | 999 | yes | 0 | 19,977 | 19,977 | 48,190 | 11,644,221 | 419,678 |
++| triangles | 3,000 | 3,000 | no | 1,000 | 96,994 | 131,994 | 359,279 | 21,387,058 | 1,858,804 |
++| hub with leaves | 1,001 | 1,000 | yes | 0 | 18,999 | 18,999 | 66,293 | 6,736,849 | 476,213 |
++| complement of cycles 4, 6 | 10 | 70 | no | 4 | 6,974 | 68,202 | 17,359 | 1,253,860 | 27,850 |
++| complement of cycles 3, 5 | 8 | 40 | no | 4 | 2,726 | 26,100 | 7,256 | 533,313 | 16,800 |
++| quadratic residue 13 | 13 | 78 | no | 2 | 6,632 | 76,843 | 11,268 | 774,509 | 30,403 |
++| cub8 | 8 | 24 | no | 3 | 1,282 | 5,932 | 3,096 | 215,872 | 10,934 |
++| `Z4 x Z4` | 16 | 96 | no | 4 | 18,739 | 594,112 | 36,823 | 2,598,853 | 36,680 |
++
++Observations: a path and a hub with leaves, the shapes with a long chain or many
++alike leaves, cost units close to linear in the lines and are labelled without a
++search. `triangles` (1,000 identical directed triangles) branches once per
++triangle and still costs about 32 units per node. The symmetric graphs show what
++the optimised engine's stops save over the reference engine, by a factor of about 4.6
++on `cub8` and about 32 on `Z4 x Z4`. These counts do not yet include the 4.x
++engine on the same shapes (section 6).
++
++## 2. Requirements and their sources
++
++| Id | Requirement | Source |
++|---|---|---|
++| Q1 | RDF 1.2 only. The input includes triple terms, reifier bindings, annotations and blank graph names; no lowering drops them. | `AGENTS.md`, RDF 1.2 only |
++| Q2 | The core builds for `wasm32-unknown-unknown` and needs no threads. | `AGENTS.md`, everything is wasm-able |
++| Q3 | No compromise inherited from earlier work. Agreement with RDFC-1.0 is not a requirement. | `AGENTS.md`, GREENFIELD and SOTA |
++| Q4 | Byte determinism across implementations and languages: no dependence on hash-table order, word size or recursion depth. Every comparison is on byte strings or unsigned integers of stated width. Every recursion has an explicit-stack equivalent. | `AGENTS.md`, byte determinism; the container format of GTS |
++| Q5 | Working memory linear in the input. | A consumer that canonicalises about 16.6 million quads in 16 GiB |
++| Q6 | Meaning is carried by typed structure, never by the spelling of a string. No step of the definition obtains meaning by parsing a string it produced. | `AGENTS.md`, make illegal states unrepresentable |
++| Q7 | One hash, with no variants and typed domain separation. | Consumers that already identify content by BLAKE3 |
++| Q8 | A stable identity per blank node that a component keeps alone or inside a larger dataset, and a deterministic map from source identifiers to positions. | Consumers that mint identity from canonical labels |
++| Q9 | A named, engine-independent admission predicate and a typed refusal that names the component and its size. | Consumers that gate on "no component needed a search" |
++| Q10 | A declared empty named graph, including one with a blank name, is canonical input. | The dataset model: a named graph is a member with or without statements |
++| Q11 | The work of a search is bounded by an engine limit and a refusal, never by a partial result. | `AGENTS.md`, hard failures |
++
++Two things are not requirements. Byte agreement with RDFC-1.0 on easy data was
++considered for three conveniences (a stock tool could check easy data, the W3C
++suite would give byte-level coverage, fewer labels would change) and rejected: it
++fixes a second serialisation and a mandatory hash inside the labelling. The W3C
++suite remains the gate of the RDFC-1.0 entry point. The budget, stop signal and
++memory accounting of the 4.x engine are mechanisms of an engine, not properties of
++a canonical form: the definition has no caller budget and an engine states its own
++limit.
++
++## 3. The design
++
++### 3.1 Input, lines and terms
++
++The input is a set of typed lines (`lines.rs`) of five kinds: `quad`,
++`reifier-binding`, `annotation` (with a count), `empty-graph` and `record`. A term
++is an IRI, a literal, a blank node or a triple term; absence is always an explicit
++option and never an empty string. Admission interns every constant leaf by its
++encoding and every blank node by its source identifier, and stores each line as a
++token sequence in walk order. Every encoding the definition orders is a function of
++those tokens and of what each blank leaf is replaced by, so nothing is spelled as
++text and nothing is parsed back. Lowering a dataset view to lines is outside the
++definition; `view.rs` and the migration guide state PurRDF's own rule. A composite
++literal that names a blank node is lowered to a composite node with one `record`
++line, so the blank nodes it names take part in the labelling.
++
++### 3.2 Components and refinement
++
++The incidence graph has the blank nodes on one side and the lines that hold a blank
++node on the other. Lines are masked: every free blank leaf is replaced by one
++marker, and a fixed blank leaf by its position. Each connected component is labelled
++alone, from a fresh start of one cell of nodes and cells of lines by masked
++encoding. Colour refinement runs as a queue of `(side, colour)` pairs over two
++ordered partitions (`reference.rs`, `Engine::refine` and `Engine::split`):
++
++* a colour is the offset at which its cell starts;
++* a splitter is one cell of either side acting on the other; the key of an element
++  is the sorted list of its incidence labels into the splitter, a label being the
++  ascending occurrence numbers of the node in the line;
++* fragments take offsets in ascending key order, the empty key first;
++* when the split cell is already queued, every fragment is queued; otherwise all
++  fragments but the largest, ties to the smallest colour;
++* one refinement pops at most `2V` pairs, where `V` is the number of nodes plus
++  lines of the component.
++
++Colours are integers, never hashes, and no hash enters the search.
++
++### 3.3 Calls, certificates and positions
++
++A call receives an ordered partition and applies one of three rules:
++
++1. *Discrete.* The node partition is discrete: every node is fixed.
++2. *Nest.* The partition has a singleton cell but is not discrete: the singletons
++   are fixed with their positions and the call nests on each free component that
++   remains. A nested call inherits the parent's partition restricted to its
++   component.
++3. *Branch.* No cell is a singleton: the call individualises each member of the
++   cell of colour zero in turn, refines, and recurses.
++
++The certificate of a call is `(s, E, C)`: the number of nodes it fixes, the sorted
++entries of the lines it completes (each entry holds a fully fixed masked line and
++the largest position among its blank occurrences), and the certificates of its
++nested calls in order. A branching call takes the smallest certificate among its
++children. `certificate.rs` encodes certificates and provides `rebuild`, which
++reconstructs the line set from a certificate alone; the tests check that every
++certificate rebuilds to itself. The component identity is the BLAKE3
++key-derivation digest of the certificate encoding under the context
++`nested-refinement-labelling 1 component`. Top components are ordered by identity,
++positions follow from the structure of the calls and the order of components, and
++the canonical line sequence replaces each blank leaf by `fixed(position)` and
++lists encodings in ascending bytewise order. Its digest is BLAKE3 in
++key-derivation mode under `nested-refinement-labelling 1 lines`, over the line
++count and the concatenated encodings.
++
++### 3.4 The result record
++
++The result is typed throughout: the placement of every node (position and stable
++identity `(component digest, local position, copy index)`), the canonical lines and
++their digest, and a structural record. The record is a function of the input alone
++and equal across engines: per component the node, line and label-element counts,
++the cells after the first refinement, whether the incidence graph is acyclic, the
++calls of the result path by rule, the target-cell sizes, the attaining children,
++the work units by part and the factorised order of the automorphism group.
++`guaranteed` is true exactly when every branching call of the result path has a
++target cell that is one twin class. A completed search-free run proves the
++predicate and is the labelling. Figures that depend on the engine or on source
++identifiers (`explored`, `twin_units`, `comparison_units`, `stopped_on_s`,
++`stopped_on_e`) are kept apart from the record.
++
++Refusals are a closed list: `input` (ill-formed lines), `graph` (an `empty-graph`
++line names a graph another line carries), `width` (a quantity exceeds 64 bits) and
++`limit` (the engine's limit tripped on an input that is not guaranteed). Both
++engines use the limit `2^34` limited units and trip only past `max(limit, A)`,
++where `A` is the allowance of the whole input: the sum of every component's
++allowance plus the charge of the split into top components (`reference.rs`,
++`prepare`). The allowance of one component is `2S + O + 2·O·bits(V) + M +
++V·bits(V) + 4W` over its start charges `S`, label elements `O`, incidences `M`,
++and start-weighted node count `W` (`static_record`). The allowance is what the
++search-free run needs, so no limit refuses a guaranteed input.
++
++### 3.5 The optimised engine
++
++The reference engine is the definition written for clarity and explores every
++child of every branching call. The optimised engine computes the same result on
++dense arrays with an explicit stack of calls (`optimised.rs`) and may skip a child
++only by a shortcut that is checked against the call's own state: the strict stop on
++`s` and then on `E`; a verified automorphism of the call that carries an explored
++child onto a skipped one; the exchange of two tied nested calls; the twins of the
++first explored child; and the lifting of a map to the branching calls below it.
++Pruning is an optimisation of a definition that has none, and the tests compare
++the two engines on a corpus under three relabellings.
++
++## 4. Published work consulted
++
++**RDFC-1.0** [1] is the baseline whose cost motivates the work and the RDF
++Dataset Canonicalization the 4.x engine implements. Its algorithm uses neither an
++automorphism group nor a refinement fixpoint.
++
++**Individualisation and refinement.** McKay and Piperno [2] describe the method of
++nauty and Traces: refine a colouring to an equitable partition, pick a cell,
++individualise each member in turn, refine again and recurse to a discrete colouring
++(a leaf). A refinement function, a target-cell selector and a node invariant fix the
++tree, and the canonical form is the best leaf under the invariant; pruning by
++automorphisms and by invariants never removes every optimal leaf. This is the shape
++the definition needs: a tree fixed by the text, with traversal and pruning left to
++the engine. Junttila and Kaski [10, 11] describe bliss, whose component recursion
++corresponds to the nesting of rule 2 here, though the definition nests inside the
++certificate rather than as a search heuristic.
++
++**Colour refinement.** Berkholz, Bonsma and Grohe [8] give tight bounds for
++canonical colour refinement, in the neighbourhood of `(n + m) log n` work. Paige and
++Tarjan [9] describe the partition-refinement algorithms whose rule of queueing all
++but the largest fragment gives that bound; the queue rule of section 3.2 follows it.
++Neuen and Schweitzer [6] show families on which every individualisation-refinement
++algorithm takes exponential time, whatever the selector. Cai, Fürer and Immerman
++[7] show that refinement of any fixed dimension fails to distinguish some pairs of
++graphs. Arvind, Köbler, Rattan and Verbitsky [5] study the
++graph classes on which colour refinement decides isomorphism; forests are among
++them.
++
++**The cost of the leaf definition.** Babai and Luks [4] show that finding the
++lexicographic leader of an orbit of strings is hard in general, which is why the
++form is the best leaf of a pinned tree and not the least adjacency matrix over all
++relabellings. Miyazaki [12] analyses the worst case of McKay's canonical labelling
++algorithm.
++
++**RDF.** Hogan [3] defines iso-canonical labelling of blank nodes by hashed
++colour refinement followed by a nauty-style search, with automorphism pruning, and
++measures it on web data; his earlier work [13] concerns skolemising blank nodes
++while preserving isomorphism. Hogan's test framework found a defect in the pruning
++of the conference version, which is the direct reason this design treats pruning as
++a proved optimisation of a pruning-free definition tested differentially.
++
++**Hash.** BLAKE3 [14] is a single algorithm with no variants and a key-derivation
++mode that takes a context string. The definition uses it for the two shared values.
++
++Hogan's figures in section 1.2 and the pruning defect in his conference version
++were checked against the author's copy of [3], and the statements about RDFC-1.0
++against the text of the Recommendation [1]. The statements about the other works
++rest on their titles and abstracts and on the implementation itself; the papers'
++bodies were not re-read for this document. No source of nauty,
++Traces, bliss, saucy, dejavu or blabel is copied into this repository.
++
++## 5. Choices and alternatives
++
++| Choice | Alternatives weighed | Reason |
++|---|---|---|
++| The form is the minimum certificate over the leaves of a tree pinned by the refinement, the selector and the certificate. | The minimum over all labellings consistent with the refined partition; the lexicographically least adjacency form. | The leaves of an individualisation-refinement tree are a subset of those labellings, so the first object is not what a practical engine finds [2]. The second is hard to compute [4]. |
++| Colours are integers; no hash inside the labelling. | Hashed colours, as RDFC-1.0 and Hogan [3] use. | A hashed colour can coincide with an existing one and merge two cells, so refinement bounds and termination depend on the hash. Integers add no collisions and compare cheaper. |
++| Only what changes the result is normative: refinement, selector, certificate and order. Search order and pruning are free if proved. | A normative case split (tree canonisation on forests, leaf minimum elsewhere). | One definition keeps an engine that misses a shortcut correct and merely slower. |
++| One splitter-queue refinement over the node-line incidence graph. | Synchronous rounds; splitting by node cells only. | Rounds are quadratic on chains. Splitting by node cells alone is weaker than splitting by line signatures. The queue rule follows [9]. |
++| Three-way rule per call: discrete, nest, branch. | Nesting at every child. | Nesting at every child regresses when refinement leaves no singleton. |
++| Nested calls inherit the parent's restricted partition. | A fresh start in every nested call. | A fresh start re-refines the whole remaining component at each level; the restriction is stable and corresponds between isomorphic siblings. |
++| Top-level calls start fresh, per connected component. | One refinement over the whole dataset. | A component's cell order could depend on unrelated components through the largest-fragment rule, and a component's lines would depend on the rest of the dataset. A fresh start also permits per-component caching. |
++| The target cell is the cell of colour zero. | Smallest, largest, maximally non-uniformly joined cell [2, 10]. | The result-path lemmas, the structural record, the group order and the map depend on it. No selector removes the exponential worst case [6]. |
++| The certificate is `(s, E, C)`. | `(E, C)` without the node count. | Two non-isomorphic components of four and five nodes with equal `E` and `C` exist, so `s` is required; `rebuild` is the completeness check. |
++| No node invariant compared before the certificate. | A trace or cell-size invariant as in Traces [2]. | It would break "the nested minimum is the global minimum" and would be normative: adding it later changes bytes and needs a new version. |
++| No stronger refinement than colour refinement. | Two-dimensional Weisfeiler-Leman refinement. | It cannot split vertex-transitive or distance-regular graphs at the root, every fixed strength has exponential families [7, 6], and it would more than double what two engines must reproduce. `guaranteed` plus the typed `limit` refusal state the hard residue honestly. |
++| The forest case gets no special rule. | A normative tree canonisation for acyclic components. | Colour refinement on a plain incidence forest never branches, so the general rule already costs one path. The result is proved for the coloured, edge-labelled case rather than cited from [5], which covers uncoloured graphs. |
++| One hash, BLAKE3 in key-derivation mode, 32 bytes, one context per value. | SHA-256; a selectable hash. | Consumers already identify content by BLAKE3 and it is native to the workspace; a selectable hash would make identities incomparable. Component order depends on identity bytes, so the hash changes positions as well as digests. |
++| Identity is the typed triple `(component digest, local position, copy index)`; the document keeps short decimal labels that nothing parses. | A prefixed string identity; one global position counter. | A global counter renames every later node when an unrelated component is added. Meaning from parsing a string is excluded by Q6. |
++| Ties among equal digests are broken by the map rule: the child with the smallest source identifier. | A certificate comparison between top components; a `collision` refusal. | Comparing certificates on digest equality would run on every pair of copies and keep certificates for many small components. The collision resistance of the hash is the stated assumption of the definition; a collision is not detected. |
++| `empty-graph(term)` is supplied once for each named graph no statement line carries. | A declaration line for every graph; a sentinel quad. | RDF has no "declared and non-empty" state. A sentinel is a reserved code word that Q6 excludes. |
++| Reifier bindings and annotations are typed lines; the reserved IRIs of the 4.x overlay are gone. | Keeping the overlay. | The overlay spells typed structure as quads with reserved IRIs and reads it back, which Q6 excludes. |
++
++## 6. Settled, open and owed
++
++**Settled in the implementation** (checked by the tests named):
++
++* The definition of sections 3.2 to 3.4 as implemented by the reference engine, with
++  every worked example of the frozen revision reproduced byte for byte
++  (`every_worked_example_reproduces_byte_for_byte`).
++* The optimised engine's agreement with the reference engine on the corpus under
++  three relabellings (`the_optimised_engine_agrees_on_the_corpus_under_three_relabellings`).
++* Certificate completeness for the cases tried: every certificate rebuilds to
++  itself (`every_certificate_rebuilds_to_itself`), and relabelling or reordering the
++  input changes only the map (`relabelling_and_line_order_change_only_the_map`).
++* BLAKE3 for both shared values, the identifier `(nested-refinement-labelling, 1)`,
++  the closed refusal list and the line kinds.
++
++**Open:**
++
++* *Independent agreement.* No second implementation written by a different reader
++  has produced the same canonical line sequences and digests on shared vectors. The
++  definition is provisional until it has. The vectors in `crates/rdf-core/src/canonical_labelling/vectors/` are the worked
++  examples; a larger shared set that includes non-trivial automorphism groups is
++  needed.
++* *Verification without search.* No certificate is known that lets a reader check
++  that a canonical claim is the minimum on a non-discrete residue without repeating
++  the search. If every canonical claim had a short checkable certificate, two
++  checked claims with different forms would certify non-isomorphism, which would put
++  graph non-isomorphism in NP; that is not known. What a reader can always check is
++  that the document is the dataset relabelled; canonicity under a stated
++  `(name, version)` is checkable by recomputation, at a cost no method bounds in
++  general. A file must not claim "canonical, verified in bounded time".
++* *Hard families.* Colour refinement splits no regular graph, so strongly regular
++  graphs, rook graphs, hypercubes and Paley graphs stay one cell at the root. The
++  stops of section 3.5 cut the work on `Z4 x Z4` and `cub8` by large factors, but no
++  bound is claimed for these families in general, and exponential lower bounds are
++  known for individualisation-refinement algorithms [6] and for McKay's algorithm
++  [12], and no refinement of fixed dimension distinguishes every pair of
++  non-isomorphic graphs [7]. The refusal states the limit.
++* *Refinement strength and node invariant.* Both are excluded from version `1`. A
++  stronger refinement or an invariant would be a new version, never an option.
++* *Dataset-state identity.* `DATASET-STATE-DIGEST.md` defines a separate identity
++  with its own blank labelling. Whether it adopts this definition is undecided.
++
++**Evidence owed:**
++
++1. The 4.x engine and the labelling on the same shapes, in instruction counts and
++   allocation counts (section 1.3 has the labelling only): the 246-node synthetic
++   tree and a parameterised family of its shape against fan-out and depth.
++2. The two acceptance workloads, first run only: millions of small datasets, each a
++   star of blank spans around one blank reifier, run cold one at a time; and one
++   carrier of about 16.6 million quads in 16 GiB.
++3. Calibration of the limited work unit against instruction counts.
++4. The hard families on the optimised engine in counts: complete bipartite graphs up
++   to 300 by 300, the hypercube of dimension 8, rook graphs, Paley graphs, random
++   cubic graphs and coloured Cai-Fürer-Immerman graphs.
++5. The share of residual components of real datasets that are isomorphic, which
++   decides what nesting buys.
++6. Agreement of the native, WebAssembly, Python and C hosts on the shared vectors.
++
++## 7. Consequences for consumers
++
++[`MIGRATION-5.0.md`](../MIGRATION-5.0.md) is the migration contract; this section
++states why each consequence follows from the design.
++
++* **Every blank-node label and every canonical digest of a dataset with a blank
++  node, a reifier, an annotation or a declared empty graph changes.** Positions
++  come from the order of components and the structure of calls, not from RDFC-1.0's
++  hash order, and the digest is BLAKE3 over the typed line sequence, not SHA-256
++  over N-Quads text. The digest also moves for datasets with no blank node.
++* **Labels are output only.** A consumer reads the typed placement, not the decimal
++  label. Position order differs from the byte order of labels (`10` precedes `2`),
++  so a document read back by its labels is not promised the identity map.
++* **A component has the same stable identity alone or inside a larger dataset**,
++  because top components start fresh. Its position is offset by the components
++  before it, and the copy index among equal components can shift when an equal copy
++  is added.
++* **Identity of automorphic nodes is a property of the input document**, since the
++  map rule picks the smallest source identifier. The claim of canonicity is about
++  the canonical line sequence.
++* **A finite search bound refuses a hard input with the `limit` outcome** and
++  publishes no bytes. An input the labelling finishes without a search succeeds
++  under every bound, including `0`. The units a refusal reports depend on the
++  engine and on the source identifiers and are not a property of the dataset.
++* **RDFC-1.0 remains a separate entry point** and the W3C suite gates it. The 4.x
++  algorithm stays callable to recompute stored 4.x digests.
++
++## 8. References
++
++Bibliographic records were checked against the Crossref DOI registry, and the W3C
++and BLAKE3 entries against the publisher documents themselves. The checks cover
++authors, title, venue, volume, pages and year. Where the registry gives an online
++year that precedes the year of the printed volume, the printed year is used.
++
++1. Longley, D., Kellogg, G., Yamamoto, D. (eds.). *RDF Dataset Canonicalization*.
++   W3C Recommendation, 21 May 2024.
++   <https://www.w3.org/TR/2024/REC-rdf-canon-20240521/>.
++2. McKay, B. D., Piperno, A. Practical graph isomorphism, II. *Journal of Symbolic
++   Computation* 60, 94-112, 2014. DOI 10.1016/j.jsc.2013.09.003.
++3. Hogan, A. Canonical forms for isomorphic and equivalent RDF graphs: algorithms
++   for leaning and labelling blank nodes. *ACM Transactions on the Web* 11(4),
++   article 22, 2017. DOI 10.1145/3068333.
++4. Babai, L., Luks, E. M. Canonical labeling of graphs. *Proc. 15th ACM Symposium on
++   Theory of Computing (STOC '83)*, 171-183, 1983. DOI 10.1145/800061.808746.
++5. Arvind, V., Köbler, J., Rattan, G., Verbitsky, O. Graph isomorphism, color
++   refinement, and compactness. *computational complexity* 26(3), 627-685, 2017.
++   DOI 10.1007/s00037-016-0147-6.
++6. Neuen, D., Schweitzer, P. An exponential lower bound for
++   individualization-refinement algorithms for graph isomorphism. *Proc. 50th ACM
++   Symposium on Theory of Computing (STOC '18)*, 138-150, 2018. DOI
++   10.1145/3188745.3188900.
++7. Cai, J.-Y., Fürer, M., Immerman, N. An optimal lower bound on the number of
++   variables for graph identification. *Combinatorica* 12(4), 389-410, 1992. DOI
++   10.1007/BF01305232.
++8. Berkholz, C., Bonsma, P., Grohe, M. Tight lower and upper bounds for the
++   complexity of canonical colour refinement. *Theory of Computing Systems* 60(4),
++   581-614, 2017. DOI 10.1007/s00224-016-9686-0.
++9. Paige, R., Tarjan, R. E. Three partition refinement algorithms. *SIAM Journal on
++   Computing* 16(6), 973-989, 1987. DOI 10.1137/0216062.
++10. Junttila, T., Kaski, P. Engineering an efficient canonical labeling tool for
++    large and sparse graphs. *Proc. 9th Workshop on Algorithm Engineering and
++    Experiments (ALENEX 2007)*, 135-149. DOI 10.1137/1.9781611972870.13.
++11. Junttila, T., Kaski, P. Conflict propagation and component recursion for
++    canonical labeling. *Theory and Practice of Algorithms in (Computer) Systems
++    (TAPAS 2011)*, LNCS 6595, 151-162. DOI 10.1007/978-3-642-19754-3_16.
++12. Miyazaki, T. The complexity of McKay's canonical labeling algorithm. In *Groups
++    and Computation II*, DIMACS Series in Discrete Mathematics and Theoretical
++    Computer Science 28, 239-256, 1997. DOI 10.1090/dimacs/028/14.
++13. Hogan, A. Skolemising blank nodes while preserving isomorphism. *Proc. 24th
++    International Conference on World Wide Web (WWW 2015)*, 430-440. DOI
++    10.1145/2736277.2741653.
++14. O'Connor, J., Aumasson, J.-P., Neves, S., Wilcox-O'Hearn, Z. *BLAKE3: one
++    function, fast everywhere*. Specification.
++    <https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf>.
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index bbc6844f5..bc1e33c66 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -799,7 +799,7 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
+ | `core.pack-intvector-get` | `purrdf-core` | `IntVector::get` | `crates/rdf-core/src/ir/pack/bits.rs:237` | `pack_bits`, `pack_restore_alloc` | pack_bits | I | a two-word gather and shift for one value | leave | one random access; there is no second element to put in a lane | scalar on both builds | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+ | `core.dataset-scan-filter` | `purrdf-core` | `RdfDataset::quads_for_pattern_with_plan` (residual filter), `QuadMatches::next`, `QuadPatternCursor::next` | `crates/rdf-core/src/ir/dataset.rs:1250` | `ir_layout`, `mutable`, `shared_views`, `path_range` | ir_layout | I | — | rewrite | the pattern becomes one key and one mask word per field (a wildcard masks to zero, `GraphMatch::Default` keys the `0` niche of `None`), and a row matches when every `(word ^ key) & mask` is zero. A sequential candidate run (the SPOG slice or the whole-table fallback) is filtered eight rows at a time: each row a `0x0000_0000`/`0xFFFF_FFFF` lane, the lanes masked to their own bit and OR-folded, and the set bits yielded lowest first, which is row order; the tail and the permuted run test one row at a time with the same key. The owned cursor (`QuadPatternCursor`, from `quads_for_pattern_cursor`) holds the same `QuadKey` and shares the kernel: a sequential run is searched by `QuadKey::first_match` over the same eight-row `chunk_matches`, which is `#[inline(always)]` because with a plain `#[inline]` the second caller cut this crate's `QuadMatches::next` from 73 packed ops to 8 on x86_64; a permuted run tests each row with `QuadKey::matches`. Measured in `QuadMatches::next`, which each iterating crate inlines (every copy has the same counts), and in the cursor's `next` as a call site. The per-row `Option` filter and the per-row cursor loop are kept under test as the oracles, compared in order for every `(s?, p?, o?) × GraphMatch` combination (unused ids and an unknown graph included) over seeded datasets of every size to 40 and past several chunk multiples, both access shapes exercised | +simd128: `i32x4.eq` compares and an `i16x8.bitmask` row mask; baseline: straight-line scalar lanes | sse2 v73·f0·r0·req✓<br>cursor v104·f0·r0·req✓ | avx2 v47·f0·r0·req✓<br>cursor v65·f0·r0 | avx512 masks v18·f0·r0·req✓<br>cursor v36·f0·r0 | neon v58·f0·r0·req✓<br>cursor v79·f0·r0 | neon v58·f0·r0·req✓<br>cursor v79·f0·r0 | scalar v0·f0·r0<br>cursor v0·f0·r0 | simd128 v57·f0·r0·req✓<br>cursor v57·f0·r0 |
+ | `core.pack-triples-intersect` | `purrdf-core` | `pack::triples::partition_rows` (the `(?,p,o)` shorter-list probe), `DeltaListRef::next` | `crates/rdf-core/src/ir/pack/triples.rs:938` | `pack_index_compare`, `pack_query`, `pack_restore_alloc` | pack_index_compare | I | the `(?,p,o)` path decodes one FoQ list and keeps or drops each entry on a data-dependent test; the delta decode is a varint loop whose next offset depends on the current byte | leave | the `(?,p,o)` path no longer merges. Its list lengths were measured on the two comparison lanes: the WatDiv lane's frozen 10M-triple pack with its 20 instantiated queries, and the LUBM lane's generated data loaded as a pack with its 14 queries run without entailment. The path ran 1,520 times (1,500 WatDiv, 20 LUBM); one list was at least 32 times the other in 1,090 calls and at least 1,000 times in 1,065, only 430 were within 32 times (5 within 4 times), and the object list was the shorter in 1,518. A merge decoded 73,260,098 list entries for those calls, where the shorter lists hold 86,551. So the path reads both lengths from their count vectors, decodes only the shorter list and tests each entry in place: an object-index position is kept when `Sp` holds the predicate there, a predicate-index position when binary search finds the object in its `So` slice. The positions come out ascending, as the merge gave them; the merge is kept under test as the oracle over every predicate and object pair of a two-partition fixture skewed both ways, and `pack_index_compare` runs `pair_skewed_object_short` and `pair_skewed_predicate_short` beside `pair_dense` and `pair_sparse`. A galloping or block intersect would still decode the long list first; what remains has each step depending on the previous byte or on a data-dependent test, with no fixed-width independence to put in lanes | scalar on both builds | intersect v0·f0·r0<br>delta v0·f0·r0 | intersect v0·f0·r0<br>delta v0·f0·r0 | intersect v0·f0·r0<br>delta v0·f0·r0 | intersect v0·f0·r0<br>delta v0·f0·r0 | intersect v0·f0·r0<br>delta v0·f0·r0 | intersect v0·f0·r0<br>delta v0·f0·r0 | intersect v0·f0·r0<br>delta v0·f0·r0 |
+-| `core.canon-escape` | `purrdf-core` | `canon::write_iri_escaped`, `write_literal_escaped`, `find_first_literal_escape`; `iri_escape::find_first_candidate` | `crates/rdf-core/src/ir/canon.rs:2796` | `flat_view_canon`, `shared_homes` | rdf-escape | I | — | rewrite | clean-run batching with the RDFC-1.0 output bytes unchanged. The IRI writer delegates to `iri_escape::push_escaped`, now the one emission of the IRIREF egress law (the Turtle writer and the entailment surface use it too); the literal law (the canonical `ECHAR` set plus `\u00XX` for the other C0 controls and DEL, C1 raw) is neither `iri_escape`'s nor `xml_escape`'s, so it stays here as the one canonical-literal writer, now public, over a local all-ASCII class whose every stop is an escape. The kernel is `purrdf_lex::terminals::ByteClass`, the formulation of `lex.scan-json-string` exported for a class a writer owns: sixteen-byte `as_chunks` lanes, each a `0x00`/`0xFF` byte from the class runs written as compares, a branch-free OR-fold as the clean-chunk test, the hit chunk's lanes read as a little-endian `u128` whose trailing-zero count over 8 is the offset. The per-char writers are kept under test as the oracle over fixed-seed values holding every ASCII scalar and the whole `0xC2` block, and the W3C RDFC-1.0 fixtures pass unchanged | the scans: +simd128 packed `i8x16` compares, baseline scalar lanes; the drivers: scalar on both builds | iri scan sse2 v23·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan sse2 v11·f0·r0·req✓<br>literal v0·f0·r0 | iri scan avx2 v22·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx2 v23·f0·r0·req✓<br>literal v4·f0·r0 | iri scan avx512 masks v10·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx512 masks v18·f0·r0·req✓<br>literal v3·f0·r0 | iri scan neon v20·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v8·f0·r0·req✓<br>literal v0·f0·r0 | iri scan sve v13·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v8·f0·r0·req✓<br>literal v0·f0·r0 | iri scan scalar v0·f0·r0<br>iri v0·f0·r0<br>literal scan scalar v0·f0·r0<br>literal v0·f0·r0 | iri scan simd128 v19·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan simd128 v9·f0·r0·req✓<br>literal v0·f0·r0 |
++| `core.canon-escape` | `purrdf-core` | `canon::write_iri_escaped`, `write_literal_escaped`, `find_first_literal_escape`; `iri_escape::find_first_candidate` | `crates/rdf-core/src/ir/canon.rs:2796` | `flat_view_canon`, `shared_homes` | rdf-escape | I | — | rewrite | clean-run batching. The IRI writer delegates to `iri_escape::push_escaped` with the `Canonical` carrier, the one emission of the IRIREF egress law; the Turtle writer names the `Xml` carrier, which also escapes DEL and C1. The literal law (the canonical `ECHAR` set, `\u00XX` for the other C0 controls and DEL, `\uFFFE` and `\uFFFF` for the two noncharacters, C1 raw) is the `Canonical` carrier of `literal_escape`, scanned over a class of the ASCII stops plus the lead byte `0xEF`. An ASCII stop is always an escape; `0xEF` is a candidate, and only U+FFFE and U+FFFF behind it are escaped while every other scalar of that block rides raw. The escaped noncharacters change the output bytes of literals that hold them; every other value writes the bytes it wrote before. The kernel is `purrdf_lex::terminals::ByteClass`, the formulation of `lex.scan-json-string` exported for a class a writer owns: sixteen-byte `as_chunks` lanes, each a `0x00`/`0xFF` byte from the class runs written as compares, a branch-free OR-fold as the clean-chunk test, the hit chunk's lanes read as a little-endian `u128` whose trailing-zero count over 8 is the offset. The per-char writers are kept under test as the oracle over fixed-seed values holding every ASCII scalar and the whole `0xC2` block, and the W3C RDFC-1.0 fixtures pass unchanged | the scans: +simd128 packed `i8x16` compares, baseline scalar lanes; the drivers: scalar on both builds | iri scan sse2 v23·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan sse2 v12·f0·r0·req✓<br>literal v0·f0·r0 | iri scan avx2 v22·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx2 v11·f0·r0·req✓<br>literal v4·f0·r0 | iri scan avx512 masks v10·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx512 masks v5·f0·r0·req✓<br>literal v3·f0·r0 | iri scan neon v20·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v10·f0·r0·req✓<br>literal v0·f0·r0 | iri scan sve v13·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v10·f0·r0·req✓<br>literal v0·f0·r0 | iri scan scalar v0·f0·r0<br>iri v0·f0·r0<br>literal scan scalar v0·f0·r0<br>literal v0·f0·r0 | iri scan simd128 v19·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan simd128 v9·f0·r0·req✓<br>literal v0·f0·r0 |
+ | `core.purremb-f32-decode` | `purrdf-core` | `F32Scalars::check_finite`, `F32Scalars::decode_into`, `EffectiveF32Row::decode_into` (`first_non_finite_f32`), `F32Scalars::next` | `crates/rdf-core/src/ir/embedding/view.rs:909` | `purremb`, `purremb_alloc` | — | FI | — | rewrite | a bulk decode beside the lazy iterator: `chunks_exact(4)` little-endian words, sixteen per block, each lane a `0x0000_0000`/`0xFFFF_FFFF` word from a masked compare of the exponent field (the finiteness test on the bits) and a branch-free OR as the clean-block test; only a hit block is searched again, out of line and `#[cold]`, for its first scalar. `check_finite` returns the iterator's first `NonFiniteScalar` at the same column; `decode_into` appends exactly what `for v in row { out.push(v?) }` does, including the values before a failure; the normalized row divides the same way. The per-scalar iterator is unchanged and recorded beside the fold: `F32Scalars::next` is inlined into every caller, so it is measured in `L2F32Scalars::next`, the out-of-line normalized iterator that inlines it. Whole-matrix verification uses `check_finite`. The drained iterator is kept under test as the oracle for every non-finite class at every position of every length to 40, with a later second non-finite, an advanced iterator, a nonzero first column and a trailing partial scalar | the fold: +simd128 `i32x4.eq` + `v128.any_true`, baseline scalar lanes; the iterator: scalar on both builds | fold sse2 v36·f0·r0·req✓<br>iterator v0·f0·r0 | fold avx2 v30·f0·r0·req✓<br>iterator v0·f0·r0 | fold avx512 v10·f0·r0·req✓<br>iterator v0·f0·r0 | fold neon v13·f0·r0·req✓<br>iterator v0·f0·r0 | fold neon v12·f0·r0·req✓<br>iterator v0·f0·r0 | fold scalar v0·f0·r0<br>iterator v0·f0·r0 | fold simd128 v48·f0·r0·req✓<br>iterator v0·f0·r0 |
+ | `core.purremb-norm` | `purrdf-core` | `norm_fold`, `deterministic_l2_norm` | `crates/rdf-core/src/ir/embedding/view.rs:4636` | `purremb`, `purremb_alloc` | — | FI | the scaled sum of squares is sequential by specification | leave | PURREMB §13.2 makes the written order normative (no FMA, sequential); measured in `L2F32Scalars::new` | scalar on both builds | v1·f0·r0 | v1·f0·r0 | v1·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+ | `core.paged-map-quad` | `purrdf-core` | `QuadIds::map_ids` through `PageTranslation::to_global` | `crates/rdf-core/src/ir/dataset.rs:151`, `crates/rdf-core/src/ir/paged/mod.rs:469` | `paged_cross_page_bgp` | paged_cross_page_bgp | I | up to four independent table gathers per quad | leave | a gather over at most four columns through the shared id-mapping home; the selector measures the enclosing eager seal `PagedDataset::from_provider`. Counts cover its selected emitted parent bodies and do not establish isolated gather SIMD or inlining; query-time mappings are monomorphized in their callers | baseline and +simd128 counts describe the enclosing eager seal | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v0·f0·r0 | v6·f0·r0 |
+@@ -816,7 +816,7 @@ floor of 0 and says so. A crate-level row names no function and has no cells.
+ | `datalog.relation-contains` | `purrdf-datalog` | `Relation::contains` (tail probe `Tail::contains`, inlined) | `crates/datalog/src/store.rs:903` | `seminaive`, `rules_divergence`, `srl_closure` | datalog-seminaive | I | — | rewrite | the mutable tail retains structure-of-arrays subjects, objects and optional row handles. Existing relation and sealed-batch live counts prove whether every physical tail cell is occupied. An occupied tail uses the original packed key-count kernel; a tail with vacancies also checks each handle. Both paths compare both full-width identities at every position, bitwise-AND the equalities and count live matches without early exit. The counter is u32 because the tail seals at 64 rows; neither key is narrowed. SSE2 pairs both 32-bit halves of each 64-bit key, while AVX2/AVX-512, NEON, SVE and SIMD128 compare full 64-bit lanes. Tail::row, Tail::iter and Tail::take_rows preserve insertion order; the galloping batch probe remains unchanged. The tuple oracle covers lengths0–64, hits and lone hits at every position, one-column near misses, swapped/absent keys and column round trips. Directed controls distinguish equal low halves with different high halves and generic host IDs with different tags or payloads | +simd128: i64x2.eq compares both key columns, v128.and combines their boolean masks and i32x4.add reduces the bounded match count; baseline: scalar full-width comparisons and counted matches without early exit | sse2 v25·f0·r0·req✓ | avx2 v92·f0·r0·req✓ | avx512 masks v57·f0·r0·req✓ | neon v105·f0·r0·req✓ | sve v50·f0·r0·req✓ | scalar v0·f0·r0 | simd128 v18·f0·r0·req✓ |
+ | `datalog.gallop-leapfrog` | `purrdf-datalog` | `purrdf_core::gallop::run_end` (in `Batch::subject_run`), `cycle::Cursor::seek` | `crates/datalog/src/store.rs:622`, `crates/datalog/src/seminaive/cycle.rs:194` | `seminaive`, `rules_divergence`, `srl_closure` | datalog-seminaive | I | exponential then binary search; each probe depends on the previous comparison | leave | loop-carried search | scalar on both builds | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 | gallop v0·f0·r0<br>leapfrog v0·f0·r0 |
+ | `datalog.chase` | `purrdf-datalog` | `chase::execute` | `crates/datalog/src/chase.rs:1175` | `chase` | entail-chase | I | a fixpoint over relation probes; each round depends on the last | leave | loop-carried fixpoint shared by ordinary and prepared admission; the probes are the relation rows above | scalar on both builds | v3·f0·r0 | v12·f0·r0 | v4·f0·r0 | v1·f0·r0 | v1·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+-| `entail.escape` | `purrdf-entail` | `engine::write_iri_escaped`, `write_literal_escaped` | `crates/entail/src/engine.rs:1396` | `chase` | — | I | — | rewrite | both writers delegate: the IRI one to `purrdf_core::iri_escape::push_escaped`, the literal one to `purrdf_core::ir::canon::write_literal_escaped`, the canonical N-Quads writer this surface is defined to match, so the laws are no longer transcribed here and the scans are the ones `core.canon-escape` measures (repeated in this entry). `write_literal_escaped` is measured in `write_leaf_surface`, which inlines it. The per-char writers are kept under test as the oracle over fixed-seed values | the scans: +simd128 packed `i8x16` compares, baseline scalar lanes; the drivers: scalar on both builds | iri scan sse2 v23·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan sse2 v11·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan avx2 v22·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx2 v23·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan avx512 masks v10·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx512 masks v18·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan neon v20·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v8·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan sve v13·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v8·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan scalar v0·f0·r0<br>iri v0·f0·r0<br>literal scan scalar v0·f0·r0<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan simd128 v19·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan simd128 v9·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 |
++| `entail.escape` | `purrdf-entail` | `engine::write_iri_escaped`, `write_literal_escaped` | `crates/entail/src/engine.rs:1396` | `chase` | — | I | — | rewrite | both writers delegate: the IRI one to `purrdf_core::iri_escape::push_escaped`, the literal one to `purrdf_core::ir::canon::write_literal_escaped`, the canonical N-Quads writer this surface is defined to match, so the laws are no longer transcribed here and the scans are the ones `core.canon-escape` measures (repeated in this entry). `write_literal_escaped` is measured in `write_leaf_surface`, which inlines it. The per-char writers are kept under test as the oracle over fixed-seed values | the scans: +simd128 packed `i8x16` compares, baseline scalar lanes; the drivers: scalar on both builds | iri scan sse2 v23·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan sse2 v12·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan avx2 v22·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx2 v11·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan avx512 masks v10·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan avx512 masks v5·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan neon v20·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v10·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan sve v13·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan neon v10·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan scalar v0·f0·r0<br>iri v0·f0·r0<br>literal scan scalar v0·f0·r0<br>literal (in write_leaf_surface) v0·f0·r0 | iri scan simd128 v19·f0·r0·req✓<br>iri v0·f0·r0<br>literal scan simd128 v9·f0·r0·req✓<br>literal (in write_leaf_surface) v0·f0·r0 |
+ | `entail.classify` | `purrdf-entail` | `Subsumptions::decide`, `owl_dl::saturate::saturate` | `crates/entail/src/reasoner/classify.rs:97` | `classify`, `consistency`, `schema_scan` | entail-classify | I | ordered-map and work-queue pointer chasing over concept ids | leave | no contiguous data-parallel loop | scalar on both builds | decide v2·f0·r0<br>saturate v0·f0·r0 | decide v9·f0·r0<br>saturate v0·f0·r0 | decide v0·f0·r0<br>saturate v0·f0·r0 | decide v0·f0·r0<br>saturate v0·f0·r0 | decide v0·f0·r0<br>saturate v0·f0·r0 | decide v0·f0·r0<br>saturate v0·f0·r0 | decide v1·f0·r0<br>saturate v0·f0·r0 |
+ | `shapes.frontier-dedup` | `purrdf-shapes` | `FrontierDedup::insert` (linear stage `linear_contains`, inlined) | `crates/shapes/src/path.rs:158` | `pattern_lookup` | shapes-pattern_lookup | I | — | rewrite | the linear stage (fewer than `LINEAR_MAX` = 16 admitted ids) tests every id with no exit on a hit, four at a time: each chunk's compares are `0x0000_0000`/`0xFFFF_FFFF` `u32` lanes OR-ed into a lane accumulator that is folded once after the last chunk, and the at most three ids after the last whole chunk are tested one at a time. Four lanes rather than eight because the stage never holds more than fifteen ids, so a wider chunk would leave most frontiers in the one-at-a-time tail; on x86_64 the compiled loop takes one chunk per iteration as a `pcmpeqd` + `por`, folded by `movmskps`. The count also covers the promotion into the hashed set and its call into the set's own insert. The slice's short-circuiting `contains` and the dedup it sat in are kept under test as the oracles: every frontier size 0 to 20 with a hit at every position and misses, seeded frontiers with repeats at every size 0 to 16, seeded id streams across the promotion and a `clear`, and the boundary itself at 15, 16 and 17 admitted ids | +simd128: `i32x4.eq` compares answered by `v128.any_true`; baseline: straight-line scalar compares with no exit | sse2 v72·f0·r0·req✓ | avx2 v173·f0·r0·req✓ | avx512 masks v50·f0·r0·req✓ | neon v150·f0·r0·req✓ | sve v88·f0·r0·req✓ | scalar v0·f0·r0 | simd128 v31·f0·r0·req✓ |
+ | `shapes.path-eval` | `purrdf-shapes` | `path::eval_planned_ids_with_paths` | `crates/shapes/src/path.rs:243` | `pattern_lookup`, `validate`, `shacl_product_alloc`, `shacl_product_reuse`, `shared_views` | shapes-pattern_lookup | I | the walk calls `FrontierDedup::insert` per reached id | leave | the walk uses predicate-slot reads, pattern cursors and recursion over the lowered path. The frontier membership probe, `FrontierDedup::insert`, stays out of line and is measured separately in the `shapes.frontier-dedup` row (four ids per packed compare in its linear stage). Counts here cover compiler-generated packed work in the walk entry, not that separate probe. | Same walk on both wasm builds; emitted counts recorded separately | v4·f0·r0 | v4·f0·r0 | v4·f0·r0 | v4·f0·r0 | v4·f0·r0 | v0·f0·r0 | v0·f0·r0 |
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 25afcb0a0..6b4a3f076 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3387,7 +3387,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3403,7 +3403,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3419,7 +3419,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3435,7 +3435,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3451,7 +3451,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3468,7 +3468,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3485,7 +3485,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3501,7 +3501,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3517,7 +3517,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3533,7 +3533,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3549,7 +3549,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3566,7 +3566,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3583,7 +3583,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3600,7 +3600,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3617,7 +3617,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3634,7 +3634,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3651,7 +3651,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3668,7 +3668,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3685,7 +3685,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3702,7 +3702,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3715,7 +3715,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3728,7 +3728,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3745,7 +3745,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3762,7 +3762,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3779,7 +3779,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3796,7 +3796,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3814,7 +3814,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3832,7 +3832,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3846,7 +3846,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:eedeecf1469d8070",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3863,7 +3863,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3880,7 +3880,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3897,7 +3897,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3914,7 +3914,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3933,7 +3933,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3952,7 +3952,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3971,7 +3971,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3990,7 +3990,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "encode_prepared_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4007,7 +4007,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4024,7 +4024,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4039,9 +4039,9 @@ authorities = [
+     "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+-    "crates/rdf-core/src/turtle_render.rs=source:c8e14d2ee54f3ff9",
++    "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:0d8fcaa14be12895"
++constructors = "source:510070aeeef16641"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]
+diff --git scripts/conformance-frozen/vectors-rdf12-canon.sha256 scripts/conformance-frozen/vectors-rdf12-canon.sha256
+index 7eb05597b..0303c110b 100644
+--- scripts/conformance-frozen/vectors-rdf12-canon.sha256
++++ scripts/conformance-frozen/vectors-rdf12-canon.sha256
+@@ -19,6 +19,9 @@ a06af36dfa463ccb00b9a2f956cdfbf3bb1b8b5f6e405204f234f3b79e34b282  cases/isomorph
+ 6045e0ae560e058d9ced1411699aa8cb152c805d65933d75ce0fdd1972f5faa0  cases/literal-forms.canonical
+ 98ef0bf4ca2c54252e90f9dff4f2741434b016246b4170c410ec047c1e7258d8  cases/literal-forms.digest
+ c0fadb13d98d804536be614592e8e203f3a7c407facc738cb225ad2fd23b94e1  cases/literal-forms.ttl
++06edfe965c0b6a0072146ac4e8b95a82be2b4f1c0da72c6a22977d68943bdb21  cases/literal-noncharacters.canonical
++7f0be259ee61b31669c00a88a5c5655066e88ffb4573e20050d39195132a3e15  cases/literal-noncharacters.digest
++9fc60e7b3e6f6a21370254139b3fae85f31bed35ffc1ccc2c93133d001c9cd66  cases/literal-noncharacters.ttl
+ 19b02a5868c200fbb31aa977f08f71d8363813f6292b260a6e52908ca36e44c0  cases/near-isomorphic-a.canonical
+ 6b49524f93cf022f635e6fee78a5386b38ee135293d34f9d2aae868baae9e33e  cases/near-isomorphic-a.digest
+ 15382d61fe7d2394936b28396a10a01b6644e1f104958a0d1e57521fb69c1dd0  cases/near-isomorphic-a.ttl
+@@ -62,5 +65,5 @@ f6807c7940bbfa4762b6d7fdacea3cd0cf558cf67853af2a5a23d3a7878f6e0e  cases/triple-t
+ e5633fc695b6a5cf9e02d55343d73276184226b1e354fb8156026c163ee2113d  cases/unicode-lexical-forms.canonical
+ 0d1680352d838ecaaa677abbcf9567aa095ce5a7d3626e10e6035688f9e1321a  cases/unicode-lexical-forms.digest
+ 58f48d7414866e0142abab3b492ffe8ddc8b4769c601cf256439bc68b018aa38  cases/unicode-lexical-forms.ttl
+-8b30afac5b02849e0085ae6e82c70508b3dfa85b33cf8e1ee594b38dd2353c0e  manifest.tsv
++9797a5fee0f26e3845f9859332d4a170adad89a4acbb5b766baee54c1ab2b32a  manifest.tsv
+ e9725bd5da673e86b47cbf79ebf3245cc2aa99e6626ee71bdca2fb7becbe15e9  pairs.tsv
+diff --git scripts/simd-asm-manifest.toml scripts/simd-asm-manifest.toml
+index aa322d939..f9857cd69 100644
+--- scripts/simd-asm-manifest.toml
++++ scripts/simd-asm-manifest.toml
+@@ -2562,7 +2562,7 @@ summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `writ
+   label = "iri"
+   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+   crate = "purrdf_lex"
+-  symbol = "purrdf_lex::term_syntax::write_iri"
++  symbol = "purrdf_lex::term_syntax::write_iri_for"
+   min_vector_ops = 0
+   max_fma = 0
+   forbid_relaxed = true
+@@ -2589,13 +2589,15 @@ summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `writ
+   max_fma = 0
+   forbid_relaxed = true
+ 
+-  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
++  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5:
++  # with the noncharacter lead byte among its stops the scan has the shape of the XML
++  # carrier's scan, whose floor is 3.
+   [[site.measure]]
+   label = "literal scan avx512 masks"
+   configs = ["x86_64-v4"]
+   crate = "purrdf_lex"
+   symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
+-  min_vector_ops = 9
++  min_vector_ops = 3
+   require_mnemonics = ["vpcmpeqb %k"]
+   max_fma = 0
+   forbid_relaxed = true
+@@ -2637,7 +2639,7 @@ summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `writ
+   label = "literal"
+   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+   crate = "purrdf_lex"
+-  symbol = "purrdf_lex::term_syntax::write_literal"
++  symbol = "purrdf_lex::term_syntax::write_literal_for"
+   min_vector_ops = 0
+   max_fma = 0
+   forbid_relaxed = true
+@@ -3157,7 +3159,7 @@ summary = "the entailment engine's term surfaces, spelled by `term_syntax::write
+   label = "iri"
+   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+   crate = "purrdf_lex"
+-  symbol = "purrdf_lex::term_syntax::write_iri"
++  symbol = "purrdf_lex::term_syntax::write_iri_for"
+   min_vector_ops = 0
+   max_fma = 0
+   forbid_relaxed = true
+@@ -3184,13 +3186,15 @@ summary = "the entailment engine's term surfaces, spelled by `term_syntax::write
+   max_fma = 0
+   forbid_relaxed = true
+ 
+-  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
++  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5:
++  # with the noncharacter lead byte among its stops the scan has the shape of the XML
++  # carrier's scan, whose floor is 3.
+   [[site.measure]]
+   label = "literal scan avx512 masks"
+   configs = ["x86_64-v4"]
+   crate = "purrdf_lex"
+   symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
+-  min_vector_ops = 9
++  min_vector_ops = 3
+   require_mnemonics = ["vpcmpeqb %k"]
+   max_fma = 0
+   forbid_relaxed = true
+diff --git vectors/rdf12-canon/README.md vectors/rdf12-canon/README.md
+index 2f88a91ee..81ac83e18 100644
+--- vectors/rdf12-canon/README.md
++++ vectors/rdf12-canon/README.md
+@@ -105,6 +105,7 @@ Correctness evidence lives elsewhere and is deliberately not duplicated:
+ | Case | Covers |
+ |---|---|
+ | `literal-forms` | `"0.70"` ≠ `"0.7"`; lexical forms never normalized |
++| `literal-noncharacters` | U+FFFE and U+FFFF in a lexical form are written as `\uFFFE` and `\uFFFF`; the C1 control U+0085 and U+FFFD stay raw |
+ | `directional-literals` | `@en--ltr` ≠ `@en--rtl` ≠ `@en` |
+ | `unicode-lexical-forms` | NFC vs NFD are distinct; astral planes survive |
+ 
+diff --git vectors/rdf12-canon/cases/literal-noncharacters.canonical vectors/rdf12-canon/cases/literal-noncharacters.canonical
+new file mode 100644
+index 000000000..68b2b5f6c
+--- /dev/null
++++ vectors/rdf12-canon/cases/literal-noncharacters.canonical
+@@ -0,0 +1,3 @@
++<http://example.org/s> <http://example.org/c1> "xy" .
++<http://example.org/s> <http://example.org/neighbour> "p�q" .
++<http://example.org/s> <http://example.org/nonchars> "a\uFFFEb\uFFFFc" .
+diff --git vectors/rdf12-canon/cases/literal-noncharacters.digest vectors/rdf12-canon/cases/literal-noncharacters.digest
+new file mode 100644
+index 000000000..bf7e26e6f
+--- /dev/null
++++ vectors/rdf12-canon/cases/literal-noncharacters.digest
+@@ -0,0 +1 @@
++06edfe965c0b6a0072146ac4e8b95a82be2b4f1c0da72c6a22977d68943bdb21
+diff --git vectors/rdf12-canon/cases/literal-noncharacters.ttl vectors/rdf12-canon/cases/literal-noncharacters.ttl
+new file mode 100644
+index 000000000..076e420df
+--- /dev/null
++++ vectors/rdf12-canon/cases/literal-noncharacters.ttl
+@@ -0,0 +1,5 @@
++@prefix ex: <http://example.org/> .
++
++ex:s ex:nonchars "a\uFFFEb\uFFFFc" .
++ex:s ex:c1 "x\u0085y" .
++ex:s ex:neighbour "p\uFFFDq" .
+diff --git vectors/rdf12-canon/manifest.tsv vectors/rdf12-canon/manifest.tsv
+index af67fae92..5379429b8 100644
+--- vectors/rdf12-canon/manifest.tsv
++++ vectors/rdf12-canon/manifest.tsv
+@@ -39,3 +39,4 @@ cases/poison-sentinel-nested.ttl	refusal	reserved-vocabulary object urn:purrdf:r
+ cases/poison-sentinel-datatype.ttl	refusal	reserved-vocabulary object urn:purrdf:rdfc:reifies
+ cases/poison-sentinel-unminted.ttl	refusal	reserved-vocabulary predicate urn:purrdf:rdfc:no-such-sentinel
+ cases/poison-complexity.ttl	refusal	budget-exceeded
++cases/literal-noncharacters.ttl	golden
