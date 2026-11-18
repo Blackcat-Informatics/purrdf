@@ -62,12 +62,12 @@ fn checkpointed_nodes_are_the_canonical_node_of_every_prefix_range() {
         let mut digests: Vec<_> = (0..count).map(|index| digest(index / 7 * 7)).collect();
         digests.sort_unstable();
         let directory = directory(&digests, 0);
-        assert_eq!(directory.root(), node_of(digests.iter().copied()));
+        assert_eq!(directory.root().unwrap(), node_of(&digests));
         for range in prefix_ranges(&directory) {
             let mut work = SourceDifferenceWork::default();
             assert_eq!(
                 DirectoryRead::node(&directory, range.clone(), &mut work).unwrap(),
-                node_of(digests[range.clone()].iter().copied()),
+                node_of(&digests[range.clone()]),
                 "{count} members, range {range:?}"
             );
             assert!(work.members < CHECKPOINT_ROWS as u64);
@@ -133,7 +133,7 @@ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
     let before = directory(&with(&removed), 0);
     let after = directory(&with(&added), 0);
     assert_eq!(before.content_records(), after.content_records());
-    assert_ne!(before.root(), after.root());
+    assert_ne!(before.root().unwrap(), after.root().unwrap());
     let (seen, _) = changes(&[&before], &[&after]);
     let mut expected: Vec<_> = removed
         .iter()
@@ -144,7 +144,7 @@ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
     assert_eq!(seen, expected);
 
     let moved = directory(&with(&removed), 1000);
-    assert_eq!(moved.root(), before.root());
+    assert_eq!(moved.root().unwrap(), before.root().unwrap());
     let (seen, work) = changes(&[&before], &[&moved]);
     assert_eq!(seen, []);
     assert_eq!(work.ranges, 1);

@@ -670,8 +670,13 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
         )
     }
 
-    fn removal_root(carrier: Option<ResidentSource<'_>>) -> Option<DirectoryNode> {
-        carrier.and_then(|(_, statistics)| statistics.source_root())
+    fn removal_root(
+        carrier: Option<ResidentSource<'_>>,
+    ) -> Result<Option<DirectoryNode>, SegmentedError> {
+        Ok(match carrier {
+            Some((_, statistics)) => statistics.source_root()?,
+            None => None,
+        })
     }
 
     fn source_baseline(
@@ -697,12 +702,13 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                 Arc::ptr_eq(a, b)
             })
             && let Some(head) = &old.head
-            && self.sessions[new.layers.len() - 1].source_root()? == head.statistics().source_root()
+            && self.sessions[new.layers.len() - 1].source_root()?
+                == head.statistics().source_root()?
             && Self::removal_root(
                 new.layers
                     .last()
                     .and_then(|layer| layer.metadata.removal_source()),
-            ) == Self::removal_root(head.metadata.removal_source())
+            )? == Self::removal_root(head.metadata.removal_source())?
         {
             return Ok(Baseline {
                 snapshot: SegmentedStackSnapshot {
@@ -1081,7 +1087,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                         .head
                         .as_ref()
                         .expect("the resident source exists");
-                    (head.statistics().source_root(), head.metadata.removals())
+                    (head.statistics().source_root()?, head.metadata.removals())
                 };
                 // An unchanged union adds nothing only when its members are
                 // the ones already observed.

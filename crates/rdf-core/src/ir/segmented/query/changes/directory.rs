@@ -84,7 +84,7 @@ fn leaf(keys: &[[u8; 32]], operation: &SegmentedOperation) -> Result<Shared<Node
     }
     #[cfg(test)]
     COPIES.set(COPIES.get() + keys.len());
-    let merkle = node_of(keys.iter().copied()).expect("a leaf holds a key");
+    let merkle = node_of(keys).expect("a leaf holds a key");
     allocate(keys[0], (summary, merkle), Kind::Leaf(owned), storage)
 }
 
@@ -359,7 +359,7 @@ impl DirectoryRead for EffectiveDirectory {
             match &node.kind {
                 Kind::Leaf(keys) => {
                     work.members += range.len() as u64;
-                    return Ok(node_of(keys[range].iter().copied()));
+                    return Ok(node_of(&keys[range]));
                 }
                 Kind::Branch { left, right, .. } => {
                     let size = usize::try_from(left.summary.population())
@@ -412,7 +412,10 @@ mod tests {
             sum.insert(*key).unwrap();
         }
         assert_eq!(directory.summary(), sum);
-        assert_eq!(directory.root(), node_of(expected.iter().copied()));
+        assert_eq!(
+            directory.root(),
+            node_of(&expected.iter().copied().collect::<Vec<_>>())
+        );
         assert_eq!(
             directory
                 .node(0..expected.len(), &mut SourceDifferenceWork::default())

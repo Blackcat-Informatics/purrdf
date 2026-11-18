@@ -657,14 +657,15 @@ fn encode_prepared_dataset(
         block_bytes,
     )?;
     let directory = source_statistics.effective_source_directory();
-    let checkpoint_count = directory.node_checkpoints().len();
+    let checkpoints = directory.node_checkpoints()?;
+    let checkpoint_count = checkpoints.len();
     let width = super::super::source_directory::NODE_CHECKPOINT_BYTES;
     let per = (block_bytes - 9) / width;
     let source_checkpoints = append_fixed(
         &mut blocks,
-        (0..checkpoint_count).step_by(per).map(|start| {
-            let mut bytes = vec![0; (checkpoint_count - start).min(per) * width];
-            directory.encode_node_checkpoints(start, &mut bytes);
+        checkpoints.chunks(per).map(|chunk| {
+            let mut bytes = vec![0; chunk.len() * width];
+            super::super::source_directory::encode_node_checkpoints(chunk, &mut bytes);
             bytes
         }),
         checkpoint_count as u64,
@@ -1493,7 +1494,8 @@ fn validate_node_checkpoints(
     directory: &super::super::source_directory::SourceDirectory,
 ) -> Result<(), SegmentedError> {
     let width = super::super::source_directory::NODE_CHECKPOINT_BYTES;
-    let count = directory.node_checkpoints().len();
+    let checkpoints = directory.node_checkpoints()?;
+    let count = checkpoints.len();
     if header.source_checkpoints.rows != count as u64 {
         return Err(SegmentedError::Corrupt(
             "source checkpoint packing disagrees with RDF rows",
@@ -1517,7 +1519,10 @@ fn validate_node_checkpoints(
                 "source checkpoint packing disagrees with RDF rows",
             ));
         }
-        directory.encode_node_checkpoints(ordinal, &mut expected[..actual.len()]);
+        super::super::source_directory::encode_node_checkpoints(
+            &checkpoints[ordinal..ordinal + actual.len() / width],
+            &mut expected[..actual.len()],
+        );
         if actual != &expected[..actual.len()] {
             return Err(SegmentedError::Corrupt(
                 "source checkpoint contents disagree with RDF rows",
@@ -2224,7 +2229,7 @@ mod certification_tests {
             let mut work = SourceDifferenceWork::default();
             assert_eq!(
                 directory.node(range.clone(), &mut work).unwrap(),
-                node_of(digests[range.clone()].iter().copied()),
+                node_of(&digests[range.clone()]),
                 "range {range:?}"
             );
             assert!(work.members < 32);
@@ -2236,10 +2241,7 @@ mod certification_tests {
                 pending.extend([range.start..middle, middle..range.end]);
             }
         }
-        assert_eq!(
-            session.source_root().unwrap(),
-            node_of(digests.iter().copied())
-        );
+        assert_eq!(session.source_root().unwrap(), node_of(&digests));
         assert!(matches!(
             directory.node(0..1026, &mut SourceDifferenceWork::default()),
             Err(SegmentedError::Corrupt(_))
@@ -2275,15 +2277,38 @@ mod certification_tests {
         let header = Header::decode(image.bytes()).unwrap();
         let stream = header.source_checkpoints;
         assert!(stream.blocks > 1);
-        for slot in stream.first..stream.first + stream.blocks {
+        // A boundary byte and a node byte of the first record in each block.
+        for (slot, offset) in
+            (stream.first..stream.first + stream.blocks).flat_map(|slot| [(slot, 0), (slot, 17)])
+        {
             let mut bytes = image.bytes().to_vec();
-            bytes[slot as usize * header.block_bytes as usize + 9] ^= 1;
+            bytes[slot as usize * header.block_bytes as usize + 9 + offset] ^= 1;
             rehash(&mut bytes, image.receipt());
             assert_eq!(
                 SegmentedImage::certify(bytes).unwrap_err(),
                 SegmentedError::Corrupt("source checkpoint contents disagree with RDF rows")
             );
         }
+    }
+
+    /// The magic and the version name one checkpoint law together; a
+    /// mismatched pair is refused before any checkpoint is read.
+    #[test]
+    fn header_refuses_a_magic_that_disagrees_with_its_version() {
+        let image = image();
+        assert_eq!(
+            Header::decode(image.bytes()).unwrap().version,
+            format::VERSION
+        );
+        let refusal = SegmentedError::Corrupt(
+            "unsupported segmented format/profile; regenerate the image from RDF input",
+        );
+        let mut older = image.bytes().to_vec();
+        crate::bytes::put_u32_le(&mut older, 8, format::ADDITIVE_VERSION).unwrap();
+        assert_eq!(Header::decode(&older).unwrap_err(), refusal);
+        let mut renamed = image.bytes().to_vec();
+        renamed[..8].copy_from_slice(b"PURRSEG7");
+        assert_eq!(Header::decode(&renamed).unwrap_err(), refusal);
     }
 
     #[test]

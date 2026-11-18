@@ -734,7 +734,12 @@ impl LocalStatistics {
     }
     /// The canonical node of the effective source directory, the members
     /// [`Self::source_union`] sums.
-    pub(crate) fn source_root(&self) -> Option<crate::ir::source_directory::DirectoryNode> {
+    ///
+    /// # Errors
+    /// Returns allocator refusal while deriving the directory's node index.
+    pub(crate) fn source_root(
+        &self,
+    ) -> Result<Option<crate::ir::source_directory::DirectoryNode>, StorageError> {
         self.effective_source_directory().root()
     }
     pub(crate) const fn source_directory(&self) -> &SourceDirectory {

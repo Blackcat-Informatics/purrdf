@@ -180,8 +180,11 @@ Native construction reserves source-record storage from the exact physical row
 count. Sources without annotations reuse their physical directory for normalized
 keys; they retain no duplicate record or checkpoint buffers. Annotated sources
 retain a separate normalized directory because statement copies must collapse.
-Resident directories keep the same sparse branch checkpoints, their root node
-and the additive total. Scalar term hashing streams the initial value directly;
+Resident directories keep the additive total from the freeze and derive the
+same sparse branch checkpoints and root node on first use, from the sorted
+records, into resident memory with typed allocation refusal. A statistics build
+that never compares ranges or writes an image does no Merkle hashing, and sealing
+and certification hash only the effective directory. Scalar term hashing streams the initial value directly;
 only nested triple terms require admitted traversal scratch. These storage choices
 preserve source identities. In 4.0, resident and controlled sealing share the
 fallible digest sorter. Its permutation of equal-digest source-local addresses

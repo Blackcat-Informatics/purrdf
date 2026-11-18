@@ -18,9 +18,14 @@
 //! * `feed_layers`: the change feed after replacing that image with one whose
 //!   middle row changed.
 //! * `feed_head`: the same change in a resident head.
+//! * `feed_regroup`: the change feed after replacing that image with three
+//!   images that partition the changed rows by subject identifier, so every carrier
+//!   differs while only the middle row changed.
+//! * `statistics`: `TripleDatasetBuilder::freeze` of the same rows as
+//!   triples, which builds the eager statistics and reads no change feed.
 //!
 //! The fixture has `PURRDF_SOURCE_CHANGE_ROWS` rows (2048 by default), each a
-//! quad, a reifier and an annotation. Fixture construction, sealing of the
+//! quad (a triple in `statistics`), a reifier and an annotation. Fixture construction, sealing of the
 //! compared images and the previous version are outside every window. The
 //! counting allocator also runs in the instruction samples; its work is the
 //! same for every build compared.
@@ -32,8 +37,9 @@ use std::sync::Arc;
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_core::source::SourceVisit;
 use purrdf_core::{
-    DatasetView, RdfDataset, SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer,
-    SegmentedLayerMetadata, SegmentedReadLimits, SegmentedResidentHead, SegmentedStack,
+    DatasetView, RdfDataset, RdfLiteral, SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer,
+    SegmentedLayerMetadata, SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId,
+    TripleDatasetBuilder,
 };
 
 #[path = "../tests/support/source_snapshot.rs"]
@@ -42,7 +48,14 @@ mod source_snapshot;
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-const ROWS: [&str; 4] = ["seal", "capture", "feed_layers", "feed_head"];
+const ROWS: [&str; 6] = [
+    "seal",
+    "capture",
+    "feed_layers",
+    "feed_head",
+    "feed_regroup",
+    "statistics",
+];
 
 fn rows() -> usize {
     std::env::var("PURRDF_SOURCE_CHANGE_ROWS").map_or(2048, |raw| {
@@ -56,6 +69,11 @@ fn limits() -> SegmentedReadLimits {
 }
 
 fn builder(dataset: &RdfDataset) -> SegmentedBuilder {
+    builder_of(dataset, |_| true)
+}
+
+/// A builder over the rows of `dataset` whose subject `keep` admits.
+fn builder_of(dataset: &RdfDataset, keep: impl Fn(TermId) -> bool) -> SegmentedBuilder {
     let mut builder = SegmentedBuilder::new(
         SegmentedBuildLimits::new(1 << 20, 1 << 28, 1 << 20, 4096, 64).unwrap(),
     )
@@ -69,6 +87,9 @@ fn builder(dataset: &RdfDataset) -> SegmentedBuilder {
     .enumerate()
     {
         for row in rows {
+            if !keep(row.s) {
+                continue;
+            }
             let mut values = vec![
                 dataset.term_value(row.s),
                 dataset.term_value(row.p),
@@ -94,7 +115,11 @@ fn builder(dataset: &RdfDataset) -> SegmentedBuilder {
 }
 
 fn layer(dataset: &RdfDataset) -> Arc<SegmentedLayer> {
-    let image = builder(dataset).seal().unwrap();
+    sealed(builder(dataset))
+}
+
+fn sealed(builder: SegmentedBuilder) -> Arc<SegmentedLayer> {
+    let image = builder.seal().unwrap();
     Arc::new(
         SegmentedLayer::new(
             Arc::new(image.provider()),
@@ -129,12 +154,16 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
                 u64::try_from(version.statement_count()).unwrap()
             })
         }
-        "feed_layers" | "feed_head" => {
+        "statistics" => {
+            let builder = triples(count);
+            Box::new(move || u64::try_from(black_box(builder.freeze().unwrap()).len()).unwrap())
+        }
+        "feed_layers" | "feed_head" | "feed_regroup" => {
             let mut stack = SegmentedStack::default();
-            if row == "feed_layers" {
-                stack.publish(vec![layer(&original)], limits()).unwrap();
-            } else {
+            if row == "feed_head" {
                 stack.set_head(Some(head(original)));
+            } else {
+                stack.publish(vec![layer(&original)], limits()).unwrap();
             }
             let previous = stack
                 .snapshot()
@@ -144,10 +173,19 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
                 .source_version()
                 .unwrap()
                 .unwrap();
-            if row == "feed_layers" {
-                stack.publish(vec![layer(&changed)], limits()).unwrap();
-            } else {
-                stack.set_head(Some(head(changed)));
+            match row {
+                "feed_head" => stack.set_head(Some(head(changed))),
+                "feed_layers" => stack.publish(vec![layer(&changed)], limits()).unwrap(),
+                _ => stack
+                    .publish(
+                        (0..3)
+                            .map(|part| {
+                                sealed(builder_of(&changed, |subject| subject.index() % 3 == part))
+                            })
+                            .collect(),
+                        limits(),
+                    )
+                    .unwrap(),
             }
             let snapshot = stack.snapshot().unwrap();
             Box::new(move || {
@@ -168,6 +206,31 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
         }
         _ => panic!("unknown row {row}"),
     }
+}
+
+/// The `statistics` fixture: the source rows as triples, reifiers and
+/// annotations in a compact builder, which is frozen in the window.
+fn triples(count: usize) -> TripleDatasetBuilder {
+    let mut builder = TripleDatasetBuilder::default();
+    let p = builder.intern_iri("urn:source:predicate").unwrap();
+    let annotation = builder.intern_iri("urn:source:annotation").unwrap();
+    for index in 0..count {
+        let subject = builder.intern_iri(&format!("urn:source:{index}")).unwrap();
+        let reifier = builder
+            .intern_iri(&format!("urn:source:reifier:{index}"))
+            .unwrap();
+        let object = builder
+            .intern_literal(RdfLiteral::simple(format!("row {index} revision 0")))
+            .unwrap();
+        let note = builder
+            .intern_literal(RdfLiteral::simple(format!("note {index} revision 0")))
+            .unwrap();
+        builder.push_triple(subject, p, object).unwrap();
+        let triple = builder.intern_triple(subject, p, object).unwrap();
+        builder.push_reifier(reifier, triple).unwrap();
+        builder.push_annotation(reifier, annotation, note).unwrap();
+    }
+    builder
 }
 
 #[cfg(target_os = "linux")]

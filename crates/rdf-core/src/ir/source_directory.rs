@@ -7,9 +7,10 @@
 //! holding at least [`CHECKPOINT_ROWS`] members; smaller nodes are recomputed.
 
 use std::ops::Range;
+use std::sync::OnceLock;
 
 use purrdf_hash::multiset::Multiset256;
-use purrdf_lex::allocation::{Admission, Memory, StorageError};
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 use purrdf_lex::walk::WorkList;
 
 use crate::{StatisticsStream, source::SourceDifferenceWork};
@@ -72,7 +73,19 @@ pub(crate) fn recompute<D: DirectoryRead + ?Sized>(
     range: Range<usize>,
     work: &mut SourceDifferenceWork,
 ) -> Result<Option<DirectoryNode>, D::Error> {
-    let mut builder = merkle::NodeBuilder::new(0);
+    if range.len() <= merkle::SMALL {
+        recompute_with::<_, { merkle::SMALL }>(directory, range, work)
+    } else {
+        recompute_with::<_, { merkle::SPINE }>(directory, range, work)
+    }
+}
+
+fn recompute_with<D: DirectoryRead + ?Sized, const N: usize>(
+    directory: &D,
+    range: Range<usize>,
+    work: &mut SourceDifferenceWork,
+) -> Result<Option<DirectoryNode>, D::Error> {
+    let mut builder = merkle::NodeBuilder::<N>::new(0);
     for index in range {
         builder.push(directory.record(index)?.digest(), &mut |_| {});
         work.members += 1;
@@ -147,13 +160,42 @@ impl DirectoryEntry for SourceRecord {
     }
 }
 
+/// The canonical nodes of one directory: every branch of at least
+/// [`CHECKPOINT_ROWS`] members by ascending boundary, and the root.
+#[derive(Clone, Default)]
+struct NodeIndex {
+    checkpoints: Box<[NodeCheckpoint]>,
+    root: Option<DirectoryNode>,
+}
+
+/// The node index, derived from the records on first use. Freezing a
+/// directory hashes nothing: statistics builds that never compare ranges or
+/// write an image pay no Merkle work. The index is resident memory owned by
+/// the directory, allocated fallibly; it is a pure function of the records, so
+/// it takes no part in equality.
+#[derive(Clone, Default)]
+struct LazyNodes(OnceLock<NodeIndex>);
+
+impl std::fmt::Debug for LazyNodes {
+    // Whether the index was derived yet is not part of the value.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("LazyNodes")
+    }
+}
+
+impl PartialEq for LazyNodes {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for LazyNodes {}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SourceDirectory {
     records: Box<[SourceRecord]>,
-    // Every branch of at least CHECKPOINT_ROWS members, by ascending boundary.
-    checkpoints: Box<[NodeCheckpoint]>,
-    root: Option<DirectoryNode>,
     content: Multiset256,
+    nodes: LazyNodes,
 }
 
 impl SourceDirectory {
@@ -164,19 +206,23 @@ impl SourceDirectory {
     }
 
     /// The canonical node of every record; `None` when there is none.
-    pub(crate) const fn root(&self) -> Option<DirectoryNode> {
-        self.root
+    ///
+    /// # Errors
+    /// Returns allocator refusal while deriving the node index.
+    pub(crate) fn root(&self) -> Result<Option<DirectoryNode>, StorageError> {
+        Ok(self.nodes()?.root)
     }
 
+    /// The admitted record storage. The lazily derived node index is resident
+    /// memory outside this account.
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
-        size_of_val(self.records.as_ref()).checked_add(size_of_val(self.checkpoints.as_ref()))
+        Some(size_of_val(self.records.as_ref()))
     }
 
     pub(crate) fn freeze<S: Admission + ?Sized>(
         mut records: Vec<SourceRecord>,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
-        let mut checkpoints = Vec::new();
         let prepared = (|| {
             memory.admission_mut().checkpoint(0)?;
             // Resident and controlled sealing use the same digest ordering and
@@ -188,78 +234,35 @@ impl SourceDirectory {
             })?;
             memory.admission_mut().checkpoint(0)?;
             let mut content = Multiset256::default();
-            let mut builder = merkle::NodeBuilder::new(0);
-            let mut refused = None;
-            let mut record_branch = |branch: merkle::Branch, memory: &mut Memory<'_, S>| {
-                if branch.population >= CHECKPOINT_ROWS as u64 && refused.is_none() {
-                    let checkpoint = NodeCheckpoint {
-                        boundary: branch.boundary,
-                        node: branch.node,
-                    };
-                    if let Err(cause) = memory.push_copy_with_progress(&mut checkpoints, checkpoint)
-                    {
-                        refused = Some(cause);
-                    }
-                }
-            };
             for record in &records {
                 memory.admission_mut().checkpoint(1)?;
                 content
                     .insert(record.digest)
                     .map_err(|_| StorageError::SizeOverflow)?;
-                builder.push(record.digest, &mut |branch| record_branch(branch, memory));
             }
-            let root = builder.finish(&mut |branch| record_branch(branch, memory));
-            if let Some(cause) = refused {
-                return Err(cause);
-            }
-            // Branches complete in post-order; readers search by boundary.
-            purrdf_lex::walk::try_sort_unstable_by(&mut checkpoints, |left, right| {
-                memory.admission_mut().checkpoint(1)?;
-                Ok::<_, StorageError>(left.boundary.cmp(&right.boundary))
-            })?;
             memory.admission_mut().checkpoint(0)?;
-            Ok::<_, StorageError>((root, content))
+            Ok::<_, StorageError>(content)
         })();
-        let (root, content) = match prepared {
-            Ok(values) => values,
+        let content = match prepared {
+            Ok(content) => content,
             Err(cause) => {
-                // Both local owners die before their individual refunds. A refused
-                // refund cannot replace the first failure or prevent the other refund.
-                let _ = memory.release_vec(checkpoints);
                 let _ = memory.release_vec(records);
                 return Err(cause);
             }
         };
-        Self::from_arrays(records, checkpoints, (root, content), memory)
+        Self::from_records(records, content, memory)
     }
 
-    /// Publish both originally admitted buffers, retaining neither on refusal.
-    fn from_arrays<S: Admission + ?Sized>(
+    /// Publish the originally admitted buffer, retaining nothing on refusal.
+    fn from_records<S: Admission + ?Sized>(
         records: Vec<SourceRecord>,
-        checkpoints: Vec<NodeCheckpoint>,
-        (root, content): (Option<DirectoryNode>, Multiset256),
+        content: Multiset256,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
-        let records = match memory.boxed_slice(records) {
-            Ok(records) => records,
-            Err(cause) => {
-                let _ = memory.release_vec(checkpoints);
-                return Err(cause);
-            }
-        };
-        let checkpoints = match memory.boxed_slice(checkpoints) {
-            Ok(checkpoints) => checkpoints,
-            Err(cause) => {
-                let _ = memory.release_vec(records.into_vec());
-                return Err(cause);
-            }
-        };
         Ok(Self {
-            records,
-            checkpoints,
-            root,
+            records: memory.boxed_slice(records)?,
             content,
+            nodes: LazyNodes::default(),
         })
     }
 
@@ -268,32 +271,72 @@ impl SourceDirectory {
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
         let records = memory.collect(self.records.iter().copied())?;
-        let checkpoints = match memory.collect(self.checkpoints.iter().copied()) {
-            Ok(checkpoints) => checkpoints,
-            Err(cause) => {
-                let _ = memory.release_vec(records);
-                return Err(cause);
-            }
-        };
-        Self::from_arrays(records, checkpoints, (self.root, self.content), memory)
+        Self::from_records(records, self.content, memory)
     }
 
-    /// Destroy both buffers and attempt their exact original refunds.
+    /// Destroy the record buffer and attempt its exact original refund.
     pub(super) fn release_admitted<S: Admission + ?Sized>(
         self,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), StorageError> {
-        let records = memory.release_vec(self.records.into_vec());
-        let checkpoints = memory.release_vec(self.checkpoints.into_vec());
-        records.and(checkpoints)
+        memory.release_vec(self.records.into_vec())
     }
 
     pub(crate) fn len(&self) -> usize {
         self.records.len()
     }
 
-    pub(crate) fn node_checkpoints(&self) -> &[NodeCheckpoint] {
-        &self.checkpoints
+    /// The node index, hashed from the records once and then shared.
+    fn nodes(&self) -> Result<&NodeIndex, StorageError> {
+        if let Some(index) = self.nodes.0.get() {
+            return Ok(index);
+        }
+        let index = self.derive_nodes()?;
+        // A concurrent first use derives the same index from the same records.
+        Ok(self.nodes.0.get_or_init(|| index))
+    }
+
+    fn derive_nodes(&self) -> Result<NodeIndex, StorageError> {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut checkpoints = Vec::new();
+        let mut refused = None;
+        let mut builder = merkle::NodeBuilder::<{ merkle::SPINE }>::new(0);
+        let mut record = |branch: merkle::Branch, refused: &mut Option<StorageError>| {
+            if branch.population >= CHECKPOINT_ROWS as u64 && refused.is_none() {
+                let checkpoint = NodeCheckpoint {
+                    boundary: branch.boundary,
+                    node: branch.node,
+                };
+                if let Err(cause) = memory.push(&mut checkpoints, checkpoint) {
+                    *refused = Some(cause);
+                }
+            }
+        };
+        for entry in &self.records {
+            builder.push(entry.digest, &mut |branch| record(branch, &mut refused));
+            if let Some(cause) = refused {
+                return Err(cause);
+            }
+        }
+        let root = builder.finish(&mut |branch| record(branch, &mut refused));
+        if let Some(cause) = refused {
+            return Err(cause);
+        }
+        // Branches complete in post-order; readers search by boundary.
+        checkpoints.sort_unstable_by_key(|checkpoint| checkpoint.boundary);
+        Ok(NodeIndex {
+            checkpoints: memory.boxed_slice(checkpoints)?,
+            root,
+        })
+    }
+
+    /// The sparse checkpoints a version 8 image stores, by ascending boundary.
+    ///
+    /// # Errors
+    /// Returns allocator refusal while deriving the node index.
+    pub(crate) fn node_checkpoints(&self) -> Result<&[NodeCheckpoint], StorageError> {
+        Ok(&self.nodes()?.checkpoints)
     }
 
     /// The additive prefix sums a version 7 image stores after every complete
@@ -312,23 +355,6 @@ impl SourceDirectory {
                 }
                 *state.sum()
             })
-    }
-
-    /// Persist the sparse checkpoints from `start`, as [`NODE_CHECKPOINT_BYTES`]
-    /// records: the boundary as a little-endian `u64`, then the node.
-    pub(crate) fn encode_node_checkpoints(&self, start: usize, output: &mut [u8]) {
-        assert!(output.len().is_multiple_of(NODE_CHECKPOINT_BYTES));
-        for (index, bytes) in output
-            .as_chunks_mut::<NODE_CHECKPOINT_BYTES>()
-            .0
-            .iter_mut()
-            .enumerate()
-        {
-            let checkpoint = self.checkpoints[start + index];
-            crate::bytes::put_u64_le(bytes, 0, checkpoint.boundary)
-                .expect("fixed checkpoint width");
-            bytes[8..].copy_from_slice(&checkpoint.node);
-        }
     }
 
     /// Persist sorted digests and physical addresses without implied populations. Full
@@ -385,18 +411,22 @@ impl DirectoryRead for SourceDirectory {
         range: Range<usize>,
         work: &mut SourceDifferenceWork,
     ) -> Result<Option<DirectoryNode>, Self::Error> {
+        if range.len() < CHECKPOINT_ROWS {
+            return recompute(self, range, work);
+        }
+        let nodes = self.nodes()?;
         if range.start == 0 && range.end == self.records.len() {
-            return Ok(self.root);
+            return Ok(nodes.root);
         }
         checkpointed(self, range, work, |boundary| {
-            let index = self
+            let index = nodes
                 .checkpoints
                 .binary_search_by_key(&boundary, |checkpoint| checkpoint.boundary)
                 // INVARIANT: freeze records every branch of at least
                 // CHECKPOINT_ROWS members, and a digest-prefix range of that
                 // size with two distinct digests is exactly one such branch.
                 .expect("every large branch has a checkpoint");
-            Ok(self.checkpoints[index].node)
+            Ok(nodes.checkpoints[index].node)
         })
     }
 }
@@ -672,6 +702,18 @@ fn partition<D: DirectoryRead>(
         }
     }
     Ok(low)
+}
+
+/// Persist `checkpoints` as [`NODE_CHECKPOINT_BYTES`] records: the boundary as
+/// a little-endian `u64`, then the node. `output` holds one record per
+/// checkpoint.
+pub(crate) fn encode_node_checkpoints(checkpoints: &[NodeCheckpoint], output: &mut [u8]) {
+    let (records, rest) = output.as_chunks_mut::<NODE_CHECKPOINT_BYTES>();
+    assert!(rest.is_empty() && records.len() == checkpoints.len());
+    for (bytes, checkpoint) in records.iter_mut().zip(checkpoints) {
+        crate::bytes::put_u64_le(bytes, 0, checkpoint.boundary).expect("fixed checkpoint width");
+        bytes[8..].copy_from_slice(&checkpoint.node);
+    }
 }
 
 #[cfg(test)]

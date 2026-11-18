@@ -81,24 +81,30 @@ const EMPTY: Entry = Entry {
     bit: 0,
 };
 
+/// The spine bound for any member count.
+pub(crate) const SPINE: usize = 257;
+
 /// Build the canonical node of digests pushed in ascending order.
 ///
 /// The right spine holds subtrees whose separating bits strictly increase
-/// upwards, so a 256-bit digest bounds it at 257 entries: the work is linear
-/// in the members and nothing is allocated.
-pub(crate) struct NodeBuilder {
-    spine: [Entry; 257],
+/// upwards, so a 256-bit digest bounds it at [`SPINE`] entries, and it never
+/// holds more entries than distinct digests. `N` is the bound the caller can
+/// prove: [`SPINE`] in general, or the member count of a short range, so that
+/// recomputing a small range does not initialise a full spine. The work is
+/// linear in the members and nothing is allocated.
+pub(crate) struct NodeBuilder<const N: usize> {
+    spine: [Entry; N],
     depth: usize,
     run: Option<([u8; 32], u64, u64)>,
     bit: u16,
     next: u64,
 }
 
-impl NodeBuilder {
+impl<const N: usize> NodeBuilder<N> {
     /// A builder whose first member has ordinal `start`.
     pub(crate) const fn new(start: u64) -> Self {
         Self {
-            spine: [EMPTY; 257],
+            spine: [EMPTY; N],
             depth: 0,
             run: None,
             bit: 0,
@@ -177,10 +183,20 @@ impl NodeBuilder {
 }
 
 /// The node of `digests`, which are sorted ascending.
-pub(crate) fn node_of(digests: impl IntoIterator<Item = [u8; 32]>) -> Option<DirectoryNode> {
-    let mut builder = NodeBuilder::new(0);
-    for digest in digests {
-        builder.push(digest, &mut |_| {});
+pub(crate) fn node_of(digests: &[[u8; 32]]) -> Option<DirectoryNode> {
+    fn build<const N: usize>(digests: &[[u8; 32]]) -> Option<DirectoryNode> {
+        let mut builder = NodeBuilder::<N>::new(0);
+        for digest in digests {
+            builder.push(*digest, &mut |_| {});
+        }
+        builder.finish(&mut |_| {})
     }
-    builder.finish(&mut |_| {})
+    if digests.len() <= SMALL {
+        build::<SMALL>(digests)
+    } else {
+        build::<SPINE>(digests)
+    }
 }
+
+/// The spine bound of a range of at most this many members.
+pub(crate) const SMALL: usize = super::CHECKPOINT_ROWS;

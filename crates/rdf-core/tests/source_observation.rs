@@ -277,7 +277,7 @@ fn multiple_output_regrouping_and_lazy_prefix_compaction_follow_only_changed_key
         // each range holds one carrier per side: digest work is linear in the
         // records, while only the changed rows are resolved as candidates.
         let records = u64::try_from(previous.statement_count()).unwrap();
-        assert!(work.directory.ranges < 4 * records);
+        assert!(work.directory.ranges < 3 * records);
         measurements.push((count, work, requests, io, lazy));
     }
     eprintln!(
