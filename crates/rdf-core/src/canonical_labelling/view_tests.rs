@@ -627,6 +627,120 @@ fn a_large_constant_is_admitted_while_the_view_is_lowered() {
     assert!(small.asked > 50_000 && small.asked < done.admitted_bytes);
 }
 
+/// A record payload is admitted once however many records repeat it: records
+/// that share one payload and differ in their terms hold it as one constant, so
+/// the account never sees more than the grant, a ceiling at the grant admits
+/// them, and a ceiling below the payload refuses.
+#[test]
+fn a_payload_shared_by_records_is_admitted_once() {
+    let view = cycle();
+    let payload = vec![7u8; 40_000];
+    let terms: Vec<[TermValue; 1]> = ["a", "b", "c", "d"].iter().map(|n| [value_of(n)]).collect();
+    let records: Vec<Record<'_>> = terms.iter().map(|t| Record::new(&payload, t)).collect();
+    let mut roomy = Recorder {
+        ceiling: usize::MAX,
+        asked: 0,
+    };
+    let done = compare_view_with_memory(
+        view.as_ref(),
+        &records,
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut roomy),
+    )
+    .expect("admitted");
+    // A ceiling at the grant admits the records: the shared payload is not
+    // charged again for each record.
+    let mut fits = Recorder {
+        ceiling: done.admitted_bytes,
+        asked: 0,
+    };
+    assert!(
+        compare_view_with_memory(
+            view.as_ref(),
+            &records,
+            &mut control(),
+            Limit::ENGINE,
+            &mut Memory::new(&mut fits),
+        )
+        .is_ok()
+    );
+    assert_eq!(roomy.asked, done.admitted_bytes, "the peak is the grant");
+    let mut small = Recorder {
+        ceiling: payload.len() / 2,
+        asked: 0,
+    };
+    let refused = compare_view_with_memory(
+        view.as_ref(),
+        &records,
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut small),
+    );
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+}
+
+/// The fields of a refusal are inspectable through the shared error
+/// inspection: a limit refusal reports its code, its search-free failures and
+/// its engine figures.
+#[test]
+fn a_limit_refusal_exposes_its_fields_to_structured_inspection() {
+    use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
+    #[derive(Default)]
+    struct Fields {
+        variants: Vec<&'static str>,
+        names: Vec<&'static str>,
+        lists: Vec<usize>,
+        nodes: Option<u128>,
+    }
+    impl<'e> ErrorVisitor<'e> for Fields {
+        fn variant(&mut self, code: &'static str) {
+            self.variants.push(code);
+        }
+        fn begin_list(&mut self, _name: Option<&'static str>, length: usize) {
+            self.lists.push(length);
+        }
+        fn end_list(&mut self) {}
+        fn begin_record(&mut self, _name: Option<&'static str>, code: &'static str) {
+            self.variants.push(code);
+        }
+        fn end_record(&mut self) {}
+        fn value(&mut self, name: Option<&'static str>, value: ErrorValue<'e>) {
+            if let Some(name) = name {
+                self.names.push(name);
+            }
+            match value {
+                ErrorValue::Cause(inner) | ErrorValue::Record(inner) => inner.visit(self),
+                ErrorValue::Unsigned(n) if name == Some("nodes") => self.nodes = Some(n),
+                _ => {}
+            }
+        }
+    }
+    let refusal = Refusal::Limit {
+        broken_by: vec![super::FailureRecord {
+            path_position: 1,
+            tied_cell: 2,
+            component_nodes: 3,
+            component_lines: 4,
+        }],
+        source: vec![1, 2].into(),
+        nodes: 13,
+        units: 99,
+    };
+    let error = ViewError::<CallerRefusal>::Refused(refusal);
+    let mut fields = Fields::default();
+    error.visit(&mut fields);
+    assert_eq!(fields.variants[0], "labelling-view-refused");
+    assert!(fields.variants.contains(&"labelling-refusal-limit"));
+    assert!(fields.variants.contains(&"labelling-failure-record"));
+    assert!(fields.names.contains(&"code") && fields.names.contains(&"units"));
+    assert_eq!(fields.nodes, Some(13));
+    assert_eq!(fields.lists, [1]);
+}
+
 /// The stop signal is polled while the annotation rows are collected: a view
 /// that repeats one annotation row many times is stopped, and the same view
 /// with the row once completes under the same signal.

@@ -54,7 +54,7 @@ use super::document::{
 use super::lines::Interner;
 use super::lines::{
     Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
-    Tok, iri_encoding, literal_encoding,
+    Tok, iri_encoding, literal_encoding, push_bytes,
 };
 use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::cdt_blank::cdt_blank_segments;
@@ -158,7 +158,10 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
     purrdf_hash::error_visit! {
         Read(cause) => "labelling-view-read" { "cause" => Cause(cause) },
         ForeignId => "labelling-view-foreign-id" {},
-        Refused(refusal) => "labelling-view-refused" { "code" => Unsigned(u128::from(refusal.code())) },
+        Refused(refusal) => "labelling-view-refused" {
+            "code" => Unsigned(u128::from(refusal.code())),
+            "refusal" => Cause(refusal),
+        },
         Stopped => "labelling-view-stopped" {},
         Storage(cause) => "labelling-view-storage" { "cause" => Cause(cause) },
     }
@@ -324,7 +327,9 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
                     out.push(Tok::Blank(node));
                     if self.composites.insert(node) {
                         let payload = composite_payload(datatype, &cut.segments);
-                        admit(meter, interned_bytes(payload.len().saturating_add(8)))?;
+                        let mut encoded = Vec::with_capacity(8 + payload.len());
+                        push_bytes(&mut encoded, &payload);
+                        admit_constant(meter, interner, &encoded)?;
                         let mut record = Vec::new();
                         interner.record_head(&payload, cut.blanks.len() + 1, &mut record);
                         record.push(Tok::Blank(node));
@@ -501,10 +506,9 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         for record in records {
             self.poll()?;
             let mut tokens = Vec::new();
-            admit(
-                &mut self.meter,
-                interned_bytes(record.payload.len().saturating_add(8)),
-            )?;
+            let mut payload = Vec::with_capacity(8 + record.payload.len());
+            push_bytes(&mut payload, record.payload);
+            admit_constant(&mut self.meter, &self.admitter.interner, &payload)?;
             self.admitter
                 .interner
                 .record_head(record.payload, record.terms.len(), &mut tokens);
@@ -734,8 +738,8 @@ fn grant<E, S: StorageAdmission + ?Sized>(
 /// components and their first calls, proportional to the incidences, the
 /// constant leaf occurrences, the vertices and the structs each top component
 /// holds (7.12 of the definition). A refusal of the admission is
-/// [`ViewError::Storage`] and nothing is labelled. On success the grant stays with the returned
-/// [`Comparison`], whose `admitted_bytes` states it: release that many bytes
+/// [`ViewError::Storage`] and nothing is labelled. On success the grant stays
+/// with the returned [`Comparison`], whose `admitted_bytes` states it: release that many bytes
 /// when the comparison is dropped. On any other error the grant is returned
 /// before the error is. Not metered: the present canonical form, the temporary
 /// encoding of one literal while it is interned, the second copy of each

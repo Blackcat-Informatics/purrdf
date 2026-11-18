@@ -395,6 +395,68 @@ impl Refusal {
     }
 }
 
+impl purrdf_hash::error::StructuredError for InputReason {
+    purrdf_hash::error_visit! {
+        Slot => "labelling-input-slot" {},
+        Count => "labelling-input-count" {},
+        Repeated => "labelling-input-repeated" {},
+        Kind => "labelling-input-kind" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for GraphTerm {
+    purrdf_hash::error_visit! {
+        Iri => "labelling-term-iri" {},
+        Literal => "labelling-term-literal" {},
+        Blank => "labelling-term-blank" {},
+        Triple => "labelling-term-triple" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Quantity {
+    purrdf_hash::error_visit! {
+        Nodes => "labelling-quantity-nodes" {},
+        Lines => "labelling-quantity-lines" {},
+        Incidences => "labelling-quantity-incidences" {},
+        Occurrences => "labelling-quantity-occurrences" {},
+        Length => "labelling-quantity-length" {},
+        Count => "labelling-quantity-count" {},
+        Units => "labelling-quantity-units" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for FailureRecord {
+    purrdf_hash::error_visit! {
+        @record self { path_position, tied_cell, component_nodes, component_lines }
+            => "labelling-failure-record" {
+            "path_position" => Unsigned(u128::from(self.path_position)),
+            "tied_cell" => Unsigned(u128::from(self.tied_cell)),
+            "component_nodes" => Unsigned(u128::from(self.component_nodes)),
+            "component_lines" => Unsigned(u128::from(self.component_lines)),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for Refusal {
+    purrdf_hash::error_visit! {
+        Input { reason } => "labelling-refusal-input" { "reason" => Record(reason) },
+        Graph { term, source } => "labelling-refusal-graph" {
+            "term" => Record(term),
+            "source" => Value(source.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                purrdf_hash::error::ErrorValue::Bytes,
+            )),
+        },
+        Width { quantity } => "labelling-refusal-width" { "quantity" => Record(quantity) },
+        Limit { broken_by, source, nodes, units } => "labelling-refusal-limit" {
+            "broken_by" => List(broken_by.iter().map(|record| purrdf_hash::error::ErrorValue::Record(record))),
+            "source" => Bytes(source),
+            "nodes" => Unsigned(u128::from(*nodes)),
+            "units" => Unsigned(u128::from(*units)),
+        },
+    }
+}
+
 /// One top component of the result.
 #[derive(Clone, Debug)]
 pub struct Component {
