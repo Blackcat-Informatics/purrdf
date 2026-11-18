@@ -34,6 +34,7 @@ use purrdf_rdf::{
     ContentDigest, ContentStore, DatasetProvenance, PipelineBundle, RdfDataset, RdfLookaside,
     StopSignal, try_canonicalize_view,
 };
+use sha2::Digest as _;
 
 #[path = "support/canon_load.rs"]
 mod load;
@@ -326,16 +327,22 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
         Arc::new(ContentStore::new()),
         DatasetProvenance::new(),
     );
+    // The built route: the document is built, then hashed, then the separator and the
+    // sidecar fold (three section separators for a bundle with no sidecar) follow.
     let window = WholeProcessWindow::open();
     let built = try_canonicalize_view(
         ds,
         &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
     )
     .expect("default document");
-    let built_digest = ContentDigest::of(built.nquads().as_bytes());
+    let mut hasher = sha2::Sha256::new();
+    hasher.update(built.nquads().as_bytes());
+    hasher.update([0x1d_u8; 3]);
+    let built_fold = ContentDigest::from_raw(hasher.finalize().into());
+    let m = window.close();
+    // Metadata is taken outside both windows.
     let built_document = Document::of(built.nquads());
     drop(built);
-    let m = window.close();
     line("bundle_digest_built_document", &f, &built_document, m, None);
 
     let window = WholeProcessWindow::open();
@@ -343,8 +350,13 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
         .digest(&mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None))
         .expect("bundle digest");
     let m = window.close();
+    assert_eq!(
+        folded, built_fold,
+        "the streamed bundle fold equals the built-document fold"
+    );
     assert_ne!(
-        folded, built_digest,
+        folded.to_hex(),
+        built_document.sha256,
         "the bundle fold adds its sections to the document"
     );
     line("bundle_digest_streamed", &f, &built_document, m, None);
