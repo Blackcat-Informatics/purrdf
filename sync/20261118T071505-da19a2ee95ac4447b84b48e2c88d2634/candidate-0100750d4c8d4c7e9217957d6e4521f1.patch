@@ -1,0 +1,325 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 1dbe69436..bc1cceb26 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -27,6 +27,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   over binary lines and does not move; the 5.0 document spells those characters
+   as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
+   SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
++- **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
++  admits the executed SRL program against the declarations before it compiles,
++  so a rule that derives a protected predicate is refused as
++  `SrlError::Execution`, and a rule deriving another predicate still runs.
++- **Behaviour change: an unsupported signing algorithm is `Unverified`.**
++  `verify_sig` and `verify_sig_with_key` report a COSE_Sign1 whose declared
++  `alg` this engine does not implement as `SigStatus::Unverified` instead of
++  `Invalid`, and the file verifiers (`verify_signatures`,
++  `verify_signatures_with_resolver` and the C, WebAssembly and Python surfaces
++  over them) record it as `unverified`: the engine could not check it. `Invalid` remains for a signature
++  that was checked and failed and for a malformed structure. Callers that
++  require `Valid` still refuse an unverified signature.
+ - **Breaking: canonical output is the nested-refinement labelling.** The
+   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
+   routes to `(nested-refinement-labelling, 1)`. The canonical document is the
+diff --git crates/gts/src/cose/sign1.rs crates/gts/src/cose/sign1.rs
+index edd81f053..52a46602d 100644
+--- crates/gts/src/cose/sign1.rs
++++ crates/gts/src/cose/sign1.rs
+@@ -86,9 +86,10 @@ pub enum VerifyingKeyRef<'a> {
+ pub enum SigStatus {
+     /// Cryptographically valid under the resolved key.
+     Valid,
+-    /// Malformed, unsupported, algorithm/key mismatch or failed verification.
++    /// Malformed, algorithm/key mismatch or failed verification.
+     Invalid,
+-    /// Well-formed supported envelope whose key was not resolved.
++    /// Not checked: the key was not resolved, or the declared signing
++    /// algorithm is one this engine does not implement.
+     Unverified,
+ }
+ 
+@@ -363,7 +364,11 @@ pub fn signature_kid(sig: &[u8]) -> Option<String> {
+ /// Typed algorithm-aware verification, refusing mismatched key types.
+ #[must_use]
+ pub fn verify_sig_with_key(sig: &[u8], frame_id: &[u8], public: VerifyingKeyRef<'_>) -> SigStatus {
+-    parse_sign1(sig).map_or(SigStatus::Invalid, |parsed| parsed.verify(frame_id, public))
++    match parse_sign1(sig) {
++        Ok(parsed) => parsed.verify(frame_id, public),
++        Err(Sign1Error::UnsupportedAlgorithm) => SigStatus::Unverified,
++        Err(_) => SigStatus::Invalid,
++    }
+ }
+ 
+ /// Existing Ed25519 convenience, routed through the same strict typed core.
+@@ -373,8 +378,9 @@ pub fn verify_sig(sig: &[u8], frame_id: &[u8], public: &VerifyingKey) -> SigStat
+ }
+ 
+ /// Verify recorded signatures with the existing Ed25519 resolver. Parse and
+-/// algorithm validation precede lookup: malformed/unsupported is invalid;
+-/// a supported valid structure with no resolved key is unverified.
++/// algorithm validation precede lookup: a malformed envelope is invalid; an
++/// unsupported algorithm, or a supported valid structure with no resolved
++/// key, is unverified.
+ pub fn verify_signatures(
+     signatures: &mut [model::Signature],
+     resolve: impl Fn(&str) -> Option<VerifyingKey>,
+@@ -390,7 +396,8 @@ pub fn verify_signatures(
+ /// Verify folded signatures using explicit opaque/absent identifiers and typed
+ /// keys. The declared algorithm is supplied to the caller's resolver;
+ /// returning a key of another algorithm produces invalid, never a downgrade.
+-/// Malformed or unsupported envelopes never invoke the resolver.
++/// Malformed or unsupported envelopes never invoke the resolver: a malformed
++/// one is invalid and one with an unsupported algorithm is unverified.
+ pub fn verify_signatures_with_resolver<'a>(
+     signatures: &mut [model::Signature],
+     resolve: impl Fn(Option<&[u8]>, Algorithm) -> Option<VerifyingKeyRef<'a>>,
+@@ -414,6 +421,7 @@ fn verify_resolved(
+             .ok()
+             .and_then(|parsed| parsed.kid_text().map(str::to_string));
+         sig.status = match parsed {
++            Err(Sign1Error::UnsupportedAlgorithm) => "unverified",
+             Err(_) => "invalid",
+             Ok(parsed) => match verify(&parsed, &sig.frame_id) {
+                 Some(SigStatus::Valid) => "valid",
+diff --git crates/gts/src/cose/tests.rs crates/gts/src/cose/tests.rs
+index 351deb207..f23f50253 100644
+--- crates/gts/src/cose/tests.rs
++++ crates/gts/src/cose/tests.rs
+@@ -430,3 +430,41 @@ fn verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid() {
+     assert_eq!(signatures[1].status, "invalid");
+     assert_eq!(signatures[1].kid.as_deref(), Some("weak"));
+ }
++
++/// `blob`, a COSE_Sign1, with its protected header replaced by `protected`.
++fn with_protected(blob: &[u8], protected: Vec<u8>) -> Vec<u8> {
++    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
++    let Value::Tag(tag, value) = &mut value else {
++        panic!("a COSE_Sign1 has an outer tag");
++    };
++    let tag = *tag;
++    let mut fields = value.take().into_array().expect("a COSE_Sign1 is an array");
++    fields[0] = Value::Bytes(protected);
++    wire::encode(&Value::Tag(tag, Box::new(Value::Array(fields))))
++}
++
++#[test]
++fn an_unsupported_algorithm_is_unverified_and_a_malformed_header_is_invalid() {
++    let signer = SigningKey::from_bytes(&[5; 32]);
++    let public = signer.verifying_key();
++    let honest = sign_id(b"frame", &signer, "kid");
++    assert_eq!(verify_sig(&honest, b"frame", &public), SigStatus::Valid);
++
++    // alg -99 is an integer this engine does not implement: not checked.
++    let unsupported = with_protected(&honest, vec![0xa1, 0x01, 0x38, 0x62]);
++    assert_eq!(
++        verify_sig(&unsupported, b"frame", &public),
++        SigStatus::Unverified
++    );
++    assert_ne!(
++        verify_sig(&unsupported, b"frame", &public),
++        SigStatus::Valid
++    );
++
++    // A protected header that is not a CBOR map is malformed, hence invalid.
++    let malformed = with_protected(&honest, vec![0x01]);
++    assert_eq!(
++        verify_sig(&malformed, b"frame", &public),
++        SigStatus::Invalid
++    );
++}
+diff --git crates/gts/tests/cose_composite.rs crates/gts/tests/cose_composite.rs
+index 931431695..08f1c749a 100644
+--- crates/gts/tests/cose_composite.rs
++++ crates/gts/tests/cose_composite.rs
+@@ -425,10 +425,20 @@ fn headers_are_authenticated_unique_typed_and_critical_rules_enforced() {
+         cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
+         SigStatus::Valid
+     );
++    // An integer alg this engine does not implement is not checked: unverified.
++    for alg in [-49, -99] {
++        let envelope = raw_ed_signature(
++            &wire::encode(&Value::Map(vec![(1.into(), alg.into())])),
++            unprotected(),
++        );
++        assert!(cose::parse_sign1(&envelope).is_err());
++        assert_eq!(
++            cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
++            SigStatus::Unverified
++        );
++    }
+     let bad_maps = [
+         vec![],
+-        vec![(1.into(), (-49).into())],
+-        vec![(1.into(), (-99).into())],
+         vec![(1.into(), (-58).into())], // Correctly signed Ed bytes, wrong declared algorithm/size.
+         vec![(1.into(), Value::Text("EdDSA".into()))],
+         vec![(1.into(), Value::Bytes(vec![0x27]))],
+diff --git crates/gts/tests/hedged_writer.rs crates/gts/tests/hedged_writer.rs
+index 55f85b2bc..f5c159aca 100644
+--- crates/gts/tests/hedged_writer.rs
++++ crates/gts/tests/hedged_writer.rs
+@@ -433,21 +433,20 @@ fn malformed_unsupported_unresolved_and_wrong_type_are_distinct() {
+     wrong.insert(b"unknown", EdKey::from_bytes(&[1; 32]).verifying_key());
+     let result = verify_file_with_keyring(&bytes, &wrong);
+     assert_eq!((result.invalid, result.unverified), (1, 0));
+-    for invalid in [
+-        alter_frame(&bytes, 1, |frame| {
+-            *field(frame, "sig") = Value::Bytes(vec![0]);
+-        }),
+-        alter_frame(&bytes, 1, |frame| {
+-            alter_envelope(frame, |parts| {
+-                parts[0] =
+-                    Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
+-            });
+-        }),
+-    ] {
+-        let result = verify_file_with_keyring(&invalid, &NoLookup);
+-        assert_eq!((result.invalid, result.unverified), (1, 0));
+-        assert!(!result.ok);
+-    }
++    let malformed = alter_frame(&bytes, 1, |frame| {
++        *field(frame, "sig") = Value::Bytes(vec![0]);
++    });
++    let result = verify_file_with_keyring(&malformed, &NoLookup);
++    assert_eq!((result.invalid, result.unverified), (1, 0));
++    assert!(!result.ok);
++    let unsupported = alter_frame(&bytes, 1, |frame| {
++        alter_envelope(frame, |parts| {
++            parts[0] = Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
++        });
++    });
++    let result = verify_file_with_keyring(&unsupported, &NoLookup);
++    assert_eq!((result.invalid, result.unverified), (0, 1));
++    assert!(!result.ok);
+ }
+ 
+ fn opaque_absent_and_empty_ids_remain_distinct_at_file_resolution() {
+diff --git crates/shapes/src/rules.rs crates/shapes/src/rules.rs
+index 6cb36f332..5bc583c6a 100644
+--- crates/shapes/src/rules.rs
++++ crates/shapes/src/rules.rs
+@@ -301,6 +301,8 @@ pub struct RuleOptions {
+     max_join_steps: Option<u64>,
+     /// How the host names the limits' knobs, for a refusal to name them.
+     knobs: LimitKnobs,
++    /// Predicates the executed program must never derive.
++    never_derive: Option<Arc<purrdf_datalog::admission::NeverDeriveDeclarations>>,
+ }
+ 
+ impl RuleOptions {
+@@ -423,6 +425,27 @@ impl RuleOptions {
+         self
+     }
+ 
++    /// Refuse, before execution, any SRL rule set whose executed program can
++    /// derive a predicate these declarations protect. Crate-private: a lowered
++    /// SHACL-AF rule has a variable-predicate head, which admission refuses as
++    /// undecidable, so the public setter is the SRL one on `InferOptions`.
++    #[must_use]
++    pub(crate) fn with_never_derive_declarations(
++        mut self,
++        declarations: purrdf_datalog::admission::NeverDeriveDeclarations,
++    ) -> Self {
++        self.never_derive = Some(Arc::new(declarations));
++        self
++    }
++
++    /// The never-derive declarations the executed program is admitted against.
++    #[must_use]
++    pub(crate) fn never_derive_declarations(
++        &self,
++    ) -> Option<&purrdf_datalog::admission::NeverDeriveDeclarations> {
++        self.never_derive.as_deref()
++    }
++
+     /// Name the limits' knobs as the host exposes them, so a refusal tells its caller
+     /// what to change in the caller's own terms. The default names this type's methods.
+     #[must_use]
+diff --git crates/shapes/src/srl/document.rs crates/shapes/src/srl/document.rs
+index b6524408b..1783f7b23 100644
+--- crates/shapes/src/srl/document.rs
++++ crates/shapes/src/srl/document.rs
+@@ -603,6 +603,17 @@ impl InferOptions {
+         self
+     }
+ 
++    /// Refuse the inference unless the program it executes derives none of the
++    /// predicates `declarations` protect; the refusal is [`SrlError::Execution`].
++    #[must_use]
++    pub fn with_never_derive_declarations(
++        mut self,
++        declarations: purrdf_datalog::admission::NeverDeriveDeclarations,
++    ) -> Self {
++        self.rules = self.rules.with_never_derive_declarations(declarations);
++        self
++    }
++
+     /// Select the reproducible query-seed sequence described by
+     /// [`RuleOptions::with_entropy_seed`].
+     #[must_use]
+diff --git crates/shapes/src/srl/eval.rs crates/shapes/src/srl/eval.rs
+index 98d5c7d83..f60f40757 100644
+--- crates/shapes/src/srl/eval.rs
++++ crates/shapes/src/srl/eval.rs
+@@ -463,8 +463,15 @@ where
+                 predicates
+             })
+             .collect();
+-        let program = schedule::compile_scheduled(lowered.clauses, schedule)
+-            .map_err(|e| describe(&e, set))?;
++        let program = match options.never_derive_declarations() {
++            Some(declarations) => schedule::compile_scheduled_with_declarations(
++                lowered.clauses,
++                schedule,
++                declarations,
++            ),
++            None => schedule::compile_scheduled(lowered.clauses, schedule),
++        }
++        .map_err(|e| describe(&e, set))?;
+         coordinates.contract = Some(purrdf_hash::hex::Digest32::from(
+             *program.contract_hash(&governors).digest(),
+         ));
+diff --git crates/shapes/tests/srl_language.rs crates/shapes/tests/srl_language.rs
+index bacf27634..ad147b0bf 100644
+--- crates/shapes/tests/srl_language.rs
++++ crates/shapes/tests/srl_language.rs
+@@ -620,6 +620,31 @@ single_inferred_case! {
+     ["x", "found", "p"]
+ }
+ 
++/// A never-derive declaration refuses the executed program; without it the same rule runs.
++fn a_never_derive_declaration_refuses_the_executed_program() {
++    use purrdf_datalog::admission::{DeclarationLayer, DeclarationSource, NeverDeriveDeclarations};
++
++    let document =
++        srl::parse_and_check(&rules("RULE { ?s :q ?o } WHERE { ?s :p ?o }"), None).unwrap();
++    let source = data(":a :p :b .");
++    let derived = srl::infer(&document, &source, &InferOptions::default()).unwrap();
++    assert_eq!(derived.inferred().len(), 1);
++    let mut declarations = NeverDeriveDeclarations::default();
++    declarations.declare(
++        format!("{EX}q"),
++        DeclarationSource {
++            layer: DeclarationLayer::Ontology,
++            identity: "https://example.org/obligation".to_owned(),
++        },
++    );
++    let options = InferOptions::default().with_never_derive_declarations(declarations.clone());
++    let refused = srl::infer(&document, &source, &options).unwrap_err();
++    assert!(matches!(refused, SrlError::Execution(_)), "{refused:?}");
++    let unrelated =
++        srl::parse_and_check(&rules("RULE { ?s :r ?o } WHERE { ?s :p ?o }"), None).unwrap();
++    assert!(srl::infer(&unrelated, &source, &options).is_ok());
++}
++
+ /// `BNODE()` in an assignment is fresh per solution, and fresh against the base graph.
+ fn an_assigned_blank_node_is_fresh_per_solution() {
+     let inferred = infer(
+@@ -1053,6 +1078,7 @@ purrdf_testkit::harness_main!(
+     the_version_announcement_is_made_early,
+     a_negation_sees_only_earlier_variables,
+     an_assigned_variable_joins_a_later_pattern,
++    a_never_derive_declaration_refuses_the_executed_program,
+     an_assigned_blank_node_is_fresh_per_solution,
+     independent_guarded_components_preserve_both_blank_mints,
+     computed_assignment_values_reach_negative_patterns,
