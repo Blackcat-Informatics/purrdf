@@ -128,6 +128,8 @@ fn labelled<D: DatasetView, T>(
         run.record_units(labelling.labelled().explored.total());
         run.phase(CanonPhase::Output);
         let out = finish(&labelling)?;
+        // The lines the grant covers are destroyed before it is refunded.
+        drop(labelling);
         memory.release_bytes(bytes).map_err(CanonError::Storage)?;
         Ok(out)
     })

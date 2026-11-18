@@ -440,7 +440,7 @@ impl<'a> Engine<'a> {
                 self.comp.occ[l].iter().map(|&x| fixed_now[x]).collect();
             if let Some(positions) = positions {
                 let entry = entry_of(self.set, self.comp.lines[l], &positions);
-                units.entries += 1 + (entry.encoding.len() as u64).div_ceil(8);
+                units.entries += 1 + (entry.encoding().len() as u64).div_ceil(8);
                 entries.push(entry);
             }
         }
@@ -535,18 +535,18 @@ impl<'a> Engine<'a> {
         }
         for (x, y) in a.entries.iter().zip(&b.entries) {
             self.comparison_units += 1;
-            let order = x.m.cmp(&y.m);
+            let order = x.m().cmp(&y.m());
             if order != Ordering::Equal {
                 return order;
             }
             let read = x
-                .encoding
+                .encoding()
                 .iter()
-                .zip(y.encoding.iter())
+                .zip(y.encoding())
                 .position(|(p, q)| p != q)
-                .map_or(x.encoding.len(), |i| i + 1);
+                .map_or_else(|| x.encoding().len(), |i| i + 1);
             self.comparison_units += (read as u64).div_ceil(8);
-            let order = x.encoding.cmp(&y.encoding);
+            let order = x.encoding().cmp(y.encoding());
             if order != Ordering::Equal {
                 return order;
             }
@@ -890,10 +890,9 @@ impl TwinTest {
     }
 }
 
-/// The top components of `set`, each with its nodes in node order.
-pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
-    let n = set.nodes.len();
-    let mut parent: Vec<usize> = (0..n).collect();
+/// The root of each node of `set`: two nodes of one line share a root, and a
+/// root is its own root.
+fn joined_nodes(set: &LineSet) -> Vec<usize> {
     fn find(parent: &mut [usize], mut x: usize) -> usize {
         while parent[x] != x {
             parent[x] = parent[parent[x]];
@@ -901,6 +900,7 @@ pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
         }
         x
     }
+    let mut parent: Vec<usize> = (0..set.nodes.len()).collect();
     for l in 0..set.lines.len() {
         let mut first = None;
         for b in set.occurrences(l) {
@@ -915,10 +915,27 @@ pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
             }
         }
     }
+    for x in 0..parent.len() {
+        parent[x] = find(&mut parent, x);
+    }
+    parent
+}
+
+/// The number of top components of `set`.
+pub(crate) fn component_count(set: &LineSet) -> usize {
+    joined_nodes(set)
+        .iter()
+        .enumerate()
+        .filter(|&(x, &parent)| x == parent)
+        .count()
+}
+
+/// The top components of `set`, each with its nodes in node order.
+pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
+    let parent = joined_nodes(set);
     let mut index: BTreeMap<usize, usize> = BTreeMap::new();
     let mut comps: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
-    for b in 0..n {
-        let root = find(&mut parent, b);
+    for (b, &root) in parent.iter().enumerate() {
         let next = comps.len();
         let i = *index.entry(root).or_insert(next);
         if i == comps.len() {
@@ -928,7 +945,7 @@ pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
     }
     for l in 0..set.lines.len() {
         if let Some(b) = set.occurrences(l).next() {
-            let i = index[&find(&mut parent, b)];
+            let i = index[&parent[b]];
             comps[i].1.push(l);
         }
     }
@@ -1153,16 +1170,20 @@ pub(crate) fn merge_factors(mut factors: Vec<Factor>) -> Vec<Factor> {
     out
 }
 
-/// Final positions of the nodes of a result path, by local node.
+/// Final positions of the nodes of a result path, by local node, over a heap
+/// work list: the depth of the path costs no machine stack.
 pub(crate) fn positions(tree: &Tree, o: u64, out: &mut [u64]) {
-    for &(v, q) in &tree.fixed {
-        out[v] = o + (q - tree.p);
-    }
-    let s = tree.fixed.len() as u64;
-    let mut t = 0;
-    for nested in &tree.nested {
-        positions(nested, o + s + t, out);
-        t += nested.n_k;
+    let mut work = vec![(tree, o)];
+    while let Some((tree, o)) = work.pop() {
+        for &(v, q) in &tree.fixed {
+            out[v] = o + (q - tree.p);
+        }
+        let s = tree.fixed.len() as u64;
+        let mut t = 0;
+        for nested in &tree.nested {
+            work.push((nested, o + s + t));
+            t += nested.n_k;
+        }
     }
 }
 
@@ -1639,7 +1660,12 @@ pub(crate) fn assemble(
     let mut histogram: BTreeMap<u64, u64> = BTreeMap::new();
     let mut groups: Vec<Factor> = Vec::new();
     let mut traces = Vec::new();
-    for (rank, &i) in order.iter().enumerate() {
+    let mut totals: BTreeMap<[u8; 32], u64> = BTreeMap::new();
+    for l in labellings {
+        *totals.entry(l.identity).or_default() += 1;
+    }
+    let mut seen: BTreeMap<[u8; 32], u64> = BTreeMap::new();
+    for &i in &order {
         let (l, comp) = (&labellings[i], &comps[i]);
         if tracing {
             traces.push(ComponentTrace {
@@ -1649,10 +1675,9 @@ pub(crate) fn assemble(
                 tree: l.tree.clone(),
             });
         }
-        let copy_index = order[..rank]
-            .iter()
-            .filter(|&&j| labellings[j].identity == l.identity)
-            .count() as u64;
+        let seen = seen.entry(l.identity).or_default();
+        let copy_index = *seen;
+        *seen += 1;
         let mut local = vec![0u64; comp.nodes.len()];
         positions(&l.tree, 0, &mut local);
         for (v, &lp) in local.iter().enumerate() {
@@ -1696,10 +1721,7 @@ pub(crate) fn assemble(
             .checked_add(r.units)
             .ok_or(Halt::Refused(UNITS_WIDTH))?;
         if copy_index == 0 {
-            let k = order
-                .iter()
-                .filter(|&&j| labellings[j].identity == l.identity)
-                .count() as u64;
+            let k = totals[&l.identity];
             record.top_multiplicities.push(k);
             if k >= 2 {
                 groups.push(Factor {

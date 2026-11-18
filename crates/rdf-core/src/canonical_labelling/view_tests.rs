@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use purrdf_lex::allocation::{Ceiling, Memory, Resident, StorageError};
+use purrdf_lex::allocation::{Admission, Ceiling, Memory, Resident, StorageError};
 use purrdf_testkit::error_capture::CallerRefusal;
 
 use super::reference;
@@ -108,6 +108,8 @@ struct Probe {
     inner: Arc<RdfDataset>,
     fault: bool,
     annotation_rows: usize,
+    /// How many times the quad table was read.
+    quad_reads: AtomicU64,
 }
 
 impl Probe {
@@ -116,6 +118,7 @@ impl Probe {
             inner,
             fault: false,
             annotation_rows: 1,
+            quad_reads: AtomicU64::new(0),
         }
     }
 }
@@ -132,6 +135,7 @@ impl DatasetView for Probe {
         self.fault.then_some(FAULT)
     }
     fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.quad_reads.fetch_add(1, Ordering::Relaxed);
         self.inner.quads()
     }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
@@ -519,6 +523,278 @@ fn an_admitted_comparison_that_ends_in_an_error_returns_its_grant() {
         compare_view_with_memory(view.as_ref(), &[], &mut control, Limit::ENGINE, &mut memory);
     assert_eq!(stopped.err(), Some(ViewError::Stopped));
     assert_eq!(memory.admitted_bytes(), 0);
+}
+
+/// An account whose progress poll refuses.
+struct Refusing;
+
+impl Admission for Refusing {
+    fn checkpoint(&mut self, _units: u64) -> Result<(), StorageError> {
+        Err(StorageError::AdmissionFailed)
+    }
+    fn resize(&mut self, _live: usize) -> Result<(), StorageError> {
+        Ok(())
+    }
+}
+
+/// The caller's account is polled before the view is read: a refusing account
+/// ends the call with the storage outcome with no row read, and the same view
+/// over an account that admits is read and labelled.
+#[test]
+fn a_refusing_account_ends_the_call_before_any_row_is_read() {
+    let view = Probe::over(cycle());
+    let mut refusing = Refusing;
+    let refused = compare_view_with_memory(
+        &view,
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut refusing),
+    );
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+    assert_eq!(view.quad_reads.load(Ordering::Relaxed), 0);
+    let mut resident = Resident;
+    let admitted = compare_view_with_memory(
+        &view,
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut resident),
+    );
+    assert!(admitted.is_ok());
+    assert!(view.quad_reads.load(Ordering::Relaxed) > 0);
+}
+
+/// An account that refuses past a ceiling and records the largest total it
+/// was asked to admit.
+struct Recorder {
+    ceiling: usize,
+    asked: usize,
+}
+
+impl Admission for Recorder {
+    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+        self.asked = self.asked.max(live);
+        if live > self.ceiling {
+            return Err(StorageError::AdmissionFailed);
+        }
+        Ok(())
+    }
+}
+
+/// Each constant is admitted through the caller's account as lowering interns
+/// it: a view with a large constant over an account too small for it is
+/// refused with the storage outcome before the rest of the working state is
+/// asked for, and the same view over an account that holds it is admitted.
+#[test]
+fn a_large_constant_is_admitted_while_the_view_is_lowered() {
+    let big = format!("<{}>", "x".repeat(50_000));
+    let view = dataset(&[("a", "<p>", big.as_str()), ("a", "<p>", "b")]);
+    let mut roomy = Recorder {
+        ceiling: usize::MAX,
+        asked: 0,
+    };
+    let done = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut roomy),
+    )
+    .expect("admitted");
+    assert!(done.admitted_bytes > 50_000);
+    let mut small = Recorder {
+        ceiling: 10_000,
+        asked: 0,
+    };
+    let mut memory = Memory::new(&mut small);
+    let refused = compare_view_with_memory(
+        view.as_ref(),
+        &[],
+        &mut control(),
+        Limit::ENGINE,
+        &mut memory,
+    );
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+    assert_eq!(memory.admitted_bytes(), 0);
+    // The refusal came at the constant, not at the whole grant.
+    assert!(small.asked > 50_000 && small.asked < done.admitted_bytes);
+}
+
+/// An account that records every total it was asked to admit, in order.
+struct Sequence(Vec<usize>);
+
+impl Admission for Sequence {
+    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+        self.0.push(live);
+        Ok(())
+    }
+}
+
+/// A record payload is admitted once however many records repeat it: records
+/// that share one payload and differ in their terms hold it as one constant, so
+/// while the view is lowered the account is asked for about one payload, not
+/// one per record. The last request is the grant of the rest of the working
+/// state; every request before it is made by lowering.
+#[test]
+fn a_payload_shared_by_records_is_admitted_once() {
+    let view = cycle();
+    let payload = vec![7u8; 40_000];
+    let terms: Vec<[TermValue; 1]> = ["a", "b", "c", "d"].iter().map(|n| [value_of(n)]).collect();
+    let records: Vec<Record<'_>> = terms.iter().map(|t| Record::new(&payload, t)).collect();
+    let mut account = Sequence(Vec::new());
+    compare_view_with_memory(
+        view.as_ref(),
+        &records,
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut account),
+    )
+    .expect("admitted");
+    let (grant, lowering) = account.0.split_last().expect("the account was asked");
+    let peak = lowering
+        .iter()
+        .copied()
+        .max()
+        .expect("lowering was metered");
+    assert!(
+        peak > payload.len() && peak < 2 * payload.len(),
+        "lowering held {peak} bytes for one {}-byte payload",
+        payload.len()
+    );
+    assert!(*grant > peak);
+    // A ceiling below the payload refuses during lowering.
+    let mut small = Recorder {
+        ceiling: payload.len() / 2,
+        asked: 0,
+    };
+    let refused = compare_view_with_memory(
+        view.as_ref(),
+        &records,
+        &mut control(),
+        Limit::ENGINE,
+        &mut Memory::new(&mut small),
+    );
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+}
+
+/// The fields of a refusal are inspectable through the shared error
+/// inspection: a limit refusal reports its code, its search-free failures and
+/// its engine figures.
+#[test]
+fn a_limit_refusal_exposes_its_fields_to_structured_inspection() {
+    use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
+    #[derive(Default)]
+    struct Fields {
+        variants: Vec<&'static str>,
+        names: Vec<&'static str>,
+        lists: Vec<usize>,
+        nodes: Option<u128>,
+    }
+    impl<'e> ErrorVisitor<'e> for Fields {
+        fn variant(&mut self, code: &'static str) {
+            self.variants.push(code);
+        }
+        fn begin_list(&mut self, _name: Option<&'static str>, length: usize) {
+            self.lists.push(length);
+        }
+        fn end_list(&mut self) {}
+        fn begin_record(&mut self, _name: Option<&'static str>, code: &'static str) {
+            self.variants.push(code);
+        }
+        fn end_record(&mut self) {}
+        fn value(&mut self, name: Option<&'static str>, value: ErrorValue<'e>) {
+            if let Some(name) = name {
+                self.names.push(name);
+            }
+            match value {
+                ErrorValue::Cause(inner) | ErrorValue::Record(inner) => inner.visit(self),
+                ErrorValue::Unsigned(n) if name == Some("nodes") => self.nodes = Some(n),
+                _ => {}
+            }
+        }
+    }
+    let refusal = Refusal::Limit {
+        broken_by: vec![super::FailureRecord {
+            path_position: 1,
+            tied_cell: 2,
+            component_nodes: 3,
+            component_lines: 4,
+        }],
+        source: vec![1, 2].into(),
+        nodes: 13,
+        units: 99,
+    };
+    let error = ViewError::<CallerRefusal>::Refused(refusal);
+    let mut fields = Fields::default();
+    error.visit(&mut fields);
+    assert_eq!(fields.variants[0], "labelling-view-refused");
+    assert!(fields.variants.contains(&"labelling-refusal-limit"));
+    assert!(fields.variants.contains(&"labelling-failure-record"));
+    assert!(fields.names.contains(&"code") && fields.names.contains(&"units"));
+    assert_eq!(fields.nodes, Some(13));
+    assert_eq!(fields.lists, [1]);
+}
+
+/// The stop signal is polled while the annotation rows are collected: a view
+/// that repeats one annotation row many times is stopped, and the same view
+/// with the row once completes under the same signal.
+#[test]
+fn the_stop_signal_is_polled_while_annotation_rows_are_collected() {
+    let mut b = RdfDatasetBuilder::new();
+    let (s, p, o) = (id_of(&mut b, "s"), id_of(&mut b, "<p>"), id_of(&mut b, "o"));
+    let (r, q, v) = (
+        id_of(&mut b, "r"),
+        id_of(&mut b, "<q>"),
+        id_of(&mut b, "<v>"),
+    );
+    let triple = b.intern_triple(s, p, o).expect("triple term");
+    b.push_reifier(r, triple).expect("reifier row");
+    b.push_annotation(r, q, v).expect("annotation row");
+    let mut view = Probe::over(b.freeze().expect("freezes"));
+    let run = |view: &Probe| {
+        label_view(
+            view,
+            &[],
+            Scope::Dataset,
+            Limit::ENGINE,
+            Some(&After(AtomicU64::new(50))),
+        )
+    };
+    assert!(run(&view).is_ok());
+    view.annotation_rows = 1000;
+    assert_eq!(run(&view).err(), Some(ViewError::Stopped));
+}
+
+/// The admitted working state charges the structs held for each top
+/// component: of two inputs with the same lines, tokens, occurrences and
+/// nodes, the one in four components is charged more than the one in one.
+#[test]
+fn the_working_state_charges_each_top_component() {
+    let set = |quads: &[(&str, &str)]| {
+        let lines: Vec<Line> = quads
+            .iter()
+            .map(|&(s, o)| line_quad(s, "<p>", o, None))
+            .collect();
+        admit(&lines).expect("well formed")
+    };
+    let one = set(&[("a", "b"), ("b", "c"), ("c", "d"), ("d", "a")]);
+    let four = set(&[("a", "a"), ("b", "b"), ("c", "c"), ("d", "d")]);
+    assert_eq!(one.blank_nodes(), four.blank_nodes());
+    let (one, four) = (
+        super::optimised::working_bytes(&one).expect("fits"),
+        super::optimised::working_bytes(&four).expect("fits"),
+    );
+    assert!(four > one, "four components {four}, one component {one}");
 }
 
 /// The digest of the empty input, fixed by the definition (3.3).

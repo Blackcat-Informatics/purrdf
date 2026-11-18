@@ -417,6 +417,16 @@ pub(crate) struct Interner {
 }
 
 impl Interner {
+    /// Whether the constant leaf of encoding `encoding` is already interned.
+    pub(crate) fn has_constant(&self, encoding: &[u8]) -> bool {
+        self.const_index.contains_key(encoding)
+    }
+
+    /// Whether the blank node of source identifier `source` is already interned.
+    pub(crate) fn has_node(&self, source: &[u8]) -> bool {
+        self.node_index.contains_key(source)
+    }
+
     /// The index of a constant leaf of encoding `encoding`.
     pub(crate) fn constant(&mut self, encoding: &[u8]) -> usize {
         if let Some(&c) = self.const_index.get(encoding) {
