@@ -289,6 +289,17 @@ lost or retyped a public field, and none of these enums lost a variant.
   follows profile version 4 for such a dataset), because
   the GTS wire format is governed in `gmeow-gts`; both writers author the same
   pack bytes.
+- **Segmented images.** The writer emits format version `8` (`PURRSEG8`), whose
+  source checkpoint stream holds the canonical BLAKE3 Merkle node of every
+  source-directory branch of at least 32 members instead of additive prefix
+  sums. The header layout is unchanged apart from its magic and version. The
+  reader accepts version `7` (`PURRSEG7`) and version `8` and refuses any other.
+  Certification checks a version `7` image's additive checkpoints against its
+  rows, and the change feed compares its ranges by hashing their records, so it
+  reads more directory records than a version `8` image of the same rows. An
+  image written by 5.0 has a different snapshot identity and receipt from the
+  4.x image of the same input, and a 4.x reader refuses it. Rewrite a version
+  `7` image from its RDF input to restore logarithmic range comparison.
 - **Columnar.** The five-table Parquet files record no canonical digest, only
   content digests of blobs and of the manifest. They are unchanged.
 - **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest

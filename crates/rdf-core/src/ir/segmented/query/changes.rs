@@ -14,7 +14,9 @@ use super::{
     SegmentedStackQuery, SegmentedStackSnapshot, SegmentedStackSource, SegmentedStackTerm,
     SourceTerm, hash_of, reserve_table_with_memory,
 };
-use crate::ir::source_directory::{DirectoryChange, DirectoryEntry, DirectoryRead, SourceRecord};
+use crate::ir::source_directory::{
+    DirectoryChange, DirectoryEntry, DirectoryNode, DirectoryRead, SourceRecord,
+};
 use crate::ir::statistics::{LocalStatistics, Relation};
 use crate::source::{
     SourceChangeWork, SourceFamily, SourceRowRef, SourceSide, SourceVersion, SourceVisit,
@@ -250,7 +252,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
             work,
         )?;
         self.diff_compacted_head(before, self.sessions.len() == 1, candidates, work)?;
-        if next.summary() != self.sessions[0].source_union()? {
+        if next.root() != self.sessions[0].source_root()? {
             return Err(SegmentedError::Corrupt(
                 "compacted source directory disagrees with certified image",
             ));
@@ -325,12 +327,12 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                 .iter()
                 .enumerate()
             {
-                let root = source.source_union()?;
-                memory.push(&mut roots, (root.population(), *root.sum(), index))?;
+                // Layers with equal canonical roots hold the same members.
+                memory.push(&mut roots, (source.source_root()?, index))?;
             }
             roots.sort_unstable();
-            roots.dedup_by_key(|entry| (entry.0, entry.1));
-            let indices = memory.collect(roots.iter().map(|entry| entry.2))?;
+            roots.dedup_by_key(|entry| entry.0);
+            let indices = memory.collect(roots.iter().map(|entry| entry.1))?;
             let sources = memory.collect(
                 indices
                     .iter()
@@ -668,10 +670,8 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
         )
     }
 
-    fn removal_root(carrier: Option<ResidentSource<'_>>) -> Multiset256 {
-        carrier.map_or_else(Multiset256::default, |(_, statistics)| {
-            statistics.source_union()
-        })
+    fn removal_root(carrier: Option<ResidentSource<'_>>) -> Option<DirectoryNode> {
+        carrier.and_then(|(_, statistics)| statistics.source_root())
     }
 
     fn source_baseline(
@@ -697,8 +697,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                 Arc::ptr_eq(a, b)
             })
             && let Some(head) = &old.head
-            && self.sessions[new.layers.len() - 1].source_union()?
-                == head.statistics().source_union()
+            && self.sessions[new.layers.len() - 1].source_root()? == head.statistics().source_root()
             && Self::removal_root(
                 new.layers
                     .last()
@@ -713,8 +712,8 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
             });
         }
         if let Some(first) = self.sessions.first() {
-            let root = first.source_union()?;
-            if new.layers.len() == 1 && root == previous.records {
+            let root = first.source_root()?;
+            if new.layers.len() == 1 && root == previous.directory.root() {
                 // Reapplying the unchanged head A ∪ (S \ R) is idempotent.
                 // Keep it when the caller retained it across compaction, so its
                 // rows do not become a spurious corpus-sized physical addition.
@@ -731,7 +730,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                 let Some(recorded) = recorded else {
                     continue;
                 };
-                if recorded.summary() != root || old.layers.len() - index != new.layers.len() {
+                if recorded.root() != root || old.layers.len() - index != new.layers.len() {
                     continue;
                 }
                 if old.layers[index + 1..]
@@ -1073,7 +1072,7 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
             } else {
                 let (source, removals) = if index < self.sessions.len() {
                     (
-                        self.sessions[index].source_union()?,
+                        self.sessions[index].source_root()?,
                         self.snapshot.layers[index].metadata.removals(),
                     )
                 } else {
@@ -1082,9 +1081,11 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
                         .head
                         .as_ref()
                         .expect("the resident source exists");
-                    (head.statistics().source_union(), head.metadata.removals())
+                    (head.statistics().source_root(), head.metadata.removals())
                 };
-                if source == records && removals.is_none() {
+                // An unchanged union adds nothing only when its members are
+                // the ones already observed.
+                if source == directory.root() && removals.is_none() {
                     if index < self.sessions.len() {
                         storage
                             .run(|memory| memory.push(&mut prefixes, Some(directory.clone())))?;

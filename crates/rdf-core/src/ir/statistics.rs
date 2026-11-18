@@ -732,6 +732,11 @@ impl LocalStatistics {
     pub(crate) const fn source_union(&self) -> purrdf_hash::multiset::Multiset256 {
         self.source_union
     }
+    /// The canonical node of the effective source directory, the members
+    /// [`Self::source_union`] sums.
+    pub(crate) fn source_root(&self) -> Option<crate::ir::source_directory::DirectoryNode> {
+        self.effective_source_directory().root()
+    }
     pub(crate) const fn source_directory(&self) -> &SourceDirectory {
         &self.directory
     }

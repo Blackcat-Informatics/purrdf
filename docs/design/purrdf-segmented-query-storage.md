@@ -123,7 +123,7 @@ require regeneration from their RDF input; this reader refuses unsupported
 profiles. The certification receipt's encoding and hash laws remain distinct
 from the data profile.
 
-The 432-byte profile 6 header also retains the exact normalized statement-union
+The header also retains the exact normalized statement-union
 and reifier multiset: asserted and annotation occurrences of the same value quad
 count once in that union, while a virtual reifier declaration remains a separate
 family. Its 128-bit population and 256-bit sum are reconstructed and compared
@@ -138,30 +138,50 @@ The normalized source directory collapses asserted/annotation copies
 of a statement and keeps virtual reifiers in their separate identity family;
 its entries retain actual source-local addresses for selective value reads.
 Each 37-byte record contains the canonical record digest, the source-local
-32-bit ordinal and stream tag. A separate authenticated fixed-record stream
-stores one 256-bit cumulative sum per complete group of 32 records. Prefix
-populations are implied by position, and zero is implicit. A selective prefix
-read combines its checkpoint with at most 31 tail digests; actual tail visits
-are counted in `SourceDifferenceWork::members`, while the original read owner
-accounts for checkpoint and directory block reads. Full certification rebuilds
-and compares every record and checkpoint from the RDF rows, including their
-exact packing. Selective reads compare digest ranges
-using those authenticated prefixes through the same algorithm as resident
-directories; only differing records fetch their physical rows. The original
-read operation owns every directory and row read. Replacing a sealed descriptor
-therefore does not itself require enumerating either complete layer.
+32-bit ordinal and stream tag. Range equality uses a canonical BLAKE3 Merkle
+node over the sorted digests, the binary Patricia trie over their bits. A run
+of equal digests is a leaf: the digest itself when it occurs once, otherwise
+the keyed hash of the digest and its count. A set of two or more distinct
+digests splits at the first bit where its least and greatest digests differ;
+its node is the keyed hash of the two child nodes. The keys are derived from
+the domains `purrdf-core/source-directory-leaf/v1` and
+`purrdf-core/source-directory-branch/v1`. The node depends only on the member
+multiset, never on paging, chunking or edit history, so equal nodes mean equal
+members. The additive sums kept beside it are not collision resistant: a party
+choosing rows can build two different sets with equal sums and populations.
+They remain only for content fingerprints and for agreement between two values
+the same process built.
+
+Format version 8 (`PURRSEG8`) stores sparse checkpoints in a separate
+authenticated fixed-record stream: one 40-byte record per branch of at least
+32 members, holding the little-endian ordinal of the branch's first right-hand
+member and its node, in ascending ordinal order. A digest-prefix range of at
+least 32 members with two distinct digests is exactly one such branch; a reader
+finds it by binary search at that boundary. A smaller range hashes its fewer
+than 32 records; those digests are counted in `SourceDifferenceWork::members`,
+while the original read owner accounts for checkpoint and directory block
+reads. Full certification rebuilds and compares every record and checkpoint
+from the RDF rows, including their exact packing. Selective reads compare digest
+ranges through the same algorithm as resident directories; only differing
+records fetch their physical rows. The original read operation owns every
+directory and row read. Replacing a sealed descriptor therefore does not itself
+require enumerating either complete layer.
+
+Version 7 images (`PURRSEG7`) remain readable. Their checkpoint stream holds one
+256-bit cumulative additive sum per complete group of 32 records; full
+certification rebuilds and compares those sums as a local consistency check, and
+nothing else reads them. A version 7 range is compared by hashing its records.
 
 The directory payload approaches 38 bytes per row, before physical page padding
-and the authentication tree, instead of 88. Old images require regeneration
-from their original RDF input; there is one decoder for the current profile.
+and the authentication tree, instead of 88. Images before version 7 require
+regeneration from their original RDF input.
 
 Native construction reserves source-record storage from the exact physical row
 count. Sources without annotations reuse their physical directory for normalized
 keys; they retain no duplicate record or checkpoint buffers. Annotated sources
 retain a separate normalized directory because statement copies must collapse.
-Resident checkpoints store only complete 32-record prefixes, with the zero prefix
-implicit and the final partial block read directly. Checkpoint storage is sized
-once to that exact count. Scalar term hashing streams the initial value directly;
+Resident directories keep the same sparse branch checkpoints, their root node
+and the additive total. Scalar term hashing streams the initial value directly;
 only nested triple terms require admitted traversal scratch. These storage choices
 preserve source identities. In 4.0, resident and controlled sealing share the
 fallible digest sorter. Its permutation of equal-digest source-local addresses
@@ -169,7 +189,9 @@ can change persisted directory bytes from earlier releases; regenerate those
 images when upgrading.
 
 An observation retains an effective directory of canonical keys. Its immutable Patricia tree uses leaves of at most
-32 keys and copies only changed leaves and paths. Each node and leaf buffer
+32 keys and copies only changed leaves and paths. Every node carries the
+canonical Merkle node of its keys, so an edit rehashes one leaf and its path.
+Each node and leaf buffer
 retains its original read-account grant; keys carry no dataset, provider or row
 address. Successors retain the current snapshot and independent key storage,
 allowing replaced source owners to release. Initial positive composition reads
@@ -179,7 +201,13 @@ Known sealed prefixes share those keys. Regrouped intermediate prefixes may
 instead refer lazily to the current snapshot's certified directories, avoiding
 a retained-key copy merely to populate a cache. One admitted range traversal
 compares groups of directories; it never constructs a merged row/key array.
-Equal normalized contributor roots collapse before group comparison. Source
+A range is skipped when both groups hold the same members carrier by carrier,
+with equal nodes in order. Members spread over other carriers are split until
+each range holds one carrier per side, so the digest work of such a regrouping
+is linear in its records, while only changed rows are resolved. Contributors
+with equal canonical roots collapse before group comparison. Baseline reuse,
+compaction checks and the no-op test of a captured layer also compare canonical
+roots. Source
 removals retain chronological visibility checks, including old removals when
 comparison uses physical contributor bags rather than effective keys.
 

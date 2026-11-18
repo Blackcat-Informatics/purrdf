@@ -53,38 +53,52 @@ impl crate::ir::source_directory::DirectoryRead for SourceDirectory<'_> {
         })
     }
 
-    fn prefix(
+    fn node(
         &self,
-        end: usize,
+        range: std::ops::Range<usize>,
         work: &mut crate::source::SourceDifferenceWork,
-    ) -> Result<purrdf_hash::multiset::Multiset256, Self::Error> {
-        use crate::ir::source_directory::CHECKPOINT_ROWS;
+    ) -> Result<Option<crate::ir::source_directory::DirectoryNode>, Self::Error> {
+        use crate::ir::source_directory::{NODE_CHECKPOINT_BYTES, checkpointed, recompute};
 
-        if end > self.len()? {
+        if range.end > self.len()? {
             return Err(SegmentedError::Corrupt(
-                "source directory prefix outside section",
+                "source directory range outside section",
             ));
         }
-        let checkpoint = end / CHECKPOINT_ROWS;
-        let start = checkpoint * CHECKPOINT_ROWS;
-        let mut prefix = if checkpoint == 0 {
-            purrdf_hash::multiset::Multiset256::default()
-        } else {
-            let sum = self.session.fixed_record::<32>(
-                self.session.header.source_checkpoints,
-                format::SOURCE_CHECKPOINTS,
-                (checkpoint - 1) as u64,
-            )?;
-            purrdf_hash::multiset::Multiset256::from_parts(sum, start as u128)
-        };
-        for index in start..end {
-            let record = self.record(index)?;
-            prefix
-                .insert(record.digest)
-                .map_err(|_| SegmentedError::AddressExhausted)?;
-            work.members += 1;
+        if self.session.header.version == format::ADDITIVE_VERSION {
+            // Additive checkpoints prove nothing about which members a range
+            // holds; a version 7 image is compared from its records.
+            return recompute(self, range, work);
         }
-        Ok(prefix)
+        checkpointed(self, range, work, |boundary| {
+            let stream = self.session.header.source_checkpoints;
+            let read = |index| {
+                self.session.fixed_record::<NODE_CHECKPOINT_BYTES>(
+                    stream,
+                    format::SOURCE_CHECKPOINTS,
+                    index,
+                )
+            };
+            let index = format::partition_point(stream.rows, |index| {
+                Ok::<_, SegmentedError>(
+                    crate::bytes::read_u64_le(&read(index)?, 0).expect("fixed checkpoint boundary")
+                        < boundary,
+                )
+            })?;
+            let record = if index < stream.rows {
+                read(index)?
+            } else {
+                return Err(SegmentedError::Corrupt(
+                    "missing source directory checkpoint",
+                ));
+            };
+            if crate::bytes::read_u64_le(&record, 0) != Some(boundary) {
+                return Err(SegmentedError::Corrupt(
+                    "missing source directory checkpoint",
+                ));
+            }
+            Ok(record[8..].try_into().expect("fixed checkpoint node"))
+        })
     }
 }
 
@@ -100,6 +114,19 @@ impl SegmentedSession {
             session: self,
             stream: self.header.effective_directory,
         }
+    }
+
+    /// The canonical node of the effective source directory.
+    pub(in crate::ir::segmented) fn source_root(
+        &self,
+    ) -> Result<Option<crate::ir::source_directory::DirectoryNode>, SegmentedError> {
+        use crate::ir::source_directory::DirectoryRead as _;
+
+        let directory = self.source_directory();
+        directory.node(
+            0..directory.len()?,
+            &mut crate::source::SourceDifferenceWork::default(),
+        )
     }
 
     pub(in crate::ir::segmented) fn source_record_row(
