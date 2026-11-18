@@ -1,0 +1,23 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: bfe17b62ab919e528c3135ddb515bc09cfcac496
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1375
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1375
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: c2bdbb06a04d561b426d8c0e397f11ecbdcad8fa
+GhpRsq-Head-Ref: paudley/1332-iri-normalize-removes-a-percent-encoded
+GhpRsq-Head-OID: bfe17b62ab919e528c3135ddb515bc09cfcac496
+GhpRsq-Result-Tree: 52cbdc060675235246f071569d8679c7c7911b3e
+GhpRsq-Result-Commit: 51204a4454fa2e2d7b175ea3cc45da2442ce7536
+GhpRsq-Parent-Hashes: bfe17b62ab919e528c3135ddb515bc09cfcac496
+GhpRsq-Squash-Notes-SHA256: 323adad4856dc080698bb8bd636cc6e6a62a89b085376324a5b72174a45353ae
+GhpRsq-Stage-Tree: d5595dbc0e50465f17b2f604717eecc59a864469
+GhpRsq-Stage-Commit: 37a3d0a4646c24d97b28e4c8efb22a2c8b192e47
+GhpRsq-Stage-Tag: refs/tags/ghprsq/artifacts/37a3d0a4646c24d97b28e4c8efb22a2c8b192e47
+GhpRsq-Stage-Ref: refs/ghprsq/pr/1375/stage
+GhpRsq-Stage-Files: 14
+GhpRsq-Stage-URL: https://github.com/Blackcat-Informatics/purrdf/tree/37a3d0a4646c24d97b28e4c8efb22a2c8b192e47
