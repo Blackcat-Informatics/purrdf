@@ -10,7 +10,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **Behaviour change: the Python GTS fold view refuses a damaged file, and the
   seeking reader refuses an unclassifiable tail item.** `GtsFoldViewNative.from_bytes`
-  now raises `ValueError` (with the native `code` and `diagnostic_json`) when
+  and `gts_relational_rows_from_bytes` now raise `ValueError` (with the native `code` and `diagnostic_json`) when
   the fold reports any diagnostic, as the dataset import does, instead of
   returning an empty or partial view. `IndexedCatalog::segment` returns the
   frame-not-a-map refusal when an item after the segment header is not a map, so

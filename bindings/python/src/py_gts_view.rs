@@ -315,9 +315,11 @@ fn gts_relational_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
 ) -> PyResult<Bound<'py, PyDict>> {
+    let graph = py
+        .detach(|| purrdf::gts::read_graph(data, true))
+        .map_err(|diagnostic| native_error(py, &diagnostic))?;
     let (rows, directions) = py
         .detach(|| {
-            let graph = purrdf_gts::reader::read(data, true, None);
             crate::gts_view::relational_rows(&graph)
                 .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
         })

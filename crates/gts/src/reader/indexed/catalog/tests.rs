@@ -480,6 +480,19 @@ fn catalog_refuses_a_segment_whose_tail_holds_an_unclassifiable_item() {
         Some(FoldError::FrameMap)
     ));
 
+    let mut tagged = valid.clone();
+    tagged.extend(crate::wire::encode(&Value::Tag(
+        1000,
+        Box::new(Value::Map(Vec::new())),
+    )));
+    let failure = open(tagged)
+        .segment(0)
+        .expect_err("a tag-wrapped map is not a frame, as the full reader decides");
+    assert!(matches!(
+        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
+        Some(FoldError::FrameMap)
+    ));
+
     let mut headerless = crate::wire::encode(&Value::Text("stray".into()));
     headerless.extend(valid);
     let failure = open(headerless)

@@ -225,10 +225,12 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
             data: None,
             transforms: None,
         };
+        // The full reader classifies the untagged item: a tag-wrapped map is not a
+        // frame there, so it is not one here.
+        discovered.map = self.input.map(range)?.is_some();
         let Some(mut entries) = self.input.map(&inner)? else {
             return Ok(discovered);
         };
-        discovered.map = true;
         let mut magic = false;
         while let Some(key) = self.input.next(&mut entries)? {
             let Some(value) = self.input.next(&mut entries)? else {

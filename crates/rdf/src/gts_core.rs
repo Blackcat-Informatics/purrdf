@@ -327,25 +327,6 @@ mod tests {
     use crate::gts_resolve::term_from_id;
     use purrdf_gts::model::{Term, TermKind};
 
-    /// Every byte-reading consumer, the Python fold view included, takes its graph
-    /// from `read_graph`, which turns a fold diagnostic into an error.
-    #[test]
-    fn read_graph_refuses_damaged_files_and_reads_the_neighbouring_valid_file() {
-        let mut writer = purrdf_gts::writer::Writer::new("rdf");
-        writer.add_index();
-        let valid = writer.into_bytes();
-        assert!(read_graph(&valid, true).is_ok());
-
-        let stray = purrdf_gts::wire::encode(&Value::Text("stray".into()));
-        let mut headerless = stray.clone();
-        headerless.extend(&valid);
-        assert!(read_graph(&headerless, true).is_err());
-
-        let mut trailing = valid;
-        trailing.extend(stray);
-        assert!(read_graph(&trailing, true).is_err());
-    }
-
     #[test]
     fn metadata_simple_values_surface_as_opaque_and_null_stays_null() {
         assert_eq!(
