@@ -396,7 +396,7 @@ states why each consequence follows from the design.
 Bibliographic records were checked against the Crossref DOI registry, and the W3C
 and BLAKE3 entries against the publisher documents themselves. The checks cover
 authors, title, venue, volume, pages and year. Where the registry gives an online
-year that precedes the issue year, the issue year is used.
+year that precedes the year of the printed volume, the printed year is used.
 
 1. Longley, D., Kellogg, G., Yamamoto, D. (eds.). *RDF Dataset Canonicalization*.
    W3C Recommendation, 21 May 2024.
