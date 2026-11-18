@@ -433,21 +433,20 @@ fn malformed_unsupported_unresolved_and_wrong_type_are_distinct() {
     wrong.insert(b"unknown", EdKey::from_bytes(&[1; 32]).verifying_key());
     let result = verify_file_with_keyring(&bytes, &wrong);
     assert_eq!((result.invalid, result.unverified), (1, 0));
-    for invalid in [
-        alter_frame(&bytes, 1, |frame| {
-            *field(frame, "sig") = Value::Bytes(vec![0]);
-        }),
-        alter_frame(&bytes, 1, |frame| {
-            alter_envelope(frame, |parts| {
-                parts[0] =
-                    Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
-            });
-        }),
-    ] {
-        let result = verify_file_with_keyring(&invalid, &NoLookup);
-        assert_eq!((result.invalid, result.unverified), (1, 0));
-        assert!(!result.ok);
-    }
+    let malformed = alter_frame(&bytes, 1, |frame| {
+        *field(frame, "sig") = Value::Bytes(vec![0]);
+    });
+    let result = verify_file_with_keyring(&malformed, &NoLookup);
+    assert_eq!((result.invalid, result.unverified), (1, 0));
+    assert!(!result.ok);
+    let unsupported = alter_frame(&bytes, 1, |frame| {
+        alter_envelope(frame, |parts| {
+            parts[0] = Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
+        });
+    });
+    let result = verify_file_with_keyring(&unsupported, &NoLookup);
+    assert_eq!((result.invalid, result.unverified), (0, 1));
+    assert!(!result.ok);
 }
 
 fn opaque_absent_and_empty_ids_remain_distinct_at_file_resolution() {

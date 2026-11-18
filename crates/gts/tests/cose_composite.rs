@@ -425,10 +425,20 @@ fn headers_are_authenticated_unique_typed_and_critical_rules_enforced() {
         cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
         SigStatus::Valid
     );
+    // An integer alg this engine does not implement is not checked: unverified.
+    for alg in [-49, -99] {
+        let envelope = raw_ed_signature(
+            &wire::encode(&Value::Map(vec![(1.into(), alg.into())])),
+            unprotected(),
+        );
+        assert!(cose::parse_sign1(&envelope).is_err());
+        assert_eq!(
+            cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
+            SigStatus::Unverified
+        );
+    }
     let bad_maps = [
         vec![],
-        vec![(1.into(), (-49).into())],
-        vec![(1.into(), (-99).into())],
         vec![(1.into(), (-58).into())], // Correctly signed Ed bytes, wrong declared algorithm/size.
         vec![(1.into(), Value::Text("EdDSA".into()))],
         vec![(1.into(), Value::Bytes(vec![0x27]))],

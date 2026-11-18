@@ -27,6 +27,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   over binary lines and does not move; the 5.0 document spells those characters
   as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
   SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
+- **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
+  admits the executed SRL program against the declarations before it compiles,
+  so a rule that derives a protected predicate is refused as
+  `SrlError::Execution`, and a rule deriving another predicate still runs.
+- **Behaviour change: an unsupported signing algorithm is `Unverified`.**
+  `verify_sig` and `verify_sig_with_key` report a COSE_Sign1 whose declared
+  `alg` this engine does not implement as `SigStatus::Unverified` instead of
+  `Invalid`, and the file verifiers (`verify_signatures`,
+  `verify_signatures_with_resolver` and the C, WebAssembly and Python surfaces
+  over them) record it as `unverified`: the engine could not check it. `Invalid` remains for a signature
+  that was checked and failed and for a malformed structure. Callers that
+  require `Valid` still refuse an unverified signature.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
   routes to `(nested-refinement-labelling, 1)`. The canonical document is the
