@@ -19,7 +19,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   leaf and the view bundle's equivalents no longer build the canonical document
   text and label table before hashing, so those are no longer allocated:
   requested bytes fall by about one document plus one label table, and
-  allocations by about ten percent. Peak memory is set by the labelling search
+  allocations by 5 to 11 percent. Peak memory is set by the labelling search
   and is unchanged. The digests are byte-identical for every input, and the
   identity law, domain, section order and refusals are unchanged. The
   canonicalization receipts of these runs record `Sha256Digest` as their output
