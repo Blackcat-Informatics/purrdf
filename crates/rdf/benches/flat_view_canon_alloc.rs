@@ -25,12 +25,15 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY;
-use purrdf_core::{CanonPhase, CanonicalizationControl};
+use purrdf_core::{CANON_CORPUS_POLICY, CanonPhase, CanonicalizationControl};
 use purrdf_rdf::rdfc12::{
     CanonHash, try_canonical_sha256_view, try_canonicalize_flat_view, try_canonicalize_sha256_view,
-    try_flat_blake3_view, try_flat_digest_view,
+    try_flat_blake3_measured_view, try_flat_blake3_view, try_flat_digest_view,
 };
-use purrdf_rdf::{ContentDigest, RdfDataset, StopSignal};
+use purrdf_rdf::{
+    ContentDigest, ContentStore, DatasetProvenance, PipelineBundle, RdfDataset, RdfLookaside,
+    StopSignal, try_canonicalize_view,
+};
 
 #[path = "support/canon_load.rs"]
 mod load;
@@ -294,6 +297,57 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
         |c: &mut CanonicalizationControl<'_>| try_flat_blake3_view(ds, HASH, c).is_ok();
     let pre = with_pre_output.then(|| pre_output_peak(&blake3_run));
     line("flat_blake3_streamed", &f, &flat, m, pre.as_ref());
+
+    // The streamed route that also counts the document it never builds.
+    let window = WholeProcessWindow::open();
+    let measured =
+        try_flat_blake3_measured_view(ds, HASH, &mut control(None)).expect("measured BLAKE3");
+    let m = window.close();
+    assert_eq!(
+        purrdf_hash::hex::encode(&measured.digest),
+        flat.blake3,
+        "measured BLAKE3 equals the document BLAKE3"
+    );
+    assert_eq!(
+        measured.bytes, flat.doc_bytes as u64,
+        "the measured length is the document's length"
+    );
+    let measured_run =
+        |c: &mut CanonicalizationControl<'_>| try_flat_blake3_measured_view(ds, HASH, c).is_ok();
+    let pre = with_pre_output.then(|| pre_output_peak(&measured_run));
+    line("flat_blake3_measured", &f, &flat, m, pre.as_ref());
+
+    // The pipeline bundle's identity fold hashes the default canonical document as
+    // its lines are spelled; the built route is the fold it replaced. Both rows
+    // carry the default document's own length and digests.
+    let bundle = PipelineBundle::<()>::new(
+        Arc::clone(&loaded.dataset),
+        RdfLookaside::default(),
+        Arc::new(ContentStore::new()),
+        DatasetProvenance::new(),
+    );
+    let window = WholeProcessWindow::open();
+    let built = try_canonicalize_view(
+        ds,
+        &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
+    )
+    .expect("default document");
+    let built_digest = ContentDigest::of(built.nquads().as_bytes());
+    let built_document = Document::of(built.nquads());
+    drop(built);
+    let m = window.close();
+    line("bundle_digest_built_document", &f, &built_document, m, None);
+
+    let window = WholeProcessWindow::open();
+    let folded = bundle
+        .digest(&mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None))
+        .expect("bundle digest");
+    let m = window.close();
+    assert_ne!(
+        folded, built_digest,
+        "the bundle fold adds its sections to the document"
+    );
+    line("bundle_digest_streamed", &f, &built_document, m, None);
 
     // The overlay presentation is a different document on the reifier shape, so its
     // length and digests come from its own result.
