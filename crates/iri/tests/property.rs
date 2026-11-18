@@ -101,16 +101,30 @@ prop_test! {
     }
 }
 
-/// Scheme-less, authority-less references built from the segments whose
+/// References built from the segments whose
 /// handling decides what a reference means: `.`, `..`, empty, plain, one holding
 /// a colon, one holding a percent-encoded unreserved character, and the
 /// percent-encoded spellings of `.` and `..` in either hex case and mixed with a
 /// literal dot. Resolution reads those as ordinary segments, so they may appear
-/// in leading, interior and final position. A leading `/` gives the
-/// absolute-path and network-path neighbours, which the property skips when
-/// they hold an encoded dot.
+/// in leading, interior and final position. A leading `/`, an
+/// authority or a scheme gives the absolute-path, network-path and absolute
+/// neighbours, where an encoded dot must keep its meaning too.
 fn relative_reference() -> impl Strategy<Value = String> {
-    let prefix = prop::sample::select(vec!["", "", "", "./", "../", "%2e/", "%2E%2e/", "/"]);
+    let prefix = prop::sample::select(vec![
+        "",
+        "",
+        "",
+        "./",
+        "../",
+        "%2e/",
+        "%2E%2e/",
+        "/",
+        "/",
+        "//h/",
+        "http://h/",
+        "http://%41/",
+        "a:",
+    ]);
     let seg = prop::sample::select(vec![
         "", ".", "..", "..", "x", "y", "a:b", "%7e", "%3A", "%2e", "%2E", "%2e%2E", ".%2e", "%2E.",
         "x%2e",
@@ -162,26 +176,22 @@ fn absolute_base() -> impl Strategy<Value = &'static str> {
 prop_test! {
     /// Protects the meaning of a relative reference under `normalize` (RFC 3986
     /// §4.1, §5.2.4, §6.2.2.3): dot segments are interpreted by resolution, so for
-    /// every reference with no scheme and every absolute base, resolving the
+    /// every reference and every absolute base, resolving the
     /// normal form names the same IRI as resolving the original. That includes a
-    /// rootless reference with a percent-encoded dot segment, which resolution
-    /// reads as an ordinary segment. The two results are compared in normal form
+    /// reference with a percent-encoded dot segment, under a scheme, an
+    /// authority, a root or none, which resolution reads as an ordinary segment. The two results are compared in normal form
     /// because the reference's case and percent-encoding normalization carry
-    /// into the resolved text. The normal form also stays scheme-less and is a
-    /// fixed point. A reference with an authority or a leading `/` that holds an
-    /// encoded dot is outside the guarantee and is skipped.
+    /// into the resolved text. The normal form also keeps the scheme and the
+    /// authority and is a fixed point.
     #[test]
     fn normalize_preserves_what_a_relative_reference_resolves_to(
         r in relative_reference(),
         b in absolute_base(),
     ) {
         if let Ok(reference) = parse(&r) {
-            prop_assume!(!reference.has_scheme());
-            let rooted = reference.authority().is_some() || reference.path().starts_with('/');
-            prop_assume!(!(rooted && reference.path().to_ascii_lowercase().contains("%2e")));
             let base = parse(b).expect("base parses");
             let n = reference.normalize();
-            prop_assert!(!n.has_scheme());
+            prop_assert_eq!(n.has_scheme(), reference.has_scheme());
             prop_assert_eq!(n.authority().is_some(), reference.authority().is_some());
             prop_assert_eq!(n.normalize().as_str(), n.as_str());
             let direct = base.resolve(&r).expect("reference resolves").normalize();
