@@ -890,8 +890,16 @@ impl TwinTest {
     }
 }
 
-/// Union-find parents of the nodes of `set`: two nodes of one line share a root.
+/// The root of each node of `set`: two nodes of one line share a root, and a
+/// root is its own root.
 fn joined_nodes(set: &LineSet) -> Vec<usize> {
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        x
+    }
     let mut parent: Vec<usize> = (0..set.nodes.len()).collect();
     for l in 0..set.lines.len() {
         let mut first = None;
@@ -907,16 +915,10 @@ fn joined_nodes(set: &LineSet) -> Vec<usize> {
             }
         }
     }
-    parent
-}
-
-/// The root of `x` in `parent`, compressing the path.
-fn find(parent: &mut [usize], mut x: usize) -> usize {
-    while parent[x] != x {
-        parent[x] = parent[parent[x]];
-        x = parent[x];
+    for x in 0..parent.len() {
+        parent[x] = find(&mut parent, x);
     }
-    x
+    parent
 }
 
 /// The number of top components of `set`.
@@ -930,12 +932,10 @@ pub(crate) fn component_count(set: &LineSet) -> usize {
 
 /// The top components of `set`, each with its nodes in node order.
 pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
-    let n = set.nodes.len();
-    let mut parent = joined_nodes(set);
+    let parent = joined_nodes(set);
     let mut index: BTreeMap<usize, usize> = BTreeMap::new();
     let mut comps: Vec<(Vec<usize>, Vec<usize>)> = Vec::new();
-    for b in 0..n {
-        let root = find(&mut parent, b);
+    for (b, &root) in parent.iter().enumerate() {
         let next = comps.len();
         let i = *index.entry(root).or_insert(next);
         if i == comps.len() {
@@ -945,7 +945,7 @@ pub(crate) fn top_components(set: &LineSet) -> Vec<Comp> {
     }
     for l in 0..set.lines.len() {
         if let Some(b) = set.occurrences(l).next() {
-            let i = index[&find(&mut parent, b)];
+            let i = index[&parent[b]];
             comps[i].1.push(l);
         }
     }
