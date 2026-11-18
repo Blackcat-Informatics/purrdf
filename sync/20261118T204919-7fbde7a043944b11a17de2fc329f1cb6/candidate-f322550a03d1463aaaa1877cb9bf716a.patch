@@ -1,0 +1,1461 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index ce9a2264b..5ddff2639 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -27,6 +27,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   checkpoint. A regrouping that spreads the same members over other layers now
+   costs digest work linear in their records; it still resolves only changed rows.
+ 
++- **`try_flat_blake3_measured_view` returns the flat canonical document's BLAKE3
++  digest and its byte length from one streaming run.** It takes the arguments of
++  `try_flat_blake3_view`, returns a `FlatBlake3Measured { digest, bytes }`, builds
++  no document, admits no document or label payload to the owned workspace and
++  refuses exactly as `try_flat_blake3_view` does, so a caller that records the
++  document length no longer builds the document to measure it.
++- **`PipelineBundle::digest` and the residue leaf hash the canonical document as
++  its lines are spelled.** The carrier identity, the pipeline root's residue
++  leaf and the view bundle's equivalents no longer build the canonical document
++  text and label table before hashing, so those are no longer allocated:
++  requested bytes fall by about one document plus one label table, and
++  allocations by 5 to 11 percent. Peak memory is set by the labelling search
++  and is unchanged. The digests are byte-identical for every input, and the
++  identity law, domain, section order and refusals are unchanged. The
++  canonicalization receipts of these runs record `Sha256Digest` as their output
++  instead of `Document`.
++- **`TextIndex::with_delta` checks each removed row by its row digest.** The
++  additive source digest and statement populations accept a removal the index
++  never held when its hash balances an addition. The index now keeps a sorted
++  directory of the digest of every selected source row, token-less rows
++  included, and each removed row must consume one occurrence of its digest;
++  otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
++  The directory is updated by every applied delta and is not part of either
++  fingerprint. A genuine delta applies as before.
+ - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
+   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
+   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
+diff --git crates/rdf-core/src/ir/canon.rs crates/rdf-core/src/ir/canon.rs
+index b9b770163..40b30ba3d 100644
+--- crates/rdf-core/src/ir/canon.rs
++++ crates/rdf-core/src/ir/canon.rs
+@@ -1028,6 +1028,57 @@ pub fn try_flat_blake3_view<D: FallibleDatasetView>(
+     )
+ }
+ 
++/// The BLAKE3-256 digest of a flat canonical document and its length in bytes.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
++pub struct FlatBlake3Measured {
++    /// The unkeyed BLAKE3-256 digest of the document, as [`try_flat_blake3_view`] returns it.
++    pub digest: [u8; 32],
++    /// The document's length in bytes, as `Canonicalized::nquads().len()` of
++    /// [`try_canonicalize_flat_view`] reports it.
++    pub bytes: u64,
++}
++
++/// [`try_flat_blake3_view`] that also returns the document's length in bytes,
++/// counted as the same bytes are hashed in one streaming run. The document is
++/// never built and no document or label payload is admitted to the owned
++/// workspace.
++///
++/// # Errors
++/// Exactly [`try_flat_blake3_view`]'s refusals.
++pub fn try_flat_blake3_measured_view<D: FallibleDatasetView>(
++    view: &D,
++    hash: CanonHash,
++    control: &mut CanonicalizationControl<'_>,
++) -> Result<FlatBlake3Measured, ViewCanonError<D::Error, D::Evidence>> {
++    let mut bytes = 0u64;
++    let digest = control.run(
++        SearchConfiguration::rdfc(
++            hash,
++            CanonPresentation::FlatAssertion,
++            None,
++            CanonOutput::Blake3Digest,
++        ),
++        |run| match checkpointed_drain(view, |view| {
++            CanonState::new(
++                view,
++                CanonScope::Dataset,
++                CanonPresentation::FlatAssertion,
++                hash,
++                run,
++            )
++            .digest_fallible(output::Counting::new(
++                purrdf_hash::blake3::Hasher::new(),
++                &mut bytes,
++            ))
++        }) {
++            Ok(result) => result.map_err(ViewCanonError::Refused),
++            Err(failure) => Err(failure.into()),
++        },
++    )?;
++    Ok(FlatBlake3Measured { digest, bytes })
++}
++
+ /// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
+ /// IRI (so no quad or statement row can carry it as a graph name).
+ fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id>> {
+diff --git crates/rdf-core/src/ir/canon/labelled.rs crates/rdf-core/src/ir/canon/labelled.rs
+index be93822bd..a02b35344 100644
+--- crates/rdf-core/src/ir/canon/labelled.rs
++++ crates/rdf-core/src/ir/canon/labelled.rs
+@@ -181,6 +181,58 @@ fn document<D: DatasetView>(
+     builder.finish(run.stop())
+ }
+ 
++/// Feed every line of the canonical document to `hasher` as it is spelled, in
++/// the document's order, through one reused line buffer. The document is never
++/// built: the bytes hashed are exactly the bytes [`document`] would append.
++fn stream_document<D: DatasetView>(
++    labelling: &Labelling<D::Id>,
++    run: &SearchRun<'_>,
++    hasher: &mut sha2::Sha256,
++) -> Result<(), CanonError<D::ReadError>> {
++    use sha2::Digest as _;
++    // INVARIANT: as in `document`, a spelling failure is unreachable.
++    let unreadable = |_| {
++        CanonError::Refused(Box::new(Refusal::Input {
++            reason: InputReason::Kind,
++        }))
++    };
++    let composites = labelling.composites().map_err(unreadable)?;
++    let mut text = String::new();
++    for line in &labelling.labelled().lines {
++        run.check_stop().map_err(|_| CanonError::Stopped)?;
++        text.clear();
++        write_line_with(line, &composites, &mut text).map_err(unreadable)?;
++        hasher.update(text.as_bytes());
++    }
++    run.check_stop().map_err(|_| CanonError::Stopped)
++}
++
++/// Feed the canonical document of `view` to `hasher`, line by line, without
++/// building it. The hasher then holds exactly the bytes of
++/// [`try_canonicalize_view`]'s [`nquads`](Canonicalized::nquads), and the caller
++/// continues the same hash. On an error the hasher's state is unspecified.
++///
++/// # Errors
++/// As [`try_canonicalize_view`], except that no document is admitted to the
++/// owned workspace.
++pub(crate) fn try_hash_document_view<D: DatasetView>(
++    view: &D,
++    control: &mut CanonicalizationControl<'_>,
++    hasher: &mut sha2::Sha256,
++) -> Result<(), CanonError<D::ReadError>> {
++    control.run(
++        SearchConfiguration::labelling(None, CanonOutput::Sha256Digest),
++        |run| {
++            view.checked_read(|view| {
++                labelled(view, Scope::Dataset, run, |labelling| {
++                    stream_document::<D>(labelling, run, hasher)
++                })
++            })
++            .map_err(CanonError::Read)?
++        },
++    )
++}
++
+ /// The digest of the canonical line sequence.
+ fn digest(labelling: &Labelling<impl Copy>) -> Digest32 {
+     Digest32::new(labelling.labelled().digest)
+diff --git crates/rdf-core/src/ir/canon/order_tests.rs crates/rdf-core/src/ir/canon/order_tests.rs
+index 970eaf771..14e1c119a 100644
+--- crates/rdf-core/src/ir/canon/order_tests.rs
++++ crates/rdf-core/src/ir/canon/order_tests.rs
+@@ -110,6 +110,14 @@ fn check_flat<D: FallibleDatasetView>(view: &D) {
+             try_flat_blake3_view(view, hash, &mut control()).unwrap(),
+             *purrdf_hash::blake3::hash(flat.nquads().as_bytes()).as_bytes()
+         );
++        // The measured entry streams the same bytes and counts exactly them.
++        let measured =
++            try_flat_blake3_measured_view(view, hash, &mut control()).expect("measured digest");
++        assert_eq!(
++            measured.digest,
++            *purrdf_hash::blake3::hash(flat.nquads().as_bytes()).as_bytes()
++        );
++        assert_eq!(measured.bytes, flat.nquads().len() as u64);
+     }
+ }
+ 
+@@ -569,6 +577,16 @@ fn statements() -> [Arc<RdfDataset>; 2] {
+ fn flat_datasets_with_nested_terms_escapes_and_many_blanks_match_the_oracle() {
+     check(&*mixed());
+     check_flat(&*mixed());
++    check_flat(&*RdfDatasetBuilder::new().freeze().unwrap());
++    let mut plain = RdfDatasetBuilder::new();
++    let (s, p) = (plain.intern_iri(S).unwrap(), plain.intern_iri(P).unwrap());
++    for k in 0..3 {
++        let o = plain
++            .intern_literal(RdfLiteral::simple(format!("v{k}")))
++            .unwrap();
++        plain.push_quad(s, p, o, None).unwrap();
++    }
++    check_flat(&*plain.freeze().unwrap());
+     for dataset in statements() {
+         check(&*dataset);
+         check_flat(&*dataset);
+diff --git crates/rdf-core/src/ir/canon/output.rs crates/rdf-core/src/ir/canon/output.rs
+index 1042225b8..2c4636317 100644
+--- crates/rdf-core/src/ir/canon/output.rs
++++ crates/rdf-core/src/ir/canon/output.rs
+@@ -66,6 +66,29 @@ impl Absorb for purrdf_hash::blake3::Hasher {
+     }
+ }
+ 
++/// A running hash that also counts the bytes it is given.
++pub(super) struct Counting<'n, H> {
++    inner: H,
++    bytes: &'n mut u64,
++}
++
++impl<'n, H> Counting<'n, H> {
++    pub(super) const fn new(inner: H, bytes: &'n mut u64) -> Self {
++        Self { inner, bytes }
++    }
++}
++
++impl<H: Absorb> Absorb for Counting<'_, H> {
++    fn absorb(&mut self, bytes: &[u8]) {
++        *self.bytes += bytes.len() as u64;
++        self.inner.absorb(bytes);
++    }
++
++    fn digest(self) -> [u8; 32] {
++        self.inner.digest()
++    }
++}
++
+ /// The digest sink: every line is copied into one reused 64 KiB buffer, and each
+ /// full buffer is hashed and emptied; no line and no document is kept.
+ ///
+diff --git crates/rdf-core/src/ir/pipeline_bundle.rs crates/rdf-core/src/ir/pipeline_bundle.rs
+index 3c257477f..c3e78b102 100644
+--- crates/rdf-core/src/ir/pipeline_bundle.rs
++++ crates/rdf-core/src/ir/pipeline_bundle.rs
+@@ -33,7 +33,7 @@
+ //! ## Content addressing
+ //!
+ //! [`PipelineBundle::digest`] is a SHA-256 fold over, in a fixed order:
+-//! 1. the canonical document text of the dataset ([`try_canonicalize_view`]),
++//! 1. the canonical document text of the dataset (streamed by `try_hash_document_view`),
+ //! 2. each lookaside resource's identity (its name, else IRI, else path) with
+ //!    its `content_digest` (empty when none is declared), as pairs SORTED by
+ //!    identity then digest,
+@@ -42,7 +42,7 @@
+ //!    ([`DatasetProvenance::public_projection`]).
+ //!
+ //! [`PipelineViewBundle::digest`] folds exactly the same four sections, reading
+-//! section 1 through the shared [`try_canonicalize_view`] implementation. A
++//! section 1 through the shared `try_hash_document_view` implementation. A
+ //! composite view and the flat dataset holding the same content canonicalize
+ //! byte-identically, so the two folds agree by construction rather than by
+ //! coincidence.
+@@ -118,7 +118,7 @@ use std::sync::{Arc, Mutex};
+ use sha2::{Digest, Sha256};
+ 
+ use super::canon::CanonError;
+-use super::canon::labelled::{try_canonicalize_view, try_graph_digest_view as graph_digest32};
++use super::canon::labelled::{try_graph_digest_view as graph_digest32, try_hash_document_view};
+ use super::composite::{CompositeDatasetView, CompositeSource, GraphPlacement, owned_value};
+ use super::dataset::RdfDataset;
+ use super::mutable::DeltaDatasetView;
+@@ -532,7 +532,7 @@ impl<H> BundleCore<H> {
+     /// Sections 2–4 of the identity fold: the SORTED lookaside resource identities
+     /// and digests, the SORTED blob digests, and the runtime-id-free public
+     /// provenance projection. Shared verbatim by
+-    /// [`digest`](Self::digest_over) and [`pipeline_root`](Self::pipeline_root_over).
++    /// `digest` and [`pipeline_root`](Self::pipeline_root_over).
+     fn fold_sidecars(&self, hasher: &mut Sha256) {
+         // 2. Each lookaside resource's identity + content_digest, collected + SORTED
+         //    so the fold is order-independent. The resource IDENTITY (name, falling
+@@ -593,16 +593,20 @@ impl<H> BundleCore<H> {
+         }
+     }
+ 
+-    /// Canonicalize either carrier and fold its complete content identity.
++    /// Canonicalize either carrier and fold its complete content identity. The
++    /// canonical document is hashed as its lines are produced and never built.
+     fn digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
+         &self,
+         view: &D,
+         control: &mut crate::CanonicalizationControl<'_>,
+     ) -> Result<ContentDigest, PipelineBundleError> {
+-        let canonical = try_canonicalize_view(view, control)
++        let mut hasher = Sha256::new();
++        try_hash_document_view(view, control, &mut hasher)
+             .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?;
+         DigestWorkCounter::bump(&self.work.dataset_canonicalizations);
+-        Ok(self.digest_over(canonical.nquads()))
++        hasher.update([SEP_SECTION]);
++        self.fold_sidecars(&mut hasher);
++        Ok(finish(hasher))
+     }
+ 
+     fn residue_digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
+@@ -611,18 +615,11 @@ impl<H> BundleCore<H> {
+         control: &mut crate::CanonicalizationControl<'_>,
+     ) -> Result<ContentDigest, PipelineBundleError> {
+         let residue = ResidueView(view);
+-        let canonical = try_canonicalize_view(&residue, control)
++        let mut hasher = Sha256::new();
++        try_hash_document_view(&residue, control, &mut hasher)
+             .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?;
+         DigestWorkCounter::bump(&self.work.residue_canonicalizations);
+-        Ok(ContentDigest::of(canonical.nquads().as_bytes()))
+-    }
+-
+-    fn digest_over(&self, canonical_nquads: &str) -> ContentDigest {
+-        let mut hasher = Sha256::new();
+-        hasher.update(canonical_nquads.as_bytes());
+-        hasher.update([SEP_SECTION]);
+-        self.fold_sidecars(&mut hasher);
+-        finish(hasher)
++        Ok(finish(hasher))
+     }
+ 
+     /// The pipeline root over already-computed leaves. See [`PIPELINE_ROOT_DOMAIN`]
+@@ -1634,7 +1631,7 @@ impl<H> PipelineViewBundle<H> {
+ 
+     /// The content [`ContentDigest`] of this carrier — the same four-section fold
+     /// [`PipelineBundle::digest`] performs, reading its first section through
+-    /// [`try_canonicalize_view`].
++    /// `try_hash_document_view`.
+     ///
+     /// # Errors
+     ///
+@@ -2642,6 +2639,75 @@ mod tests {
+         );
+     }
+ 
++    /// The streamed identity folds are byte-identical to hashing the built canonical
++    /// document: the carrier fold (document, separator, sidecars) and the residue
++    /// leaf, over named graphs, blank nodes, reifiers, the empty dataset, with and
++    /// without a sidecar.
++    #[test]
++    fn streamed_folds_equal_the_fold_over_the_built_document() {
++        let control = || crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None);
++        let mut blanks = RdfDatasetBuilder::new();
++        let p = iri(&mut blanks, "p");
++        let (b1, b2) = (
++            blanks
++                .intern_blank("a", crate::BlankScope::DEFAULT)
++                .unwrap(),
++            blanks.intern_blank("b", crate::BlankScope(3)).unwrap(),
++        );
++        let g = blanks
++            .intern_blank("g", crate::BlankScope::DEFAULT)
++            .unwrap();
++        blanks.push_quad(b1, p, b2, None).unwrap();
++        blanks.push_quad(b2, p, b1, Some(g)).unwrap();
++        let datasets = [
++            RdfDatasetBuilder::new().freeze().unwrap(),
++            dataset_with_named_graph(),
++            shared_reifier_dataset(true),
++            blanks.freeze().unwrap(),
++        ];
++        for dataset in datasets {
++            for sidecar in [false, true] {
++                let mut lookaside = RdfLookaside::default();
++                if sidecar {
++                    lookaside.resources.push(
++                        RdfLookasideResource::new(RdfLookasideKind::Reasoning)
++                            .with_name("closure")
++                            .with_digest("deadbeef"),
++                    );
++                }
++                let bundle = PipelineBundle::<SyntheticHandle>::new(
++                    Arc::clone(&dataset),
++                    lookaside,
++                    Arc::new(ContentStore::new()),
++                    DatasetProvenance::new(),
++                );
++                let built =
++                    super::super::canon::labelled::try_canonicalize_view(&*dataset, &mut control())
++                        .unwrap();
++                let mut oracle = Sha256::new();
++                oracle.update(built.nquads().as_bytes());
++                oracle.update([SEP_SECTION]);
++                bundle.core.fold_sidecars(&mut oracle);
++                assert_eq!(
++                    bundle.digest(&mut control()).unwrap(),
++                    finish(oracle),
++                    "carrier fold, sidecar: {sidecar}"
++                );
++
++                let residue = super::super::canon::labelled::try_canonicalize_view(
++                    &ResidueView(&*dataset),
++                    &mut control(),
++                )
++                .unwrap();
++                assert_eq!(
++                    bundle.residue_digest(&mut control()).unwrap(),
++                    ContentDigest::of(residue.nquads().as_bytes()),
++                    "residue leaf, sidecar: {sidecar}"
++                );
++            }
++        }
++    }
++
+     #[test]
+     fn digest_is_sensitive_to_a_lookaside_resource() {
+         let base = empty_bundle();
+diff --git crates/rdf-core/src/rdfc12.rs crates/rdf-core/src/rdfc12.rs
+index da7900592..69377561f 100644
+--- crates/rdf-core/src/rdfc12.rs
++++ crates/rdf-core/src/rdfc12.rs
+@@ -21,13 +21,13 @@ pub use crate::ir::canon::{
+     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
+     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
+     CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID, CANON_PROFILE_VERSION, CanonHash,
+-    CanonPresentation, RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE, RdfcActiveGroup, RdfcActivePath,
+-    RdfcCandidateProgress, RdfcGroupLabels, RdfcGroupObservation, RdfcGroupObservations,
+-    RdfcGroupStats, RdfcRefusalObservation, RdfcRootProgress, RdfcSearchContext,
+-    ReservedVocabulary, canonical_relabel, canonical_relabel_with_mapping, check_admissible,
+-    check_admissible_flat_view, check_admissible_view, try_canonical_blake3_view,
++    CanonPresentation, FlatBlake3Measured, RDFC_V2_CORPUS_POLICY, RESERVED_NAMESPACE,
++    RdfcActiveGroup, RdfcActivePath, RdfcCandidateProgress, RdfcGroupLabels, RdfcGroupObservation,
++    RdfcGroupObservations, RdfcGroupStats, RdfcRefusalObservation, RdfcRootProgress,
++    RdfcSearchContext, ReservedVocabulary, canonical_relabel, canonical_relabel_with_mapping,
++    check_admissible, check_admissible_flat_view, check_admissible_view, try_canonical_blake3_view,
+     try_canonical_sha256_view, try_canonicalize, try_canonicalize_flat_graph_view,
+     try_canonicalize_flat_view, try_canonicalize_graph_view, try_canonicalize_sha256_view,
+-    try_canonicalize_view, try_canonicalize_with, try_flat_blake3_view, try_flat_digest_view,
+-    try_graph_digest_view,
++    try_canonicalize_view, try_canonicalize_with, try_flat_blake3_measured_view,
++    try_flat_blake3_view, try_flat_digest_view, try_graph_digest_view,
+ };
+diff --git crates/rdf/benches/flat_view_canon_alloc.rs crates/rdf/benches/flat_view_canon_alloc.rs
+index 9428f1dd0..9cc7d9c8c 100644
+--- crates/rdf/benches/flat_view_canon_alloc.rs
++++ crates/rdf/benches/flat_view_canon_alloc.rs
+@@ -25,12 +25,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
+ 
+ use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
+ use purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY;
+-use purrdf_core::{CanonPhase, CanonicalizationControl};
++use purrdf_core::{CANON_CORPUS_POLICY, CanonPhase, CanonicalizationControl};
+ use purrdf_rdf::rdfc12::{
+     CanonHash, try_canonical_sha256_view, try_canonicalize_flat_view, try_canonicalize_sha256_view,
+-    try_flat_blake3_view, try_flat_digest_view,
++    try_flat_blake3_measured_view, try_flat_blake3_view, try_flat_digest_view,
+ };
+-use purrdf_rdf::{ContentDigest, RdfDataset, StopSignal};
++use purrdf_rdf::{
++    ContentDigest, ContentStore, DatasetProvenance, PipelineBundle, RdfDataset, RdfLookaside,
++    StopSignal, try_canonicalize_view,
++};
++use sha2::Digest as _;
+ 
+ #[path = "support/canon_load.rs"]
+ mod load;
+@@ -295,6 +299,68 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
+     let pre = with_pre_output.then(|| pre_output_peak(&blake3_run));
+     line("flat_blake3_streamed", &f, &flat, m, pre.as_ref());
+ 
++    // The streamed route that also counts the document it never builds.
++    let window = WholeProcessWindow::open();
++    let measured =
++        try_flat_blake3_measured_view(ds, HASH, &mut control(None)).expect("measured BLAKE3");
++    let m = window.close();
++    assert_eq!(
++        purrdf_hash::hex::encode(&measured.digest),
++        flat.blake3,
++        "measured BLAKE3 equals the document BLAKE3"
++    );
++    assert_eq!(
++        measured.bytes, flat.doc_bytes as u64,
++        "the measured length is the document's length"
++    );
++    let measured_run =
++        |c: &mut CanonicalizationControl<'_>| try_flat_blake3_measured_view(ds, HASH, c).is_ok();
++    let pre = with_pre_output.then(|| pre_output_peak(&measured_run));
++    line("flat_blake3_measured", &f, &flat, m, pre.as_ref());
++
++    // The pipeline bundle's identity fold hashes the default canonical document as
++    // its lines are spelled; the built route is the fold it replaced. Both rows
++    // carry the default document's own length and digests.
++    let bundle = PipelineBundle::<()>::new(
++        Arc::clone(&loaded.dataset),
++        RdfLookaside::default(),
++        Arc::new(ContentStore::new()),
++        DatasetProvenance::new(),
++    );
++    // The built route: the document is built, then hashed, then the separator and the
++    // sidecar fold (three section separators for a bundle with no sidecar) follow.
++    let window = WholeProcessWindow::open();
++    let built = try_canonicalize_view(
++        ds,
++        &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
++    )
++    .expect("default document");
++    let mut hasher = sha2::Sha256::new();
++    hasher.update(built.nquads().as_bytes());
++    hasher.update([0x1d_u8; 3]);
++    let built_fold = ContentDigest::from_raw(hasher.finalize().into());
++    let m = window.close();
++    // Metadata is taken outside both windows.
++    let built_document = Document::of(built.nquads());
++    drop(built);
++    line("bundle_digest_built_document", &f, &built_document, m, None);
++
++    let window = WholeProcessWindow::open();
++    let folded = bundle
++        .digest(&mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None))
++        .expect("bundle digest");
++    let m = window.close();
++    assert_eq!(
++        folded, built_fold,
++        "the streamed bundle fold equals the built-document fold"
++    );
++    assert_ne!(
++        folded.to_hex(),
++        built_document.sha256,
++        "the bundle fold adds its sections to the document"
++    );
++    line("bundle_digest_streamed", &f, &built_document, m, None);
++
+     // The overlay presentation is a different document on the reifier shape, so its
+     // length and digests come from its own result.
+     let window = WholeProcessWindow::open();
+diff --git crates/text/README.md crates/text/README.md
+index baf9ba678..2e75621d8 100644
+--- crates/text/README.md
++++ crates/text/README.md
+@@ -113,6 +113,12 @@ effective statement additions and removals. The inputs use the same carrier
+ profile as the index. Both asserted and annotation literal rows count, including
+ a literal present in both layers. Reversing the delta must recover the indexed
+ source fingerprint; missing additions and incomplete deltas are typed refusals.
++Each removed row must also be held by the index. The index keeps a sorted
++directory of the digest of every selected source row, token-less rows included,
++once per occurrence. A removal consumes one occurrence of its row digest, and a
++row that is absent or removed more often than held is refused with
++`TextDeltaError::UnheldRemoval`. The directory follows every applied delta. It
++lives in memory beside the index and is not part of either fingerprint.
+ The next source also refreshes predicate coverage for nonliteral changes.
+ 
+ Only changed documents are analyzed, using their complete key:
+diff --git crates/text/benches/search.rs crates/text/benches/search.rs
+index 69f29d7da..7fe49852a 100644
+--- crates/text/benches/search.rs
++++ crates/text/benches/search.rs
+@@ -115,45 +115,58 @@ fn skewed_term(rng: &mut SplitMix64) -> u64 {
+     smallest
+ }
+ 
++/// The generated text of every document, in document order.
++fn texts() -> Vec<String> {
++    let mut generator = SplitMix64::new(SEED);
++    (0..DOCUMENTS)
++        .map(|_| {
++            let mut text = String::new();
++            for token in 0..TOKENS_PER_DOCUMENT {
++                if token > 0 {
++                    text.push(' ');
++                }
++                text.push_str("term");
++                // Fixed width, so the dictionary's sorted order is its numeric
++                // order and the generated text is trivially readable in a profile.
++                let ordinal = skewed_term(&mut generator);
++                for digit in (0..4).rev() {
++                    let place = 10_u64.pow(digit);
++                    let value = (ordinal / place) % 10;
++                    text.push(char::from(
++                        b'0' + u8::try_from(value).expect("a digit is one byte"),
++                    ));
++                }
++            }
++            text
++        })
++        .collect()
++}
++
++/// A frozen dataset of `(document ordinal, text)` rows, every literal untagged
++/// and in the default graph.
++fn dataset_of<'a>(rows: impl IntoIterator<Item = (u32, &'a str)>) -> Arc<RdfDataset> {
++    let mut builder = RdfDatasetBuilder::new();
++    let note = builder.intern_iri(NOTE).unwrap();
++    for (document, text) in rows {
++        let subject = builder
++            .intern_iri(&format!("https://example.org/doc/{document:04}"))
++            .unwrap();
++        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
++        builder.push_quad(subject, note, literal, None).unwrap();
++    }
++    builder
++        .freeze()
++        .expect("the generated corpus must validate")
++}
++
+ /// The generated corpus, as one frozen dataset.
+ ///
+ /// Every literal is untagged and in the default graph, so the index holds a
+ /// single `(graph, language)` partition and a ceiling therefore bounds one
+ /// heap rather than being split across several.
+ fn corpus() -> Arc<RdfDataset> {
+-    let mut generator = SplitMix64::new(SEED);
+-    let mut builder = RdfDatasetBuilder::new();
+-    let note = builder.intern_iri(NOTE).unwrap();
+-
+-    let mut text = String::new();
+-    for document in 0..DOCUMENTS {
+-        text.clear();
+-        for token in 0..TOKENS_PER_DOCUMENT {
+-            if token > 0 {
+-                text.push(' ');
+-            }
+-            text.push_str("term");
+-            // Fixed width, so the dictionary's sorted order is its numeric order
+-            // and the generated text is trivially readable in a profile.
+-            let ordinal = skewed_term(&mut generator);
+-            for digit in (0..4).rev() {
+-                let place = 10_u64.pow(digit);
+-                let value = (ordinal / place) % 10;
+-                text.push(char::from(
+-                    b'0' + u8::try_from(value).expect("a digit is one byte"),
+-                ));
+-            }
+-        }
+-        let subject = builder
+-            .intern_iri(&format!("https://example.org/doc/{document:04}"))
+-            .unwrap();
+-        let literal = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+-        builder.push_quad(subject, note, literal, None).unwrap();
+-    }
+-
+-    builder
+-        .freeze()
+-        .expect("the generated corpus must validate")
++    let texts = texts();
++    dataset_of((0..DOCUMENTS).zip(texts.iter().map(String::as_str)))
+ }
+ 
+ /// The language tags the multi-partition corpus spreads its documents across.
+@@ -262,6 +275,32 @@ fn benchmark(criterion: &mut Bench) {
+         );
+     });
+ 
++    // One document's text replaced: the delta names that one removed and one
++    // added row, and the next source is the corpus with the replacement.
++    let texts = texts();
++    let replacement = "term0001 term0002 term0003";
++    let removed = dataset_of([(7, texts[7].as_str())]);
++    let added = dataset_of([(7, replacement)]);
++    let next = dataset_of(
++        (0..DOCUMENTS).zip(
++            texts
++                .iter()
++                .enumerate()
++                .map(|(at, text)| if at == 7 { replacement } else { text.as_str() }),
++        ),
++    );
++    group.bench_function("apply_delta_one_document", |bencher| {
++        bencher.iter_batched(
++            || index.clone(),
++            |index| {
++                index
++                    .with_delta(black_box(&*next), black_box(&*added), black_box(&*removed))
++                    .expect("the genuine delta applies")
++            },
++            BatchSize::SmallInput,
++        );
++    });
++
+     group.bench_function("search_unbounded", |bencher| {
+         bencher.iter(|| {
+             select(
+diff --git crates/text/src/error.rs crates/text/src/error.rs
+index a4f7e8d9e..ee96fddfd 100644
+--- crates/text/src/error.rs
++++ crates/text/src/error.rs
+@@ -53,6 +53,12 @@ pub enum TextDeltaError {
+         /// Population independently observed in the next source.
+         observed: u128,
+     },
++    /// A removed row is not among the rows the index holds, or is removed
++    /// more often than it is held.
++    UnheldRemoval {
++        /// Canonical selected removal ordinal.
++        ordinal: usize,
++    },
+     /// The original source, analysis, capacity or ranking refusal.
+     Indexing(TextError),
+     /// The delta was analyzed under a different resolved law.
+@@ -106,6 +112,10 @@ impl core::fmt::Display for TextDeltaError {
+                 f,
+                 "text delta coverage mismatch for {predicate:?}: {before} previous, {added} added, {removed} removed, {observed} observed"
+             ),
++            Self::UnheldRemoval { ordinal } => write!(
++                f,
++                "text delta removal {ordinal} is not a row the index holds"
++            ),
+             Self::Indexing(cause) => cause.fmt(f),
+             Self::AnalyzerMismatch { expected, actual } => write!(
+                 f,
+@@ -138,6 +148,7 @@ impl std::error::Error for TextDeltaError {
+             | Self::SourceOverlap { .. }
+             | Self::MissingAddition { .. }
+             | Self::CoverageMismatch { .. }
++            | Self::UnheldRemoval { .. }
+             | Self::SourceMismatch { .. } => None,
+         }
+     }
+@@ -157,6 +168,9 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
+             "before" => Unsigned(*before), "added" => Unsigned(*added),
+             "removed" => Unsigned(*removed), "observed" => Unsigned(*observed),
+         },
++        UnheldRemoval { ordinal } => "text-delta-unheld-removal" {
++            "ordinal" => Unsigned(*ordinal as u128),
++        },
+         Indexing(cause) => "text-delta-indexing" { "cause" => Cause(cause) },
+         AnalyzerMismatch { expected, actual } => "text-delta-analyzer-mismatch" {
+             "expected" => Bytes(expected), "actual" => Bytes(actual),
+diff --git crates/text/src/index.rs crates/text/src/index.rs
+index 651905720..900b54d13 100644
+--- crates/text/src/index.rs
++++ crates/text/src/index.rs
+@@ -102,8 +102,8 @@ const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/ind
+ const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v2");
+ 
+ mod source_digest;
+-use source_digest::SourceDigest;
+ pub use source_digest::source_fingerprint;
++use source_digest::{SourceDigest, row_directory, row_hashes};
+ mod token_streams;
+ use token_streams::TokenTable;
+ pub(crate) use token_streams::{Slice, Table};
+@@ -794,6 +794,10 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
+     source_fingerprint: [u8; FINGERPRINT_BYTES],
+     /// Reversible source accounting, retained independently of its published hash.
+     source_digest: SourceDigest,
++    /// The hash of every selected source row, token-less rows included, sorted,
++    /// with one entry per occurrence. A delta's removed rows are joined against
++    /// it exactly. Memory only: derived from the source rows, never fingerprinted.
++    row_directory: Table<[u8; 32]>,
+     /// Original source-owned observation for independently discovering changes.
+     source_version: Option<purrdf_core::source::SourceVersion>,
+     /// Which configured predicates the build's walk found a statement for.
+@@ -893,7 +897,8 @@ impl<P: CorpusProfile> TextIndex<P> {
+     {
+         let (rows, coverage) = collect_rows(dataset, config)?;
+         let version = dataset.source_version().map_err(TextError::source_read)?;
+-        let source = SourceDigest::from_rows(&rows);
++        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
++        let source = SourceDigest::from_hashes(hashes.iter().copied());
+         let (documents, dictionary) = analyze_rows(&rows, config)?;
+         let mut index = Self::assemble(
+             config.clone(),
+@@ -904,6 +909,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             RankingProfile::single_field(),
+         )?;
+         index.source_version = version;
++        index.row_directory = row_directory(hashes)?;
+         dataset
+             .checked_read(|_| ())
+             .map_err(TextError::source_read)?;
+@@ -928,7 +934,8 @@ impl<P: CorpusProfile> TextIndex<P> {
+         }
+         let (rows, coverage) = collect_rows(dataset, config)?;
+         let version = dataset.source_version().map_err(TextError::source_read)?;
+-        let source = SourceDigest::from_rows(&rows);
++        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
++        let source = SourceDigest::from_hashes(hashes.iter().copied());
+         let (documents, dictionary) = analyze_rows(&rows, config)?;
+         let mut index = Self::assemble(
+             config.clone(),
+@@ -939,6 +946,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             profile,
+         )?;
+         index.source_version = version;
++        index.row_directory = row_directory(hashes)?;
+         dataset
+             .checked_read(|_| ())
+             .map_err(TextError::source_read)?;
+@@ -2018,6 +2026,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             fingerprint: [0; FINGERPRINT_BYTES],
+             source_fingerprint: source.fingerprint::<P>(),
+             source_digest: source,
++            row_directory: Table::default(),
+             source_version: None,
+             coverage,
+         };
+diff --git crates/text/src/index/delta.rs crates/text/src/index/delta.rs
+index 07ac6e04b..028683182 100644
+--- crates/text/src/index/delta.rs
++++ crates/text/src/index/delta.rs
+@@ -10,11 +10,12 @@ use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
+ use purrdf_core::{GraphSelector, StatisticsStream};
+ use purrdf_hash::multiset::Multiset256;
+ 
++use super::source_digest::row_hashes;
+ use super::{
+     CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
+     analyze_rows, collect_rows, collect_subject_rows,
+ };
+-use super::{StoredToken, share_buffer};
++use super::{StoredToken, Table, share_buffer};
+ use crate::surface::postings::{Joined, join_by};
+ use crate::{TextDeltaError, TextError};
+ 
+@@ -62,10 +63,14 @@ impl<P: CorpusProfile> TextIndex<P> {
+             .map(|row| &row.subject)
+             .collect();
+         let rows = collect_subject_rows(next, &self.config, &subjects)?;
++        let added_hashes: Vec<[u8; 32]> = row_hashes(&additions).collect();
++        let removed_hashes: Vec<[u8; 32]> = row_hashes(&removals).collect();
++        let directory = self.directory_after(&added_hashes, &removed_hashes)?;
+         let source = validate_delta(
+             &rows,
+             &additions,
+-            &removals,
++            &added_hashes,
++            &removed_hashes,
+             self.source_digest,
+             observed_source,
+         )?;
+@@ -78,6 +83,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+         let source_fingerprint = source.fingerprint::<P>();
+         if source_fingerprint == self.source_fingerprint {
+             self.coverage = coverage;
++            self.row_directory = directory;
+             self.source_version = version;
+             finish_read(next)?;
+             return Ok(self);
+@@ -103,6 +109,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+         self.merge_changed(partial, &changed)?;
+         self.source_fingerprint = source_fingerprint;
+         self.source_digest = source;
++        self.row_directory = directory;
+         self.coverage = coverage;
+         self.source_version = version;
+         self.fingerprint = self.compute_fingerprint();
+@@ -113,6 +120,29 @@ impl<P: CorpusProfile> TextIndex<P> {
+         Ok(self)
+     }
+ 
++    /// The row directory after the delta. Each removed row consumes one
++    /// occurrence of its hash in the pre-delta directory, so a row the index
++    /// never held, or one removed more often than held, is refused whatever
++    /// the additive digest and populations say. Token-less rows are held too.
++    fn directory_after(
++        &self,
++        added: &[[u8; 32]],
++        removed: &[[u8; 32]],
++    ) -> Result<Table<[u8; 32]>, TextDeltaError> {
++        let mut directory = self.row_directory.clone();
++        for (ordinal, hash) in removed.iter().enumerate() {
++            let Ok(at) = directory.binary_search_by(|held| held.cmp(hash)) else {
++                return Err(TextDeltaError::UnheldRemoval { ordinal });
++            };
++            directory = directory.remove(at)?;
++        }
++        for hash in added {
++            let at = directory.partition_point(|held| held < hash);
++            directory = directory.insert(at, *hash)?;
++        }
++        Ok(directory)
++    }
++
+     /// Obtain next-source evidence independently of the requested additions and
+     /// removals. Neither branch enumerates the complete next source.
+     fn observe_source<D: DatasetView>(&self, next: &D) -> Result<ObservedSource, TextDeltaError>
+@@ -454,7 +484,8 @@ type DocumentIdentity<'a, P> = (
+ fn validate_delta<P: CorpusProfile>(
+     rows: &[SourceRow<P>],
+     added: &[SourceRow<P>],
+-    removed: &[SourceRow<P>],
++    added_hashes: &[[u8; 32]],
++    removed_hashes: &[[u8; 32]],
+     mut expected: SourceDigest,
+     mut prior: SourceDigest,
+ ) -> Result<SourceDigest, TextDeltaError> {
+@@ -466,11 +497,11 @@ fn validate_delta<P: CorpusProfile>(
+             Joined::Right((ordinal, _)) => return Err(TextDeltaError::MissingAddition { ordinal }),
+         }
+     }
+-    for row in added {
+-        prior.remove(row);
++    for &hash in added_hashes {
++        prior.remove_hash(hash);
+     }
+-    for row in removed {
+-        prior.insert(row);
++    for &hash in removed_hashes {
++        prior.insert_hash(hash);
+     }
+     if expected != prior {
+         return Err(TextDeltaError::SourceMismatch {
+@@ -478,11 +509,11 @@ fn validate_delta<P: CorpusProfile>(
+             actual: prior.fingerprint::<P>(),
+         });
+     }
+-    for row in removed {
+-        expected.remove(row);
++    for &hash in removed_hashes {
++        expected.remove_hash(hash);
+     }
+-    for row in added {
+-        expected.insert(row);
++    for &hash in added_hashes {
++        expected.insert_hash(hash);
+     }
+     Ok(expected)
+ }
+@@ -538,6 +569,10 @@ mod tests {
+ 
+     fn assert_fresh<P: CorpusProfile>(actual: &TextIndex<P>, fresh: &TextIndex<P>) {
+         assert_eq!(actual.source_digest, fresh.source_digest);
++        assert_eq!(
++            actual.row_directory.iter().collect::<Vec<_>>(),
++            fresh.row_directory.iter().collect::<Vec<_>>()
++        );
+         assert_eq!(actual.source_fingerprint, fresh.source_fingerprint);
+         assert_eq!(actual.fingerprint, fresh.fingerprint);
+         assert_eq!(actual.coverage, fresh.coverage);
+@@ -1063,6 +1098,89 @@ mod tests {
+         );
+     }
+ 
++    /// The additive source digest and the populations cannot show that a
++    /// removed row was indexed. Forge an index whose recorded digest and
++    /// population already include a row it never held: the sums and the
++    /// population balance, and only the exact row directory refuses it.
++    #[test]
++    fn text_delta_refuses_removals_the_index_never_held() {
++        let held = ("urn:s", "river bank", None, None, false);
++        let before = dataset(&[held]);
++        let after = dataset(&[]);
++        let genuine = TextIndex::from_dataset(&*before, &config()).unwrap();
++        let applied = genuine
++            .clone()
++            .with_delta(&*after, &*dataset(&[]), &*before)
++            .unwrap();
++        assert_fresh(
++            &applied,
++            &TextIndex::from_dataset(&*after, &config()).unwrap(),
++        );
++
++        let (no_rows, no_coverage) = collect_rows(&*dataset(&[]), &config()).unwrap();
++        for row in [
++            ("urn:absent", "", None, None, false),
++            ("urn:s", "", None, None, false),
++            ("urn:s", "river", None, None, false),
++            ("urn:s", "River Bank", None, None, false),
++            ("urn:s", "bank river", None, None, false),
++            ("urn:s", "river bank", Some("en"), None, false),
++        ] {
++            let removed = dataset(&[row]);
++            let (rows, coverage) = collect_rows(&*removed, &config()).unwrap();
++            let mut forged = genuine.clone();
++            forged.source_digest.insert(&rows[0]);
++            forged.coverage.represented[0] += 1;
++            validate_delta(
++                &[],
++                &no_rows,
++                &[],
++                &row_hashes(&rows).collect::<Vec<_>>(),
++                forged.source_digest,
++                genuine.source_digest,
++            )
++            .expect("the forged digest balances the delta");
++            forged
++                .coverage
++                .with_delta(&config(), &no_coverage, &coverage, &genuine.coverage)
++                .expect("the forged population balances the delta");
++            assert_eq!(
++                forged
++                    .with_delta(&*before, &*dataset(&[]), &*removed)
++                    .unwrap_err(),
++                TextDeltaError::UnheldRemoval { ordinal: 0 },
++                "{row:?}"
++            );
++        }
++    }
++
++    /// A row occurring twice is held twice, and the directory follows every
++    /// delta, so a later removal is judged against the updated state.
++    #[test]
++    fn text_delta_row_directory_follows_successive_deltas() {
++        let row = ("urn:s", "river bank", None, None, false);
++        let twin = ("urn:s", "river bank", None, None, true);
++        let empty = dataset(&[]);
++        let one = dataset(&[row]);
++        let two = dataset(&[row, twin]);
++        let mut index = TextIndex::from_dataset(&*empty, &config()).unwrap();
++        for (next, added, removed) in [
++            (&two, &two, &empty),
++            (&one, &empty, &dataset(&[twin])),
++            (&empty, &empty, &one),
++        ] {
++            index = index.with_delta(&**next, &**added, &**removed).unwrap();
++            assert_fresh(
++                &index,
++                &TextIndex::from_dataset(&**next, &config()).unwrap(),
++            );
++        }
++        assert!(matches!(
++            index.with_delta(&*empty, &*empty, &*one),
++            Err(TextDeltaError::UnheldRemoval { ordinal: 0 })
++        ));
++    }
++
+     #[test]
+     fn text_delta_graph_free_carrier_matches_fresh() {
+         use purrdf_core::ir::TripleDataset;
+diff --git crates/text/src/index/source_digest.rs crates/text/src/index/source_digest.rs
+index 704489bed..fc87b4aeb 100644
+--- crates/text/src/index/source_digest.rs
++++ crates/text/src/index/source_digest.rs
+@@ -62,16 +62,33 @@ impl SourceDigest {
+     pub(super) fn from_rows<'a, P: CorpusProfile + 'a>(
+         rows: impl IntoIterator<Item = &'a SourceRow<P>>,
+     ) -> Self {
++        Self::from_hashes(row_hashes(rows))
++    }
++
++    /// Sum already computed row hashes, so a caller that also needs them for
++    /// another purpose hashes each row once.
++    pub(super) fn from_hashes(hashes: impl IntoIterator<Item = [u8; 32]>) -> Self {
+         let mut digest = Self::default();
+-        for hash in row_hashes(rows) {
+-            digest
+-                .state
+-                .insert(hash)
+-                .expect("a finite source population fits u128");
++        for hash in hashes {
++            digest.insert_hash(hash);
+         }
+         digest
+     }
+ 
++    pub(super) fn insert_hash(&mut self, hash: [u8; 32]) {
++        self.state
++            .insert(hash)
++            .expect("a finite source population fits u128");
++    }
++
++    /// The caller establishes row membership before subtracting it.
++    pub(super) fn remove_hash(&mut self, hash: [u8; 32]) {
++        self.state
++            .remove(hash)
++            .expect("source membership was validated");
++    }
++
++    #[cfg(test)]
+     pub(super) fn insert<P: CorpusProfile>(&mut self, row: &SourceRow<P>) {
+         self.state
+             .insert(row_hash(row))
+@@ -80,6 +97,7 @@ impl SourceDigest {
+ 
+     /// The caller establishes row membership before subtracting it. Population
+     /// alone cannot prove membership in a multiset.
++    #[cfg(test)]
+     pub(super) fn remove<P: CorpusProfile>(&mut self, row: &SourceRow<P>) {
+         self.state
+             .remove(row_hash(row))
+@@ -104,6 +122,16 @@ pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+     })
+ }
+ 
++/// The sorted per-row hashes of every selected source row, token-less rows
++/// included, each repeated as often as the row occurs.
++pub(super) fn row_directory(
++    mut hashes: Vec<[u8; 32]>,
++) -> Result<super::Table<[u8; 32]>, crate::TextError> {
++    hashes.sort_unstable();
++    super::Table::from_streams(hashes)
++}
++
++#[cfg(test)]
+ fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
+     row_hashes(std::iter::once(row))
+         .next()
+@@ -113,7 +141,7 @@ fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
+ /// Use the original core row law so independently sealed native metadata and
+ /// selected text rows consume exactly the same preimages. No literal text is
+ /// copied into an owned term or output buffer.
+-fn row_hashes<'a, P: CorpusProfile + 'a>(
++pub(super) fn row_hashes<'a, P: CorpusProfile + 'a>(
+     rows: impl IntoIterator<Item = &'a SourceRow<P>>,
+ ) -> impl Iterator<Item = [u8; 32]> {
+     rows.into_iter().map(|row| {
+diff --git helpers-ledger.toml helpers-ledger.toml
+index dfb9872cf..8dc7db2bb 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -2165,6 +2165,16 @@ criterion = "a"
+ anchor = "purrdf_hash::arch::x86_64::hex_encode"
+ reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."
+ 
++[[distinct]]
++members = [
++    "purrdf_text::bench_crate::search::dataset_of",
++    "purrdf_text::test_crate::wasm_determinism::corpus_dataset",
++]
++kind = "body"
++criterion = "b"
++anchor = "purrdf_text::bench_crate::search::dataset_of"
++reason = "Two fixture builders over different row keys: the bench numbers its documents from a generated ordinal and takes the text by iterator so the same builder serves the full corpus and its removed-row subsets, while the wasm test names each document by a local name from a fixed table; a bench target and a test target share no module, so a shared body would need a path include that couples a measured loop to a frozen test."
++
+ [[distinct]]
+ members = [
+     "purrdf_retrieval::test_crate::boundary::ScriptedStream::next",
+@@ -3387,7 +3397,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3403,7 +3413,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3419,7 +3429,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3435,7 +3445,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3451,7 +3461,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3468,7 +3478,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3485,7 +3495,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3501,7 +3511,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3517,7 +3527,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3533,7 +3543,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3549,7 +3559,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3566,7 +3576,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3583,7 +3593,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3600,7 +3610,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3617,7 +3627,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3634,7 +3644,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3651,7 +3661,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3668,7 +3678,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3685,7 +3695,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3702,7 +3712,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3715,7 +3725,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3728,7 +3738,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3745,7 +3755,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3762,7 +3772,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3779,7 +3789,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3796,7 +3806,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3814,7 +3824,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3832,7 +3842,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3846,7 +3856,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:eedeecf1469d8070",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3863,7 +3873,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3880,7 +3890,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3897,7 +3907,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3914,7 +3924,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3933,7 +3943,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3952,7 +3962,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3971,7 +3981,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3990,7 +4000,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "encode_prepared_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4007,7 +4017,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4024,7 +4034,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4041,7 +4051,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:70a36b655d3a8322"
++constructors = "source:907d99921ec40858"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]

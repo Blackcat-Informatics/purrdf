@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1376-change-feed-and-segmented-change-path",
+  "branch": "paudley/1376-change-feed-and-segmented-change-path",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "a46066d505e212d3caf7d0436dcfbd5f2bc36926",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1376-change-feed-and-segmented-change-path/.stage/sync/sync/20261118T170329-f9565fdf21b444cfaa3939a18c83cf1b",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "51204a4454fa2e2d7b175ea3cc45da2442ce7536",
+  "merge_bases": [
+    "c2bdbb06a04d561b426d8c0e397f11ecbdcad8fa"
+  ],
+  "merge_index": "85839655ea53b7518e5aaf65463e4667656db05057998e30c5c968c0e4bed518",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "beddae1cc3153059c7f3bb61fcb7f37f36c9d0b3",
+  "candidate_patch": "candidate-f1492009373e40039a2d2e7e30943c21.patch",
+  "stdout_log": "commit-f1492009373e40039a2d2e7e30943c21.stdout.log",
+  "stderr_log": "commit-f1492009373e40039a2d2e7e30943c21.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 213.4221573260147,
+  "commit": "08bdb12160c113f67dc6571fe25cf67fa23f78cb",
+  "tree": "beddae1cc3153059c7f3bb61fcb7f37f36c9d0b3",
+  "exit_code": 0
+}

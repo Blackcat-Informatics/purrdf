@@ -1,0 +1,7 @@
+{"time": "2026-11-18T20:49:19.495158+00:00", "status": "started"}
+{"time": "2026-11-18T20:49:22.938662+00:00", "status": "merging"}
+{"time": "2026-11-18T20:49:24.481412+00:00", "status": "conflicted"}
+{"time": "2026-11-18T20:49:24.574699+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'helpers-ledger.toml'\n"}
+{"time": "2026-11-18T20:58:18.089491+00:00", "status": "committing", "candidate_tree": "a07b0692eca3eedb0658fb45c93a18fe14fe885a", "candidate_patch": "candidate-f322550a03d1463aaaa1877cb9bf716a.patch", "stdout_log": "commit-f322550a03d1463aaaa1877cb9bf716a.stdout.log", "stderr_log": "commit-f322550a03d1463aaaa1877cb9bf716a.stderr.log", "validation_records": []}
+{"time": "2026-11-18T20:58:49.261902+00:00", "status": "commit_returned", "exit_code": 0, "commit_duration_seconds": 31.168756114988355, "stdout_log": "commit-f322550a03d1463aaaa1877cb9bf716a.stdout.log", "stderr_log": "commit-f322550a03d1463aaaa1877cb9bf716a.stderr.log"}
+{"time": "2026-11-18T20:58:49.546196+00:00", "status": "completed", "commit": "1f0aa66f0b83ff393b5eefc73f26e2f06d44621c", "tree": "a07b0692eca3eedb0658fb45c93a18fe14fe885a", "exit_code": 0, "stdout_log": "commit-f322550a03d1463aaaa1877cb9bf716a.stdout.log", "stderr_log": "commit-f322550a03d1463aaaa1877cb9bf716a.stderr.log"}

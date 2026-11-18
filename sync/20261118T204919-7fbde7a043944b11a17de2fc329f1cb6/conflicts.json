@@ -1,0 +1,42 @@
+{
+  "CHANGELOG.md": [
+    {
+      "mode": "100644",
+      "oid": "5590d541581a784e8c7052d050a1a094d4ec0192",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "ce9a2264b88512f2ed7d0dc1ef8b1cdd8e678bf0",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "5137be75fafba4935e3cd41192ba3049f99b38ea",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "helpers-ledger.toml": [
+    {
+      "mode": "100644",
+      "oid": "6b4a3f076c781f95db0c8f2a4e6475469080fb60",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "dfb9872cf1b23b6fd3a9d019dc88ed923e8a8cc6",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "ec6f7c19a8729aefa3779666905b52a5b7b84a90",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ]
+}
