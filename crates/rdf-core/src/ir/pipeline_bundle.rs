@@ -33,7 +33,7 @@
 //! ## Content addressing
 //!
 //! [`PipelineBundle::digest`] is a SHA-256 fold over, in a fixed order:
-//! 1. the canonical document text of the dataset ([`try_canonicalize_view`]),
+//! 1. the canonical document text of the dataset (streamed by `try_hash_document_view`),
 //! 2. each lookaside resource's identity (its name, else IRI, else path) with
 //!    its `content_digest` (empty when none is declared), as pairs SORTED by
 //!    identity then digest,
@@ -42,7 +42,7 @@
 //!    ([`DatasetProvenance::public_projection`]).
 //!
 //! [`PipelineViewBundle::digest`] folds exactly the same four sections, reading
-//! section 1 through the shared [`try_canonicalize_view`] implementation. A
+//! section 1 through the shared `try_hash_document_view` implementation. A
 //! composite view and the flat dataset holding the same content canonicalize
 //! byte-identically, so the two folds agree by construction rather than by
 //! coincidence.
@@ -118,7 +118,7 @@ use std::sync::{Arc, Mutex};
 use sha2::{Digest, Sha256};
 
 use super::canon::CanonError;
-use super::canon::labelled::{try_canonicalize_view, try_graph_digest_view as graph_digest32};
+use super::canon::labelled::{try_graph_digest_view as graph_digest32, try_hash_document_view};
 use super::composite::{CompositeDatasetView, CompositeSource, GraphPlacement, owned_value};
 use super::dataset::RdfDataset;
 use super::mutable::DeltaDatasetView;
@@ -532,7 +532,7 @@ impl<H> BundleCore<H> {
     /// Sections 2–4 of the identity fold: the SORTED lookaside resource identities
     /// and digests, the SORTED blob digests, and the runtime-id-free public
     /// provenance projection. Shared verbatim by
-    /// [`digest`](Self::digest_over) and [`pipeline_root`](Self::pipeline_root_over).
+    /// `digest` and [`pipeline_root`](Self::pipeline_root_over).
     fn fold_sidecars(&self, hasher: &mut Sha256) {
         // 2. Each lookaside resource's identity + content_digest, collected + SORTED
         //    so the fold is order-independent. The resource IDENTITY (name, falling
@@ -593,16 +593,20 @@ impl<H> BundleCore<H> {
         }
     }
 
-    /// Canonicalize either carrier and fold its complete content identity.
+    /// Canonicalize either carrier and fold its complete content identity. The
+    /// canonical document is hashed as its lines are produced and never built.
     fn digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
         &self,
         view: &D,
         control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<ContentDigest, PipelineBundleError> {
-        let canonical = try_canonicalize_view(view, control)
+        let mut hasher = Sha256::new();
+        try_hash_document_view(view, control, &mut hasher)
             .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?;
         DigestWorkCounter::bump(&self.work.dataset_canonicalizations);
-        Ok(self.digest_over(canonical.nquads()))
+        hasher.update([SEP_SECTION]);
+        self.fold_sidecars(&mut hasher);
+        Ok(finish(hasher))
     }
 
     fn residue_digest_in<D: DatasetView<ReadError = core::convert::Infallible>>(
@@ -611,18 +615,11 @@ impl<H> BundleCore<H> {
         control: &mut crate::CanonicalizationControl<'_>,
     ) -> Result<ContentDigest, PipelineBundleError> {
         let residue = ResidueView(view);
-        let canonical = try_canonicalize_view(&residue, control)
+        let mut hasher = Sha256::new();
+        try_hash_document_view(&residue, control, &mut hasher)
             .map_err(|source| canon_refusal(CanonScopeName::Residue, source))?;
         DigestWorkCounter::bump(&self.work.residue_canonicalizations);
-        Ok(ContentDigest::of(canonical.nquads().as_bytes()))
-    }
-
-    fn digest_over(&self, canonical_nquads: &str) -> ContentDigest {
-        let mut hasher = Sha256::new();
-        hasher.update(canonical_nquads.as_bytes());
-        hasher.update([SEP_SECTION]);
-        self.fold_sidecars(&mut hasher);
-        finish(hasher)
+        Ok(finish(hasher))
     }
 
     /// The pipeline root over already-computed leaves. See [`PIPELINE_ROOT_DOMAIN`]
@@ -1634,7 +1631,7 @@ impl<H> PipelineViewBundle<H> {
 
     /// The content [`ContentDigest`] of this carrier — the same four-section fold
     /// [`PipelineBundle::digest`] performs, reading its first section through
-    /// [`try_canonicalize_view`].
+    /// `try_hash_document_view`.
     ///
     /// # Errors
     ///
@@ -2640,6 +2637,75 @@ mod tests {
             .unwrap(),
             "a different dataset changes the digest"
         );
+    }
+
+    /// The streamed identity folds are byte-identical to hashing the built canonical
+    /// document: the carrier fold (document, separator, sidecars) and the residue
+    /// leaf, over named graphs, blank nodes, reifiers, the empty dataset, with and
+    /// without a sidecar.
+    #[test]
+    fn streamed_folds_equal_the_fold_over_the_built_document() {
+        let control = || crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None);
+        let mut blanks = RdfDatasetBuilder::new();
+        let p = iri(&mut blanks, "p");
+        let (b1, b2) = (
+            blanks
+                .intern_blank("a", crate::BlankScope::DEFAULT)
+                .unwrap(),
+            blanks.intern_blank("b", crate::BlankScope(3)).unwrap(),
+        );
+        let g = blanks
+            .intern_blank("g", crate::BlankScope::DEFAULT)
+            .unwrap();
+        blanks.push_quad(b1, p, b2, None).unwrap();
+        blanks.push_quad(b2, p, b1, Some(g)).unwrap();
+        let datasets = [
+            RdfDatasetBuilder::new().freeze().unwrap(),
+            dataset_with_named_graph(),
+            shared_reifier_dataset(true),
+            blanks.freeze().unwrap(),
+        ];
+        for dataset in datasets {
+            for sidecar in [false, true] {
+                let mut lookaside = RdfLookaside::default();
+                if sidecar {
+                    lookaside.resources.push(
+                        RdfLookasideResource::new(RdfLookasideKind::Reasoning)
+                            .with_name("closure")
+                            .with_digest("deadbeef"),
+                    );
+                }
+                let bundle = PipelineBundle::<SyntheticHandle>::new(
+                    Arc::clone(&dataset),
+                    lookaside,
+                    Arc::new(ContentStore::new()),
+                    DatasetProvenance::new(),
+                );
+                let built =
+                    super::super::canon::labelled::try_canonicalize_view(&*dataset, &mut control())
+                        .unwrap();
+                let mut oracle = Sha256::new();
+                oracle.update(built.nquads().as_bytes());
+                oracle.update([SEP_SECTION]);
+                bundle.core.fold_sidecars(&mut oracle);
+                assert_eq!(
+                    bundle.digest(&mut control()).unwrap(),
+                    finish(oracle),
+                    "carrier fold, sidecar: {sidecar}"
+                );
+
+                let residue = super::super::canon::labelled::try_canonicalize_view(
+                    &ResidueView(&*dataset),
+                    &mut control(),
+                )
+                .unwrap();
+                assert_eq!(
+                    bundle.residue_digest(&mut control()).unwrap(),
+                    ContentDigest::of(residue.nquads().as_bytes()),
+                    "residue leaf, sidecar: {sidecar}"
+                );
+            }
+        }
     }
 
     #[test]
