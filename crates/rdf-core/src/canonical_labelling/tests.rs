@@ -428,8 +428,8 @@ impl Names<'_> {
             tree.units.entries
         );
         for entry in &tree.cert.entries {
-            let prefix = format!("{pad}  entry m {}: ", entry.m);
-            wrapped(out, &prefix, &hex::encode(&entry.encoding));
+            let prefix = format!("{pad}  entry m {}: ", entry.m());
+            wrapped(out, &prefix, &hex::encode(entry.encoding()));
         }
         for nested in &tree.nested {
             let prefix = format!("{pad}  nested call, certificate ");
@@ -960,8 +960,8 @@ fn without_s(certificate: &super::Certificate) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&(certificate.entries.len() as u64).to_be_bytes());
     for entry in &certificate.entries {
-        out.extend_from_slice(&entry.m.to_be_bytes());
-        out.extend_from_slice(&entry.encoding);
+        out.extend_from_slice(&entry.m().to_be_bytes());
+        out.extend_from_slice(entry.encoding());
     }
     out.extend_from_slice(&(certificate.nested.len() as u64).to_be_bytes());
     for nested in &certificate.nested {
