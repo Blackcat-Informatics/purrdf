@@ -53,6 +53,12 @@ pub enum TextDeltaError {
         /// Population independently observed in the next source.
         observed: u128,
     },
+    /// A removed row is not among the rows the index holds, or is removed
+    /// more often than it is held.
+    UnheldRemoval {
+        /// Canonical selected removal ordinal.
+        ordinal: usize,
+    },
     /// The original source, analysis, capacity or ranking refusal.
     Indexing(TextError),
     /// The delta was analyzed under a different resolved law.
@@ -106,6 +112,10 @@ impl core::fmt::Display for TextDeltaError {
                 f,
                 "text delta coverage mismatch for {predicate:?}: {before} previous, {added} added, {removed} removed, {observed} observed"
             ),
+            Self::UnheldRemoval { ordinal } => write!(
+                f,
+                "text delta removal {ordinal} is not a row the index holds"
+            ),
             Self::Indexing(cause) => cause.fmt(f),
             Self::AnalyzerMismatch { expected, actual } => write!(
                 f,
@@ -138,6 +148,7 @@ impl std::error::Error for TextDeltaError {
             | Self::SourceOverlap { .. }
             | Self::MissingAddition { .. }
             | Self::CoverageMismatch { .. }
+            | Self::UnheldRemoval { .. }
             | Self::SourceMismatch { .. } => None,
         }
     }
@@ -156,6 +167,9 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
             "predicate" => Term(&**predicate),
             "before" => Unsigned(*before), "added" => Unsigned(*added),
             "removed" => Unsigned(*removed), "observed" => Unsigned(*observed),
+        },
+        UnheldRemoval { ordinal } => "text-delta-unheld-removal" {
+            "ordinal" => Unsigned(*ordinal as u128),
         },
         Indexing(cause) => "text-delta-indexing" { "cause" => Cause(cause) },
         AnalyzerMismatch { expected, actual } => "text-delta-analyzer-mismatch" {

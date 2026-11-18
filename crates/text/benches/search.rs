@@ -115,45 +115,58 @@ fn skewed_term(rng: &mut SplitMix64) -> u64 {
     smallest
 }
 
+/// The generated text of every document, in document order.
+fn texts() -> Vec<String> {
+    let mut generator = SplitMix64::new(SEED);
+    (0..DOCUMENTS)
+        .map(|_| {
+            let mut text = String::new();
+            for token in 0..TOKENS_PER_DOCUMENT {
+                if token > 0 {
+                    text.push(' ');
+                }
+                text.push_str("term");
+                // Fixed width, so the dictionary's sorted order is its numeric
+                // order and the generated text is trivially readable in a profile.
+                let ordinal = skewed_term(&mut generator);
+                for digit in (0..4).rev() {
+                    let place = 10_u64.pow(digit);
+                    let value = (ordinal / place) % 10;
+                    text.push(char::from(
+                        b'0' + u8::try_from(value).expect("a digit is one byte"),
+                    ));
+                }
+            }
+            text
+        })
+        .collect()
+}
+
+/// A frozen dataset of `(document ordinal, text)` rows, every literal untagged
+/// and in the default graph.
+fn dataset_of<'a>(rows: impl IntoIterator<Item = (u32, &'a str)>) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let note = builder.intern_iri(NOTE).unwrap();
+    for (document, text) in rows {
+        let subject = builder
+            .intern_iri(&format!("https://example.org/doc/{document:04}"))
+            .unwrap();
+        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
+        builder.push_quad(subject, note, literal, None).unwrap();
+    }
+    builder
+        .freeze()
+        .expect("the generated corpus must validate")
+}
+
 /// The generated corpus, as one frozen dataset.
 ///
 /// Every literal is untagged and in the default graph, so the index holds a
 /// single `(graph, language)` partition and a ceiling therefore bounds one
 /// heap rather than being split across several.
 fn corpus() -> Arc<RdfDataset> {
-    let mut generator = SplitMix64::new(SEED);
-    let mut builder = RdfDatasetBuilder::new();
-    let note = builder.intern_iri(NOTE).unwrap();
-
-    let mut text = String::new();
-    for document in 0..DOCUMENTS {
-        text.clear();
-        for token in 0..TOKENS_PER_DOCUMENT {
-            if token > 0 {
-                text.push(' ');
-            }
-            text.push_str("term");
-            // Fixed width, so the dictionary's sorted order is its numeric order
-            // and the generated text is trivially readable in a profile.
-            let ordinal = skewed_term(&mut generator);
-            for digit in (0..4).rev() {
-                let place = 10_u64.pow(digit);
-                let value = (ordinal / place) % 10;
-                text.push(char::from(
-                    b'0' + u8::try_from(value).expect("a digit is one byte"),
-                ));
-            }
-        }
-        let subject = builder
-            .intern_iri(&format!("https://example.org/doc/{document:04}"))
-            .unwrap();
-        let literal = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
-        builder.push_quad(subject, note, literal, None).unwrap();
-    }
-
-    builder
-        .freeze()
-        .expect("the generated corpus must validate")
+    let texts = texts();
+    dataset_of((0..DOCUMENTS).zip(texts.iter().map(String::as_str)))
 }
 
 /// The language tags the multi-partition corpus spreads its documents across.
@@ -257,6 +270,32 @@ fn benchmark(criterion: &mut Bench) {
                 index
                     .with_ranking_profile(black_box(reranking.clone()))
                     .expect("rerank")
+            },
+            BatchSize::SmallInput,
+        );
+    });
+
+    // One document's text replaced: the delta names that one removed and one
+    // added row, and the next source is the corpus with the replacement.
+    let texts = texts();
+    let replacement = "term0001 term0002 term0003";
+    let removed = dataset_of([(7, texts[7].as_str())]);
+    let added = dataset_of([(7, replacement)]);
+    let next = dataset_of(
+        (0..DOCUMENTS).zip(
+            texts
+                .iter()
+                .enumerate()
+                .map(|(at, text)| if at == 7 { replacement } else { text.as_str() }),
+        ),
+    );
+    group.bench_function("apply_delta_one_document", |bencher| {
+        bencher.iter_batched(
+            || index.clone(),
+            |index| {
+                index
+                    .with_delta(black_box(&*next), black_box(&*added), black_box(&*removed))
+                    .expect("the genuine delta applies")
             },
             BatchSize::SmallInput,
         );

@@ -113,6 +113,12 @@ effective statement additions and removals. The inputs use the same carrier
 profile as the index. Both asserted and annotation literal rows count, including
 a literal present in both layers. Reversing the delta must recover the indexed
 source fingerprint; missing additions and incomplete deltas are typed refusals.
+Each removed row must also be held by the index. The index keeps a sorted
+directory of the digest of every selected source row, token-less rows included,
+once per occurrence. A removal consumes one occurrence of its row digest, and a
+row that is absent or removed more often than held is refused with
+`TextDeltaError::UnheldRemoval`. The directory follows every applied delta. It
+lives in memory beside the index and is not part of either fingerprint.
 The next source also refreshes predicate coverage for nonliteral changes.
 
 Only changed documents are analyzed, using their complete key:

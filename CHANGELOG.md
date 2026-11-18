@@ -24,6 +24,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   identity law, domain, section order and refusals are unchanged. The
   canonicalization receipts of these runs record `Sha256Digest` as their output
   instead of `Document`.
+- **`TextIndex::with_delta` checks each removed row by its row digest.** The
+  additive source digest and statement populations accept a removal the index
+  never held when its hash balances an addition. The index now keeps a sorted
+  directory of the digest of every selected source row, token-less rows
+  included, and each removed row must consume one occurrence of its digest;
+  otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
+  The directory is updated by every applied delta and is not part of either
+  fingerprint. A genuine delta applies as before.
 - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
