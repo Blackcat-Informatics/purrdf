@@ -1,0 +1,192 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 5746a19c7..027772aae 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -12,6 +12,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   admits the executed SRL program against the declarations before it compiles,
+   so a rule that derives a protected predicate is refused as
+   `SrlError::Execution`, and a rule deriving another predicate still runs.
++- **Behaviour change: an unsupported signing algorithm is `Unverified`.**
++  `verify_sig` and `verify_sig_with_key` report a COSE_Sign1 whose declared
++  `alg` this engine does not implement as `SigStatus::Unverified` instead of
++  `Invalid`, and the file verifiers (`verify_signatures`,
++  `verify_signatures_with_resolver` and the C, WebAssembly and Python surfaces
++  over them) record it as `unverified`: the engine could not check it. `Invalid` remains for a signature
++  that was checked and failed and for a malformed structure. Callers that
++  require `Valid` still refuse an unverified signature.
+ - **Breaking: canonical output is the nested-refinement labelling.** The
+   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
+   routes to `(nested-refinement-labelling, 1)`. The canonical document is the
+diff --git crates/gts/src/cose/sign1.rs crates/gts/src/cose/sign1.rs
+index edd81f053..52a46602d 100644
+--- crates/gts/src/cose/sign1.rs
++++ crates/gts/src/cose/sign1.rs
+@@ -86,9 +86,10 @@ pub enum VerifyingKeyRef<'a> {
+ pub enum SigStatus {
+     /// Cryptographically valid under the resolved key.
+     Valid,
+-    /// Malformed, unsupported, algorithm/key mismatch or failed verification.
++    /// Malformed, algorithm/key mismatch or failed verification.
+     Invalid,
+-    /// Well-formed supported envelope whose key was not resolved.
++    /// Not checked: the key was not resolved, or the declared signing
++    /// algorithm is one this engine does not implement.
+     Unverified,
+ }
+ 
+@@ -363,7 +364,11 @@ pub fn signature_kid(sig: &[u8]) -> Option<String> {
+ /// Typed algorithm-aware verification, refusing mismatched key types.
+ #[must_use]
+ pub fn verify_sig_with_key(sig: &[u8], frame_id: &[u8], public: VerifyingKeyRef<'_>) -> SigStatus {
+-    parse_sign1(sig).map_or(SigStatus::Invalid, |parsed| parsed.verify(frame_id, public))
++    match parse_sign1(sig) {
++        Ok(parsed) => parsed.verify(frame_id, public),
++        Err(Sign1Error::UnsupportedAlgorithm) => SigStatus::Unverified,
++        Err(_) => SigStatus::Invalid,
++    }
+ }
+ 
+ /// Existing Ed25519 convenience, routed through the same strict typed core.
+@@ -373,8 +378,9 @@ pub fn verify_sig(sig: &[u8], frame_id: &[u8], public: &VerifyingKey) -> SigStat
+ }
+ 
+ /// Verify recorded signatures with the existing Ed25519 resolver. Parse and
+-/// algorithm validation precede lookup: malformed/unsupported is invalid;
+-/// a supported valid structure with no resolved key is unverified.
++/// algorithm validation precede lookup: a malformed envelope is invalid; an
++/// unsupported algorithm, or a supported valid structure with no resolved
++/// key, is unverified.
+ pub fn verify_signatures(
+     signatures: &mut [model::Signature],
+     resolve: impl Fn(&str) -> Option<VerifyingKey>,
+@@ -390,7 +396,8 @@ pub fn verify_signatures(
+ /// Verify folded signatures using explicit opaque/absent identifiers and typed
+ /// keys. The declared algorithm is supplied to the caller's resolver;
+ /// returning a key of another algorithm produces invalid, never a downgrade.
+-/// Malformed or unsupported envelopes never invoke the resolver.
++/// Malformed or unsupported envelopes never invoke the resolver: a malformed
++/// one is invalid and one with an unsupported algorithm is unverified.
+ pub fn verify_signatures_with_resolver<'a>(
+     signatures: &mut [model::Signature],
+     resolve: impl Fn(Option<&[u8]>, Algorithm) -> Option<VerifyingKeyRef<'a>>,
+@@ -414,6 +421,7 @@ fn verify_resolved(
+             .ok()
+             .and_then(|parsed| parsed.kid_text().map(str::to_string));
+         sig.status = match parsed {
++            Err(Sign1Error::UnsupportedAlgorithm) => "unverified",
+             Err(_) => "invalid",
+             Ok(parsed) => match verify(&parsed, &sig.frame_id) {
+                 Some(SigStatus::Valid) => "valid",
+diff --git crates/gts/src/cose/tests.rs crates/gts/src/cose/tests.rs
+index 351deb207..f23f50253 100644
+--- crates/gts/src/cose/tests.rs
++++ crates/gts/src/cose/tests.rs
+@@ -430,3 +430,41 @@ fn verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid() {
+     assert_eq!(signatures[1].status, "invalid");
+     assert_eq!(signatures[1].kid.as_deref(), Some("weak"));
+ }
++
++/// `blob`, a COSE_Sign1, with its protected header replaced by `protected`.
++fn with_protected(blob: &[u8], protected: Vec<u8>) -> Vec<u8> {
++    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
++    let Value::Tag(tag, value) = &mut value else {
++        panic!("a COSE_Sign1 has an outer tag");
++    };
++    let tag = *tag;
++    let mut fields = value.take().into_array().expect("a COSE_Sign1 is an array");
++    fields[0] = Value::Bytes(protected);
++    wire::encode(&Value::Tag(tag, Box::new(Value::Array(fields))))
++}
++
++#[test]
++fn an_unsupported_algorithm_is_unverified_and_a_malformed_header_is_invalid() {
++    let signer = SigningKey::from_bytes(&[5; 32]);
++    let public = signer.verifying_key();
++    let honest = sign_id(b"frame", &signer, "kid");
++    assert_eq!(verify_sig(&honest, b"frame", &public), SigStatus::Valid);
++
++    // alg -99 is an integer this engine does not implement: not checked.
++    let unsupported = with_protected(&honest, vec![0xa1, 0x01, 0x38, 0x62]);
++    assert_eq!(
++        verify_sig(&unsupported, b"frame", &public),
++        SigStatus::Unverified
++    );
++    assert_ne!(
++        verify_sig(&unsupported, b"frame", &public),
++        SigStatus::Valid
++    );
++
++    // A protected header that is not a CBOR map is malformed, hence invalid.
++    let malformed = with_protected(&honest, vec![0x01]);
++    assert_eq!(
++        verify_sig(&malformed, b"frame", &public),
++        SigStatus::Invalid
++    );
++}
+diff --git crates/gts/tests/cose_composite.rs crates/gts/tests/cose_composite.rs
+index 931431695..08f1c749a 100644
+--- crates/gts/tests/cose_composite.rs
++++ crates/gts/tests/cose_composite.rs
+@@ -425,10 +425,20 @@ fn headers_are_authenticated_unique_typed_and_critical_rules_enforced() {
+         cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
+         SigStatus::Valid
+     );
++    // An integer alg this engine does not implement is not checked: unverified.
++    for alg in [-49, -99] {
++        let envelope = raw_ed_signature(
++            &wire::encode(&Value::Map(vec![(1.into(), alg.into())])),
++            unprotected(),
++        );
++        assert!(cose::parse_sign1(&envelope).is_err());
++        assert_eq!(
++            cose::verify_sig(&envelope, b"frame", &key.verifying_key()),
++            SigStatus::Unverified
++        );
++    }
+     let bad_maps = [
+         vec![],
+-        vec![(1.into(), (-49).into())],
+-        vec![(1.into(), (-99).into())],
+         vec![(1.into(), (-58).into())], // Correctly signed Ed bytes, wrong declared algorithm/size.
+         vec![(1.into(), Value::Text("EdDSA".into()))],
+         vec![(1.into(), Value::Bytes(vec![0x27]))],
+diff --git crates/gts/tests/hedged_writer.rs crates/gts/tests/hedged_writer.rs
+index 55f85b2bc..f5c159aca 100644
+--- crates/gts/tests/hedged_writer.rs
++++ crates/gts/tests/hedged_writer.rs
+@@ -433,21 +433,20 @@ fn malformed_unsupported_unresolved_and_wrong_type_are_distinct() {
+     wrong.insert(b"unknown", EdKey::from_bytes(&[1; 32]).verifying_key());
+     let result = verify_file_with_keyring(&bytes, &wrong);
+     assert_eq!((result.invalid, result.unverified), (1, 0));
+-    for invalid in [
+-        alter_frame(&bytes, 1, |frame| {
+-            *field(frame, "sig") = Value::Bytes(vec![0]);
+-        }),
+-        alter_frame(&bytes, 1, |frame| {
+-            alter_envelope(frame, |parts| {
+-                parts[0] =
+-                    Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
+-            });
+-        }),
+-    ] {
+-        let result = verify_file_with_keyring(&invalid, &NoLookup);
+-        assert_eq!((result.invalid, result.unverified), (1, 0));
+-        assert!(!result.ok);
+-    }
++    let malformed = alter_frame(&bytes, 1, |frame| {
++        *field(frame, "sig") = Value::Bytes(vec![0]);
++    });
++    let result = verify_file_with_keyring(&malformed, &NoLookup);
++    assert_eq!((result.invalid, result.unverified), (1, 0));
++    assert!(!result.ok);
++    let unsupported = alter_frame(&bytes, 1, |frame| {
++        alter_envelope(frame, |parts| {
++            parts[0] = Value::Bytes(wire::canonical(&Value::Map(vec![(1.into(), (-49).into())])));
++        });
++    });
++    let result = verify_file_with_keyring(&unsupported, &NoLookup);
++    assert_eq!((result.invalid, result.unverified), (0, 1));
++    assert!(!result.ok);
+ }
+ 
+ fn opaque_absent_and_empty_ids_remain_distinct_at_file_resolution() {

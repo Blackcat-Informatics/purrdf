@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1325-srl-entry-points-do-not-apply-never",
+  "branch": "paudley/1325-srl-entry-points-do-not-apply-never",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "2abf56f94139f135024e1e1c7df3cba8c43555a4",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1325-srl-entry-points-do-not-apply-never/.stage/sync/sync/20261118T060454-71b5d49a183045b08216643b7ce12fd0",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "c1ccb8438ee7e854214b2e96f679649a3109a642",
+  "merge_bases": [
+    "f829322747f0d7c241a83763c600b95888e39cd3"
+  ],
+  "merge_index": "9b669611f2f7a71dcb22bc556c1df2a19e03035f3f67c203e1ae298a97ddbeb6",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "5164baffd56018d1ed0ad0da92abbd6f3651ef7e",
+  "candidate_patch": "candidate-9767bff59a44405fadfb39271dd6b135.patch",
+  "stdout_log": "commit-9767bff59a44405fadfb39271dd6b135.stdout.log",
+  "stderr_log": "commit-9767bff59a44405fadfb39271dd6b135.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 59.324633116979385,
+  "commit": "e9f977217651f2025b2b056d502063651910d65a",
+  "tree": "5164baffd56018d1ed0ad0da92abbd6f3651ef7e",
+  "exit_code": 0
+}
