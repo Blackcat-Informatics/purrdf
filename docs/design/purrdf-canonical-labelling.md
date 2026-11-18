@@ -42,7 +42,7 @@ own neighbourhoods, so the factors multiply down a tree. Nothing in the algorith
 separates like siblings by what lies beneath them: it permutes them. Colour
 refinement (section 4) separates such siblings in a few rounds when their
 subtrees differ. The Recommendation states that the algorithm "can behave poorly"
-on some inputs, requires implementations to defend against such attacks and notes
+on some inputs, requires implementations to defend against denial-of-service attacks and notes
 that calls to *Hash N-Degree Quads* may be limited [1, section 4.4.3]. Section 7.1
 of the Recommendation (non-normative) discusses poison datasets. It names no
 structural remedy.
@@ -278,7 +278,8 @@ a proved optimisation of a pruning-free definition tested differentially.
 mode that takes a context string. The definition uses it for the two shared values.
 
 Hogan's figures in section 1.2 and the pruning defect in his conference version
-were checked against the author's copy of [3]. The statements about the other works
+were checked against the author's copy of [3], and the statements about RDFC-1.0
+against the text of the Recommendation [1]. The statements about the other works
 rest on their titles and abstracts and on the implementation itself; the papers'
 bodies were not re-read for this document. No source of nauty,
 Traces, bliss, saucy, dejavu or blabel is copied into this repository.
@@ -324,7 +325,7 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
 
 * *Independent agreement.* No second implementation written by a different reader
   has produced the same canonical line sequences and digests on shared vectors. The
-  definition is provisional until it has. The vectors in `vectors/` are the worked
+  definition is provisional until it has. The vectors in `crates/rdf-core/src/canonical_labelling/vectors/` are the worked
   examples; a larger shared set that includes non-trivial automorphism groups is
   needed.
 * *Verification without search.* No certificate is known that lets a reader check
@@ -339,8 +340,9 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
   graphs, rook graphs, hypercubes and Paley graphs stay one cell at the root. The
   stops of section 3.5 cut the work on `Z4 x Z4` and `cub8` by large factors, but no
   bound is claimed for these families in general, and exponential lower bounds are
-  known for individualisation-refinement algorithms [6], for refinement of fixed
-  dimension [7] and for McKay's algorithm [12]. The refusal states the limit.
+  known for individualisation-refinement algorithms [6] and for McKay's algorithm
+  [12], and no refinement of fixed dimension distinguishes every pair of
+  non-isomorphic graphs [7]. The refusal states the limit.
 * *Refinement strength and node invariant.* Both are excluded from version `1`. A
   stronger refinement or an invariant would be a new version, never an option.
 * *Dataset-state identity.* `DATASET-STATE-DIGEST.md` defines a separate identity

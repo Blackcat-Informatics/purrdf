@@ -203,8 +203,7 @@ build and execution path. Approximation and arithmetic are separate contracts.
 See [embedding kNN](./docs/design/purrdf-embedding-knn.md),
 [HNSW's recall and build evidence](./crates/hnsw/README.md),
 [retrieval composition](./docs/design/purrdf-retrieval-ladder.md), and
-[SIMD and arithmetic contracts](./docs/design/purrdf-simd.md), and
-[canonical labelling of blank nodes](./docs/design/purrdf-canonical-labelling.md).
+[SIMD and arithmetic contracts](./docs/design/purrdf-simd.md).
 
 These ranked producer integrations are Rust APIs, also usable by a Rust host
 compiled to WASM. The shipped Python and npm packages expose data-shaped
@@ -536,6 +535,7 @@ contracts and the implemented surfaces above are the basis for that growth.
 - [Migration to 5.0](./docs/MIGRATION-5.0.md), [migration to 4.0](./docs/MIGRATION-4.0.md), [migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
 - [GTS](./docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
   [RDF 1.2 canonicalization](./docs/RDF12-CANON-PROFILE.md),
+  [canonical labelling of blank nodes](./docs/design/purrdf-canonical-labelling.md),
   [storage contracts](./crates/rdf-core/STORAGE.md) and
   [release process](./docs/RELEASE.md).
 
