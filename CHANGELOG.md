@@ -8,14 +8,23 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **The 5.0 canonical document follows the N-Quads 1.2 canonical form for
-  U+FFFE, U+FFFF and IRIs.** A literal holding U+FFFE or U+FFFF is spelled with
-  `\uFFFE` or `\uFFFF`, since neither matches the XML 1.1 `Char` production, and
-  an IRI is escaped exactly where `IRIREF` forbids a scalar, so DEL and the C1
-  controls ride raw. The canonical digest is over binary lines and does not
-  move; the certificate digest that follows the document does. The retained 4.x
-  `purrdf-rdfc12` output, the Turtle and other serializers and every existing
-  `term_syntax` writer keep their bytes, so stored digests recompute unchanged.
+- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
+  IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
+  N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
+  `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
+  for every caller; the C1 controls stay raw. The canonical IRI writer escapes
+  exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
+  carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
+  Turtle emitter, the native N-Triples writer and the SHACL path renderer keep.
+  `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
+  the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
+  literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
+  because it was taken over a non-conforming spelling; every other stored digest
+  recomputes unchanged. The readers affected are the PACK version 1
+  `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
+  source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
+  over binary lines and does not move; the 5.0 document spells those characters
+  as escapes.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
   routes to `(nested-refinement-labelling, 1)`. The canonical document is the

@@ -43,10 +43,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use purrdf_iri::vocab::rdf::REIFIES;
-use purrdf_lex::term_syntax::{
-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri_canonical_lines as write_iri,
-    write_literal_canonical_lines as write_literal,
-};
+use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri, write_literal};
 use purrdf_lex::text_out::TextOut;
 
 use super::lines::push_bytes;

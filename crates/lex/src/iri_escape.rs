@@ -34,52 +34,95 @@
 //! [`find_first_candidate`], the chunked scan for the bytes that can begin an
 //! escaped scalar, copying every run between two escapes whole.
 //!
-//! # The one scalar range egress adds, and why
+//! # Two escape sets, one per carrier
 //!
-//! [`is_iriref_escape_required`] is [`crate::terminals::is_iriref_forbidden`]
-//! widened by exactly `[#x7F-#x9F]` — DEL and the C1 control block. Those are
-//! **lawful raw** in an `IRIREF` body and the ingress predicate rightly permits
-//! them; they are escaped on the way out because this workspace's serialized
-//! output is embedded verbatim inside an XML text node by the CL-dialect
-//! carrier, and an XML processor normalizes or replaces raw C1 code points on
-//! read. Escaping them is what makes serialize-then-parse a round trip across
-//! that carrier. Nothing else is added: U+00A0 NO-BREAK SPACE, U+2000-U+200A,
-//! U+2028, U+2029 and U+3000 all ride VERBATIM, because they are `ucschar`
-//! under RFC 3987 §2.2 and an `IRIREF` body is content rather than a token
-//! boundary.
+//! An `IRIREF` writer is free to escape more than the production forbids, so
+//! which set a writer uses is a choice of **carrier**, and each carrier names
+//! the rule it follows:
 //!
+//! * [`Carrier::Canonical`] is exactly the production's exclusions: `[#x00-#x20]`
+//!   and the nine delimiters ``< > " { } | ^ ` \``, the set
+//!   [`crate::terminals::is_iriref_forbidden`] answers. Its rule is the `IRIREF`
+//!   production of RDF 1.2 N-Quads and N-Triples (section 2, grammar). The canonical
+//!   forms of those two languages (section 3 of each) say nothing about escaping in
+//!   an IRI, so the canonical document escapes what the grammar requires and nothing
+//!   else: DEL and the C1 block, which `IRIREF` admits and which match the XML 1.1
+//!   `Char` production, ride raw, exactly as U+00A0 does.
+//! * [`Carrier::Xml`] is the same set widened by exactly `[#x7F-#x9F]`, DEL and the
+//!   C1 control block. Those are lawful raw in an `IRIREF` body and are escaped
+//!   because serialized output of this carrier is embedded verbatim in an XML text
+//!   node, and an XML processor normalizes or replaces raw C1 code points on read.
+//!   Escaping them is what makes serialize-then-parse a round trip across that
+//!   carrier. Its rule is XML 1.0 section 2.2 (`Char`, with the C1 controls
+//!   discouraged) and XML 1.1 section 2.11 (NEL rewriting).
+//!
+//! Nothing else is added to either: U+00A0 NO-BREAK SPACE, U+2000-U+200A, U+2028,
+//! U+2029 and U+3000 ride VERBATIM in both, because they are `ucschar` under RFC
+//! 3987 section 2.2 and an `IRIREF` body is content rather than a token boundary.
 //! The widening is written as the enumerated range it is, not as
-//! [`char::is_control`]. The two happen to agree here only because
-//! `char::is_control` is `[#x00-#x1F] ∪ [#x7F-#x9F]` and the first half is
-//! already inside `[#x00-#x20]`; saying so with a Unicode property would leave
-//! a reader unable to tell which half of the answer came from the grammar and
-//! which from the carrier.
+//! [`char::is_control`], so a reader can tell which half of the answer came from
+//! the grammar and which from the carrier.
 //!
-//! # The canonical-lines set
-//!
-//! The canonical document of the nested-refinement labelling uses a second,
-//! narrower set: [`is_iriref_escape_required_canonical_lines`], exactly
-//! [`crate::terminals::is_iriref_forbidden`] and nothing else. The canonical form
-//! of RDF 1.2 N-Quads (section 3) says nothing about escaping in an IRI, so that
-//! document escapes what the `IRIREF` production forbids and no more: DEL and the
-//! C1 block match the XML 1.1 `Char` production and ride raw, as U+00A0 does.
-//! [`push_escaped_canonical_lines`] and [`escape_canonical_lines`] are its writers.
-//! Only that document writer calls them; the set above, which every other writer
-//! (including the retained 4.x `purrdf-rdfc12` output) keeps, is the one named by
-//! the unqualified functions. The candidate scan is shared: its stops are a
-//! superset of both sets, so the canonical-lines writer decides the scalar at the
-//! `0xC2` lead byte and keeps the C1 block raw.
+//! The `_for` forms ([`is_iriref_escape_required_for`], [`push_escaped_for`],
+//! [`escape_for`]) name the carrier. [`crate::term_syntax::write_iri`] and every
+//! canonical or hashed form use [`Carrier::Canonical`]; the Turtle emitter and
+//! renderer of `purrdf-core`, the N-Triples writer of the native codecs and the
+//! SHACL path renderer feed the CL-dialect carrier and name [`Carrier::Xml`]. The
+//! unqualified functions are the [`Carrier::Xml`] set, kept for existing callers;
+//! new code names its carrier. Both carriers share one candidate scan,
+//! [`find_first_candidate`], whose stops are a superset of either set, so a
+//! canonical writer decides the scalar at the `0xC2` lead byte and keeps the C1
+//! block raw.
 
 use crate::terminals::{ByteClass, byte_run_count};
 use crate::text_out::TextOut;
 use std::borrow::Cow;
 
-/// DEL and the C1 control block, `[#x7F-#x9F]` — the single range this egress
-/// law adds to the ingress production. Lawful raw inside an `IRIREF`, escaped
-/// anyway so the bytes survive an XML text node.
+/// DEL and the C1 control block, `[#x7F-#x9F]` — the single range the
+/// [`Carrier::Xml`] set adds to the production's exclusions. Lawful raw inside
+/// an `IRIREF`, escaped anyway so the bytes survive an XML text node.
 const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
 
-/// Whether an `IRIREF` writer must emit `c` as a `UCHAR` escape rather than raw.
+/// The carrier an `IRIREF` body is escaped for. Each is a specification's
+/// constraint, not a style; see the [module docs](self).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Carrier {
+    /// The canonical form of RDF 1.2 N-Quads and N-Triples: exactly the scalars
+    /// the `IRIREF` production excludes, DEL and the C1 block raw.
+    Canonical,
+    /// Text embedded in an XML document: the production's exclusions and the
+    /// range `[#x7F-#x9F]`.
+    Xml,
+}
+
+/// Whether an `IRIREF` writer for `carrier` must emit `c` as a `UCHAR` escape
+/// rather than raw.
+///
+/// [`Carrier::Canonical`] answers [`crate::terminals::is_iriref_forbidden`] and
+/// nothing else; [`Carrier::Xml`] adds DEL and the C1 control block.
+///
+/// ```
+/// use purrdf_lex::iri_escape::{Carrier, is_iriref_escape_required_for};
+///
+/// assert!(is_iriref_escape_required_for(' ', Carrier::Canonical));
+/// assert!(is_iriref_escape_required_for('<', Carrier::Canonical));
+/// // DEL and the C1 block: raw in the canonical form, escaped for XML.
+/// assert!(!is_iriref_escape_required_for('\u{7F}', Carrier::Canonical));
+/// assert!(!is_iriref_escape_required_for('\u{85}', Carrier::Canonical));
+/// assert!(is_iriref_escape_required_for('\u{85}', Carrier::Xml));
+/// // The neighbour past the C1 block is raw in both.
+/// assert!(!is_iriref_escape_required_for('\u{A0}', Carrier::Canonical));
+/// assert!(!is_iriref_escape_required_for('\u{A0}', Carrier::Xml));
+/// ```
+#[inline]
+#[must_use]
+pub const fn is_iriref_escape_required_for(c: char, carrier: Carrier) -> bool {
+    crate::terminals::is_iriref_forbidden(c)
+        || matches!(carrier, Carrier::Xml) && C1_AND_DEL.0 <= c && c <= C1_AND_DEL.1
+}
+
+/// Whether an `IRIREF` writer for [`Carrier::Xml`] must emit `c` as a `UCHAR`
+/// escape rather than raw: [`is_iriref_escape_required_for`] with that carrier.
 ///
 /// This is the union of two enumerated sets and nothing else:
 ///
@@ -87,8 +130,8 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
 ///   control **plus the SPACE**) and the nine reserved delimiters
 ///   ``< > " { } | ^ ` \``, which the grammar forbids raw;
 /// * `C1_AND_DEL` — `[#x7F-#x9F]`, DEL and the C1 control block, which the
-///   grammar PERMITS raw and which this workspace escapes anyway for XML
-///   transport (see the [module docs](self)).
+///   grammar PERMITS raw and which this carrier escapes for XML transport (see
+///   the [module docs](self)).
 ///
 /// Every scalar at or above U+00A0 answers `false`: that includes the whole
 /// non-ASCII Unicode whitespace block, which is content inside an `IRIREF` body
@@ -112,26 +155,7 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
 #[inline]
 #[must_use]
 pub const fn is_iriref_escape_required(c: char) -> bool {
-    crate::terminals::is_iriref_forbidden(c) || (C1_AND_DEL.0 <= c && c <= C1_AND_DEL.1)
-}
-
-/// Whether the canonical document must emit `c` as a `UCHAR` escape rather than
-/// raw: exactly the scalars the `IRIREF` production forbids, [`crate::terminals::is_iriref_forbidden`].
-/// DEL and the C1 block ride raw.
-///
-/// ```
-/// use purrdf_lex::iri_escape::is_iriref_escape_required_canonical_lines;
-///
-/// assert!(is_iriref_escape_required_canonical_lines(' '));
-/// assert!(is_iriref_escape_required_canonical_lines('<'));
-/// assert!(!is_iriref_escape_required_canonical_lines('\u{7F}'));
-/// assert!(!is_iriref_escape_required_canonical_lines('\u{85}'));
-/// assert!(!is_iriref_escape_required_canonical_lines('\u{A0}'));
-/// ```
-#[inline]
-#[must_use]
-pub const fn is_iriref_escape_required_canonical_lines(c: char) -> bool {
-    crate::terminals::is_iriref_forbidden(c)
+    is_iriref_escape_required_for(c, Carrier::Xml)
 }
 
 /// The bytes that can begin a scalar [`is_iriref_escape_required`] answers
@@ -142,7 +166,10 @@ pub const fn is_iriref_escape_required_canonical_lines(c: char) -> bool {
 /// Derived from the predicate itself, so the scan and the law cannot drift: the
 /// ASCII half is the predicate over every ASCII scalar, and the one lead byte is
 /// the lead of the non-ASCII half (`C1_AND_DEL` lies wholly inside the two-byte
-/// sequences led by `0xC2`, which a const assertion below pins).
+/// sequences led by `0xC2`, which a const assertion below pins). This is the
+/// [`Carrier::Xml`] set, a superset of [`Carrier::Canonical`]'s, so one scan
+/// serves both: a canonical writer meets `0xC2` as a candidate that needs no
+/// escape and keeps the run whole.
 const CANDIDATE_TABLE: [u8; 256] = {
     let mut table = [0_u8; 256];
     let mut b = 0_u8;
@@ -237,12 +264,7 @@ fn push_uchar<W: TextOut + ?Sized>(ch: char, out: &mut W) {
 ///
 /// `at` is a char boundary. A candidate that needs no escape (a non-C1 scalar
 /// led by `0xC2`, such as U+00A0) stays inside the run it interrupts.
-fn push_escaped_from<W: TextOut + ?Sized>(
-    iri: &str,
-    mut at: usize,
-    required: fn(char) -> bool,
-    out: &mut W,
-) {
+fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, carrier: Carrier, out: &mut W) {
     let bytes = iri.as_bytes();
     let mut run_start = at;
     while at < bytes.len() {
@@ -260,7 +282,7 @@ fn push_escaped_from<W: TextOut + ?Sized>(
             .next()
             .expect("a candidate offset is a char boundary");
         at = hit + ch.len_utf8();
-        if required(ch) {
+        if is_iriref_escape_required_for(ch, carrier) {
             out.push_str(&iri[run_start..hit]);
             push_uchar(ch, out);
             if out.failed() {
@@ -272,12 +294,13 @@ fn push_escaped_from<W: TextOut + ?Sized>(
     out.push_str(&iri[run_start..]);
 }
 
-/// Append `iri` to `out` as an `IRIREF` body: every scalar
+/// Append `iri` to `out` as an `IRIREF` body for [`Carrier::Xml`]: every scalar
 /// [`is_iriref_escape_required`] answers `true` for rides as its `\u00XX`
-/// `UCHAR`, and every other scalar rides verbatim.
+/// `UCHAR`, and every other scalar rides verbatim. [`push_escaped_for`] is the
+/// form that names the carrier.
 ///
-/// The emission of the canonical N-Quads writer and the entailment surface
-/// writer; one scan with bulk copies of the clean runs.
+/// The emission of the Turtle writer and of the XML carriers; one scan with
+/// bulk copies of the clean runs.
 ///
 /// ```
 /// use purrdf_lex::iri_escape::push_escaped;
@@ -287,26 +310,27 @@ fn push_escaped_from<W: TextOut + ?Sized>(
 /// assert_eq!(out, "urn:ex:a\\u0020b\\u003C\\u0085\\u003E\u{a0}");
 /// ```
 pub fn push_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
-    push_escaped_from(iri, 0, is_iriref_escape_required, out);
+    push_escaped_for(iri, Carrier::Xml, out);
 }
 
-/// Append `iri` to `out` as an `IRIREF` body for the canonical document: every
-/// scalar [`is_iriref_escape_required_canonical_lines`] answers `true` for rides as
-/// its `\u00XX` `UCHAR`, and every other scalar, DEL and the C1 block included,
-/// rides verbatim.
+/// Append `iri` to `out` as an `IRIREF` body for `carrier`: every scalar
+/// [`is_iriref_escape_required_for`] answers `true` for rides as its `\u00XX`
+/// `UCHAR` in upper-case hex, and every other scalar rides verbatim. The
+/// emission of the canonical form uses [`Carrier::Canonical`].
 ///
 /// ```
-/// use purrdf_lex::iri_escape::push_escaped_canonical_lines;
+/// use purrdf_lex::iri_escape::{Carrier, push_escaped_for};
 ///
 /// let mut out = String::new();
-/// push_escaped_canonical_lines("urn:ex:a b<\u{85}>\u{7f}\u{a0}", &mut out);
+/// push_escaped_for("urn:ex:a b<\u{85}>\u{7f}\u{a0}", Carrier::Canonical, &mut out);
 /// assert_eq!(out, "urn:ex:a\\u0020b\\u003C\u{85}\\u003E\u{7f}\u{a0}");
 /// ```
-pub fn push_escaped_canonical_lines<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
-    push_escaped_from(iri, 0, is_iriref_escape_required_canonical_lines, out);
+pub fn push_escaped_for<W: TextOut + ?Sized>(iri: &str, carrier: Carrier, out: &mut W) {
+    push_escaped_from(iri, 0, carrier, out);
 }
 
-/// `iri` as an `IRIREF` body, borrowed when no scalar needs an escape.
+/// `iri` as an `IRIREF` body for [`Carrier::Xml`], borrowed when no scalar needs
+/// an escape. [`escape_for`] is the form that names the carrier.
 ///
 /// The same bytes as [`push_escaped`]. The scan that finds the first escaped
 /// scalar is the scan that emits, so a value that needs escaping is still read
@@ -322,26 +346,22 @@ pub fn push_escaped_canonical_lines<W: TextOut + ?Sized>(iri: &str, out: &mut W)
 /// ```
 #[must_use]
 pub fn escape(iri: &str) -> Cow<'_, str> {
-    escape_with(iri, is_iriref_escape_required)
+    escape_for(iri, Carrier::Xml)
 }
 
-/// `iri` as an `IRIREF` body for the canonical document, borrowed when no scalar
-/// needs an escape. The same bytes as [`push_escaped_canonical_lines`].
+/// `iri` as an `IRIREF` body for `carrier`, borrowed when no scalar needs an
+/// escape. The same bytes as [`push_escaped_for`].
 ///
 /// ```
 /// use std::borrow::Cow;
-/// use purrdf_lex::iri_escape::escape_canonical_lines;
+/// use purrdf_lex::iri_escape::{Carrier, escape_for};
 ///
-/// // DEL is raw for the canonical document.
-/// assert!(matches!(escape_canonical_lines("urn:ex:\u{7f}"), Cow::Borrowed(_)));
-/// assert_eq!(escape_canonical_lines("urn:ex:a b"), "urn:ex:a\\u0020b");
+/// // DEL is raw for the canonical form and escaped for XML.
+/// assert!(matches!(escape_for("urn:ex:\u{7f}", Carrier::Canonical), Cow::Borrowed(_)));
+/// assert_eq!(escape_for("urn:ex:\u{7f}", Carrier::Xml), "urn:ex:\\u007F");
 /// ```
 #[must_use]
-pub fn escape_canonical_lines(iri: &str) -> Cow<'_, str> {
-    escape_with(iri, is_iriref_escape_required_canonical_lines)
-}
-
-fn escape_with(iri: &str, required: fn(char) -> bool) -> Cow<'_, str> {
+pub fn escape_for(iri: &str, carrier: Carrier) -> Cow<'_, str> {
     let bytes = iri.as_bytes();
     let mut at = 0;
     while let Some(offset) = find_first_candidate(&bytes[at..]) {
@@ -350,10 +370,10 @@ fn escape_with(iri: &str, required: fn(char) -> bool) -> Cow<'_, str> {
             .chars()
             .next()
             .expect("a candidate offset is a char boundary");
-        if required(ch) {
+        if is_iriref_escape_required_for(ch, carrier) {
             let mut out = String::with_capacity(iri.len() + 8);
             out.push_str(&iri[..hit]);
-            push_escaped_from(iri, hit, required, &mut out);
+            push_escaped_from(iri, hit, carrier, &mut out);
             return Cow::Owned(out);
         }
         at = hit + ch.len_utf8();
@@ -364,7 +384,8 @@ fn escape_with(iri: &str, required: fn(char) -> bool) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CANDIDATE_TABLE, escape, find_first_candidate, is_iriref_escape_required, push_escaped,
+        CANDIDATE_TABLE, Carrier, escape, escape_for, find_first_candidate,
+        is_iriref_escape_required, is_iriref_escape_required_for, push_escaped, push_escaped_for,
     };
     use purrdf_testkit::rng::SplitMix64;
     use std::borrow::Cow;
@@ -416,34 +437,82 @@ mod tests {
     }
 
     #[test]
-    fn the_canonical_lines_set_differs_from_the_xml_set_at_del_and_the_c1_block_only() {
-        use super::{escape_canonical_lines, is_iriref_escape_required_canonical_lines};
+    fn the_canonical_set_is_exactly_the_production_exclusions_at_every_scalar() {
+        // N-Quads 1.2 `IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\\] | UCHAR)* '>'`: the
+        // canonical form escapes what the grammar forbids and nothing more.
         for c in all_scalars() {
             assert_eq!(
-                is_iriref_escape_required(c) != is_iriref_escape_required_canonical_lines(c),
+                is_iriref_escape_required_for(c, Carrier::Canonical),
+                crate::terminals::is_iriref_forbidden(c),
+                "{c:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_carriers_differ_at_del_and_the_c1_block_and_nowhere_else() {
+        for c in all_scalars() {
+            assert_eq!(
+                is_iriref_escape_required_for(c, Carrier::Xml)
+                    != is_iriref_escape_required_for(c, Carrier::Canonical),
                 matches!(c, '\u{7F}'..='\u{9F}'),
                 "{c:?}"
             );
         }
-        // Executed on the writer: the refused-side scalars ride raw for the
-        // canonical document, escaped for XML; U+00A0 rides raw in both.
+        // Refused-side case and its valid neighbour, executed on the writer: DEL
+        // and NEL are raw canonically and escaped for XML, and U+00A0 is raw in both.
         for (raw, xml) in [
             ("\u{7f}", "\\u007F"),
             ("\u{85}", "\\u0085"),
             ("\u{9f}", "\\u009F"),
         ] {
             let iri = format!("urn:ex:{raw}x");
-            assert!(matches!(escape_canonical_lines(&iri), Cow::Borrowed(_)));
-            assert_eq!(escape(&iri), format!("urn:ex:{xml}x"));
+            assert!(matches!(
+                escape_for(&iri, Carrier::Canonical),
+                Cow::Borrowed(_)
+            ));
+            assert_eq!(escape_for(&iri, Carrier::Xml), format!("urn:ex:{xml}x"));
         }
+        let neighbour = "urn:ex:\u{a0}x";
         assert!(matches!(
-            escape_canonical_lines("urn:ex:\u{a0}x"),
+            escape_for(neighbour, Carrier::Canonical),
             Cow::Borrowed(_)
         ));
-        assert_eq!(
-            escape_canonical_lines("urn:ex:a b\u{85}"),
-            "urn:ex:a\\u0020b\u{85}"
-        );
+        assert!(matches!(
+            escape_for(neighbour, Carrier::Xml),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn the_canonical_writer_agrees_with_the_per_scalar_oracle() {
+        let alphabet = alphabet();
+        let mut rng = SplitMix64::new(0x001E_1E5C_A9E0_0002);
+        for len in (0..=70).chain([127, 128, 129, 255]) {
+            for _ in 0..20 {
+                let iri: String = (0..len)
+                    .map(|_| {
+                        if rng.below_usize(6) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
+                        } else {
+                            'a'
+                        }
+                    })
+                    .collect();
+                let mut expected = String::new();
+                for ch in iri.chars() {
+                    if crate::terminals::is_iriref_forbidden(ch) {
+                        let _ = write!(expected, "\\u{:04X}", ch as u32);
+                    } else {
+                        expected.push(ch);
+                    }
+                }
+                let mut pushed = String::new();
+                push_escaped_for(&iri, Carrier::Canonical, &mut pushed);
+                assert_eq!(pushed, expected, "{iri:?}");
+                assert_eq!(escape_for(&iri, Carrier::Canonical), expected, "{iri:?}");
+            }
+        }
     }
 
     #[test]

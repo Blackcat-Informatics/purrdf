@@ -6,8 +6,8 @@
 //! The 5.0 canonical document spells them as `UCHAR` (N-Quads 1.2 section 3: a
 //! character outside the XML 1.1 `Char` production), its digest is over binary
 //! lines and is the same from every entry point, and the retained 4.x
-//! `purrdf-rdfc12` output keeps writing them raw, so a digest recorded by 4.x
-//! recomputes unchanged.
+//! `purrdf-rdfc12` output escapes them too (profile version 4), so a 4.x digest
+//! recorded over the raw spelling no longer recomputes for such a dataset.
 
 use purrdf_core::{
     CANON_CORPUS_POLICY, CanonicalizationControl, try_canonical_digest_view,
@@ -44,7 +44,7 @@ fn the_document_escapes_the_noncharacters_and_every_digest_entry_agrees() {
 }
 
 #[test]
-fn the_retained_4x_output_still_writes_the_noncharacters_raw() {
+fn the_retained_4x_output_escapes_the_noncharacters_and_keeps_c1_raw() {
     let dataset = parse_dataset(SOURCE.as_bytes(), "application/n-quads", None).expect("parses");
     let canonical = try_canonicalize_with(
         &dataset,
@@ -54,6 +54,6 @@ fn the_retained_4x_output_still_writes_the_noncharacters_raw() {
     .expect("canonicalizes");
     assert_eq!(
         canonical.nquads(),
-        "<http://example.org/s> <http://example.org/p> \"a\u{fffe}b\u{ffff}c\u{85}\" .\n"
+        "<http://example.org/s> <http://example.org/p> \"a\\uFFFEb\\uFFFFc\u{85}\" .\n"
     );
 }

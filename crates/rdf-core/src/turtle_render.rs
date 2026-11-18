@@ -32,7 +32,7 @@ use crate::model::RdfTextDirection;
 use crate::{FastMap, FastSet, RdfDataset, TermId, TermRef};
 use purrdf_iri::{PrefixMap, contract_where};
 use purrdf_lex::literal_escape::{self, Carrier};
-use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri};
+use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri_for};
 
 use purrdf_iri::vocab::rdf::NS as RDF;
 use purrdf_xsd::datatype::XSD_NS as XSD;
@@ -541,7 +541,8 @@ impl<'a> Renderer<'a> {
             return curie;
         }
         let mut out = String::with_capacity(iri.len() + 2);
-        write_iri(iri, &mut out);
+        // The rendering feeds the CL-dialect carrier, so the XML set.
+        write_iri_for(iri, purrdf_lex::iri_escape::Carrier::Xml, &mut out);
         out
     }
 

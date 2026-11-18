@@ -248,7 +248,7 @@ pub const CANON_PROFILE_ID: &str = "purrdf-rdfc12";
 /// together: the first two say which algorithm was agreed, and this says which
 /// evidence was agreed to demonstrate it.
 pub const CANON_CORPUS_DIGEST: &str =
-    "b9f367a47ebbf389f76efddb083040dae77b1987f96709bebb8af9fdb5818d3d";
+    "b57bacfc3877e8db1500d0e9fe983aa3b7f463c312df0da1f6007337e019201d";
 
 /// The version of [`CANON_PROFILE_ID`] this build implements.
 ///
@@ -270,7 +270,13 @@ pub const CANON_CORPUS_DIGEST: &str =
 /// **v2 → v3**: caller-selected finite or unlimited search replaces the fixed
 /// ceiling. Typed execution receipts bind the effective configuration and actual
 /// charged events; successful canonical bytes are unchanged.
-pub const CANON_PROFILE_VERSION: u32 = 3;
+///
+/// **v3 → v4**: the canonical form of RDF 1.2 N-Quads (section 3) writes U+FFFE
+/// and U+FFFF in a literal as `\uFFFE` and `\uFFFF`, since neither matches the XML
+/// 1.1 `Char` production. Canonical bytes, and so the digest, move only for a
+/// dataset holding one of those two characters in a literal; every other dataset
+/// canonicalizes to the bytes it did under v3.
+pub const CANON_PROFILE_VERSION: u32 = 4;
 
 /// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
 /// (reifiers, annotations) rendered through this profile's reserved sentinel IRIs
@@ -5773,7 +5779,7 @@ mod tests {
     #[test]
     fn the_profile_identity_and_the_reserved_namespace_are_consistent() {
         assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-        assert_eq!(CANON_PROFILE_VERSION, 3);
+        assert_eq!(CANON_PROFILE_VERSION, 4);
         assert!(SENTINEL_REIFIES.starts_with(RESERVED_NAMESPACE));
         assert!(SENTINEL_ANNOTATION_GRAPH.starts_with(RESERVED_NAMESPACE));
     }
@@ -8155,7 +8161,7 @@ mod tests {
             complete.receipts()[0].configuration,
             SearchConfiguration::Rdfc {
                 output: CanonOutput::Blake3Digest,
-                profile_version: 3,
+                profile_version: 4,
                 ..
             }
         ));

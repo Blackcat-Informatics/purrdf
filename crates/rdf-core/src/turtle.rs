@@ -49,10 +49,17 @@ use crate::{
     blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
 };
 use purrdf_lex::term_syntax::{
-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri_for, write_literal,
 };
 use purrdf_xsd::datatype::XSD_STRING;
 use std::borrow::Cow;
+
+/// Append an `IRIREF` for the XML carrier: this emitter's artifacts are embedded
+/// in XML text by the CL-dialect carrier, so DEL and the C1 controls are escaped
+/// as well as what `IRIREF` forbids.
+fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
+    write_iri_for(iri, purrdf_lex::iri_escape::Carrier::Xml, out);
+}
 
 /// The blank-node label this emitter writes after `_:` for an OWNED-model term:
 /// the caller's label when it is already legal under the exact W3C
@@ -1026,7 +1033,10 @@ mod tests {
             RdfTerm::Triple(triple) => format!(
                 "<<( {} <{}> {} )>>",
                 reference_render(&triple.subject, display),
-                purrdf_lex::iri_escape::escape(&triple.predicate),
+                purrdf_lex::iri_escape::escape_for(
+                    &triple.predicate,
+                    purrdf_lex::iri_escape::Carrier::Xml
+                ),
                 reference_render(&triple.object, display)
             ),
             leaf if display => display_term(leaf),
@@ -1044,7 +1054,10 @@ mod tests {
                 format!(
                     "<<( {} <{}> {} )>>",
                     reference_dataset_term(dataset, s),
-                    purrdf_lex::iri_escape::escape(predicate),
+                    purrdf_lex::iri_escape::escape_for(
+                        predicate,
+                        purrdf_lex::iri_escape::Carrier::Xml
+                    ),
                     reference_dataset_term(dataset, o)
                 )
             }

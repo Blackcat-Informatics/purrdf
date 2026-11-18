@@ -39,7 +39,7 @@ use ::purrdf_rdf::blank_label::ESCAPE_MARKER;
 use ::purrdf_rdf::{BlankScope, RdfLiteral, TermRef};
 use ::purrdf_rdf::{RdfTextDirection, TermId, TermValue};
 use purrdf_core::SmallVec;
-use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required};
+use purrdf_lex::iri_escape::{self, find_first_candidate, is_iriref_escape_required_for};
 use purrdf_lex::literal_escape::{self, Carrier, find_first_literal_escape};
 use purrdf_lex::term_syntax::{self, TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN};
 use purrdf_lex::text_out::TextOut;
@@ -406,12 +406,15 @@ impl<'a> CanonicalBytes<'a> {
     /// Stream the next piece of the literal body `text`: a clean run whole, or
     /// the one scalar at its head through [`literal_escape::write`].
     ///
-    /// Every stop of the canonical kernel is an ASCII byte that is escaped, so
-    /// the scalar at a stop is one byte long.
+    /// A stop of the canonical kernel is a candidate: an ASCII byte that is
+    /// escaped, or the lead byte of the block holding U+FFFE and U+FFFF, whose
+    /// scalar rides through [`literal_escape::write`] as well and comes out raw
+    /// unless it is one of those two.
     fn advance_literal(&mut self, text: &'a str) {
         match find_first_literal_escape(text.as_bytes()) {
             Some(0) => {
-                let (head, rest) = text.split_at(1);
+                let scalar = text.chars().next().expect("a candidate begins a scalar");
+                let (head, rest) = text.split_at(scalar.len_utf8());
                 self.parts.push(CanonicalPart::Escaped(rest));
                 self.pending.clear();
                 literal_escape::write(head, Carrier::Canonical, &mut self.pending);
@@ -425,17 +428,21 @@ impl<'a> CanonicalBytes<'a> {
     }
 
     /// Stream the next piece of the `IRIREF` body `text`: a clean run whole, or
-    /// the one scalar at its head, through [`iri_escape::push_escaped`] when the
-    /// law escapes it.
+    /// the one scalar at its head, through [`iri_escape::push_escaped_for`] when
+    /// the canonical carrier's law escapes it.
     fn advance_iri(&mut self, text: &'a str) {
         match find_first_candidate(text.as_bytes()) {
             Some(0) => {
                 let scalar = text.chars().next().expect("a candidate begins a scalar");
                 let (head, rest) = text.split_at(scalar.len_utf8());
                 self.parts.push(CanonicalPart::Iri(rest));
-                if is_iriref_escape_required(scalar) {
+                if is_iriref_escape_required_for(scalar, iri_escape::Carrier::Canonical) {
                     self.pending.clear();
-                    iri_escape::push_escaped(head, &mut self.pending);
+                    iri_escape::push_escaped_for(
+                        head,
+                        iri_escape::Carrier::Canonical,
+                        &mut self.pending,
+                    );
                 } else {
                     self.parts.push(CanonicalPart::Raw(head.as_bytes()));
                 }
@@ -1914,7 +1921,12 @@ pub(crate) mod term_walk_tests {
     }
 
     fn reference_display(term: &Term) -> String {
-        let iri = |iri: &str| format!("<{}>", purrdf_lex::iri_escape::escape(iri));
+        let iri = |iri: &str| {
+            format!(
+                "<{}>",
+                purrdf_lex::iri_escape::escape_for(iri, purrdf_lex::iri_escape::Carrier::Canonical)
+            )
+        };
         match term {
             Term::NamedNode(n) => iri(&n.0),
             Term::BlankNode(b) => format!("_:{b}"),

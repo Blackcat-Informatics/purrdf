@@ -133,7 +133,7 @@ fn the_document_escapes_noncharacters_and_the_digest_input_does_not() {
         document,
         "<http://example.org/s> <http://example.org/p> \"a\\uFFFEb\\uFFFFc\u{fffd}d\u{85}e\" .\n"
     );
-    let encoding = labelled.lines.iter().next().expect("one line");
+    let encoding = labelled.lines.first().expect("one line");
     let holds = |needle: &[u8]| encoding.windows(needle.len()).any(|w| w == needle);
     assert!(holds("\u{fffe}".as_bytes()) && holds("\u{ffff}".as_bytes()));
     assert!(!holds(b"\\uFFFE"));
