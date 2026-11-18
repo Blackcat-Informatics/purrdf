@@ -10,11 +10,12 @@ use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
 use purrdf_core::{GraphSelector, StatisticsStream};
 use purrdf_hash::multiset::Multiset256;
 
+use super::source_digest::row_hashes;
 use super::{
     CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
     analyze_rows, collect_rows, collect_subject_rows,
 };
-use super::{StoredToken, share_buffer};
+use super::{StoredToken, Table, share_buffer};
 use crate::surface::postings::{Joined, join_by};
 use crate::{TextDeltaError, TextError};
 
@@ -62,10 +63,14 @@ impl<P: CorpusProfile> TextIndex<P> {
             .map(|row| &row.subject)
             .collect();
         let rows = collect_subject_rows(next, &self.config, &subjects)?;
+        let added_hashes: Vec<[u8; 32]> = row_hashes(&additions).collect();
+        let removed_hashes: Vec<[u8; 32]> = row_hashes(&removals).collect();
+        let directory = self.directory_after(&added_hashes, &removed_hashes)?;
         let source = validate_delta(
             &rows,
             &additions,
-            &removals,
+            &added_hashes,
+            &removed_hashes,
             self.source_digest,
             observed_source,
         )?;
@@ -78,6 +83,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         let source_fingerprint = source.fingerprint::<P>();
         if source_fingerprint == self.source_fingerprint {
             self.coverage = coverage;
+            self.row_directory = directory;
             self.source_version = version;
             finish_read(next)?;
             return Ok(self);
@@ -103,6 +109,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         self.merge_changed(partial, &changed)?;
         self.source_fingerprint = source_fingerprint;
         self.source_digest = source;
+        self.row_directory = directory;
         self.coverage = coverage;
         self.source_version = version;
         self.fingerprint = self.compute_fingerprint();
@@ -111,6 +118,29 @@ impl<P: CorpusProfile> TextIndex<P> {
         }
         finish_read(next)?;
         Ok(self)
+    }
+
+    /// The row directory after the delta. Each removed row consumes one
+    /// occurrence of its hash in the pre-delta directory, so a row the index
+    /// never held, or one removed more often than held, is refused whatever
+    /// the additive digest and populations say. Token-less rows are held too.
+    fn directory_after(
+        &self,
+        added: &[[u8; 32]],
+        removed: &[[u8; 32]],
+    ) -> Result<Table<[u8; 32]>, TextDeltaError> {
+        let mut directory = self.row_directory.clone();
+        for (ordinal, hash) in removed.iter().enumerate() {
+            let Ok(at) = directory.binary_search_by(|held| held.cmp(hash)) else {
+                return Err(TextDeltaError::UnheldRemoval { ordinal });
+            };
+            directory = directory.remove(at)?;
+        }
+        for hash in added {
+            let at = directory.partition_point(|held| held < hash);
+            directory = directory.insert(at, *hash)?;
+        }
+        Ok(directory)
     }
 
     /// Obtain next-source evidence independently of the requested additions and
@@ -454,7 +484,8 @@ type DocumentIdentity<'a, P> = (
 fn validate_delta<P: CorpusProfile>(
     rows: &[SourceRow<P>],
     added: &[SourceRow<P>],
-    removed: &[SourceRow<P>],
+    added_hashes: &[[u8; 32]],
+    removed_hashes: &[[u8; 32]],
     mut expected: SourceDigest,
     mut prior: SourceDigest,
 ) -> Result<SourceDigest, TextDeltaError> {
@@ -466,11 +497,11 @@ fn validate_delta<P: CorpusProfile>(
             Joined::Right((ordinal, _)) => return Err(TextDeltaError::MissingAddition { ordinal }),
         }
     }
-    for row in added {
-        prior.remove(row);
+    for &hash in added_hashes {
+        prior.remove_hash(hash);
     }
-    for row in removed {
-        prior.insert(row);
+    for &hash in removed_hashes {
+        prior.insert_hash(hash);
     }
     if expected != prior {
         return Err(TextDeltaError::SourceMismatch {
@@ -478,11 +509,11 @@ fn validate_delta<P: CorpusProfile>(
             actual: prior.fingerprint::<P>(),
         });
     }
-    for row in removed {
-        expected.remove(row);
+    for &hash in removed_hashes {
+        expected.remove_hash(hash);
     }
-    for row in added {
-        expected.insert(row);
+    for &hash in added_hashes {
+        expected.insert_hash(hash);
     }
     Ok(expected)
 }
@@ -538,6 +569,10 @@ mod tests {
 
     fn assert_fresh<P: CorpusProfile>(actual: &TextIndex<P>, fresh: &TextIndex<P>) {
         assert_eq!(actual.source_digest, fresh.source_digest);
+        assert_eq!(
+            actual.row_directory.iter().collect::<Vec<_>>(),
+            fresh.row_directory.iter().collect::<Vec<_>>()
+        );
         assert_eq!(actual.source_fingerprint, fresh.source_fingerprint);
         assert_eq!(actual.fingerprint, fresh.fingerprint);
         assert_eq!(actual.coverage, fresh.coverage);
@@ -1061,6 +1096,89 @@ mod tests {
             index.with_delta(&*next, &*empty, &*empty).unwrap_err(),
             TextDeltaError::SourceMismatch { expected, actual }
         );
+    }
+
+    /// The additive source digest and the populations cannot show that a
+    /// removed row was indexed. Forge an index whose recorded digest and
+    /// population already include a row it never held: the sums and the
+    /// population balance, and only the exact row directory refuses it.
+    #[test]
+    fn text_delta_refuses_removals_the_index_never_held() {
+        let held = ("urn:s", "river bank", None, None, false);
+        let before = dataset(&[held]);
+        let after = dataset(&[]);
+        let genuine = TextIndex::from_dataset(&*before, &config()).unwrap();
+        let applied = genuine
+            .clone()
+            .with_delta(&*after, &*dataset(&[]), &*before)
+            .unwrap();
+        assert_fresh(
+            &applied,
+            &TextIndex::from_dataset(&*after, &config()).unwrap(),
+        );
+
+        let (no_rows, no_coverage) = collect_rows(&*dataset(&[]), &config()).unwrap();
+        for row in [
+            ("urn:absent", "", None, None, false),
+            ("urn:s", "", None, None, false),
+            ("urn:s", "river", None, None, false),
+            ("urn:s", "River Bank", None, None, false),
+            ("urn:s", "bank river", None, None, false),
+            ("urn:s", "river bank", Some("en"), None, false),
+        ] {
+            let removed = dataset(&[row]);
+            let (rows, coverage) = collect_rows(&*removed, &config()).unwrap();
+            let mut forged = genuine.clone();
+            forged.source_digest.insert(&rows[0]);
+            forged.coverage.represented[0] += 1;
+            validate_delta(
+                &[],
+                &no_rows,
+                &[],
+                &row_hashes(&rows).collect::<Vec<_>>(),
+                forged.source_digest,
+                genuine.source_digest,
+            )
+            .expect("the forged digest balances the delta");
+            forged
+                .coverage
+                .with_delta(&config(), &no_coverage, &coverage, &genuine.coverage)
+                .expect("the forged population balances the delta");
+            assert_eq!(
+                forged
+                    .with_delta(&*before, &*dataset(&[]), &*removed)
+                    .unwrap_err(),
+                TextDeltaError::UnheldRemoval { ordinal: 0 },
+                "{row:?}"
+            );
+        }
+    }
+
+    /// A row occurring twice is held twice, and the directory follows every
+    /// delta, so a later removal is judged against the updated state.
+    #[test]
+    fn text_delta_row_directory_follows_successive_deltas() {
+        let row = ("urn:s", "river bank", None, None, false);
+        let twin = ("urn:s", "river bank", None, None, true);
+        let empty = dataset(&[]);
+        let one = dataset(&[row]);
+        let two = dataset(&[row, twin]);
+        let mut index = TextIndex::from_dataset(&*empty, &config()).unwrap();
+        for (next, added, removed) in [
+            (&two, &two, &empty),
+            (&one, &empty, &dataset(&[twin])),
+            (&empty, &empty, &one),
+        ] {
+            index = index.with_delta(&**next, &**added, &**removed).unwrap();
+            assert_fresh(
+                &index,
+                &TextIndex::from_dataset(&**next, &config()).unwrap(),
+            );
+        }
+        assert!(matches!(
+            index.with_delta(&*empty, &*empty, &*one),
+            Err(TextDeltaError::UnheldRemoval { ordinal: 0 })
+        ));
     }
 
     #[test]

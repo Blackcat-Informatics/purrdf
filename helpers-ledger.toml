@@ -2167,6 +2167,16 @@ reason = "Per-architecture safe entries, each around its own module's base16 ker
 
 [[distinct]]
 members = [
+    "purrdf_text::bench_crate::search::dataset_of",
+    "purrdf_text::test_crate::wasm_determinism::corpus_dataset",
+]
+kind = "body"
+criterion = "b"
+anchor = "purrdf_text::bench_crate::search::dataset_of"
+reason = "Two fixture builders over different row keys: the bench numbers its documents from a generated ordinal and takes the text by iterator so the same builder serves the full corpus and its removed-row subsets, while the wasm test names each document by a local name from a fixed table; a bench target and a test target share no module, so a shared body would need a path include that couples a measured loop to a frozen test."
+
+[[distinct]]
+members = [
     "purrdf_retrieval::test_crate::boundary::ScriptedStream::next",
     "purrdf_retrieval::test_crate::wasm_determinism::ScriptedStream::next",
 ]
