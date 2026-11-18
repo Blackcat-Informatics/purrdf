@@ -33,7 +33,7 @@
 //! ## Content addressing
 //!
 //! [`PipelineBundle::digest`] is a SHA-256 fold over, in a fixed order:
-//! 1. the canonical document text of the dataset (`try_canonicalize_view`),
+//! 1. the canonical document text of the dataset (streamed by `try_hash_document_view`),
 //! 2. each lookaside resource's identity (its name, else IRI, else path) with
 //!    its `content_digest` (empty when none is declared), as pairs SORTED by
 //!    identity then digest,
@@ -42,7 +42,7 @@
 //!    ([`DatasetProvenance::public_projection`]).
 //!
 //! [`PipelineViewBundle::digest`] folds exactly the same four sections, reading
-//! section 1 through the shared `try_canonicalize_view` implementation. A
+//! section 1 through the shared `try_hash_document_view` implementation. A
 //! composite view and the flat dataset holding the same content canonicalize
 //! byte-identically, so the two folds agree by construction rather than by
 //! coincidence.
@@ -1631,7 +1631,7 @@ impl<H> PipelineViewBundle<H> {
 
     /// The content [`ContentDigest`] of this carrier — the same four-section fold
     /// [`PipelineBundle::digest`] performs, reading its first section through
-    /// `try_canonicalize_view`.
+    /// `try_hash_document_view`.
     ///
     /// # Errors
     ///

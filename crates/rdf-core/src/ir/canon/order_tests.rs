@@ -578,6 +578,15 @@ fn flat_datasets_with_nested_terms_escapes_and_many_blanks_match_the_oracle() {
     check(&*mixed());
     check_flat(&*mixed());
     check_flat(&*RdfDatasetBuilder::new().freeze().unwrap());
+    let mut plain = RdfDatasetBuilder::new();
+    let (s, p) = (plain.intern_iri(S).unwrap(), plain.intern_iri(P).unwrap());
+    for k in 0..3 {
+        let o = plain
+            .intern_literal(RdfLiteral::simple(format!("v{k}")))
+            .unwrap();
+        plain.push_quad(s, p, o, None).unwrap();
+    }
+    check_flat(&*plain.freeze().unwrap());
     for dataset in statements() {
         check(&*dataset);
         check_flat(&*dataset);

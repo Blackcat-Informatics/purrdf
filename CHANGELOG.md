@@ -17,9 +17,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **`PipelineBundle::digest` and the residue leaf hash the canonical document as
   its lines are spelled.** The carrier identity, the pipeline root's residue
   leaf and the view bundle's equivalents no longer build the canonical document
-  text before hashing it, so their peak memory no longer grows with the document.
-  The digests are byte-identical for every input, and the identity law, domain,
-  section order and refusals are unchanged.
+  text and label table before hashing, so those are no longer allocated:
+  requested bytes fall by about one document plus one label table, and
+  allocations by about ten percent. Peak memory is set by the labelling search
+  and is unchanged. The digests are byte-identical for every input, and the
+  identity law, domain, section order and refusals are unchanged. The
+  canonicalization receipts of these runs record `Sha256Digest` as their output
+  instead of `Document`.
 - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
