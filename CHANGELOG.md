@@ -11,7 +11,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` report a COSE_Sign1 whose declared
   `alg` this engine does not implement as `SigStatus::Unverified` instead of
-  `Invalid`: the engine could not check it. `Invalid` remains for a signature
+  `Invalid`, and the file verifiers (`verify_signatures`,
+  `verify_signatures_with_resolver` and the C, WebAssembly and Python surfaces
+  over them) record it as `unverified`: the engine could not check it. `Invalid` remains for a signature
   that was checked and failed and for a malformed structure. Callers that
   require `Valid` still refuse an unverified signature.
 - **Breaking: canonical output is the nested-refinement labelling.** The
