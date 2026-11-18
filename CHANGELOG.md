@@ -8,6 +8,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
+  (and `RuleOptions::with_never_derive_declarations`) admit the executed SRL
+  program against the declarations before it compiles, so a rule that derives a
+  protected predicate is refused as `SrlError::Execution`.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
   routes to `(nested-refinement-labelling, 1)`. The canonical document is the

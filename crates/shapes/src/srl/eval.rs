@@ -463,8 +463,15 @@ where
                 predicates
             })
             .collect();
-        let program = schedule::compile_scheduled(lowered.clauses, schedule)
-            .map_err(|e| describe(&e, set))?;
+        let program = match options.never_derive_declarations() {
+            Some(declarations) => schedule::compile_scheduled_with_declarations(
+                lowered.clauses,
+                schedule,
+                declarations,
+            ),
+            None => schedule::compile_scheduled(lowered.clauses, schedule),
+        }
+        .map_err(|e| describe(&e, set))?;
         coordinates.contract = Some(purrdf_hash::hex::Digest32::from(
             *program.contract_hash(&governors).digest(),
         ));
