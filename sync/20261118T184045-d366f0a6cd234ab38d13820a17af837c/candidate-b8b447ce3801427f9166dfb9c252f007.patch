@@ -1,0 +1,601 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index ca2584d34..5137be75f 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -24,6 +24,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   identity law, domain, section order and refusals are unchanged. The
+   canonicalization receipts of these runs record `Sha256Digest` as their output
+   instead of `Document`.
++- **`TextIndex::with_delta` checks each removed row by its row digest.** The
++  additive source digest and statement populations accept a removal the index
++  never held when its hash balances an addition. The index now keeps a sorted
++  directory of the digest of every selected source row, token-less rows
++  included, and each removed row must consume one occurrence of its digest;
++  otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
++  The directory is updated by every applied delta and is not part of either
++  fingerprint. A genuine delta applies as before.
+ - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
+   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
+   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
+diff --git crates/text/README.md crates/text/README.md
+index baf9ba678..2e75621d8 100644
+--- crates/text/README.md
++++ crates/text/README.md
+@@ -113,6 +113,12 @@ effective statement additions and removals. The inputs use the same carrier
+ profile as the index. Both asserted and annotation literal rows count, including
+ a literal present in both layers. Reversing the delta must recover the indexed
+ source fingerprint; missing additions and incomplete deltas are typed refusals.
++Each removed row must also be held by the index. The index keeps a sorted
++directory of the digest of every selected source row, token-less rows included,
++once per occurrence. A removal consumes one occurrence of its row digest, and a
++row that is absent or removed more often than held is refused with
++`TextDeltaError::UnheldRemoval`. The directory follows every applied delta. It
++lives in memory beside the index and is not part of either fingerprint.
+ The next source also refreshes predicate coverage for nonliteral changes.
+ 
+ Only changed documents are analyzed, using their complete key:
+diff --git crates/text/benches/search.rs crates/text/benches/search.rs
+index 69f29d7da..7fe49852a 100644
+--- crates/text/benches/search.rs
++++ crates/text/benches/search.rs
+@@ -115,45 +115,58 @@ fn skewed_term(rng: &mut SplitMix64) -> u64 {
+     smallest
+ }
+ 
++/// The generated text of every document, in document order.
++fn texts() -> Vec<String> {
++    let mut generator = SplitMix64::new(SEED);
++    (0..DOCUMENTS)
++        .map(|_| {
++            let mut text = String::new();
++            for token in 0..TOKENS_PER_DOCUMENT {
++                if token > 0 {
++                    text.push(' ');
++                }
++                text.push_str("term");
++                // Fixed width, so the dictionary's sorted order is its numeric
++                // order and the generated text is trivially readable in a profile.
++                let ordinal = skewed_term(&mut generator);
++                for digit in (0..4).rev() {
++                    let place = 10_u64.pow(digit);
++                    let value = (ordinal / place) % 10;
++                    text.push(char::from(
++                        b'0' + u8::try_from(value).expect("a digit is one byte"),
++                    ));
++                }
++            }
++            text
++        })
++        .collect()
++}
++
++/// A frozen dataset of `(document ordinal, text)` rows, every literal untagged
++/// and in the default graph.
++fn dataset_of<'a>(rows: impl IntoIterator<Item = (u32, &'a str)>) -> Arc<RdfDataset> {
++    let mut builder = RdfDatasetBuilder::new();
++    let note = builder.intern_iri(NOTE).unwrap();
++    for (document, text) in rows {
++        let subject = builder
++            .intern_iri(&format!("https://example.org/doc/{document:04}"))
++            .unwrap();
++        let literal = builder.intern_literal(RdfLiteral::simple(text)).unwrap();
++        builder.push_quad(subject, note, literal, None).unwrap();
++    }
++    builder
++        .freeze()
++        .expect("the generated corpus must validate")
++}
++
+ /// The generated corpus, as one frozen dataset.
+ ///
+ /// Every literal is untagged and in the default graph, so the index holds a
+ /// single `(graph, language)` partition and a ceiling therefore bounds one
+ /// heap rather than being split across several.
+ fn corpus() -> Arc<RdfDataset> {
+-    let mut generator = SplitMix64::new(SEED);
+-    let mut builder = RdfDatasetBuilder::new();
+-    let note = builder.intern_iri(NOTE).unwrap();
+-
+-    let mut text = String::new();
+-    for document in 0..DOCUMENTS {
+-        text.clear();
+-        for token in 0..TOKENS_PER_DOCUMENT {
+-            if token > 0 {
+-                text.push(' ');
+-            }
+-            text.push_str("term");
+-            // Fixed width, so the dictionary's sorted order is its numeric order
+-            // and the generated text is trivially readable in a profile.
+-            let ordinal = skewed_term(&mut generator);
+-            for digit in (0..4).rev() {
+-                let place = 10_u64.pow(digit);
+-                let value = (ordinal / place) % 10;
+-                text.push(char::from(
+-                    b'0' + u8::try_from(value).expect("a digit is one byte"),
+-                ));
+-            }
+-        }
+-        let subject = builder
+-            .intern_iri(&format!("https://example.org/doc/{document:04}"))
+-            .unwrap();
+-        let literal = builder.intern_literal(RdfLiteral::simple(&text)).unwrap();
+-        builder.push_quad(subject, note, literal, None).unwrap();
+-    }
+-
+-    builder
+-        .freeze()
+-        .expect("the generated corpus must validate")
++    let texts = texts();
++    dataset_of((0..DOCUMENTS).zip(texts.iter().map(String::as_str)))
+ }
+ 
+ /// The language tags the multi-partition corpus spreads its documents across.
+@@ -262,6 +275,32 @@ fn benchmark(criterion: &mut Bench) {
+         );
+     });
+ 
++    // One document's text replaced: the delta names that one removed and one
++    // added row, and the next source is the corpus with the replacement.
++    let texts = texts();
++    let replacement = "term0001 term0002 term0003";
++    let removed = dataset_of([(7, texts[7].as_str())]);
++    let added = dataset_of([(7, replacement)]);
++    let next = dataset_of(
++        (0..DOCUMENTS).zip(
++            texts
++                .iter()
++                .enumerate()
++                .map(|(at, text)| if at == 7 { replacement } else { text.as_str() }),
++        ),
++    );
++    group.bench_function("apply_delta_one_document", |bencher| {
++        bencher.iter_batched(
++            || index.clone(),
++            |index| {
++                index
++                    .with_delta(black_box(&*next), black_box(&*added), black_box(&*removed))
++                    .expect("the genuine delta applies")
++            },
++            BatchSize::SmallInput,
++        );
++    });
++
+     group.bench_function("search_unbounded", |bencher| {
+         bencher.iter(|| {
+             select(
+diff --git crates/text/src/error.rs crates/text/src/error.rs
+index a4f7e8d9e..ee96fddfd 100644
+--- crates/text/src/error.rs
++++ crates/text/src/error.rs
+@@ -53,6 +53,12 @@ pub enum TextDeltaError {
+         /// Population independently observed in the next source.
+         observed: u128,
+     },
++    /// A removed row is not among the rows the index holds, or is removed
++    /// more often than it is held.
++    UnheldRemoval {
++        /// Canonical selected removal ordinal.
++        ordinal: usize,
++    },
+     /// The original source, analysis, capacity or ranking refusal.
+     Indexing(TextError),
+     /// The delta was analyzed under a different resolved law.
+@@ -106,6 +112,10 @@ impl core::fmt::Display for TextDeltaError {
+                 f,
+                 "text delta coverage mismatch for {predicate:?}: {before} previous, {added} added, {removed} removed, {observed} observed"
+             ),
++            Self::UnheldRemoval { ordinal } => write!(
++                f,
++                "text delta removal {ordinal} is not a row the index holds"
++            ),
+             Self::Indexing(cause) => cause.fmt(f),
+             Self::AnalyzerMismatch { expected, actual } => write!(
+                 f,
+@@ -138,6 +148,7 @@ impl std::error::Error for TextDeltaError {
+             | Self::SourceOverlap { .. }
+             | Self::MissingAddition { .. }
+             | Self::CoverageMismatch { .. }
++            | Self::UnheldRemoval { .. }
+             | Self::SourceMismatch { .. } => None,
+         }
+     }
+@@ -157,6 +168,9 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
+             "before" => Unsigned(*before), "added" => Unsigned(*added),
+             "removed" => Unsigned(*removed), "observed" => Unsigned(*observed),
+         },
++        UnheldRemoval { ordinal } => "text-delta-unheld-removal" {
++            "ordinal" => Unsigned(*ordinal as u128),
++        },
+         Indexing(cause) => "text-delta-indexing" { "cause" => Cause(cause) },
+         AnalyzerMismatch { expected, actual } => "text-delta-analyzer-mismatch" {
+             "expected" => Bytes(expected), "actual" => Bytes(actual),
+diff --git crates/text/src/index.rs crates/text/src/index.rs
+index 651905720..900b54d13 100644
+--- crates/text/src/index.rs
++++ crates/text/src/index.rs
+@@ -102,8 +102,8 @@ const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/ind
+ const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v2");
+ 
+ mod source_digest;
+-use source_digest::SourceDigest;
+ pub use source_digest::source_fingerprint;
++use source_digest::{SourceDigest, row_directory, row_hashes};
+ mod token_streams;
+ use token_streams::TokenTable;
+ pub(crate) use token_streams::{Slice, Table};
+@@ -794,6 +794,10 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
+     source_fingerprint: [u8; FINGERPRINT_BYTES],
+     /// Reversible source accounting, retained independently of its published hash.
+     source_digest: SourceDigest,
++    /// The hash of every selected source row, token-less rows included, sorted,
++    /// with one entry per occurrence. A delta's removed rows are joined against
++    /// it exactly. Memory only: derived from the source rows, never fingerprinted.
++    row_directory: Table<[u8; 32]>,
+     /// Original source-owned observation for independently discovering changes.
+     source_version: Option<purrdf_core::source::SourceVersion>,
+     /// Which configured predicates the build's walk found a statement for.
+@@ -893,7 +897,8 @@ impl<P: CorpusProfile> TextIndex<P> {
+     {
+         let (rows, coverage) = collect_rows(dataset, config)?;
+         let version = dataset.source_version().map_err(TextError::source_read)?;
+-        let source = SourceDigest::from_rows(&rows);
++        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
++        let source = SourceDigest::from_hashes(hashes.iter().copied());
+         let (documents, dictionary) = analyze_rows(&rows, config)?;
+         let mut index = Self::assemble(
+             config.clone(),
+@@ -904,6 +909,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             RankingProfile::single_field(),
+         )?;
+         index.source_version = version;
++        index.row_directory = row_directory(hashes)?;
+         dataset
+             .checked_read(|_| ())
+             .map_err(TextError::source_read)?;
+@@ -928,7 +934,8 @@ impl<P: CorpusProfile> TextIndex<P> {
+         }
+         let (rows, coverage) = collect_rows(dataset, config)?;
+         let version = dataset.source_version().map_err(TextError::source_read)?;
+-        let source = SourceDigest::from_rows(&rows);
++        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
++        let source = SourceDigest::from_hashes(hashes.iter().copied());
+         let (documents, dictionary) = analyze_rows(&rows, config)?;
+         let mut index = Self::assemble(
+             config.clone(),
+@@ -939,6 +946,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             profile,
+         )?;
+         index.source_version = version;
++        index.row_directory = row_directory(hashes)?;
+         dataset
+             .checked_read(|_| ())
+             .map_err(TextError::source_read)?;
+@@ -2018,6 +2026,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             fingerprint: [0; FINGERPRINT_BYTES],
+             source_fingerprint: source.fingerprint::<P>(),
+             source_digest: source,
++            row_directory: Table::default(),
+             source_version: None,
+             coverage,
+         };
+diff --git crates/text/src/index/delta.rs crates/text/src/index/delta.rs
+index 07ac6e04b..028683182 100644
+--- crates/text/src/index/delta.rs
++++ crates/text/src/index/delta.rs
+@@ -10,11 +10,12 @@ use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
+ use purrdf_core::{GraphSelector, StatisticsStream};
+ use purrdf_hash::multiset::Multiset256;
+ 
++use super::source_digest::row_hashes;
+ use super::{
+     CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
+     analyze_rows, collect_rows, collect_subject_rows,
+ };
+-use super::{StoredToken, share_buffer};
++use super::{StoredToken, Table, share_buffer};
+ use crate::surface::postings::{Joined, join_by};
+ use crate::{TextDeltaError, TextError};
+ 
+@@ -62,10 +63,14 @@ impl<P: CorpusProfile> TextIndex<P> {
+             .map(|row| &row.subject)
+             .collect();
+         let rows = collect_subject_rows(next, &self.config, &subjects)?;
++        let added_hashes: Vec<[u8; 32]> = row_hashes(&additions).collect();
++        let removed_hashes: Vec<[u8; 32]> = row_hashes(&removals).collect();
++        let directory = self.directory_after(&added_hashes, &removed_hashes)?;
+         let source = validate_delta(
+             &rows,
+             &additions,
+-            &removals,
++            &added_hashes,
++            &removed_hashes,
+             self.source_digest,
+             observed_source,
+         )?;
+@@ -78,6 +83,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+         let source_fingerprint = source.fingerprint::<P>();
+         if source_fingerprint == self.source_fingerprint {
+             self.coverage = coverage;
++            self.row_directory = directory;
+             self.source_version = version;
+             finish_read(next)?;
+             return Ok(self);
+@@ -103,6 +109,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+         self.merge_changed(partial, &changed)?;
+         self.source_fingerprint = source_fingerprint;
+         self.source_digest = source;
++        self.row_directory = directory;
+         self.coverage = coverage;
+         self.source_version = version;
+         self.fingerprint = self.compute_fingerprint();
+@@ -113,6 +120,29 @@ impl<P: CorpusProfile> TextIndex<P> {
+         Ok(self)
+     }
+ 
++    /// The row directory after the delta. Each removed row consumes one
++    /// occurrence of its hash in the pre-delta directory, so a row the index
++    /// never held, or one removed more often than held, is refused whatever
++    /// the additive digest and populations say. Token-less rows are held too.
++    fn directory_after(
++        &self,
++        added: &[[u8; 32]],
++        removed: &[[u8; 32]],
++    ) -> Result<Table<[u8; 32]>, TextDeltaError> {
++        let mut directory = self.row_directory.clone();
++        for (ordinal, hash) in removed.iter().enumerate() {
++            let Ok(at) = directory.binary_search_by(|held| held.cmp(hash)) else {
++                return Err(TextDeltaError::UnheldRemoval { ordinal });
++            };
++            directory = directory.remove(at)?;
++        }
++        for hash in added {
++            let at = directory.partition_point(|held| held < hash);
++            directory = directory.insert(at, *hash)?;
++        }
++        Ok(directory)
++    }
++
+     /// Obtain next-source evidence independently of the requested additions and
+     /// removals. Neither branch enumerates the complete next source.
+     fn observe_source<D: DatasetView>(&self, next: &D) -> Result<ObservedSource, TextDeltaError>
+@@ -454,7 +484,8 @@ type DocumentIdentity<'a, P> = (
+ fn validate_delta<P: CorpusProfile>(
+     rows: &[SourceRow<P>],
+     added: &[SourceRow<P>],
+-    removed: &[SourceRow<P>],
++    added_hashes: &[[u8; 32]],
++    removed_hashes: &[[u8; 32]],
+     mut expected: SourceDigest,
+     mut prior: SourceDigest,
+ ) -> Result<SourceDigest, TextDeltaError> {
+@@ -466,11 +497,11 @@ fn validate_delta<P: CorpusProfile>(
+             Joined::Right((ordinal, _)) => return Err(TextDeltaError::MissingAddition { ordinal }),
+         }
+     }
+-    for row in added {
+-        prior.remove(row);
++    for &hash in added_hashes {
++        prior.remove_hash(hash);
+     }
+-    for row in removed {
+-        prior.insert(row);
++    for &hash in removed_hashes {
++        prior.insert_hash(hash);
+     }
+     if expected != prior {
+         return Err(TextDeltaError::SourceMismatch {
+@@ -478,11 +509,11 @@ fn validate_delta<P: CorpusProfile>(
+             actual: prior.fingerprint::<P>(),
+         });
+     }
+-    for row in removed {
+-        expected.remove(row);
++    for &hash in removed_hashes {
++        expected.remove_hash(hash);
+     }
+-    for row in added {
+-        expected.insert(row);
++    for &hash in added_hashes {
++        expected.insert_hash(hash);
+     }
+     Ok(expected)
+ }
+@@ -538,6 +569,10 @@ mod tests {
+ 
+     fn assert_fresh<P: CorpusProfile>(actual: &TextIndex<P>, fresh: &TextIndex<P>) {
+         assert_eq!(actual.source_digest, fresh.source_digest);
++        assert_eq!(
++            actual.row_directory.iter().collect::<Vec<_>>(),
++            fresh.row_directory.iter().collect::<Vec<_>>()
++        );
+         assert_eq!(actual.source_fingerprint, fresh.source_fingerprint);
+         assert_eq!(actual.fingerprint, fresh.fingerprint);
+         assert_eq!(actual.coverage, fresh.coverage);
+@@ -1063,6 +1098,89 @@ mod tests {
+         );
+     }
+ 
++    /// The additive source digest and the populations cannot show that a
++    /// removed row was indexed. Forge an index whose recorded digest and
++    /// population already include a row it never held: the sums and the
++    /// population balance, and only the exact row directory refuses it.
++    #[test]
++    fn text_delta_refuses_removals_the_index_never_held() {
++        let held = ("urn:s", "river bank", None, None, false);
++        let before = dataset(&[held]);
++        let after = dataset(&[]);
++        let genuine = TextIndex::from_dataset(&*before, &config()).unwrap();
++        let applied = genuine
++            .clone()
++            .with_delta(&*after, &*dataset(&[]), &*before)
++            .unwrap();
++        assert_fresh(
++            &applied,
++            &TextIndex::from_dataset(&*after, &config()).unwrap(),
++        );
++
++        let (no_rows, no_coverage) = collect_rows(&*dataset(&[]), &config()).unwrap();
++        for row in [
++            ("urn:absent", "", None, None, false),
++            ("urn:s", "", None, None, false),
++            ("urn:s", "river", None, None, false),
++            ("urn:s", "River Bank", None, None, false),
++            ("urn:s", "bank river", None, None, false),
++            ("urn:s", "river bank", Some("en"), None, false),
++        ] {
++            let removed = dataset(&[row]);
++            let (rows, coverage) = collect_rows(&*removed, &config()).unwrap();
++            let mut forged = genuine.clone();
++            forged.source_digest.insert(&rows[0]);
++            forged.coverage.represented[0] += 1;
++            validate_delta(
++                &[],
++                &no_rows,
++                &[],
++                &row_hashes(&rows).collect::<Vec<_>>(),
++                forged.source_digest,
++                genuine.source_digest,
++            )
++            .expect("the forged digest balances the delta");
++            forged
++                .coverage
++                .with_delta(&config(), &no_coverage, &coverage, &genuine.coverage)
++                .expect("the forged population balances the delta");
++            assert_eq!(
++                forged
++                    .with_delta(&*before, &*dataset(&[]), &*removed)
++                    .unwrap_err(),
++                TextDeltaError::UnheldRemoval { ordinal: 0 },
++                "{row:?}"
++            );
++        }
++    }
++
++    /// A row occurring twice is held twice, and the directory follows every
++    /// delta, so a later removal is judged against the updated state.
++    #[test]
++    fn text_delta_row_directory_follows_successive_deltas() {
++        let row = ("urn:s", "river bank", None, None, false);
++        let twin = ("urn:s", "river bank", None, None, true);
++        let empty = dataset(&[]);
++        let one = dataset(&[row]);
++        let two = dataset(&[row, twin]);
++        let mut index = TextIndex::from_dataset(&*empty, &config()).unwrap();
++        for (next, added, removed) in [
++            (&two, &two, &empty),
++            (&one, &empty, &dataset(&[twin])),
++            (&empty, &empty, &one),
++        ] {
++            index = index.with_delta(&**next, &**added, &**removed).unwrap();
++            assert_fresh(
++                &index,
++                &TextIndex::from_dataset(&**next, &config()).unwrap(),
++            );
++        }
++        assert!(matches!(
++            index.with_delta(&*empty, &*empty, &*one),
++            Err(TextDeltaError::UnheldRemoval { ordinal: 0 })
++        ));
++    }
++
+     #[test]
+     fn text_delta_graph_free_carrier_matches_fresh() {
+         use purrdf_core::ir::TripleDataset;
+diff --git crates/text/src/index/source_digest.rs crates/text/src/index/source_digest.rs
+index 704489bed..fc87b4aeb 100644
+--- crates/text/src/index/source_digest.rs
++++ crates/text/src/index/source_digest.rs
+@@ -62,16 +62,33 @@ impl SourceDigest {
+     pub(super) fn from_rows<'a, P: CorpusProfile + 'a>(
+         rows: impl IntoIterator<Item = &'a SourceRow<P>>,
+     ) -> Self {
++        Self::from_hashes(row_hashes(rows))
++    }
++
++    /// Sum already computed row hashes, so a caller that also needs them for
++    /// another purpose hashes each row once.
++    pub(super) fn from_hashes(hashes: impl IntoIterator<Item = [u8; 32]>) -> Self {
+         let mut digest = Self::default();
+-        for hash in row_hashes(rows) {
+-            digest
+-                .state
+-                .insert(hash)
+-                .expect("a finite source population fits u128");
++        for hash in hashes {
++            digest.insert_hash(hash);
+         }
+         digest
+     }
+ 
++    pub(super) fn insert_hash(&mut self, hash: [u8; 32]) {
++        self.state
++            .insert(hash)
++            .expect("a finite source population fits u128");
++    }
++
++    /// The caller establishes row membership before subtracting it.
++    pub(super) fn remove_hash(&mut self, hash: [u8; 32]) {
++        self.state
++            .remove(hash)
++            .expect("source membership was validated");
++    }
++
++    #[cfg(test)]
+     pub(super) fn insert<P: CorpusProfile>(&mut self, row: &SourceRow<P>) {
+         self.state
+             .insert(row_hash(row))
+@@ -80,6 +97,7 @@ impl SourceDigest {
+ 
+     /// The caller establishes row membership before subtracting it. Population
+     /// alone cannot prove membership in a multiset.
++    #[cfg(test)]
+     pub(super) fn remove<P: CorpusProfile>(&mut self, row: &SourceRow<P>) {
+         self.state
+             .remove(row_hash(row))
+@@ -104,6 +122,16 @@ pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+     })
+ }
+ 
++/// The sorted per-row hashes of every selected source row, token-less rows
++/// included, each repeated as often as the row occurs.
++pub(super) fn row_directory(
++    mut hashes: Vec<[u8; 32]>,
++) -> Result<super::Table<[u8; 32]>, crate::TextError> {
++    hashes.sort_unstable();
++    super::Table::from_streams(hashes)
++}
++
++#[cfg(test)]
+ fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
+     row_hashes(std::iter::once(row))
+         .next()
+@@ -113,7 +141,7 @@ fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
+ /// Use the original core row law so independently sealed native metadata and
+ /// selected text rows consume exactly the same preimages. No literal text is
+ /// copied into an owned term or output buffer.
+-fn row_hashes<'a, P: CorpusProfile + 'a>(
++pub(super) fn row_hashes<'a, P: CorpusProfile + 'a>(
+     rows: impl IntoIterator<Item = &'a SourceRow<P>>,
+ ) -> impl Iterator<Item = [u8; 32]> {
+     rows.into_iter().map(|row| {
+diff --git helpers-ledger.toml helpers-ledger.toml
+index d70930636..ec6f7c19a 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -2165,6 +2165,16 @@ criterion = "a"
+ anchor = "purrdf_hash::arch::x86_64::hex_encode"
+ reason = "Per-architecture safe entries, each around its own module's base16 kernel (SSSE3 on x86_64, NEON on aarch64), each a symbol scripts/simd-asm-manifest.toml pins."
+ 
++[[distinct]]
++members = [
++    "purrdf_text::bench_crate::search::dataset_of",
++    "purrdf_text::test_crate::wasm_determinism::corpus_dataset",
++]
++kind = "body"
++criterion = "b"
++anchor = "purrdf_text::bench_crate::search::dataset_of"
++reason = "Two fixture builders over different row keys: the bench numbers its documents from a generated ordinal and takes the text by iterator so the same builder serves the full corpus and its removed-row subsets, while the wasm test names each document by a local name from a fixed table; a bench target and a test target share no module, so a shared body would need a path include that couples a measured loop to a frozen test."
++
+ [[distinct]]
+ members = [
+     "purrdf_retrieval::test_crate::boundary::ScriptedStream::next",
