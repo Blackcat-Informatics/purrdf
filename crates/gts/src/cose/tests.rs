@@ -430,3 +430,41 @@ fn verify_signatures_marks_a_small_order_key_invalid_and_a_real_key_valid() {
     assert_eq!(signatures[1].status, "invalid");
     assert_eq!(signatures[1].kid.as_deref(), Some("weak"));
 }
+
+/// `blob`, a COSE_Sign1, with its protected header replaced by `protected`.
+fn with_protected(blob: &[u8], protected: Vec<u8>) -> Vec<u8> {
+    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
+    let Value::Tag(tag, value) = &mut value else {
+        panic!("a COSE_Sign1 has an outer tag");
+    };
+    let tag = *tag;
+    let mut fields = value.take().into_array().expect("a COSE_Sign1 is an array");
+    fields[0] = Value::Bytes(protected);
+    wire::encode(&Value::Tag(tag, Box::new(Value::Array(fields))))
+}
+
+#[test]
+fn an_unsupported_algorithm_is_unverified_and_a_malformed_header_is_invalid() {
+    let signer = SigningKey::from_bytes(&[5; 32]);
+    let public = signer.verifying_key();
+    let honest = sign_id(b"frame", &signer, "kid");
+    assert_eq!(verify_sig(&honest, b"frame", &public), SigStatus::Valid);
+
+    // alg -99 is an integer this engine does not implement: not checked.
+    let unsupported = with_protected(&honest, vec![0xa1, 0x01, 0x38, 0x62]);
+    assert_eq!(
+        verify_sig(&unsupported, b"frame", &public),
+        SigStatus::Unverified
+    );
+    assert_ne!(
+        verify_sig(&unsupported, b"frame", &public),
+        SigStatus::Valid
+    );
+
+    // A protected header that is not a CBOR map is malformed, hence invalid.
+    let malformed = with_protected(&honest, vec![0x01]);
+    assert_eq!(
+        verify_sig(&malformed, b"frame", &public),
+        SigStatus::Invalid
+    );
+}

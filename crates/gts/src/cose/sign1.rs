@@ -86,9 +86,10 @@ pub enum VerifyingKeyRef<'a> {
 pub enum SigStatus {
     /// Cryptographically valid under the resolved key.
     Valid,
-    /// Malformed, unsupported, algorithm/key mismatch or failed verification.
+    /// Malformed, algorithm/key mismatch or failed verification.
     Invalid,
-    /// Well-formed supported envelope whose key was not resolved.
+    /// Not checked: the key was not resolved, or the declared signing
+    /// algorithm is one this engine does not implement.
     Unverified,
 }
 
@@ -363,7 +364,11 @@ pub fn signature_kid(sig: &[u8]) -> Option<String> {
 /// Typed algorithm-aware verification, refusing mismatched key types.
 #[must_use]
 pub fn verify_sig_with_key(sig: &[u8], frame_id: &[u8], public: VerifyingKeyRef<'_>) -> SigStatus {
-    parse_sign1(sig).map_or(SigStatus::Invalid, |parsed| parsed.verify(frame_id, public))
+    match parse_sign1(sig) {
+        Ok(parsed) => parsed.verify(frame_id, public),
+        Err(Sign1Error::UnsupportedAlgorithm) => SigStatus::Unverified,
+        Err(_) => SigStatus::Invalid,
+    }
 }
 
 /// Existing Ed25519 convenience, routed through the same strict typed core.
