@@ -2589,13 +2589,15 @@ summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `writ
   max_fma = 0
   forbid_relaxed = true
 
-  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5:
+  # with the noncharacter lead byte among its stops the scan has the shape of the XML
+  # carrier's scan, whose floor is 3.
   [[site.measure]]
   label = "literal scan avx512 masks"
   configs = ["x86_64-v4"]
   crate = "purrdf_lex"
   symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
-  min_vector_ops = 9
+  min_vector_ops = 3
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
   forbid_relaxed = true
@@ -3184,13 +3186,15 @@ summary = "the entailment engine's term surfaces, spelled by `term_syntax::write
   max_fma = 0
   forbid_relaxed = true
 
-  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v18.
+  # With AVX-512 in the build the compares write mask registers (`%k`). Measured v5:
+  # with the noncharacter lead byte among its stops the scan has the shape of the XML
+  # carrier's scan, whose floor is 3.
   [[site.measure]]
   label = "literal scan avx512 masks"
   configs = ["x86_64-v4"]
   crate = "purrdf_lex"
   symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
-  min_vector_ops = 9
+  min_vector_ops = 3
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
   forbid_relaxed = true
