@@ -1008,6 +1008,7 @@ and an identical warm-up remain outside each process-local allocation window.
 | `crates/rdf-core/benches/shared_homes.rs` | core.canon-escape, deflate.match-length |
 | `crates/rdf-core/benches/shared_views.rs` | core.dataset-scan-filter |
 | `crates/rdf-core/benches/small.rs` | shapes.path-eval |
+| `crates/rdf-core/benches/source_change_counts.rs` | blake3.single-block |
 | `crates/rdf-core/benches/sssom.rs` | core.sssom-tsv |
 | `crates/rdf-core/benches/xsd_regex.rs` | core.xsd-regex-scan |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | wasm.term-marshal, eval.bgp-join-probe |
