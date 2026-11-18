@@ -20,7 +20,7 @@ The normative statement is the frozen specification, revision 3.11, SHA-256
 recorded in [`MIGRATION-5.0.md`](../MIGRATION-5.0.md)). The specification text is
 not part of this repository. What this repository carries is the implementation
 (`crates/rdf-core/src/canonical_labelling/`), the worked examples that revision
-states (`vectors/`), and the lowering and spelling rules of the migration guide.
+states (`crates/rdf-core/src/canonical_labelling/vectors/`), and the lowering and spelling rules of the migration guide.
 This document describes the design and its evidence; it does not restate the
 specification.
 
@@ -42,8 +42,9 @@ own neighbourhoods, so the factors multiply down a tree. Nothing in the algorith
 separates like siblings by what lies beneath them: it permutes them. Colour
 refinement (section 4) separates such siblings in a few rounds when their
 subtrees differ. The Recommendation states that the algorithm "can behave poorly"
-on some inputs, obliges implementations to defend against poison datasets and
-suggests limiting calls to *Hash N-Degree Quads* [1, section 7.1]. It names no
+on some inputs, requires implementations to defend against such attacks and notes
+that calls to *Hash N-Degree Quads* may be limited [1, section 4.4.3]. Section 7.1
+of the Recommendation (non-normative) discusses poison datasets. It names no
 structural remedy.
 
 The 4.x engine of this repository ran RDFC-1.0 and extended it to the RDF 1.2
@@ -80,8 +81,10 @@ annotations, nested triple terms); none was found.
 separate process and reports counts only: no clock is read and nothing asserts a
 threshold. The counts below come from one run at the head this document was
 written against, with the default scale (1,000 for the first three shapes).
-`explored units` is the optimised engine's limited work units over the calls it
-explored, `reference units` the reference engine's over the same input, and the
+`explored units` is the optimised engine's work units over the calls it explored,
+summed over all four parts (start, refine, fix, entries); the limit counts every
+part except start. `reference units` is the same figure for the reference engine
+over the same input. The
 allocation columns come from the counting allocator over admission and search.
 
 | Shape | Nodes | Lines | Guaranteed | Branching calls | Explored units | Reference units | Allocations | Requested bytes | Retained bytes |
@@ -158,7 +161,8 @@ ordered partitions (`reference.rs`, `Engine::refine` and `Engine::split`):
   is the sorted list of its incidence labels into the splitter, a label being the
   ascending occurrence numbers of the node in the line;
 * fragments take offsets in ascending key order, the empty key first;
-* all fragments but the largest are queued, ties to the smallest colour;
+* when the split cell is already queued, every fragment is queued; otherwise all
+  fragments but the largest, ties to the smallest colour;
 * one refinement pops at most `2V` pairs, where `V` is the number of nodes plus
   lines of the component.
 
@@ -210,10 +214,12 @@ Refusals are a closed list: `input` (ill-formed lines), `graph` (an `empty-graph
 line names a graph another line carries), `width` (a quantity exceeds 64 bits) and
 `limit` (the engine's limit tripped on an input that is not guaranteed). Both
 engines use the limit `2^34` limited units and trip only past `max(limit, A)`,
-where `A` is the allowance of the component: `2S + O + 2·O·bits(V) + M + V·bits(V)
-+ 4W` over the start charges `S`, label elements `O`, incidences `M` and the
-start-weighted node count `W` (`reference.rs`, `static_record`). The allowance is
-what the search-free run needs, so no limit refuses a guaranteed input.
+where `A` is the allowance of the whole input: the sum of every component's
+allowance plus the charge of the split into top components (`reference.rs`,
+`prepare`). The allowance of one component is `2S + O + 2·O·bits(V) + M +
+V·bits(V) + 4W` over its start charges `S`, label elements `O`, incidences `M`,
+and start-weighted node count `W` (`static_record`). The allowance is what the
+search-free run needs, so no limit refuses a guaranteed input.
 
 ### 3.5 The optimised engine
 
@@ -248,9 +254,10 @@ certificate rather than as a search heuristic.
 canonical colour refinement, in the neighbourhood of `(n + m) log n` work. Paige and
 Tarjan [9] describe the partition-refinement algorithms whose rule of queueing all
 but the largest fragment gives that bound; the queue rule of section 3.2 follows it.
-Cai, Fürer and Immerman [7] and Neuen and Schweitzer [6] show the limit of any fixed
-refinement: families that individualisation-refinement algorithms take exponential
-time on, whatever the selector. Arvind, Köbler, Rattan and Verbitsky [5] study the
+Neuen and Schweitzer [6] show families on which every individualisation-refinement
+algorithm takes exponential time, whatever the selector. Cai, Fürer and Immerman
+[7] show that refinement of any fixed dimension fails to distinguish some pairs of
+graphs. Arvind, Köbler, Rattan and Verbitsky [5] study the
 graph classes on which colour refinement decides isomorphism; forests are among
 them.
 
@@ -270,8 +277,10 @@ a proved optimisation of a pruning-free definition tested differentially.
 **Hash.** BLAKE3 [14] is a single algorithm with no variants and a key-derivation
 mode that takes a context string. The definition uses it for the two shared values.
 
-Content statements above are limited to what the titles and abstracts of the cited
-records establish and what the implementation itself shows. No source of nauty,
+Hogan's figures in section 1.2 and the pruning defect in his conference version
+were checked against the author's copy of [3]. The statements about the other works
+rest on their titles and abstracts and on the implementation itself; the papers'
+bodies were not re-read for this document. No source of nauty,
 Traces, bliss, saucy, dejavu or blabel is copied into this repository.
 
 ## 5. Choices and alternatives
@@ -329,8 +338,9 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
 * *Hard families.* Colour refinement splits no regular graph, so strongly regular
   graphs, rook graphs, hypercubes and Paley graphs stay one cell at the root. The
   stops of section 3.5 cut the work on `Z4 x Z4` and `cub8` by large factors, but no
-  bound is claimed for these families in general, and families exist on which every
-  method needs exponential work [6, 7, 12]. The refusal states the limit.
+  bound is claimed for these families in general, and exponential lower bounds are
+  known for individualisation-refinement algorithms [6], for refinement of fixed
+  dimension [7] and for McKay's algorithm [12]. The refusal states the limit.
 * *Refinement strength and node invariant.* Both are excluded from version `1`. A
   stronger refinement or an invariant would be a new version, never an option.
 * *Dataset-state identity.* `DATASET-STATE-DIGEST.md` defines a separate identity
