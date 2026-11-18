@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
-use purrdf_core::{GraphSelector, StatisticsStream};
+use purrdf_core::{FastMap, GraphSelector, StatisticsStream};
 use purrdf_hash::multiset::Multiset256;
 
 use super::{
@@ -62,6 +62,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             .map(|row| &row.subject)
             .collect();
         let rows = collect_subject_rows(next, &self.config, &subjects)?;
+        self.check_removals_held(&removals)?;
         let source = validate_delta(
             &rows,
             &additions,
@@ -111,6 +112,56 @@ impl<P: CorpusProfile> TextIndex<P> {
         }
         finish_read(next)?;
         Ok(self)
+    }
+
+    /// Check every removed row against the retained pre-delta state exactly.
+    /// The additive source digest and the statement populations agree with any
+    /// removal whose hashes balance an addition, so they cannot show that the
+    /// index held the removed rows. The retained token streams can: each
+    /// removed row's analyzed tokens must be present, with multiplicity and
+    /// predicate, in the stored document it names.
+    fn check_removals_held(&self, removals: &[SourceRow<P>]) -> Result<(), TextDeltaError> {
+        if removals.is_empty() {
+            return Ok(());
+        }
+        let (documents, dictionary) = analyze_rows(removals, &self.config)?;
+        for document in &documents {
+            let key = &document.key;
+            let Ok(at) = self.documents.binary_search_by(|stored| {
+                (&stored.graph, &stored.subject, &stored.language).cmp(&(
+                    &key.graph,
+                    &key.subject,
+                    &key.language,
+                ))
+            }) else {
+                return Err(TextDeltaError::UnheldRemoval {
+                    subject: Box::new(key.subject.clone()),
+                    term: document
+                        .tokens
+                        .first()
+                        .map_or_default(|&(term, _, _)| dictionary[term as usize].clone()),
+                });
+            };
+            let mut held: FastMap<(&str, u32), u64> = FastMap::default();
+            for token in self.token_streams[at].as_slice() {
+                *held
+                    .entry((token.term.as_str(), token.predicate))
+                    .or_default() += 1;
+            }
+            for &(term, _, predicate) in &document.tokens {
+                let term = dictionary[term as usize].as_str();
+                match held.get_mut(&(term, predicate)) {
+                    Some(count) if *count > 0 => *count -= 1,
+                    _ => {
+                        return Err(TextDeltaError::UnheldRemoval {
+                            subject: Box::new(key.subject.clone()),
+                            term: term.to_owned(),
+                        });
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Obtain next-source evidence independently of the requested additions and
@@ -833,8 +884,8 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 crate::analysis::PROJECTION_CALLS.get() - calls,
-                4,
-                "only the four literal rows in changed documents are analyzed"
+                6,
+                "the four literal rows in changed documents and the two removed rows are analyzed"
             );
             let fresh = TextIndex::from_dataset(&*next, &config).unwrap();
             assert_fresh(&updated, &fresh);
@@ -1061,6 +1112,53 @@ mod tests {
             index.with_delta(&*next, &*empty, &*empty).unwrap_err(),
             TextDeltaError::SourceMismatch { expected, actual }
         );
+    }
+
+    /// The additive source digest and the populations cannot show that a
+    /// removed row was indexed. Forge an index whose recorded digest and
+    /// population already include a row it never analyzed: the sums and the
+    /// population balance, and only exact membership refuses the removal.
+    #[test]
+    fn text_delta_refuses_removals_the_index_never_held() {
+        let held = ("urn:s", "river bank", None, None, false);
+        let before = dataset(&[held]);
+        let after = dataset(&[]);
+        let genuine = TextIndex::from_dataset(&*before, &config()).unwrap();
+        let applied = genuine
+            .clone()
+            .with_delta(&*after, &*dataset(&[]), &*before)
+            .unwrap();
+        assert_fresh(
+            &applied,
+            &TextIndex::from_dataset(&*after, &config()).unwrap(),
+        );
+
+        let forged_row = |row: Row| {
+            let removed = dataset(&[row]);
+            let (rows, _) = collect_rows(&*removed, &config()).unwrap();
+            let mut forged = genuine.clone();
+            forged.source_digest.insert(&rows[0]);
+            forged.coverage.represented[0] += 1;
+            (forged, removed)
+        };
+        for (row, term) in [
+            (("urn:absent", "river", None, None, false), "river"),
+            (("urn:s", "ocean", None, None, false), "ocean"),
+            (("urn:s", "river bank", Some("en"), None, false), "river"),
+        ] {
+            let (forged, removed) = forged_row(row);
+            let next = dataset(&[held]);
+            match forged.with_delta(&*next, &*dataset(&[]), &*removed) {
+                Err(TextDeltaError::UnheldRemoval {
+                    subject,
+                    term: lacking,
+                }) => {
+                    assert_eq!(*subject, TermValue::iri(row.0));
+                    assert_eq!(lacking, term);
+                }
+                other => panic!("an unheld removal must be refused, got {other:?}"),
+            }
+        }
     }
 
     #[test]
