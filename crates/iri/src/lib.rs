@@ -26,13 +26,12 @@
 //!   force and where it came from. [`BaseIri::relativize`] is the inverse, letting a
 //!   serializer emit `<>` or `<foo>` under a base.
 //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
-//!   encoding, and dot-segment normalization. Idempotent. A reference with no
-//!   scheme, no authority and a path that does not begin with `/` keeps the
-//!   leading dot segments only a base can interpret, and keeps a segment that
-//!   would decode to `.` or `..` percent-encoded, so it resolves to the same
-//!   IRI before and after. Under a scheme, an authority or a leading `/`, a
-//!   percent-encoded dot segment is decoded and removed, which resolution of
-//!   the undecoded text does not do.
+//!   encoding, and dot-segment normalization. Idempotent. A segment that would
+//!   decode to `.` or `..` stays percent-encoded in every path, because
+//!   resolution reads only a literal dot segment, so a reference resolves to the
+//!   same IRI before and after. A reference with no scheme, no authority and a
+//!   path that does not begin with `/` also keeps the leading dot segments only
+//!   a base can interpret.
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
 //!   [`PrefixMap`], and the namespace/local-name split
 //!   [`split_local_name`]/[`local_name`].

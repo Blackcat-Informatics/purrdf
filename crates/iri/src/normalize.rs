@@ -19,20 +19,16 @@
 //!   keep the segments a base must interpret.
 //!
 //! The steps interact in one place. §6.2.2.2 decodes `%2E`, and a segment that
-//! decodes to `.` or `..` then reads as a dot segment, which resolution of the
-//! undecoded text does not see. In the unresolved case such a segment therefore
-//! keeps its encoding, as `%2E` or `%2E%2E`, and only a literal `.` or `..` is a
-//! dot segment. Everywhere else it is decoded first and removed as a dot
-//! segment.
+//! decodes to `.` or `..` would then read as a dot segment, which resolution of
+//! the undecoded text does not see: §5.2.4 recognises only a literal `.` or
+//! `..`. Such a segment therefore keeps its encoding, as `%2E` or `%2E%2E`, in
+//! every path, under a scheme, an authority or a root as well, and only a
+//! literal `.` or `..` is a dot segment.
 //!
-//! **Guarantee and its scope.** For a reference `r` with no scheme, no authority
-//! and a path that does not begin with `/`, and any absolute base `b`,
-//! `b.resolve(r)` and `b.resolve(r.normalize())` name the same IRI: they are
-//! equal once both are normalized, and byte-equal when `r` holds no
-//! percent-encoded unreserved character and no lower-case hex digit. The
-//! guarantee does not extend to a path under a scheme, an authority or a
-//! leading `/` that holds a percent-encoded dot segment: `/a/%2e%2e/../b`
-//! normalizes to `/b` and resolves to `/a/b`.
+//! **Guarantee.** For every reference `r` that `parse` accepts and any absolute
+//! base `b`, `b.resolve(r)` and `b.resolve(r.normalize())` name the same IRI:
+//! they are equal once both are normalized, and byte-equal when `r` holds no
+//! percent-encoded unreserved character and no lower-case hex digit.
 //!
 //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
 
@@ -46,13 +42,13 @@ impl Iri {
     /// parsed/validated; for every IRI `parse` accepts, the result has the same
     /// scheme and authority presence and is a fixed point of `normalize`.
     ///
-    /// A reference with no scheme, no authority and a path that does not begin
-    /// with `/` keeps its meaning: resolving the result against an absolute base
-    /// names the IRI the original resolves to. It therefore keeps the leading
-    /// dot segments only a base can interpret, and a segment that would decode
-    /// to `.` or `..` stays percent-encoded (`%2E`, `%2E%2E`). Under a scheme,
-    /// an authority or a leading `/`, a percent-encoded dot segment is decoded
-    /// and removed, which resolution of the undecoded text would not do.
+    /// Normalization keeps the meaning of every reference: resolving the result
+    /// against an absolute base names the IRI the original resolves to. A
+    /// segment that would decode to `.` or `..` stays percent-encoded (`%2E`,
+    /// `%2E%2E`) in every path, under a scheme, an authority or a root as well,
+    /// because resolution reads only a literal `.` or `..` as a dot segment. A
+    /// reference with no scheme, no authority and a path that does not begin
+    /// with `/` also keeps the leading dot segments only a base can interpret.
     ///
     /// # Examples
     ///
@@ -68,8 +64,10 @@ impl Iri {
     /// // Interior dot segments of a relative reference collapse; leading ones stay.
     /// assert_eq!(purrdf_iri::parse("a/./b/../c")?.normalize().as_str(), "a/c");
     /// assert_eq!(purrdf_iri::parse("../a")?.normalize().as_str(), "../a");
-    /// // There, an encoded dot segment is an ordinary segment and stays encoded.
+    /// // An encoded dot segment is an ordinary segment: it stays encoded and a
+    /// // later `..` removes it like any other segment.
     /// assert_eq!(purrdf_iri::parse("a/%2e/../b")?.normalize().as_str(), "a/b");
+    /// assert_eq!(purrdf_iri::parse("http://h/a/%2e/b")?.normalize().as_str(), "http://h/a/%2E/b");
     /// # Ok::<(), purrdf_iri::IriError>(())
     /// ```
     #[must_use]
@@ -91,10 +89,11 @@ impl Iri {
             && self.authority().is_none()
             && !raw.is_empty()
             && !raw.starts_with('/');
+        let decoded = decode_segments(raw);
         let path = if unresolved {
-            collapse_unresolved_dot_segments(&decode_unresolved_segments(raw))
+            collapse_unresolved_dot_segments(&decoded)
         } else {
-            remove_dot_segments(&percent::normalize(raw))
+            remove_dot_segments(&decoded)
         };
         out.push_str(recomposition_guard(
             self.scheme().is_some(),
@@ -122,13 +121,13 @@ impl Iri {
     }
 }
 
-/// §6.2.2.2 for an unresolved rootless path, segment by segment (`/` is reserved,
-/// so decoding never moves a segment boundary). Resolution reads a segment such
+/// §6.2.2.2 for a path, segment by segment (`/` is reserved, so decoding never
+/// moves a segment boundary). Resolution reads a segment such
 /// as `%2e` or `.%2E` as an ordinary one, so a segment that decodes to `.` or `..`
 /// without being spelled that way is written fully encoded instead: decoding it
 /// would turn it into a dot segment and change what the reference resolves to.
 /// `%2E` and `%2E%2E` are fixed points of this step.
-fn decode_unresolved_segments(path: &str) -> String {
+fn decode_segments(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for (index, segment) in path.split('/').enumerate() {
         if index > 0 {

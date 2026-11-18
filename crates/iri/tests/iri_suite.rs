@@ -380,10 +380,13 @@ fn normalize_removes_every_dot_segment_under_a_scheme_authority_or_root() {
         ("/a/../b", "/b"),
         ("/../a", "/a"),
         ("/.", "/"),
-        // A percent-encoded dot segment is decoded first here, as before.
-        ("/a/%2e%2e/../b", "/b"),
-        ("http://h/a/%2e/b", "http://h/a/b"),
-        ("//h/a/%2E%2E/b", "//h/b"),
+        // A percent-encoded dot segment is an ordinary segment here too.
+        ("/a/%2e%2e/../b", "/a/b"),
+        ("/x/%2e/..", "/x/"),
+        ("http://h/a/%2e%2e/../b", "http://h/a/b"),
+        ("http://h/a/%2e/b", "http://h/a/%2E/b"),
+        ("//h/a/%2E%2E/b", "//h/a/%2E%2E/b"),
+        ("//h/.%2e/x%2e", "//h/%2E%2E/x."),
     ] {
         assert_eq!(
             parse(input).unwrap().normalize().as_str(),

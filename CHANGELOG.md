@@ -8,6 +8,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
+  scheme, an authority or a root.** A path segment that decodes to `.` or `..`
+  without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
+  path, as it already did for a rootless reference with neither scheme nor
+  authority, because reference resolution reads only a literal `.` or `..` as a
+  dot segment. For every reference `parse` accepts and every absolute base,
+  resolving the normal form now names the same IRI as resolving the original.
+  The normal form changes for an absolute or rooted IRI or reference that has a
+  whole `%2E` or `%2E%2E` segment, in any hex case, or a segment that mixes one
+  with a literal dot (`.%2e`, `%2E.`): `http://h/a/%2e/b` was `http://h/a/b` and
+  is `http://h/a/%2E/b`; `/a/%2e%2e/../b` was `/b` and is `/a/b`; `//h/%2E%2E/x`
+  was `//h/x` and is `//h/%2E%2E/x`. A literal dot segment is removed as before,
+  and a segment that only contains an encoded dot (`x%2e`) decodes as before. A
+  caller that stored such normal forms holds the old spelling.
 - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
@@ -252,11 +266,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   leading `/`.
 
   Unchanged, byte for byte: every IRI with a scheme, every reference with an
-  authority and every absolute-path reference (`/a/../b` is `/b`). Not covered
-  by the guarantee: under a scheme, an authority or a leading `/`, a
-  percent-encoded dot segment is still decoded and then removed as a dot
-  segment (`/a/%2e%2e/../b` is `/b`, while the reference itself resolves to
-  `/a/b`). The signature is unchanged. A caller that stored normal forms of
+  authority and every absolute-path reference that holds no percent-encoded dot
+  segment (`/a/../b` is `/b`). The signature is unchanged. A caller that stored normal forms of
   rootless relative references holds the old spelling for the inputs described
   above.
 
