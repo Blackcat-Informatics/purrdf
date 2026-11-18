@@ -359,6 +359,15 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
                         item: catalog.frame_item(catalog.frames.len())?,
                     }));
                 }
+                // Only a self-described or untagged header ends a segment; any
+                // other tag is the original reader's interpretation error.
+                if let Some((tag, _)) = self.input.tag(&range)?
+                    && tag != crate::wire::SELF_DESCRIBE_TAG
+                {
+                    return Err(IndexedError::native(crate::wire::HeaderError::Tag {
+                        actual: tag,
+                    }));
+                }
                 break;
             }
             offset = range.end();

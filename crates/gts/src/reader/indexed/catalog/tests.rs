@@ -493,6 +493,23 @@ fn catalog_refuses_a_segment_whose_tail_holds_an_unclassifiable_item() {
         Some(FoldError::FrameMap)
     ));
 
+    let mut tagged_header = valid.clone();
+    tagged_header.extend(crate::wire::encode(&Value::Tag(
+        1000,
+        Box::new(Value::Map(vec![(
+            Value::Text("gts".into()),
+            Value::Text(MAGIC.into()),
+        )])),
+    )));
+    let failure = open(tagged_header)
+        .segment(0)
+        .expect_err("a header-shaped item under a foreign tag is not a segment boundary");
+    assert!(matches!(
+        std::error::Error::source(&failure)
+            .and_then(|cause| cause.downcast_ref::<crate::wire::HeaderError>()),
+        Some(crate::wire::HeaderError::Tag { actual: 1000 })
+    ));
+
     let mut headerless = crate::wire::encode(&Value::Text("stray".into()));
     headerless.extend(valid);
     let failure = open(headerless)
