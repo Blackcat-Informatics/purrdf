@@ -28,7 +28,9 @@
 //! **Guarantee.** For every reference `r` that `parse` accepts and any absolute
 //! base `b`, `b.resolve(r)` and `b.resolve(r.normalize())` name the same IRI:
 //! they are equal once both are normalized, and byte-equal when `r` holds no
-//! percent-encoded unreserved character and no lower-case hex digit.
+//! percent-encoded unreserved character, no lower-case hex digit and no
+//! upper-case letter in its scheme or host, because resolution copies the
+//! scheme and authority as written.
 //!
 //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
 
