@@ -517,6 +517,27 @@ mod tests {
         assert_eq!(err.code, "gts-iri-missing-value");
     }
 
+    /// An IRI holding DEL or a C1 control is refused on import, and the
+    /// neighbour holding U+00A0 (the first `ucschar`) imports.
+    #[test]
+    fn del_and_c1_in_an_iri_are_refused_and_no_break_space_is_not() {
+        let import = |inner: &str| {
+            let mut graph = Graph::default();
+            graph
+                .terms
+                .push(iri_term(&format!("http://example.org/a{inner}b")));
+            graph.terms.push(iri_term("http://example.org/p"));
+            graph.terms.push(iri_term("http://example.org/o"));
+            graph.quads.push((0, 1, 2, None));
+            import_gts_graph(graph)
+        };
+        for inner in ["\u{7f}", "\u{80}", "\u{9f}"] {
+            let err = import(inner).expect_err(&format!("imported {inner:?}"));
+            assert_eq!(err.code, "iri-disallowed-char", "{inner:?}: {err}");
+        }
+        assert!(import("\u{a0}").is_ok());
+    }
+
     /// A nested quoted-triple term survives the consuming path: the outer triple's
     /// object IS the inner triple term.
     #[test]

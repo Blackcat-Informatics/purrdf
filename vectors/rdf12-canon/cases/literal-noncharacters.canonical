@@ -1,0 +1,3 @@
+<http://example.org/s> <http://example.org/c1> "xy" .
+<http://example.org/s> <http://example.org/neighbour> "p�q" .
+<http://example.org/s> <http://example.org/nonchars> "a\uFFFEb\uFFFFc" .
