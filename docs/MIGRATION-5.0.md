@@ -162,7 +162,8 @@ recomputes unchanged:
   `purrdf_rdf::rdfc12`, with the same name and signature it had at the crate
   root. See "Items that left the crate root".
 
-The 4.x path behaves as it always did: labels are `c14nN`, the hash is the
+The 4.x path behaves as it did, apart from the spelling of U+FFFE and U+FFFF in
+a literal (profile version 4; see "Stored digests"): labels are `c14nN`, the hash is the
 caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
 `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
 reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
@@ -300,7 +301,10 @@ lost or retyped a public field, and none of these enums lost a variant.
   and a file whose header and trailer name different versions. Source
   verification recomputes the digest and the labels with the run the version
   names, so a 4.x embedding keeps verifying against the pack or Columnar files it
-  was written for. The same file with its version byte changed to `2` is refused
+  was written for, except for a dataset holding U+FFFE or U+FFFF in a literal,
+  whose version `1` source digest no longer recomputes. Version `1` blank-node
+  labels (`c14nN`) can also move for such a dataset, because the first-degree
+  hashes of RDFC-1.0 include the spelling of an adjacent literal. The same file with its version byte changed to `2` is refused
   as a certified-RDF digest mismatch. A newly written artifact differs from the
   4.x artifact of the same inputs in the header and trailer version fields, the
   source digest, the dataset target identity, every blank-node target identity

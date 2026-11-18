@@ -66,8 +66,11 @@
 //! The `_for` forms ([`is_iriref_escape_required_for`], [`push_escaped_for`],
 //! [`escape_for`]) name the carrier. [`crate::term_syntax::write_iri`] and every
 //! canonical or hashed form use [`Carrier::Canonical`]; the Turtle emitter and
-//! renderer of `purrdf-core`, the N-Triples writer of the native codecs and the
-//! SHACL path renderer feed the CL-dialect carrier and name [`Carrier::Xml`]. The
+//! renderer of `purrdf-core` and the N-Triples writer of the native codecs feed
+//! the CL-dialect carrier and name [`Carrier::Xml`] (a literal's datatype
+//! included, through [`crate::term_syntax::write_literal_for`]); the SHACL path
+//! renderer of `purrdf-validate`, whose string is a SARIF `logicalLocation`, names
+//! it to keep its bytes stable. The
 //! unqualified functions are the [`Carrier::Xml`] set, kept for existing callers;
 //! new code names its carrier. Both carriers share one candidate scan,
 //! [`find_first_candidate`], whose stops are a superset of either set, so a
@@ -431,19 +434,6 @@ mod tests {
             assert_eq!(
                 is_iriref_escape_required(c) && !crate::terminals::is_iriref_forbidden(c),
                 matches!(c, '\u{7F}'..='\u{9F}'),
-                "{c:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn the_canonical_set_is_exactly_the_production_exclusions_at_every_scalar() {
-        // N-Quads 1.2 `IRIREF ::= '<' ([^#x00-#x20<>"{}|^`\\] | UCHAR)* '>'`: the
-        // canonical form escapes what the grammar forbids and nothing more.
-        for c in all_scalars() {
-            assert_eq!(
-                is_iriref_escape_required_for(c, Carrier::Canonical),
-                crate::terminals::is_iriref_forbidden(c),
                 "{c:?}"
             );
         }

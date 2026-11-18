@@ -117,6 +117,38 @@ pub fn write_literal<W: TextOut + ?Sized>(
     dir: Option<&str>,
     out: &mut W,
 ) {
+    write_literal_for(
+        lexical_form,
+        datatype,
+        crate::iri_escape::Carrier::Canonical,
+        lang,
+        dir,
+        out,
+    );
+}
+
+/// Append a literal in its canonical form with the datatype `IRIREF` escaped for
+/// `datatype_carrier`: [`write_literal`] is this with the canonical carrier. A
+/// writer whose IRIs are all spelled for XML names
+/// [`Xml`](crate::iri_escape::Carrier::Xml) here so its datatype IRIs match its
+/// other IRIs. The lexical form is always the canonical literal spelling.
+///
+/// ```
+/// use purrdf_lex::iri_escape::Carrier;
+/// use purrdf_lex::term_syntax::write_literal_for;
+///
+/// let mut out = String::new();
+/// write_literal_for("1", "urn:dt:\u{85}", Carrier::Xml, None, None, &mut out);
+/// assert_eq!(out, "\"1\"^^<urn:dt:\\u0085>");
+/// ```
+pub fn write_literal_for<W: TextOut + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    datatype_carrier: crate::iri_escape::Carrier,
+    lang: Option<&str>,
+    dir: Option<&str>,
+    out: &mut W,
+) {
     debug_assert!(
         dir.is_none() || lang.is_some(),
         "a base direction exists only on a language-tagged literal"
@@ -133,7 +165,7 @@ pub fn write_literal<W: TextOut + ?Sized>(
         }
     } else if datatype != XSD_STRING {
         out.push_str("^^");
-        write_iri(datatype, out);
+        write_iri_for(datatype, datatype_carrier, out);
     }
 }
 

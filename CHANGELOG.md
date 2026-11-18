@@ -15,7 +15,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   for every caller; the C1 controls stay raw. The canonical IRI writer escapes
   exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
   carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
-  Turtle emitter, the native N-Triples writer and the SHACL path renderer keep.
+  Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
+  (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
   `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
   the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
   literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
@@ -24,7 +25,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
   source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
   over binary lines and does not move; the 5.0 document spells those characters
-  as escapes.
+  as escapes The `nrl1-lines-sha256` compaction certificate digest, which is the
+  SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
   routes to `(nested-refinement-labelling, 1)`. The canonical document is the

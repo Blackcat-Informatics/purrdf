@@ -49,7 +49,7 @@ use crate::{
     blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
 };
 use purrdf_lex::term_syntax::{
-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri_for, write_literal,
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri_for, write_literal_for,
 };
 use purrdf_xsd::datatype::XSD_STRING;
 use std::borrow::Cow;
@@ -101,7 +101,7 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
 }
 
 /// Append an [`RdfLiteral`] in its canonical term form through
-/// [`write_literal`]: `"lex"`, `"lex"@lang`, `"lex"@lang--dir` or
+/// [`write_literal_for`]: `"lex"`, `"lex"@lang`, `"lex"@lang--dir` or
 /// `"lex"^^<datatype>`, with an `xsd:string` datatype left unwritten.
 ///
 /// A base direction exists only beside a language tag (RDF 1.2 Concepts §3.3);
@@ -109,9 +109,10 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
 /// of any RDF 1.2 literal, so it is not written.
 fn write_owned_literal<W: TextOut + ?Sized>(literal: &RdfLiteral, out: &mut W) {
     let language = literal.language.as_deref();
-    write_literal(
+    write_literal_for(
         &literal.lexical_form,
         literal.datatype.as_deref().unwrap_or(XSD_STRING),
+        purrdf_lex::iri_escape::Carrier::Xml,
         language,
         literal
             .direction
@@ -183,9 +184,10 @@ pub fn try_write_view_term<D: crate::DatasetView, W: TextOut + ?Sized>(
                 let TermRef::Iri(datatype) = datatype_guard.term() else {
                     return Err(crate::TermLookupError::ForeignId);
                 };
-                write_literal(
+                write_literal_for(
                     lexical,
                     datatype,
+                    purrdf_lex::iri_escape::Carrier::Xml,
                     language,
                     direction.map(crate::RdfTextDirection::as_str),
                     out,

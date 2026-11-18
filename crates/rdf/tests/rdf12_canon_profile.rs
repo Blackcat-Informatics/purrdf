@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v3.
+//! Normative vector corpus for canonicalization profile `purrdf-rdfc12` v4.
 //!
 //! The corpus at `vectors/rdf12-canon/` is the executable half of
 //! `docs/RDF12-CANON-PROFILE.md`: every clause a consumer pins is a case here, so a
