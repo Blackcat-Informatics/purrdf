@@ -103,7 +103,7 @@ const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/so
 
 mod source_digest;
 pub use source_digest::source_fingerprint;
-use source_digest::{SourceDigest, row_directory};
+use source_digest::{SourceDigest, row_directory, row_hashes};
 mod token_streams;
 use token_streams::TokenTable;
 pub(crate) use token_streams::{Slice, Table};
@@ -897,7 +897,8 @@ impl<P: CorpusProfile> TextIndex<P> {
     {
         let (rows, coverage) = collect_rows(dataset, config)?;
         let version = dataset.source_version().map_err(TextError::source_read)?;
-        let source = SourceDigest::from_rows(&rows);
+        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
+        let source = SourceDigest::from_hashes(hashes.iter().copied());
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         let mut index = Self::assemble(
             config.clone(),
@@ -908,7 +909,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             RankingProfile::single_field(),
         )?;
         index.source_version = version;
-        index.row_directory = row_directory(&rows)?;
+        index.row_directory = row_directory(hashes)?;
         dataset
             .checked_read(|_| ())
             .map_err(TextError::source_read)?;
@@ -933,7 +934,8 @@ impl<P: CorpusProfile> TextIndex<P> {
         }
         let (rows, coverage) = collect_rows(dataset, config)?;
         let version = dataset.source_version().map_err(TextError::source_read)?;
-        let source = SourceDigest::from_rows(&rows);
+        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
+        let source = SourceDigest::from_hashes(hashes.iter().copied());
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         let mut index = Self::assemble(
             config.clone(),
@@ -944,7 +946,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             profile,
         )?;
         index.source_version = version;
-        index.row_directory = row_directory(&rows)?;
+        index.row_directory = row_directory(hashes)?;
         dataset
             .checked_read(|_| ())
             .map_err(TextError::source_read)?;

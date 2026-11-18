@@ -62,16 +62,33 @@ impl SourceDigest {
     pub(super) fn from_rows<'a, P: CorpusProfile + 'a>(
         rows: impl IntoIterator<Item = &'a SourceRow<P>>,
     ) -> Self {
+        Self::from_hashes(row_hashes(rows))
+    }
+
+    /// Sum already computed row hashes, so a caller that also needs them for
+    /// another purpose hashes each row once.
+    pub(super) fn from_hashes(hashes: impl IntoIterator<Item = [u8; 32]>) -> Self {
         let mut digest = Self::default();
-        for hash in row_hashes(rows) {
-            digest
-                .state
-                .insert(hash)
-                .expect("a finite source population fits u128");
+        for hash in hashes {
+            digest.insert_hash(hash);
         }
         digest
     }
 
+    pub(super) fn insert_hash(&mut self, hash: [u8; 32]) {
+        self.state
+            .insert(hash)
+            .expect("a finite source population fits u128");
+    }
+
+    /// The caller establishes row membership before subtracting it.
+    pub(super) fn remove_hash(&mut self, hash: [u8; 32]) {
+        self.state
+            .remove(hash)
+            .expect("source membership was validated");
+    }
+
+    #[cfg(test)]
     pub(super) fn insert<P: CorpusProfile>(&mut self, row: &SourceRow<P>) {
         self.state
             .insert(row_hash(row))
@@ -80,6 +97,7 @@ impl SourceDigest {
 
     /// The caller establishes row membership before subtracting it. Population
     /// alone cannot prove membership in a multiset.
+    #[cfg(test)]
     pub(super) fn remove<P: CorpusProfile>(&mut self, row: &SourceRow<P>) {
         self.state
             .remove(row_hash(row))
@@ -106,15 +124,15 @@ pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
 
 /// The sorted per-row hashes of every selected source row, token-less rows
 /// included, each repeated as often as the row occurs.
-pub(super) fn row_directory<P: CorpusProfile>(
-    rows: &[SourceRow<P>],
+pub(super) fn row_directory(
+    mut hashes: Vec<[u8; 32]>,
 ) -> Result<super::Table<[u8; 32]>, crate::TextError> {
-    let mut hashes: Vec<[u8; 32]> = row_hashes(rows).collect();
     hashes.sort_unstable();
     super::Table::from_streams(hashes)
 }
 
-pub(super) fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
+#[cfg(test)]
+fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
     row_hashes(std::iter::once(row))
         .next()
         .expect("one source row was supplied")
@@ -123,7 +141,7 @@ pub(super) fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
 /// Use the original core row law so independently sealed native metadata and
 /// selected text rows consume exactly the same preimages. No literal text is
 /// copied into an owned term or output buffer.
-fn row_hashes<'a, P: CorpusProfile + 'a>(
+pub(super) fn row_hashes<'a, P: CorpusProfile + 'a>(
     rows: impl IntoIterator<Item = &'a SourceRow<P>>,
 ) -> impl Iterator<Item = [u8; 32]> {
     rows.into_iter().map(|row| {

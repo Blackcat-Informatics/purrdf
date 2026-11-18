@@ -10,7 +10,7 @@ use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
 use purrdf_core::{GraphSelector, StatisticsStream};
 use purrdf_hash::multiset::Multiset256;
 
-use super::source_digest::row_hash;
+use super::source_digest::row_hashes;
 use super::{
     CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
     analyze_rows, collect_rows, collect_subject_rows,
@@ -63,11 +63,14 @@ impl<P: CorpusProfile> TextIndex<P> {
             .map(|row| &row.subject)
             .collect();
         let rows = collect_subject_rows(next, &self.config, &subjects)?;
-        let directory = self.directory_after(&additions, &removals)?;
+        let added_hashes: Vec<[u8; 32]> = row_hashes(&additions).collect();
+        let removed_hashes: Vec<[u8; 32]> = row_hashes(&removals).collect();
+        let directory = self.directory_after(&added_hashes, &removed_hashes)?;
         let source = validate_delta(
             &rows,
             &additions,
-            &removals,
+            &added_hashes,
+            &removed_hashes,
             self.source_digest,
             observed_source,
         )?;
@@ -123,21 +126,19 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// the additive digest and populations say. Token-less rows are held too.
     fn directory_after(
         &self,
-        added: &[SourceRow<P>],
-        removed: &[SourceRow<P>],
+        added: &[[u8; 32]],
+        removed: &[[u8; 32]],
     ) -> Result<Table<[u8; 32]>, TextDeltaError> {
         let mut directory = self.row_directory.clone();
-        for (ordinal, row) in removed.iter().enumerate() {
-            let hash = row_hash(row);
-            let Ok(at) = directory.binary_search_by(|held| held.cmp(&hash)) else {
+        for (ordinal, hash) in removed.iter().enumerate() {
+            let Ok(at) = directory.binary_search_by(|held| held.cmp(hash)) else {
                 return Err(TextDeltaError::UnheldRemoval { ordinal });
             };
             directory = directory.remove(at)?;
         }
-        for row in added {
-            let hash = row_hash(row);
-            let at = directory.partition_point(|held| *held < hash);
-            directory = directory.insert(at, hash)?;
+        for hash in added {
+            let at = directory.partition_point(|held| held < hash);
+            directory = directory.insert(at, *hash)?;
         }
         Ok(directory)
     }
@@ -483,7 +484,8 @@ type DocumentIdentity<'a, P> = (
 fn validate_delta<P: CorpusProfile>(
     rows: &[SourceRow<P>],
     added: &[SourceRow<P>],
-    removed: &[SourceRow<P>],
+    added_hashes: &[[u8; 32]],
+    removed_hashes: &[[u8; 32]],
     mut expected: SourceDigest,
     mut prior: SourceDigest,
 ) -> Result<SourceDigest, TextDeltaError> {
@@ -495,11 +497,11 @@ fn validate_delta<P: CorpusProfile>(
             Joined::Right((ordinal, _)) => return Err(TextDeltaError::MissingAddition { ordinal }),
         }
     }
-    for row in added {
-        prior.remove(row);
+    for &hash in added_hashes {
+        prior.remove_hash(hash);
     }
-    for row in removed {
-        prior.insert(row);
+    for &hash in removed_hashes {
+        prior.insert_hash(hash);
     }
     if expected != prior {
         return Err(TextDeltaError::SourceMismatch {
@@ -507,11 +509,11 @@ fn validate_delta<P: CorpusProfile>(
             actual: prior.fingerprint::<P>(),
         });
     }
-    for row in removed {
-        expected.remove(row);
+    for &hash in removed_hashes {
+        expected.remove_hash(hash);
     }
-    for row in added {
-        expected.insert(row);
+    for &hash in added_hashes {
+        expected.insert_hash(hash);
     }
     Ok(expected)
 }
@@ -1132,7 +1134,8 @@ mod tests {
             validate_delta(
                 &[],
                 &no_rows,
-                &rows,
+                &[],
+                &row_hashes(&rows).collect::<Vec<_>>(),
                 forged.source_digest,
                 genuine.source_digest,
             )
