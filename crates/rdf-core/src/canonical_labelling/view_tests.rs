@@ -627,45 +627,49 @@ fn a_large_constant_is_admitted_while_the_view_is_lowered() {
     assert!(small.asked > 50_000 && small.asked < done.admitted_bytes);
 }
 
+/// An account that records every total it was asked to admit, in order.
+struct Sequence(Vec<usize>);
+
+impl Admission for Sequence {
+    fn resize(&mut self, live: usize) -> Result<(), StorageError> {
+        self.0.push(live);
+        Ok(())
+    }
+}
+
 /// A record payload is admitted once however many records repeat it: records
 /// that share one payload and differ in their terms hold it as one constant, so
-/// the account never sees more than the grant, a ceiling at the grant admits
-/// them, and a ceiling below the payload refuses.
+/// while the view is lowered the account is asked for about one payload, not
+/// one per record. The last request is the grant of the rest of the working
+/// state; every request before it is made by lowering.
 #[test]
 fn a_payload_shared_by_records_is_admitted_once() {
     let view = cycle();
     let payload = vec![7u8; 40_000];
     let terms: Vec<[TermValue; 1]> = ["a", "b", "c", "d"].iter().map(|n| [value_of(n)]).collect();
     let records: Vec<Record<'_>> = terms.iter().map(|t| Record::new(&payload, t)).collect();
-    let mut roomy = Recorder {
-        ceiling: usize::MAX,
-        asked: 0,
-    };
-    let done = compare_view_with_memory(
+    let mut account = Sequence(Vec::new());
+    compare_view_with_memory(
         view.as_ref(),
         &records,
         &mut control(),
         Limit::ENGINE,
-        &mut Memory::new(&mut roomy),
+        &mut Memory::new(&mut account),
     )
     .expect("admitted");
-    // A ceiling at the grant admits the records: the shared payload is not
-    // charged again for each record.
-    let mut fits = Recorder {
-        ceiling: done.admitted_bytes,
-        asked: 0,
-    };
+    let (grant, lowering) = account.0.split_last().expect("the account was asked");
+    let peak = lowering
+        .iter()
+        .copied()
+        .max()
+        .expect("lowering was metered");
     assert!(
-        compare_view_with_memory(
-            view.as_ref(),
-            &records,
-            &mut control(),
-            Limit::ENGINE,
-            &mut Memory::new(&mut fits),
-        )
-        .is_ok()
+        peak > payload.len() && peak < 2 * payload.len(),
+        "lowering held {peak} bytes for one {}-byte payload",
+        payload.len()
     );
-    assert_eq!(roomy.asked, done.admitted_bytes, "the peak is the grant");
+    assert!(*grant > peak);
+    // A ceiling below the payload refuses during lowering.
     let mut small = Recorder {
         ceiling: payload.len() / 2,
         asked: 0,
