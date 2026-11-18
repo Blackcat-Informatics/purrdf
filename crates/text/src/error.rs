@@ -53,14 +53,11 @@ pub enum TextDeltaError {
         /// Population independently observed in the next source.
         observed: u128,
     },
-    /// A removed row's analyzed content is not held by the indexed document
-    /// it names, so the index cannot have indexed that row.
+    /// A removed row is not among the rows the index holds, or is removed
+    /// more often than it is held.
     UnheldRemoval {
-        /// The subject of the document the removed row names.
-        subject: Box<purrdf_core::TermValue>,
-        /// The first analyzed term the indexed document lacks; empty when the
-        /// document is absent and the removed row analyzes to no lexical term.
-        term: String,
+        /// Canonical selected removal ordinal.
+        ordinal: usize,
     },
     /// The original source, analysis, capacity or ranking refusal.
     Indexing(TextError),
@@ -115,9 +112,9 @@ impl core::fmt::Display for TextDeltaError {
                 f,
                 "text delta coverage mismatch for {predicate:?}: {before} previous, {added} added, {removed} removed, {observed} observed"
             ),
-            Self::UnheldRemoval { subject, term } => write!(
+            Self::UnheldRemoval { ordinal } => write!(
                 f,
-                "text delta removes {term:?} from {subject:?}, which the index does not hold"
+                "text delta removal {ordinal} is not a row the index holds"
             ),
             Self::Indexing(cause) => cause.fmt(f),
             Self::AnalyzerMismatch { expected, actual } => write!(
@@ -171,8 +168,8 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
             "before" => Unsigned(*before), "added" => Unsigned(*added),
             "removed" => Unsigned(*removed), "observed" => Unsigned(*observed),
         },
-        UnheldRemoval { subject, term } => "text-delta-unheld-removal" {
-            "subject" => Term(&**subject), "term" => Text(term),
+        UnheldRemoval { ordinal } => "text-delta-unheld-removal" {
+            "ordinal" => Unsigned(*ordinal as u128),
         },
         Indexing(cause) => "text-delta-indexing" { "cause" => Cause(cause) },
         AnalyzerMismatch { expected, actual } => "text-delta-analyzer-mismatch" {

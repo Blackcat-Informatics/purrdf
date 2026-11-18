@@ -8,12 +8,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **`TextIndex::with_delta` checks each removed row against the indexed
-  document.** The additive source digest and statement populations accept a
-  removal the index never held when its hash balances an addition. A removed
-  row's analyzed tokens must now occur, with multiplicity and predicate, in the
-  stored document it names; otherwise the delta is refused with the new
-  `TextDeltaError::UnheldRemoval`. A genuine delta applies as before.
+- **`TextIndex::with_delta` checks each removed row by its row digest.** The
+  additive source digest and statement populations accept a removal the index
+  never held when its hash balances an addition. The index now keeps a sorted
+  directory of the digest of every selected source row, token-less rows
+  included, and each removed row must consume one occurrence of its digest;
+  otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
+  The directory is updated by every applied delta and is not part of either
+  fingerprint. A genuine delta applies as before.
 - **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
   IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
   N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as

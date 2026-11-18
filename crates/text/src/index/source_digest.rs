@@ -104,7 +104,17 @@ pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
     })
 }
 
-fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
+/// The sorted per-row hashes of every selected source row, token-less rows
+/// included, each repeated as often as the row occurs.
+pub(super) fn row_directory<P: CorpusProfile>(
+    rows: &[SourceRow<P>],
+) -> Result<super::Table<[u8; 32]>, crate::TextError> {
+    let mut hashes: Vec<[u8; 32]> = row_hashes(rows).collect();
+    hashes.sort_unstable();
+    super::Table::from_streams(hashes)
+}
+
+pub(super) fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
     row_hashes(std::iter::once(row))
         .next()
         .expect("one source row was supplied")

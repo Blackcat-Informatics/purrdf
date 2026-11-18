@@ -102,8 +102,8 @@ const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/ind
 const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v2");
 
 mod source_digest;
-use source_digest::SourceDigest;
 pub use source_digest::source_fingerprint;
+use source_digest::{SourceDigest, row_directory};
 mod token_streams;
 use token_streams::TokenTable;
 pub(crate) use token_streams::{Slice, Table};
@@ -794,6 +794,10 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
     source_fingerprint: [u8; FINGERPRINT_BYTES],
     /// Reversible source accounting, retained independently of its published hash.
     source_digest: SourceDigest,
+    /// The hash of every selected source row, token-less rows included, sorted,
+    /// with one entry per occurrence. A delta's removed rows are joined against
+    /// it exactly. Memory only: derived from the source rows, never fingerprinted.
+    row_directory: Table<[u8; 32]>,
     /// Original source-owned observation for independently discovering changes.
     source_version: Option<purrdf_core::source::SourceVersion>,
     /// Which configured predicates the build's walk found a statement for.
@@ -904,6 +908,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             RankingProfile::single_field(),
         )?;
         index.source_version = version;
+        index.row_directory = row_directory(&rows)?;
         dataset
             .checked_read(|_| ())
             .map_err(TextError::source_read)?;
@@ -939,6 +944,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             profile,
         )?;
         index.source_version = version;
+        index.row_directory = row_directory(&rows)?;
         dataset
             .checked_read(|_| ())
             .map_err(TextError::source_read)?;
@@ -2018,6 +2024,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             fingerprint: [0; FINGERPRINT_BYTES],
             source_fingerprint: source.fingerprint::<P>(),
             source_digest: source,
+            row_directory: Table::default(),
             source_version: None,
             coverage,
         };
