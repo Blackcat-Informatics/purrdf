@@ -25,7 +25,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
   source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
   over binary lines and does not move; the 5.0 document spells those characters
-  as escapes The `nrl1-lines-sha256` compaction certificate digest, which is the
+  as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
   SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
