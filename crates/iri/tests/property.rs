@@ -101,7 +101,7 @@ prop_test! {
     }
 }
 
-/// Scheme-less, authority-less references built from the segments whose
+/// References built from the segments whose
 /// handling decides what a reference means: `.`, `..`, empty, plain, one holding
 /// a colon, one holding a percent-encoded unreserved character, and the
 /// percent-encoded spellings of `.` and `..` in either hex case and mixed with a

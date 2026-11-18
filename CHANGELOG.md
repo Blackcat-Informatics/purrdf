@@ -266,8 +266,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   leading `/`.
 
   Unchanged, byte for byte: every IRI with a scheme, every reference with an
-  authority and every absolute-path reference that holds no percent-encoded dot
-  segment (`/a/../b` is `/b`). The signature is unchanged. A caller that stored normal forms of
+  authority and every absolute-path reference, provided it holds no segment
+  that decodes to `.` or `..` without being spelled so (`/a/../b` is `/b`).
+  The signature is unchanged. A caller that stored normal forms of
   rootless relative references holds the old spelling for the inputs described
   above.
 
