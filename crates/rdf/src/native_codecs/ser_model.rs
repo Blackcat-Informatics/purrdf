@@ -390,10 +390,15 @@ pub(super) fn spell_iri<'a>(iri: &'a str, base: Option<&BaseIri>) -> Cow<'a, str
         .map_or(Cow::Borrowed(iri), Cow::Owned)
 }
 
-/// Append an `IRIREF` token — [`term_syntax::write_iri`] — spelling the IRI against
+/// Append an `IRIREF` token — [`term_syntax::write_iri_for`] with the XML
+/// carrier, which also escapes DEL and the C1 controls — spelling the IRI against
 /// `base` per [`spell_iri`].
 fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&BaseIri>) {
-    term_syntax::write_iri(&spell_iri(iri, base), out);
+    term_syntax::write_iri_for(
+        &spell_iri(iri, base),
+        purrdf_lex::iri_escape::Carrier::Xml,
+        out,
+    );
 }
 
 /// Append one term's N-Triples surface to `out`.
@@ -1492,7 +1497,10 @@ pub(crate) mod term_walk_tests {
                 let _ = write!(
                     out,
                     "<{}>",
-                    purrdf_lex::iri_escape::escape(t.value.as_deref().unwrap_or(""))
+                    purrdf_lex::iri_escape::escape_for(
+                        t.value.as_deref().unwrap_or(""),
+                        purrdf_lex::iri_escape::Carrier::Xml,
+                    )
                 );
             }
             SerTermKind::Bnode => {

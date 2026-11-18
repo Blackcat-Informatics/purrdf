@@ -17,7 +17,11 @@ use purrdf_shapes::shapes::Path;
 #[must_use]
 pub fn render_path(path: &Path) -> String {
     match path {
-        Path::Predicate(p) => format!("<{}>", purrdf_core::iri_escape::escape(p.as_str())),
+        // The string is a SARIF `logicalLocation`; the XML set keeps its bytes stable.
+        Path::Predicate(p) => format!(
+            "<{}>",
+            purrdf_core::iri_escape::escape_for(p.as_str(), purrdf_core::iri_escape::Carrier::Xml)
+        ),
         Path::Inverse(inner) => format!("^{}", grouped(inner)),
         Path::Sequence(parts) => join(parts, "/"),
         Path::Alternative(parts) => join(parts, "|"),

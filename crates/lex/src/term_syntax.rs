@@ -7,11 +7,14 @@
 //!
 //! # The contract
 //!
-//! This is the canonical term form of RDF 1.2 N-Triples (N-Triples 1.2 §4
-//! "Canonical N-Triples"), which Turtle, TriG, N-Quads and SPARQL all accept
-//! for a term:
+//! This is the canonical term form of RDF 1.2 N-Quads (section 3, "A Canonical
+//! form of N-Quads") and RDF 1.2 N-Triples (section 3), which Turtle, TriG
+//! and SPARQL all accept for a term:
 //!
-//! * an IRI is `<` + its body through [`crate::iri_escape`] + `>`;
+//! * an IRI is `<` + its body through the
+//!   [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier of
+//!   [`crate::iri_escape`] + `>`: escaped exactly where the `IRIREF`
+//!   production forbids a scalar;
 //! * a literal is `"` + its lexical form through the
 //!   [`Canonical`](Carrier::Canonical) carrier of [`crate::literal_escape`] +
 //!   `"`, then `@lang`, `@lang--dir` or `^^<datatype>`. A literal whose
@@ -44,7 +47,8 @@ pub const TRIPLE_TERM_CLOSE: &str = ")>>";
 pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// Append `iri` as an `IRIREF`: `<`, the body escaped by
-/// [`crate::iri_escape::push_escaped`], `>`.
+/// [`crate::iri_escape::push_escaped_for`] with the
+/// [`Canonical`](crate::iri_escape::Carrier::Canonical) carrier, `>`.
 ///
 /// ```
 /// use purrdf_lex::term_syntax::write_iri;
@@ -54,8 +58,30 @@ pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// assert_eq!(out, "<http://example.org/a\\u0020b>");
 /// ```
 pub fn write_iri<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
+    write_iri_for(iri, crate::iri_escape::Carrier::Canonical, out);
+}
+
+/// Append `iri` as an `IRIREF` for `carrier`: `<`, the body escaped by
+/// [`crate::iri_escape::push_escaped_for`], `>`. [`write_iri`] is the
+/// canonical carrier; a writer whose text is embedded in an XML text node names
+/// [`Xml`](crate::iri_escape::Carrier::Xml), which also escapes DEL and the C1
+/// controls.
+///
+/// ```
+/// use purrdf_lex::iri_escape::Carrier;
+/// use purrdf_lex::term_syntax::write_iri_for;
+///
+/// let mut out = String::new();
+/// write_iri_for("urn:ex:\u{85}", Carrier::Xml, &mut out);
+/// assert_eq!(out, "<urn:ex:\\u0085>");
+/// ```
+pub fn write_iri_for<W: TextOut + ?Sized>(
+    iri: &str,
+    carrier: crate::iri_escape::Carrier,
+    out: &mut W,
+) {
     out.push('<');
-    crate::iri_escape::push_escaped(iri, out);
+    crate::iri_escape::push_escaped_for(iri, carrier, out);
     out.push('>');
 }
 
@@ -91,6 +117,38 @@ pub fn write_literal<W: TextOut + ?Sized>(
     dir: Option<&str>,
     out: &mut W,
 ) {
+    write_literal_for(
+        lexical_form,
+        datatype,
+        crate::iri_escape::Carrier::Canonical,
+        lang,
+        dir,
+        out,
+    );
+}
+
+/// Append a literal in its canonical form with the datatype `IRIREF` escaped for
+/// `datatype_carrier`: [`write_literal`] is this with the canonical carrier. A
+/// writer whose IRIs are all spelled for XML names
+/// [`Xml`](crate::iri_escape::Carrier::Xml) here so its datatype IRIs match its
+/// other IRIs. The lexical form is always the canonical literal spelling.
+///
+/// ```
+/// use purrdf_lex::iri_escape::Carrier;
+/// use purrdf_lex::term_syntax::write_literal_for;
+///
+/// let mut out = String::new();
+/// write_literal_for("1", "urn:dt:\u{85}", Carrier::Xml, None, None, &mut out);
+/// assert_eq!(out, "\"1\"^^<urn:dt:\\u0085>");
+/// ```
+pub fn write_literal_for<W: TextOut + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    datatype_carrier: crate::iri_escape::Carrier,
+    lang: Option<&str>,
+    dir: Option<&str>,
+    out: &mut W,
+) {
     debug_assert!(
         dir.is_none() || lang.is_some(),
         "a base direction exists only on a language-tagged literal"
@@ -107,7 +165,7 @@ pub fn write_literal<W: TextOut + ?Sized>(
         }
     } else if datatype != XSD_STRING {
         out.push_str("^^");
-        write_iri(datatype, out);
+        write_iri_for(datatype, datatype_carrier, out);
     }
 }
 
@@ -182,6 +240,18 @@ mod tests {
             literal("a\"b\\\u{8}\u{85}", &format!("{XSD}string"), None, None),
             "\"a\\\"b\\\\\\b\u{85}\""
         );
+        // A scalar outside XML 1.1 `Char` is a UCHAR.
+        assert_eq!(
+            literal("a\u{fffe}\u{ffff}b", &format!("{XSD}string"), None, None),
+            "\"a\\uFFFE\\uFFFFb\""
+        );
+    }
+
+    #[test]
+    fn an_iri_escapes_what_the_production_forbids_and_keeps_del_and_c1_raw() {
+        let mut out = String::new();
+        write_iri("urn:ex:a\u{7f}\u{85}\u{a0}b c", &mut out);
+        assert_eq!(out, "<urn:ex:a\u{7f}\u{85}\u{a0}b\\u0020c>");
     }
 
     #[test]

@@ -23,8 +23,11 @@ digests before opening a 4.x artifact.
   blank node.
 - RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
   algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
-  read-side recompute of stored 4.x digests. No writer records a 4.x digest in a
-  new artifact. A GTS compaction certificate names the function that recorded its
+  read-side recompute of stored 4.x digests (profile version 4). A stored 4.x
+  digest of a dataset holding U+FFFE or U+FFFF in a literal no longer recomputes,
+  because it was computed over a spelling that does not conform to the canonical
+  form of RDF 1.2 N-Quads; every other stored digest recomputes unchanged. No
+  writer records a 4.x digest in a new artifact. A GTS compaction certificate names the function that recorded its
   refold digests (see "Containers").
 - The search bound is a limit on the engine's own work. Refusal is the labelling's
   typed `limit` outcome.
@@ -125,6 +128,15 @@ and a triple term as `<<( s p o )>>`. Each line is spelled as:
 - `annotation`: `reifier p o [g] .`, once, whatever its count
 - `empty-graph` and `record`: nothing
 
+The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
+U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
+XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
+where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
+raw. The digest is over the binary line encodings and does not depend on these
+spellings. The retained 4.x `purrdf-rdfc12` output spells U+FFFE and U+FFFF the
+same way (profile version 4), so a stored 4.x digest of a dataset holding either
+in a literal no longer recomputes; see "Stored digests".
+
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
 node, so the labels of one document can skip a number.
@@ -138,7 +150,10 @@ and are never parsed back.
 
 A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
 overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
-dataset. To check one, recompute it with the 4.x function:
+dataset. To check one, recompute it with the 4.x function. A digest of a dataset
+holding U+FFFE or U+FFFF in a literal does not recompute, because it was taken
+over the raw spelling that profile version 3 wrote; every other stored 4.x digest
+recomputes unchanged:
 
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
@@ -147,7 +162,8 @@ dataset. To check one, recompute it with the 4.x function:
   `purrdf_rdf::rdfc12`, with the same name and signature it had at the crate
   root. See "Items that left the crate root".
 
-The 4.x path behaves as it always did: labels are `c14nN`, the hash is the
+The 4.x path behaves as it did, apart from the spelling of U+FFFE and U+FFFF in
+a literal (profile version 4; see "Stored digests"): labels are `c14nN`, the hash is the
 caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
 `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
 reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
@@ -246,14 +262,17 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function
-  that recorded it. Because the line sequence holds a line for each declared empty
+  that recorded it; a version `1` `rdfc_digest` of a dataset holding U+FFFE or
+  U+FFFF in a literal does not recompute. Because the line sequence holds a line for each declared empty
   graph, a pack that declares an empty graph now has a different digest from the
   same pack without the declaration; under version `1` they were equal.
 - **GTS compaction certificates.** A certificate's canonical CBOR map carries a
   `refold_canon` text field naming the function that computed its refold digests:
   `rdfc10-sha256` (the 4.x RDFC-1.0 flat form) or `nrl1-lines-sha256` (SHA-256 of
   the default-family canonical document). An absent field means `rdfc10-sha256`,
-  so every certificate written by 4.x reads unchanged, and an `rdfc10-sha256`
+  so every certificate written by 4.x reads unchanged (its refold digests still
+  recompute, except for a dataset holding U+FFFE or U+FFFF in a literal), and an
+  `rdfc10-sha256`
   certificate is written without the field, byte for byte as 4.x wrote it.
   `compact_and_certify_versioned` writes `nrl1-lines-sha256` and returns a
   `VersionedCertificate { canon, certificate }`; `compact_and_certify` keeps its
@@ -266,21 +285,26 @@ lost or retyped a public field, and none of these enums lost a variant.
   `CompactionCertificate::from_canonical_cbor` refuses a certificate that is not
   `rdfc10-sha256` (`rdf-certificate-cbor-unexpected-canon`); read a certificate of
   either kind with `VersionedCertificate::from_canonical_cbor`. The digest the
-  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest, because
+  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest (it now
+  follows profile version 4 for such a dataset), because
   the GTS wire format is governed in `gmeow-gts`; both writers author the same
   pack bytes.
 - **Columnar.** The five-table Parquet files record no canonical digest, only
   content digests of blobs and of the manifest. They are unchanged.
 - **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest
   and the blank-node target identities carry canonical labels. Format version `1`
-  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels. The 5.0
+  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels (a source digest
+  of a dataset holding U+FFFE or U+FFFF in a literal does not recompute). The 5.0
   writer emits format version `2`, whose digest is the line-sequence digest and
   whose labels are the labelling's decimal labels. Nothing else in the framing or
   the sections changes. The reader accepts both versions and refuses any other,
   and a file whose header and trailer name different versions. Source
   verification recomputes the digest and the labels with the run the version
   names, so a 4.x embedding keeps verifying against the pack or Columnar files it
-  was written for. The same file with its version byte changed to `2` is refused
+  was written for, except for a dataset holding U+FFFE or U+FFFF in a literal,
+  whose version `1` source digest no longer recomputes. Version `1` blank-node
+  labels (`c14nN`) can also move for such a dataset, because the first-degree
+  hashes of RDFC-1.0 include the spelling of an adjacent literal. The same file with its version byte changed to `2` is refused
   as a certified-RDF digest mismatch. A newly written artifact differs from the
   4.x artifact of the same inputs in the header and trailer version fields, the
   source digest, the dataset target identity, every blank-node target identity
