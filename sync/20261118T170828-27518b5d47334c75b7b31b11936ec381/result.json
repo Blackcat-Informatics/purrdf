@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1377-text-index-delta-checks-removed-rows",
+  "branch": "paudley/1377-text-index-delta-checks-removed-rows",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "a97a9f0803b2234e554555d69fe849dc893ca487",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1377-text-index-delta-checks-removed-rows/.stage/sync/sync/20261118T170828-27518b5d47334c75b7b31b11936ec381",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "51204a4454fa2e2d7b175ea3cc45da2442ce7536",
+  "merge_bases": [
+    "c2bdbb06a04d561b426d8c0e397f11ecbdcad8fa"
+  ],
+  "merge_index": "73f40a1365457b3fb51468d8cadf6b7a1339ce909ca599f9cfdc3d95d22ad932",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "38ddaff69f9c9b05a1cde3d2f41c8901837733f5",
+  "candidate_patch": "candidate-88d066417e884090896b45cdd4bbf8b7.patch",
+  "stdout_log": "commit-88d066417e884090896b45cdd4bbf8b7.stdout.log",
+  "stderr_log": "commit-88d066417e884090896b45cdd4bbf8b7.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 293.59435608499916,
+  "commit": "f42b17b6b8ab8e65997466d93c55942127d4fb26",
+  "tree": "38ddaff69f9c9b05a1cde3d2f41c8901837733f5",
+  "exit_code": 0
+}
