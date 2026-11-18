@@ -620,6 +620,31 @@ single_inferred_case! {
     ["x", "found", "p"]
 }
 
+/// A never-derive declaration refuses the executed program; without it the same rule runs.
+fn a_never_derive_declaration_refuses_the_executed_program() {
+    use purrdf_datalog::admission::{DeclarationLayer, DeclarationSource, NeverDeriveDeclarations};
+
+    let document =
+        srl::parse_and_check(&rules("RULE { ?s :q ?o } WHERE { ?s :p ?o }"), None).unwrap();
+    let source = data(":a :p :b .");
+    let derived = srl::infer(&document, &source, &InferOptions::default()).unwrap();
+    assert_eq!(derived.inferred().len(), 1);
+    let mut declarations = NeverDeriveDeclarations::default();
+    declarations.declare(
+        format!("{EX}q"),
+        DeclarationSource {
+            layer: DeclarationLayer::Ontology,
+            identity: "https://example.org/obligation".to_owned(),
+        },
+    );
+    let options = InferOptions::default().with_never_derive_declarations(declarations.clone());
+    let refused = srl::infer(&document, &source, &options).unwrap_err();
+    assert!(matches!(refused, SrlError::Execution(_)), "{refused:?}");
+    let unrelated =
+        srl::parse_and_check(&rules("RULE { ?s :r ?o } WHERE { ?s :p ?o }"), None).unwrap();
+    assert!(srl::infer(&unrelated, &source, &options).is_ok());
+}
+
 /// `BNODE()` in an assignment is fresh per solution, and fresh against the base graph.
 fn an_assigned_blank_node_is_fresh_per_solution() {
     let inferred = infer(
@@ -1053,6 +1078,7 @@ purrdf_testkit::harness_main!(
     the_version_announcement_is_made_early,
     a_negation_sees_only_earlier_variables,
     an_assigned_variable_joins_a_later_pattern,
+    a_never_derive_declaration_refuses_the_executed_program,
     an_assigned_blank_node_is_fresh_per_solution,
     independent_guarded_components_preserve_both_blank_mints,
     computed_assignment_values_reach_negative_patterns,

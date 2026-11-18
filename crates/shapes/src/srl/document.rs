@@ -603,6 +603,17 @@ impl InferOptions {
         self
     }
 
+    /// Refuse the inference unless the program it executes derives none of the
+    /// predicates `declarations` protect; the refusal is [`SrlError::Execution`].
+    #[must_use]
+    pub fn with_never_derive_declarations(
+        mut self,
+        declarations: purrdf_datalog::admission::NeverDeriveDeclarations,
+    ) -> Self {
+        self.rules = self.rules.with_never_derive_declarations(declarations);
+        self
+    }
+
     /// Select the reproducible query-seed sequence described by
     /// [`RuleOptions::with_entropy_seed`].
     #[must_use]

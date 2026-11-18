@@ -301,6 +301,8 @@ pub struct RuleOptions {
     max_join_steps: Option<u64>,
     /// How the host names the limits' knobs, for a refusal to name them.
     knobs: LimitKnobs,
+    /// Predicates the executed program must never derive.
+    never_derive: Option<Arc<purrdf_datalog::admission::NeverDeriveDeclarations>>,
 }
 
 impl RuleOptions {
@@ -421,6 +423,27 @@ impl RuleOptions {
     pub fn with_max_join_steps(mut self, steps: u64) -> Self {
         self.max_join_steps = Some(steps);
         self
+    }
+
+    /// Refuse, before execution, any SRL rule set whose executed program can
+    /// derive a predicate these declarations protect. Crate-private: a lowered
+    /// SHACL-AF rule has a variable-predicate head, which admission refuses as
+    /// undecidable, so the public setter is the SRL one on `InferOptions`.
+    #[must_use]
+    pub(crate) fn with_never_derive_declarations(
+        mut self,
+        declarations: purrdf_datalog::admission::NeverDeriveDeclarations,
+    ) -> Self {
+        self.never_derive = Some(Arc::new(declarations));
+        self
+    }
+
+    /// The never-derive declarations the executed program is admitted against.
+    #[must_use]
+    pub(crate) fn never_derive_declarations(
+        &self,
+    ) -> Option<&purrdf_datalog::admission::NeverDeriveDeclarations> {
+        self.never_derive.as_deref()
     }
 
     /// Name the limits' knobs as the host exposes them, so a refusal tells its caller
