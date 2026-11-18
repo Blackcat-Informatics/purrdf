@@ -1028,6 +1028,57 @@ pub fn try_flat_blake3_view<D: FallibleDatasetView>(
     )
 }
 
+/// The BLAKE3-256 digest of a flat canonical document and its length in bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct FlatBlake3Measured {
+    /// The unkeyed BLAKE3-256 digest of the document, as [`try_flat_blake3_view`] returns it.
+    pub digest: [u8; 32],
+    /// The document's length in bytes, as `Canonicalized::nquads().len()` of
+    /// [`try_canonicalize_flat_view`] reports it.
+    pub bytes: u64,
+}
+
+/// [`try_flat_blake3_view`] that also returns the document's length in bytes,
+/// counted as the same bytes are hashed in one streaming run. The document is
+/// never built and no document or label payload is admitted to the owned
+/// workspace.
+///
+/// # Errors
+/// Exactly [`try_flat_blake3_view`]'s refusals.
+pub fn try_flat_blake3_measured_view<D: FallibleDatasetView>(
+    view: &D,
+    hash: CanonHash,
+    control: &mut CanonicalizationControl<'_>,
+) -> Result<FlatBlake3Measured, ViewCanonError<D::Error, D::Evidence>> {
+    let mut bytes = 0u64;
+    let digest = control.run(
+        SearchConfiguration::rdfc(
+            hash,
+            CanonPresentation::FlatAssertion,
+            None,
+            CanonOutput::Blake3Digest,
+        ),
+        |run| match checkpointed_drain(view, |view| {
+            CanonState::new(
+                view,
+                CanonScope::Dataset,
+                CanonPresentation::FlatAssertion,
+                hash,
+                run,
+            )
+            .digest_fallible(output::Counting::new(
+                purrdf_hash::blake3::Hasher::new(),
+                &mut bytes,
+            ))
+        }) {
+            Ok(result) => result.map_err(ViewCanonError::Refused),
+            Err(failure) => Err(failure.into()),
+        },
+    )?;
+    Ok(FlatBlake3Measured { digest, bytes })
+}
+
 /// The [`CanonScope`] naming `graph` in `view`, or `None` when `view` interns no such
 /// IRI (so no quad or statement row can carry it as a graph name).
 fn graph_scope<D: DatasetView>(view: &D, graph: &str) -> Option<CanonScope<D::Id>> {

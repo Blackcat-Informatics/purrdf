@@ -66,6 +66,29 @@ impl Absorb for purrdf_hash::blake3::Hasher {
     }
 }
 
+/// A running hash that also counts the bytes it is given.
+pub(super) struct Counting<'n, H> {
+    inner: H,
+    bytes: &'n mut u64,
+}
+
+impl<'n, H> Counting<'n, H> {
+    pub(super) const fn new(inner: H, bytes: &'n mut u64) -> Self {
+        Self { inner, bytes }
+    }
+}
+
+impl<H: Absorb> Absorb for Counting<'_, H> {
+    fn absorb(&mut self, bytes: &[u8]) {
+        *self.bytes += bytes.len() as u64;
+        self.inner.absorb(bytes);
+    }
+
+    fn digest(self) -> [u8; 32] {
+        self.inner.digest()
+    }
+}
+
 /// The digest sink: every line is copied into one reused 64 KiB buffer, and each
 /// full buffer is hashed and emptied; no line and no document is kept.
 ///

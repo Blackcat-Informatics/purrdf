@@ -181,6 +181,58 @@ fn document<D: DatasetView>(
     builder.finish(run.stop())
 }
 
+/// Feed every line of the canonical document to `hasher` as it is spelled, in
+/// the document's order, through one reused line buffer. The document is never
+/// built: the bytes hashed are exactly the bytes [`document`] would append.
+fn stream_document<D: DatasetView>(
+    labelling: &Labelling<D::Id>,
+    run: &SearchRun<'_>,
+    hasher: &mut sha2::Sha256,
+) -> Result<(), CanonError<D::ReadError>> {
+    use sha2::Digest as _;
+    // INVARIANT: as in `document`, a spelling failure is unreachable.
+    let unreadable = |_| {
+        CanonError::Refused(Box::new(Refusal::Input {
+            reason: InputReason::Kind,
+        }))
+    };
+    let composites = labelling.composites().map_err(unreadable)?;
+    let mut text = String::new();
+    for line in &labelling.labelled().lines {
+        run.check_stop().map_err(|_| CanonError::Stopped)?;
+        text.clear();
+        write_line_with(line, &composites, &mut text).map_err(unreadable)?;
+        hasher.update(text.as_bytes());
+    }
+    run.check_stop().map_err(|_| CanonError::Stopped)
+}
+
+/// Feed the canonical document of `view` to `hasher`, line by line, without
+/// building it. The hasher then holds exactly the bytes of
+/// [`try_canonicalize_view`]'s [`nquads`](Canonicalized::nquads), and the caller
+/// continues the same hash. On an error the hasher's state is unspecified.
+///
+/// # Errors
+/// As [`try_canonicalize_view`], except that no document is admitted to the
+/// owned workspace.
+pub(crate) fn try_hash_document_view<D: DatasetView>(
+    view: &D,
+    control: &mut CanonicalizationControl<'_>,
+    hasher: &mut sha2::Sha256,
+) -> Result<(), CanonError<D::ReadError>> {
+    control.run(
+        SearchConfiguration::labelling(None, CanonOutput::Sha256Digest),
+        |run| {
+            view.checked_read(|view| {
+                labelled(view, Scope::Dataset, run, |labelling| {
+                    stream_document::<D>(labelling, run, hasher)
+                })
+            })
+            .map_err(CanonError::Read)?
+        },
+    )
+}
+
 /// The digest of the canonical line sequence.
 fn digest(labelling: &Labelling<impl Copy>) -> Digest32 {
     Digest32::new(labelling.labelled().digest)
