@@ -77,7 +77,12 @@ struct KindCount<I = TermId> {
     rows: u64,
 }
 
-/// No query-time growth: every slice is frozen through the original admission.
+/// Every slice is frozen through the original admission, and
+/// [`Self::retained_bytes`] accounts for them. The one exemption is each source
+/// directory's derived node index: a cache outside `retained_bytes`, at most 40
+/// bytes per checkpoint, allocated through the memory interfaces at the first
+/// range node or root read, and refused with a typed error when it cannot be
+/// admitted.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct LocalStatistics<I = TermId> {
     predicates: Box<[Predicate<I>]>,

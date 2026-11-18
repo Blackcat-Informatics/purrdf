@@ -213,8 +213,9 @@ impl SourceDirectory {
         Ok(self.nodes()?.root)
     }
 
-    /// The admitted record storage. The lazily derived node index is resident
-    /// memory outside this account.
+    /// The admitted record storage. The lazily derived node index is a cache
+    /// outside this account: at most [`NODE_CHECKPOINT_BYTES`] per checkpoint,
+    /// allocated through the memory interfaces at the first node or root read.
     pub(crate) fn retained_bytes(&self) -> Option<usize> {
         Some(size_of_val(self.records.as_ref()))
     }

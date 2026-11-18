@@ -2241,7 +2241,12 @@ mod certification_tests {
                 pending.extend([range.start..middle, middle..range.end]);
             }
         }
-        assert_eq!(session.source_root().unwrap(), node_of(&digests));
+        assert_eq!(
+            session
+                .source_root(&mut SourceDifferenceWork::default())
+                .unwrap(),
+            node_of(&digests)
+        );
         assert!(matches!(
             directory.node(0..1026, &mut SourceDifferenceWork::default()),
             Err(SegmentedError::Corrupt(_))

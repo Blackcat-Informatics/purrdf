@@ -116,17 +116,16 @@ impl SegmentedSession {
         }
     }
 
-    /// The canonical node of the effective source directory.
+    /// The canonical node of the effective source directory. Digests hashed
+    /// to derive it (a version 7 image has no stored nodes) are added to `work`.
     pub(in crate::ir::segmented) fn source_root(
         &self,
+        work: &mut crate::source::SourceDifferenceWork,
     ) -> Result<Option<crate::ir::source_directory::DirectoryNode>, SegmentedError> {
         use crate::ir::source_directory::DirectoryRead as _;
 
         let directory = self.source_directory();
-        directory.node(
-            0..directory.len()?,
-            &mut crate::source::SourceDifferenceWork::default(),
-        )
+        directory.node(0..directory.len()?, work)
     }
 
     pub(in crate::ir::segmented) fn source_record_row(
