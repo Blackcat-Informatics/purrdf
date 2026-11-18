@@ -86,9 +86,10 @@ pub enum VerifyingKeyRef<'a> {
 pub enum SigStatus {
     /// Cryptographically valid under the resolved key.
     Valid,
-    /// Malformed, unsupported, algorithm/key mismatch or failed verification.
+    /// Malformed, algorithm/key mismatch or failed verification.
     Invalid,
-    /// Well-formed supported envelope whose key was not resolved.
+    /// Not checked: the key was not resolved, or the declared signing
+    /// algorithm is one this engine does not implement.
     Unverified,
 }
 
@@ -363,7 +364,11 @@ pub fn signature_kid(sig: &[u8]) -> Option<String> {
 /// Typed algorithm-aware verification, refusing mismatched key types.
 #[must_use]
 pub fn verify_sig_with_key(sig: &[u8], frame_id: &[u8], public: VerifyingKeyRef<'_>) -> SigStatus {
-    parse_sign1(sig).map_or(SigStatus::Invalid, |parsed| parsed.verify(frame_id, public))
+    match parse_sign1(sig) {
+        Ok(parsed) => parsed.verify(frame_id, public),
+        Err(Sign1Error::UnsupportedAlgorithm) => SigStatus::Unverified,
+        Err(_) => SigStatus::Invalid,
+    }
 }
 
 /// Existing Ed25519 convenience, routed through the same strict typed core.
@@ -373,8 +378,9 @@ pub fn verify_sig(sig: &[u8], frame_id: &[u8], public: &VerifyingKey) -> SigStat
 }
 
 /// Verify recorded signatures with the existing Ed25519 resolver. Parse and
-/// algorithm validation precede lookup: malformed/unsupported is invalid;
-/// a supported valid structure with no resolved key is unverified.
+/// algorithm validation precede lookup: a malformed envelope is invalid; an
+/// unsupported algorithm, or a supported valid structure with no resolved
+/// key, is unverified.
 pub fn verify_signatures(
     signatures: &mut [model::Signature],
     resolve: impl Fn(&str) -> Option<VerifyingKey>,
@@ -390,7 +396,8 @@ pub fn verify_signatures(
 /// Verify folded signatures using explicit opaque/absent identifiers and typed
 /// keys. The declared algorithm is supplied to the caller's resolver;
 /// returning a key of another algorithm produces invalid, never a downgrade.
-/// Malformed or unsupported envelopes never invoke the resolver.
+/// Malformed or unsupported envelopes never invoke the resolver: a malformed
+/// one is invalid and one with an unsupported algorithm is unverified.
 pub fn verify_signatures_with_resolver<'a>(
     signatures: &mut [model::Signature],
     resolve: impl Fn(Option<&[u8]>, Algorithm) -> Option<VerifyingKeyRef<'a>>,
@@ -414,6 +421,7 @@ fn verify_resolved(
             .ok()
             .and_then(|parsed| parsed.kid_text().map(str::to_string));
         sig.status = match parsed {
+            Err(Sign1Error::UnsupportedAlgorithm) => "unverified",
             Err(_) => "invalid",
             Ok(parsed) => match verify(&parsed, &sig.frame_id) {
                 Some(SigStatus::Valid) => "valid",
