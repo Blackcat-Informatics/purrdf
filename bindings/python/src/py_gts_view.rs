@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyTuple};
 
 use crate::gts_view::{ALL_SCOPE, GtsFoldView, GtsFoldViewConfig, PublicValue, RelationalRows};
+use crate::py_store::presentation::native_error;
 
 type PyTermRow = (
     u8,
@@ -48,8 +49,12 @@ impl PyGtsFoldView {
         data: &[u8],
         curie_prefixes: Vec<(String, String)>,
     ) -> PyResult<Self> {
+        // A fold diagnostic is an error here exactly as in every other byte consumer:
+        // a damaged file never becomes an empty or partial view.
+        let graph = py
+            .detach(|| purrdf::gts::read_graph(data, true))
+            .map_err(|diagnostic| native_error(py, &diagnostic))?;
         py.detach(|| {
-            let graph = purrdf_gts::reader::read(data, true, None);
             Ok(Self {
                 inner: fold_view(graph, curie_prefixes)?,
             })

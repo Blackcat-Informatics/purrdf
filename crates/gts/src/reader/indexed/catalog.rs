@@ -73,6 +73,7 @@ struct FrameLocation {
 }
 struct Discovered {
     header: bool,
+    map: bool,
     kind: Option<BoundRange>,
     id: Option<BoundRange>,
     data: Option<BoundRange>,
@@ -218,6 +219,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
             .map_or_else(|| range.clone(), |(_, child)| child);
         let mut discovered = Discovered {
             header: false,
+            map: false,
             kind: None,
             id: None,
             data: None,
@@ -226,6 +228,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
         let Some(mut entries) = self.input.map(&inner)? else {
             return Ok(discovered);
         };
+        discovered.map = true;
         let mut magic = false;
         while let Some(key) = self.input.next(&mut entries)? {
             let Some(value) = self.input.next(&mut entries)? else {
@@ -357,6 +360,11 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
                 break;
             }
             offset = range.end();
+            // A frame is a map; the full reader reports any other item, so a
+            // catalog must not present a segment with such an item as complete.
+            if !discovered.map {
+                return Err(IndexedError::native(FoldError::FrameMap));
+            }
             self.admit_metadata(
                 catalog
                     .header
