@@ -158,7 +158,32 @@ fn normalize_authority(auth: &str) -> String {
         out.push_str(&percent::normalize(ui));
         out.push('@');
     }
-    // Lower-case the host (and the port, which is digits-only so case is moot).
-    out.push_str(&percent::normalize(&host_port.to_ascii_lowercase()));
+    // Lower-case the host (and the port, which is digits-only so case is moot)
+    // after decoding, so a letter that decoding exposes (`%41`) is lower-cased
+    // too and the result is a fixed point; a retained triplet keeps its
+    // upper-case hex digits.
+    lower_case_outside_triplets(&percent::normalize(host_port), &mut out);
     out
+}
+
+/// Append `text` with every ASCII letter lower-cased except the two hex digits
+/// of each `%XX` triplet.
+fn lower_case_outside_triplets(text: &str, out: &mut String) {
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] == b'%'
+            && bytes.get(at + 1).is_some_and(u8::is_ascii_hexdigit)
+            && bytes.get(at + 2).is_some_and(u8::is_ascii_hexdigit)
+        {
+            out.push_str(&text[at..at + 3]);
+            at += 3;
+            continue;
+        }
+        let Some(ch) = text[at..].chars().next() else {
+            break;
+        };
+        out.push(ch.to_ascii_lowercase());
+        at += ch.len_utf8();
+    }
 }

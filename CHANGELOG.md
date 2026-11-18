@@ -21,7 +21,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   is `http://h/a/%2E/b`; `/a/%2e%2e/../b` was `/b` and is `/a/b`; `//h/%2E%2E/x`
   was `//h/x` and is `//h/%2E%2E/x`. A literal dot segment is removed as before,
   and a segment that only contains an encoded dot (`x%2e`) decodes as before. A
-  caller that stored such normal forms holds the old spelling.
+  caller that stored such normal forms holds the old spelling. A host letter
+  that percent-decoding exposes is now lower-cased as well (`http://%41/` was
+  `http://A/` and is `http://a/`), so the normal form is a fixed point.
 - **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
   IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
   N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as

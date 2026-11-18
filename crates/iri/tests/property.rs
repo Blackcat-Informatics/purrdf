@@ -122,6 +122,7 @@ fn relative_reference() -> impl Strategy<Value = String> {
         "/",
         "//h/",
         "http://h/",
+        "http://%41/",
         "a:",
     ]);
     let seg = prop::sample::select(vec![

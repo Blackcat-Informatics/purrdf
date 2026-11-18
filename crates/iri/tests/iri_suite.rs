@@ -122,9 +122,11 @@ fn normalize_case_and_pct_and_dots() {
 
 #[test]
 fn normalize_is_idempotent() {
-    let n1 = parse("HTTP://Host/a/%7e/../b").unwrap().normalize();
-    let n2 = n1.normalize();
-    assert_eq!(n1.as_str(), n2.as_str());
+    for input in ["HTTP://Host/a/%7e/../b", "http://%41/%2E"] {
+        let n1 = parse(input).unwrap().normalize();
+        let n2 = n1.normalize();
+        assert_eq!(n1.as_str(), n2.as_str(), "{input}");
+    }
 }
 
 /// RFC 3986 §3.3: with no authority a path may not begin with `//`, or the
@@ -387,6 +389,10 @@ fn normalize_removes_every_dot_segment_under_a_scheme_authority_or_root() {
         ("http://h/a/%2e/b", "http://h/a/%2E/b"),
         ("//h/a/%2E%2E/b", "//h/a/%2E%2E/b"),
         ("//h/.%2e/x%2e", "//h/%2E%2E/x."),
+        // A host letter that decoding exposes is lower-cased; a retained
+        // triplet keeps its upper-case hex digits.
+        ("http://%41/%2E", "http://a/%2E"),
+        ("//%41b%2f/x", "//ab%2F/x"),
     ] {
         assert_eq!(
             parse(input).unwrap().normalize().as_str(),
