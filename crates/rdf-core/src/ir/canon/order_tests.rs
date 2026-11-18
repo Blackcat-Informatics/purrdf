@@ -110,6 +110,14 @@ fn check_flat<D: FallibleDatasetView>(view: &D) {
             try_flat_blake3_view(view, hash, &mut control()).unwrap(),
             *purrdf_hash::blake3::hash(flat.nquads().as_bytes()).as_bytes()
         );
+        // The measured entry streams the same bytes and counts exactly them.
+        let measured =
+            try_flat_blake3_measured_view(view, hash, &mut control()).expect("measured digest");
+        assert_eq!(
+            measured.digest,
+            *purrdf_hash::blake3::hash(flat.nquads().as_bytes()).as_bytes()
+        );
+        assert_eq!(measured.bytes, flat.nquads().len() as u64);
     }
 }
 
@@ -569,6 +577,16 @@ fn statements() -> [Arc<RdfDataset>; 2] {
 fn flat_datasets_with_nested_terms_escapes_and_many_blanks_match_the_oracle() {
     check(&*mixed());
     check_flat(&*mixed());
+    check_flat(&*RdfDatasetBuilder::new().freeze().unwrap());
+    let mut plain = RdfDatasetBuilder::new();
+    let (s, p) = (plain.intern_iri(S).unwrap(), plain.intern_iri(P).unwrap());
+    for k in 0..3 {
+        let o = plain
+            .intern_literal(RdfLiteral::simple(format!("v{k}")))
+            .unwrap();
+        plain.push_quad(s, p, o, None).unwrap();
+    }
+    check_flat(&*plain.freeze().unwrap());
     for dataset in statements() {
         check(&*dataset);
         check_flat(&*dataset);

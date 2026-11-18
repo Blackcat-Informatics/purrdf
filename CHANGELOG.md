@@ -27,6 +27,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   checkpoint. A regrouping that spreads the same members over other layers now
   costs digest work linear in their records; it still resolves only changed rows.
 
+- **`try_flat_blake3_measured_view` returns the flat canonical document's BLAKE3
+  digest and its byte length from one streaming run.** It takes the arguments of
+  `try_flat_blake3_view`, returns a `FlatBlake3Measured { digest, bytes }`, builds
+  no document, admits no document or label payload to the owned workspace and
+  refuses exactly as `try_flat_blake3_view` does, so a caller that records the
+  document length no longer builds the document to measure it.
+- **`PipelineBundle::digest` and the residue leaf hash the canonical document as
+  its lines are spelled.** The carrier identity, the pipeline root's residue
+  leaf and the view bundle's equivalents no longer build the canonical document
+  text and label table before hashing, so those are no longer allocated:
+  requested bytes fall by about one document plus one label table, and
+  allocations by 5 to 11 percent. Peak memory is set by the labelling search
+  and is unchanged. The digests are byte-identical for every input, and the
+  identity law, domain, section order and refusals are unchanged. The
+  canonicalization receipts of these runs record `Sha256Digest` as their output
+  instead of `Document`.
+- **`TextIndex::with_delta` checks each removed row by its row digest.** The
+  additive source digest and statement populations accept a removal the index
+  never held when its hash balances an addition. The index now keeps a sorted
+  directory of the digest of every selected source row, token-less rows
+  included, and each removed row must consume one occurrence of its digest;
+  otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
+  The directory is updated by every applied delta and is not part of either
+  fingerprint. A genuine delta applies as before.
 - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
