@@ -657,22 +657,20 @@ fn encode_prepared_dataset(
         block_bytes,
     )?;
     let directory = source_statistics.effective_source_directory();
-    let checkpoint_count = directory.checkpoint_sums().len();
-    let per = (block_bytes - 9) / 32;
+    let checkpoints = directory.node_checkpoints()?;
+    let checkpoint_count = checkpoints.len();
+    let width = super::super::source_directory::NODE_CHECKPOINT_BYTES;
+    let per = (block_bytes - 9) / width;
     let source_checkpoints = append_fixed(
         &mut blocks,
-        (0..checkpoint_count).step_by(per).map(|start| {
-            directory
-                .checkpoint_sums()
-                .skip(start)
-                .take(per)
-                .flatten()
-                .copied()
-                .collect::<Vec<_>>()
+        checkpoints.chunks(per).map(|chunk| {
+            let mut bytes = vec![0; chunk.len() * width];
+            super::super::source_directory::encode_node_checkpoints(chunk, &mut bytes);
+            bytes
         }),
         checkpoint_count as u64,
         format::SOURCE_CHECKPOINTS,
-        32,
+        width,
         block_bytes,
     )?;
     let overflow = Stream {
@@ -686,6 +684,7 @@ fn encode_prepared_dataset(
         | (u8::from(caps.reifiers) << 1)
         | (u8::from(caps.annotations) << 2);
     let header = Header {
+        version: format::VERSION,
         block_bytes: limits.block_bytes,
         records_per_block: limits.records_per_block,
         first_term_index: limits.first_term_index,
@@ -1480,7 +1479,67 @@ fn validate_source_directory(
         ordinal += count;
     }
     memory.release_vec(expected)?;
-    let mut sums = directory.checkpoint_sums();
+    if header.version == format::ADDITIVE_VERSION {
+        // A version 7 image's additive prefix sums are a local consistency
+        // check only; its readers compare ranges from the records.
+        validate_additive_checkpoints(bytes, header, directory)
+    } else {
+        validate_node_checkpoints(bytes, header, directory)
+    }
+}
+
+fn validate_node_checkpoints(
+    bytes: &[u8],
+    header: &Header,
+    directory: &super::super::source_directory::SourceDirectory,
+) -> Result<(), SegmentedError> {
+    let width = super::super::source_directory::NODE_CHECKPOINT_BYTES;
+    let checkpoints = directory.node_checkpoints()?;
+    let count = checkpoints.len();
+    if header.source_checkpoints.rows != count as u64 {
+        return Err(SegmentedError::Corrupt(
+            "source checkpoint packing disagrees with RDF rows",
+        ));
+    }
+    let per = (header.block_bytes as usize - 9) / width;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut expected = memory.collect(std::iter::repeat_n(0_u8, count.min(per) * width))?;
+    let mut ordinal = 0;
+    for slot in header.source_checkpoints.first
+        ..header.source_checkpoints.first + header.source_checkpoints.blocks
+    {
+        let actual = fixed_records(
+            block(bytes, header, slot)?,
+            format::SOURCE_CHECKPOINTS,
+            width,
+        )?;
+        if actual.len() != (count - ordinal).min(per) * width {
+            return Err(SegmentedError::Corrupt(
+                "source checkpoint packing disagrees with RDF rows",
+            ));
+        }
+        super::super::source_directory::encode_node_checkpoints(
+            &checkpoints[ordinal..ordinal + actual.len() / width],
+            &mut expected[..actual.len()],
+        );
+        if actual != &expected[..actual.len()] {
+            return Err(SegmentedError::Corrupt(
+                "source checkpoint contents disagree with RDF rows",
+            ));
+        }
+        ordinal += actual.len() / width;
+    }
+    memory.release_vec(expected)?;
+    Ok(())
+}
+
+fn validate_additive_checkpoints(
+    bytes: &[u8],
+    header: &Header,
+    directory: &super::super::source_directory::SourceDirectory,
+) -> Result<(), SegmentedError> {
+    let mut sums = directory.additive_checkpoints();
     let per = (header.block_bytes as usize - 9) / 32;
     for slot in header.source_checkpoints.first
         ..header.source_checkpoints.first + header.source_checkpoints.blocks
@@ -1492,7 +1551,7 @@ fn validate_source_directory(
             ));
         }
         for sum in actual.as_chunks::<32>().0 {
-            if Some(sum) != sums.next() {
+            if Some(*sum) != sums.next() {
                 return Err(SegmentedError::Corrupt(
                     "source checkpoint contents disagree with RDF rows",
                 ));
@@ -2134,13 +2193,13 @@ mod certification_tests {
     }
 
     #[test]
-    fn sparse_source_prefixes_match_a_full_scan_across_pages_and_checkpoints() {
-        use crate::ir::source_directory::DirectoryRead;
+    fn sparse_source_nodes_match_a_full_scan_across_pages_and_checkpoints() {
+        use crate::ir::source_directory::{DirectoryRead, first_differing_bit, node_of};
         use crate::source::SourceDifferenceWork;
-        use purrdf_hash::multiset::Multiset256;
 
         let image = directory_image(1025);
         let header = Header::decode(image.bytes()).unwrap();
+        assert_eq!(header.version, format::VERSION);
         let count = header.effective_directory.rows;
         let compact = header.effective_directory.blocks + header.source_checkpoints.blocks;
         let previous = count.div_ceil((u64::from(header.block_bytes) - 9) / 88);
@@ -2159,23 +2218,37 @@ mod certification_tests {
             ))
             .unwrap();
         let directory = session.source_directory();
-        let mut expected = Multiset256::default();
-        for end in 0..=directory.len().unwrap() {
-            if end != 0 {
-                expected
-                    .insert(directory.record(end - 1).unwrap().digest)
-                    .unwrap();
-            }
+        let digests: Vec<_> = (0..directory.len().unwrap())
+            .map(|index| directory.record(index).unwrap().digest)
+            .collect();
+        // Every range a comparison splits into, answered from at most one
+        // checkpoint and fewer than one block of records.
+        let mut pending = Vec::new();
+        pending.push(0..digests.len());
+        while let Some(range) = pending.pop() {
             let mut work = SourceDifferenceWork::default();
             assert_eq!(
-                directory.prefix(end, &mut work).unwrap(),
-                expected,
-                "prefix {end}"
+                directory.node(range.clone(), &mut work).unwrap(),
+                node_of(&digests[range.clone()]),
+                "range {range:?}"
             );
-            assert_eq!(work.members, (end % 32) as u64);
+            assert!(work.members < 32);
+            if let Some(bit) = first_differing_bit(&digests[range.start], &digests[range.end - 1]) {
+                let middle = range.start
+                    + digests[range.clone()].partition_point(|digest| {
+                        digest[usize::from(bit / 8)] & (0x80 >> (bit % 8)) == 0
+                    });
+                pending.extend([range.start..middle, middle..range.end]);
+            }
         }
+        assert_eq!(
+            session
+                .source_root(&mut SourceDifferenceWork::default())
+                .unwrap(),
+            node_of(&digests)
+        );
         assert!(matches!(
-            directory.prefix(1026, &mut SourceDifferenceWork::default()),
+            directory.node(0..1026, &mut SourceDifferenceWork::default()),
             Err(SegmentedError::Corrupt(_))
         ));
     }
@@ -2209,15 +2282,38 @@ mod certification_tests {
         let header = Header::decode(image.bytes()).unwrap();
         let stream = header.source_checkpoints;
         assert!(stream.blocks > 1);
-        for slot in stream.first..stream.first + stream.blocks {
+        // A boundary byte and a node byte of the first record in each block.
+        for (slot, offset) in
+            (stream.first..stream.first + stream.blocks).flat_map(|slot| [(slot, 0), (slot, 17)])
+        {
             let mut bytes = image.bytes().to_vec();
-            bytes[slot as usize * header.block_bytes as usize + 9] ^= 1;
+            bytes[slot as usize * header.block_bytes as usize + 9 + offset] ^= 1;
             rehash(&mut bytes, image.receipt());
             assert_eq!(
                 SegmentedImage::certify(bytes).unwrap_err(),
                 SegmentedError::Corrupt("source checkpoint contents disagree with RDF rows")
             );
         }
+    }
+
+    /// The magic and the version name one checkpoint law together; a
+    /// mismatched pair is refused before any checkpoint is read.
+    #[test]
+    fn header_refuses_a_magic_that_disagrees_with_its_version() {
+        let image = image();
+        assert_eq!(
+            Header::decode(image.bytes()).unwrap().version,
+            format::VERSION
+        );
+        let refusal = SegmentedError::Corrupt(
+            "unsupported segmented format/profile; regenerate the image from RDF input",
+        );
+        let mut older = image.bytes().to_vec();
+        crate::bytes::put_u32_le(&mut older, 8, format::ADDITIVE_VERSION).unwrap();
+        assert_eq!(Header::decode(&older).unwrap_err(), refusal);
+        let mut renamed = image.bytes().to_vec();
+        renamed[..8].copy_from_slice(b"PURRSEG7");
+        assert_eq!(Header::decode(&renamed).unwrap_err(), refusal);
     }
 
     #[test]

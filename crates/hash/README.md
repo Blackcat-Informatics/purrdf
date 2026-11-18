@@ -609,6 +609,8 @@ source on every run.
 | `b"purrdf-core/snapshot/dictionary/v1"` | `(inline)` | `crates/rdf-core/src/ir/frozen_terms.rs` |
 | `b"purrdf-core/snapshot/graphs/v1"` | `GRAPHS` | `crates/rdf-core/src/source.rs` |
 | `b"purrdf-core/snapshot/rows/v1"` | `ROWS` | `crates/rdf-core/src/source.rs` |
+| `b"purrdf-core/source-directory-branch/v1"` | `BRANCH_DOMAIN` | `crates/rdf-core/src/ir/source_directory/merkle.rs` |
+| `b"purrdf-core/source-directory-leaf/v1"` | `LEAF_DOMAIN` | `crates/rdf-core/src/ir/source_directory/merkle.rs` |
 | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
 | `b"purrdf-datalog-contract-v1"` | `CONTRACT_DIGEST_TAG` | `crates/datalog/src/cache.rs` |
 | `b"purrdf-datalog-dl-clause-ir-v3"` | `CLAUSE_IR_DIGEST_TAG` | `crates/datalog/src/cache.rs` |

@@ -160,7 +160,9 @@ pub enum SourceVisit<B> {
 pub struct SourceDifferenceWork {
     /// Digest-prefix ranges compared or emitted.
     pub ranges: u64,
-    /// Stored digests visited while reading sparse prefix-sum tails.
+    /// Stored digests hashed while recomputing a canonical directory node
+    /// below the sparse checkpoints, or from the records of an image whose
+    /// checkpoints are additive.
     pub members: u64,
     /// Physical records passed to the consumer.
     pub changed: u64,

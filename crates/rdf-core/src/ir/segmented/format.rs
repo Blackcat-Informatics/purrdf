@@ -12,7 +12,18 @@ use super::{
     SegmentedSnapshot,
 };
 
-pub(super) const MAGIC: &[u8; 8] = b"PURRSEG7";
+/// The written format version: source checkpoints hold canonical Merkle nodes.
+pub(super) const VERSION: u32 = 8;
+/// The readable earlier version, whose source checkpoints are additive sums.
+pub(super) const ADDITIVE_VERSION: u32 = 7;
+
+const fn magic(version: u32) -> &'static [u8; 8] {
+    if version == ADDITIVE_VERSION {
+        b"PURRSEG7"
+    } else {
+        b"PURRSEG8"
+    }
+}
 pub(super) const HEADER_BYTES: usize = 456;
 pub(super) const RECORD_HEADER: usize = 13;
 const COMPRESSED_RECORDS: u32 = 1 << 31;
@@ -60,6 +71,7 @@ pub(super) struct Stream {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Header {
+    pub version: u32,
     pub block_bytes: u32,
     pub records_per_block: u32,
     pub terms: u64,
@@ -90,8 +102,8 @@ impl Header {
 
     pub(super) fn encode(self) -> Vec<u8> {
         let mut out = Vec::with_capacity(HEADER_BYTES);
-        out.extend_from_slice(MAGIC);
-        out.extend_from_slice(&7_u32.to_le_bytes());
+        out.extend_from_slice(magic(self.version));
+        out.extend_from_slice(&self.version.to_le_bytes());
         out.extend_from_slice(&self.block_bytes.to_le_bytes());
         out.extend_from_slice(&self.records_per_block.to_le_bytes());
         out.push(self.flags);
@@ -126,11 +138,18 @@ impl Header {
     }
 
     pub(super) fn decode(bytes: &[u8]) -> Result<Self, SegmentedError> {
-        if bytes.get(..8) != Some(MAGIC.as_slice()) || read_u32_le(bytes, 8) != Some(7) {
-            return Err(SegmentedError::Corrupt(
-                "unsupported segmented format/profile; regenerate the image from RDF input",
-            ));
-        }
+        let version = match read_u32_le(bytes, 8) {
+            Some(version @ (ADDITIVE_VERSION | VERSION))
+                if bytes.get(..8) == Some(magic(version).as_slice()) =>
+            {
+                version
+            }
+            _ => {
+                return Err(SegmentedError::Corrupt(
+                    "unsupported segmented format/profile; regenerate the image from RDF input",
+                ));
+            }
+        };
         let mut input = Reader::at(bytes, 12);
         let block_bytes = input.u32()?;
         let records_per_block = input.u32()?;
@@ -168,6 +187,7 @@ impl Header {
             .try_into()
             .map_err(|_| SegmentedError::Corrupt("truncated source sum"))?;
         let header = Self {
+            version,
             block_bytes,
             records_per_block,
             flags,
@@ -236,11 +256,24 @@ impl Header {
                 "effective source directory packing mismatch",
             ));
         }
-        let checkpoints = header.effective_directory.rows
-            / super::super::source_directory::CHECKPOINT_ROWS as u64;
-        if header.source_checkpoints.rows != checkpoints
+        let checkpoints = header.source_checkpoints.rows;
+        let (count, width) = if version == ADDITIVE_VERSION {
+            (
+                checkpoints
+                    == header.effective_directory.rows
+                        / super::super::source_directory::CHECKPOINT_ROWS as u64,
+                32,
+            )
+        } else {
+            // Each checkpoint is a distinct branch of at least two members.
+            (
+                checkpoints < header.effective_directory.rows.max(1),
+                super::super::source_directory::NODE_CHECKPOINT_BYTES as u64,
+            )
+        };
+        if !count
             || header.source_checkpoints.blocks
-                != checkpoints.div_ceil((u64::from(block_bytes) - 9) / 32)
+                != checkpoints.div_ceil((u64::from(block_bytes) - 9) / width)
         {
             return Err(SegmentedError::Corrupt(
                 "source checkpoint packing mismatch",

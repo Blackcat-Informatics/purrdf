@@ -846,6 +846,7 @@ impl SegmentedOperation {
             identity,
             limits: self.limits,
             header: Header {
+                version: format::VERSION,
                 block_bytes: receipt.block_bytes,
                 records_per_block: 1,
                 first_term_index: 0,

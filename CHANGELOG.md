@@ -8,6 +8,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **The change feed and segmented change path decide range and layer equality
+  by canonical Merkle nodes; segmented images move to format version 8.** Range
+  skips, the layer deduplication, baseline reuse, the compaction check and the
+  no-op test of a captured layer compared additive `Multiset256` sums, which a
+  party choosing rows can make collide for different row sets. They now compare
+  a BLAKE3 Merkle node over the sorted digest directory (domains
+  `purrdf-core/source-directory-branch/v1` and
+  `purrdf-core/source-directory-leaf/v1`), kept in sparse checkpoints and in the
+  persistent effective directory so an edit stays logarithmic. The additive sum
+  remains for content fingerprints and for the agreement check between two values
+  one process built. `SegmentedBuilder` writes format version `8` (`PURRSEG8`),
+  whose source checkpoints carry those nodes; version `7` images still certify
+  and open, their additive checkpoints serve only as a consistency check, and
+  their ranges are compared from the records. Snapshot identities and receipts of
+  newly written images change (the certification receipt golden moves with the
+  header), and `SourceDifferenceWork::members` counts the digests hashed below a
+  checkpoint. A regrouping that spreads the same members over other layers now
+  costs digest work linear in their records; it still resolves only changed rows.
+
 - **`try_flat_blake3_measured_view` returns the flat canonical document's BLAKE3
   digest and its byte length from one streaming run.** It takes the arguments of
   `try_flat_blake3_view`, returns a `FlatBlake3Measured { digest, bytes }`, builds
