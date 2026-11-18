@@ -3,10 +3,15 @@
 
 //! Source-independent effective keys, retained without physical row addresses.
 //! Chunked Patricia paths copy only changed leaves; every owner keeps its grant.
+//! Every node carries the canonical Merkle node of its keys, so an edit rehashes
+//! one leaf and its path, and equal key sets have equal roots whatever their
+//! edit history or chunking.
+
+use std::ops::Range;
 
 use super::{Multiset256, QueryStorage, SegmentedError, SegmentedOperation, Shared};
 use crate::ir::source_directory::{
-    DirectoryEntry, DirectoryRead, first_differing_bit as difference,
+    DirectoryEntry, DirectoryNode, DirectoryRead, first_differing_bit as difference, node_of,
 };
 use crate::source::SourceDifferenceWork;
 use purrdf_lex::walk::WorkList;
@@ -31,7 +36,9 @@ enum Kind {
 #[derive(Debug)]
 struct Node {
     first: [u8; 32],
+    // The additive sum and exact population; the population addresses ordinals.
     summary: Multiset256,
+    merkle: DirectoryNode,
     kind: Kind,
     // Keys and child references drop before their original allocation grant.
     _storage: QueryStorage,
@@ -45,7 +52,7 @@ std::thread_local! {
 
 fn allocate(
     first: [u8; 32],
-    summary: Multiset256,
+    (summary, merkle): (Multiset256, DirectoryNode),
     kind: Kind,
     mut storage: QueryStorage,
 ) -> Result<Shared<Node>, SegmentedError> {
@@ -55,6 +62,7 @@ fn allocate(
     Shared::try_new(Node {
         first,
         summary,
+        merkle,
         kind,
         _storage: storage,
     })
@@ -76,7 +84,8 @@ fn leaf(keys: &[[u8; 32]], operation: &SegmentedOperation) -> Result<Shared<Node
     }
     #[cfg(test)]
     COPIES.set(COPIES.get() + keys.len());
-    allocate(keys[0], summary, Kind::Leaf(owned), storage)
+    let merkle = node_of(keys).expect("a leaf holds a key");
+    allocate(keys[0], (summary, merkle), Kind::Leaf(owned), storage)
 }
 
 fn branch(
@@ -89,9 +98,10 @@ fn branch(
     summary
         .combine(right.summary)
         .map_err(|_| SegmentedError::AddressExhausted)?;
+    let merkle = crate::ir::source_directory::merkle_branch(&left.merkle, &right.merkle);
     allocate(
         left.first,
-        summary,
+        (summary, merkle),
         Kind::Branch { bit, left, right },
         QueryStorage::new(operation)?,
     )
@@ -102,7 +112,7 @@ fn right(key: &[u8; 32], bit: u16) -> bool {
 }
 
 enum Build {
-    Range(std::ops::Range<usize>),
+    Range(Range<usize>),
     Join(u16),
 }
 
@@ -111,6 +121,11 @@ impl EffectiveDirectory {
         self.root
             .as_ref()
             .map_or_else(Multiset256::default, |root| root.summary)
+    }
+
+    /// The canonical node of every key; `None` when there is none.
+    pub(super) fn root(&self) -> Option<DirectoryNode> {
+        self.root.as_ref().map(|root| root.merkle)
     }
 
     /// Positive source composition needs only independently certified keys.
@@ -323,49 +338,47 @@ impl DirectoryRead for EffectiveDirectory {
         }
     }
 
-    fn prefix(
+    fn node(
         &self,
-        mut end: usize,
+        mut range: Range<usize>,
         work: &mut SourceDifferenceWork,
-    ) -> Result<Multiset256, Self::Error> {
-        if end > self.len()? {
+    ) -> Result<Option<DirectoryNode>, Self::Error> {
+        if range.end > self.len()? {
             return Err(SegmentedError::Corrupt(
-                "effective directory prefix outside range",
+                "effective directory range outside population",
             ));
         }
-        let mut sum = Multiset256::default();
-        let mut node = self.root.as_ref();
-        while end != 0 {
-            let current = node.expect("nonempty prefix has a root");
-            if end as u128 == current.summary.population() {
-                sum.combine(current.summary)
-                    .map_err(|_| SegmentedError::AddressExhausted)?;
-                break;
+        if range.is_empty() {
+            return Ok(None);
+        }
+        let mut node = self.root.as_ref().expect("a nonempty range has a root");
+        loop {
+            if range.start == 0 && range.end as u128 == node.summary.population() {
+                return Ok(Some(node.merkle));
             }
-            match &current.kind {
+            match &node.kind {
                 Kind::Leaf(keys) => {
-                    for key in &keys[..end] {
-                        sum.insert(*key)
-                            .map_err(|_| SegmentedError::AddressExhausted)?;
-                        work.members += 1;
-                    }
-                    break;
+                    work.members += range.len() as u64;
+                    return Ok(node_of(&keys[range]));
                 }
                 Kind::Branch { left, right, .. } => {
                     let size = usize::try_from(left.summary.population())
                         .map_err(|_| SegmentedError::AddressExhausted)?;
-                    if end <= size {
-                        node = Some(left);
+                    if range.end <= size {
+                        node = left;
+                    } else if range.start >= size {
+                        range = range.start - size..range.end - size;
+                        node = right;
                     } else {
-                        sum.combine(left.summary)
-                            .map_err(|_| SegmentedError::AddressExhausted)?;
-                        end -= size;
-                        node = Some(right);
+                        // A branch is the split of one digest prefix, so a
+                        // prefix range holding both children is all of it.
+                        return Err(SegmentedError::Corrupt(
+                            "effective directory range is not a digest prefix",
+                        ));
                     }
                 }
             }
         }
-        Ok(sum)
     }
 }
 
@@ -389,25 +402,25 @@ mod tests {
         *purrdf_hash::blake3::hash(&index.to_le_bytes()).as_bytes()
     }
 
+    /// Ordinals, the additive summary and the canonical root agree with the
+    /// expected set, so equal sets have equal roots whatever their history.
     fn check(directory: &EffectiveDirectory, expected: &BTreeSet<[u8; 32]>) {
         assert_eq!(directory.len().unwrap(), expected.len());
         let mut sum = Multiset256::default();
         for (index, key) in expected.iter().enumerate() {
             assert_eq!(directory.record(index).unwrap(), *key);
-            assert_eq!(
-                directory
-                    .prefix(index, &mut SourceDifferenceWork::default())
-                    .unwrap(),
-                sum
-            );
             sum.insert(*key).unwrap();
         }
         assert_eq!(directory.summary(), sum);
         assert_eq!(
+            directory.root(),
+            node_of(&expected.iter().copied().collect::<Vec<_>>())
+        );
+        assert_eq!(
             directory
-                .prefix(expected.len(), &mut SourceDifferenceWork::default())
+                .node(0..expected.len(), &mut SourceDifferenceWork::default())
                 .unwrap(),
-            sum
+            directory.root()
         );
     }
 
@@ -439,6 +452,55 @@ mod tests {
             directory = directory.set(key, false, &operation).unwrap();
         }
         assert!(directory.root.is_none());
+    }
+
+    /// The baseline, prefix and no-op decisions compare these roots. Keys
+    /// whose additive sum and population collide have different roots; the
+    /// same keys reached by edits or copied from a sorted source agree.
+    #[test]
+    fn roots_separate_additive_collisions_and_agree_across_histories() {
+        let operation = operation();
+        let (a, b, c) = (key(1_000_001), key(1_000_002), key(1_000_003));
+        let mut difference = Multiset256::default();
+        difference.insert(a).unwrap();
+        difference.insert(b).unwrap();
+        difference.remove(c).unwrap();
+        let d = *difference.sum();
+        let shared: BTreeSet<_> = (0..200).map(key).collect();
+        let build = |extra: [[u8; 32]; 2]| {
+            let mut directory = EffectiveDirectory::default();
+            for key in shared.iter().chain(&extra) {
+                directory = directory.set(*key, true, &operation).unwrap();
+            }
+            directory
+        };
+        let left = build([a, b]);
+        let right = build([c, d]);
+        assert_eq!(left.summary(), right.summary());
+        assert_ne!(left.root(), right.root());
+
+        let mut sorted: Vec<_> = shared.iter().copied().chain([a, b]).collect();
+        sorted.sort_unstable();
+        let copied = EffectiveDirectory::from_source(&SortedKeys(&sorted), &operation).unwrap();
+        assert_eq!(copied.root(), left.root());
+        let mut edited = right.set(c, false, &operation).unwrap();
+        edited = edited.set(d, false, &operation).unwrap();
+        edited = edited.set(b, true, &operation).unwrap();
+        edited = edited.set(a, true, &operation).unwrap();
+        assert_eq!(edited.root(), left.root());
+    }
+
+    struct SortedKeys<'a>(&'a [[u8; 32]]);
+
+    impl DirectoryRead for SortedKeys<'_> {
+        type Error = SegmentedError;
+        type Record = [u8; 32];
+        fn len(&self) -> Result<usize, Self::Error> {
+            Ok(self.0.len())
+        }
+        fn record(&self, index: usize) -> Result<Self::Record, Self::Error> {
+            Ok(self.0[index])
+        }
     }
 
     #[test]

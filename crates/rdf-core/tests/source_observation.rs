@@ -273,12 +273,16 @@ fn multiple_output_regrouping_and_lazy_prefix_compaction_follow_only_changed_key
             (unchanged.candidates, unchanged.emitted, unchanged.physical),
             (0, 0, 0)
         );
+        // Members spread over other carriers are compared by splitting until
+        // each range holds one carrier per side: digest work is linear in the
+        // records, while only the changed rows are resolved as candidates.
+        let records = u64::try_from(previous.statement_count()).unwrap();
+        assert!(work.directory.ranges < 3 * records);
         measurements.push((count, work, requests, io, lazy));
     }
     eprintln!(
         "multi-output regrouping (population, work, requests, bytes, lazy prefix): {measurements:?}"
     );
-    assert!(measurements[2].1.directory.ranges < measurements[0].1.directory.ranges * 4);
     assert!(measurements[2].2 < measurements[0].2 * 4);
     assert!(measurements[2].3 < measurements[0].3 * 4);
 }
@@ -1261,4 +1265,101 @@ fn changed_head_observation_work_grows_with_digest_prefixes() {
     eprintln!("chronological head observation: {measurements:?}");
     assert!(measurements[1].1.directory.members < measurements[0].1.directory.members * 3);
     assert_eq!(measurements[0].2, measurements[1].2);
+}
+
+/// A reference image written by the version 7 writer, whose source
+/// checkpoints are additive sums: `segmented_v7_before.bin` seals
+/// `dataset(48, false, false)` and `segmented_v7_after.bin` seals
+/// `dataset(56, true, false)`, both as `sealed` does, with 512-byte blocks.
+fn version_7(name: &str) -> Arc<purrdf_core::SegmentedLayer> {
+    let bytes = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/goldens")
+            .join(name),
+    )
+    .unwrap();
+    assert_eq!(&bytes[..12], b"PURRSEG7\x07\0\0\0");
+    let image = purrdf_core::SegmentedImage::certify(bytes).unwrap();
+    Arc::new(
+        purrdf_core::SegmentedLayer::new(
+            Arc::new(image.provider()),
+            image.receipt().clone(),
+            SegmentedLayerMetadata::default(),
+        )
+        .unwrap(),
+    )
+}
+
+/// Version 7 images stay readable: they certify against their additive
+/// checkpoints, and the change feed compares them from their records.
+#[test]
+fn version_7_images_open_and_answer_the_change_feed() {
+    let mut stack = SegmentedStack::default();
+    stack
+        .publish(vec![version_7("segmented_v7_before.bin")], limits())
+        .unwrap();
+    let before = stack.snapshot().unwrap();
+    let old_rows = surface(&snapshot(dataset(48, false, false)));
+    assert_eq!(surface(&before), old_rows);
+    let previous = before
+        .query(limits())
+        .unwrap()
+        .source_version()
+        .unwrap()
+        .unwrap();
+    stack
+        .publish(vec![version_7("segmented_v7_after.bin")], limits())
+        .unwrap();
+    let after = stack.snapshot().unwrap();
+    let new_rows = surface(&snapshot(dataset(56, true, false)));
+    assert_eq!(surface(&after), new_rows);
+    let expected: BTreeSet<_> = old_rows
+        .difference(&new_rows)
+        .map(|row| (false, row.clone()))
+        .chain(
+            new_rows
+                .difference(&old_rows)
+                .map(|row| (true, row.clone())),
+        )
+        .collect();
+    assert!(!expected.is_empty());
+    let query = after.query(limits()).unwrap();
+    let mut actual = BTreeSet::new();
+    let observed = query
+        .visit_source_changes(&previous, |side, family, row| {
+            actual.insert((
+                side == SourceSide::Next,
+                (u8::from(family == SourceFamily::Reifiers), value(row)),
+            ));
+            ControlFlow::<()>::Continue(())
+        })
+        .unwrap();
+    let SourceVisit::Complete { version, .. } = observed else {
+        panic!("complete version 7 change feed");
+    };
+    assert_eq!(actual, expected);
+    assert_eq!(
+        version.content_fingerprint(),
+        query
+            .source_version()
+            .unwrap()
+            .unwrap()
+            .content_fingerprint()
+    );
+    // The same version 7 image reopened as another layer holds no change.
+    stack
+        .publish(vec![version_7("segmented_v7_after.bin")], limits())
+        .unwrap();
+    let reopened = stack.snapshot().unwrap();
+    let observed = reopened
+        .query(limits())
+        .unwrap()
+        .visit_source_changes(&version, |_, _, row| -> ControlFlow<()> {
+            panic!("an unchanged version 7 image emitted {row:?}");
+        })
+        .unwrap();
+    let SourceVisit::Complete { work, .. } = observed else {
+        panic!("complete unchanged version 7 change feed");
+    };
+    assert_eq!((work.candidates, work.emitted), (0, 0));
 }

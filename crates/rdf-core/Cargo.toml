@@ -152,6 +152,12 @@ name = "freeze_alloc"
 harness = false
 
 [[bench]]
+# Allocations and retired instructions of the segmented seal, the first source
+# version and the change feed. Report-only; no clock is read.
+name = "source_change_counts"
+harness = false
+
+[[bench]]
 # Complete-state identity construction over fixed native shapes. Report-only;
 # it does not alter or compare any preexisting identity's hot path.
 name = "dataset_state_digest"

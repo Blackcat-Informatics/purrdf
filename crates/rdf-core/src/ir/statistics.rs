@@ -77,7 +77,12 @@ struct KindCount<I = TermId> {
     rows: u64,
 }
 
-/// No query-time growth: every slice is frozen through the original admission.
+/// Every slice is frozen through the original admission, and
+/// [`Self::retained_bytes`] accounts for them. The one exemption is each source
+/// directory's derived node index: a cache outside `retained_bytes`, at most 40
+/// bytes per checkpoint, allocated through the memory interfaces at the first
+/// range node or root read, and refused with a typed error when it cannot be
+/// admitted.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct LocalStatistics<I = TermId> {
     predicates: Box<[Predicate<I>]>,
@@ -731,6 +736,16 @@ fn hash_statistics_entries<T: Copy + Hash, S: Admission + ?Sized>(
 impl LocalStatistics {
     pub(crate) const fn source_union(&self) -> purrdf_hash::multiset::Multiset256 {
         self.source_union
+    }
+    /// The canonical node of the effective source directory, the members
+    /// [`Self::source_union`] sums.
+    ///
+    /// # Errors
+    /// Returns allocator refusal while deriving the directory's node index.
+    pub(crate) fn source_root(
+        &self,
+    ) -> Result<Option<crate::ir::source_directory::DirectoryNode>, StorageError> {
+        self.effective_source_directory().root()
     }
     pub(crate) const fn source_directory(&self) -> &SourceDirectory {
         &self.directory
