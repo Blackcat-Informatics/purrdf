@@ -70,8 +70,9 @@
 //! blank nodes and for copies of equal top components the two maps can differ by
 //! an automorphism. The canonical line sequence, its bytes and its digest are
 //! equal only when the view is given the same lines and records as the reader's
-//! labelled set: the records of bindings, suppression and blob entries, VALUES
-//! pairs and typed values come from the caller, and the dataset folds the case
+//! labelled set: the records of bindings, suppression and blob entries and
+//! pairs of VALUES (one for each typed value) come from the caller, and the
+//! dataset folds the case
 //! of a language tag where the format keeps it as written. The order of delivery
 //! a reader reports for a canonical file comes from the reader's own run.
 //!

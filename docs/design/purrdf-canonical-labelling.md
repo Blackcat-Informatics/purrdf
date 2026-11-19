@@ -332,9 +332,8 @@ GTS format, section "Nested terms, lowering and term nodes":
   by an automorphism of the lowered set. When the dataset path is given the same
   lines and records as the reader's labelled set, the canonical line sequence, its
   bytes and its digest are the same. A GTS fold adds a `record` line for each
-  binding, suppression entry, blob entry and pair of VALUES, and one for each typed
-  literal stored as a typed value; the dataset path adds none unless the caller
-  passes them as records, so without them its sequence and digest differ. The
+  binding, suppression entry, blob entry and pair of VALUES (one for each typed
+  value); the dataset path adds none unless the caller passes them as records, so without them its sequence and digest differ. The
   dataset folds the case of a language tag to lower case, and the format keeps the
   text as written, so a literal whose tag has capitals gives different line bytes
   unless the view presents the tag as written. A canonical file written from the
@@ -533,8 +532,8 @@ states why each consequence follows from the design.
   and those a GTS reader reports or stores can differ by an automorphism. The
   canonical bytes and the digest are equal only when the dataset path is given
   the same lines and records as the reader's labelled set, including the records
-  of bindings, suppression and blob entries, VALUES pairs and typed values, and
-  language tags as the format writes them (the dataset folds their case). A
+  of bindings, suppression and blob entries and pairs of VALUES (one for each
+  typed value), and language tags as the format writes them (the dataset folds their case). A
   reader's order of delivery comes from the reader's own run.
 * **Labels are output only.** A consumer reads the typed placement, not the decimal
   label. Position order differs from the byte order of labels (`10` precedes `2`),
