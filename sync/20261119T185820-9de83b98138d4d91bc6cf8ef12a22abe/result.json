@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1386-gts-file-s-content-digest-is-computed",
+  "branch": "paudley/1386-gts-file-s-content-digest-is-computed",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "d050db5db5b6431b11357c52af92c08fa90b5664",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1386-gts-file-s-content-digest-is-computed/.stage/gts-file-s-content-digest-is-computed/sync/20261119T185820-9de83b98138d4d91bc6cf8ef12a22abe",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "3d74f50b40a9a23588f9ce525a94c31865382944",
+  "merge_bases": [
+    "51c3c1534a80f58e7c99746575b0a70e63bed113"
+  ],
+  "merge_index": "976c7ff68afc09513ea9b6ac109672cba7e97ac68bd661e330ca068f68471010",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "7bca1e8a5760cbb4bcbf7bc2c48979cd2725008d",
+  "candidate_patch": "candidate-71d02d9ccc0141a6ba77201feeb4aef5.patch",
+  "stdout_log": "commit-71d02d9ccc0141a6ba77201feeb4aef5.stdout.log",
+  "stderr_log": "commit-71d02d9ccc0141a6ba77201feeb4aef5.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 37.19071955400432,
+  "commit": "57c9a301d03f47de9155803659fc64ba86139aff",
+  "tree": "7bca1e8a5760cbb4bcbf7bc2c48979cd2725008d",
+  "exit_code": 0
+}

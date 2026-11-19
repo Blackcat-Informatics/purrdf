@@ -1,0 +1,100 @@
+{
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDSfug": {
+    "resolution": "addressed",
+    "reason": "The export gains an additive take_read_losses accessor and both preparation functions move the ledger out before into_parts instead of cloning it.",
+    "commit": "ae581671592cf816a5c113eaef00bca4e354c47c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T22:00:15Z",
+      "state": null,
+      "commit": "4233f49a824b2a2a7edbf66cb192187a905cd73c",
+      "path": "crates/purrdf/src/gts_columnar.rs",
+      "line": null,
+      "body_sha256": "31d430c32f3637ef94ab0b341a44bb2358ddcb3de4366e340d515a1398f1bbd3"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDSfxQ": {
+    "resolution": "addressed",
+    "reason": "The loss helper builds its location only for a tag that needs folding and charges the note, the label text, the boxed location and the ledger slot through the caller's Memory; a too-small budget gets the typed storage error, with tests for the refused, admitted and already-folded cases.",
+    "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T22:00:50Z",
+      "state": null,
+      "commit": "4233f49a824b2a2a7edbf66cb192187a905cd73c",
+      "path": "crates/rdf/src/gts_language_fold.rs",
+      "line": null,
+      "body_sha256": "57630ad767dc6f915051f40334cc67e3b869beeb652bb8e61d0c4419f7708a87"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZIxS5g": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T19:29:01Z",
+      "state": "COMMENTED",
+      "commit": "dcaee910fbef915bf74aa780c12989d44b7782b1",
+      "path": null,
+      "line": null,
+      "body_sha256": "0fd497c69de46cd6f2eec62dde33f7bd43101b8251654cc0d88582a3aeb10940"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABomgMbg": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T22:42:29Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "ca193d85d88c5430dbedaebcdd4fa850411ef2773ff717f2e94b239e2d2dc6c9"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDSfrQ": {
+    "resolution": "declined",
+    "reason": "The Unreleased section is hand-authored: make changelog runs the handwritten guard first, which refuses to regenerate over it unless explicitly forced, and earlier entries arrived by hand edit.",
+    "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/1396#discussion_r4636435205",
+    "revision": {
+      "updated_at": "2026-11-19T23:21:58Z",
+      "state": null,
+      "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+      "path": "CHANGELOG.md",
+      "line": 19,
+      "body_sha256": "94015150f9eb97633260cffaf5cc288ee293ccf011b24b6256968059b608bd7d"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFFpjBQ": {
+    "resolution": "acknowledged",
+    "reason": "My own reply on the resolved thread.",
+    "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T23:21:53Z",
+      "state": null,
+      "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+      "path": "CHANGELOG.md",
+      "line": 19,
+      "body_sha256": "fcbacf59dcecedfe0edf4f37125f150da8aa27f0600641b15f1d177ea60efa05"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFFqMyg": {
+    "resolution": "acknowledged",
+    "reason": "The reviewer withdrew the changelog finding after reading the guard; the thread is resolved.",
+    "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T23:23:11Z",
+      "state": null,
+      "commit": "dc814177d59a621d569ffc68b4beeacbe476f761",
+      "path": "CHANGELOG.md",
+      "line": 19,
+      "body_sha256": "edcd15c8d40fec9d43d0f86da256e879318990e1fdcd92f5ab6940f6b5ccb6be"
+    }
+  }
+}
