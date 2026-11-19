@@ -367,6 +367,11 @@ GTS format, section "Nested terms, lowering and term nodes":
   identifiers, positions, identities and digests. An input with a nested term is
   labelled as its lowered set, whose canonical line sequence, digest and positions
   differ from those of the unlowered lines.
+* A document with a nested term has one more line to write for each nested term
+  than the lines it spells: the document loops poll once per line of the sequence
+  in each of their two passes, so the poll total of a document run grows by two
+  for each nested term, and the scratch and owned bytes follow the larger lowered
+  set.
 * The canonical document spells a term node as the triple term it stands for, read
   from the components of its record, and writes no nested-term record. Term nodes
   take positions, so the labels of a view's blank nodes in a document need not be

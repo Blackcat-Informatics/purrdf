@@ -105,6 +105,14 @@ nested term gets new labels and a new digest. The lowering reads triple terms by
 the identifiers of their components and never expands a term that holds
 another, so a chain of `n` nested statements costs linear work and memory.
 
+A canonical form that holds a nested triple term renumbers its blank labels:
+each term node takes a position among the blank nodes, so the labels of the
+view's own blank nodes move up, and the order of members that were equal
+before the renumbering can swap. A consumer that stores or compares the
+canonical text of a result with a nested triple term, such as a recorded
+evaluator trace, regenerates it. The statements of the document are the same
+up to the renaming of blank nodes.
+
 ### Composite literals
 
 A blank-node label written inside a `cdt:List` or `cdt:Map` literal names a
