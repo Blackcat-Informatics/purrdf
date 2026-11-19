@@ -1,0 +1,44 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABoJG-AA": {
+    "resolution": "acknowledged",
+    "reason": "Automated summary regenerated at the rebased head; it reports no actionable comments, and its earlier inline finding (tagged header-shaped tail) is fixed by the SELF_DESCRIBE_TAG check in catalog.rs.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-18T22:20:12Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "b6f3310fc45399d495a356cfd4f15e1bb37038a5a5f8321809db7d605a4cb124"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABY3MEkw": {
+    "resolution": "addressed",
+    "reason": "Its single inline finding is fixed in c415296c6.",
+    "commit": "c415296c6919953a5b0370df9324033e6b8226ae",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-18T19:19:44Z",
+      "state": "COMMENTED",
+      "commit": "8c84bdd5ba566dda5fe0387a568c9be087d139ff",
+      "path": null,
+      "line": null,
+      "body_sha256": "9b9e18912f52242b17fc1379bee9f3eb0853c2a11791a8beb95627b85e518cfc"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE1gNXQ": {
+    "resolution": "addressed",
+    "reason": "Tagged header-shaped tails are refused: catalog.rs checks the tail item's tag against SELF_DESCRIBE_TAG and returns the typed error; covered by the tagged-map tail case in the catalog tests.",
+    "commit": "c415296c6919953a5b0370df9324033e6b8226ae",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-18T20:15:27Z",
+      "state": null,
+      "commit": "8f2797d0ac505c6bc8dd7c603ecda64b5967c916",
+      "path": "crates/gts/src/reader/indexed/catalog.rs",
+      "line": 377,
+      "body_sha256": "06fcd94068b234f0e0ebcc489a427088aca31c2b097d446625a8d67e7631884f"
+    }
+  }
+}

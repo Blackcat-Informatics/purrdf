@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\nThe Python GTS fold view ignores the diagnostics of the read it is built from. A file that the reader reports as damaged produces a successful, partly or wholly empty view and no exception.\n\nRead on main, not run:\n\n- `bindings/python/src/py_gts_view.rs` builds the fold view and the relational rows from `reader::read(data, true, None)` (near lines 52 and 315) and does not inspect `graph.diagnostics`.\n- `reader::read` reports damage as diagnostics on a returned value, not as an error. For example a file whose first item is not a header returns an empty graph with `DamagedFrame`, \"first item is not a header\"; a non-map item among a segment's frames returns the earlier content with `gts-frame-not-map`.\n- The other consumers of the same reader do fail: the import into an RDF dataset, `read_graph` and the command line all turn any fold diagnostic into an error.\n\nSo the same bytes raise on the command line and return an empty or truncated result in Python.\n\nA related quiet path: the seeking reader accepts a non-map item in a segment's tail after its index frame and reports it only if that frame is fetched, so a catalog over a file with unknown trailing material is returned as complete.\n\n## Expected\n\n- The Python view raises on a fold diagnostic, as the dataset import does, or returns the diagnostics where a caller must see them. Either way a damaged file is not a silent success.\n- The seeking reader reports trailing items it cannot classify when the catalog is built, or exposes that the segment has an unverified tail, so that a caller can refuse it.\n\n## Acceptance\n\n- A test per surface: a file whose first item is not a header; a valid file followed by a non-map item. Each raises or reports in Python, and each is reported by the seeking reader.\n- A neighbouring valid file still reads as before on both surfaces.\n- No change to what the low-level reader returns.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-14T07:41:39Z",
+  "labels": [],
+  "milestone": null,
+  "number": 1319,
+  "state": "OPEN",
+  "title": "Python GTS fold view ignores read diagnostics; the seeking reader accepts an unclassified tail",
+  "updatedAt": "2026-11-14T07:41:39Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1319"
+}

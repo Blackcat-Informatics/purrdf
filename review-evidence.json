@@ -1,0 +1,54 @@
+{
+  "ok": true,
+  "head": "8f2797d0ac505c6bc8dd7c603ecda64b5967c916",
+  "items": [
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABoJG-AA",
+      "kind": "comment",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1381#issuecomment-6988873216",
+      "author": "coderabbitai",
+      "updated_at": "2026-11-18T22:20:12Z",
+      "state": null,
+      "commit": null,
+      "body_sha256": "b6f3310fc45399d495a356cfd4f15e1bb37038a5a5f8321809db7d605a4cb124",
+      "body_bytes": 16814,
+      "body_archived": false
+    },
+    {
+      "id": "github:review:PRR_kwDOTKq-Ms8AAAABY3MEkw",
+      "kind": "review",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1381#pullrequestreview-5963449491",
+      "author": "coderabbitai",
+      "updated_at": "2026-11-18T19:19:44Z",
+      "state": "COMMENTED",
+      "commit": "8c84bdd5ba566dda5fe0387a568c9be087d139ff",
+      "body_sha256": "9b9e18912f52242b17fc1379bee9f3eb0853c2a11791a8beb95627b85e518cfc",
+      "body_bytes": 4157,
+      "body_archived": false
+    },
+    {
+      "id": "github:inline:PRRC_kwDOTKq-Ms8AAAABE1gNXQ",
+      "kind": "inline",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1381#discussion_r4619504989",
+      "author": "coderabbitai",
+      "updated_at": "2026-11-18T20:15:27Z",
+      "state": null,
+      "commit": "8f2797d0ac505c6bc8dd7c603ecda64b5967c916",
+      "thread_id": "PRRT_kwDOTKq-Ms65JyEW",
+      "resolved": true,
+      "outdated": false,
+      "path": "crates/gts/src/reader/indexed/catalog.rs",
+      "line": 377,
+      "body_sha256": "06fcd94068b234f0e0ebcc489a427088aca31c2b097d446625a8d67e7631884f",
+      "body_bytes": 2576,
+      "body_archived": false
+    }
+  ],
+  "coverage": {
+    "comments": "complete",
+    "reviews": "complete",
+    "inline_comments": "complete",
+    "threads": "complete"
+  },
+  "bodies": "kept on the forge; each item carries body_sha256 of the original"
+}
