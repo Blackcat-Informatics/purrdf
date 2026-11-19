@@ -81,11 +81,25 @@ fn builder(dataset: &RdfDataset) -> SegmentedBuilder {
 }
 
 /// A builder over the rows of `dataset` whose subject `keep` admits.
+///
+/// The construction limits are the floor of 2^20 terms, 2^28 term bytes and 2^20
+/// rows, raised to the fixture's own term count, arena bytes and row count, so
+/// every fixture size builds and the default size keeps its floor.
 fn builder_of(dataset: &RdfDataset, keep: impl Fn(TermId) -> bool) -> SegmentedBuilder {
-    let mut builder = SegmentedBuilder::new(
-        SegmentedBuildLimits::new(1 << 20, 1 << 28, 1 << 20, 4096, 64).unwrap(),
+    let fit = |actual: usize, floor: u32| {
+        u32::try_from(actual)
+            .expect("fixture within the u32 construction bounds")
+            .max(floor)
+    };
+    let limits = SegmentedBuildLimits::new(
+        fit(dataset.term_count(), 1 << 20),
+        fit(dataset.rdf_text_bytes(), 1 << 28),
+        fit(dataset.rdf_row_count(), 1 << 20),
+        4096,
+        64,
     )
     .unwrap();
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
     for (stream, rows) in [
         dataset.quads().collect::<Vec<_>>(),
         dataset.reifier_quads().collect(),
