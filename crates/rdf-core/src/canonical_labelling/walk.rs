@@ -102,9 +102,8 @@ pub(crate) struct Walk {
     /// does not exceed, so the walk never trips.
     bound: u64,
     totals: WalkTotals,
-    /// The smallest source identifier and the node count of the top component
-    /// whose step 2 is running: the fields of a refusal.
-    source: Box<[u8]>,
+    /// The node count of the top component whose step 2 is running: a field
+    /// of a refusal.
     nodes: u64,
 }
 
@@ -114,7 +113,6 @@ impl Default for Walk {
             total: 0,
             bound: u64::MAX,
             totals: WalkTotals::default(),
-            source: Box::default(),
             nodes: 0,
         }
     }
@@ -134,17 +132,14 @@ impl Walk {
                 limit.max(allowance)
             },
             totals: WalkTotals::default(),
-            source: Box::default(),
             nodes: 0,
         };
         walk.add(&[(Kind::Split, split)]);
         walk
     }
 
-    /// Step 2 begins on the top component of smallest source identifier
-    /// `source` and `nodes` nodes.
-    pub(crate) fn enter(&mut self, source: &[u8], nodes: u64) {
-        self.source = source.into();
+    /// Step 2 begins on a top component of `nodes` nodes.
+    pub(crate) const fn enter(&mut self, nodes: u64) {
         self.nodes = nodes;
     }
 
@@ -211,12 +206,13 @@ impl Walk {
         }
     }
 
-    /// The refusal of a walk that ended at its last charge, with the first
+    /// The refusal of a walk that ended at its last charge, in the top
+    /// component whose smallest source identifier is `source`, with the first
     /// failures of the search-free run.
-    pub(crate) fn refusal(&self, broken_by: Vec<FailureRecord>) -> Refusal {
+    pub(crate) fn refusal(&self, source: &[u8], broken_by: Vec<FailureRecord>) -> Refusal {
         Refusal::Limit {
             broken_by,
-            source: self.source.clone(),
+            source: source.into(),
             nodes: self.nodes,
             units: self.total,
         }
@@ -269,6 +265,12 @@ pub(crate) fn twin_tests(
 pub(crate) struct Relation {
     classes: Classes,
     len: usize,
+    /// The version of `TW` at the last pass of (K1): the pass is repeated only
+    /// when a join of `TW`, by this call or a nested one, has changed it.
+    twin_version: Option<u64>,
+    /// The passes of (K1) made.
+    #[cfg(test)]
+    pub(crate) passes: u64,
 }
 
 impl Relation {
@@ -276,6 +278,9 @@ impl Relation {
         Self {
             classes: Classes::new(len),
             len,
+            twin_version: None,
+            #[cfg(test)]
+            passes: 0,
         }
     }
 
@@ -288,11 +293,31 @@ impl Relation {
     }
 
     /// (K1): every two members of `target` in one class of `TW` are related.
+    ///
+    /// One pass groups the members by their root in `TW` and relates each
+    /// member to the first of its group. The relation only grows, so a pass
+    /// is needed only after a join of `TW`.
     pub(crate) fn twins(&mut self, target: &[usize], tw: &mut Classes) {
-        let roots: Vec<usize> = target.iter().map(|&v| tw.find(v)).collect();
-        for i in 1..self.len {
-            if let Some(j) = (0..i).find(|&j| roots[j] == roots[i]) {
-                self.relate(i, j);
+        if self.twin_version == Some(tw.unions()) {
+            return;
+        }
+        self.twin_version = Some(tw.unions());
+        #[cfg(test)]
+        {
+            self.passes += 1;
+        }
+        let mut keyed: Vec<(usize, usize)> = target
+            .iter()
+            .take(self.len)
+            .enumerate()
+            .map(|(i, &v)| (tw.find(v), i))
+            .collect();
+        keyed.sort_unstable();
+        let mut first = None;
+        for (root, i) in keyed {
+            match first {
+                Some((group, head)) if group == root => self.relate(i, head),
+                _ => first = Some((root, i)),
             }
         }
     }

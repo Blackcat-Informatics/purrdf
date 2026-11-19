@@ -196,7 +196,13 @@ fn claims() -> Vec<Line> {
 
 fn prepare(row: &str, size: usize) -> CountWork {
     let lines = match row {
-        "path" => path(size),
+        "path" => {
+            assert!(
+                size >= 1,
+                "PURRDF_LABELLING_COUNT_NODES must be at least 1, got {size}"
+            );
+            path(size)
+        }
         "quadratic_residue_13" => quadratic_residue_13(),
         "cube" => cube(),
         "z4_z4" => z4_z4(),

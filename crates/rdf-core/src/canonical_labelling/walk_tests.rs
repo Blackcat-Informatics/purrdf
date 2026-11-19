@@ -9,11 +9,12 @@
 //! here is computed by both engines and must be the same from each.
 
 use super::optimised_tests::{complement_of_cycles, cub8, fifteen, k4_pair};
+use super::reference::Classes;
 use super::tests::{
-    complete_bipartite_one_direction, cube_both_directions, cycle_with_records, failure_record,
-    hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
+    complete_bipartite_one_direction, cube_both_directions, cycle_with_records, directed_cycle,
+    failure_record, hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
 };
-use super::walk::{Kind, Walk};
+use super::walk::{Kind, Relation, Walk};
 use super::{FailureRecord, Labelled, Limit, Line, Refusal, Term, admit};
 use super::{optimised, reference};
 use purrdf_hash::hex;
@@ -610,7 +611,7 @@ fn the_walk_trips_exactly_above_its_bound_and_saturates() {
     );
     assert_eq!(walk.total(), u64::MAX);
     assert_eq!(walk.totals().twin, u64::MAX);
-    match walk.refusal(Vec::new()) {
+    match walk.refusal(b"s", Vec::new()) {
         Refusal::Limit { units, .. } => assert_eq!(units, u64::MAX),
         other => panic!("expected a limit refusal, got {other:?}"),
     }
@@ -763,4 +764,50 @@ fn the_shared_inputs_with_reifiers_walk_to_their_figures() {
             assert_eq!(got, totals, "{name}");
         }
     }
+}
+
+/// The relation of (K1) over a call that visits every member, as a directed
+/// cycle of 2,000 blank nodes makes: the relation is needed at each visit, and
+/// the twin classes change only when a twin test passes, so one pass serves
+/// every visit until a join of the classes (by the call or a nested one)
+/// changes them. A pass relates each member to the first of its class and no
+/// other; a rescan per member is cubic over the visits.
+#[test]
+fn the_twin_relation_is_read_in_passes_not_per_member_scans() {
+    const N: usize = 2_000;
+    let target: Vec<usize> = (0..N).collect();
+    let mut tw = Classes::new(N);
+    let mut relation = Relation::new(N);
+    for visit in 0..N {
+        relation.twins(&target, &mut tw);
+        assert!(!relation.skipped(visit), "no twins yet");
+    }
+    assert_eq!(relation.passes, 1, "no join of TW, one pass");
+
+    // Members 0, 5 and 7 become one class, 3 and 4 another.
+    let (a, b) = (tw.find(0), tw.find(5));
+    tw.join(a, b);
+    let (a, b) = (tw.find(0), tw.find(7));
+    tw.join(a, b);
+    let (a, b) = (tw.find(3), tw.find(4));
+    tw.join(a, b);
+    for _ in 0..N {
+        relation.twins(&target, &mut tw);
+    }
+    assert_eq!(relation.passes, 2, "joins of TW, one more pass");
+    let skipped: Vec<usize> = (0..N).filter(|&i| relation.skipped(i)).collect();
+    assert_eq!(
+        skipped,
+        [4, 5, 7],
+        "each later member of a class is skipped"
+    );
+
+    // A neighbouring input labels the same in both engines, and the 2,000-node
+    // cycle labels in the optimised engine (the reference engine is the oracle
+    // for small inputs).
+    walked(&directed_cycle(12), Limit::ENGINE.get()).expect("the neighbour labels");
+    let set = admit(&directed_cycle(N)).expect("well formed");
+    optimised::label_walked(&set, Limit::ENGINE.get(), false, None)
+        .map_err(super::Halt::expect_refusal)
+        .expect("a directed cycle of 2,000 nodes labels");
 }
