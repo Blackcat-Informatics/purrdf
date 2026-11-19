@@ -1,0 +1,24 @@
+ghprsq source head backlink metadata
+
+parent_hashes: a5b46826f2ac350d05a62561c79c4e05232c941c
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1392
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1392
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 7529d48913eed643394f6a1887c19a13af10d103
+GhpRsq-Head-Ref: paudley/1339-canonical-labelling-is-factorial-in
+GhpRsq-Head-OID: a5b46826f2ac350d05a62561c79c4e05232c941c
+GhpRsq-Result-Tree: 66d22a8989c0ff83d384ee3d9fed606a24467e6b
+GhpRsq-Result-Commit: 3d74f50b40a9a23588f9ce525a94c31865382944
+GhpRsq-Parent-Hashes: a5b46826f2ac350d05a62561c79c4e05232c941c
+GhpRsq-Squash-Notes-SHA256: 922e1df83af0b24dd6d022f40bde1dc514f5f2e4e3e06031ee7811e6f9b24be0
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Tree: 037af42050d67cf0cd848ba568848e772dc85d4f
+GhpRsq-Stage-Commit: 623f1c24829b430424603e94054ea000e01b7f0e
+GhpRsq-Stage-Tag: refs/tags/ghprsq/artifacts/623f1c24829b430424603e94054ea000e01b7f0e
+GhpRsq-Stage-Ref: refs/ghprsq/pr/1392/stage
+GhpRsq-Stage-Files: 16
+GhpRsq-Stage-URL: https://github.com/Blackcat-Informatics/purrdf/tree/623f1c24829b430424603e94054ea000e01b7f0e
