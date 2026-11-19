@@ -2696,7 +2696,7 @@ fn analyze_rows<P: CorpusProfile>(
             // buffer, including capacity, before retaining the remaining views.
             drop(core::mem::take(&mut analysis.lexical));
             if config.surface || config.projection == IndexProjection::Han {
-                analyses.push((digest_rows(std::iter::once(row)), analysis));
+                analyses.push((row_fingerprint(row), analysis));
             }
         }
         // Retain auxiliary-only documents without admitting them into the
@@ -2859,6 +2859,12 @@ fn digest_rows<'a, P: CorpusProfile + 'a>(
     let mut hashes: Vec<[u8; 32]> = row_hashes(rows).collect();
     hashes.sort_unstable();
     sorted_source_fingerprint::<P>(hashes)
+}
+
+/// The source identity of one row alone. A single hash is already sorted, so no
+/// collection is built.
+fn row_fingerprint<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; FINGERPRINT_BYTES] {
+    sorted_source_fingerprint::<P>(row_hashes(std::iter::once(row)))
 }
 
 /// A streaming digest over the crate's one term encoding.

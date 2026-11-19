@@ -22,7 +22,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
   keeps its 4.x additive value and is deprecated. The first identity request
   of a dataset frozen without eager statistics now sorts its record digests in a
-  scratch buffer, and a text delta hashes the whole row directory. The new row
+  scratch buffer, a text delta hashes the whole row directory, and a standalone surface delta sorts every source digest (about 9% more instructions at 2048 rows). `SourceMatchEvidence::literal` of an index-built surface also moves. The new row
   benches `source_change_counts` (`identity_*`, `version_fingerprint`) and
   `purrdf-text` `source_identity_counts` report their retired instructions and
   allocations, through the new shared runner

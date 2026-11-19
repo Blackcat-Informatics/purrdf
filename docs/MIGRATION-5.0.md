@@ -184,17 +184,21 @@ digests in ascending order, repeats kept, followed by the row count, under a
 domain of its own (`purrdf_hash::multiset::sorted_fingerprint`). Two different
 row sets share a value only through a BLAKE3 collision.
 
-Every value below moves for every input, and a value recorded by 4.x never
-equals the 5.0 value of the same data. Nothing recomputes a 4.x value: recompute
+Every value below moves for every input, except that a segmented stack made only
+of image layers, with no removal or declaration owners and no resident head,
+hashes image snapshots alone and keeps its 4.x snapshot identity and the
+receipts bound to it. A value recorded by 4.x otherwise never equals the 5.0
+value of the same data. Nothing recomputes a 4.x value: recompute
 the identity from the data and record it again.
 
 | Value | What moved |
 |---|---|
-| `ContentIdentified::content_identity` of `RdfDataset`, of a triple dataset, and of `CompositeDatasetView`, `DeltaDatasetView`, paged datasets, paged and segmented stack snapshots and queries, and the SHACL data and class-membership views | The resident record and named-graph families, and a mutation snapshot's suppressed, converted and withdrawn-graph families, are sorted-digest fingerprints (domains `purrdf-core/snapshot/rows/v2`, `purrdf-core/snapshot/graphs/v2`, `purrdf-core/delta-snapshot/v2` and its family domains). Composed views hash these identities, so they move with them. The class-membership view hashes its supplementary subclass edges the same way (`purrdf-shapes/class-membership-snapshot/v2`). |
+| `ContentIdentified::content_identity` of `RdfDataset`, of a triple dataset, and of `CompositeDatasetView`, `DeltaDatasetView`, paged datasets and segmented stack snapshots and queries (see the exception above), and the SHACL data and class-membership views | The resident record and named-graph families, and a mutation snapshot's suppressed, converted and withdrawn-graph families, are sorted-digest fingerprints (domains `purrdf-core/snapshot/rows/v2`, `purrdf-core/snapshot/graphs/v2`, `purrdf-core/delta-snapshot/v2` and its family domains). Composed views hash these identities, so they move with them. The class-membership view hashes its supplementary subclass edges the same way (`purrdf-shapes/class-membership-snapshot/v2`). |
 | Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt` or `bind_execution_receipt_hex`, by Python `bind_execution_receipt`, by JavaScript `bindExecutionReceipt` and by C `purrdf_execution_receipt_bind`; `QueryCoordinates::execution_identity`, `SuppliedQueryCoordinates::execution_identity` and `RuleCoordinates::execution_identity`, which take these content identities. |
 | `SourceVersion::content_fingerprint` | BLAKE3 over the population and the canonical Merkle node of the sorted record digests (`purrdf/source-version/v2`). |
 | `TextIndex::source_fingerprint`, `TextSource::source_fingerprint` and `purrdf_text::source_digest` | BLAKE3 over the sorted selected-row digests (`purrdf-text/source/v3`, `purrdf-text/triples/source/v3`). `verify_binding` refuses an index whose stored source identity came from 4.x. |
 | `TextIndex::fingerprint`, `snapshot_fingerprint` and the generation retrieval strata attest | The index generation binds the source identity, so it moves with it, and so does every retrieval evidence identity recorded over a 4.x generation. |
+| `SourceMatchEvidence::literal` of a match from an index-built surface, and the literal identity Han occurrences carry | The per-row source identity moved from the additive `purrdf-text/source/v2` law to the sorted `purrdf-text/source/v3` law. |
 | `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
 
 `purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
@@ -204,7 +208,8 @@ combine across physical layers without visiting rows; they are accounting sums
 for drift and population checks between structures one process built, and no
 identity is derived from them. `TextDeltaError::SourceMismatch` reports check
 values of the same accounting. `DatasetStateDigest`, pack identities and
-segmented image snapshots already hashed bytes or sorted rows and are unchanged.
+the image snapshots inside a segmented stack already hashed bytes or sorted rows
+and are unchanged.
 
 Two cases are settled by the new law. A paged dataset certifies a page it
 materializes by recomputing the page's content identity from the rows the
