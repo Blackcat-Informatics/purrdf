@@ -101,6 +101,7 @@ fn lift<E>(error: ViewError<E>) -> CanonError<E> {
         ViewError::Refused(refusal) => CanonError::Refused(Box::new(refusal)),
         ViewError::Stopped => CanonError::Stopped,
         ViewError::Storage(error) => CanonError::Storage(error),
+        ViewError::Lowering(refusal) => CanonError::Lowering(refusal),
     }
 }
 

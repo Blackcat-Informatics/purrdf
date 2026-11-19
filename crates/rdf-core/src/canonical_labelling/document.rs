@@ -47,6 +47,7 @@ use purrdf_lex::term_syntax::{TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_iri, wr
 use purrdf_lex::text_out::TextOut;
 
 use super::lines::push_bytes;
+use super::nested::NESTED_TERM_PAYLOAD;
 use super::write_label;
 use crate::RdfTextDirection;
 
@@ -89,24 +90,26 @@ impl fmt::Display for DocumentError {
 
 impl std::error::Error for DocumentError {}
 
-/// The marker byte after the four scope bytes of a composite node's source
-/// identifier. A blank node of a view has its label there, which is UTF-8, and
-/// `0xFF` never begins UTF-8, so no blank node of a view has such a source.
-const COMPOSITE_MARK: u8 = 0xFF;
+/// The first bytes of a composite node's source identifier: four zero bytes
+/// and the marker `0xFF`. A blank node of a view has its label after its four
+/// scope bytes, which is UTF-8, and `0xFF` never begins UTF-8; in the text
+/// form its source begins `0x82` and a term node's `0x81`. So no other node of
+/// a labelled set has such a source.
+const COMPOSITE_PREFIX: [u8; 5] = [0, 0, 0, 0, 0xFF];
 
 /// The source identifier of the composite node of the literal leaf whose
-/// encoding is `literal`: four zero bytes, [`COMPOSITE_MARK`], then the
-/// encoding. One literal value is one node.
+/// encoding is `literal`: [`COMPOSITE_PREFIX`], then the encoding. One literal
+/// value is one node.
 pub(crate) fn composite_source(literal: &[u8]) -> Vec<u8> {
-    let mut source = Vec::with_capacity(5 + literal.len());
-    source.extend_from_slice(&[0, 0, 0, 0, COMPOSITE_MARK]);
+    let mut source = Vec::with_capacity(COMPOSITE_PREFIX.len() + literal.len());
+    source.extend_from_slice(&COMPOSITE_PREFIX);
     source.extend_from_slice(literal);
     source
 }
 
 /// Whether `source` is the source identifier of a composite node.
 pub(crate) fn is_composite_source(source: &[u8]) -> bool {
-    source.get(4) == Some(&COMPOSITE_MARK)
+    source.starts_with(&COMPOSITE_PREFIX)
 }
 
 /// The payload of a composite node's `record` line: `bytes(datatype)`, then
@@ -123,15 +126,21 @@ pub(crate) fn composite_payload(datatype: &str, segments: &[&str]) -> Vec<u8> {
     payload
 }
 
-/// The literal each composite node of a canonical line sequence spells, by the
-/// node's position: its lexical form with each embedded blank node written
-/// `_:` and its position, and its datatype.
+/// What the nodes of a canonical line sequence that are not blank nodes of the
+/// dataset spell, by position: each composite node its literal (its lexical
+/// form with each embedded blank node written `_:` and its position, and its
+/// datatype), and each term node its triple term, from the encodings of the
+/// three components of its nested-term record.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Composites(BTreeMap<u64, (String, String)>);
+pub(crate) struct Composites {
+    literals: BTreeMap<u64, (String, String)>,
+    triples: BTreeMap<u64, Box<[u8]>>,
+}
 
 impl Composites {
-    /// Read the composite spellings of `lines`, a canonical line sequence, in
-    /// which `is_composite` names the positions of the composite nodes.
+    /// Read the spellings of `lines`, a canonical line sequence, in which
+    /// `is_composite` names the positions of the composite nodes and
+    /// `is_term_node` those of the term nodes.
     ///
     /// # Errors
     /// [`DocumentError`] when a composite node's record is not one this
@@ -139,8 +148,10 @@ impl Composites {
     pub(crate) fn of(
         lines: &[Box<[u8]>],
         is_composite: impl Fn(u64) -> bool,
+        is_term_node: impl Fn(u64) -> bool,
     ) -> Result<Self, DocumentError> {
         let mut spelled = BTreeMap::new();
+        let mut triples = BTreeMap::new();
         for line in lines {
             let Some((&TAG_RECORD, rest)) = line.split_first() else {
                 continue;
@@ -152,6 +163,10 @@ impl Composites {
                 continue;
             }
             let node = reader.u64()?;
+            if is_term_node(node) && payload == NESTED_TERM_PAYLOAD && terms == 4 {
+                triples.insert(node, reader.bytes.into());
+                continue;
+            }
             if !is_composite(node) {
                 continue;
             }
@@ -171,19 +186,23 @@ impl Composites {
             }
             spelled.insert(node, (lexical, datatype.to_owned()));
         }
-        Ok(Self(spelled))
+        Ok(Self {
+            literals: spelled,
+            triples,
+        })
     }
 }
 
 /// A cursor over one line encoding.
-struct Reader<'a, 'c> {
+struct Reader<'a> {
     bytes: &'a [u8],
-    /// How composite nodes are spelled; none spells every leaf as a label.
-    composites: Option<&'c Composites>,
+    /// How composite nodes and term nodes are spelled; none spells every leaf
+    /// as a label.
+    composites: Option<&'a Composites>,
 }
 
-impl<'a, 'c> Reader<'a, 'c> {
-    const fn new(bytes: &'a [u8], composites: Option<&'c Composites>) -> Self {
+impl<'a> Reader<'a> {
+    const fn new(bytes: &'a [u8], composites: Option<&'a Composites>) -> Self {
         Self { bytes, composites }
     }
 
@@ -232,18 +251,39 @@ impl<'a, 'c> Reader<'a, 'c> {
     }
 
     /// Spell the next term into `out`. Triple terms nest to the depth of the
-    /// input, so the walk keeps its own work list instead of the machine stack.
+    /// input, and a term node is spelled as its triple term from the
+    /// components of its record, which may hold term nodes in turn, so the walk
+    /// keeps its own work list instead of the machine stack.
     fn term<W: TextOut + ?Sized>(&mut self, out: &mut W) -> Result<(), DocumentError> {
-        // Each entry is a piece still to write: a term to read, or a literal
-        // piece of text between the terms of a triple.
-        enum Step {
+        // Each entry is a piece still to write: a term to read from the
+        // current cursor, a literal piece of text between the terms of a
+        // triple, or the end of a term node's components, where the cursor
+        // that was current before them is restored.
+        #[derive(Clone, Copy)]
+        enum Step<'a> {
             Term,
             Text(&'static str),
+            Resume(&'a [u8]),
         }
+        let triple = [
+            Step::Text(TRIPLE_TERM_CLOSE),
+            Step::Text(" "),
+            Step::Term,
+            Step::Text(" "),
+            Step::Term,
+            Step::Text(" "),
+            Step::Term,
+        ];
         let mut pending = vec![Step::Term];
         while let Some(step) = pending.pop() {
             match step {
                 Step::Text(text) => out.push_str(text),
+                Step::Resume(bytes) => {
+                    if !self.bytes.is_empty() {
+                        return Err(DocumentError::Truncated);
+                    }
+                    self.bytes = bytes;
+                }
                 Step::Term => match self.tag()? {
                     TAG_IRI => write_iri(self.text()?, out),
                     TAG_LITERAL => {
@@ -259,11 +299,23 @@ impl<'a, 'c> Reader<'a, 'c> {
                     }
                     TAG_FIXED => {
                         let position = self.u64()?;
-                        match self.composites.and_then(|c| c.0.get(&position)) {
-                            Some((lexical, datatype)) => {
-                                write_literal(lexical, datatype, None, None, out);
-                            }
-                            None => write_label(position, out),
+                        let composites = self.composites;
+                        if let Some((lexical, datatype)) =
+                            composites.and_then(|c| c.literals.get(&position))
+                        {
+                            write_literal(lexical, datatype, None, None, out);
+                        } else if let Some(components) =
+                            composites.and_then(|c| c.triples.get(&position))
+                        {
+                            out.push_str(TRIPLE_TERM_OPEN);
+                            out.push(' ');
+                            // The work list pops from the end: the components
+                            // first, then the cursor of the line is restored.
+                            pending.push(Step::Resume(self.bytes));
+                            self.bytes = components;
+                            pending.extend(triple);
+                        } else {
+                            write_label(position, out);
                         }
                     }
                     TAG_TRIPLE => {
@@ -271,15 +323,7 @@ impl<'a, 'c> Reader<'a, 'c> {
                         out.push(' ');
                         // The work list pops from the end: subject first, the
                         // close last.
-                        pending.extend([
-                            Step::Text(TRIPLE_TERM_CLOSE),
-                            Step::Text(" "),
-                            Step::Term,
-                            Step::Text(" "),
-                            Step::Term,
-                            Step::Text(" "),
-                            Step::Term,
-                        ]);
+                        pending.extend(triple);
                     }
                     other => return Err(DocumentError::Tag(other)),
                 },
@@ -328,7 +372,7 @@ pub(crate) fn write_line_with<W: TextOut + ?Sized>(
 }
 
 fn spell_line<W: TextOut + ?Sized>(
-    mut reader: Reader<'_, '_>,
+    mut reader: Reader<'_>,
     out: &mut W,
 ) -> Result<(), DocumentError> {
     match reader.tag()? {
