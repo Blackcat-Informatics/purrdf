@@ -311,17 +311,29 @@ GTS format, section "Nested terms, lowering and term nodes":
   `E([2, lexical, form, x])`, the texts whole as the view holds them. A composite
   node stands for its literal and takes the literal's `K`. The digests only order
   nodes: they enter no line, payload or digest.
-* SOURCE ORDER. When a view holds a nested term, every blank node of the view takes
+* SOURCE ORDER. The source form is decided per input: the statements of the view
+  that the scope selects together with the caller's records, which is what the
+  lowering reads. When that input holds a nested term, every blank node of it takes
   the source identifier `E([ordinal, label])`, the scope ordinal as an unsigned
   integer and the label as a byte string, the bytes the format gives a blank node of
-  a fold. Term nodes (first byte `0x81`) then precede every blank node of the view
+  a fold. Term nodes (first byte `0x81`) then precede every other blank node
   (`0x82`), and the order of twins and of copies of a top component, the only things
-  source identifiers decide, is the format's. When a view holds no nested term, its
-  blank nodes keep the source identifier of four big-endian bytes of the scope
+  source identifiers decide, is the format's. When the input holds no nested term,
+  its blank nodes keep the source identifier of four big-endian bytes of the scope
   ordinal and the label, which orders labels bytewise; the format's form would
   order a shorter label first and so move the positions of twins in inputs the
-  lowering does not change. Both forms are injective, so either names each blank
-  node once.
+  lowering does not change. A nested term only in a graph the scope leaves out does
+  not change the form, and a nested term only in a record changes it even when the
+  view holds none. Both forms are injective, so either names each blank node once.
+* THE DATASET PATH AND A GTS READER. The canonical map of the dataset path is not
+  the positions a GTS reader reports or stores for the same data. Source
+  identifiers decide only the order of twin blank nodes and of copies of equal top
+  components, and the reader's source identifiers come from its own folds; for those
+  nodes the two maps can differ by an automorphism of the lowered set. The canonical
+  line sequence, its bytes and its digest are the same. A canonical file written
+  from the dataset path's positions holds the canonical bytes, and the order of
+  delivery a reader reports for it comes from that reader's own run, not from the
+  positions it was written from.
 * A nested term of PurRDF's model may stand as the subject or the predicate of a
   triple term, which RDF 1.2 and the format's position rules exclude. The lowering
   treats every component that is a triple term as nested, so such input is lowered
@@ -340,9 +352,9 @@ GTS format, section "Nested terms, lowering and term nodes":
   input of the read is refused by weight. The view is read once: size and weight
   are counted while the view is lowered, from term identifiers, and are judged
   before any digest is formed, any nested-term record is built or the engine runs.
-* THE THREE CASES. A view with no triple term and a view whose triple terms all
-  have depth one lower to the lines they always gave, with the same source
-  identifiers, positions, identities and digests. A view with a nested term is
+* THE THREE CASES. An input with no triple term and an input whose triple terms
+  all have depth one lower to the lines they always gave, with the same source
+  identifiers, positions, identities and digests. An input with a nested term is
   labelled as its lowered set, whose canonical line sequence, digest and positions
   differ from those of the unlowered lines.
 * The canonical document spells a term node as the triple term it stands for, read
@@ -502,11 +514,19 @@ states why each consequence follows from the design.
   come from the order of components and the structure of calls, not from RDFC-1.0's
   hash order, and the digest is BLAKE3 over the typed line sequence, not SHA-256
   over N-Quads text. The digest also moves for datasets with no blank node.
-* **A dataset with a triple term nested inside a triple term is labelled as its
-  lowered set** (section 3.6): its canonical line sequence, digest and positions are
-  those of the set with one term node and one record per nested term, and the
-  positions of its blank nodes need not be consecutive. A dataset whose triple terms
-  all have depth one, and one with no triple term, are labelled as before.
+* **An input with a triple term nested inside a triple term is labelled as its
+  lowered set** (section 3.6): the input is the statements the scope selects
+  together with the caller's records, its canonical line sequence, digest and
+  positions are those of the set with one term node and one record per nested term,
+  and the positions of its blank nodes need not be consecutive. An input whose
+  triple terms all have depth one, and one with no triple term, are labelled as
+  before.
+* **The dataset path's canonical map is not a GTS reader's.** For twin blank
+  nodes and for copies of equal top components, the positions `label_view` gives
+  and those a GTS reader reports or stores for the same data can differ by an
+  automorphism; the canonical bytes and the digest are equal. A canonical file
+  written from the dataset path's positions has the canonical bytes, and a
+  reader's order of delivery comes from the reader's own run.
 * **Labels are output only.** A consumer reads the typed placement, not the decimal
   label. Position order differs from the byte order of labels (`10` precedes `2`),
   so a document read back by its labels is not promised the identity map.

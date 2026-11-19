@@ -50,16 +50,28 @@
 //! source identifier is four zero bytes, `0xFF` and its literal's encoding,
 //! which no `(label, scope)` spells.
 //!
-//! When the view holds a nested term, every blank node of the view instead
+//! The source form is decided per input: the statements of the view that the
+//! scope selects together with the caller's records, which is what the
+//! lowering reads. When that input holds a nested term, every blank node of it
 //! takes the source identifier `E([ordinal, label])`, the deterministic CBOR
 //! encoding the second-generation GTS format gives a blank node of a fold, and
 //! a term node takes `E([d])` with the digest of its nested term. The digests
 //! of term nodes read those bytes, and the source order is the format's: every
-//! term node (first byte `0x81`) precedes every blank node of the view
-//! (`0x82`). A view with no nested term keeps the four-byte form, so the order
-//! of its twins, which the lowering does not change, does not move; the
-//! format's form would order a shorter label first. Both forms name each node
-//! once.
+//! term node (first byte `0x81`) precedes every blank node of the input
+//! (`0x82`). An input with no nested term keeps the four-byte form, so the
+//! order of its twins, which the lowering does not change, does not move; the
+//! format's form would order a shorter label first. A nested term only in a
+//! graph the scope leaves out does not change the form, and a nested term only
+//! in a record changes it even when the view holds none. Both forms name each
+//! node once.
+//!
+//! The canonical map of a view is not the positions a GTS reader reports or
+//! stores for the same data: the reader's source identifiers come from its own
+//! folds, so for twin blank nodes and for copies of equal top components the
+//! two maps can differ by an automorphism, while the canonical line sequence,
+//! its bytes and its digest are equal. A canonical file written from a view's
+//! positions holds the canonical bytes; the order of delivery a reader reports
+//! for it comes from the reader's own run.
 //!
 //! Terms are lowered from the identifiers of their components over heap work
 //! lists: no triple term that holds another is expanded, each nested term is

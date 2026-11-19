@@ -90,13 +90,17 @@ is no blank node of the dataset, with one `record` line:
   typed literal and 2, 3 or 4 for a language literal with no direction, `ltr` or
   `rtl`, and `x` the datatype IRI or the language. A composite node takes the
   source of its literal.
-- In a dataset with a nested term every blank node of the dataset has the source
-  identifier `E([ordinal, label])`, the scope ordinal an unsigned integer and the
-  label a byte string, so every term node precedes every blank node in source
-  order.
+- When the input of a labelling holds a nested term, every blank node of that
+  input has the source identifier `E([ordinal, label])`, the scope ordinal an
+  unsigned integer and the label a byte string, so every term node precedes every
+  blank node in source order. The input is the statements the scope selects
+  together with the caller's records: a nested term only in a graph the scope
+  leaves out does not change the form, and a nested term only in a record changes
+  it even when the dataset holds none. An input with no nested term keeps the
+  four-byte source identifiers.
 
-A dataset with no triple term, or whose triple terms all have depth one, lowers
-to the same lines as before and keeps its labels and digests. A dataset with a
+An input with no triple term, or whose triple terms all have depth one, lowers
+to the same lines as before and keeps its labels and digests. An input with a
 nested term gets new labels and a new digest. The lowering reads triple terms by
 the identifiers of their components and never expands a term that holds
 another, so a chain of `n` nested statements costs linear work and memory.
@@ -172,7 +176,7 @@ and a triple term as `<<( s p o )>>`. Each line is spelled as:
 
 A term node is spelled as the triple term it stands for, from the components of
 its record, which may hold term nodes in turn. Term nodes take positions, so
-the labels of the blank nodes of a dataset with a nested term need not be
+the labels of the blank nodes of an input with a nested term need not be
 consecutive.
 
 The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
