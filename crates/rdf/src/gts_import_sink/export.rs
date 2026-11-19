@@ -217,6 +217,17 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             term.lang.as_deref(),
                             direction,
                         );
+                        if let Some(tag) = term.lang.as_deref()
+                            && let Some(entry) = crate::gts_language_fold::language_fold_loss(
+                                term.value.as_deref().unwrap_or_default(),
+                                tag,
+                                crate::RdfLocation::logical("gts:sink")
+                                    .with_gts_segment(key.segment)
+                                    .with_gts_term(key.term as u64),
+                            )
+                        {
+                            self.metadata.losses.record(entry);
+                        }
                         let baseline = self.memory.admitted_bytes();
                         let language = term
                             .lang
@@ -558,7 +569,8 @@ where
             let output = emitter.output.finish().map_err(dictionary_import_failure)?;
             Ok(GtsTextExport {
                 written: output.written,
-                envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside),
+                envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside)
+                    .with_losses(emitter.metadata.losses),
                 read,
             })
         })();
