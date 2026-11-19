@@ -9,17 +9,31 @@
 //! and nothing here asserts a threshold: the report is for comparison across
 //! changes of the engine. Set `PURRDF_LABELLING_BENCH_SCALE` to scale the
 //! sizes of the paths, triangles and hub (default 1).
+//!
+//! With `--counts` (Linux and `perf`), the rows `path`, `quadratic_residue_13`,
+//! `cube`, `z4_z4` and `claims` run in fresh child processes under the test
+//! kit's counter protocol and print retired user-mode instructions beside the
+//! allocation line of `label`; `PURRDF_LABELLING_COUNT_NODES` sets the path
+//! (1,000 nodes by default) and `PURRDF_LABELLING_COUNT_SAMPLES` the samples.
+//! `claims` is four messages of 20 claims, each a blank reifier of a triple
+//! term with 6 to 8 annotations, the first three claims of a message being
+//! like siblings: a guaranteed input that runs no search.
 
 use std::hint::black_box;
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_core::canonical_labelling::{Line, Term, admit, label, label_reference};
+use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
 fn blank(name: &str) -> Term {
     Term::blank(name.as_bytes())
+}
+
+fn iri(name: &str) -> Term {
+    Term::iri(name.as_bytes())
 }
 
 fn quad(s: &str, p: &str, o: &str) -> Line {
@@ -53,6 +67,18 @@ fn triangles(n: usize) -> Vec<Line> {
 
 fn hub(n: usize) -> Vec<Line> {
     (0..n).map(|i| quad("h", "p", &format!("l{i}"))).collect()
+}
+
+fn cube() -> Vec<Line> {
+    let mut edges = Vec::new();
+    for i in 0..8usize {
+        for bit in [1, 2, 4] {
+            if i < i ^ bit {
+                edges.push((format!("v{i}"), format!("v{}", i ^ bit)));
+            }
+        }
+    }
+    both(&edges)
 }
 
 fn z4_z4() -> Vec<Line> {
@@ -128,6 +154,68 @@ fn cub8() -> Vec<Line> {
     )
 }
 
+/// Four messages of 20 claims. Claim `c` of message `m` is a blank reifier of
+/// `<<(s_m_c p o_m_c)>>` with `6 + c % 3` annotations, held by the message
+/// node; the first three claims of a message share one triple and one set of
+/// annotations, so they are like siblings.
+fn claims() -> Vec<Line> {
+    let mut lines = Vec::new();
+    for m in 0..4 {
+        let message = format!("m{m}");
+        for c in 0..20usize {
+            let reifier = format!("m{m}c{c:02}");
+            let key = if c < 3 { 0 } else { c };
+            lines.push(Line::Quad {
+                subject: blank(&message),
+                predicate: iri("claim"),
+                object: blank(&reifier),
+                graph: None,
+            });
+            lines.push(Line::ReifierBinding {
+                reifier: blank(&reifier),
+                triple: Term::triple(
+                    iri(&format!("s{m}_{key}")),
+                    iri("p"),
+                    iri(&format!("o{m}_{key}")),
+                ),
+                graph: None,
+            });
+            for a in 0..6 + key % 3 {
+                lines.push(Line::Annotation {
+                    count: 1,
+                    reifier: blank(&reifier),
+                    predicate: iri(&format!("q{a}")),
+                    object: iri(&format!("v{m}_{key}_{a}")),
+                    graph: None,
+                });
+            }
+        }
+    }
+    lines
+}
+
+fn prepare(row: &str, size: usize) -> CountWork {
+    let lines = match row {
+        "path" => path(size),
+        "quadratic_residue_13" => quadratic_residue_13(),
+        "cube" => cube(),
+        "z4_z4" => z4_z4(),
+        "claims" => claims(),
+        other => panic!("unknown row {other}"),
+    };
+    Box::new(move || {
+        let (_, labelled) = label(&lines).expect("the shape is labelled");
+        u64::from_le_bytes(labelled.digest[..8].try_into().expect("eight bytes"))
+    })
+}
+
+const COUNT_ROWS: CountRows<'static> = CountRows {
+    bench: "canonical_labelling",
+    rows: &["path", "quadratic_residue_13", "cube", "z4_z4", "claims"],
+    size: ("PURRDF_LABELLING_COUNT_NODES", 1000),
+    samples: "PURRDF_LABELLING_COUNT_SAMPLES",
+};
+
 fn scale() -> usize {
     std::env::var("PURRDF_LABELLING_BENCH_SCALE")
         .ok()
@@ -172,6 +260,14 @@ fn measure(name: &str, lines: &[Line]) {
 }
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--counts" || arg == "--child") {
+        run_count_rows(
+            &COUNT_ROWS,
+            &prepare,
+            &purrdf_alloc_probe::whole_process_report,
+        );
+        return;
+    }
     let scale = scale();
     for (name, lines) in [
         ("path", path(1_000 * scale)),
