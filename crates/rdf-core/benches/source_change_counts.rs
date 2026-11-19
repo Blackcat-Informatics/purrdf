@@ -23,6 +23,15 @@
 //!   differs while only the middle row changed.
 //! * `statistics`: `TripleDatasetBuilder::freeze` of the same rows as
 //!   triples, which builds the eager statistics and reads no change feed.
+//! * `identity_resident`: the first content identity of the resident freeze
+//!   of the fixture, which has no eager statistics and reads every row.
+//! * `identity_admitted`: the first content identity of the admitted freeze,
+//!   which reads its eager statistics' record directory.
+//! * `identity_delta`: the first content identity of a mutation snapshot that
+//!   removes the middle quad and inserts its changed revision, over a base
+//!   whose identity is already sealed.
+//! * `version_fingerprint`: `SourceVersion::content_fingerprint` of the first
+//!   source version of a one-image stack.
 //!
 //! The fixture has `PURRDF_SOURCE_CHANGE_ROWS` rows (2048 by default), each a
 //! quad (a triple in `statistics`), a reifier and an annotation. Fixture construction, sealing of the
@@ -34,35 +43,34 @@ use std::hint::black_box;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
+use purrdf_alloc_probe::CountingAllocator;
 use purrdf_core::source::SourceVisit;
 use purrdf_core::{
-    DatasetView, RdfDataset, RdfLiteral, SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer,
-    SegmentedLayerMetadata, SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId,
-    TripleDatasetBuilder,
+    ContentIdentified, DatasetMut, DatasetView, MutableDataset, QuadValues, RdfDataset, RdfLiteral,
+    SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer, SegmentedLayerMetadata,
+    SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId, TripleDatasetBuilder,
 };
 
 #[path = "../tests/support/source_snapshot.rs"]
 mod source_snapshot;
 
+use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
+
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-const ROWS: [&str; 6] = [
+const ROWS: [&str; 10] = [
     "seal",
     "capture",
     "feed_layers",
     "feed_head",
     "feed_regroup",
     "statistics",
+    "identity_resident",
+    "identity_admitted",
+    "identity_delta",
+    "version_fingerprint",
 ];
-
-fn rows() -> usize {
-    std::env::var("PURRDF_SOURCE_CHANGE_ROWS").map_or(2048, |raw| {
-        raw.parse()
-            .expect("PURRDF_SOURCE_CHANGE_ROWS is an integer")
-    })
-}
 
 fn limits() -> SegmentedReadLimits {
     SegmentedReadLimits::new(1 << 30, 64, 20_000_000, 1 << 34, 32)
@@ -136,7 +144,7 @@ fn head(dataset: Arc<RdfDataset>) -> SegmentedResidentHead {
 
 /// Prepare one row outside the window; the returned closure is the measured
 /// work and returns its witness.
-fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
+fn prepare(row: &str, count: usize) -> CountWork {
     let original = source_snapshot::dataset(count, false, false);
     let changed = source_snapshot::dataset(count, true, false);
     match row {
@@ -153,6 +161,60 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
                 let version = black_box(query.source_version().unwrap().unwrap());
                 u64::try_from(version.statement_count()).unwrap()
             })
+        }
+        "identity_resident" => {
+            let dataset = source_snapshot::dataset(count, false, false);
+            Box::new(move || first_byte(&dataset.content_identity().unwrap()))
+        }
+        "identity_admitted" => {
+            let builder = source_snapshot::builder(count, false, false);
+            let mut admission = purrdf_lex::allocation::Resident;
+            let bytes = builder.native_buffer_bytes().unwrap();
+            let dataset = builder
+                .freeze_with_memory(&mut purrdf_lex::allocation::Memory::resume(
+                    &mut admission,
+                    bytes,
+                ))
+                .unwrap();
+            Box::new(move || first_byte(&dataset.content_identity().unwrap()))
+        }
+        "identity_delta" => {
+            let base = source_snapshot::dataset(count, false, false);
+            base.content_identity().unwrap();
+            let changed = source_snapshot::dataset(count, true, false);
+            let middle = |dataset: &RdfDataset| {
+                let row = dataset
+                    .quads()
+                    .find(|row| {
+                        dataset.term_value(row.s)
+                            == purrdf_core::TermValue::iri(format!("urn:source:{}", count / 2))
+                    })
+                    .unwrap();
+                QuadValues {
+                    s: dataset.term_value(row.s),
+                    p: dataset.term_value(row.p),
+                    o: dataset.term_value(row.o),
+                    g: row.g.map(|id| dataset.term_value(id)),
+                }
+            };
+            let mut mutation = MutableDataset::new(Arc::clone(&base));
+            assert!(mutation.remove(&middle(&base)));
+            assert!(mutation.insert(middle(&changed)).unwrap());
+            let view = mutation.snapshot_view().unwrap();
+            Box::new(move || first_byte(&view.content_identity().unwrap()))
+        }
+        "version_fingerprint" => {
+            let mut stack = SegmentedStack::default();
+            stack.publish(vec![layer(&original)], limits()).unwrap();
+            let version = stack
+                .snapshot()
+                .unwrap()
+                .query(limits())
+                .unwrap()
+                .source_version()
+                .unwrap()
+                .unwrap();
+            Box::new(move || u64::from(black_box(version.content_fingerprint())[0]))
         }
         "statistics" => {
             let builder = triples(count);
@@ -208,6 +270,11 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
     }
 }
 
+/// A witness that depends on the whole identity.
+fn first_byte(identity: &purrdf_hash::hex::Digest32) -> u64 {
+    u64::from(black_box(identity.as_bytes())[0])
+}
+
 /// The `statistics` fixture: the source rows as triples, reifiers and
 /// annotations in a compact builder, which is frozen in the window.
 fn triples(count: usize) -> TripleDatasetBuilder {
@@ -233,75 +300,14 @@ fn triples(count: usize) -> TripleDatasetBuilder {
     builder
 }
 
-#[cfg(target_os = "linux")]
-fn child(row: &str, count: usize) {
-    use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
-    let work = prepare(row, count);
-    let mut control = CounterControl::required().expect("admitted instruction counter");
-    control.command(CounterCommand::Enable).expect("enable");
-    let witness = work();
-    control.command(CounterCommand::Disable).expect("disable");
-    println!("witness={witness}");
-}
+const SPEC: CountRows<'static> = CountRows {
+    bench: "source_change_counts",
+    rows: &ROWS,
+    size: ("PURRDF_SOURCE_CHANGE_ROWS", 2048),
+    samples: "PURRDF_SOURCE_CHANGE_COUNT_SAMPLES",
+};
 
-#[cfg(target_os = "linux")]
-fn counts(row: &str, count: usize, witness: u64) {
-    use purrdf_testkit::bench::counter::collect_instructions;
-    let samples: usize = std::env::var("PURRDF_SOURCE_CHANGE_COUNT_SAMPLES").map_or(3, |raw| {
-        raw.parse().expect("the sample count is an integer")
-    });
-    let executable = std::env::current_exe().expect("the bench binary path");
-    let home = std::env::temp_dir().join(format!("source_change_counts_{}", std::process::id()));
-    std::fs::create_dir_all(&home).expect("the scratch directory");
-    let mut taken = Vec::new();
-    for sample in 0..samples {
-        let directory = home.join(format!("{row}_{sample}"));
-        let args = ["--child".into(), row.into(), count.to_string().into()];
-        let sample = collect_instructions(&executable, &args, &directory)
-            .unwrap_or_else(|error| panic!("{row}: {error}"));
-        let stdout =
-            std::fs::read_to_string(directory.join("workload.stdout")).expect("the child's output");
-        assert_eq!(stdout.trim(), format!("witness={witness}"), "{row}");
-        taken.push(sample.instructions.to_string());
-    }
-    let _ = std::fs::remove_dir_all(&home);
-    println!(
-        "[source_change_counts] {row}: rows={count} instructions={}",
-        taken.join(",")
-    );
-}
-
+/// Run this target's rows through the shared count runner.
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    if args.first().map(String::as_str) == Some("--child") {
-        #[cfg(target_os = "linux")]
-        child(&args[1], args[2].parse().expect("the row count"));
-        return;
-    }
-    let instructions = args.iter().any(|arg| arg == "--counts");
-    let filters: Vec<&String> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
-    let count = rows();
-    for row in ROWS {
-        if !filters.is_empty() && !filters.iter().any(|filter| row.contains(filter.as_str())) {
-            continue;
-        }
-        let work = prepare(row, count);
-        let window = WholeProcessWindow::open();
-        let witness = work();
-        let measured = window.close();
-        println!(
-            "[source_change_counts] {row}: rows={count} witness={witness} allocations={} \
-             requested_bytes={} retained_bytes={} peak_working_bytes={}",
-            measured.allocations,
-            measured.requested_bytes,
-            measured.retained_bytes,
-            measured.peak_working_bytes,
-        );
-        if instructions {
-            #[cfg(target_os = "linux")]
-            counts(row, count, witness);
-            #[cfg(not(target_os = "linux"))]
-            panic!("native instruction counting requires Linux perf");
-        }
-    }
+    run_count_rows(&SPEC, &prepare, &purrdf_alloc_probe::whole_process_report);
 }

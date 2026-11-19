@@ -75,25 +75,6 @@ fn checkpointed_nodes_are_the_canonical_node_of_every_prefix_range() {
     }
 }
 
-/// Two member sets with equal additive sums and populations: `{a, b}` and
-/// `{c, a + b - c}` modulo 2^256.
-fn colliding_pair() -> ([[u8; 32]; 2], [[u8; 32]; 2]) {
-    let (a, b, c) = (digest(1), digest(2), digest(3));
-    let mut sum = Multiset256::default();
-    sum.insert(a).unwrap();
-    sum.insert(b).unwrap();
-    sum.remove(c).unwrap();
-    let d = *sum.sum();
-    let mut left = Multiset256::default();
-    left.insert(a).unwrap();
-    left.insert(b).unwrap();
-    let mut right = Multiset256::default();
-    right.insert(c).unwrap();
-    right.insert(d).unwrap();
-    assert_eq!(left, right, "the constructed pair collides additively");
-    ([a, b], [c, d])
-}
-
 fn changes(
     previous: &[&SourceDirectory],
     next: &[&SourceDirectory],
@@ -122,7 +103,7 @@ fn changes(
 /// physical addresses moved or it is spread over the same carriers.
 #[test]
 fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
-    let (removed, added) = colliding_pair();
+    let (removed, added) = crate::source::additive_collision();
     let shared: Vec<_> = (10..80).map(digest).collect();
     let with = |pair: &[[u8; 32]]| {
         let mut digests = shared.clone();
@@ -132,7 +113,14 @@ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
     };
     let before = directory(&with(&removed), 0);
     let after = directory(&with(&added), 0);
-    assert_eq!(before.content_records(), after.content_records());
+    let additive = |directory: &SourceDirectory| {
+        let mut sum = Multiset256::default();
+        directory
+            .digests()
+            .for_each(|digest| sum.insert(digest).unwrap());
+        sum
+    };
+    assert_eq!(additive(&before), additive(&after));
     assert_ne!(before.root().unwrap(), after.root().unwrap());
     let (seen, _) = changes(&[&before], &[&after]);
     let mut expected: Vec<_> = removed
@@ -162,4 +150,41 @@ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
     whole.sort_unstable();
     let (seen, _) = changes(&[&directory(&whole, 0)], &[&low, &high]);
     assert_eq!(seen, [], "the same members over other carriers");
+}
+
+/// The public row-set identities decide by the sorted digests: a record or
+/// graph set whose additive sum and population equal another's still has its
+/// own resident snapshot identity and source version fingerprint. The equal
+/// rows of a reordered dataset keep the resident identity (the
+/// `content_identity` integration test); equal members at other physical
+/// ordinals keep the version fingerprint.
+#[test]
+fn row_set_identities_distinguish_an_additive_collision() {
+    let (removed, added) = crate::source::additive_collision();
+    let with = |pair: &[[u8; 32]]| {
+        let mut digests: Vec<_> = (10..40).map(digest).collect();
+        digests.extend_from_slice(pair);
+        digests.sort_unstable();
+        digests
+    };
+    let (before, after) = (with(&removed), with(&added));
+    let snapshot = |records: &[[u8; 32]], graphs: &[[u8; 32]]| {
+        crate::source::resident_snapshot(records.iter().copied(), graphs.iter().copied(), [7; 32])
+    };
+    assert_ne!(snapshot(&before, &[]), snapshot(&after, &[]));
+    assert_ne!(snapshot(&[], &before), snapshot(&[], &after));
+    assert_eq!(
+        snapshot(&before, &after),
+        snapshot(&with(&removed), &with(&added))
+    );
+
+    let fingerprint = |directory: &SourceDirectory| {
+        crate::source::source_version_fingerprint(
+            directory.len() as u128,
+            directory.root().unwrap(),
+        )
+    };
+    let (old, new) = (directory(&before, 0), directory(&after, 0));
+    assert_ne!(fingerprint(&old), fingerprint(&new));
+    assert_eq!(fingerprint(&old), fingerprint(&directory(&before, 500)));
 }

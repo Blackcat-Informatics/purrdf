@@ -255,6 +255,111 @@ pub fn collect_instructions(
     InstructionSample::from_perf(&csv_text, &verbose_text)
 }
 
+/// A report-only bench of named fixed-work rows: the rows, the fixture size
+/// and the environment variables that override the size and the sample count.
+#[derive(Debug, Clone, Copy)]
+pub struct CountRows<'a> {
+    /// The bench name printed before each row.
+    pub bench: &'a str,
+    /// Every row, in report order.
+    pub rows: &'a [&'a str],
+    /// The variable naming the fixture size, and the size without it.
+    pub size: (&'a str, usize),
+    /// The variable naming the instruction samples per row (3 without it).
+    pub samples: &'a str,
+}
+
+/// The measured work of one row, prepared outside every window. It returns a
+/// witness that must agree between the in-process run and every child sample.
+pub type CountWork = Box<dyn FnOnce() -> u64>;
+
+/// Run a row bench from its command line.
+///
+/// Without arguments every row runs once in process under `measure`, which
+/// wraps the work in an allocation window and returns the witness and the
+/// window's report. Free arguments select rows by substring. With `--counts`
+/// (Linux and `perf`) each selected row also runs in fresh child processes
+/// under [`collect_instructions`], and its retired user-mode instructions are
+/// printed. A child is this executable started as `--child <row> <size>`.
+///
+/// # Panics
+/// Panics on an unknown row, a malformed size or sample count, a failed
+/// instruction sample, or a child whose witness differs: a report built on any
+/// of them would be wrong.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn run_count_rows(
+    spec: &CountRows<'_>,
+    prepare: &dyn Fn(&str, usize) -> CountWork,
+    measure: &dyn Fn(CountWork) -> (u64, String),
+) {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--child") {
+        #[cfg(target_os = "linux")]
+        count_child(prepare(&args[1], args[2].parse().expect("the row size")));
+        return;
+    }
+    let instructions = args.iter().any(|arg| arg == "--counts");
+    let filters: Vec<&String> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
+    let (variable, default) = spec.size;
+    let size = std::env::var(variable).map_or(default, |raw| {
+        raw.parse()
+            .unwrap_or_else(|_| panic!("{variable} is an integer"))
+    });
+    for &row in spec.rows {
+        if !filters.is_empty() && !filters.iter().any(|filter| row.contains(filter.as_str())) {
+            continue;
+        }
+        let (witness, report) = measure(prepare(row, size));
+        println!(
+            "[{}] {row}: rows={size} witness={witness} {report}",
+            spec.bench
+        );
+        if instructions {
+            #[cfg(target_os = "linux")]
+            count_samples(spec, row, size, witness);
+            #[cfg(not(target_os = "linux"))]
+            panic!("native instruction counting requires Linux perf");
+        }
+    }
+}
+
+/// One child sample: the counter is enabled around the work alone.
+#[cfg(target_os = "linux")]
+fn count_child(work: CountWork) {
+    let mut control = CounterControl::required().expect("admitted instruction counter");
+    control.command(CounterCommand::Enable).expect("enable");
+    let witness = work();
+    control.command(CounterCommand::Disable).expect("disable");
+    println!("witness={witness}");
+}
+
+#[cfg(target_os = "linux")]
+fn count_samples(spec: &CountRows<'_>, row: &str, size: usize, witness: u64) {
+    let samples: usize = std::env::var(spec.samples).map_or(3, |raw| {
+        raw.parse().expect("the sample count is an integer")
+    });
+    let executable = std::env::current_exe().expect("the bench binary path");
+    let home = std::env::temp_dir().join(format!("{}_{}", spec.bench, std::process::id()));
+    std::fs::create_dir_all(&home).expect("the scratch directory");
+    let mut taken = Vec::new();
+    for sample in 0..samples {
+        let directory = home.join(format!("{row}_{sample}"));
+        let args = ["--child".into(), row.into(), size.to_string().into()];
+        let sample = collect_instructions(&executable, &args, &directory)
+            .unwrap_or_else(|error| panic!("{row}: {error}"));
+        let stdout =
+            std::fs::read_to_string(directory.join("workload.stdout")).expect("the child's output");
+        assert_eq!(stdout.trim(), format!("witness={witness}"), "{row}");
+        taken.push(sample.instructions.to_string());
+    }
+    let _ = std::fs::remove_dir_all(&home);
+    println!(
+        "[{}] {row}: rows={size} instructions={}",
+        spec.bench,
+        taken.join(",")
+    );
+}
+
 /// Save explicit count units through the benchmark store's atomic writer.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn save_report(

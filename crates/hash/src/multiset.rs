@@ -164,6 +164,40 @@ impl Multiset256 {
     }
 }
 
+/// BLAKE3 of the framed domain, every member digest in ascending order, then
+/// the exact member count as 16 little-endian bytes.
+///
+/// This is the identity of a multiset of rows: the hash commits to the sorted
+/// sequence itself, so two different multisets share a fingerprint only through
+/// a BLAKE3 collision. The additive [`Multiset256`] sum is no such identity: a
+/// party choosing the members can construct two different multisets with equal
+/// sums and populations. Every row family supplies its own domain. The caller
+/// supplies the digests already sorted, where it visits every row; a debug
+/// build refuses an unsorted sequence.
+///
+/// # Panics
+/// Panics, in a debug build only, when `members` is not in ascending order.
+#[must_use]
+pub fn sorted_fingerprint(domain: Domain, members: impl IntoIterator<Item = [u8; 32]>) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    frame_le_with(domain.as_bytes(), &mut |part| {
+        digest.update(part);
+    });
+    let mut population = 0_u128;
+    let mut previous: Option<[u8; 32]> = None;
+    for member in members {
+        debug_assert!(
+            previous.is_none_or(|before| before <= member),
+            "sorted_fingerprint members must be in ascending order"
+        );
+        previous = Some(member);
+        digest.update(&member);
+        population += 1;
+    }
+    digest.update(&population.to_le_bytes());
+    *digest.finalize().as_bytes()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +259,43 @@ mod tests {
         assert_eq!(left, duplicate);
         left.subtract(duplicate).unwrap();
         assert_eq!(left, Multiset256::default());
+    }
+
+    /// The row-set identity law: two multisets with equal additive sums and
+    /// populations get different fingerprints, as do a member and its repeat
+    /// and one multiset under two domains; the same multiset agrees.
+    #[test]
+    fn sorted_fingerprints_separate_additive_collisions_multiplicity_and_domains() {
+        const ROWS: Domain = Domain::new(b"purrdf-hash/test/rows");
+        const OTHER: Domain = Domain::new(b"purrdf-hash/test/other");
+        let member = |seed: u8| *blake3::hash(&[seed]).as_bytes();
+        let (a, b, c) = (member(1), member(2), member(3));
+        let mut d = Multiset256::default();
+        d.insert(a).unwrap();
+        d.insert(b).unwrap();
+        d.remove(c).unwrap();
+        let d = *d.sum();
+        let sorted = |mut members: Vec<[u8; 32]>| {
+            members.sort_unstable();
+            members
+        };
+        let (left, right) = (sorted(vec![a, b]), sorted(vec![c, d]));
+        let additive = |members: &[[u8; 32]]| {
+            let mut sum = Multiset256::default();
+            for &member in members {
+                sum.insert(member).unwrap();
+            }
+            sum
+        };
+        assert_eq!(additive(&left), additive(&right));
+        let fingerprint =
+            |domain, members: &[[u8; 32]]| sorted_fingerprint(domain, members.iter().copied());
+        assert_ne!(fingerprint(ROWS, &left), fingerprint(ROWS, &right));
+        assert_eq!(
+            fingerprint(ROWS, &left),
+            fingerprint(ROWS, &sorted(vec![b, a]))
+        );
+        assert_ne!(fingerprint(ROWS, &[a]), fingerprint(ROWS, &[a, a]));
+        assert_ne!(fingerprint(ROWS, &left), fingerprint(OTHER, &left));
     }
 }

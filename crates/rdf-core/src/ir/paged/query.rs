@@ -808,6 +808,9 @@ impl<'dataset> PagedQueryView<'dataset> {
         }
         // Preserve the specific summary-drift diagnostic before checking the
         // encompassing identity, which also catches changes with equal counts.
+        // The identity is recomputed from the returned rows and is BLAKE3 over
+        // their sorted digests, so a provider choosing rows cannot match it with
+        // other rows: this check certifies the page against a hostile provider.
         if materialization
             .dataset
             .frozen_snapshot_identity()

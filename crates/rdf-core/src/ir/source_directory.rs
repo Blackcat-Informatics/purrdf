@@ -194,15 +194,13 @@ impl Eq for LazyNodes {}
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct SourceDirectory {
     records: Box<[SourceRecord]>,
-    content: Multiset256,
     nodes: LazyNodes,
 }
 
 impl SourceDirectory {
-    /// The additive sum of every record, for content fingerprints and for
-    /// agreement between two values this process built.
-    pub(crate) const fn content_records(&self) -> Multiset256 {
-        self.content
+    /// The record digests in ascending order, one per physical record.
+    pub(crate) fn digests(&self) -> impl ExactSizeIterator<Item = [u8; 32]> + Clone + '_ {
+        self.records.iter().map(|record| record.digest)
     }
 
     /// The canonical node of every record; `None` when there is none.
@@ -234,35 +232,22 @@ impl SourceDirectory {
                 Ok::<_, StorageError>(left.digest.cmp(&right.digest))
             })?;
             memory.admission_mut().checkpoint(0)?;
-            let mut content = Multiset256::default();
-            for record in &records {
-                memory.admission_mut().checkpoint(1)?;
-                content
-                    .insert(record.digest)
-                    .map_err(|_| StorageError::SizeOverflow)?;
-            }
-            memory.admission_mut().checkpoint(0)?;
-            Ok::<_, StorageError>(content)
+            Ok::<_, StorageError>(())
         })();
-        let content = match prepared {
-            Ok(content) => content,
-            Err(cause) => {
-                let _ = memory.release_vec(records);
-                return Err(cause);
-            }
-        };
-        Self::from_records(records, content, memory)
+        if let Err(cause) = prepared {
+            let _ = memory.release_vec(records);
+            return Err(cause);
+        }
+        Self::from_records(records, memory)
     }
 
     /// Publish the originally admitted buffer, retaining nothing on refusal.
     fn from_records<S: Admission + ?Sized>(
         records: Vec<SourceRecord>,
-        content: Multiset256,
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
         Ok(Self {
             records: memory.boxed_slice(records)?,
-            content,
             nodes: LazyNodes::default(),
         })
     }
@@ -272,7 +257,7 @@ impl SourceDirectory {
         memory: &mut Memory<'_, S>,
     ) -> Result<Self, StorageError> {
         let records = memory.collect(self.records.iter().copied())?;
-        Self::from_records(records, self.content, memory)
+        Self::from_records(records, memory)
     }
 
     /// Destroy the record buffer and attempt its exact original refund.
