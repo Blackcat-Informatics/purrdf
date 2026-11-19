@@ -98,7 +98,7 @@ allocation columns come from the counting allocator over admission and search.
 | cub8 | 8 | 24 | no | 3 | 1,282 | 5,932 | 3,112 | 224,580 | 10,934 |
 | `Z4 x Z4` | 16 | 96 | no | 4 | 18,739 | 594,112 | 38,203 | 2,766,276 | 36,680 |
 
-`cargo bench -p purrdf-core --bench canonical_labelling_counts -- --counts` reports
+`cargo bench -p purrdf-core --bench canonical_labelling -- --counts` reports
 retired user-mode instructions, allocations and requested bytes of `label` in fresh
 processes. The figures below are the median of five samples:
 

@@ -147,12 +147,6 @@ name = "canonical_labelling"
 harness = false
 
 [[bench]]
-# Allocations, requested bytes and retired instructions of the canonical
-# labelling over fixed shapes. Report-only; no clock is read.
-name = "canonical_labelling_counts"
-harness = false
-
-[[bench]]
 # Separate allocator instrumentation for freeze, materialization and build costs.
 name = "freeze_alloc"
 harness = false
