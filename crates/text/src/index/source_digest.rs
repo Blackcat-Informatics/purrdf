@@ -5,14 +5,19 @@
 
 use purrdf_hash::multiset::Multiset256;
 
-use super::{CorpusProfile, SOURCE_DIGEST_DOMAIN, SourceRow, TRIPLE_SOURCE_DIGEST_DOMAIN};
+use super::{
+    CorpusProfile, SOURCE_DIGEST_DOMAIN, SOURCE_IDENTITY_DOMAIN, SourceRow,
+    TRIPLE_SOURCE_DIGEST_DOMAIN, TRIPLE_SOURCE_IDENTITY_DOMAIN,
+};
 
 /// Sum of the selected row hashes in Z/(2^256), plus their exact population.
 ///
 /// A repeated row contributes repeatedly; unlike XOR, two equal rows do not
 /// disappear. The sum's encoding is explicitly little-endian on every target.
-/// This is a multiset fingerprint, not an authentication proof. The observed
-/// source summary must still be supplied independently of the proposed delta.
+/// This is a population and drift check between structures this process
+/// built, not an identity: the index's source identity is BLAKE3 over the
+/// sorted row directory. The observed source summary must still be supplied
+/// independently of the proposed delta.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct SourceDigest {
     state: Multiset256,
@@ -59,6 +64,7 @@ impl SourceDigest {
         .map_err(|error| crate::TextError::data(error.to_string()))
     }
 
+    #[cfg(test)]
     pub(super) fn from_rows<'a, P: CorpusProfile + 'a>(
         rows: impl IntoIterator<Item = &'a SourceRow<P>>,
     ) -> Self {
@@ -104,22 +110,51 @@ impl SourceDigest {
             .expect("source membership was validated");
     }
 
-    pub(super) fn fingerprint<P: CorpusProfile>(&self) -> [u8; 32] {
-        source_fingerprint::<P>(self.state)
+    /// The accounting check value a delta mismatch reports. It is a drift
+    /// check between structures this process built, not a source identity.
+    pub(super) fn check_value<P: CorpusProfile>(&self) -> [u8; 32] {
+        additive_check_value::<P>(self.state)
     }
 }
 
-/// Apply the native source domain to maintained selected literal-row hashes.
-/// Insert or remove the matching profile's hash from
-/// `purrdf_core::source::LiteralSourceRow::hashes_with_memory` for each selected
-/// statement. Counts and membership belong to the original source owner; this
-/// multiset identity is not an authentication proof.
-pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
     state.fingerprint(if P::GRAPH_FREE {
         TRIPLE_SOURCE_DIGEST_DOMAIN
     } else {
         SOURCE_DIGEST_DOMAIN
     })
+}
+
+/// The 4.x source law: the additive sum of selected literal-row hashes under
+/// the source domain. No 5.0 index carries this value.
+/// [`TextIndex::source_fingerprint`](super::TextIndex::source_fingerprint) is
+/// BLAKE3 over the sorted selected-row digests, which
+/// [`source_digest`](super::source_digest) computes from a dataset; a party
+/// choosing rows can construct two different row sets with one additive value.
+/// The value is not collision-resistant and must not be used as an identity.
+#[deprecated(
+    since = "5.0.0",
+    note = "this additive value is not collision-resistant and must not be used as an identity: use `source_digest` or `TextIndex::source_fingerprint`"
+)]
+pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+    additive_check_value::<P>(state)
+}
+
+/// The identity of the selected source rows: BLAKE3 over every selected
+/// literal-row hash in ascending order, one per occurrence, under the
+/// profile's source domain. `sorted` must be ascending; the row directory
+/// already is.
+pub(super) fn sorted_source_fingerprint<P: CorpusProfile>(
+    sorted: impl IntoIterator<Item = [u8; 32]>,
+) -> [u8; 32] {
+    purrdf_hash::multiset::sorted_fingerprint(
+        if P::GRAPH_FREE {
+            TRIPLE_SOURCE_IDENTITY_DOMAIN
+        } else {
+            SOURCE_IDENTITY_DOMAIN
+        },
+        sorted,
+    )
 }
 
 /// The sorted per-row hashes of every selected source row, token-less rows
@@ -220,10 +255,37 @@ mod tests {
 
     #[test]
     fn empty_source_profiles_have_distinct_identities() {
-        let empty = SourceDigest::default();
         assert_ne!(
-            empty.fingerprint::<GraphLanguage>(),
-            empty.fingerprint::<crate::GraphFree>()
+            sorted_source_fingerprint::<GraphLanguage>([]),
+            sorted_source_fingerprint::<crate::GraphFree>([])
         );
+    }
+
+    /// The source identity is BLAKE3 over the sorted row hashes: two selected
+    /// row sets whose additive sums and populations agree have different
+    /// identities, while the same rows reached in another order agree.
+    #[test]
+    fn source_identity_distinguishes_an_additive_collision() {
+        let digest = |seed: u8| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
+        let (a, b, c) = (digest(1), digest(2), digest(3));
+        let mut d = Multiset256::default();
+        d.insert(a).unwrap();
+        d.insert(b).unwrap();
+        d.remove(c).unwrap();
+        let d = *d.sum();
+        let sorted = |mut hashes: Vec<[u8; 32]>| {
+            hashes.sort_unstable();
+            hashes
+        };
+        let (left, right) = (sorted(vec![a, b]), sorted(vec![c, d]));
+        assert_eq!(
+            SourceDigest::from_hashes(left.iter().copied()),
+            SourceDigest::from_hashes(right.iter().copied())
+        );
+        let identity = |hashes: &[[u8; 32]]| {
+            sorted_source_fingerprint::<GraphLanguage>(hashes.iter().copied())
+        };
+        assert_ne!(identity(&left), identity(&right));
+        assert_eq!(identity(&left), identity(&sorted(vec![b, a])));
     }
 }

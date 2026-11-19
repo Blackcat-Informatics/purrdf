@@ -93,7 +93,8 @@ pub trait TextSource<P: CorpusProfile>: std::fmt::Debug + Send + Sync + 'static 
     fn ranking_profile(&self) -> &RankingProfile;
     /// Native content identity of the complete snapshot.
     fn fingerprint(&self) -> [u8; 32];
-    /// Exact selected literal-row multiset identity.
+    /// Identity of the selected literal rows: BLAKE3 over their sorted row
+    /// digests, one per occurrence.
     fn source_fingerprint(&self) -> [u8; 32];
     /// Coverage of the configured predicates in this same immutable snapshot.
     fn source_coverage(&self) -> &SourceCoverage;

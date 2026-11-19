@@ -7,7 +7,7 @@ use crate::analysis::{AlignedText, Analysis, Projection};
 use crate::index::{Document, Table, compare_document_keys, share_index};
 use crate::phonetic::{self, DoubleMetaphone, PhoneticCodes, PhoneticRefusal, PreparedDistance};
 use crate::{Analyzer, CorpusProfile, GraphLanguage, TextError};
-use purrdf_hash::{Domain, blake3, frame::frame_le_into, multiset::Multiset256};
+use purrdf_hash::{Domain, blake3, frame::frame_le_into, multiset::sorted_fingerprint};
 use purrdf_lex::allocation::shared::Shared;
 use std::{
     borrow::Borrow,
@@ -25,7 +25,9 @@ pub use substring::{
     SubstringLimits, SubstringRefusal, SubstringRefusalReason, SubstringReport, SubstringWork,
 };
 
-const GENERATION_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-generation/v2\0");
+const GENERATION_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-generation/v3");
+/// The surface's source rows: BLAKE3 over their sorted digests.
+const SOURCES_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-sources/v1");
 const SOURCE_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-source/v1\0");
 const LITERAL_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-literal/v1\0");
 
@@ -313,7 +315,6 @@ pub struct SurfaceIndex<P: CorpusProfile = GraphLanguage> {
     words: Table<StoredTerm<P>>,
     spans: Table<StoredTerm<P>>,
     sources: Table<Shared<Source<P>>>,
-    source_state: Multiset256,
     grams: [FlatPostings<u64, GramPosting>; 3],
     phonetic_postings: FlatPostings<String, Spelling>,
 }
@@ -388,7 +389,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
         let mut words = BTreeMap::new();
         let mut spans = BTreeMap::new();
         let mut sources = Vec::with_capacity(rows.len());
-        let mut source_state = Multiset256::default();
         for (document, identity, analysis) in rows {
             let names = |projections: &[Projection],
                          pool: &mut BTreeMap<String, Spelling>|
@@ -422,9 +422,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
             }
             frame_le_into(&mut digest, &identity);
             let digest = *digest.finalize().as_bytes();
-            source_state
-                .insert(digest)
-                .map_err(|e| TextError::data(e.to_string()))?;
             let source = share_index(Source {
                 document,
                 identity,
@@ -467,7 +464,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
             words,
             spans,
             sources: Table::from_streams(sources)?,
-            source_state,
             grams: [
                 FlatPostings::build(std::mem::take(&mut gram_rows[0]))?,
                 FlatPostings::build(std::mem::take(&mut gram_rows[1]))?,
@@ -475,7 +471,7 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
             ],
             phonetic_postings: FlatPostings::build(code_rows)?,
         };
-        result.generation = result.content_generation();
+        result.generation = result.content_generation()?;
         Ok(result)
     }
 
@@ -631,23 +627,49 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
         result
     }
 
-    fn content_generation(&self) -> [u8; 32] {
-        let mut digest = blake3::Hasher::new();
-        digest.update(GENERATION_DOMAIN.as_bytes());
-        frame_le_into(&mut digest, &self.analyzer.fingerprint());
-        match self.coordinate_generation {
-            Some(generation) => {
-                digest.update(&[1]);
-                frame_le_into(&mut digest, &generation);
-            }
-            None => {
-                digest.update(&[0]);
-            }
-        }
-        frame_le_into(&mut digest, &self.source_state.population().to_le_bytes());
-        frame_le_into(&mut digest, self.source_state.sum());
-        *digest.finalize().as_bytes()
+    /// The standalone generation: the analyzer, the coordinate owner and the
+    /// identity of the source rows, BLAKE3 over their sorted digests, so two
+    /// different source sets never share it through an additive sum.
+    fn content_generation(&self) -> Result<[u8; 32], TextError> {
+        let mut sources = Vec::new();
+        sources.try_reserve_exact(self.sources.len()).map_err(|_| {
+            TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
+                construct: "surface source identity",
+            })
+        })?;
+        sources.extend(self.sources.iter().map(|source| source.digest));
+        sources.sort_unstable();
+        Ok(surface_generation(
+            &self.analyzer.fingerprint(),
+            self.coordinate_generation,
+            &sources,
+        ))
     }
+}
+
+/// The preimage of [`SurfaceIndex::content_generation`]; `sources` ascending.
+fn surface_generation(
+    analyzer: &[u8; 32],
+    coordinate_generation: Option<[u8; 32]>,
+    sources: &[[u8; 32]],
+) -> [u8; 32] {
+    let mut digest = blake3::Hasher::new();
+    digest.update(GENERATION_DOMAIN.as_bytes());
+    frame_le_into(&mut digest, analyzer);
+    match coordinate_generation {
+        Some(generation) => {
+            digest.update(&[1]);
+            frame_le_into(&mut digest, &generation);
+        }
+        None => {
+            digest.update(&[0]);
+        }
+    }
+    frame_le_into(
+        &mut digest,
+        &sorted_fingerprint(SOURCES_DOMAIN, sources.iter().copied()),
+    );
+    *digest.finalize().as_bytes()
 }
 
 struct TermBuild<P: CorpusProfile> {
@@ -776,6 +798,31 @@ fn distinct_codes(codes: &PhoneticCodes) -> impl Iterator<Item = &str> {
 #[cfg(test)]
 mod tests {
     use super::{Analyzer, SurfaceIndex};
+
+    /// The standalone generation binds the sorted source digests: two source
+    /// sets whose additive sums and populations agree give two generations.
+    /// Equal sources reached through deltas keep the fresh generation (the
+    /// next test).
+    #[test]
+    fn surface_generation_distinguishes_an_additive_collision() {
+        use purrdf_hash::multiset::Multiset256;
+        let digest = |seed: u8| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
+        let (a, b, c) = (digest(1), digest(2), digest(3));
+        let mut d = Multiset256::default();
+        d.insert(a).unwrap();
+        d.insert(b).unwrap();
+        d.remove(c).unwrap();
+        let d = *d.sum();
+        let sorted = |mut sources: Vec<[u8; 32]>| {
+            sources.sort_unstable();
+            sources
+        };
+        let generation = |sources: &[[u8; 32]]| super::surface_generation(&[9; 32], None, sources);
+        assert_ne!(
+            generation(&sorted(vec![a, b])),
+            generation(&sorted(vec![c, d]))
+        );
+    }
 
     #[test]
     fn successive_document_deltas_preserve_fresh_generations_and_queries() {

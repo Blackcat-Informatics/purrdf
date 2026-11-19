@@ -223,7 +223,13 @@ fn construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids() 
     let (source, graphs) = graph_fixture();
     let window = CurrentThreadWindow::open();
     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
+    let allocation = window.close();
+    assert_eq!(allocation.allocations, 0);
+    assert_eq!(allocation.requested_bytes, 0);
+    // The first identity request sorts the source's row digests in scratch;
+    // the sealed identity is then read without allocating.
     let snapshot = view.content_identity().unwrap();
+    let window = CurrentThreadWindow::open();
     assert_eq!(view.content_identity().unwrap(), snapshot);
     let allocation = window.close();
     assert_eq!(allocation.allocations, 0);

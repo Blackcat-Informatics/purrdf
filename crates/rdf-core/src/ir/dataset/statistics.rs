@@ -366,6 +366,51 @@ impl RdfDataset {
         self.native_statistics.scanned.load(Ordering::Relaxed)
     }
 
+    /// The record digest of every physical asserted, reifier and annotation
+    /// row, in ascending order: the record directory eager statistics would
+    /// seal, for a dataset frozen without them.
+    ///
+    /// # Errors
+    /// Returns the admission's storage or progress refusal; the buffer is then
+    /// dropped and its grant is the caller's scope to refund.
+    pub(crate) fn native_record_digests<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<[u8; 32]>, StorageError> {
+        let rows = self
+            .quads
+            .len()
+            .checked_add(self.reifiers.len())
+            .and_then(|rows| rows.checked_add(self.annotations.len()))
+            .ok_or(StorageError::SizeOverflow)?;
+        let mut digests = Vec::new();
+        memory.reserve(&mut digests, rows)?;
+        let mut pending = Vec::new();
+        let mut hasher = crate::source::SourceRowHasher::default();
+        for relation in [
+            Relation::Asserted,
+            Relation::Reifiers,
+            Relation::Annotations,
+        ] {
+            for row in self.statistic_rows(relation) {
+                // The summary is scratch: only the row's record digest is kept.
+                let (identity, _) = crate::source::SourceSummary::default().add_row(
+                    relation,
+                    row,
+                    &self.dictionary,
+                    &mut pending,
+                    &mut hasher,
+                    memory,
+                )?;
+                // Reserved above for every physical row: this never grows.
+                digests.push(identity);
+            }
+        }
+        memory.release_vec(pending)?;
+        crate::source::sort_digests(&mut digests, memory)?;
+        Ok(digests)
+    }
+
     pub(crate) fn native_source_summary(
         &self,
         predicate: Option<TermId>,

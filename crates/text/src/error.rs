@@ -32,11 +32,12 @@ pub enum TextDeltaError {
         /// Canonical selected addition ordinal.
         ordinal: usize,
     },
-    /// Reversing the delta does not recover the indexed source generation.
+    /// Reversing the delta does not recover the indexed source accounting.
     SourceMismatch {
-        /// Existing selected-source identity.
+        /// Check value of the existing selected-source accounting: a domain-bound
+        /// hash of its additive sum, for diagnosis, not a source identity.
         expected: [u8; 32],
-        /// Identity reconstructed from the supplied source and delta.
+        /// Check value reconstructed from the supplied source and delta.
         actual: [u8; 32],
     },
     /// Statement populations implied by the delta disagree with the source,
