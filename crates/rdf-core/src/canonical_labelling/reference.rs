@@ -1033,62 +1033,6 @@ fn apply_queue_rule(queue: &mut Queue, side: usize, c: u64, fragments: &[(u64, u
     }
 }
 
-/// The units one component of the optimised engine has spent: the figures it
-/// reports and the limited units its own limit is compared with. The limited
-/// units are the engine's own count, not the walk of 8.3, and saturate at
-/// `2^64 - 1`.
-pub(crate) struct Meter {
-    /// Units over the calls explored.
-    pub(crate) explored: Units,
-    /// Twin units of the search-free run (8.1(f)).
-    pub(crate) twin_units: u64,
-    /// The limited units spent on the input so far.
-    pub(crate) limited: u64,
-    limit: u64,
-    /// Whether the run is the search-free run, which no limit may refuse.
-    pub(crate) search_free: bool,
-}
-
-impl Meter {
-    pub(crate) fn new(limit: u64) -> Self {
-        Self {
-            explored: Units::default(),
-            twin_units: 0,
-            limited: 0,
-            limit,
-            search_free: true,
-        }
-    }
-
-    /// Charge `units` of a fixing or a refinement.
-    ///
-    /// # Errors
-    /// [`Stop::Limit`] when a search passes its limit.
-    pub(crate) fn charge(&mut self, units: Units) -> Result<(), Stop> {
-        self.explored = self.explored.saturating_add(units);
-        self.limited = self
-            .limited
-            .saturating_add(units.refine)
-            .saturating_add(units.fix)
-            .saturating_add(units.entries);
-        // The search-free run is bounded by the allowance (Lemma A) and no
-        // limit may refuse it; only a search is limited.
-        if !self.search_free && self.limited > self.limit {
-            return Err(Stop::Limit);
-        }
-        Ok(())
-    }
-
-    /// The units of one twin test: limited, and counted in the figure when the
-    /// test is one of the search-free run (8.1(f)).
-    pub(crate) const fn twin(&mut self, units: u64) {
-        if self.search_free {
-            self.twin_units = self.twin_units.saturating_add(units);
-        }
-        self.limited = self.limited.saturating_add(units);
-    }
-}
-
 /// The twin test of 7.10 over the lines of one top component, and the twin
 /// classes found so far, kept for the whole component (a union-find). Both
 /// engines test through it.
@@ -1573,12 +1517,9 @@ impl<'a> Run<'a> {
             .call(&self.pair, &lines, 0, &constants, mode)
             .map(|called| called.tree)
     }
+}
 
-    /// The search-free run (7.10): it labels the component, or records its
-    /// first failures and leaves it unlabelled.
-    ///
-    /// # Errors
-    /// [`Stop::Stopped`] when the caller's signal is set.
+impl ComponentRun for Run<'_> {
     fn search_free(&mut self) -> Result<(), Stop> {
         match self.top_call(Mode::SearchFree) {
             Ok(tree) => {
@@ -1590,13 +1531,9 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Step 2 of the walk on this component: START, the REFINE of its fresh
-    /// start, then its top call. A component the search-free run did not label
-    /// (and every component when `explore_all` is forced) is labelled here by
-    /// exploring every child, the walk charging only what it charges. A
-    /// labelled component is walked for its charges alone: there the walk
-    /// visits one child at each branching call (Lemma W (4)(d)), and its
-    /// figures stay those of the search-free run.
+    /// A component the walk labels is labelled by exploring every child, the
+    /// walk charging only what it charges; one it does not label keeps the
+    /// figures of its search-free run.
     fn walk(&mut self, walk: Walk, explore_all: bool) -> (Walk, Result<(), Stop>) {
         let saved = (self.engine.explored, self.engine.comparison_units);
         self.engine.walk = walk;
@@ -1626,8 +1563,16 @@ impl<'a> Run<'a> {
         )
     }
 
-    fn source(&self) -> &'a [u8] {
+    fn is_labelled(&self) -> bool {
+        self.tree.is_some()
+    }
+
+    fn source(&self) -> &[u8] {
         self.engine.source_of(self.smallest_node)
+    }
+
+    fn blank_nodes(&self) -> u64 {
+        self.record.blank_nodes
     }
 
     fn finish(mut self) -> Result<Option<Labelling>, Refusal> {
@@ -1780,11 +1725,7 @@ pub(crate) fn label_traced(
         .map(|(labelled, traces, _)| (labelled, traces))
 }
 
-/// [`label_traced`] with the walk of 8.3 that decided the outcome: the
-/// search-free run on every top component first, outside the walk (7.10);
-/// then the walk, its charge for the split of the input first and the top
-/// components in ascending order of their smallest source identifier; then
-/// the result.
+/// [`label_traced`] with the walk of 8.3 that decided the outcome.
 ///
 /// # Errors
 /// As [`label_traced`].
@@ -1804,84 +1745,39 @@ pub(crate) fn label_walked(
         allowance,
         split_charge,
     } = prepare(set).map_err(Halt::Refused)?;
-    let mut runs: Vec<Run<'_>> = comps
+    let runs: Vec<Run<'_>> = comps
         .iter()
         .zip(statics)
         .map(|(comp, stat)| Run::new(set, comp, stat, tracing, stop))
         .collect();
-    if !force_search {
-        for run in &mut runs {
-            // The search-free run records its failures and charges no walk, so
-            // the caller's stop is the one way it ends early.
-            run.search_free().map_err(|_: Stop| Halt::Stopped)?;
-        }
-    }
-    let mut failures: Vec<FailureDiagnostic> = runs.iter().flat_map(Run::failures).collect();
-    failures.sort();
-    let mut walk = Walk::new(limit, allowance, split_charge);
-    let mut order: Vec<usize> = (0..runs.len()).collect();
-    order.sort_by(|&a, &b| runs[a].source().cmp(runs[b].source()));
-    for i in order {
-        let run = &mut runs[i];
-        walk.enter(run.source(), run.record.blank_nodes);
-        let explore_all = force_search || run.tree.is_none();
-        let (back, outcome) = run.walk(walk, explore_all);
-        walk = back;
-        match outcome {
-            Ok(()) => {}
-            Err(Stop::Stopped) => return Err(Halt::Stopped),
-            // A walked branching call always completes its first child, so no
-            // call of the walk fails; a stop of the walk is its limit.
-            Err(Stop::Limit | Stop::Failed) => {
-                return Err(Halt::Refused(
-                    walk.refusal(failures.iter().map(|f| f.record).collect()),
-                ));
-            }
-        }
-    }
-    let mut labellings = Vec::with_capacity(runs.len());
-    for run in runs {
-        // INVARIANT: every run is labelled here (the search-free run or the
-        // walk labelled it), so `labellings` stays aligned with `comps`.
-        if let Some(labelling) = run.finish().map_err(Halt::Refused)? {
-            labellings.push(labelling);
-        }
-    }
-    if force_search {
-        failures = full_search_failures(set, &comps, &labellings);
-    }
-    let (labelled, traces) = assemble(
+    drive(
         set,
         &comps,
-        &labellings,
-        failures,
-        allowance,
-        split_charge,
+        runs,
+        (allowance, split_charge),
+        limit,
+        force_search,
         tracing,
-    )?;
-    Ok((labelled, traces, walk))
+    )
 }
 
-/// How a top call of a component ended.
-pub(crate) enum CallOutcome {
-    /// The component is labelled.
-    Done,
-    /// The search-free run met a target cell that is not one twin class.
-    Failed,
-    /// The engine's limit tripped.
-    Limit,
-    /// The caller's stop signal was set.
-    Stopped,
-}
-
-/// One top component of an engine, between its search-free run and its search.
+/// One top component of an engine: its search-free run, then its step of the
+/// walk.
 pub(crate) trait ComponentRun {
-    /// The limited units spent before any call: START and the fresh refinement.
-    fn base_units(&self) -> u64;
-    /// The top call, the search-free run or a search, continuing the limited
-    /// units `spent` on the input so far.
-    fn top_call(&mut self, search_free: bool, spent: &mut u64) -> CallOutcome;
-    /// Whether a top call has labelled the component.
+    /// The search-free run (7.10): it labels the component, or records its
+    /// first failures and leaves it unlabelled. It charges no walk.
+    ///
+    /// # Errors
+    /// [`Stop::Stopped`] when the caller's signal is set.
+    fn search_free(&mut self) -> Result<(), Stop>;
+    /// Step 2 of the walk on this component: START, the REFINE of its fresh
+    /// start, then its top call, every charge made to `walk`, which is handed
+    /// back. With `label` the walk labels the component; otherwise it runs
+    /// for its charges alone, and the component keeps what its search-free run
+    /// found (there the walk visits one child at each branching call, Lemma W
+    /// (4)(d)).
+    fn walk(&mut self, walk: Walk, label: bool) -> (Walk, Result<(), Stop>);
+    /// Whether a run has labelled the component.
     fn is_labelled(&self) -> bool;
     /// The first failures recorded by the search-free run.
     fn failures(&self) -> Vec<FailureDiagnostic>;
@@ -1919,61 +1815,63 @@ pub(crate) fn failure_diagnostics(
         .collect()
 }
 
-/// The labelling of every top component by the runs of an engine: the
-/// search-free run on every component before any search, so that every first
-/// failure is known before a limit can trip (7.10); then a search of each
-/// component the search-free run did not label; then the result.
+/// The labelling of every top component by the runs of an engine, the one
+/// order both engines follow: the search-free run on every top component
+/// first, outside the walk, so that every first failure is known before the
+/// walk can end (7.10); then the walk of 8.3, its charge for the split of the
+/// input first and the top components in ascending order of their smallest
+/// source identifier, under the limit `limit` and the allowance and split
+/// charge `charges`; then the result, with the walk.
 ///
 /// # Errors
-/// The refusal `limit` when a search trips the limit, `width` when a sum
-/// overflows; [`Halt::Stopped`] when the caller's signal is set.
+/// The refusal `limit`, with the walk's fields, when the walk carries its
+/// running total above `max(limit, A)`; `width` when a sum overflows;
+/// [`Halt::Stopped`] when the caller's signal is set.
 pub(crate) fn drive<R: ComponentRun>(
     set: &LineSet,
     comps: &[Comp],
     mut runs: Vec<R>,
-    allowance: u64,
-    split_charge: u64,
+    charges: (u64, u64),
+    limit: u64,
     force_search: bool,
     tracing: bool,
-) -> Result<(Labelled, Vec<ComponentTrace>), Halt> {
-    let mut spent = runs
-        .iter()
-        .fold(0u64, |spent, run| spent.saturating_add(run.base_units()));
+) -> Result<(Labelled, Vec<ComponentTrace>, Walk), Halt> {
+    let (allowance, split_charge) = charges;
     if !force_search {
         for run in &mut runs {
-            // A first failure is recorded in the engine; the search-free run
-            // never checks the limit (Lemma A bounds it by the allowance).
-            if matches!(run.top_call(true, &mut spent), CallOutcome::Stopped) {
-                return Err(Halt::Stopped);
-            }
+            // The search-free run records its failures and charges no walk, so
+            // the caller's stop is the one way it ends early.
+            run.search_free().map_err(|_: Stop| Halt::Stopped)?;
         }
     }
     let mut failures: Vec<FailureDiagnostic> =
         runs.iter().flat_map(ComponentRun::failures).collect();
     failures.sort();
-    for run in &mut runs {
-        if run.is_labelled() {
-            continue;
-        }
-        // A search never stops on a failure (it explores every child of a
-        // non-empty target cell), so a stop is the limit.
-        match run.top_call(false, &mut spent) {
-            CallOutcome::Done => {}
-            CallOutcome::Stopped => return Err(Halt::Stopped),
-            CallOutcome::Limit | CallOutcome::Failed => {
-                return Err(Halt::Refused(Refusal::Limit {
-                    broken_by: failures.iter().map(|f| f.record).collect(),
-                    source: run.source().into(),
-                    nodes: run.blank_nodes(),
-                    units: spent,
-                }));
+    let mut walk = Walk::new(limit, allowance, split_charge);
+    let mut order: Vec<usize> = (0..runs.len()).collect();
+    order.sort_by(|&a, &b| runs[a].source().cmp(runs[b].source()));
+    for i in order {
+        let run = &mut runs[i];
+        walk.enter(run.source(), run.blank_nodes());
+        let label = force_search || !run.is_labelled();
+        let (back, outcome) = run.walk(walk, label);
+        walk = back;
+        match outcome {
+            Ok(()) => {}
+            Err(Stop::Stopped) => return Err(Halt::Stopped),
+            // A walked branching call always completes its first child, so no
+            // call of the walk fails; a stop of the walk is its limit.
+            Err(Stop::Limit | Stop::Failed) => {
+                return Err(Halt::Refused(
+                    walk.refusal(failures.iter().map(|f| f.record).collect()),
+                ));
             }
         }
     }
     let mut labellings = Vec::with_capacity(runs.len());
     for run in runs {
-        // INVARIANT: every run is labelled here (the search-free run or a
-        // search completed it), so `labellings` stays aligned with `comps`.
+        // INVARIANT: every run is labelled here (the search-free run or the
+        // walk labelled it), so `labellings` stays aligned with `comps`.
         if let Some(labelling) = run.finish().map_err(Halt::Refused)? {
             labellings.push(labelling);
         }
@@ -1981,7 +1879,7 @@ pub(crate) fn drive<R: ComponentRun>(
     if force_search {
         failures = full_search_failures(set, comps, &labellings);
     }
-    assemble(
+    let (labelled, traces) = assemble(
         set,
         comps,
         &labellings,
@@ -1989,7 +1887,8 @@ pub(crate) fn drive<R: ComponentRun>(
         allowance,
         split_charge,
         tracing,
-    )
+    )?;
+    Ok((labelled, traces, walk))
 }
 
 /// The result over the labellings of every top component: components in their

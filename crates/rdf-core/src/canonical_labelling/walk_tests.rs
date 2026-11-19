@@ -1,20 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The walk of 8.3 in the reference engine, against the rows `walk`,
-//! `limit-rows` and `limit-relabel` of 13.2. The walk decides whether an
-//! input is refused with `limit` and the fields of that refusal; its totals
-//! are the ones every engine reports, so these figures, totals by kind and the
-//! fields of each refusal, are shared with the other engines of the labelling.
+//! The walk of 8.3 in both engines, against the rows `walk`, `limit-rows`
+//! and `limit-relabel` of 13.2. The walk decides whether an input is refused
+//! with `limit` and the fields of that refusal; its totals are the ones every
+//! engine reports, so these figures, totals by kind and the fields of each
+//! refusal, are shared with the other engines of the labelling. Every outcome
+//! here is computed by both engines and must be the same from each.
 
 use super::optimised_tests::{complement_of_cycles, cub8, fifteen, k4_pair};
-use super::reference;
 use super::tests::{
     complete_bipartite_one_direction, cube_both_directions, cycle_with_records, failure_record,
-    quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
+    hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
 };
 use super::walk::Walk;
 use super::{FailureRecord, Labelled, Line, Refusal, Term, admit};
+use super::{optimised, reference};
 use purrdf_hash::hex;
 use purrdf_xsd::datatype::XSD_STRING;
 
@@ -210,12 +211,35 @@ fn walk_inputs() -> Vec<(&'static str, Vec<Line>)> {
 }
 
 /// The outcome of the reference engine at the limit `limit`, with the walk
-/// that decided it when it labels.
+/// that decided it when it labels. INVARIANT: the optimised engine follows
+/// the same walk, so its outcome is the same: equal totals by kind and
+/// equal refusal fields, and when both label, the same result.
 fn walked(lines: &[Line], limit: u64) -> Result<(Labelled, Walk), Refusal> {
     let set = admit(lines).expect("well formed");
-    reference::label_walked(&set, limit, false, false, None)
+    let reference = reference::label_walked(&set, limit, false, false, None)
         .map(|(labelled, _, walk)| (labelled, walk))
-        .map_err(super::Halt::expect_refusal)
+        .map_err(super::Halt::expect_refusal);
+    let optimised =
+        optimised::label_walked(&set, limit, false, None).map_err(super::Halt::expect_refusal);
+    match (&reference, &optimised) {
+        (Ok((r, r_walk)), Ok((o, o_walk))) => {
+            assert_eq!(
+                (r_walk.totals(), r_walk.total()),
+                (o_walk.totals(), o_walk.total()),
+                "L = {limit}: the totals of the optimised engine's walk"
+            );
+            assert_eq!(r.digest, o.digest, "L = {limit}: digest");
+            assert_eq!(r.placements, o.placements, "L = {limit}: canonical map");
+            assert_eq!(r.record, o.record, "L = {limit}: structural record");
+        }
+        (Err(r), Err(o)) => assert_eq!(r, o, "L = {limit}: the refusal"),
+        (r, o) => panic!(
+            "L = {limit}: the reference {} and the optimised engine {}",
+            if r.is_ok() { "labels" } else { "refuses" },
+            if o.is_ok() { "labels" } else { "refuses" },
+        ),
+    }
+    reference
 }
 
 /// One row of `walk`: START, REFINE, FIX-SUM, SPLIT, TWIN, the total and `A`.
@@ -530,6 +554,33 @@ fn the_limit_moves_with_the_naming_and_the_result_does_not() {
             }
         }
         assert_eq!(got, totals, "{name}");
+    }
+}
+
+/// The walk ends inside a component the search-free run labels: `QR13`, then a
+/// guaranteed hub whose sources sort after it, the hub's step charged after
+/// `QR13`'s. One unit below the total, the refusal names the hub, whose step
+/// made the last charge, with the units of that charge; at the total the input
+/// is labelled. An engine that charges the hub's step whole must find the
+/// same charge.
+#[test]
+fn the_walk_can_end_inside_a_component_the_search_free_run_labels() {
+    let mut lines = quadratic_residue_13("a");
+    lines.extend(prefixed(&hub(false), "z"));
+    let (labelled, walk) = walked(&lines, u64::MAX).expect("labelled with no limit");
+    assert_eq!(labelled.record.broken_by.len(), 1, "QR13 alone fails");
+    let total = walk.total();
+    assert!(total > labelled.record.allowance, "the walk passes A");
+    assert!(walked(&lines, total).is_ok(), "labelled at the total");
+    match walked(&lines, total - 1) {
+        Err(Refusal::Limit { source, units, .. }) => {
+            assert!(source.starts_with(b"z"), "the hub's step: {source:?}");
+            assert_eq!(units, total, "the last charge of the hub's step");
+        }
+        other => panic!(
+            "expected a limit refusal, got {:?}",
+            other.map(|(l, _)| l.digest)
+        ),
     }
 }
 

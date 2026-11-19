@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The optimised engine: the result of [`super::reference`], computed on dense
-//! arrays with an explicit stack of calls and the shortcuts of section 10.
+//! arrays with an explicit stack of calls.
 //!
 //! A cell is a range of an array of its side, and its colour is the index at
 //! which the range starts, so splitting a cell rewrites only the range of the
@@ -12,91 +12,35 @@
 //! proportional to its own size. Calls are frames of one heap stack: nothing
 //! recurses (6.6).
 //!
-//! The shortcuts, each scoped to one call and each checked against the call's
-//! own state (10.1):
-//!
-//! * the strict stop of 10.4, on `s` and then on `E`;
-//! * route (1): two children of one call with equal certificates give a map
-//!   that is used only after it is checked to carry the lines of the call onto
-//!   themselves; it joins classes of the target cell, and a child in the class
-//!   of an explored child is not explored;
-//! * route (2): the exchange of two tied nested calls of an explored child or
-//!   of a rule 2 call, checked at the nearest branching call;
-//! * route (4): the twins of the first explored child of a call;
-//! * route (5): two complete leaves of the top call with equal line sets,
-//!   found at the top call in place of the certificate key of route (1);
-//! * lifting (route (3)): a map used at a branching call is used, unchecked,
-//!   at every branching call below it on the stack.
-//!
-//! In descending order the same classes skip children; the attaining child of
-//! smallest source identifier, which the result names, is explored last when
-//! its class was skipped.
+//! The search is the walk of 8.3 and nothing besides it: a branching call
+//! visits the members of its target cell in source order, skips a member the
+//! relation `~` of [`super::walk`] relates to an earlier one, stops a child
+//! whose `s` or entries exceed the best's, and completes every other child.
+//! Every charge of the walk is made where the walk makes it, so the engine
+//! refuses with `limit` exactly where the walk passes `max(L, A)`, with the
+//! walk's fields. The chosen child is the first completed child that attains
+//! the best certificate, and the attaining count is the number of members
+//! whose class of `~` holds a completed child equal to the best.
 
 use std::cmp::{Ordering, Reverse};
 use std::collections::{BTreeMap, BinaryHeap};
 
 use super::certificate::{Certificate, Entry, entry_of};
-use super::lines::{Leaf, LineSet, Tok};
+use super::lines::{Leaf, LineSet};
 use super::reference::{
-    CallOutcome, Child, Classes, Comp, ComponentRun, Labelling, LabellingParts, Meter, Prepared,
-    Static, Stop, Tree, TwinTest, component_count, drive, failure_diagnostics, finish_labelling,
-    fragments_to_queue, positions, prepare,
+    Child, Classes, Comp, ComponentRun, Labelling, LabellingParts, Prepared, Static, Stop, Tree,
+    TwinTest, component_count, drive, failure_diagnostics, finish_labelling, fragments_to_queue,
+    prepare,
 };
-use super::walk::{tied_exchanges, witness_cap};
+use super::walk::{
+    Kind, Map, Relation, Totals, Walk, Witnesses, carries, nodes_below, tied_exchanges, twin_tests,
+};
 use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
-#[cfg(test)]
-use crate::FastMap;
 use crate::StopSignal;
 use crate::governor::is_stopped;
 
-/// The optimised engine's own limit on the limited units of a search.
+/// The optimised engine's own limit `L` on the running total of the walk.
 pub(super) const ENGINE_LIMIT: u64 = 1 << 34;
-
-/// The shortcuts the engine uses, and the order in which it visits children.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "one independent switch per shortcut of 10.1 and 10.4, which the tests turn on one at a time"
-)]
-pub(crate) struct Options {
-    /// The strict stop of 10.4.
-    pub(crate) stops: bool,
-    /// The routes of 10.1 in a search: the classes of the target cell. Without
-    /// it no child is skipped.
-    pub(crate) orbits: bool,
-    /// Visit the children of a branching call in descending order of source
-    /// identifier. The result is the same; only the stops fire elsewhere.
-    pub(crate) descending: bool,
-    /// Route (1) between children of equal certificate, at every call but the
-    /// top call when `leaves` is on. Used only with `orbits`.
-    pub(crate) maps: bool,
-    /// Route (4): the twins of the first explored child. Used only with
-    /// `orbits`.
-    pub(crate) twins: bool,
-    /// Route (2): the exchange of tied nested calls. Used only with `orbits`.
-    pub(crate) exchanges: bool,
-    /// Lifting: a map used at a call is used at the calls below it. Used only
-    /// with `orbits`.
-    pub(crate) lifting: bool,
-    /// Route (5): leaves of the top call keyed by their line sets, in place of
-    /// the certificate key of route (1) at that call. Used only with `orbits`;
-    /// it needs neither `maps` nor any other route.
-    pub(crate) leaves: bool,
-}
-
-impl Options {
-    /// Every shortcut, ascending order.
-    pub(crate) const PRODUCTION: Self = Self {
-        stops: true,
-        orbits: true,
-        descending: false,
-        maps: true,
-        twins: true,
-        exchanges: true,
-        lifting: true,
-        leaves: true,
-    };
-}
 
 /// One incidence: the other end, and the label of the incidence as the
 /// occurrence numbers `occ_nums[off..off + len]` of the node in the line.
@@ -417,10 +361,13 @@ struct Nest<'a> {
     /// The source of the nested call now running.
     current: &'a [u8],
     sourced: Vec<(&'a [u8], Tree)>,
+    /// The maps the nested calls own (step 5, (K3)).
+    carried: Vec<Map>,
     failed: bool,
 }
 
-/// A rule 3 call in progress.
+/// A rule 3 call in progress: the walk of step 3(b) over its target cell, or
+/// the one child of the search-free run.
 struct Branch {
     adj: Adj,
     pair: [Side; 2],
@@ -430,38 +377,26 @@ struct Branch {
     n_k: u64,
     /// The target cell, local nodes in ascending source order.
     target: Vec<usize>,
-    /// Indices into `target` in visiting order.
-    explore: Vec<usize>,
-    next: usize,
-    best: Option<Child>,
-    /// Final positions below the first completed child of each key, by local
-    /// node: the certificate of the child, or at the top call (route (5)) the
-    /// sorted entries of its leaf.
-    witnesses: BTreeMap<Vec<Entry>, Vec<usize>>,
-    /// The certificates of the witnesses of the non-top key.
-    cert_witnesses: BTreeMap<Certificate, Vec<usize>>,
-    /// The most witnesses kept: a bound on memory, not on the result.
-    witness_cap: usize,
-    /// Target index by global node, ascending by node.
-    by_global: Vec<(usize, usize)>,
-    /// Whether the child of each target member was visited.
-    visited: Vec<bool>,
-    /// The child explored although its class was explored.
-    forced: Option<usize>,
-    /// Target indices of the explored children that attain the best so far.
-    attain: Vec<usize>,
-    /// Union-find over target indices: the classes of checked maps and twins.
-    classes: Classes,
-    class_explored: Vec<bool>,
-    /// Local node to target index.
+    /// The same members as nodes of the top component.
+    members: Vec<usize>,
+    /// Target index by local node, `usize::MAX` off the target cell.
     target_index: Vec<usize>,
+    /// The members visited: every member in a walk, the first in the
+    /// search-free run.
+    visits: usize,
+    next: usize,
+    /// The best completed child: the first of smallest certificate.
+    best: Option<Child>,
+    /// Target indices of the completed children equal to the best.
+    attain: Vec<usize>,
+    relation: Relation,
+    witnesses: Witnesses,
+    /// The known maps that passed their check here (`OWN`).
+    own: Vec<Map>,
+    /// Whether the twin tests of the call (step 4) are made.
+    tested: bool,
     stopped_s: u64,
     stopped_e: u64,
-    search_free: bool,
-    /// Whether the routes apply at this call.
-    orbits: bool,
-    /// The children whose certificates or stops are known.
-    explored_count: usize,
 }
 
 enum Frame<'a> {
@@ -471,8 +406,10 @@ enum Frame<'a> {
 
 /// What a frame delivers to the frame below it.
 enum Event {
-    Tree(Tree),
-    Child(Child, usize),
+    /// A call's tree and the maps it owns.
+    Tree(Tree, Vec<Map>),
+    /// A completed child, the maps its nested calls carry, its target index.
+    Child(Child, Vec<Map>, usize),
     Failed,
 }
 
@@ -488,28 +425,34 @@ struct Engine<'a> {
     set: &'a LineSet,
     comp: &'a Comp,
     index: &'a Index,
-    options: Options,
-    meter: Meter,
+    /// The twin test and the twin classes of the search-free run.
     twin: TwinTest,
+    /// Whether the calls run are the walk's, or the search-free run's.
+    walking: bool,
+    /// The walk while this component's step 2 runs.
+    walk: Walk,
+    /// The charges the walk makes on this component when the search-free run
+    /// labels it: there the walk runs the calls of the search-free run, one
+    /// child at each branching call with the same twin tests (Lemma W
+    /// (4)(d)), so its charges, kind by kind, are those of the run.
+    free_totals: Totals,
+    /// `TW`: the twin classes of the tests of the walk.
+    tw: Classes,
+    /// Engine figure: units over the calls explored.
+    explored: Units,
+    /// Engine figure: twin units of the search-free run (8.1(f)).
+    twin_units: u64,
     /// First failures: `(p, size of the target cell, local node)`.
     failures: Vec<(u64, u64, usize)>,
     stop: Option<&'a dyn StopSignal>,
     /// The path position of each fixed node of the top component.
     fixed_pos: Vec<Option<u64>>,
-    /// The map under test, identity between checks.
-    map: Vec<usize>,
-    /// Final positions scratch, by local node of the top component.
-    lambda: Vec<u64>,
-    scratch: Scratch,
-    /// Maps used at a branching call, as moved `(node, image)` pairs by node
-    /// of the top component, still to be lifted to the calls below it.
-    found: Vec<Vec<(usize, usize)>>,
-    /// Exchanges of tied nested calls (route (2)) found by the last nest.
-    exchanges: Vec<Vec<(usize, usize)>>,
-    /// Branching calls on the stack.
-    branch_depth: usize,
-    /// Local node of the call under test, by node of the top component.
+    /// Local node of the call under a map check, by node of the top
+    /// component; `usize::MAX` between checks.
     local: Vec<usize>,
+    /// The identity on the nodes of the top component, scratch of the check.
+    image: Vec<usize>,
+    scratch: Scratch,
 }
 
 impl<'a> Engine<'a> {
@@ -519,35 +462,54 @@ impl<'a> Engine<'a> {
         set: &'a LineSet,
         comp: &'a Comp,
         index: &'a Index,
-        options: Options,
         stop: Option<&'a dyn StopSignal>,
-        limit: u64,
         start: Vec<u64>,
     ) -> Self {
+        let n = comp.nodes.len();
         Self {
             set,
             comp,
             index,
-            options,
-            meter: Meter::new(limit),
             twin: TwinTest::new(set, comp, start),
+            walking: false,
+            walk: Walk::default(),
+            free_totals: Totals::default(),
+            tw: Classes::new(n),
+            explored: Units::default(),
+            twin_units: 0,
             failures: Vec::new(),
             stop,
-            fixed_pos: vec![None; comp.nodes.len()],
-            map: (0..comp.nodes.len()).collect(),
-            lambda: vec![0; comp.nodes.len()],
+            fixed_pos: vec![None; n],
+            local: vec![usize::MAX; n],
+            image: (0..n).collect(),
             scratch: Scratch::default(),
-            found: Vec::new(),
-            exchanges: Vec::new(),
-            branch_depth: 0,
-            local: vec![usize::MAX; comp.nodes.len()],
         }
     }
-}
 
-impl<'a> Engine<'a> {
     fn source_of(&self, v: usize) -> &'a [u8] {
         self.set.source(self.comp.nodes[v])
+    }
+
+    /// A charge of the walk. The search-free run charges no walk; it records
+    /// the charge the walk would make on a component it labels.
+    fn charge(&mut self, kind: Kind, units: u64) -> Result<(), Stop> {
+        if self.walking {
+            self.walk.charge(kind, units)
+        } else {
+            self.free_totals.add(kind, units);
+            Ok(())
+        }
+    }
+
+    /// The one charge of a fixing that is not stopped: its FIX-SUM and SPLIT.
+    fn charge_fixing(&mut self, fix_sum: u64, split: u64) -> Result<(), Stop> {
+        if self.walking {
+            self.walk.charge_fixing(fix_sum, split)
+        } else {
+            self.free_totals.add(Kind::FixSum, fix_sum);
+            self.free_totals.add(Kind::Split, split);
+            Ok(())
+        }
     }
 
     /// The fresh start of the top component, refined.
@@ -618,17 +580,19 @@ impl<'a> Engine<'a> {
                 .cmp(self.source_of(inst.node_g[b]))
         });
         let k = target.len();
-        let search_free = self.meter.search_free;
-        let explore: Vec<usize> = if search_free {
-            let u = inst.node_g[target[0]];
-            for &w in &target[1..] {
-                let w = inst.node_g[w];
+        let members: Vec<usize> = target.iter().map(|&v| inst.node_g[v]).collect();
+        if !self.walking {
+            // The search-free run: the target cell is one twin class, or the
+            // component fails here (7.10).
+            let u = members[0];
+            for &w in &members[1..] {
                 let (ru, rw) = (self.twin.find(u), self.twin.find(w));
                 if ru == rw {
                     continue;
                 }
                 let (passed, units) = self.twin.test(self.set, self.comp, u, w);
-                self.meter.twin(units);
+                self.twin_units = self.twin_units.saturating_add(units);
+                self.free_totals.add(Kind::Twin, units);
                 if passed {
                     self.twin.join(ru, rw);
                 } else {
@@ -636,31 +600,19 @@ impl<'a> Engine<'a> {
                     return Err(Stop::Failed);
                 }
             }
-            vec![0]
-        } else if self.options.descending {
-            (0..k).rev().collect()
-        } else {
-            (0..k).collect()
-        };
+        }
         let mut target_index = vec![usize::MAX; inst.node_g.len()];
         for (i, &v) in target.iter().enumerate() {
             target_index[v] = i;
         }
-        let mut by_global: Vec<(usize, usize)> = target
-            .iter()
-            .enumerate()
-            .map(|(i, &v)| (inst.node_g[v], i))
-            .collect();
-        by_global.sort_unstable();
         let Inst {
             node_g,
             line_g,
             adj,
             pair,
         } = inst;
-        self.branch_depth += 1;
-        let witness_cap = witness_cap(node_g.len());
-        let branch = Box::new(Branch {
+        let witnesses = Witnesses::new(node_g.len());
+        Ok(Frame::Branch(Box::new(Branch {
             adj,
             pair,
             node_g,
@@ -668,31 +620,26 @@ impl<'a> Engine<'a> {
             p,
             n_k,
             target,
-            explore,
+            members,
+            target_index,
+            visits: if self.walking { k } else { 1 },
             next: 0,
             best: None,
-            witnesses: BTreeMap::new(),
-            cert_witnesses: BTreeMap::new(),
-            witness_cap,
-            by_global,
-            visited: vec![false; k],
-            forced: None,
             attain: Vec::new(),
-            classes: Classes::new(k),
-            class_explored: vec![false; k],
-            target_index,
+            relation: Relation::new(k),
+            witnesses,
+            own: Vec::new(),
+            tested: false,
             stopped_s: 0,
             stopped_e: 0,
-            search_free,
-            orbits: self.options.orbits && !search_free,
-            explored_count: 0,
-        });
-        Ok(Frame::Branch(branch))
+        })))
     }
 
     /// FIX the singleton node cells of the call's pair, form the entries,
-    /// split the remainder into its free components and build their instances.
-    /// With a `bound`, the stops of 10.4 apply once `s`, and then `E`, are known.
+    /// split the remainder into its free components and build their instances,
+    /// with the charge of the fixing (step 3(a) and (b)(vi)). With a `bound`,
+    /// the stops of step 3(b)(iv) and (v) apply once `s`, and then `E`, are
+    /// known, and a stopped child is charged its FIX-SUM alone.
     fn nest(
         &mut self,
         call: &CallRef<'_>,
@@ -732,30 +679,31 @@ impl<'a> Engine<'a> {
             .map(|&v| call.adj[0][v].len() as u64)
             .sum();
         units.fix += s + entries.len() as u64 + removed_incidences;
+        // FIX-SUM: the fixing without the split of its remainder, with its
+        // entries.
+        let fix_sum = units.fix.saturating_add(units.entries);
         // A child is stopped when its `s` is greater than the best's, or when
         // its `s` is equal and its sorted entries come after the best's in list
         // order (10.4).
-        let cut = bound.and_then(|best| {
-            if !self.options.stops {
-                return None;
-            }
-            match s.cmp(&best.s) {
-                Ordering::Greater => Some(Cut::OnS),
-                Ordering::Equal if entries > best.entries => Some(Cut::OnE),
-                _ => None,
-            }
+        let cut = bound.and_then(|best| match s.cmp(&best.s) {
+            Ordering::Greater => Some(Cut::OnS),
+            Ordering::Equal if entries > best.entries => Some(Cut::OnE),
+            _ => None,
         });
         if let Some(cut) = cut {
             self.undo(&fixed);
-            self.meter.charge(units)?;
+            self.explored = self.explored.saturating_add(units);
+            self.charge(Kind::FixSum, fix_sum)?;
             return Ok(Nested::Cut(cut));
         }
         let free_nodes = call.pair[0]
             .starts()
             .filter(|&c| call.pair[0].size[c] >= 2)
             .count();
-        let components = self.split(call, &mut units);
-        self.meter.charge(units)?;
+        let (components, split) = self.split(call);
+        units.fix += split;
+        self.explored = self.explored.saturating_add(units);
+        self.charge_fixing(fix_sum, split)?;
         Ok(Nested::Frame(Box::new(Nest {
             kind,
             p: call.p,
@@ -766,6 +714,7 @@ impl<'a> Engine<'a> {
             pending: components,
             current: &[],
             sourced: Vec::new(),
+            carried: Vec::new(),
             failed: false,
         })))
     }
@@ -777,8 +726,8 @@ impl<'a> Engine<'a> {
     }
 
     /// The free components of the call after its fixing, as instances, the
-    /// smallest source last; the split is charged to `units`.
-    fn split(&self, call: &CallRef<'_>, units: &mut Units) -> Vec<(&'a [u8], Inst)> {
+    /// smallest source last, with the charge for the split (8.1(c)).
+    fn split(&self, call: &CallRef<'_>) -> (Vec<(&'a [u8], Inst)>, u64) {
         let (nodes, lines) = (&call.pair[0], &call.pair[1]);
         let free = |v: usize| nodes.cell_size_of(v) >= 2;
         let mut comp_of_node = vec![usize::MAX; call.node_g.len()];
@@ -815,7 +764,7 @@ impl<'a> Engine<'a> {
             }
         }
         if count == 0 {
-            return Vec::new();
+            return (Vec::new(), 0);
         }
         let mut node_cells: Vec<Vec<(usize, usize)>> = vec![Vec::new(); count];
         let mut line_cells: Vec<Vec<(usize, usize)>> = vec![Vec::new(); count];
@@ -901,9 +850,11 @@ impl<'a> Engine<'a> {
         let sizes: Vec<u64> = (0..count)
             .map(|ci| (node_g[ci].len() + line_g[ci].len()) as u64)
             .collect();
-        if count >= 2 {
-            units.fix += sizes.iter().sum::<u64>() - sizes.iter().copied().max().unwrap_or(0);
-        }
+        let split = if count >= 2 {
+            sizes.iter().sum::<u64>() - sizes.iter().copied().max().unwrap_or(0)
+        } else {
+            0
+        };
         let mut out: Vec<(&'a [u8], Inst)> = Vec::with_capacity(count);
         for ci in 0..count {
             let n = node_g[ci].len();
@@ -932,140 +883,267 @@ impl<'a> Engine<'a> {
         // The smallest source last, so that popping runs them in ascending
         // order of source.
         out.sort_by(|a, b| b.0.cmp(a.0));
-        out
+        (out, split)
+    }
+
+    /// Relate the members of the target cell that a known map moves onto one
+    /// another, when the map passes its check against the call (step 5).
+    /// Whether it passed; a map that fails is dropped whole.
+    fn relate_by(&mut self, b: &mut Branch, map: &[(usize, usize)]) -> bool {
+        for (x, &g) in b.node_g.iter().enumerate() {
+            self.local[g] = x;
+        }
+        let (local, target_index) = (&self.local, &b.target_index);
+        let in_target = |g: usize| local[g] != usize::MAX && target_index[local[g]] != usize::MAX;
+        let checked = carries(
+            self.set,
+            self.comp,
+            &self.twin,
+            &b.line_g,
+            |g| local[g] != usize::MAX,
+            in_target,
+            map,
+            &mut self.image,
+        );
+        if checked {
+            for &(x, y) in map {
+                let (i, j) = (target_index[local[x]], target_index[local[y]]);
+                if i != usize::MAX && j != usize::MAX {
+                    b.relation.relate(i, j);
+                }
+            }
+        }
+        for &g in &b.node_g {
+            self.local[g] = usize::MAX;
+        }
+        checked
     }
 }
 
-/// What the engine did with the maps it discovered, per thread, for the tests
-/// that hold it to the rule of 10.1: a map discovered by a route is checked
-/// against its call before it is used; only a lifted map is not.
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Audit {
-    /// Maps offered to a call by routes (1), (2) and (5).
-    pub(crate) discovered: u64,
-    /// Of those, refused because they do not preserve the target cell.
-    pub(crate) cell_rejected: u64,
-    /// Of those, checked against the call's lines.
-    pub(crate) checked: u64,
-    /// Of the checked, found not to be automorphisms of the call.
-    pub(crate) rejected: u64,
-    /// Maps offered unchecked to a call below, by lifting.
-    pub(crate) lifted: u64,
-    /// Class joins made by a map that passed its check.
-    pub(crate) joins_checked: u64,
-    /// Class joins made by a lifted map.
-    pub(crate) joins_lifted: u64,
-    /// Class joins made by a twin test.
-    pub(crate) joins_twin: u64,
-    /// Class joins made with no permit: by no checked map, lifted map or twin.
-    pub(crate) joins_unpermitted: u64,
-    /// The permit in force: `PERMIT_*`.
-    permit: u8,
-}
-
-#[cfg(test)]
-impl Audit {
-    const ZERO: Self = Self {
-        discovered: 0,
-        cell_rejected: 0,
-        checked: 0,
-        rejected: 0,
-        lifted: 0,
-        joins_checked: 0,
-        joins_lifted: 0,
-        joins_twin: 0,
-        joins_unpermitted: 0,
-        permit: 0,
-    };
-}
-
-/// A join of classes is made under the permit of what justifies it.
-#[cfg(test)]
-const PERMIT_CHECKED: u8 = 1;
-#[cfg(test)]
-const PERMIT_LIFTED: u8 = 2;
-#[cfg(test)]
-const PERMIT_TWIN: u8 = 3;
-
-#[cfg(test)]
-thread_local! {
-    static AUDIT: std::cell::Cell<Audit> = const { std::cell::Cell::new(Audit::ZERO) };
-}
-
-#[cfg(test)]
-fn audit(update: impl FnOnce(&mut Audit)) {
-    AUDIT.with(|cell| {
-        let mut figures = cell.get();
-        update(&mut figures);
-        cell.set(figures);
-    });
-}
-
-/// The figures of this thread since the last call, reset to zero.
-#[cfg(test)]
-pub(crate) fn take_audit() -> Audit {
-    AUDIT.with(|cell| cell.replace(Audit::default()))
-}
-
-/// Join the classes of two target indices of a call.
-fn join_classes(b: &mut Branch, i: usize, j: usize) {
-    let (ri, rj) = (b.classes.find(i), b.classes.find(j));
-    if ri != rj {
-        #[cfg(test)]
-        audit(|a| match a.permit {
-            PERMIT_CHECKED => a.joins_checked += 1,
-            PERMIT_LIFTED => a.joins_lifted += 1,
-            PERMIT_TWIN => a.joins_twin += 1,
-            _ => a.joins_unpermitted += 1,
-        });
-        b.classes.join(ri, rj);
-        b.class_explored[ri] = b.class_explored[ri] || b.class_explored[rj];
-    }
-}
-
-/// Use a map found below the call, given as moved `(node, image)` pairs, at a
-/// call whose automorphism it is by lifting (10.1): no check, because it fixes
-/// the call's constants and every line holds free nodes of one nested
-/// component. A map with a pair that leaves the target cell is not used.
-fn join_pairs(b: &mut Branch, pairs: &[(usize, usize)]) {
-    if !b.orbits {
-        return;
-    }
-    let index = |g: usize| {
-        b.by_global
-            .binary_search_by_key(&g, |&(node, _)| node)
-            .ok()
-            .map(|at| b.by_global[at].1)
-    };
-    let mut joins = Vec::new();
-    for &(g, h) in pairs {
-        match (index(g), index(h)) {
-            (Some(i), Some(j)) => joins.push((i, j)),
-            (None, None) => {}
-            _ => return,
+impl<'a> Engine<'a> {
+    /// Run the call on `top` with argument `p` to its tree, on the heap stack.
+    fn run(&mut self, top: Inst, p: u64) -> Result<Tree, Stop> {
+        let mut stack: Vec<Frame<'a>> = vec![self.begin(top, p)?];
+        let mut event: Option<Event> = None;
+        loop {
+            if let Some(delivered) = event.take() {
+                let Some(frame) = stack.last_mut() else {
+                    return match delivered {
+                        Event::Tree(tree, _) => Ok(tree),
+                        _ => Err(Stop::Failed),
+                    };
+                };
+                match (frame, delivered) {
+                    (Frame::Nest(nest), Event::Tree(tree, own)) => {
+                        nest.sourced.push((nest.current, tree));
+                        nest.carried.extend(own);
+                    }
+                    (Frame::Nest(nest), Event::Failed) => nest.failed = true,
+                    (Frame::Branch(branch), Event::Child(child, carried, target_index)) => {
+                        self.child_done(branch, child, carried, target_index);
+                    }
+                    (Frame::Branch(_), Event::Failed) => {
+                        stack.pop();
+                        event = Some(Event::Failed);
+                        continue;
+                    }
+                    // INVARIANT: a nest receives trees and failures only, a
+                    // branch children and failures only.
+                    _ => return Err(Stop::Failed),
+                }
+            }
+            let top = stack.len() - 1;
+            let act = match &mut stack[top] {
+                Frame::Nest(nest) => match nest.pending.pop() {
+                    Some((source, inst)) => {
+                        nest.current = source;
+                        let at = nest.p + nest.fixed.len() as u64;
+                        match self.begin(inst, at) {
+                            Ok(frame) => Act::Push(frame),
+                            Err(Stop::Failed) => {
+                                nest.failed = true;
+                                Act::Again
+                            }
+                            Err(other) => return Err(other),
+                        }
+                    }
+                    None => Act::Finish,
+                },
+                Frame::Branch(branch) => self.step_branch(branch)?,
+            };
+            match act {
+                Act::Push(frame) => stack.push(frame),
+                Act::Again => {}
+                Act::Finish => match stack.pop() {
+                    Some(Frame::Nest(nest)) => event = Some(self.finish_nest(*nest)),
+                    Some(Frame::Branch(branch)) => event = Some(self.finish_branch(*branch)?),
+                    None => return Err(Stop::Failed),
+                },
+            }
         }
     }
-    for (i, j) in joins {
-        join_classes(b, i, j);
-    }
-}
 
-/// The map that sends each node of the call to the node of the other leaf with
-/// the same final position (6.5); `None` when the positions are not a
-/// permutation.
-fn map_between(first: &[usize], new: &[usize]) -> Option<Vec<usize>> {
-    let n = first.len();
-    let mut inverse = vec![usize::MAX; n];
-    for (x, &position) in first.iter().enumerate() {
-        if position >= n {
-            return None;
+    /// The next child of a branching call (step 3(b)): its frame, or the end
+    /// of the call. A walk skips a member related to an earlier one, charges
+    /// the REFINE of every child it visits and the fixing of each, and makes
+    /// the twin tests of the call after the fixing of its first completed
+    /// child and before that child's nested calls.
+    fn step_branch(&mut self, b: &mut Branch) -> Result<Act<'a>, Stop> {
+        while b.next < b.visits {
+            let ti = b.next;
+            b.next += 1;
+            if self.walking {
+                // (K1) reads `TW` as it stands at the visit, after step 4.
+                if b.tested {
+                    b.relation.twins(&b.members, &mut self.tw);
+                }
+                if b.relation.skipped(ti) {
+                    continue;
+                }
+            }
+            let v = b.target[ti];
+            let mut pair = b.pair.clone();
+            let mut queue = Queue::new([b.node_g.len(), b.line_g.len()]);
+            individualise(&mut pair[0], v, &mut queue);
+            let refine_units = refine(
+                &b.adj,
+                &self.index.occ_nums,
+                &mut pair,
+                &mut queue,
+                &mut self.scratch,
+            );
+            self.explored.refine = self.explored.refine.saturating_add(refine_units);
+            self.charge(Kind::Refine, refine_units)?;
+            let call = CallRef {
+                adj: &b.adj,
+                pair: &pair,
+                node_g: &b.node_g,
+                line_g: &b.line_g,
+                p: b.p,
+            };
+            let bound = if self.walking {
+                b.best.as_ref().map(|child| &child.cert)
+            } else {
+                None
+            };
+            let kind = NestKind::Child {
+                target_index: ti,
+                refine: refine_units,
+            };
+            match self.nest(&call, kind, bound)? {
+                Nested::Frame(nest) => {
+                    if self.walking && !b.tested {
+                        let units =
+                            twin_tests(&self.twin, self.set, self.comp, &mut self.tw, &b.members);
+                        self.charge(Kind::Twin, units)?;
+                        b.tested = true;
+                    }
+                    return Ok(Act::Push(Frame::Nest(nest)));
+                }
+                Nested::Cut(Cut::OnS) => b.stopped_s += 1,
+                Nested::Cut(Cut::OnE) => b.stopped_e += 1,
+            }
         }
-        inverse[position] = x;
+        Ok(Act::Finish)
     }
-    new.iter()
-        .map(|&position| inverse.get(position).copied().filter(|&x| x != usize::MAX))
-        .collect()
+
+    /// A child completed (step 3(b)(viii) and (ix)): in a walk, its known map
+    /// from an earlier witness of its certificate (K2) and the maps it carries
+    /// (K3), each used only when it passes its check; then the best so far and
+    /// the attaining children. The best is replaced only by a strictly smaller
+    /// certificate, so it ends as the attaining child of smallest source.
+    fn child_done(&mut self, b: &mut Branch, child: Child, carried: Vec<Map>, ti: usize) {
+        if self.walking {
+            let by_position: Vec<usize> = nodes_below(&child.fixed, b.p, &child.nested)
+                .into_iter()
+                .map(|(_, node)| node)
+                .collect();
+            let known = b.witnesses.complete(&child.cert, by_position);
+            for map in known.into_iter().chain(carried) {
+                if self.relate_by(b, &map) {
+                    b.own.push(map);
+                }
+            }
+        }
+        let order = b
+            .best
+            .as_ref()
+            .map_or(Ordering::Less, |best| child.cert.cmp(&best.cert));
+        match order {
+            Ordering::Less => {
+                b.attain.clear();
+                b.attain.push(ti);
+                b.best = Some(child);
+            }
+            Ordering::Equal => b.attain.push(ti),
+            Ordering::Greater => {}
+        }
+    }
+
+    /// The nest is complete: undo its fixing and deliver what it made, with
+    /// the maps it carries in a walk: those its nested calls own and the
+    /// exchanges of its tied nested calls.
+    fn finish_nest(&mut self, nest: Nest<'a>) -> Event {
+        self.undo(&nest.fixed);
+        if nest.failed {
+            return Event::Failed;
+        }
+        // Ascending by certificate, equal certificates by smallest source
+        // (6.4): a stable sort of the source order.
+        let mut sourced = nest.sourced;
+        sourced.sort_by(|a, b| a.0.cmp(b.0));
+        sourced.sort_by(|a, b| a.1.cert.cmp(&b.1.cert));
+        let nested: Vec<Tree> = sourced.into_iter().map(|(_, tree)| tree).collect();
+        let mut carried = nest.carried;
+        if self.walking {
+            carried.extend(tied_exchanges(&nested));
+        }
+        let cert = Certificate {
+            s: nest.fixed.len() as u64,
+            entries: nest.entries,
+            nested: nested.iter().map(|t| t.cert.clone()).collect(),
+        };
+        let mut child = Child {
+            fixed: nest.fixed,
+            nested,
+            cert,
+            rule: if nest.discrete { 1 } else { 2 },
+            units: nest.units,
+        };
+        match nest.kind {
+            NestKind::Call { n_k } => Event::Tree(Tree::of_child(child, nest.p, n_k), carried),
+            NestKind::Child {
+                target_index,
+                refine,
+            } => {
+                child.units.refine += refine;
+                Event::Child(child, carried, target_index)
+            }
+        }
+    }
+
+    /// The branching call is complete: its tree, the chosen child being the
+    /// best, with the maps it owns. Every member of the target cell attains in
+    /// the search-free run (F2); in a walk the attaining members are those
+    /// whose class of `~` holds a completed child equal to the best.
+    fn finish_branch(&self, mut b: Branch) -> Result<Event, Stop> {
+        let Some(child) = b.best.take() else {
+            return Err(Stop::Failed);
+        };
+        let attaining = if self.walking {
+            b.relation.related_to(&b.attain)
+        } else {
+            b.target.len() as u64
+        };
+        let mut tree = Tree::of_child(child, b.p, b.n_k);
+        tree.child_rule = tree.rule;
+        tree.rule = 3;
+        tree.target = b.members;
+        tree.attaining = attaining;
+        tree.stopped_s = b.stopped_s;
+        tree.stopped_e = b.stopped_e;
+        Ok(Event::Tree(tree, b.own))
+    }
 }
 
 /// What a call is run on: the instance's parts, borrowed.
@@ -1109,558 +1187,7 @@ fn identity_side(cells: &[(usize, usize)], n: usize) -> Side {
     side
 }
 
-impl<'a> Engine<'a> {
-    /// Run the call on `top` with argument `p` to its tree, on the heap stack.
-    fn run(&mut self, top: Inst, p: u64) -> Result<Tree, Stop> {
-        self.branch_depth = 0;
-        self.found.clear();
-        self.exchanges.clear();
-        let mut stack: Vec<Frame<'a>> = vec![self.begin(top, p)?];
-        let mut event: Option<Event> = None;
-        loop {
-            if let Some(delivered) = event.take() {
-                let Some(frame) = stack.last_mut() else {
-                    return match delivered {
-                        Event::Tree(tree) => Ok(tree),
-                        _ => Err(Stop::Failed),
-                    };
-                };
-                let mut unwind = false;
-                match (frame, delivered) {
-                    (Frame::Nest(nest), Event::Tree(tree)) => {
-                        nest.sourced.push((nest.current, tree));
-                    }
-                    (Frame::Nest(nest), Event::Failed) => nest.failed = true,
-                    (Frame::Branch(branch), Event::Child(child, target_index)) => {
-                        self.child_done(branch, child, target_index);
-                    }
-                    (Frame::Branch(_), Event::Failed) => unwind = true,
-                    // INVARIANT: a nest receives trees and failures only, a
-                    // branch children and failures only.
-                    _ => return Err(Stop::Failed),
-                }
-                if unwind {
-                    stack.pop();
-                    self.branch_depth -= 1;
-                    event = Some(Event::Failed);
-                    continue;
-                }
-                if !self.found.is_empty() {
-                    self.lift(&mut stack);
-                }
-            }
-            let top = stack.len() - 1;
-            let act = match &mut stack[top] {
-                Frame::Nest(nest) => match nest.pending.pop() {
-                    Some((source, inst)) => {
-                        nest.current = source;
-                        let at = nest.p + nest.fixed.len() as u64;
-                        match self.begin(inst, at) {
-                            Ok(frame) => Act::Push(frame),
-                            Err(Stop::Failed) => {
-                                nest.failed = true;
-                                Act::Again
-                            }
-                            Err(other) => return Err(other),
-                        }
-                    }
-                    None => Act::Finish,
-                },
-                Frame::Branch(branch) => self.step_branch(branch)?,
-            };
-            if !self.found.is_empty() {
-                self.lift(&mut stack);
-            }
-            match act {
-                Act::Push(frame) => stack.push(frame),
-                Act::Again => {}
-                Act::Finish => match stack.pop() {
-                    Some(Frame::Nest(nest)) => {
-                        event = Some(self.finish_nest(*nest));
-                        self.use_exchanges(&mut stack);
-                    }
-                    Some(Frame::Branch(branch)) => {
-                        self.branch_depth -= 1;
-                        event = Some(Event::Tree(Self::finish_branch(*branch)?));
-                    }
-                    None => return Err(Stop::Failed),
-                },
-            }
-        }
-    }
-
-    /// The next child of a branching call: its frame, or the end of the call.
-    fn step_branch(&mut self, b: &mut Branch) -> Result<Act<'a>, Stop> {
-        loop {
-            while b.next < b.explore.len() {
-                let ti = b.explore[b.next];
-                b.next += 1;
-                if b.orbits && b.forced != Some(ti) {
-                    let root = b.classes.find(ti);
-                    if b.class_explored[root] {
-                        continue;
-                    }
-                }
-                let v = b.target[ti];
-                let mut pair = b.pair.clone();
-                let mut queue = Queue::new([b.node_g.len(), b.line_g.len()]);
-                individualise(&mut pair[0], v, &mut queue);
-                let refine_units = refine(
-                    &b.adj,
-                    &self.index.occ_nums,
-                    &mut pair,
-                    &mut queue,
-                    &mut self.scratch,
-                );
-                self.meter.charge(Units {
-                    refine: refine_units,
-                    ..Units::default()
-                })?;
-                let call = CallRef {
-                    adj: &b.adj,
-                    pair: &pair,
-                    node_g: &b.node_g,
-                    line_g: &b.line_g,
-                    p: b.p,
-                };
-                let bound = b.best.as_ref().map(|child| &child.cert);
-                let kind = NestKind::Child {
-                    target_index: ti,
-                    refine: refine_units,
-                };
-                match self.nest(&call, kind, bound)? {
-                    Nested::Frame(nest) => return Ok(Act::Push(Frame::Nest(nest))),
-                    Nested::Cut(cut) => self.cut(b, ti, cut),
-                }
-            }
-            // The result names the attaining child of smallest source
-            // identifier: explore it if its class was skipped.
-            let missing = if b.orbits {
-                Self::unvisited_minimum(b)
-            } else {
-                None
-            };
-            let Some(minimum) = missing else {
-                return Ok(Act::Finish);
-            };
-            b.forced = Some(minimum);
-            b.explore.push(minimum);
-        }
-    }
-
-    /// The smallest target index whose child attains, when its child was not
-    /// visited.
-    fn unvisited_minimum(b: &mut Branch) -> Option<usize> {
-        let mut roots: Vec<usize> = b.attain.iter().map(|&ti| b.classes.find(ti)).collect();
-        roots.sort_unstable();
-        roots.dedup();
-        let minimum =
-            (0..b.target.len()).find(|&ti| roots.binary_search(&b.classes.find(ti)).is_ok())?;
-        (!b.visited[minimum]).then_some(minimum)
-    }
-
-    /// A child the stop of 10.4 ended: classified as not attaining.
-    fn cut(&mut self, b: &mut Branch, target_index: usize, cut: Cut) {
-        match cut {
-            Cut::OnS => b.stopped_s += 1,
-            Cut::OnE => b.stopped_e += 1,
-        }
-        self.explored_child(b, target_index);
-    }
-
-    /// A child completed: the best so far, the attaining list, and the checked
-    /// map between it and the best when their certificates are equal.
-    fn child_done(&mut self, b: &mut Branch, child: Child, target_index: usize) {
-        if b.orbits && (self.options.maps || (self.options.leaves && b.p == 0)) {
-            self.record_child(b, &child);
-        }
-        let order = b
-            .best
-            .as_ref()
-            .map_or(Ordering::Less, |best| child.cert.cmp(&best.cert));
-        match order {
-            Ordering::Less => {
-                b.attain.clear();
-                b.attain.push(target_index);
-                b.best = Some(child);
-            }
-            Ordering::Equal => {
-                b.attain.push(target_index);
-                if self.options.descending {
-                    // Ties go to the later child, the smaller source.
-                    b.best = Some(child);
-                }
-            }
-            Ordering::Greater => {}
-        }
-        self.explored_child(b, target_index);
-    }
-
-    /// Mark the class of a child explored; after the first, test the twins of
-    /// that child in the rest of the target cell (route (4)).
-    fn explored_child(&mut self, b: &mut Branch, target_index: usize) {
-        let root = b.classes.find(target_index);
-        b.class_explored[root] = true;
-        b.visited[target_index] = true;
-        b.explored_count += 1;
-        if !b.orbits || !self.options.twins || b.explored_count != 1 {
-            return;
-        }
-        let u = b.node_g[b.target[target_index]];
-        for tj in 0..b.target.len() {
-            let (ru, rj) = (b.classes.find(target_index), b.classes.find(tj));
-            if ru == rj {
-                continue;
-            }
-            let (passed, units) = self
-                .twin
-                .test(self.set, self.comp, u, b.node_g[b.target[tj]]);
-            self.meter.twin(units);
-            if passed {
-                #[cfg(test)]
-                audit(|a| a.permit = PERMIT_TWIN);
-                join_classes(b, target_index, tj);
-                #[cfg(test)]
-                audit(|a| a.permit = 0);
-                if self.options.lifting && self.branch_depth >= 2 {
-                    let w = b.node_g[b.target[tj]];
-                    self.found.push(vec![(u, w), (w, u)]);
-                }
-            }
-        }
-    }
-
-    /// The final positions below `child`, by local node of the call (6.5).
-    fn lambda_of(&mut self, child: &Child, b: &Branch) -> Vec<usize> {
-        for &(v, q) in &child.fixed {
-            self.lambda[v] = q - b.p;
-        }
-        let s = child.fixed.len() as u64;
-        let mut t = 0;
-        for nested in &child.nested {
-            positions(nested, s + t, &mut self.lambda);
-            t += nested.n_k;
-        }
-        b.node_g
-            .iter()
-            .map(|&g| usize::try_from(self.lambda[g]).unwrap_or(usize::MAX))
-            .collect()
-    }
-
-    /// Routes (1) and (5): the map between a completed child and the first
-    /// completed child with the same key, used only when it is checked to
-    /// carry the lines of the call onto themselves (10.1). At the top call the
-    /// key is the set of lines of the child's leaf, else its certificate.
-    fn record_child(&mut self, b: &mut Branch, child: &Child) {
-        let lambda = self.lambda_of(child, b);
-        let hit = if self.options.leaves && b.p == 0 {
-            let key = self.leaf_key(b, &lambda);
-            let hit = b
-                .witnesses
-                .get(&key)
-                .map(|first| map_between(first, &lambda));
-            if hit.is_none() && b.witnesses.len() < b.witness_cap {
-                b.witnesses.insert(key, lambda);
-            }
-            hit
-        } else {
-            let hit = b
-                .cert_witnesses
-                .get(&child.cert)
-                .map(|first| map_between(first, &lambda));
-            if hit.is_none() && b.cert_witnesses.len() < b.witness_cap {
-                b.cert_witnesses.insert(child.cert.clone(), lambda);
-            }
-            hit
-        };
-        if let Some(Some(image)) = hit {
-            self.try_map(b, &image);
-        }
-    }
-
-    /// The lines of the top component with every blank leaf replaced by its
-    /// final position, ascending (10.1, route (5)). The top call has nothing
-    /// fixed above it, so its local nodes are the nodes of the component.
-    fn leaf_key(&self, b: &Branch, lambda: &[usize]) -> Vec<Entry> {
-        let mut entries: Vec<Entry> = b
-            .line_g
-            .iter()
-            .map(|&lg| {
-                let positions: Vec<u64> = self.comp.occ[lg]
-                    .iter()
-                    .map(|&x| lambda[x] as u64)
-                    .collect();
-                entry_of(self.set, self.comp.lines[lg], &positions)
-            })
-            .collect();
-        entries.sort();
-        entries
-    }
-
-    /// Use `image` (local node to local node of the call) at the call when it
-    /// is checked: it joins the classes of the target cell and is offered to
-    /// the calls below. Whether it was used.
-    fn try_map(&mut self, b: &mut Branch, image: &[usize]) -> bool {
-        #[cfg(test)]
-        audit(|a| a.discovered += 1);
-        // A map of the call preserves its cells; a map that does not is not used.
-        if b.target
-            .iter()
-            .any(|&x| b.target_index[image[x]] == usize::MAX)
-        {
-            #[cfg(test)]
-            audit(|a| a.cell_rejected += 1);
-            return false;
-        }
-        let checked = self.is_automorphism(b, image);
-        #[cfg(test)]
-        {
-            audit(|a| {
-                a.checked += 1;
-                a.rejected += u64::from(!checked);
-            });
-            assert_eq!(
-                checked,
-                self.independent_check(b, image),
-                "the check of a map against its call's own state"
-            );
-        }
-        if !checked {
-            return false;
-        }
-        let joins: Vec<(usize, usize)> = b
-            .target
-            .iter()
-            .enumerate()
-            .map(|(ti, &x)| (ti, b.target_index[image[x]]))
-            .collect();
-        #[cfg(test)]
-        audit(|a| a.permit = PERMIT_CHECKED);
-        for (ti, tj) in joins {
-            join_classes(b, ti, tj);
-        }
-        #[cfg(test)]
-        audit(|a| a.permit = 0);
-        if self.options.lifting && self.branch_depth >= 2 {
-            let pairs: Vec<(usize, usize)> = image
-                .iter()
-                .enumerate()
-                .filter(|&(x, &y)| x != y)
-                .map(|(x, &y)| (b.node_g[x], b.node_g[y]))
-                .collect();
-            if !pairs.is_empty() {
-                self.found.push(pairs);
-            }
-        }
-        true
-    }
-
-    /// The map that moves each node of `pairs` to its image and fixes every
-    /// other node, as local nodes of the call; `None` when a node is not in it.
-    fn image_of(&mut self, b: &Branch, pairs: &[(usize, usize)]) -> Option<Vec<usize>> {
-        for (x, &g) in b.node_g.iter().enumerate() {
-            self.local[g] = x;
-        }
-        let mut image: Vec<usize> = (0..b.node_g.len()).collect();
-        let mut complete = true;
-        for &(g, h) in pairs {
-            let (x, y) = (self.local[g], self.local[h]);
-            if x == usize::MAX || y == usize::MAX {
-                complete = false;
-                break;
-            }
-            image[x] = y;
-        }
-        for &g in &b.node_g {
-            self.local[g] = usize::MAX;
-        }
-        complete.then_some(image)
-    }
-
-    /// Offer the maps found at the call on top of `stack` to the calls below
-    /// it, without a check (lifting: 10.1).
-    fn lift(&mut self, stack: &mut [Frame<'a>]) {
-        let found = std::mem::take(&mut self.found);
-        let Some((_, below)) = stack.split_last_mut() else {
-            return;
-        };
-        Self::lift_to(below, &found);
-    }
-
-    fn lift_to(below: &mut [Frame<'a>], found: &[Vec<(usize, usize)>]) {
-        for frame in below {
-            if let Frame::Branch(a) = frame {
-                for pairs in found {
-                    #[cfg(test)]
-                    audit(|n| {
-                        n.lifted += 1;
-                        n.permit = PERMIT_LIFTED;
-                    });
-                    join_pairs(a, pairs);
-                    #[cfg(test)]
-                    audit(|n| n.permit = 0);
-                }
-            }
-        }
-    }
-
-    /// Route (2): the exchanges of tied nested calls the last nest found, each
-    /// checked at the nearest branching call below it and lifted from there.
-    fn use_exchanges(&mut self, stack: &mut [Frame<'a>]) {
-        let maps = std::mem::take(&mut self.exchanges);
-        if maps.is_empty() {
-            return;
-        }
-        let Some(at) = stack.iter().rposition(|f| matches!(f, Frame::Branch(_))) else {
-            return;
-        };
-        let (below, rest) = stack.split_at_mut(at);
-        let Some(Frame::Branch(b)) = rest.first_mut() else {
-            return;
-        };
-        if !b.orbits {
-            return;
-        }
-        for pairs in maps {
-            let Some(image) = self.image_of(b, &pairs) else {
-                continue;
-            };
-            if self.try_map(b, &image) {
-                let found = std::mem::take(&mut self.found);
-                Self::lift_to(below, &found);
-            }
-        }
-    }
-
-    /// Whether `image` (local node to local node of the call) carries the set
-    /// of the call's lines onto itself with every constant held fixed (10.1).
-    fn is_automorphism(&mut self, b: &Branch, image: &[usize]) -> bool {
-        for (x, &y) in image.iter().enumerate() {
-            self.map[b.node_g[x]] = b.node_g[y];
-        }
-        let ok = b.line_g.iter().all(|&lg| {
-            let mut occurrences = self.comp.occ[lg].iter();
-            let mut tokens = Vec::with_capacity(self.set.lines[self.comp.lines[lg]].len());
-            for token in &*self.set.lines[self.comp.lines[lg]] {
-                tokens.push(match *token {
-                    Tok::Blank(_) => {
-                        let Some(&node) = occurrences.next() else {
-                            return false;
-                        };
-                        Tok::Blank(self.comp.nodes[self.map[node]])
-                    }
-                    other => other,
-                });
-            }
-            self.twin.holds(&tokens)
-        });
-        for &g in &b.node_g {
-            self.map[g] = g;
-        }
-        ok
-    }
-
-    /// Whether `image` carries the multiset of the call's own lines onto itself,
-    /// computed from the call's lines alone (10.1), for the tests that hold the
-    /// check of [`Self::is_automorphism`] to account.
-    #[cfg(test)]
-    fn independent_check(&self, b: &Branch, image: &[usize]) -> bool {
-        let local: FastMap<usize, usize> =
-            b.node_g.iter().enumerate().map(|(x, &g)| (g, x)).collect();
-        let mut own: FastMap<Vec<Tok>, usize> = FastMap::default();
-        let mut carried: FastMap<Vec<Tok>, usize> = FastMap::default();
-        for &lg in &b.line_g {
-            let line = &self.set.lines[self.comp.lines[lg]];
-            *own.entry(line.to_vec()).or_default() += 1;
-            let mut occurrences = self.comp.occ[lg].iter();
-            let tokens: Vec<Tok> = line
-                .iter()
-                .map(|&token| match token {
-                    Tok::Blank(_) => {
-                        let node = *occurrences.next().expect("one node per blank leaf");
-                        let image_node = local.get(&node).map_or(node, |&x| b.node_g[image[x]]);
-                        Tok::Blank(self.comp.nodes[image_node])
-                    }
-                    other => other,
-                })
-                .collect();
-            *carried.entry(tokens).or_default() += 1;
-        }
-        own == carried
-    }
-
-    /// The nest is complete: undo its fixing and deliver what it made.
-    fn finish_nest(&mut self, nest: Nest<'a>) -> Event {
-        self.undo(&nest.fixed);
-        if nest.failed {
-            return Event::Failed;
-        }
-        // Ascending by certificate, equal certificates by smallest source
-        // (6.4): a stable sort of the source order.
-        let mut sourced = nest.sourced;
-        sourced.sort_by(|a, b| a.0.cmp(b.0));
-        sourced.sort_by(|a, b| a.1.cert.cmp(&b.1.cert));
-        let nested: Vec<Tree> = sourced.into_iter().map(|(_, tree)| tree).collect();
-        if self.options.orbits
-            && self.options.exchanges
-            && self.branch_depth > 0
-            && nested.len() >= 2
-        {
-            self.exchanges = tied_exchanges(&nested);
-        }
-        let cert = Certificate {
-            s: nest.fixed.len() as u64,
-            entries: nest.entries,
-            nested: nested.iter().map(|t| t.cert.clone()).collect(),
-        };
-        let mut child = Child {
-            fixed: nest.fixed,
-            nested,
-            cert,
-            rule: if nest.discrete { 1 } else { 2 },
-            units: nest.units,
-        };
-        match nest.kind {
-            NestKind::Call { n_k } => Event::Tree(Tree::of_child(child, nest.p, n_k)),
-            NestKind::Child {
-                target_index,
-                refine,
-            } => {
-                child.units.refine += refine;
-                Event::Child(child, target_index)
-            }
-        }
-    }
-
-    /// The branching call is complete: its tree, the chosen child being the
-    /// best, and the attaining count the classes of the attaining children.
-    fn finish_branch(mut b: Branch) -> Result<Tree, Stop> {
-        let Some(child) = b.best.take() else {
-            return Err(Stop::Failed);
-        };
-        let k = b.target.len();
-        let attaining = if b.search_free {
-            k as u64
-        } else {
-            let mut roots: Vec<usize> = b.attain.iter().map(|&ti| b.classes.find(ti)).collect();
-            roots.sort_unstable();
-            roots.dedup();
-            (0..k)
-                .filter(|&ti| roots.binary_search(&b.classes.find(ti)).is_ok())
-                .count() as u64
-        };
-        let mut tree = Tree::of_child(child, b.p, b.n_k);
-        tree.child_rule = tree.rule;
-        tree.rule = 3;
-        tree.target = b.target.iter().map(|&v| b.node_g[v]).collect();
-        tree.attaining = attaining;
-        tree.stopped_s = b.stopped_s;
-        tree.stopped_e = b.stopped_e;
-        Ok(tree)
-    }
-}
-
-/// One top component between its search-free run and its search.
+/// One top component: its search-free run, then its step of the walk.
 struct Run<'a> {
     engine: Engine<'a>,
     fresh: Inst,
@@ -1677,8 +1204,6 @@ impl<'a> Run<'a> {
         comp: &'a Comp,
         index: &'a Index,
         stat: Static,
-        limit: u64,
-        options: Options,
         stop: Option<&'a dyn StopSignal>,
     ) -> Self {
         let Static {
@@ -1686,7 +1211,7 @@ impl<'a> Run<'a> {
             start,
             w,
         } = stat;
-        let mut engine = Engine::new(set, comp, index, options, stop, limit, start);
+        let mut engine = Engine::new(set, comp, index, stop, start);
         let (fresh, fresh_units) = engine.fresh();
         let sizes: Vec<usize> = fresh.pair[0]
             .starts()
@@ -1701,8 +1226,8 @@ impl<'a> Run<'a> {
             .max()
             .map(|s| s as u64);
         record.units.refine = fresh_units;
-        engine.meter.explored.start = record.units.start;
-        engine.meter.explored.refine = fresh_units;
+        engine.explored.start = record.units.start;
+        engine.explored.refine = fresh_units;
         let smallest_node = (0..comp.nodes.len())
             .min_by(|&a, &b| engine.source_of(a).cmp(engine.source_of(b)))
             .unwrap_or(0);
@@ -1719,24 +1244,46 @@ impl<'a> Run<'a> {
 }
 
 impl ComponentRun for Run<'_> {
-    fn base_units(&self) -> u64 {
-        self.record.units.start + self.fresh_units
-    }
-
-    fn top_call(&mut self, search_free: bool, spent: &mut u64) -> CallOutcome {
-        self.engine.meter.search_free = search_free;
-        self.engine.meter.limited = *spent;
-        let result = self.engine.run(self.fresh.clone(), 0);
-        *spent = self.engine.meter.limited;
-        match result {
+    fn search_free(&mut self) -> Result<(), Stop> {
+        self.engine.walking = false;
+        match self.engine.run(self.fresh.clone(), 0) {
             Ok(tree) => {
                 self.tree = Some(tree);
-                CallOutcome::Done
+                Ok(())
             }
-            Err(Stop::Failed) => CallOutcome::Failed,
-            Err(Stop::Limit) => CallOutcome::Limit,
-            Err(Stop::Stopped) => CallOutcome::Stopped,
+            Err(Stop::Failed) => Ok(()),
+            Err(halt) => Err(halt),
         }
+    }
+
+    fn walk(&mut self, mut walk: Walk, label: bool) -> (Walk, Result<(), Stop>) {
+        if !label {
+            // The search-free run labelled the component: the walk's charges
+            // here are its own, made at once unless the walk ends among them.
+            let mut totals = self.engine.free_totals;
+            totals.add(Kind::Start, self.record.units.start);
+            totals.add(Kind::Refine, self.fresh_units);
+            if walk.absorb(&totals) {
+                return (walk, Ok(()));
+            }
+        }
+        let saved = self.engine.explored;
+        self.engine.walk = walk;
+        self.engine.walking = true;
+        let result = self
+            .engine
+            .charge(Kind::Start, self.record.units.start)
+            .and_then(|()| self.engine.charge(Kind::Refine, self.fresh_units))
+            .and_then(|()| self.engine.run(self.fresh.clone(), 0));
+        let outcome = result.map(|tree| {
+            if label {
+                self.tree = Some(tree);
+            } else {
+                self.engine.explored = saved;
+            }
+        });
+        self.engine.walking = false;
+        (std::mem::take(&mut self.engine.walk), outcome)
     }
 
     fn is_labelled(&self) -> bool {
@@ -1767,30 +1314,42 @@ impl ComponentRun for Run<'_> {
         };
         let parts = LabellingParts {
             smallest_node: self.smallest_node,
-            twin_units: self.engine.meter.twin_units,
+            twin_units: self.engine.twin_units,
             w: self.w,
             steps: Vec::new(),
             comparison_units: 0,
-            explored: self.engine.meter.explored,
+            explored: self.engine.explored,
         };
         finish_labelling(self.record, tree, parts).map(Some)
     }
 }
 
 /// Label an admitted set with the optimised engine. `force_search` skips the
-/// search-free run and searches every component.
+/// search-free run and labels every component by its walk.
 ///
 /// # Errors
-/// `width` when the allowance overflows; `limit` when a search exceeds
-/// `max(limit, A)` limited units; [`Halt::Stopped`] when `stop` is set, polled
-/// before the first call and at every call.
+/// `width` when the allowance overflows; `limit` when the walk of 8.3 carries
+/// its running total above `max(limit, A)`; [`Halt::Stopped`] when `stop` is
+/// set, polled before the first call and at every call.
 pub(crate) fn label_set(
     set: &LineSet,
     limit: u64,
     force_search: bool,
-    options: Options,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Labelled, Halt> {
+    label_walked(set, limit, force_search, stop).map(|(labelled, _)| labelled)
+}
+
+/// [`label_set`] with the walk of 8.3 that decided the outcome.
+///
+/// # Errors
+/// As [`label_set`].
+pub(crate) fn label_walked(
+    set: &LineSet,
+    limit: u64,
+    force_search: bool,
+    stop: Option<&dyn StopSignal>,
+) -> Result<(Labelled, Walk), Halt> {
     if is_stopped(stop) {
         return Err(Halt::Stopped);
     }
@@ -1800,24 +1359,23 @@ pub(crate) fn label_set(
         allowance,
         split_charge,
     } = prepare(set).map_err(Halt::Refused)?;
-    let limit = limit.max(allowance);
     let indexes: Vec<Index> = comps.iter().map(Index::new).collect();
     let runs: Vec<Run<'_>> = comps
         .iter()
         .zip(&indexes)
         .zip(statics)
-        .map(|((comp, index), stat)| Run::new(set, comp, index, stat, limit, options, stop))
+        .map(|((comp, index), stat)| Run::new(set, comp, index, stat, stop))
         .collect();
-    let (labelled, _) = drive(
+    let (labelled, _, walk) = drive(
         set,
         &comps,
         runs,
-        allowance,
-        split_charge,
+        (allowance, split_charge),
+        limit,
         force_search,
         false,
     )?;
-    Ok(labelled)
+    Ok((labelled, walk))
 }
 
 /// An upper bound, in bytes, of the arrays the engine builds for the top

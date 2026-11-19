@@ -15,8 +15,8 @@ implemented twice (a reference engine and an optimised engine). Both are held to
 each other, but they share a reader of the specification and are not independent
 in the sense that matters. The document is updated as the design settles.
 
-The normative statement is the frozen specification, revision 3.11, SHA-256
-`a2dc6ea69735f62cde18be17bc14890d89b4416e8dcf3bba42e3cfe55e283c15` (the identity
+The normative statement is the frozen specification, revision 3.12, SHA-256
+`088cb74fba0f5f733224157ab7c3a6e06f4a3f3447edf4c01bb15cf15c58809a` (the identity
 recorded in [`MIGRATION-5.0.md`](../MIGRATION-5.0.md)). The specification text is
 not part of this repository. What this repository carries is the implementation
 (`crates/rdf-core/src/canonical_labelling/`), the worked examples that revision
@@ -89,22 +89,22 @@ allocation columns come from the counting allocator over admission and search.
 
 | Shape | Nodes | Lines | Guaranteed | Branching calls | Explored units | Reference units | Allocations | Requested bytes | Retained bytes |
 |---|---:|---:|---|---:|---:|---:|---:|---:|---:|
-| path | 1,000 | 999 | yes | 0 | 19,977 | 19,977 | 48,190 | 11,644,221 | 419,678 |
-| triangles | 3,000 | 3,000 | no | 1,000 | 96,994 | 131,994 | 359,279 | 21,387,058 | 1,858,804 |
-| hub with leaves | 1,001 | 1,000 | yes | 0 | 18,999 | 18,999 | 66,293 | 6,736,849 | 476,213 |
-| complement of cycles 4, 6 | 10 | 70 | no | 4 | 6,974 | 68,202 | 17,359 | 1,253,860 | 27,850 |
-| complement of cycles 3, 5 | 8 | 40 | no | 4 | 2,726 | 26,100 | 7,256 | 533,313 | 16,800 |
-| quadratic residue 13 | 13 | 78 | no | 2 | 6,632 | 76,843 | 11,268 | 774,509 | 30,403 |
-| cub8 | 8 | 24 | no | 3 | 1,282 | 5,932 | 3,096 | 215,872 | 10,934 |
-| `Z4 x Z4` | 16 | 96 | no | 4 | 18,739 | 594,112 | 36,823 | 2,598,853 | 36,680 |
+| path | 1,000 | 999 | yes | 0 | 19,977 | 19,977 | 48,192 | 11,644,303 | 419,678 |
+| triangles | 3,000 | 3,000 | no | 1,000 | 96,994 | 131,994 | 323,281 | 20,826,948 | 1,858,804 |
+| hub with leaves | 1,001 | 1,000 | yes | 0 | 18,999 | 18,999 | 66,295 | 6,760,930 | 476,213 |
+| complement of cycles 4, 6 | 10 | 70 | no | 4 | 6,974 | 68,202 | 17,403 | 1,317,215 | 27,850 |
+| complement of cycles 3, 5 | 8 | 40 | no | 4 | 2,726 | 26,100 | 7,421 | 569,530 | 16,800 |
+| quadratic residue 13 | 13 | 78 | no | 2 | 6,632 | 76,843 | 10,706 | 772,214 | 30,403 |
+| cub8 | 8 | 24 | no | 3 | 1,282 | 5,932 | 3,112 | 224,580 | 10,934 |
+| `Z4 x Z4` | 16 | 96 | no | 4 | 18,739 | 594,112 | 38,203 | 2,766,276 | 36,680 |
 
 Observations: a path and a hub with leaves, the shapes with a long chain or many
 alike leaves, cost units close to linear in the lines and are labelled without a
 search. `triangles` (1,000 identical directed triangles) branches once per
 triangle and still costs about 32 units per node. The symmetric graphs show what
-the optimised engine's stops save over the reference engine, by a factor of about 4.6
-on `cub8` and about 32 on `Z4 x Z4`. These counts do not yet include the 4.x
-engine on the same shapes (section 6).
+the walk's skips and stops save over the reference engine's tree, by a factor of
+about 4.6 on `cub8` and about 32 on `Z4 x Z4`. These counts do not yet include the
+4.x engine on the same shapes (section 6).
 
 ## 2. Requirements and their sources
 
@@ -221,13 +221,9 @@ V·bits(V) + 4W` over its start charges `S`, label elements `O`, incidences `M`,
 and start-weighted node count `W` (`static_record`). The allowance is what the
 search-free run needs, so no limit refuses a guaranteed input.
 
-The reference engine decides `limit` by the walk of section 8.3 of revision 3.12
-of the specification (SHA-256
-`088cb74fba0f5f733224157ab7c3a6e06f4a3f3447edf4c01bb15cf15c58809a`). That revision
-labels every input exactly as revision 3.11 does: its worked examples are those of
-3.11, and it changes only which inputs that are not guaranteed are refused and the
-fields of the refusal. The walk is one sequential computation, a function of the
-input as given, source identifiers included, and of `L`:
+Both engines decide `limit` by the walk of section 8.3 of the specification. The
+walk is one sequential computation, a function of the input as given, source
+identifiers included, and of `L`:
 
 * The search-free run comes first, on every component, and none of its units
   enters the walk.
@@ -247,23 +243,28 @@ The walk's home is `walk.rs`: the running total and its trip, the totals by kind
 the twin classes of a component, the relation of a call, the witnesses of equal
 children with their cap and the check of a map. For a component the search-free
 run does not label, the reference engine explores every child of every branching
-call for its result and charges only what the walk charges. The optimised engine
-compares its own count, the units of the calls it explores and of its twin tests,
-with `max(L, A)`, so on an input that is not guaranteed its refusals and their
-fields can differ from the walk's. No label, digest, position, identity, record or
-map depends on the walk or on `L`.
+call for its result and charges only what the walk charges; the optimised engine
+explores what the walk visits and nothing else. Both make every charge of the
+walk, so they refuse the same inputs with the same fields. No label, digest,
+position, identity, record or map depends on the walk or on `L`.
 
 ### 3.5 The optimised engine
 
 The reference engine is the definition written for clarity and explores every
 child of every branching call. The optimised engine computes the same result on
-dense arrays with an explicit stack of calls (`optimised.rs`) and may skip a child
-only by a shortcut that is checked against the call's own state: the strict stop on
-`s` and then on `E`; a verified automorphism of the call that carries an explored
-child onto a skipped one; the exchange of two tied nested calls; the twins of the
-first explored child; and the lifting of a map to the branching calls below it.
-Pruning is an optimisation of a definition that has none, and the tests compare
-the two engines on a corpus under three relabellings.
+dense arrays with an explicit stack of calls (`optimised.rs`), and its search is
+the walk of section 3.4: it skips a member of the target cell that a twin class or
+a checked map from equal children or from below relates to an earlier one, stops a
+child on `s` and then on `E`, and completes every other child. The chosen child is
+the first completed child that attains the best certificate, and the attaining
+count is the number of members whose class holds a completed child equal to the
+best. On a component the search-free run labels, the walk runs the calls of that
+run, one child at each branching call with the same twin tests, so the optimised
+engine makes the charges the run recorded at once, and walks the step charge by
+charge only when the walk ends inside it. Pruning is an optimisation of a
+definition that has none, and the tests compare the two engines, their results and
+the totals of their walks, on a corpus under three relabellings, on the
+enumeration spaces and on every row of the walk.
 
 ## 4. Published work consulted
 
@@ -352,9 +353,10 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
   input changes only the map (`relabelling_and_line_order_change_only_the_map`).
 * BLAKE3 for both shared values, the identifier `(nested-refinement-labelling, 1)`,
   the closed refusal list and the line kinds.
-* The walk of revision 3.12 in the reference engine: its totals by kind on the
-  thirteen inputs of the specification's row `walk`, and the outcomes and fields
-  of its rows `limit-rows` and `limit-relabel` (`walk_tests.rs`).
+* The walk of the specification in both engines: equal totals by kind on the
+  thirteen inputs of the specification's row `walk` and on the shared comparison
+  inputs, and equal outcomes and fields on its rows `limit-rows` and
+  `limit-relabel` (`walk_tests.rs`).
 
 **Open:**
 
@@ -422,9 +424,8 @@ states why each consequence follows from the design.
 * **A finite search bound refuses a hard input with the `limit` outcome** and
   publishes no bytes. An input the labelling finishes without a search succeeds
   under every bound, including `0`. The fields of a refusal are not a property of
-  the dataset: from the reference engine they are those of the walk, functions of
-  the input as given, source identifiers included, and of the limit; from the
-  optimised engine they are its own count.
+  the dataset: they are those of the walk, functions of the input as given, source
+  identifiers included, and of the limit, the same from every engine.
 * **RDFC-1.0 remains a separate entry point** and the W3C suite gates it. The 4.x
   algorithm stays callable to recompute stored 4.x digests.
 

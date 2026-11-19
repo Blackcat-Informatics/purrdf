@@ -653,14 +653,7 @@ fn label_lines<E>(
     limit: Limit,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Labelled, ViewError<E>> {
-    optimised::label_set(
-        lines,
-        limit.get(),
-        false,
-        optimised::Options::PRODUCTION,
-        stop,
-    )
-    .map_err(|halt| match halt {
+    optimised::label_set(lines, limit.get(), false, stop).map_err(|halt| match halt {
         super::Halt::Refused(refusal) => ViewError::Refused(refusal),
         super::Halt::Stopped => ViewError::Stopped,
     })

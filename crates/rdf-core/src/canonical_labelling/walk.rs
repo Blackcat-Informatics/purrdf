@@ -59,7 +59,8 @@ pub(crate) struct Totals {
 }
 
 impl Totals {
-    fn add(&mut self, kind: Kind, units: u64) {
+    /// Add `units` of one kind.
+    pub(crate) fn add(&mut self, kind: Kind, units: u64) {
         let slot = match kind {
             Kind::Start => &mut self.start,
             Kind::Refine => &mut self.refine,
@@ -68,6 +69,15 @@ impl Totals {
             Kind::Twin => &mut self.twin,
         };
         *slot = slot.saturating_add(units);
+    }
+
+    /// The sum of the kinds, saturating.
+    const fn sum(&self) -> u64 {
+        self.start
+            .saturating_add(self.refine)
+            .saturating_add(self.fix_sum)
+            .saturating_add(self.split)
+            .saturating_add(self.twin)
     }
 }
 
@@ -127,6 +137,29 @@ impl Walk {
     pub(crate) fn charge_fixing(&mut self, fix_sum: u64, split: u64) -> Result<(), Stop> {
         self.add(&[(Kind::FixSum, fix_sum), (Kind::Split, split)]);
         self.test()
+    }
+
+    /// Make at once the charges `totals` of a component whose step is known
+    /// whole, when they leave `R` at most `max(L, A)`, so that no test among
+    /// them could fail. Whether they were made; when they were not, nothing
+    /// was added, and the walk ends inside them, so the step is walked charge
+    /// by charge to find where.
+    pub(crate) fn absorb(&mut self, totals: &Totals) -> bool {
+        let fits = self
+            .bound
+            .is_none_or(|bound| self.total.saturating_add(totals.sum()) <= bound);
+        if fits {
+            for (kind, units) in [
+                (Kind::Start, totals.start),
+                (Kind::Refine, totals.refine),
+                (Kind::FixSum, totals.fix_sum),
+                (Kind::Split, totals.split),
+                (Kind::Twin, totals.twin),
+            ] {
+                self.add(&[(kind, units)]);
+            }
+        }
+        fits
     }
 
     /// Add one charge; a charge of `0` is not made.
@@ -249,6 +282,19 @@ impl Relation {
     pub(crate) fn skipped(&mut self, i: usize) -> bool {
         let root = self.classes.find(i);
         (0..i).any(|j| self.classes.find(j) == root)
+    }
+
+    /// The number of members whose class holds one of `members`. With the
+    /// completed children equal to the best, it is the attaining count: the
+    /// first member of a class is visited, every member of a class has the
+    /// certificate of the others, and a stopped member's exceeds the best's.
+    pub(crate) fn related_to(&mut self, members: &[usize]) -> u64 {
+        let mut roots: Vec<usize> = members.iter().map(|&i| self.classes.find(i)).collect();
+        roots.sort_unstable();
+        roots.dedup();
+        (0..self.len)
+            .filter(|&i| roots.binary_search(&self.classes.find(i)).is_ok())
+            .count() as u64
     }
 }
 
