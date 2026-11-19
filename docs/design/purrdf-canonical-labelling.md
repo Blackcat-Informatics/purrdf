@@ -98,6 +98,18 @@ allocation columns come from the counting allocator over admission and search.
 | cub8 | 8 | 24 | no | 3 | 1,282 | 5,932 | 3,112 | 224,580 | 10,934 |
 | `Z4 x Z4` | 16 | 96 | no | 4 | 18,739 | 594,112 | 38,203 | 2,766,276 | 36,680 |
 
+`cargo bench -p purrdf-core --bench canonical_labelling_counts -- --counts` reports
+retired user-mode instructions, allocations and requested bytes of `label` in fresh
+processes. The figures below are the median of five samples:
+
+| Shape | Instructions | Allocations | Requested bytes |
+|---|---:|---:|---:|
+| path of 1,000 nodes | 61,416,594 | 48,192 | 11,644,303 |
+| quadratic residue 13 | 5,084,033 | 10,706 | 772,214 |
+| 3-cube | 1,533,933 | 3,572 | 269,744 |
+| `Z4 x Z4` | 17,081,718 | 38,203 | 2,766,276 |
+| claims: four messages of 20 reifiers, 6 to 8 annotations each, guaranteed | 14,645,767 | 32,487 | 2,380,158 |
+
 Observations: a path and a hub with leaves, the shapes with a long chain or many
 alike leaves, cost units close to linear in the lines and are labelled without a
 search. `triangles` (1,000 identical directed triangles) branches once per
