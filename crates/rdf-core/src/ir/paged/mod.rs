@@ -1196,6 +1196,8 @@ impl PagedDataset {
         }
         // Match query admission: diagnose structural drift first, then refuse
         // remaining content changes even when every summary count is unchanged.
+        // The recomputed identity commits to the sorted row digests, so this
+        // refusal holds against a provider that chooses the rows it returns.
         if materialization
             .dataset
             .frozen_snapshot_identity()

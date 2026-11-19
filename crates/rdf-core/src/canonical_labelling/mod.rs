@@ -27,9 +27,10 @@
 //!
 //! [`mod@reference`] is written for clarity and explores every child of every
 //! branching call it searches; it is the oracle the optimised engine is held to.
-//! The entries of this module run the optimised engine: dense arrays, an
-//! explicit stack of calls, the strict stops of 10.4 and checked automorphisms
-//! (10.1), with the same result.
+//! The entries of this module run the optimised engine: dense arrays and an
+//! explicit stack of calls, searching by the walk of 8.3 alone (the strict
+//! stops of 10.4 and the skips of checked automorphisms), with the same
+//! result. Both engines decide the refusal `limit` by that walk.
 
 mod certificate;
 mod document;
@@ -45,6 +46,9 @@ mod tests;
 mod view;
 #[cfg(test)]
 mod view_tests;
+mod walk;
+#[cfg(test)]
+mod walk_tests;
 
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
 pub(crate) use document::write_line_with;
@@ -54,6 +58,7 @@ pub use view::{
     Comparison, Labelling, Record, Scope, ViewError, compare_view, compare_view_with_memory,
     label_view, label_view_with_memory, lines_of_view,
 };
+pub use walk::WalkTotals;
 
 use purrdf_hash::Domain;
 use purrdf_lex::term_syntax::write_blank;
@@ -298,10 +303,12 @@ pub struct StatisticsRecord {
     pub guaranteed: bool,
 }
 
-/// The engine's own limit on the limited units of a search (8.1 and 8.3 of the
+/// An engine's limit `L` on its limited units (8.1 and 8.3 of the
 /// definition). The definition has no caller budget; an engine states its own.
-/// The engine trips only past `max(limit, A)` for an input that is not
-/// guaranteed, with the typed refusal [`Refusal::Limit`].
+/// No input is refused at or below `max(L, A)`, `A` the allowance, and no
+/// guaranteed input is refused at all. Both engines refuse with
+/// [`Refusal::Limit`] when the walk of 8.3 carries its running total above
+/// `max(L, A)`, so under one limit they refuse the same inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Limit(u64);
 
@@ -366,18 +373,21 @@ pub enum Refusal {
         /// The quantity.
         quantity: Quantity,
     },
-    /// The engine's own limit tripped on an input that is not guaranteed
-    /// (code 3).
+    /// The walk of 8.3 passed the engine's limit on an input that is not
+    /// guaranteed (code 3). The diagnostic fields are those of the walk, the
+    /// same from every engine. They are determined by the input as given,
+    /// source identifiers included, and the limit, and are NOT a property of
+    /// the dataset.
     Limit {
         /// The first failures of the search-free run, never empty.
         broken_by: Vec<FailureRecord>,
-        /// Engine-specific: the smallest source of the component searched.
+        /// The smallest source identifier of the top component whose step of
+        /// the walk made the last charge.
         source: Box<[u8]>,
-        /// Engine-specific: its node count.
+        /// Its node count.
         nodes: u64,
-        /// Engine-specific: the limited units spent; determined by the engine
-        /// and the input as given, source identifiers included, and NOT a
-        /// property of the dataset.
+        /// The limited units after the last charge, saturating at
+        /// `2^64 - 1`.
         units: u64,
     },
 }
@@ -502,8 +512,8 @@ pub struct Labelled {
     /// included, which differs between relabellings of one dataset.
     pub explored: Units,
     /// Engine figure: twin units of the search-free run (8.1(f)). The twin
-    /// tests a search makes (route (4) of the optimised engine) spend limited
-    /// units and are not counted here, so every engine reports the same figure.
+    /// tests of the walk are charged to the walk and are not counted here, so
+    /// every engine reports the same figure.
     /// NOT a property of the dataset and NOT part of the structural record: an
     /// engine figure determined by the input as given, source identifiers
     /// included, which differs between relabellings of one dataset.
@@ -516,8 +526,8 @@ pub struct Labelled {
     /// included, which differs between relabellings of one dataset.
     pub comparison_units: u64,
     /// Engine figure: children the strict stop of 10.4 ended on `s`, counted
-    /// at the branching calls of the result path. Zero from an engine that
-    /// explores every child.
+    /// at the branching calls of the result path when the walk labels the
+    /// component. Zero from an engine that explores every child.
     pub stopped_on_s: u64,
     /// Engine figure: children the strict stop of 10.4 ended on `E`, counted
     /// as `stopped_on_s` is.
@@ -549,21 +559,32 @@ pub fn write_label<W: TextOut + ?Sized>(position: u64, out: &mut W) {
 /// not guaranteed.
 pub fn label(lines: &[Line]) -> Result<(LineSet, Labelled), Refusal> {
     let set = admit(lines)?;
-    let labelled = optimised::label_set(
-        &set,
-        optimised::ENGINE_LIMIT,
-        false,
-        optimised::Options::PRODUCTION,
-        None,
-    )
-    .map_err(Halt::expect_refusal)?;
+    let labelled = optimised::label_set(&set, optimised::ENGINE_LIMIT, false, None)
+        .map_err(Halt::expect_refusal)?;
     Ok((set, labelled))
+}
+
+/// Admit `lines` and label them with the optimised engine under `limit`, with
+/// the totals by kind of the walk of 8.3 that decided the outcome. The walk
+/// is the same in every engine, so the totals are those the definition's
+/// rows print for the input as given.
+///
+/// # Errors
+/// As [`label`], the refusal `limit` being decided by `limit`.
+pub fn label_with_walk(
+    lines: &[Line],
+    limit: Limit,
+) -> Result<(LineSet, Labelled, WalkTotals), Refusal> {
+    let set = admit(lines)?;
+    let (labelled, walk) =
+        optimised::label_walked(&set, limit.get(), false, None).map_err(Halt::expect_refusal)?;
+    Ok((set, labelled, walk.totals()))
 }
 
 /// Admit `lines` and label them with the reference engine: the definition
 /// written for clarity, exploring every child of every branching call it
 /// searches. It is the oracle the optimised engine of [`label`] is held to; the
-/// two give the same result wherever the optimised engine does not refuse.
+/// two give the same result, and refuse the same inputs with the same fields.
 ///
 /// # Errors
 /// As [`label`].

@@ -1133,8 +1133,11 @@ impl RdfDataset {
     ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
         // No freeze computes this: the first request seals it, and only this
         // fixed-size content identity is cached.
-        let graphs = memory.try_scope(|memory| {
-            let mut graphs = purrdf_hash::multiset::Multiset256::default();
+        let dictionary = self.dictionary.snapshot_fingerprint(memory)?;
+        // A refusal inside the scope drops its buffers and refunds their grant.
+        memory.try_scope(|memory| {
+            let mut graphs = Vec::new();
+            memory.reserve(&mut graphs, self.named_graphs.len())?;
             let mut pending = Vec::new();
             for &graph in &self.named_graphs {
                 memory.admission_mut().checkpoint(1)?;
@@ -1144,36 +1147,30 @@ impl RdfDataset {
                         crate::source::source_hash_update(&mut hash, bytes, memory)
                     })
                     .map_err(|error| crate::source::source_visit_error(&error))?;
-                graphs
-                    .insert(crate::source::source_hash_finalize(&hash, memory)?)
-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                // Reserved above: this push never grows the buffer.
+                graphs.push(crate::source::source_hash_finalize(&hash, memory)?);
             }
             memory.release_vec(pending)?;
-            Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
-        })?;
-        let records = if let Some(statistics) = &self.statistics {
-            statistics.source_directory().content_records()
-        } else {
-            let mut records = purrdf_hash::multiset::Multiset256::default();
-            for relation in [
-                super::statistics::Relation::Asserted,
-                super::statistics::Relation::Reifiers,
-                super::statistics::Relation::Annotations,
-            ] {
-                records
-                    .combine(
-                        self.native_source_summary(None, GraphMatch::Any, relation)
-                            .records,
-                    )
-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
-            }
-            records
-        };
-        Ok(crate::source::resident_snapshot(
-            records,
-            graphs,
-            self.dictionary.snapshot_fingerprint(memory)?,
-        ))
+            crate::source::sort_digests(&mut graphs, memory)?;
+            let identity = if let Some(statistics) = &self.statistics {
+                crate::source::resident_snapshot(
+                    statistics.source_directory().digests(),
+                    graphs.iter().copied(),
+                    dictionary,
+                )
+            } else {
+                let records = self.native_record_digests(memory)?;
+                let identity = crate::source::resident_snapshot(
+                    records.iter().copied(),
+                    graphs.iter().copied(),
+                    dictionary,
+                );
+                memory.release_vec(records)?;
+                identity
+            };
+            memory.release_vec(graphs)?;
+            Ok(identity)
+        })
     }
 
     pub(crate) fn term_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(

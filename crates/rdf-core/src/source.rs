@@ -4,7 +4,7 @@
 //! Content-derived source rows, independently of dictionary ordinals or sizing
 //! statistics. Row hashes preserve blank scopes and every literal coordinate.
 
-use purrdf_hash::multiset::Multiset256;
+use purrdf_hash::multiset::{Multiset256, sorted_fingerprint};
 use purrdf_hash::{Domain, blake3::RecordHasher, frame::frame_le_with};
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
@@ -15,20 +15,59 @@ use crate::{RdfTextDirection, TermValue};
 const ROW: Domain = Domain::new(b"purrdf/source-row/v1");
 const TRIPLE_ROW: Domain = Domain::new(b"purrdf/triples/source-row/v1");
 const RECORD: Domain = Domain::new(b"purrdf/source-record/v1");
-const SOURCE_VERSION: Domain = Domain::new(b"purrdf/source-version/v1");
+const SOURCE_VERSION: Domain = Domain::new(b"purrdf/source-version/v2");
 
+/// The snapshot identity of a resident dataset: BLAKE3 over the sorted source
+/// record digests, the sorted named-graph digests and the dictionary seal. Each
+/// row family commits to its sorted sequence under its own domain, so the value
+/// is a function of the exact row sets and not of an additive sum a party
+/// choosing rows could steer. Both sequences must be ascending.
 pub(crate) fn resident_snapshot(
-    records: Multiset256,
-    graphs: Multiset256,
+    records: impl IntoIterator<Item = [u8; 32]>,
+    graphs: impl IntoIterator<Item = [u8; 32]>,
     dictionary: [u8; 32],
 ) -> purrdf_hash::hex::Digest32 {
-    const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v1");
-    const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v1");
+    const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v2");
+    const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v2");
     let mut hash = RecordHasher::new();
-    hash.update(&records.fingerprint(ROWS));
-    hash.update(&graphs.fingerprint(GRAPHS));
+    hash.update(&sorted_fingerprint(ROWS, records));
+    hash.update(&sorted_fingerprint(GRAPHS, graphs));
     hash.update(&dictionary);
     purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+}
+
+/// The content identity of a source observation: BLAKE3 over its exact
+/// population and the canonical Merkle node of its sorted effective record
+/// digests, which the version maintains incrementally. Equal nodes mean equal
+/// multisets, so the value commits to the rows themselves. An empty source has
+/// no node.
+pub(crate) fn source_version_fingerprint(population: u128, node: Option<[u8; 32]>) -> [u8; 32] {
+    let mut digest = purrdf_hash::blake3::Hasher::new();
+    frame_le_with(SOURCE_VERSION.as_bytes(), &mut |part| {
+        digest.update(part);
+    });
+    digest.update(&population.to_le_bytes());
+    if let Some(node) = node {
+        digest.update(&node);
+    }
+    *digest.finalize().as_bytes()
+}
+
+/// Sort row digests in place for [`sorted_fingerprint`], charging one unit of
+/// work per comparison when the admission meters progress.
+pub(crate) fn sort_digests<S: Admission + ?Sized>(
+    digests: &mut [[u8; 32]],
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
+    if memory.admission().progress_enabled() {
+        purrdf_lex::walk::try_sort_unstable_by(digests, |left, right| {
+            memory.admission_mut().checkpoint(1)?;
+            Ok::<_, StorageError>(left.cmp(right))
+        })
+    } else {
+        digests.sort_unstable();
+        Ok(())
+    }
 }
 
 pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 32]) -> [u8; 32] {
@@ -116,10 +155,12 @@ impl SourceVersion {
 
     /// Content identity of the complete statement union and reifier families,
     /// independent of dictionary IDs, physical segmentation or classification.
-    /// This is a fingerprint, not a signature or a membership proof.
+    /// It is BLAKE3 over the exact population and the canonical Merkle node of
+    /// the sorted record digests, so two different record sets never share a
+    /// value. It is a content identity, not a signature.
     #[must_use]
     pub fn content_fingerprint(&self) -> [u8; 32] {
-        self.0.records.fingerprint(SOURCE_VERSION)
+        source_version_fingerprint(self.0.records.population(), self.0.content_node())
     }
 }
 
@@ -169,8 +210,16 @@ pub struct SourceDifferenceWork {
 }
 
 /// Exact content accounting for one predicate, graph selection and physical
-/// statement stream. This is content evidence, distinct from sizing estimates
-/// or a statistics cache discriminator. It is not a membership proof.
+/// statement stream: populations and additive sums of row digests, which
+/// combine across physical layers without visiting their rows. It is distinct
+/// from sizing estimates or a statistics cache discriminator.
+///
+/// The sums are a population and drift check between structures one process
+/// built. They are not an identity: a party choosing rows can construct two
+/// different row sets with equal sums and populations, so no equality of row
+/// sets supplied by another party rests on them. Row-set identities are BLAKE3
+/// over sorted row digests ([`SourceVersion::content_fingerprint`] and the
+/// dataset content identity).
 ///
 /// Chronological unions must correct overlap and removals before publishing a
 /// summary; adding their physical layer summaries alone is insufficient.
@@ -188,14 +237,16 @@ impl SourceSummary {
     }
 
     /// Literal-source sums in graph-aware, graph-free order. Occurrences in
-    /// distinct physical streams contribute separately when combined.
+    /// distinct physical streams contribute separately when combined. These
+    /// are accounting sums, not an identity of the literal rows.
     #[must_use]
     pub const fn literal_rows(self) -> [Multiset256; 2] {
         self.literals
     }
 
-    /// Physical record identity, including the statement stream's kind. Named
-    /// graph declarations without statements do not enter this multiset.
+    /// The additive sum and population of the physical record digests,
+    /// including the statement stream's kind. Named graph declarations without
+    /// statements do not enter it. It is an accounting sum, not an identity.
     #[must_use]
     pub const fn records(self) -> Multiset256 {
         self.records
@@ -385,4 +436,27 @@ pub(crate) fn source_visit_error(error: &OwnedTermFoldError<StorageError>) -> St
     match error {
         OwnedTermFoldError::Storage(error) | OwnedTermFoldError::Visitor(error) => *error,
     }
+}
+
+/// Two member sets with equal additive sums and populations: `{a, b}` and
+/// `{c, a + b - c}` modulo 2^256. Constructing such a pair over real rows takes
+/// a party choosing rows about 2^40 work for 128 members; the identity laws are
+/// checked on the digests directly.
+#[cfg(test)]
+pub(crate) fn additive_collision() -> ([[u8; 32]; 2], [[u8; 32]; 2]) {
+    let digest = |seed: u64| *purrdf_hash::blake3::hash(&seed.to_le_bytes()).as_bytes();
+    let (a, b, c) = (digest(1), digest(2), digest(3));
+    let mut sum = Multiset256::default();
+    sum.insert(a).unwrap();
+    sum.insert(b).unwrap();
+    sum.remove(c).unwrap();
+    let d = *sum.sum();
+    let mut left = Multiset256::default();
+    left.insert(a).unwrap();
+    left.insert(b).unwrap();
+    let mut right = Multiset256::default();
+    right.insert(c).unwrap();
+    right.insert(d).unwrap();
+    assert_eq!(left, right, "the constructed pair collides additively");
+    ([a, b], [c, d])
 }

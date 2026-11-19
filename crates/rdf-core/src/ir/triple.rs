@@ -310,8 +310,8 @@ impl TripleDataset {
         crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
             let mut resident = purrdf_lex::allocation::Resident;
             Ok(crate::source::resident_snapshot(
-                self.statistics.source_directory().content_records(),
-                purrdf_hash::multiset::Multiset256::default(),
+                self.statistics.source_directory().digests(),
+                core::iter::empty(),
                 self.dictionary
                     .snapshot_fingerprint(&mut purrdf_lex::allocation::Memory::new(
                         &mut resident,

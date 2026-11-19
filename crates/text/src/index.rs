@@ -95,15 +95,21 @@ use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
 const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v6");
-/// Domain-separation prefix for [`TextIndex::source_fingerprint`].
+/// Domain of the additive selected-source check value: the 4.x source
+/// fingerprint law, kept for [`source_fingerprint`] and the delta mismatch report.
 const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v2");
+/// Domain-separation prefix for [`TextIndex::source_fingerprint`]: BLAKE3 over
+/// the sorted selected-row digests.
+const SOURCE_IDENTITY_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v3");
 /// Graph-free source and index identities omit every graph coordinate.
 const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/index/v3");
 const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v2");
+const TRIPLE_SOURCE_IDENTITY_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v3");
 
 mod source_digest;
+#[allow(deprecated, reason = "the 4.x public path stays reachable, deprecated")]
 pub use source_digest::source_fingerprint;
-use source_digest::{SourceDigest, row_directory, row_hashes};
+use source_digest::{SourceDigest, row_directory, row_hashes, sorted_source_fingerprint};
 mod token_streams;
 use token_streams::TokenTable;
 pub(crate) use token_streams::{Slice, Table};
@@ -792,11 +798,12 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
 
     /// The digest of the source rows walked.
     source_fingerprint: [u8; FINGERPRINT_BYTES],
-    /// Reversible source accounting, retained independently of its published hash.
+    /// Reversible additive source accounting: the drift check a delta is
+    /// validated against, not the source identity.
     source_digest: SourceDigest,
     /// The hash of every selected source row, token-less rows included, sorted,
     /// with one entry per occurrence. A delta's removed rows are joined against
-    /// it exactly. Memory only: derived from the source rows, never fingerprinted.
+    /// it exactly, and [`Self::source_fingerprint`] hashes it in this order.
     row_directory: Table<[u8; 32]>,
     /// Original source-owned observation for independently discovering changes.
     source_version: Option<purrdf_core::source::SourceVersion>,
@@ -899,17 +906,21 @@ impl<P: CorpusProfile> TextIndex<P> {
         let version = dataset.source_version().map_err(TextError::source_read)?;
         let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
         let source = SourceDigest::from_hashes(hashes.iter().copied());
+        let directory = row_directory(hashes)?;
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         let mut index = Self::assemble(
             config.clone(),
             documents,
             &dictionary,
-            source,
+            (
+                source,
+                sorted_source_fingerprint::<P>(directory.iter().copied()),
+            ),
             coverage,
             RankingProfile::single_field(),
         )?;
         index.source_version = version;
-        index.row_directory = row_directory(hashes)?;
+        index.row_directory = directory;
         dataset
             .checked_read(|_| ())
             .map_err(TextError::source_read)?;
@@ -936,17 +947,21 @@ impl<P: CorpusProfile> TextIndex<P> {
         let version = dataset.source_version().map_err(TextError::source_read)?;
         let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
         let source = SourceDigest::from_hashes(hashes.iter().copied());
+        let directory = row_directory(hashes)?;
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         let mut index = Self::assemble(
             config.clone(),
             documents,
             &dictionary,
-            source,
+            (
+                source,
+                sorted_source_fingerprint::<P>(directory.iter().copied()),
+            ),
             coverage,
             profile,
         )?;
         index.source_version = version;
-        index.row_directory = row_directory(hashes)?;
+        index.row_directory = directory;
         dataset
             .checked_read(|_| ())
             .map_err(TextError::source_read)?;
@@ -1838,7 +1853,9 @@ impl<P: CorpusProfile> TextIndex<P> {
     }
 
     /// The digest of the `(graph, subject, predicate, literal)` rows this index
-    /// was built by walking.
+    /// was built by walking: BLAKE3 over their sorted row digests, one per
+    /// occurrence, so two different row sets share it only through a BLAKE3
+    /// collision.
     ///
     /// [`Self::fingerprint`] identifies the index; this identifies the *data
     /// under* it. The two are separate because pairing an index with the wrong
@@ -1944,7 +1961,7 @@ impl<P: CorpusProfile> TextIndex<P> {
         config: TextIndexConfig<P>,
         documents: Vec<AnalyzedDocument<P>>,
         dictionary: &[String],
-        source: SourceDigest,
+        (source, source_fingerprint): (SourceDigest, [u8; FINGERPRINT_BYTES]),
         coverage: SourceCoverage,
         ranking: RankingProfile,
     ) -> Result<Self, TextError> {
@@ -2024,7 +2041,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             surface,
             han_occurrences,
             fingerprint: [0; FINGERPRINT_BYTES],
-            source_fingerprint: source.fingerprint::<P>(),
+            source_fingerprint,
             source_digest: source,
             row_directory: Table::default(),
             source_version: None,
@@ -2053,8 +2070,9 @@ impl<P: CorpusProfile> TextIndex<P> {
 }
 
 /// Compute the native generation from the immutable inputs that determine text answers.
-/// Persistent providers use this same preimage with their maintained source multiset
-/// identity. Derived document tables and postings add no independent identity.
+/// Persistent providers use this same preimage with the source identity of their rows,
+/// BLAKE3 over the sorted selected-row digests that [`source_digest`] computes.
+/// Derived document tables and postings add no independent identity.
 pub fn snapshot_fingerprint<P: CorpusProfile>(
     config: &TextIndexConfig<P>,
     ranking: &RankingProfile,
@@ -2678,7 +2696,7 @@ fn analyze_rows<P: CorpusProfile>(
             // buffer, including capacity, before retaining the remaining views.
             drop(core::mem::take(&mut analysis.lexical));
             if config.surface || config.projection == IndexProjection::Han {
-                analyses.push((digest_rows(std::iter::once(row)), analysis));
+                analyses.push((row_fingerprint(row), analysis));
             }
         }
         // Retain auxiliary-only documents without admitting them into the
@@ -2838,7 +2856,15 @@ where
 fn digest_rows<'a, P: CorpusProfile + 'a>(
     rows: impl ExactSizeIterator<Item = &'a SourceRow<P>>,
 ) -> [u8; FINGERPRINT_BYTES] {
-    SourceDigest::from_rows(rows).fingerprint::<P>()
+    let mut hashes: Vec<[u8; 32]> = row_hashes(rows).collect();
+    hashes.sort_unstable();
+    sorted_source_fingerprint::<P>(hashes)
+}
+
+/// The source identity of one row alone. A single hash is already sorted, so no
+/// collection is built.
+fn row_fingerprint<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; FINGERPRINT_BYTES] {
+    sorted_source_fingerprint::<P>(row_hashes(std::iter::once(row)))
 }
 
 /// A streaming digest over the crate's one term encoding.

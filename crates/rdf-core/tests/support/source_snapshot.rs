@@ -7,6 +7,11 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 use std::sync::Arc;
 
 pub(crate) fn dataset(count: usize, changed: bool, reverse: bool) -> Arc<RdfDataset> {
+    builder(count, changed, reverse).freeze().unwrap()
+}
+
+/// The unfrozen fixture, for callers that choose how it is frozen.
+pub(crate) fn builder(count: usize, changed: bool, reverse: bool) -> RdfDatasetBuilder {
     let mut builder = RdfDatasetBuilder::new();
     let p = builder.intern_iri("urn:source:predicate").unwrap();
     let annotation = builder.intern_iri("urn:source:annotation").unwrap();
@@ -40,5 +45,5 @@ pub(crate) fn dataset(count: usize, changed: bool, reverse: bool) -> Arc<RdfData
             .push_annotation_in_graph(reifier, annotation, note, g)
             .unwrap();
     }
-    builder.freeze().unwrap()
+    builder
 }

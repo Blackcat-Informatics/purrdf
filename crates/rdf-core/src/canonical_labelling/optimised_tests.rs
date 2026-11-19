@@ -3,13 +3,13 @@
 
 //! The optimised engine is held to the reference engine: on every worked
 //! example, on the named inputs of the definition under several namings and
-//! both visiting orders, and on generated inputs, the two give the same
-//! canonical map, identities, line sequence, digest, structural record and
-//! first failures, whatever shortcuts are on. The stops of 10.4 fire where
-//! the definition says, the stop signal is honoured, and the limit refuses
-//! the same input the same way.
+//! on generated inputs, the two give the same canonical map, identities, line
+//! sequence, digest, structural record and first failures, with the
+//! search-free run and with every component labelled by its walk. The stops
+//! of 10.4 fire in the walk, the stop signal is honoured, and the limit
+//! refuses the same input with the same fields.
 
-use super::optimised::{self, Options};
+use super::optimised;
 use super::reference;
 use super::tests::{
     blocks, both_directions, corpus, failure_record, hub, nested_instance, quad,
@@ -17,82 +17,6 @@ use super::tests::{
 };
 use super::{Halt, Labelled, Line, Refusal, Term, admit};
 use crate::StopSignal;
-
-/// Every combination of the three switches of the optimised engine.
-fn every_option() -> Vec<Options> {
-    let mut out = Vec::new();
-    for stops in [false, true] {
-        for orbits in [false, true] {
-            for descending in [false, true] {
-                out.push(Options {
-                    stops,
-                    orbits,
-                    descending,
-                    ..Options::PRODUCTION
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Each proved shortcut of 10.1 and 10.4 on its own, with the classes of the
-/// target cell on and the others off, in both visiting orders: the twins of
-/// route (4), the maps of route (1), the leaves of route (5) at the top call
-/// with route (1) off below it, both together, the exchange of
-/// route (2), and lifting with a source of maps to lift (routes (1) and (4)).
-fn alone_options() -> Vec<Options> {
-    let off = Options {
-        stops: false,
-        orbits: true,
-        descending: false,
-        maps: false,
-        twins: false,
-        exchanges: false,
-        lifting: false,
-        leaves: false,
-    };
-    let mut out = Vec::new();
-    for descending in [false, true] {
-        let base = Options { descending, ..off };
-        out.push(Options {
-            twins: true,
-            ..base
-        });
-        out.push(Options { maps: true, ..base });
-        out.push(Options {
-            leaves: true,
-            ..base
-        });
-        out.push(Options {
-            maps: true,
-            leaves: true,
-            ..base
-        });
-        out.push(Options {
-            exchanges: true,
-            ..base
-        });
-        out.push(Options {
-            maps: true,
-            lifting: true,
-            ..base
-        });
-        out.push(Options {
-            twins: true,
-            lifting: true,
-            ..base
-        });
-    }
-    out
-}
-
-/// Every combination of the three switches, and each route alone.
-fn every_variant() -> Vec<Options> {
-    let mut out = every_option();
-    out.extend(alone_options());
-    out
-}
 
 /// Everything deterministic in a result, compared whole. The engine figures
 /// (units of explored calls, twin units, comparison units, stops) are the
@@ -132,21 +56,36 @@ fn reference_of(lines: &[Line]) -> Labelled {
     reference::label_set(&set, reference::ENGINE_LIMIT, false).expect("labelled")
 }
 
-fn optimised_of(lines: &[Line], options: Options) -> Labelled {
+fn optimised_of(lines: &[Line], force_search: bool) -> Labelled {
     let set = admit(lines).expect("well formed");
-    optimised::label_set(&set, optimised::ENGINE_LIMIT, false, options, None)
+    optimised::label_set(&set, optimised::ENGINE_LIMIT, force_search, None)
         .unwrap_or_else(|halt| panic!("the optimised engine did not label: {halt:?}"))
 }
 
-/// Property: the optimised engine computes the reference result. INVARIANT
-/// held for every switch of the engine, so a shortcut that is wrong on an
-/// input shows as a difference from the oracle.
+/// Property: the optimised engine computes the reference result and walks to
+/// the reference's totals by kind. INVARIANT held with the search-free run and
+/// with every component labelled by its walk (the search forced), so a skip, a
+/// stop, a known map or a charge that is wrong on an input shows as a
+/// difference from the oracle. A searched result equals the search-free one,
+/// failures included (Theorem GR), so one oracle serves both.
 fn assert_agrees(context: &str, lines: &[Line]) {
-    let oracle = reference_of(lines);
-    for options in every_variant() {
-        let result = optimised_of(lines, options);
-        assert_same(&format!("{context} {options:?}"), &oracle, &result);
-    }
+    let set = admit(lines).expect("well formed");
+    let (oracle, _, oracle_walk) =
+        reference::label_walked(&set, reference::ENGINE_LIMIT, false, false, None)
+            .expect("labelled");
+    let (result, walk) =
+        optimised::label_walked(&set, optimised::ENGINE_LIMIT, false, None).expect("labelled");
+    assert_same(context, &oracle, &result);
+    assert_eq!(
+        (oracle_walk.totals(), oracle_walk.total()),
+        (walk.totals(), walk.total()),
+        "{context}: the totals of the walk"
+    );
+    assert_same(
+        &format!("{context} searched"),
+        &oracle,
+        &optimised_of(lines, true),
+    );
 }
 
 #[test]
@@ -176,7 +115,7 @@ fn node(prefix: &str, i: usize, width: usize) -> String {
 /// `COMPL(k1, k2)`: every ordered pair of distinct nodes that is not an edge
 /// of the cycle on the first `k1` nodes or of the cycle on the next `k2`. The
 /// nodes of the second cycle are named first when `second_first`.
-fn complement_of_cycles(k1: usize, k2: usize, second_first: bool) -> Vec<Line> {
+pub(super) fn complement_of_cycles(k1: usize, k2: usize, second_first: bool) -> Vec<Line> {
     let n = k1 + k2;
     let width = if n >= 10 { 2 } else { 1 };
     // Index of each node in its name: the first cycle `0..k1`, the second
@@ -216,7 +155,7 @@ fn edges_of(pairs: &[(&str, &str)]) -> Vec<Line> {
     both_directions(&owned)
 }
 
-fn fifteen() -> Vec<Line> {
+pub(super) fn fifteen() -> Vec<Line> {
     let mut lines = vec![
         quad("c0", "<p>", "c1"),
         quad("c1", "<p>", "c2"),
@@ -231,7 +170,7 @@ fn fifteen() -> Vec<Line> {
     lines
 }
 
-fn cub8() -> Vec<Line> {
+pub(super) fn cub8() -> Vec<Line> {
     edges_of(&[
         ("w0", "w1"),
         ("w0", "w4"),
@@ -248,7 +187,7 @@ fn cub8() -> Vec<Line> {
     ])
 }
 
-fn k4_pair() -> Vec<Line> {
+pub(super) fn k4_pair() -> Vec<Line> {
     let mut pairs: Vec<(String, String)> = Vec::new();
     for prefix in ["a", "b"] {
         for i in 0..4 {
@@ -306,11 +245,13 @@ fn named_inputs() -> Vec<(&'static str, Vec<Line>)> {
     ]
 }
 
-/// The inputs of the stops and of the shortcuts of section 10, under the
-/// namings of 13.2 (seeds 1 to 3) and both visiting orders: every shortcut
-/// of the engine, and all of them together, equal the oracle.
+/// The inputs of the stops and of the skips of section 10, under the namings
+/// of 13.2 (seeds 1 to 3): the walk's result equals the oracle's. On
+/// `COMPL(4, 6)`, under both namings, a child whose nested call has the
+/// smaller `s` and the larger `E` is the smaller certificate, so a stop on a
+/// nested call would return a certificate that is not the minimum.
 #[test]
-fn the_named_inputs_of_section_ten_agree_under_every_shortcut_and_naming() {
+fn the_named_inputs_of_section_ten_agree_under_every_naming() {
     for (name, lines) in named_inputs() {
         assert_agrees(name, &lines);
         for seed in 1..=3 {
@@ -319,54 +260,18 @@ fn the_named_inputs_of_section_ten_agree_under_every_shortcut_and_naming() {
     }
 }
 
-const STOPS_ONLY: Options = Options {
-    stops: true,
-    orbits: false,
-    descending: false,
-    ..Options::PRODUCTION
-};
-
-/// 10.4: with no other shortcut and the children in ascending source order,
-/// the stop on `s` fires three times at the branching calls of the result
-/// path of `FIFTEEN` (the children of `c0`, `c1`, `c2` have `s = 3`, the best
-/// `s = 2`), and the stop on `E` fires six times on `CUB8`.
+/// 10.4: the walk stops children on `s` on `FIFTEEN` (children of `s = 3`
+/// against a best of `s = 2`) and on `E` on `CUB8`, at the branching calls of
+/// the result path, when the walk labels them; the oracle, which explores
+/// every child, stops none.
 #[test]
-fn the_strict_stops_fire_where_the_definition_counts_them() {
-    let on_fifteen = optimised_of(&fifteen(), STOPS_ONLY);
-    assert_eq!(on_fifteen.stopped_on_s, 3, "stops on s on FIFTEEN");
-    let on_cub8 = optimised_of(&cub8(), STOPS_ONLY);
-    assert_eq!(on_cub8.stopped_on_e, 6, "stops on E on CUB8");
-    // The neighbour: the oracle explores every child and stops none.
+fn the_strict_stops_fire_in_the_walk() {
+    let on_fifteen = optimised_of(&fifteen(), true);
+    assert!(on_fifteen.stopped_on_s > 0, "stops on s on FIFTEEN");
+    let on_cub8 = optimised_of(&cub8(), true);
+    assert!(on_cub8.stopped_on_e > 0, "stops on E on CUB8");
     let oracle = reference_of(&fifteen());
     assert_eq!(oracle.stopped_on_s + oracle.stopped_on_e, 0);
-}
-
-/// 10.4, why there is no stop on a nested call: on `COMPL(4, 6)` a child whose
-/// nested call has the smaller `s` and the larger `E` is the smaller
-/// certificate. The permanent test of the correction: the nodes of the
-/// 6-cycle are visited first (its names are smallest) and the nodes of the
-/// 4-cycle first, in both visiting orders, and the engine returns the
-/// reference's minimum each time.
-#[test]
-fn the_stop_never_returns_a_certificate_that_is_not_the_minimum() {
-    for second_first in [false, true] {
-        let lines = complement_of_cycles(4, 6, second_first);
-        let oracle = reference_of(&lines);
-        for descending in [false, true] {
-            let options = Options {
-                stops: true,
-                orbits: false,
-                descending,
-                ..Options::PRODUCTION
-            };
-            let result = optimised_of(&lines, options);
-            assert_same(
-                &format!("COMPL(4,6) second_first={second_first} {options:?}"),
-                &oracle,
-                &result,
-            );
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -474,8 +379,8 @@ fn generated(seed: u64) -> Vec<Line> {
     }
 }
 
-/// Property over generated inputs: the optimised engine equals the oracle
-/// with every switch, for the input as drawn and for a relabelling of it.
+/// Property over generated inputs: the optimised engine equals the oracle,
+/// for the input as drawn and for a relabelling of it.
 #[test]
 fn the_optimised_engine_agrees_with_the_reference_on_generated_inputs() {
     for seed in 1..=160 {
@@ -506,103 +411,53 @@ impl StopSignal for Raised {
 fn a_raised_stop_signal_stops_the_optimised_engine() {
     let set = admit(&complement_of_cycles(4, 6, false)).expect("well formed");
     let raised = Raised(true);
-    let stopped = optimised::label_set(
-        &set,
-        optimised::ENGINE_LIMIT,
-        false,
-        Options::PRODUCTION,
-        Some(&raised),
-    );
+    let stopped = optimised::label_set(&set, optimised::ENGINE_LIMIT, false, Some(&raised));
     assert!(matches!(stopped, Err(Halt::Stopped)), "{stopped:?}");
     let quiet = Raised(false);
-    let done = optimised::label_set(
-        &set,
-        optimised::ENGINE_LIMIT,
-        false,
-        Options::PRODUCTION,
-        Some(&quiet),
-    );
+    let done = optimised::label_set(&set, optimised::ENGINE_LIMIT, false, Some(&quiet));
     assert!(done.is_ok());
 }
 
-/// 7.10, 7.11 and 8.3: under a limit its search exceeds, an input that is not
+/// 7.10, 7.11 and 8.3: under a limit its walk exceeds, an input that is not
 /// guaranteed is refused as `limit` naming the first failure of every
-/// component; under a large limit the same input is labelled with the same
-/// failures; and no limit refuses a guaranteed input.
+/// component, with the reference's fields; under a large limit the same input
+/// is labelled with the same failures; and no limit refuses a guaranteed
+/// input.
 #[test]
 fn the_optimised_limit_refuses_what_the_reference_refuses_and_nothing_guaranteed() {
     let mut lines = quadratic_residue_13("v");
     lines.extend(quadratic_residue_13("w"));
     let set = admit(&lines).expect("well formed");
     let qr = failure_record(0, 13, 13, 78);
-    let plain = Options {
-        stops: false,
-        orbits: false,
-        descending: false,
-        ..Options::PRODUCTION
-    };
-    match optimised::label_set(&set, 0, false, plain, None) {
+    let refused = optimised::label_set(&set, 0, false, None);
+    match &refused {
         Err(Halt::Refused(Refusal::Limit {
             broken_by, nodes, ..
         })) => {
-            assert_eq!(broken_by, [qr, qr]);
-            assert_eq!(nodes, 13);
+            assert_eq!(broken_by, &[qr, qr]);
+            assert_eq!(*nodes, 13);
         }
         other => panic!("expected a limit refusal, got {other:?}"),
     }
-    let labelled = optimised::label_set(&set, optimised::ENGINE_LIMIT, false, plain, None)
-        .expect("the search fits");
+    let oracle = reference::label_set(&set, 0, false).map(|_| ());
+    assert_eq!(refused.map(|_| ()).map_err(Halt::expect_refusal), oracle);
+    let labelled =
+        optimised::label_set(&set, optimised::ENGINE_LIMIT, false, None).expect("the search fits");
     assert_eq!(labelled.record.broken_by, [qr, qr]);
     let guaranteed = admit(&hub(false)).expect("well formed");
-    assert!(optimised::label_set(&guaranteed, 0, false, Options::PRODUCTION, None).is_ok());
-}
-
-/// The same refusal and its valid neighbour with every shortcut on. The search
-/// of two copies of `QR13` spends more limited units than its allowance even
-/// with the routes (the invalid input); the same input under a large limit,
-/// and a guaranteed input under the least limit, are labelled (the valid
-/// neighbours).
-#[test]
-fn the_limit_refuses_with_every_shortcut_on_and_its_neighbours_pass() {
-    let mut lines = quadratic_residue_13("v");
-    lines.extend(quadratic_residue_13("w"));
-    let set = admit(&lines).expect("well formed");
-    let qr = failure_record(0, 13, 13, 78);
-    match optimised::label_set(&set, 0, false, Options::PRODUCTION, None) {
-        Err(Halt::Refused(Refusal::Limit {
-            broken_by, nodes, ..
-        })) => {
-            assert_eq!(broken_by, [qr, qr]);
-            assert_eq!(nodes, 13);
-        }
-        other => panic!("expected a limit refusal, got {other:?}"),
-    }
-    let labelled = optimised::label_set(
-        &set,
-        optimised::ENGINE_LIMIT,
-        false,
-        Options::PRODUCTION,
-        None,
-    )
-    .expect("the search fits");
-    assert_eq!(labelled.record.broken_by, [qr, qr]);
+    assert!(optimised::label_set(&guaranteed, 0, false, None).is_ok());
 }
 
 /// The twin units are those of the search-free run, in the optimised engine as
 /// in the reference, on an input the search-free run does not settle (`QR13`)
-/// and on one it does: the twin tests a search makes spend limited units and
-/// are not counted in the figure.
+/// and on those it does: the twin tests of the walk are charged to the walk
+/// and are not counted in the figure.
 #[test]
-fn the_twin_units_are_those_of_the_search_free_run_whatever_the_search_does() {
+fn the_twin_units_are_those_of_the_search_free_run_whatever_the_walk_does() {
     for (name, lines) in named_inputs() {
         let oracle = reference_of(&lines);
-        for options in every_option() {
-            let result = optimised_of(&lines, options);
-            assert_eq!(
-                oracle.twin_units, result.twin_units,
-                "{name} {options:?}: twin units"
-            );
-        }
+        let result = optimised_of(&lines, false);
+        assert_eq!(oracle.twin_units, result.twin_units, "{name}: twin units");
     }
 }
 
@@ -718,9 +573,7 @@ fn the_optimised_engine_agrees_on_every_set_of_n3p1() {
 }
 
 /// `Q4` (13.2 item (h)): every one of the 65,535 sets, by mask, in four
-/// strides run side by side, each against the reference with every variant:
-/// the eight combinations of the stops, the classes and the order, and each
-/// route alone in both orders.
+/// strides run side by side, each against the reference.
 fn q4_stride(stride: u64) {
     let space = loops_space("x", 4);
     let mut visited = 0u64;
@@ -793,8 +646,8 @@ fn the_optimised_engine_agrees_on_every_set_of_q5dense_stride_3() {
     q5dense_stride(3);
 }
 
-/// `RB3`: reifier bindings, triple terms and annotations; route (1) over lines
-/// of those kinds. Every one of its 4,095 sets.
+/// `RB3`: reifier bindings, triple terms and annotations; known maps over
+/// lines of those kinds. Every one of its 4,095 sets.
 #[test]
 fn the_optimised_engine_agrees_on_every_set_of_rb3() {
     let space = rb3_lines();
@@ -823,49 +676,7 @@ fn the_optimised_engine_agrees_on_every_set_of_rec3() {
 }
 
 // ---------------------------------------------------------------------------
-// That routes (1) and (4) act.
-
-fn only(maps: bool, twins: bool) -> Options {
-    Options {
-        maps,
-        twins,
-        exchanges: false,
-        lifting: false,
-        leaves: false,
-        ..Options::PRODUCTION
-    }
-}
-
-fn no_orbits() -> Options {
-    Options {
-        orbits: false,
-        ..Options::PRODUCTION
-    }
-}
-
-/// 10.1 routes (1) and (4) each explore strictly fewer units than the engine
-/// with no route where they apply: the map between equal certificates on the
-/// complement of two cycles and on `Z4Z4`, the twins on `K33`; and the result is
-/// the oracle's.
-#[test]
-fn routes_one_and_four_each_explore_fewer_units_than_no_route() {
-    for (name, lines, maps, twins) in [
-        ("COMPL(4,6)", complement_of_cycles(4, 6, false), true, false),
-        ("Z4Z4", z4_z4(), true, false),
-        ("FIFTEEN", fifteen(), false, true),
-    ] {
-        let oracle = reference_of(&lines);
-        let none = optimised_of(&lines, no_orbits());
-        let route = optimised_of(&lines, only(maps, twins));
-        assert_same(name, &oracle, &route);
-        assert!(
-            route.explored.total() < none.explored.total(),
-            "{name}: {} units with the route, {} without",
-            route.explored.total(),
-            none.explored.total()
-        );
-    }
-}
+// The work of the walk, the stop signal and ties.
 
 /// Whether two results differ in anything the definition fixes.
 fn differs(a: &Labelled, b: &Labelled) -> bool {
@@ -906,7 +717,6 @@ fn the_optimised_engine_polls_the_stop_signal_at_each_call() {
             &set,
             optimised::ENGINE_LIMIT,
             false,
-            Options::PRODUCTION,
             Some(&After(std::sync::atomic::AtomicU64::new(clear_polls))),
         )
     };
@@ -914,303 +724,34 @@ fn the_optimised_engine_polls_the_stop_signal_at_each_call() {
     assert!(run(u64::MAX).is_ok());
 }
 
-/// A shortcut only skips calls: on the inputs of 10.1 where the group is
-/// large, the optimised engine explores strictly fewer units than the
-/// reference tree, and never more on any input of the section.
+/// The walk only skips and stops children: on the inputs of section 10 it
+/// explores no more units than the reference tree, with or without the
+/// search-free run.
 #[test]
-fn the_shortcuts_never_explore_more_units_than_the_reference_tree() {
+fn the_walk_never_explores_more_units_than_the_reference_tree() {
     for (name, lines) in named_inputs() {
         let oracle = reference_of(&lines);
-        let result = optimised_of(&lines, Options::PRODUCTION);
-        assert!(
-            result.explored.total() <= oracle.explored.total(),
-            "{name}: {} units explored against the reference tree's {}",
-            result.explored.total(),
-            oracle.explored.total()
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// The routes of 10.1, each alone.
-
-/// The engine with orbits and none of the routes beyond (1) and (4).
-const BASE_ROUTES: Options = Options {
-    exchanges: false,
-    lifting: false,
-    leaves: false,
-    ..Options::PRODUCTION
-};
-
-/// Each route alone, then all, over the base, in both visiting orders: the
-/// result is the oracle's, and a route never explores more than the base.
-fn route_variants(descending: bool) -> Vec<(&'static str, Options)> {
-    let base = Options {
-        descending,
-        ..BASE_ROUTES
-    };
-    vec![
-        ("base", base),
-        (
-            "exchanges",
-            Options {
-                exchanges: true,
-                ..base
-            },
-        ),
-        (
-            "lifting",
-            Options {
-                lifting: true,
-                ..base
-            },
-        ),
-        (
-            "leaves",
-            Options {
-                leaves: true,
-                ..base
-            },
-        ),
-        (
-            "all",
-            Options {
-                exchanges: true,
-                lifting: true,
-                leaves: true,
-                ..base
-            },
-        ),
-    ]
-}
-
-fn explored_of(lines: &[Line], options: Options) -> u64 {
-    optimised_of(lines, options).explored.total()
-}
-
-/// 10.1: every route alone and all together return the oracle's result in both
-/// visiting orders on the named inputs and on generated inputs, and none
-/// explores more than the engine with only routes (1) and (4): a map that is
-/// used skips children and adds none.
-#[test]
-fn each_route_alone_and_all_together_agree_with_the_oracle_and_never_cost() {
-    let mut inputs = named_inputs();
-    for seed in 1..=60 {
-        inputs.push(("generated", generated(seed)));
-    }
-    for (name, lines) in inputs {
-        let oracle = reference_of(&lines);
-        for descending in [false, true] {
-            let variants = route_variants(descending);
-            let base = explored_of(&lines, variants[0].1);
-            for (route, options) in variants {
-                let result = optimised_of(&lines, options);
-                assert_same(&format!("{name} {route} {options:?}"), &oracle, &result);
-                assert!(
-                    result.explored.total() <= base,
-                    "{name} {route} descending={descending}: {} explored units against {base}",
-                    result.explored.total()
-                );
-            }
-        }
-    }
-}
-
-/// Lifting (10.1): a map used at a nested call is used at the call above it,
-/// so the complement of two cycles, whose nested calls hold the symmetry,
-/// explores fewer units with it, in both visiting orders and both namings.
-#[test]
-fn lifting_skips_children_the_nested_maps_already_cover() {
-    for second_first in [false, true] {
-        let lines = complement_of_cycles(4, 6, second_first);
-        for descending in [false, true] {
-            let variants = route_variants(descending);
-            let base = explored_of(&lines, variants[0].1);
-            let lifted = explored_of(&lines, variants[2].1);
+        for force_search in [false, true] {
+            let result = optimised_of(&lines, force_search);
             assert!(
-                lifted < base,
-                "COMPL(4,6) second_first={second_first} descending={descending}: {lifted} against {base}"
+                result.explored.total() <= oracle.explored.total(),
+                "{name} searched={force_search}: {} units explored against the reference tree's {}",
+                result.explored.total(),
+                oracle.explored.total()
             );
         }
     }
 }
 
-/// Route (2) (10.1): the exchange of two tied nested calls joins children the
-/// other routes leave apart, on at least one generated input, and with
-/// lifting it joins more still on `K4PAIR`, whose two copies are exchanged.
-#[test]
-fn the_exchange_of_tied_nested_calls_joins_children_of_the_call_above() {
-    let strict = (1..=160).any(|seed| {
-        let lines = generated(seed);
-        let variants = route_variants(false);
-        explored_of(&lines, variants[1].1) < explored_of(&lines, variants[0].1)
-    });
-    assert!(strict, "no generated input is helped by the exchange");
-    let variants = route_variants(false);
-    let lines = k4_pair();
-    let all = explored_of(&lines, variants[4].1);
-    assert!(all < explored_of(&lines, variants[1].1));
-    assert!(all < explored_of(&lines, variants[2].1));
-}
-
-/// Route (5) (10.1): two leaves of the top call with equal line sets give the
-/// map that route (1) gives from equal certificates, so the engine that keys
-/// the top call by its leaves explores what the engine that keys it by
-/// certificate explores, and both return the oracle's result.
-#[test]
-fn leaves_of_the_top_call_join_the_same_children_as_equal_certificates() {
-    for (name, lines) in named_inputs() {
-        let oracle = reference_of(&lines);
-        for descending in [false, true] {
-            let variants = route_variants(descending);
-            let (by_cert, by_leaf) = (variants[0].1, variants[3].1);
-            let (a, b) = (optimised_of(&lines, by_cert), optimised_of(&lines, by_leaf));
-            assert_same(name, &oracle, &b);
-            assert_eq!(a.explored, b.explored, "{name} descending={descending}");
-        }
-    }
-}
-
-/// Orbit use in descending order (10.1 with 6.4): the children the classes
-/// skip are not explored, the attaining child of smallest source is explored
-/// when its class was skipped, and the result is the ascending one.
-#[test]
-fn descending_order_uses_the_classes_and_still_names_the_smallest_attaining_child() {
-    for (name, lines) in named_inputs() {
-        let oracle = reference_of(&lines);
-        let plain = Options {
-            orbits: false,
-            descending: true,
-            ..Options::PRODUCTION
-        };
-        let used = Options {
-            descending: true,
-            ..Options::PRODUCTION
-        };
-        let (a, b) = (optimised_of(&lines, plain), optimised_of(&lines, used));
-        assert_same(name, &oracle, &b);
-        assert!(b.explored.total() <= a.explored.total(), "{name}");
-        if name == "COMPL(4,6)" || name == "Z4Z4" {
-            assert!(b.explored.total() < a.explored.total(), "{name}");
-        }
-    }
-}
-
-/// 10.1: a map a route discovers is checked against its call's own state
-/// before it is used, and only a lifted map is used unchecked. Over the named
-/// inputs, `NESTED` among them, and generated inputs, every map offered to a
-/// call is either refused for not preserving the target cell or checked against
-/// the call's lines (each check, accepted or refused, is repeated from the
-/// call's lines alone inside the engine and must agree), and lifting offers
-/// maps that were checked below.
-#[test]
-fn every_map_discovered_is_checked_against_its_calls_own_state() {
-    let mut inputs = named_inputs();
-    for seed in 1..=60 {
-        inputs.push(("generated", generated(seed)));
-    }
-    let mut total = optimised::Audit::default();
-    for (name, lines) in inputs {
-        for options in every_variant() {
-            let _ = optimised::take_audit();
-            let result = optimised_of(&lines, options);
-            let audit = optimised::take_audit();
-            assert_eq!(
-                audit.joins_unpermitted, 0,
-                "{name} {options:?}: classes joined by no checked map, lifted map or twin"
-            );
-            assert!(
-                audit.joins_lifted == 0 || options.lifting,
-                "{name} {options:?}: a join by a lifted map with lifting off"
-            );
-            assert!(
-                audit.joins_twin == 0 || options.twins,
-                "{name} {options:?}: a join by twins with twins off"
-            );
-            assert!(
-                options.orbits || audit.discovered + audit.lifted == 0,
-                "{name} {options:?}: a map used with the classes off"
-            );
-            assert!(
-                options.lifting || audit.lifted == 0,
-                "{name} {options:?}: a map lifted with lifting off"
-            );
-            assert!(result.explored.total() > 0);
-            total.discovered += audit.discovered;
-            total.checked += audit.checked;
-            total.rejected += audit.rejected;
-            total.cell_rejected += audit.cell_rejected;
-            total.lifted += audit.lifted;
-            total.joins_checked += audit.joins_checked;
-            total.joins_lifted += audit.joins_lifted;
-            total.joins_twin += audit.joins_twin;
-        }
-    }
-    assert!(
-        total.joins_checked > 0 && total.joins_lifted > 0 && total.joins_twin > 0,
-        "{total:?}"
-    );
-    eprintln!("maps audited: {total:?}");
-}
-
-/// Route (5) alone: the leaves of the top call, with route (1) off below it,
-/// skip children of the top call, in both orders, and the result is the oracle's.
-#[test]
-fn route_five_alone_skips_children_of_the_top_call() {
-    for (name, lines) in [
-        ("COMPL(4,6)", complement_of_cycles(4, 6, false)),
-        ("Z4Z4", z4_z4()),
-    ] {
-        let oracle = reference_of(&lines);
-        for descending in [false, true] {
-            let none = Options {
-                orbits: false,
-                descending,
-                ..Options::PRODUCTION
-            };
-            let leaves = Options {
-                twins: false,
-                maps: false,
-                exchanges: false,
-                lifting: false,
-                leaves: true,
-                descending,
-                ..Options::PRODUCTION
-            };
-            let (a, b) = (optimised_of(&lines, none), optimised_of(&lines, leaves));
-            assert_same(name, &oracle, &b);
-            assert!(
-                b.explored.total() < a.explored.total(),
-                "{name} descending={descending}: {} against {}",
-                b.explored.total(),
-                a.explored.total()
-            );
-        }
-    }
-}
-
-/// 10.4: a child whose certificate ties the best so far is not stopped. On the
-/// 2-cycle, with the skip by twins off, the second child ties the first and is
-/// explored, so the attaining count and the group order are `2` and `2` as in
-/// the oracle. With twins on the result is the same, the second child being
-/// either explored or skipped by its class. The search is forced, since the
-/// search-free run settles the 2-cycle.
+/// 10.4: a child that ties the best so far is not stopped. On the 2-cycle,
+/// labelled by its walk (the search-free run settles it, so the search is
+/// forced), the attaining count and the group order are `2` and `2` as in the
+/// oracle, and no child is stopped on `E`.
 #[test]
 fn a_child_that_ties_the_best_is_not_stopped_on_the_two_cycle() {
     let lines = vec![quad("a", "<p>", "b"), quad("b", "<p>", "a")];
-    let set = admit(&lines).expect("well formed");
     let oracle = reference_of(&lines);
-    for twins in [false, true] {
-        let options = Options {
-            twins,
-            ..Options::PRODUCTION
-        };
-        let result = optimised::label_set(&set, optimised::ENGINE_LIMIT, true, options, None)
-            .expect("labelled");
-        assert!(!differs(&oracle, &result), "twins {twins}");
-        assert_eq!(
-            result.stopped_on_e, 0,
-            "twins {twins}: no child stopped on E"
-        );
-    }
+    let result = optimised_of(&lines, true);
+    assert!(!differs(&oracle, &result));
+    assert_eq!(result.stopped_on_e, 0, "no child stopped on E");
 }
