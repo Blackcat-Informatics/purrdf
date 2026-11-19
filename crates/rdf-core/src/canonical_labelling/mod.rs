@@ -45,6 +45,9 @@ mod tests;
 mod view;
 #[cfg(test)]
 mod view_tests;
+mod walk;
+#[cfg(test)]
+mod walk_tests;
 
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
 pub(crate) use document::write_line_with;
@@ -298,10 +301,13 @@ pub struct StatisticsRecord {
     pub guaranteed: bool,
 }
 
-/// The engine's own limit on the limited units of a search (8.1 and 8.3 of the
+/// An engine's limit `L` on its limited units (8.1 and 8.3 of the
 /// definition). The definition has no caller budget; an engine states its own.
-/// The engine trips only past `max(limit, A)` for an input that is not
-/// guaranteed, with the typed refusal [`Refusal::Limit`].
+/// No input is refused at or below `max(L, A)`, `A` the allowance, and no
+/// guaranteed input is refused at all. The reference engine refuses with
+/// [`Refusal::Limit`] when the walk of 8.3 carries its running total above
+/// `max(L, A)`; the optimised engine, when its own count of the units of the
+/// calls it explores does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Limit(u64);
 
@@ -366,18 +372,22 @@ pub enum Refusal {
         /// The quantity.
         quantity: Quantity,
     },
-    /// The engine's own limit tripped on an input that is not guaranteed
-    /// (code 3).
+    /// The engine's limit tripped on an input that is not guaranteed
+    /// (code 3). From the reference engine the diagnostic fields are those of
+    /// the walk of 8.3; from the optimised engine they are its own count. They
+    /// are determined by the input as given, source identifiers included, and
+    /// the limit, and are NOT a property of the dataset.
     Limit {
         /// The first failures of the search-free run, never empty.
         broken_by: Vec<FailureRecord>,
-        /// Engine-specific: the smallest source of the component searched.
+        /// The smallest source identifier of the top component whose step of
+        /// the walk made the last charge (the component searched, from the
+        /// optimised engine).
         source: Box<[u8]>,
-        /// Engine-specific: its node count.
+        /// Its node count.
         nodes: u64,
-        /// Engine-specific: the limited units spent; determined by the engine
-        /// and the input as given, source identifiers included, and NOT a
-        /// property of the dataset.
+        /// The limited units after the last charge, saturating at
+        /// `2^64 - 1`.
         units: u64,
     },
 }

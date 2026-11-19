@@ -176,7 +176,7 @@ fn node(prefix: &str, i: usize, width: usize) -> String {
 /// `COMPL(k1, k2)`: every ordered pair of distinct nodes that is not an edge
 /// of the cycle on the first `k1` nodes or of the cycle on the next `k2`. The
 /// nodes of the second cycle are named first when `second_first`.
-fn complement_of_cycles(k1: usize, k2: usize, second_first: bool) -> Vec<Line> {
+pub(super) fn complement_of_cycles(k1: usize, k2: usize, second_first: bool) -> Vec<Line> {
     let n = k1 + k2;
     let width = if n >= 10 { 2 } else { 1 };
     // Index of each node in its name: the first cycle `0..k1`, the second
@@ -216,7 +216,7 @@ fn edges_of(pairs: &[(&str, &str)]) -> Vec<Line> {
     both_directions(&owned)
 }
 
-fn fifteen() -> Vec<Line> {
+pub(super) fn fifteen() -> Vec<Line> {
     let mut lines = vec![
         quad("c0", "<p>", "c1"),
         quad("c1", "<p>", "c2"),
@@ -231,7 +231,7 @@ fn fifteen() -> Vec<Line> {
     lines
 }
 
-fn cub8() -> Vec<Line> {
+pub(super) fn cub8() -> Vec<Line> {
     edges_of(&[
         ("w0", "w1"),
         ("w0", "w4"),
@@ -248,7 +248,7 @@ fn cub8() -> Vec<Line> {
     ])
 }
 
-fn k4_pair() -> Vec<Line> {
+pub(super) fn k4_pair() -> Vec<Line> {
     let mut pairs: Vec<(String, String)> = Vec::new();
     for prefix in ["a", "b"] {
         for i in 0..4 {

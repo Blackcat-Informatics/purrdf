@@ -1,0 +1,390 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! The walk of 8.3 in the reference engine, against the rows `walk`,
+//! `limit-rows` and `limit-relabel` of 13.2. The walk decides whether an
+//! input is refused with `limit` and the fields of that refusal; its totals
+//! are the ones every engine reports, so these figures are shared with the
+//! other engines of the labelling and are compared charge for charge.
+
+use super::optimised_tests::{complement_of_cycles, cub8, fifteen, k4_pair};
+use super::reference;
+use super::tests::{
+    complete_bipartite_one_direction, cube_both_directions, cycle_with_records, failure_record,
+    quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
+};
+use super::walk::Walk;
+use super::{FailureRecord, Labelled, Line, Refusal, Term, admit};
+
+/// The directed 4-cycle `C4D` of 13.2.
+fn c4d() -> Vec<Line> {
+    vec![
+        quad("a", "<p>", "b"),
+        quad("b", "<p>", "c"),
+        quad("c", "<p>", "d"),
+        quad("d", "<p>", "a"),
+    ]
+}
+
+/// `C4DX`, the naming of `C4D` that tests opposite nodes.
+fn c4dx() -> Vec<Line> {
+    vec![
+        quad("a", "<p>", "c"),
+        quad("c", "<p>", "b"),
+        quad("b", "<p>", "d"),
+        quad("d", "<p>", "a"),
+    ]
+}
+
+/// `CUBET`: `CUBE` written with triple terms. For every edge `{v_i, v_j}`,
+/// `i < j`, the lines `quad(v_i, <p>, <<(v_j <q> v_i)>>)` and
+/// `quad(v_j, <p>, <<(v_i <q> v_j)>>)`.
+fn cubet() -> Vec<Line> {
+    let mut lines = Vec::new();
+    for i in 0..8usize {
+        for bit in [1, 2, 4] {
+            let j = i ^ bit;
+            if i < j {
+                let (vi, vj) = (format!("v{i}"), format!("v{j}"));
+                for (x, y) in [(&vi, &vj), (&vj, &vi)] {
+                    lines.push(Line::Quad {
+                        subject: term(x),
+                        predicate: term("<p>"),
+                        object: Term::triple(term(y), term("<q>"), term(x)),
+                        graph: None,
+                    });
+                }
+            }
+        }
+    }
+    lines
+}
+
+/// `QR13` with `QR13S`: two top components of equal identity.
+fn qr13_with_qr13s() -> Vec<Line> {
+    let mut lines = quadratic_residue_13("r");
+    lines.extend(quadratic_residue_13("s"));
+    lines
+}
+
+/// The thirteen inputs of the row `walk`, by their names in 13.2.
+fn walk_inputs() -> Vec<(&'static str, Vec<Line>)> {
+    vec![
+        ("QR13", quadratic_residue_13("r")),
+        ("CUBE", cube_both_directions()),
+        ("CUB8", cub8()),
+        ("COMPL(3,5)", complement_of_cycles(3, 5, false)),
+        ("COMPL(4,6)", complement_of_cycles(4, 6, false)),
+        ("FIFTEEN", fifteen()),
+        ("K4PAIR", k4_pair()),
+        ("K33", complete_bipartite_one_direction(3)),
+        ("C4D", c4d()),
+        ("C4DX", c4dx()),
+        ("12.2", two_cycles()),
+        ("12.10", cycle_with_records(&["a", "c"])),
+        ("CUBET", cubet()),
+    ]
+}
+
+/// The outcome of the reference engine at the limit `limit`, with the walk
+/// that decided it when it labels.
+fn walked(lines: &[Line], limit: u64) -> Result<(Labelled, Walk), Refusal> {
+    let set = admit(lines).expect("well formed");
+    reference::label_walked(&set, limit, false, false, None)
+        .map(|(labelled, _, walk)| (labelled, walk))
+        .map_err(super::Halt::expect_refusal)
+}
+
+/// One row of `walk`: START, REFINE, FIX-SUM, SPLIT, TWIN, the total and `A`.
+fn row(walk: &Walk, allowance: u64) -> [u64; 7] {
+    let t = walk.totals();
+    [
+        t.start,
+        t.refine,
+        t.fix_sum,
+        t.split,
+        t.twin,
+        walk.total(),
+        allowance,
+    ]
+}
+
+/// Row `walk` of 13.2: the totals by kind of the walk of each input in its
+/// given naming, its total and its allowance, equal to the figures the text
+/// prints; and the bounds of Lemma W (4): the units (a) to (d) of the walk
+/// are at most those of the reference tree, and the total of a guaranteed
+/// input is at most its allowance with the twin units of its search-free
+/// run. A change in the order of the charges, in a skip, a stop or a known
+/// map moves one of these figures.
+#[test]
+fn the_walk_charges_the_totals_of_the_text() {
+    let expected: [(&str, [u64; 7]); 13] = [
+        ("QR13", [234, 2_628, 3_770, 0, 1_512, 8_144, 5_473]),
+        ("CUBE", [72, 368, 772, 48, 378, 1_638, 1_584]),
+        ("CUB8", [72, 500, 710, 0, 354, 1_636, 1_584]),
+        ("COMPL(3,5)", [120, 798, 1_764, 44, 780, 3_506, 2_608]),
+        ("COMPL(4,6)", [210, 2_106, 4_602, 56, 1_986, 8_960, 4_900]),
+        ("FIFTEEN", [45, 190, 275, 0, 192, 702, 910]),
+        ("K4PAIR", [72, 388, 452, 24, 264, 1_200, 1_584]),
+        ("K33", [27, 63, 78, 8, 36, 212, 510]),
+        ("C4D", [12, 40, 72, 0, 30, 154, 232]),
+        ("C4DX", [12, 52, 108, 0, 30, 202, 232]),
+        ("12.2", [18, 56, 108, 6, 36, 224, 318]),
+        ("12.10", [20, 50, 100, 0, 12, 182, 308]),
+        ("CUBET", [120, 552, 1_060, 48, 630, 2_410, 2_376]),
+    ];
+    let mut got = Vec::new();
+    for (name, lines) in walk_inputs() {
+        let (labelled, walk) = walked(&lines, u64::MAX).expect("labelled with no limit");
+        let figures = row(&walk, labelled.record.allowance);
+        let t = walk.totals();
+        let limited = t.start + t.refine + t.fix_sum + t.split;
+        let set = admit(&lines).expect("well formed");
+        let tree = reference::label_set(&set, u64::MAX, true).expect("the reference tree");
+        assert!(
+            limited <= tree.explored.total(),
+            "{name}: {limited} units (a) to (d) above the reference tree's {}",
+            tree.explored.total()
+        );
+        if labelled.record.guaranteed {
+            assert!(
+                figures[5] <= figures[6],
+                "{name}: a guaranteed total above A"
+            );
+            assert_eq!(t.twin, labelled.twin_units, "{name}: twin units");
+        }
+        got.push((name, figures));
+    }
+    assert_eq!(got, expected);
+    // `QR13` with `QR13S`: each component walked in full.
+    let (_, walk) = walked(&qr13_with_qr13s(), u64::MAX).expect("labelled with no limit");
+    assert_eq!(walk.total(), 16_379);
+}
+
+/// One outcome of `limit-rows`: labelled, or refused with `source`, `nodes`
+/// and `units`.
+#[derive(Clone, Copy, Debug)]
+enum Outcome {
+    Labelled,
+    Limit(&'static str, u64, u64),
+}
+
+/// One input of `limit-rows` with its outcome at each limit.
+type LimitRow = (&'static str, Vec<Line>, Vec<(u64, Outcome)>);
+
+/// `lines` with every blank source identifier preceded by `prefix`.
+fn prefixed(lines: &[Line], prefix: &str) -> Vec<Line> {
+    rename_lines(lines, &|source: &[u8]| {
+        let mut name = prefix.as_bytes().to_vec();
+        name.extend_from_slice(source);
+        Term::Blank(name.into())
+    })
+}
+
+/// The outcome of `lines` at `limit` against `expected`, the source of a
+/// refusal preceded by `prefix`, `broken_by` that of the labelled record.
+fn assert_outcome(name: &str, lines: &[Line], limit: u64, expected: Outcome, prefix: &str) {
+    let context = format!("{name} prefix {prefix:?} L = {limit}");
+    let broken_by = |l: &Labelled| -> Vec<FailureRecord> { l.record.broken_by.clone() };
+    match (walked(lines, limit), expected) {
+        (Ok(_), Outcome::Labelled) => {}
+        (
+            Err(Refusal::Limit {
+                broken_by: refused,
+                source,
+                nodes,
+                units,
+            }),
+            Outcome::Limit(want_source, want_nodes, want_units),
+        ) => {
+            let (labelled, _) = walked(lines, u64::MAX).expect("labelled with no limit");
+            assert_eq!(refused, broken_by(&labelled), "{context}: broken_by");
+            assert_eq!(
+                (&*source, nodes, units),
+                (
+                    format!("{prefix}{want_source}").as_bytes(),
+                    want_nodes,
+                    want_units
+                ),
+                "{context}"
+            );
+        }
+        (got, want) => panic!(
+            "{context}: expected {want:?}, got {:?}",
+            got.map(|(l, _)| l.digest)
+        ),
+    }
+}
+
+/// Row `limit-rows` of 13.2: the outcome at each stated limit, every
+/// refusal next to the labelled case one unit above it (a refusal is a claim:
+/// the neighbouring valid limit must still label). `L = 0` leaves the
+/// allowance as the bound. The rows hold again with every source identifier
+/// preceded by one byte string, which keeps the order of 2.2. The `CUBET`
+/// refusal carries its failure record `(0, 8, 8, 24)`.
+#[test]
+fn the_limit_refuses_where_the_walk_passes_the_limit() {
+    use Outcome::{Labelled, Limit};
+    let rows: Vec<LimitRow> = vec![
+        (
+            "QR13",
+            quadratic_residue_13("r"),
+            vec![
+                (8_144, Labelled),
+                (8_143, Limit("r00", 13, 8_144)),
+                (0, Limit("r00", 13, 5_918)),
+            ],
+        ),
+        (
+            "COMPL(3,5)",
+            complement_of_cycles(3, 5, false),
+            vec![
+                (3_506, Labelled),
+                (3_505, Limit("n0", 8, 3_506)),
+                (0, Limit("n0", 8, 2_659)),
+            ],
+        ),
+        (
+            "COMPL(4,6)",
+            complement_of_cycles(4, 6, false),
+            vec![
+                (8_960, Labelled),
+                (8_959, Limit("n00", 10, 8_960)),
+                (0, Limit("n00", 10, 5_210)),
+            ],
+        ),
+        (
+            "QR13 with QR13S",
+            qr13_with_qr13s(),
+            vec![
+                (16_379, Labelled),
+                (16_378, Limit("s00", 13, 16_379)),
+                (0, Limit("s00", 13, 11_110)),
+            ],
+        ),
+        (
+            "CUBE",
+            cube_both_directions(),
+            vec![
+                (1_638, Labelled),
+                (1_637, Limit("v0", 8, 1_638)),
+                (0, Limit("v0", 8, 1_638)),
+            ],
+        ),
+        (
+            "CUB8",
+            cub8(),
+            vec![
+                (1_636, Labelled),
+                (1_635, Limit("w0", 8, 1_636)),
+                (0, Limit("w0", 8, 1_610)),
+            ],
+        ),
+        (
+            "CUBET",
+            cubet(),
+            vec![
+                (2_410, Labelled),
+                (2_409, Limit("v0", 8, 2_410)),
+                (0, Limit("v0", 8, 2_410)),
+            ],
+        ),
+        ("FIFTEEN", fifteen(), vec![(0, Labelled)]),
+        ("K4PAIR", k4_pair(), vec![(0, Labelled)]),
+        ("C4D", c4d(), vec![(0, Labelled)]),
+        ("C4DX", c4dx(), vec![(0, Labelled)]),
+        (
+            "K33",
+            complete_bipartite_one_direction(3),
+            vec![(0, Labelled)],
+        ),
+        ("12.2", two_cycles(), vec![(0, Labelled)]),
+        (
+            "12.10",
+            cycle_with_records(&["a", "c"]),
+            vec![(0, Labelled)],
+        ),
+    ];
+    for (name, lines, outcomes) in rows {
+        for prefix in ["", "pre/"] {
+            let lines = if prefix.is_empty() {
+                lines.clone()
+            } else {
+                prefixed(&lines, prefix)
+            };
+            for &(limit, outcome) in &outcomes {
+                assert_outcome(name, &lines, limit, outcome, prefix);
+            }
+        }
+    }
+    let (cubet, _) = walked(&cubet(), u64::MAX).expect("labelled with no limit");
+    assert_eq!(cubet.record.broken_by, [failure_record(0, 8, 8, 24)]);
+}
+
+/// Row `limit-relabel` of 13.2: the walk is a function of the input as given,
+/// so its total moves with the source identifiers, while the labelled result
+/// does not. The totals of the twenty relabellings of `COMPL(3, 5)`, `CUB8`
+/// and `QR13`; at `L = 3,506` the relabellings of `COMPL(3, 5)` whose total
+/// passes it are refused (seeds 5 and 7 with their stated fields) and the six
+/// others are labelled; at `L = 0` every relabelling of `CUB8` and `QR13` is
+/// refused, its total being above its allowance.
+#[test]
+fn the_limit_moves_with_the_naming_and_the_result_does_not() {
+    let compl: [u64; 20] = [
+        3506, 3506, 3566, 3506, 4539, 3566, 4539, 3566, 3506, 3566, 4539, 3506, 3506, 3566, 4539,
+        3566, 4539, 3566, 3566, 4539,
+    ];
+    let cub8_totals: [u64; 20] = [
+        1636, 1636, 1636, 1636, 2650, 2084, 3106, 3106, 2538, 1636, 2658, 2538, 1636, 2090, 2538,
+        2090, 3106, 1636, 2090, 2090,
+    ];
+    let qr13: [u64; 20] = [
+        8144, 7202, 8144, 8144, 7202, 6260, 7202, 8144, 8144, 7202, 6260, 8144, 7202, 6260, 7202,
+        8144, 8144, 6260, 6260, 8144,
+    ];
+    let inputs: [(&str, Vec<Line>, [u64; 20]); 3] = [
+        ("COMPL(3,5)", complement_of_cycles(3, 5, false), compl),
+        ("CUB8", cub8(), cub8_totals),
+        ("QR13", quadratic_residue_13("r"), qr13),
+    ];
+    for (name, lines, totals) in inputs {
+        let (base, _) = walked(&lines, u64::MAX).expect("labelled");
+        let mut got = Vec::new();
+        for seed in 1..=20u64 {
+            let renamed = relabel(&lines, seed);
+            let (labelled, walk) = walked(&renamed, u64::MAX).expect("labelled");
+            assert_eq!(labelled.digest, base.digest, "{name} seed {seed}");
+            assert_eq!(labelled.record, base.record, "{name} seed {seed}");
+            got.push(walk.total());
+            if name == "COMPL(3,5)" {
+                let outcome = walked(&renamed, 3_506);
+                if [1, 2, 4, 9, 12, 13].contains(&seed) {
+                    assert!(outcome.is_ok(), "{name} seed {seed} at L = 3,506");
+                } else {
+                    let Err(Refusal::Limit {
+                        source,
+                        nodes,
+                        units,
+                        ..
+                    }) = outcome
+                    else {
+                        panic!("{name} seed {seed}: expected a limit refusal at L = 3,506");
+                    };
+                    if [5, 7].contains(&seed) {
+                        assert_eq!(
+                            (&*source, nodes, units),
+                            (&[0u8; 8][..], 8, 3_510),
+                            "{name} seed {seed}"
+                        );
+                    }
+                }
+            } else {
+                assert!(
+                    matches!(walked(&renamed, 0), Err(Refusal::Limit { .. })),
+                    "{name} seed {seed} at L = 0"
+                );
+            }
+        }
+        assert_eq!(got, totals, "{name}");
+    }
+}

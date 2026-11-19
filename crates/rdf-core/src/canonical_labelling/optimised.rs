@@ -42,6 +42,7 @@ use super::reference::{
     Static, Stop, Tree, TwinTest, component_count, drive, failure_diagnostics, finish_labelling,
     fragments_to_queue, positions, prepare,
 };
+use super::walk::{tied_exchanges, witness_cap};
 use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
 #[cfg(test)]
 use crate::FastMap;
@@ -626,7 +627,9 @@ impl<'a> Engine<'a> {
                 if ru == rw {
                     continue;
                 }
-                if self.twin.test(self.set, self.comp, &mut self.meter, u, w) {
+                let (passed, units) = self.twin.test(self.set, self.comp, u, w);
+                self.meter.twin(units);
+                if passed {
                     self.twin.join(ru, rw);
                 } else {
                     self.failures.push((p, k as u64, u));
@@ -656,7 +659,7 @@ impl<'a> Engine<'a> {
             pair,
         } = inst;
         self.branch_depth += 1;
-        let witness_cap = ((1usize << 22) / node_g.len().max(1)).max(8);
+        let witness_cap = witness_cap(node_g.len());
         let branch = Box::new(Branch {
             adj,
             pair,
@@ -1065,48 +1068,6 @@ fn map_between(first: &[usize], new: &[usize]) -> Option<Vec<usize>> {
         .collect()
 }
 
-/// The nodes of a result path below `tree` with their final positions, the
-/// offset of `tree` taken as `0`, ascending.
-fn tree_nodes(tree: &Tree) -> Vec<(u64, usize)> {
-    let mut out = Vec::new();
-    let mut work = vec![(tree, 0u64)];
-    while let Some((t, o)) = work.pop() {
-        for &(v, q) in &t.fixed {
-            out.push((o + (q - t.p), v));
-        }
-        let s = t.fixed.len() as u64;
-        let mut k = 0;
-        for nested in &t.nested {
-            work.push((nested, o + s + k));
-            k += nested.n_k;
-        }
-    }
-    out.sort_unstable();
-    out
-}
-
-/// Route (2): for each pair of consecutive tied calls (equal certificates, in
-/// the order of 6.4), the exchange of the two, as moved `(node, image)` pairs.
-fn tied_exchanges(nested: &[Tree]) -> Vec<Vec<(usize, usize)>> {
-    let mut out = Vec::new();
-    for pair in nested.windows(2) {
-        if pair[0].cert != pair[1].cert {
-            continue;
-        }
-        let (a, b) = (tree_nodes(&pair[0]), tree_nodes(&pair[1]));
-        if a.len() != b.len() || a.iter().zip(&b).any(|(x, y)| x.0 != y.0) {
-            continue;
-        }
-        let mut moved = Vec::with_capacity(2 * a.len());
-        for (x, y) in a.iter().zip(&b) {
-            moved.push((x.1, y.1));
-            moved.push((y.1, x.1));
-        }
-        out.push(moved);
-    }
-    out
-}
-
 /// What a call is run on: the instance's parts, borrowed.
 struct CallRef<'x> {
     adj: &'x Adj,
@@ -1351,13 +1312,11 @@ impl<'a> Engine<'a> {
             if ru == rj {
                 continue;
             }
-            if self.twin.test(
-                self.set,
-                self.comp,
-                &mut self.meter,
-                u,
-                b.node_g[b.target[tj]],
-            ) {
+            let (passed, units) = self
+                .twin
+                .test(self.set, self.comp, u, b.node_g[b.target[tj]]);
+            self.meter.twin(units);
+            if passed {
                 #[cfg(test)]
                 audit(|a| a.permit = PERMIT_TWIN);
                 join_classes(b, target_index, tj);

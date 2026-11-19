@@ -213,13 +213,45 @@ identifiers (`explored`, `twin_units`, `comparison_units`, `stopped_on_s`,
 Refusals are a closed list: `input` (ill-formed lines), `graph` (an `empty-graph`
 line names a graph another line carries), `width` (a quantity exceeds 64 bits) and
 `limit` (the engine's limit tripped on an input that is not guaranteed). Both
-engines use the limit `2^34` limited units and trip only past `max(limit, A)`,
+engines use the limit `L = 2^34` limited units and trip only past `max(L, A)`,
 where `A` is the allowance of the whole input: the sum of every component's
 allowance plus the charge of the split into top components (`reference.rs`,
 `prepare`). The allowance of one component is `2S + O + 2·O·bits(V) + M +
 V·bits(V) + 4W` over its start charges `S`, label elements `O`, incidences `M`,
 and start-weighted node count `W` (`static_record`). The allowance is what the
 search-free run needs, so no limit refuses a guaranteed input.
+
+The reference engine decides `limit` by the walk of section 8.3 of revision 3.12
+of the specification (SHA-256
+`088cb74fba0f5f733224157ab7c3a6e06f4a3f3447edf4c01bb15cf15c58809a`). That revision
+labels every input exactly as revision 3.11 does: its worked examples are those of
+3.11, and it changes only which inputs that are not guaranteed are refused and the
+fields of the refusal. The walk is one sequential computation, a function of the
+input as given, source identifiers included, and of `L`:
+
+* The search-free run comes first, on every component, and none of its units
+  enters the walk.
+* The walk charges the split of the input, then each top component in ascending
+  order of its smallest source identifier: its start charge, the refinement of its
+  fresh start, then its calls.
+* At a branching call it visits the target cell in source order. It skips a member
+  related to an earlier one by a twin class or by a checked map from equal
+  children or from below, and stops a child whose `s`, or whose entries at equal
+  `s`, exceed those of the best. The twin tests of the call follow the fixing of
+  its first child and precede that child's nested calls.
+* The running total saturates at `2^64 - 1`. The walk ends with `limit` at the
+  first charge that carries it above `max(L, A)`; the refusal names the component
+  of that charge, its node count and the total.
+
+The walk's home is `walk.rs`: the running total and its trip, the totals by kind,
+the twin classes of a component, the relation of a call, the witnesses of equal
+children with their cap and the check of a map. For a component the search-free
+run does not label, the reference engine explores every child of every branching
+call for its result and charges only what the walk charges. The optimised engine
+compares its own count, the units of the calls it explores and of its twin tests,
+with `max(L, A)`, so on an input that is not guaranteed its refusals and their
+fields can differ from the walk's. No label, digest, position, identity, record or
+map depends on the walk or on `L`.
 
 ### 3.5 The optimised engine
 
@@ -320,6 +352,9 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
   input changes only the map (`relabelling_and_line_order_change_only_the_map`).
 * BLAKE3 for both shared values, the identifier `(nested-refinement-labelling, 1)`,
   the closed refusal list and the line kinds.
+* The walk of revision 3.12 in the reference engine: its totals by kind on the
+  thirteen inputs of the specification's row `walk`, and the outcomes and fields
+  of its rows `limit-rows` and `limit-relabel` (`walk_tests.rs`).
 
 **Open:**
 
@@ -386,8 +421,10 @@ states why each consequence follows from the design.
   the canonical line sequence.
 * **A finite search bound refuses a hard input with the `limit` outcome** and
   publishes no bytes. An input the labelling finishes without a search succeeds
-  under every bound, including `0`. The units a refusal reports depend on the
-  engine and on the source identifiers and are not a property of the dataset.
+  under every bound, including `0`. The fields of a refusal are not a property of
+  the dataset: from the reference engine they are those of the walk, functions of
+  the input as given, source identifiers included, and of the limit; from the
+  optimised engine they are its own count.
 * **RDFC-1.0 remains a separate entry point** and the W3C suite gates it. The 4.x
   algorithm stays callable to recompute stored 4.x digests.
 

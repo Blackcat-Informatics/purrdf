@@ -13,8 +13,11 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::certificate::{Certificate, entry_of};
+use super::certificate::{Certificate, Entry, entry_of};
 use super::lines::{Leaf, LineSet, Tok};
+use super::walk::{
+    Kind, Map, Relation, Walk, Witnesses, carries, nodes_below, tied_exchanges, twin_tests,
+};
 use super::{
     COMPONENT_CONTEXT, Component, ComponentRecord, Factor, FactorKind, FailureDiagnostic,
     FailureRecord, Halt, Identity, LINES_CONTEXT, Labelled, Placement, Quantity, Refusal,
@@ -237,12 +240,72 @@ pub(crate) struct Child {
     pub(crate) units: Units,
 }
 
+/// How a call is run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// The search-free run of 7.10: one child at a branching call, after the
+    /// twin tests of its target cell; charged to no walk.
+    SearchFree,
+    /// A call of the walk of 8.3: every charge the walk makes is made here.
+    Walked,
+    /// A call the walk does not charge (below a skipped or a stopped child),
+    /// explored for the result alone.
+    Unwalked,
+}
+
+/// A call's tree and, for a call of the walk, the maps it owns (`OWN` of
+/// step 5, (K3)).
+struct Called {
+    tree: Tree,
+    own: Vec<Map>,
+}
+
+/// A fixing computed and not yet nested (6.2): what the walk charges and
+/// decides on before the nested calls run.
+struct Fixing<'a> {
+    fixed: Vec<(usize, u64)>,
+    fixed_now: Vec<Option<u64>>,
+    entries: Vec<Entry>,
+    /// Whether no node remains free.
+    discrete: bool,
+    /// The free components of the remainder, ascending by smallest source.
+    components: Vec<(&'a [u8], BTreeSet<usize>, BTreeSet<usize>)>,
+    /// FIX (its split included) and ENTRIES.
+    units: Units,
+    /// The charge for the split of the remainder (8.1(c)).
+    split: u64,
+}
+
+impl Fixing<'_> {
+    fn s(&self) -> u64 {
+        self.fixed.len() as u64
+    }
+
+    /// FIX-SUM: the units (c) without the split, with the units (d).
+    const fn fix_sum(&self) -> u64 {
+        (self.units.fix - self.split).saturating_add(self.units.entries)
+    }
+}
+
 /// The labelling of one top component.
 struct Engine<'a> {
     set: &'a LineSet,
     comp: &'a Comp,
-    /// The units spent and the limit.
-    meter: Meter,
+    /// Engine figure: units over the calls explored.
+    explored: Units,
+    /// Engine figure: twin units of the search-free run (8.1(f)).
+    twin_units: u64,
+    /// The walk while this component's step 2 runs; between steps, a walk
+    /// that charges nothing.
+    walk: Walk,
+    /// `TW`: the twin classes of the tests of the walk, kept over the walk of
+    /// the component and separate from those of the search-free run.
+    tw: Classes,
+    /// Whether the children the walk skips or stops are explored too, for a
+    /// result computed over every child (the oracle).
+    explore_all: bool,
+    /// The identity on the nodes of the component, scratch of the map check.
+    image: Vec<usize>,
     /// Record refinement steps and every child (traced searches only).
     tracing: bool,
     /// Comparison units (8.1(e)) of the method the examples state: children
@@ -414,14 +477,10 @@ impl<'a> Engine<'a> {
         self.refine(pair, &mut queue, fixed, steps)
     }
 
-    /// FIX the singleton node cells of `pair`, form the entries, and NEST.
-    fn fix_and_nest(
-        &mut self,
-        pair: &Pair,
-        lines: &[usize],
-        p: u64,
-        constants: &[Option<u64>],
-    ) -> Result<Child, Stop> {
+    /// FIX the singleton node cells of `pair` and form the entries (6.2), and
+    /// find the free components of the remainder with the charge for their
+    /// split. Nothing is nested yet: the walk charges and decides first.
+    fn fix(&self, pair: &Pair, lines: &[usize], p: u64, constants: &[Option<u64>]) -> Fixing<'a> {
         let mut fixed_now = constants.to_vec();
         let mut fixed = Vec::new();
         for cell in pair.sides[0].cells.values() {
@@ -458,34 +517,79 @@ impl<'a> Engine<'a> {
             .flatten()
             .copied()
             .collect();
-        let components = self.components_of(&free, &fixed_now);
-        if components.len() >= 2 {
-            let sizes: Vec<u64> = components
+        let found = self.components_of(&free, &fixed_now);
+        let mut split = 0;
+        if found.len() >= 2 {
+            let sizes: Vec<u64> = found
                 .iter()
                 .map(|(n, l)| (n.len() + l.len()) as u64)
                 .collect();
             let largest = sizes.iter().copied().max().unwrap_or(0);
-            units.fix += sizes.iter().sum::<u64>() - largest;
+            split = sizes.iter().sum::<u64>() - largest;
+            units.fix += split;
         }
-        self.meter.charge(units)?;
-        // Each nested call with the smallest source identifier of its nodes.
-        let mut sourced: Vec<(&[u8], Tree)> = Vec::new();
+        // Each nested call with the smallest source identifier of its nodes,
+        // in the order in which the walk runs them (step 3(a)).
+        let mut components: Vec<(&'a [u8], BTreeSet<usize>, BTreeSet<usize>)> = found
+            .into_iter()
+            .map(|(nodes, lines)| {
+                let smallest = nodes
+                    .iter()
+                    .map(|&v| self.source_of(v))
+                    .min()
+                    .unwrap_or_default();
+                (smallest, nodes, lines)
+            })
+            .collect();
+        components.sort_by(|a, b| a.0.cmp(b.0));
+        Fixing {
+            fixed,
+            fixed_now,
+            entries,
+            discrete: free.is_empty(),
+            components,
+            units,
+            split,
+        }
+    }
+
+    /// NEST: run the nested calls of `fixing` one after the other in ascending
+    /// order of their smallest source identifier, then order them (6.4). A
+    /// call of the walk also returns the maps it carries (step 5, (K3)): the
+    /// maps its nested calls own and the exchanges of its tied nested calls.
+    fn nest(
+        &mut self,
+        pair: &Pair,
+        fixing: Fixing<'a>,
+        p: u64,
+        mode: Mode,
+    ) -> Result<(Child, Vec<Map>), Stop> {
+        let Fixing {
+            fixed,
+            fixed_now,
+            entries,
+            discrete,
+            components,
+            units,
+            ..
+        } = fixing;
+        let s = fixed.len() as u64;
+        let mut sourced: Vec<Tree> = Vec::with_capacity(components.len());
+        let mut carried = Vec::new();
         let mut failed = false;
-        for (nodes, lines) in components {
+        for (_, nodes, lines) in components {
             let inherited = Pair {
                 sides: [
                     pair.sides[0].restrict(&nodes),
                     pair.sides[1].restrict(&lines),
                 ],
             };
-            let smallest = nodes
-                .iter()
-                .map(|&v| self.source_of(v))
-                .min()
-                .unwrap_or_default();
             let lines: Vec<usize> = lines.into_iter().collect();
-            match self.call(&inherited, &lines, p + s, &fixed_now) {
-                Ok(tree) => sourced.push((smallest, tree)),
+            match self.call(&inherited, &lines, p + s, &fixed_now, mode) {
+                Ok(called) => {
+                    carried.extend(called.own);
+                    sourced.push(called.tree);
+                }
                 Err(Stop::Failed) => failed = true,
                 Err(halt @ (Stop::Limit | Stop::Stopped)) => return Err(halt),
             }
@@ -494,34 +598,35 @@ impl<'a> Engine<'a> {
             return Err(Stop::Failed);
         }
         // Ascending by certificate, equal certificates by smallest source
-        // (6.4, M2): an insertion sort, stable over the source order, whose
-        // certificate comparisons are counted.
-        sourced.sort_by(|a, b| a.0.cmp(b.0));
+        // (6.4, M2): an insertion sort, stable over the source order in which
+        // the calls ran, whose certificate comparisons are counted.
         let mut nested: Vec<Tree> = Vec::with_capacity(sourced.len());
-        for (_, tree) in sourced {
+        for tree in sourced {
             let mut at = nested.len();
             while at > 0 && self.compare(&nested[at - 1].cert, &tree.cert) == Ordering::Greater {
                 at -= 1;
             }
             nested.insert(at, tree);
         }
+        if mode == Mode::Walked {
+            carried.extend(tied_exchanges(&nested));
+        }
         let cert = Certificate {
             s,
             entries,
             nested: nested.iter().map(|t| t.cert.clone()).collect(),
         };
-        let rule = if nested.is_empty() && free.is_empty() {
-            1
-        } else {
-            2
-        };
-        Ok(Child {
-            fixed,
-            nested,
-            cert,
-            rule,
-            units,
-        })
+        let rule = if discrete { 1 } else { 2 };
+        Ok((
+            Child {
+                fixed,
+                nested,
+                cert,
+                rule,
+                units,
+            },
+            carried,
+        ))
     }
 
     /// The order of two certificates (6.3), counting comparison units
@@ -600,6 +705,118 @@ impl<'a> Engine<'a> {
         self.set.source(self.comp.nodes[v])
     }
 
+    /// A charge of the walk.
+    fn charge(&mut self, kind: Kind, units: u64) -> Result<(), Stop> {
+        self.walk.charge(kind, units)
+    }
+
+    /// The one charge of a fixing that survives: its FIX-SUM and its SPLIT.
+    fn charge_fixing(&mut self, fixing: &Fixing<'_>) -> Result<(), Stop> {
+        self.walk.charge_fixing(fixing.fix_sum(), fixing.split)
+    }
+
+    /// Individualise `v` in a copy of `pair` and refine (step 3(b)(ii)).
+    fn individualised(
+        &mut self,
+        pair: &Pair,
+        constants: &[Option<u64>],
+        v: usize,
+    ) -> (Pair, u64, Vec<Step>) {
+        let mut child_pair = pair.clone();
+        let mut steps = Vec::new();
+        let refine = self.individualise(
+            &mut child_pair,
+            constants,
+            v,
+            self.tracing.then_some(&mut steps),
+        );
+        self.explored.refine = self.explored.refine.saturating_add(refine);
+        (child_pair, refine, steps)
+    }
+
+    /// The child of `v`, explored whole: its refinement, fixing and nested
+    /// calls, run in `mode`; no charge of the walk is made at this level.
+    fn explore_child(
+        &mut self,
+        pair: &Pair,
+        lines: &[usize],
+        p: u64,
+        constants: &[Option<u64>],
+        v: usize,
+        mode: Mode,
+    ) -> Result<(Child, Vec<Step>), Stop> {
+        let (child_pair, refine, steps) = self.individualised(pair, constants, v);
+        let fixing = self.fix(&child_pair, lines, p, constants);
+        self.explored = self.explored.saturating_add(fixing.units);
+        let (mut child, _) = self.nest(&child_pair, fixing, p, mode)?;
+        child.units.refine += refine;
+        Ok((child, steps))
+    }
+
+    /// A completed child of a branching call: traced, and compared with the
+    /// best. The best is replaced only by a strictly smaller certificate, so in
+    /// ascending source order it ends as the attaining child of smallest source
+    /// identifier, the chosen child (M1, Lemma M (iv)).
+    fn consider(
+        &mut self,
+        best: &mut Best,
+        child: Child,
+        v: usize,
+        steps: Vec<Step>,
+        at: (u64, u64),
+    ) {
+        if self.tracing {
+            best.children.push(ChildTrace {
+                v,
+                steps,
+                tree: Tree::of_child(child.clone(), at.0, at.1),
+            });
+        }
+        let order = match &best.child {
+            None => Ordering::Less,
+            Some(b) => self.compare(&child.cert, &b.cert),
+        };
+        match order {
+            Ordering::Less => {
+                best.attaining = 1;
+                best.child = Some(child);
+            }
+            Ordering::Equal => best.attaining += 1,
+            Ordering::Greater => {}
+        }
+    }
+
+    /// Relate the members of the target cell that a known map moves onto one
+    /// another, when the map passes its check against the call (step 5).
+    fn relate_by(
+        &mut self,
+        relation: &mut Relation,
+        pair: &Pair,
+        lines: &[usize],
+        target: &[usize],
+        map: &[(usize, usize)],
+    ) {
+        let index = |x: usize| target.iter().position(|&t| t == x);
+        let checked = carries(
+            self.set,
+            self.comp,
+            &self.twin,
+            lines,
+            |x| pair.sides[0].colour.contains_key(&x),
+            |x| index(x).is_some(),
+            map,
+            &mut self.image,
+        );
+        if !checked {
+            return;
+        }
+        for &(x, y) in map {
+            if let (Some(i), Some(j)) = (index(x), index(y)) {
+                relation.relate(i, j);
+            }
+        }
+    }
+
     /// A call on the component of `pair` with argument `p` and constants.
     fn call(
         &mut self,
@@ -607,84 +824,73 @@ impl<'a> Engine<'a> {
         lines: &[usize],
         p: u64,
         constants: &[Option<u64>],
-    ) -> Result<Tree, Stop> {
+        mode: Mode,
+    ) -> Result<Called, Stop> {
         if is_stopped(self.stop) {
             return Err(Stop::Stopped);
         }
         let n_k = pair.sides[0].colour.len() as u64;
         let has_singleton = pair.sides[0].cells.values().any(|cell| cell.len() == 1);
         if has_singleton {
-            let child = self.fix_and_nest(pair, lines, p, constants)?;
-            return Ok(Tree::of_child(child, p, n_k));
+            // Rule 1 or 2: one charge of the fixing, then the nested calls
+            // (step 3(a)).
+            let fixing = self.fix(pair, lines, p, constants);
+            self.explored = self.explored.saturating_add(fixing.units);
+            if mode == Mode::Walked {
+                self.charge_fixing(&fixing)?;
+            }
+            let (child, own) = self.nest(pair, fixing, p, mode)?;
+            return Ok(Called {
+                tree: Tree::of_child(child, p, n_k),
+                own,
+            });
         }
-        // Rule 3: the target cell is the node cell of colour 0.
+        // Rule 3: the target cell is the node cell of colour 0, its members in
+        // source order.
         let mut target = pair.sides[0].cells[&0].clone();
         target.sort_by(|&a, &b| self.source_of(a).cmp(self.source_of(b)));
-        let explore: Vec<usize> = if self.meter.search_free {
-            let u = target[0];
-            for &w in &target[1..] {
-                let (ru, rw) = (self.twin.find(u), self.twin.find(w));
-                if ru == rw {
-                    continue;
-                }
-                if self.twin.test(self.set, self.comp, &mut self.meter, u, w) {
-                    self.twin.join(ru, rw);
-                } else {
-                    self.failures.push((p, target.len() as u64, u));
-                    return Err(Stop::Failed);
-                }
-            }
-            vec![u]
-        } else {
-            target.clone()
+        let mut best = Best {
+            child: None,
+            attaining: 0,
+            children: Vec::new(),
         };
-        // Children in ascending source order; the best is replaced only by a
-        // strictly smaller certificate, so it ends as the attaining child of
-        // smallest source identifier, the chosen child (M1, Lemma M (iv)).
-        let mut best: Option<Child> = None;
-        let mut attaining = 0u64;
-        let mut children = Vec::new();
-        for &v in &explore {
-            let mut child_pair = pair.clone();
-            let mut steps = Vec::new();
-            let refine_units = self.individualise(
-                &mut child_pair,
-                constants,
-                v,
-                self.tracing.then_some(&mut steps),
-            );
-            self.meter.charge(Units {
-                refine: refine_units,
-                ..Units::default()
-            })?;
-            let mut child = self.fix_and_nest(&child_pair, lines, p, constants)?;
-            child.units.refine += refine_units;
-            if self.tracing {
-                children.push(ChildTrace {
-                    v,
-                    steps,
-                    tree: Tree::of_child(child.clone(), p, n_k),
-                });
-            }
-            let order = match &best {
-                None => Ordering::Less,
-                Some(b) => self.compare(&child.cert, &b.cert),
-            };
-            match order {
-                Ordering::Less => {
-                    attaining = 1;
-                    best = Some(child);
+        let at = (p, n_k);
+        let own = match mode {
+            Mode::SearchFree => {
+                let u = target[0];
+                for &w in &target[1..] {
+                    let (ru, rw) = (self.twin.find(u), self.twin.find(w));
+                    if ru == rw {
+                        continue;
+                    }
+                    let (passed, units) = self.twin.test(self.set, self.comp, u, w);
+                    self.twin_units = self.twin_units.saturating_add(units);
+                    if passed {
+                        self.twin.join(ru, rw);
+                    } else {
+                        self.failures.push((p, target.len() as u64, u));
+                        return Err(Stop::Failed);
+                    }
                 }
-                Ordering::Equal => attaining += 1,
-                Ordering::Greater => {}
+                let (child, steps) = self.explore_child(pair, lines, p, constants, u, mode)?;
+                self.consider(&mut best, child, u, steps, at);
+                // Every member of one twin class attains (F2).
+                best.attaining = target.len() as u64;
+                Vec::new()
             }
-        }
-        if self.meter.search_free {
-            attaining = target.len() as u64;
-        }
-        // INVARIANT: a target cell of rule 3 has at least two members and
-        // `explore` at least one, so a best child exists.
-        let Some(child) = best else {
+            Mode::Unwalked => {
+                for &v in &target {
+                    let (child, steps) = self.explore_child(pair, lines, p, constants, v, mode)?;
+                    self.consider(&mut best, child, v, steps, at);
+                }
+                Vec::new()
+            }
+            Mode::Walked => self.walked_branch(pair, lines, constants, &target, at, &mut best)?,
+        };
+        // INVARIANT: a target cell of rule 3 has at least two members, and its
+        // first is explored in every mode (the walk never skips nor stops the
+        // first visit), so a best child exists.
+        let Some(child) = best.child else {
             return Err(Stop::Failed);
         };
         let one_twin_class = self.tracing
@@ -695,11 +901,105 @@ impl<'a> Engine<'a> {
         tree.child_rule = tree.rule;
         tree.rule = 3;
         tree.target = target;
-        tree.attaining = attaining;
-        tree.children = children;
+        tree.attaining = best.attaining;
+        tree.children = best.children;
         tree.one_twin_class = one_twin_class;
-        Ok(tree)
+        Ok(Called { tree, own })
     }
+
+    /// Step 3(b): the walk of a branching call over its target cell `target`,
+    /// in source order. Returns the maps the call owns: its known maps of (K2)
+    /// and those its completed children carry. With `explore_all`, a child
+    /// the walk skips or stops is explored on for the result, uncharged.
+    fn walked_branch(
+        &mut self,
+        pair: &Pair,
+        lines: &[usize],
+        constants: &[Option<u64>],
+        target: &[usize],
+        at: (u64, u64),
+        best: &mut Best,
+    ) -> Result<Vec<Map>, Stop> {
+        let p = at.0;
+        let mut relation = Relation::new(target.len());
+        let mut witnesses = Witnesses::new(pair.sides[0].colour.len());
+        let mut own: Vec<Map> = Vec::new();
+        // The certificate of the best completed child of the walk.
+        let mut walk_best: Option<Certificate> = None;
+        let mut tested = false;
+        for (i, &v) in target.iter().enumerate() {
+            // (K1) reads `TW` as it stands at the visit, after step 4.
+            if tested {
+                relation.twins(target, &mut self.tw);
+            }
+            // (i) Skip.
+            if relation.skipped(i) {
+                if self.explore_all {
+                    let (child, steps) =
+                        self.explore_child(pair, lines, p, constants, v, Mode::Unwalked)?;
+                    self.consider(best, child, v, steps, at);
+                }
+                continue;
+            }
+            // (ii) REFINE and (iii) FIX.
+            let (child_pair, refine, steps) = self.individualised(pair, constants, v);
+            self.charge(Kind::Refine, refine)?;
+            let fixing = self.fix(&child_pair, lines, p, constants);
+            self.explored = self.explored.saturating_add(fixing.units);
+            // (iv) and (v): the stops on `s` and on `E`.
+            let stopped = walk_best
+                .as_ref()
+                .is_some_and(|b| match fixing.s().cmp(&b.s) {
+                    Ordering::Greater => true,
+                    Ordering::Equal => fixing.entries > b.entries,
+                    Ordering::Less => false,
+                });
+            // (vi) The charge of the fixing.
+            if stopped {
+                self.charge(Kind::FixSum, fixing.fix_sum())?;
+                if self.explore_all {
+                    let (mut child, _) = self.nest(&child_pair, fixing, p, Mode::Unwalked)?;
+                    child.units.refine += refine;
+                    self.consider(best, child, v, steps, at);
+                }
+                continue;
+            }
+            self.charge_fixing(&fixing)?;
+            // (vii) The twin tests, after the fixing of the first child and
+            // before its nested calls.
+            if !tested {
+                let units = twin_tests(&self.twin, self.set, self.comp, &mut self.tw, target);
+                self.charge(Kind::Twin, units)?;
+                tested = true;
+            }
+            // (viii) The nested calls; the child is completed.
+            let (mut child, carried) = self.nest(&child_pair, fixing, p, Mode::Walked)?;
+            child.units.refine += refine;
+            let by_position: Vec<usize> = nodes_below(&child.fixed, p, &child.nested)
+                .into_iter()
+                .map(|(_, node)| node)
+                .collect();
+            let known = witnesses.complete(&child.cert, by_position);
+            for map in known.into_iter().chain(carried) {
+                self.relate_by(&mut relation, pair, lines, target, &map);
+                own.push(map);
+            }
+            // (ix) The best of the walk.
+            if walk_best.as_ref().is_none_or(|b| child.cert < *b) {
+                walk_best = Some(child.cert.clone());
+            }
+            self.consider(best, child, v, steps, at);
+        }
+        Ok(own)
+    }
+}
+
+/// The children of a branching call over those explored: the best, the
+/// number that equal it, and their traces.
+struct Best {
+    child: Option<Child>,
+    attaining: u64,
+    children: Vec<ChildTrace>,
 }
 
 /// The fragments of a split cell that go to the queue (5.5 of the
@@ -731,9 +1031,10 @@ fn apply_queue_rule(queue: &mut Queue, side: usize, c: u64, fragments: &[(u64, u
     }
 }
 
-/// The units one component's engine has spent: the figures it reports and the
-/// limited units its limit is compared with (8.1, 8.3). Both engines meter
-/// through it.
+/// The units one component of the optimised engine has spent: the figures it
+/// reports and the limited units its own limit is compared with. The limited
+/// units are the engine's own count, not the walk of 8.3, and saturate at
+/// `2^64 - 1`.
 pub(crate) struct Meter {
     /// Units over the calls explored.
     pub(crate) explored: Units,
@@ -763,13 +1064,26 @@ impl Meter {
     /// [`Stop::Limit`] when a search passes its limit.
     pub(crate) fn charge(&mut self, units: Units) -> Result<(), Stop> {
         self.explored = self.explored.saturating_add(units);
-        self.limited += units.refine + units.fix + units.entries;
+        self.limited = self
+            .limited
+            .saturating_add(units.refine)
+            .saturating_add(units.fix)
+            .saturating_add(units.entries);
         // The search-free run is bounded by the allowance (Lemma A) and no
         // limit may refuse it; only a search is limited.
         if !self.search_free && self.limited > self.limit {
             return Err(Stop::Limit);
         }
         Ok(())
+    }
+
+    /// The units of one twin test: limited, and counted in the figure when the
+    /// test is one of the search-free run (8.1(f)).
+    pub(crate) const fn twin(&mut self, units: u64) {
+        if self.search_free {
+            self.twin_units = self.twin_units.saturating_add(units);
+        }
+        self.limited = self.limited.saturating_add(units);
     }
 }
 
@@ -834,19 +1148,12 @@ impl TwinTest {
         self.classes.join(into, other);
     }
 
-    /// The twin test of local nodes `u` and `w` with its twin units (7.10,
-    /// 8.1(f)): a test, passing or failing, is charged the start charge of
-    /// every line that holds `u` or `w`; the outcome and the order of the
-    /// lines play no part. The figure depends on the pairs tested, hence on
-    /// the source order: an engine figure only.
-    pub(crate) fn test(
-        &self,
-        set: &LineSet,
-        comp: &Comp,
-        meter: &mut Meter,
-        u: usize,
-        w: usize,
-    ) -> bool {
+    /// The twin test of local nodes `u` and `w` and its twin units (7.10,
+    /// 8.1(f)): a test, passing or failing, costs the start charge of every
+    /// line that holds `u` or `w`; the outcome and the order of the lines play
+    /// no part. The units depend on the pairs tested, hence on the source
+    /// order.
+    pub(crate) fn test(&self, set: &LineSet, comp: &Comp, u: usize, w: usize) -> (bool, u64) {
         let mut holding: Vec<usize> = comp.node_lines[u]
             .iter()
             .chain(&comp.node_lines[w])
@@ -854,14 +1161,10 @@ impl TwinTest {
             .collect();
         holding.sort_unstable();
         holding.dedup();
-        let charge: u64 = holding.iter().map(|&l| self.start_charge[l]).sum();
-        // The figure is that of the search-free run (8.1(f)): the tests an
-        // engine makes during a search spend limited units and no more.
-        if meter.search_free {
-            meter.twin_units += charge;
-        }
-        meter.limited += charge;
-        self.is_pair(set, comp, u, w)
+        let charge = holding
+            .iter()
+            .fold(0u64, |sum, &l| sum.saturating_add(self.start_charge[l]));
+        (self.is_pair(set, comp, u, w), charge)
     }
 
     /// Whether the component holds a line of exactly these tokens.
@@ -1187,7 +1490,7 @@ pub(crate) fn positions(tree: &Tree, o: u64, out: &mut [u64]) {
     }
 }
 
-/// One top component between its search-free run and its search.
+/// One top component: its search-free run, then its step of the walk.
 struct Run<'a> {
     engine: Engine<'a>,
     comp: &'a Comp,
@@ -1207,7 +1510,6 @@ impl<'a> Run<'a> {
         set: &'a LineSet,
         comp: &'a Comp,
         stat: Static,
-        limit: u64,
         tracing: bool,
         stop: Option<&'a dyn StopSignal>,
     ) -> Self {
@@ -1219,7 +1521,12 @@ impl<'a> Run<'a> {
         let mut engine = Engine {
             set,
             comp,
-            meter: Meter::new(limit),
+            explored: Units::default(),
+            twin_units: 0,
+            walk: Walk::default(),
+            tw: Classes::new(comp.nodes.len()),
+            explore_all: false,
+            image: (0..comp.nodes.len()).collect(),
             tracing,
             comparison_units: 0,
             twin: TwinTest::new(set, comp, start),
@@ -1238,8 +1545,8 @@ impl<'a> Run<'a> {
             .max()
             .map(|s| s as u64);
         record.units.refine = fresh_units;
-        engine.meter.explored.start = record.units.start;
-        engine.meter.explored.refine = fresh_units;
+        engine.explored.start = record.units.start;
+        engine.explored.refine = fresh_units;
         let smallest_node = (0..comp.nodes.len())
             .min_by(|&a, &b| engine.source_of(a).cmp(engine.source_of(b)))
             .unwrap_or(0);
@@ -1255,33 +1562,56 @@ impl<'a> Run<'a> {
             steps,
         }
     }
-}
 
-impl ComponentRun for Run<'_> {
-    fn base_units(&self) -> u64 {
-        self.record.units.start + self.fresh_units
-    }
-
-    fn top_call(&mut self, search_free: bool, spent: &mut u64) -> CallOutcome {
-        self.engine.meter.search_free = search_free;
-        self.engine.meter.limited = *spent;
+    /// The top call in `mode`.
+    fn top_call(&mut self, mode: Mode) -> Result<Tree, Stop> {
         let lines: Vec<usize> = (0..self.comp.lines.len()).collect();
         let constants = vec![None; self.comp.nodes.len()];
-        let result = self.engine.call(&self.pair, &lines, 0, &constants);
-        *spent = self.engine.meter.limited;
-        match result {
+        self.engine
+            .call(&self.pair, &lines, 0, &constants, mode)
+            .map(|called| called.tree)
+    }
+
+    /// The search-free run (7.10): it labels the component, or records its
+    /// first failures and leaves it unlabelled.
+    ///
+    /// # Errors
+    /// [`Stop::Stopped`] when the caller's signal is set.
+    fn search_free(&mut self) -> Result<(), Stop> {
+        match self.top_call(Mode::SearchFree) {
             Ok(tree) => {
                 self.tree = Some(tree);
-                CallOutcome::Done
+                Ok(())
             }
-            Err(Stop::Failed) => CallOutcome::Failed,
-            Err(Stop::Limit) => CallOutcome::Limit,
-            Err(Stop::Stopped) => CallOutcome::Stopped,
+            Err(Stop::Failed) => Ok(()),
+            Err(halt) => Err(halt),
         }
     }
 
-    fn is_labelled(&self) -> bool {
-        self.tree.is_some()
+    /// Step 2 of the walk on this component: START, the REFINE of its fresh
+    /// start, then its top call. A component the search-free run did not label
+    /// (and every component when `explore_all` is forced) is labelled here by
+    /// exploring every child, the walk charging only what it charges. A
+    /// labelled component is walked for its charges alone: there the walk
+    /// visits one child at each branching call (Lemma W (4)(d)), and its
+    /// figures stay those of the search-free run.
+    fn walk(&mut self, walk: Walk, explore_all: bool) -> (Walk, Result<(), Stop>) {
+        let saved = (self.engine.explored, self.engine.comparison_units);
+        self.engine.walk = walk;
+        self.engine.explore_all = explore_all;
+        let result = self
+            .engine
+            .charge(Kind::Start, self.record.units.start)
+            .and_then(|()| self.engine.charge(Kind::Refine, self.fresh_units))
+            .and_then(|()| self.top_call(Mode::Walked));
+        let outcome = result.map(|tree| {
+            if explore_all {
+                self.tree = Some(tree);
+            } else {
+                (self.engine.explored, self.engine.comparison_units) = saved;
+            }
+        });
+        (std::mem::take(&mut self.engine.walk), outcome)
     }
 
     fn failures(&self) -> Vec<FailureDiagnostic> {
@@ -1294,12 +1624,8 @@ impl ComponentRun for Run<'_> {
         )
     }
 
-    fn source(&self) -> &[u8] {
+    fn source(&self) -> &'a [u8] {
         self.engine.source_of(self.smallest_node)
-    }
-
-    fn blank_nodes(&self) -> u64 {
-        self.record.blank_nodes
     }
 
     fn finish(mut self) -> Result<Option<Labelling>, Refusal> {
@@ -1308,11 +1634,11 @@ impl ComponentRun for Run<'_> {
         };
         let parts = LabellingParts {
             smallest_node: self.smallest_node,
-            twin_units: self.engine.meter.twin_units,
+            twin_units: self.engine.twin_units,
             w: self.w,
             steps: self.steps,
             comparison_units: self.engine.comparison_units,
-            explored: self.engine.meter.explored,
+            explored: self.engine.explored,
         };
         finish_labelling(self.record, tree, parts).map(Some)
     }
@@ -1423,8 +1749,8 @@ pub(crate) const UNITS_WIDTH: Refusal = Refusal::Width {
 /// search-free run and searches every component (a test of their agreement).
 ///
 /// # Errors
-/// `width` when the allowance overflows; `limit` when a search exceeds
-/// `max(limit, A)` limited units.
+/// `width` when the allowance overflows; `limit` when the walk of 8.3 carries
+/// its running total above `max(limit, A)`.
 pub(crate) fn label_set(
     set: &LineSet,
     limit: u64,
@@ -1448,6 +1774,25 @@ pub(crate) fn label_traced(
     tracing: bool,
     stop: Option<&dyn StopSignal>,
 ) -> Result<(Labelled, Vec<ComponentTrace>), Halt> {
+    label_walked(set, limit, force_search, tracing, stop)
+        .map(|(labelled, traces, _)| (labelled, traces))
+}
+
+/// [`label_traced`] with the walk of 8.3 that decided the outcome: the
+/// search-free run on every top component first, outside the walk (7.10);
+/// then the walk, its charge for the split of the input first and the top
+/// components in ascending order of their smallest source identifier; then
+/// the result.
+///
+/// # Errors
+/// As [`label_traced`].
+pub(crate) fn label_walked(
+    set: &LineSet,
+    limit: u64,
+    force_search: bool,
+    tracing: bool,
+    stop: Option<&dyn StopSignal>,
+) -> Result<(Labelled, Vec<ComponentTrace>, Walk), Halt> {
     if is_stopped(stop) {
         return Err(Halt::Stopped);
     }
@@ -1457,21 +1802,62 @@ pub(crate) fn label_traced(
         allowance,
         split_charge,
     } = prepare(set).map_err(Halt::Refused)?;
-    let limit = limit.max(allowance);
-    let runs: Vec<Run<'_>> = comps
+    let mut runs: Vec<Run<'_>> = comps
         .iter()
         .zip(statics)
-        .map(|(comp, stat)| Run::new(set, comp, stat, limit, tracing, stop))
+        .map(|(comp, stat)| Run::new(set, comp, stat, tracing, stop))
         .collect();
-    drive(
+    if !force_search {
+        for run in &mut runs {
+            // The search-free run records its failures and charges no walk, so
+            // the caller's stop is the one way it ends early.
+            run.search_free().map_err(|_: Stop| Halt::Stopped)?;
+        }
+    }
+    let mut failures: Vec<FailureDiagnostic> = runs.iter().flat_map(Run::failures).collect();
+    failures.sort();
+    let mut walk = Walk::new(limit, allowance, split_charge);
+    let mut order: Vec<usize> = (0..runs.len()).collect();
+    order.sort_by(|&a, &b| runs[a].source().cmp(runs[b].source()));
+    for i in order {
+        let run = &mut runs[i];
+        walk.enter(run.source(), run.record.blank_nodes);
+        let explore_all = force_search || run.tree.is_none();
+        let (back, outcome) = run.walk(walk, explore_all);
+        walk = back;
+        match outcome {
+            Ok(()) => {}
+            Err(Stop::Stopped) => return Err(Halt::Stopped),
+            // A walked branching call always completes its first child, so no
+            // call of the walk fails; a stop of the walk is its limit.
+            Err(Stop::Limit | Stop::Failed) => {
+                return Err(Halt::Refused(
+                    walk.refusal(failures.iter().map(|f| f.record).collect()),
+                ));
+            }
+        }
+    }
+    let mut labellings = Vec::with_capacity(runs.len());
+    for run in runs {
+        // INVARIANT: every run is labelled here (the search-free run or the
+        // walk labelled it), so `labellings` stays aligned with `comps`.
+        if let Some(labelling) = run.finish().map_err(Halt::Refused)? {
+            labellings.push(labelling);
+        }
+    }
+    if force_search {
+        failures = full_search_failures(set, &comps, &labellings);
+    }
+    let (labelled, traces) = assemble(
         set,
         &comps,
-        runs,
+        &labellings,
+        failures,
         allowance,
         split_charge,
-        force_search,
         tracing,
-    )
+    )?;
+    Ok((labelled, traces, walk))
 }
 
 /// How a top call of a component ended.
