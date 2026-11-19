@@ -147,6 +147,13 @@ definition; `view.rs` and the migration guide state PurRDF's own rule. A composi
 literal that names a blank node is lowered to a composite node with one `record`
 line, so the blank nodes it names take part in the labelling.
 
+The labelling encodes a language tag as the bytes its input gives, so the fold
+belongs to the input. A dataset view supplies the tag folded to lower case. The
+content digest of a GTS file is the labelling run over a view that supplies the
+tag as the file wrote it (`GtsWrittenView`). The canonical RDF digest of a
+dataset and the GTS content digest of a file are two identities, equal exactly
+when every tag of the file is already lower case.
+
 ### 3.2 Components and refinement
 
 The incidence graph has the blank nodes on one side and the lines that hold a blank

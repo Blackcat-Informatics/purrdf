@@ -45,6 +45,7 @@ pub mod gts;
 // projection + refold digest, `verify_compaction`, `compose`, and
 // the certifying authoring wrapper `compact_and_certify`.
 pub mod gts_certify;
+mod gts_content;
 mod gts_core;
 mod gts_import_blobs;
 mod gts_import_graph;
@@ -110,6 +111,7 @@ mod json_number;
 // IR import helpers are re-exported here.
 pub use dataset_io::dataset_from_bytes;
 pub use gts_compose::{GtsIngestError, IngestCheckpoint, IngestReport};
+pub use gts_content::{GtsContentError, GtsWrittenView, gts_content_digest, gts_content_labelling};
 pub use gts_import_blobs::{
     DEFAULT_MAX_FRAME_DECODED_BYTES, DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits,
     GtsBlobMetadataSource, GtsBlobOmission, GtsBlobOmissionKind, GtsBlobRecord,

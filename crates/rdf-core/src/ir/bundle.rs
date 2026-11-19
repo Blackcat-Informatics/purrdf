@@ -53,12 +53,25 @@ pub struct RdfEnvelope {
     /// suppressions, opaque nodes, signatures), reusing the crate's existing
     /// [`RdfLookaside`].
     pub lookaside: RdfLookaside,
+    /// The losses the read incurred that no RDF dataset can represent, such as
+    /// the written spelling of a language tag the dataset folds to lower case.
+    pub losses: crate::loss::LossLedger,
 }
 
 impl RdfEnvelope {
     /// Build an envelope from a lookaside.
     pub fn new(lookaside: RdfLookaside) -> Self {
-        Self { lookaside }
+        Self {
+            lookaside,
+            losses: crate::loss::LossLedger::new(),
+        }
+    }
+
+    /// This envelope carrying the losses of the read.
+    #[must_use]
+    pub fn with_losses(mut self, losses: crate::loss::LossLedger) -> Self {
+        self.losses = losses;
+        self
     }
 }
 

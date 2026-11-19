@@ -592,7 +592,10 @@ pub(crate) fn load_gts(
     let bytes = read_bytes_with_transport(path, policy)?;
     let bundle = import_gts_events(&bytes)
         .map_err(|diagnostic| CliError::Runtime(format!("{}: {diagnostic}", display_path(path))))?;
-    let ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
+    let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
+    for entry in bundle.envelope.losses.entries() {
+        ledger.record(entry.clone());
+    }
     Ok((bundle.dataset, ledger))
 }
 

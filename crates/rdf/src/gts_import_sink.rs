@@ -66,6 +66,8 @@ struct SinkImporter<'a> {
     /// Out-of-band material accumulated from blob / signature / suppression /
     /// segment-head / opaque events.
     lookaside: RdfLookaside,
+    /// Losses of the read that the dataset cannot represent.
+    losses: purrdf_core::LossLedger,
 }
 
 impl SinkImporter<'_> {
@@ -94,6 +96,17 @@ impl SinkImporter<'_> {
             },
             None => None,
         };
+        if let Some(tag) = lang
+            && let Some(entry) = crate::gts_content::language_fold_loss(
+                lexical,
+                tag,
+                RdfLocation::logical("gts:sink")
+                    .with_gts_segment(segment_index)
+                    .with_gts_term(gts_id as u64),
+            )
+        {
+            self.losses.record(entry);
+        }
         let direction = crate::gts_resolve::parse_gts_direction(direction, lang)?;
         let mut resident = purrdf_lex::allocation::Resident;
         let bytes = self.builder.native_buffer_bytes()?;
@@ -112,6 +125,7 @@ impl SinkImporter<'_> {
             blobs: None,
             builder: RdfDatasetBuilder::new(),
             lookaside: RdfLookaside::default(),
+            losses: purrdf_core::LossLedger::new(),
         }
     }
 }
@@ -675,9 +689,10 @@ fn finish_importer(
     importer: SinkImporter<'_>,
 ) -> Result<(GtsBundle, Option<BlobCollector<'_>>), RdfDiagnostic> {
     let lookaside = importer.lookaside;
+    let losses = importer.losses;
     let dataset = importer.builder.freeze()?;
     Ok((
-        GtsBundle::new(dataset, RdfEnvelope::new(lookaside)),
+        GtsBundle::new(dataset, RdfEnvelope::new(lookaside).with_losses(losses)),
         importer.blobs,
     ))
 }
