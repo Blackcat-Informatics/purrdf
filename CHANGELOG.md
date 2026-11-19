@@ -16,13 +16,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   additive `Multiset256` sum, which a party choosing rows can make collide for
   different row sets. Each row family is now hashed in ascending digest order
   under its own versioned domain, through the new
-  `purrdf_hash::multiset::sorted_fingerprint`. Every signature stays and every
-  value moves: content identities, execution receipts (`contentIdentity`,
-  `executionIdentity`) and text generations recorded by 4.x stop matching (see
-  "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
+  `purrdf_hash::multiset::sorted_fingerprint`. Every signature stays. Values
+  move: content identities, execution receipts (`contentIdentity`,
+  `executionIdentity`) and text generations recorded by 4.x stop matching, except
+  that a segmented stack made only of image layers, with no removal or
+  declaration owners and no resident head, keeps its 4.x snapshot identity and
+  the receipts bound to it (see "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
   keeps its 4.x additive value and is deprecated. The first identity request
   of a dataset frozen without eager statistics now sorts its record digests in a
-  scratch buffer, a text delta hashes the whole row directory, and a standalone surface delta sorts every source digest (about 9% more instructions at 2048 rows). `SourceMatchEvidence::literal` of an index-built surface also moves. The new row
+  scratch buffer, a text delta hashes the whole row directory, and a standalone
+  surface delta sorts every source digest (about 9% more instructions at 2048
+  rows). `SourceMatchEvidence::literal` of an index-built surface also moves. The new row
   benches `source_change_counts` (`identity_*`, `version_fingerprint`) and
   `purrdf-text` `source_identity_counts` report their retired instructions and
   allocations, through the new shared runner
