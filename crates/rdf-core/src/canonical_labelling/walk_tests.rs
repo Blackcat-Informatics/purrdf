@@ -832,7 +832,8 @@ mod skip {
         #![prop_config(Config::with_cases(256))]
 
         /// A skip query agrees with the scan of the earlier members after any
-        /// sequence of relations and twin joins.
+        /// sequence of relations between members and skip queries, over 24
+        /// members.
         #[test]
         fn a_skip_agrees_with_the_scan_of_earlier_members(
             steps in prop::collection::vec((0usize..24, 0usize..24, any::<bool>()), 0..60)

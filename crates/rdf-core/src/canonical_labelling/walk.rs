@@ -274,8 +274,8 @@ pub(crate) struct Relation {
     /// The passes of (K1) made.
     #[cfg(test)]
     pub(crate) passes: u64,
-    /// The members and lookups the relation has read, for the bound on the
-    /// work of a walk.
+    /// The members the passes of (K1) read and the class lookups the relation
+    /// made, for the bound on the work of a walk.
     #[cfg(test)]
     pub(crate) reads: u64,
 }
@@ -294,13 +294,18 @@ impl Relation {
         }
     }
 
-    /// Relate the members of indices `i` and `j`.
-    pub(crate) fn relate(&mut self, i: usize, j: usize) {
+    /// The representative of the class of member `i`.
+    fn find(&mut self, i: usize) -> usize {
         #[cfg(test)]
         {
-            self.reads += 2;
+            self.reads += 1;
         }
-        let (ri, rj) = (self.classes.find(i), self.classes.find(j));
+        self.classes.find(i)
+    }
+
+    /// Relate the members of indices `i` and `j`.
+    pub(crate) fn relate(&mut self, i: usize, j: usize) {
+        let (ri, rj) = (self.find(i), self.find(j));
         if ri != rj {
             self.classes.join(ri, rj);
             self.least[ri] = self.least[ri].min(self.least[rj]);
@@ -341,11 +346,7 @@ impl Relation {
     /// Step 3(b)(i): whether the member of index `i` is related to an earlier
     /// one, so that its child is skipped: its class has a smaller member.
     pub(crate) fn skipped(&mut self, i: usize) -> bool {
-        #[cfg(test)]
-        {
-            self.reads += 1;
-        }
-        let root = self.classes.find(i);
+        let root = self.find(i);
         self.least[root] < i
     }
 
@@ -354,11 +355,11 @@ impl Relation {
     /// first member of a class is visited, every member of a class has the
     /// certificate of the others, and a stopped member's exceeds the best's.
     pub(crate) fn related_to(&mut self, members: &[usize]) -> u64 {
-        let mut roots: Vec<usize> = members.iter().map(|&i| self.classes.find(i)).collect();
+        let mut roots: Vec<usize> = members.iter().map(|&i| self.find(i)).collect();
         roots.sort_unstable();
         roots.dedup();
         (0..self.len)
-            .filter(|&i| roots.binary_search(&self.classes.find(i)).is_ok())
+            .filter(|&i| roots.binary_search(&self.find(i)).is_ok())
             .count() as u64
     }
 }

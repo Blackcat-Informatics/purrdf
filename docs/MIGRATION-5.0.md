@@ -289,7 +289,7 @@ compiling until it handles the new variant. The enums themselves keep their
 |---|---|---|
 | `CanonOutput` | `LinesDigest`, `DocumentLinesDigest` | Add arms for both. They are the digest of the canonical line sequence, alone and together with the document and label table; the 4.x arms keep their meaning |
 | `SearchConfiguration` | `Labelling { version, selection, output }` | Add an arm. It names the labelling run, where `Rdfc { .. }` names an RDFC-1.0 run; a caller that only inspects 4.x runs can bind it with a wildcard |
-| `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)`; a completed run and a refused one both report the total of the walk of the labelling |
+| `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)`; the running total of the walk of 8.3: its total when the labelling completes, and on a refusal with `limit` its value after the charge that passed the limit, the refusal's `units` |
 
 A variant payload that changed. `CanonError` is `#[non_exhaustive]`, but a
 payload is matched by shape:

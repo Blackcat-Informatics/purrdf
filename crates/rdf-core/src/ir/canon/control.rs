@@ -137,9 +137,9 @@ pub enum SearchEvent {
     /// Dataset-state explicit automorphism test.
     StateAutomorphism,
     /// One limited unit of the nested-refinement labelling (8.1 of its
-    /// definition), as the walk of 8.3 counted them: the total of a completed
-    /// labelling is the figure a refusal of the same input reports as its
-    /// units.
+    /// definition), as the running total of the walk of 8.3: its total when the
+    /// labelling completes, and on a refusal with `limit` its value after the
+    /// charge that passed the limit, the refusal's `units`.
     LabellingUnit,
 }
 
