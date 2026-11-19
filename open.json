@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1382,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and",
+  "branch": "paudley/1382-public-row-set-identities-and",
+  "slug": "public-row-set-identities-and",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and/.stage/public-row-set-identities-and",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "9dd3d6c59f0f87f428856e8e90e975abd9d1f036",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and",
+    "branch:paudley/1382-public-row-set-identities-and",
+    "ignored:30313 files (30311 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/bench-1281-old caches into /home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and plus 23 dependency units from 1 other checkouts in 8.0s; 13239 unchanged files keep their built mtimes; 7628 other files take the seed time and rebuild; 9 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and/.stage/public-row-set-identities-and",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and/.stage/public-row-set-identities-and/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-18T16:20:07-0600",
+  "seed_error": ""
+}

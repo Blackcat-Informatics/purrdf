@@ -1,0 +1,401 @@
+diff --git .github/workflows/ci.yaml .github/workflows/ci.yaml
+index 5311b3b95..8e55b6af8 100644
+--- .github/workflows/ci.yaml
++++ .github/workflows/ci.yaml
+@@ -762,15 +762,47 @@ jobs:
+         run: node crates/shapes/tests/graphql_oracle.mjs
+ 
+ 
++  # Resolve the floating nightly ONCE per run. The seven configuration jobs and
++  # the aggregate all use the dated toolchain named here, so a run that spans a
++  # nightly publish still measures with one compiler; a rerun of a single job
++  # installs the same dated toolchain rather than the newest one. The pin of
++  # rust-toolchain.toml stays the floating channel for every other gate.
++  simd-asm-compiler:
++    if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
++    runs-on: ubuntu-latest
++    timeout-minutes: 10
++    outputs:
++      toolchain: ${{ steps.resolve.outputs.toolchain }}
++      version: ${{ steps.resolve.outputs.version }}
++    steps:
++      - name: Resolve the nightly to one dated toolchain and record its compiler
++        id: resolve
++        run: |
++          date="$(curl --fail --silent --show-error --location --retry 5 \
++            https://static.rust-lang.org/dist/channel-rust-nightly.toml \
++            | sed -n 's/^date = "\([0-9-]*\)"$/\1/p' | head -n 1)"
++          test -n "$date"
++          toolchain="nightly-$date"
++          rustup toolchain install "$toolchain" --profile minimal --no-self-update
++          {
++            echo "toolchain=$toolchain"
++            echo 'version<<RUSTC_VERSION'
++            RUSTUP_TOOLCHAIN="$toolchain" rustc -vV
++            echo 'RUSTC_VERSION'
++          } >> "$GITHUB_OUTPUT"
++
+   # One configuration per runner; the stable aggregate requires every shard.
+   simd-asm-config:
++    needs: simd-asm-compiler
+     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
+     runs-on: ubuntu-latest
+     # A cold x86_64-v4 build can consume 30 minutes; retain time to upload its
+     # checked report instead of cancelling immediately after measurement passes.
+     timeout-minutes: 45
+-    outputs:
+-      compiler-version: ${{ steps.compiler.outputs.version }}
++    env:
++      # Outranks rust-toolchain.toml, so every step of this job runs the one
++      # compiler the resolver chose rather than the floating nightly.
++      RUSTUP_TOOLCHAIN: ${{ needs.simd-asm-compiler.outputs.toolchain }}
+     strategy:
+       fail-fast: false
+       matrix:
+@@ -783,19 +815,19 @@ jobs:
+       - name: Install Rust
+         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+         with:
+-          toolchain: "nightly" # keep in sync with rust-toolchain.toml
++          toolchain: ${{ needs.simd-asm-compiler.outputs.toolchain }}
+           targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
++        env:
++          RUSTUP_TOOLCHAIN: ${{ needs.simd-asm-compiler.outputs.toolchain }}
+       - name: Identify the actual compiler
+         id: compiler
++        env:
++          EXPECTED_COMPILER: ${{ needs.simd-asm-compiler.outputs.version }}
+         run: |
+           mkdir -p target
+           rustc -vV > target/asm-compiler.txt
++          test "$(cat target/asm-compiler.txt)" = "$EXPECTED_COMPILER"
+           echo "identity=$(sha256sum target/asm-compiler.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+-          {
+-            echo 'version<<RUSTC_VERSION'
+-            cat target/asm-compiler.txt
+-            echo 'RUSTC_VERSION'
+-          } >> "$GITHUB_OUTPUT"
+       - name: Restore assembly build contexts and evidence
+         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+         with:
+@@ -932,7 +964,7 @@ jobs:
+           if-no-files-found: error
+ 
+   simd-asm:
+-    needs: simd-asm-config
++    needs: [simd-asm-compiler, simd-asm-config]
+     if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+     runs-on: ubuntu-latest
+     timeout-minutes: 10
+@@ -957,7 +989,7 @@ jobs:
+           path: target/asm-reports
+       - name: Check complete matrix and document parity
+         env:
+-          PRODUCER_COMPILER: ${{ needs.simd-asm-config.outputs.compiler-version }}
++          PRODUCER_COMPILER: ${{ needs.simd-asm-compiler.outputs.version }}
+         run: |
+           test -n "$PRODUCER_COMPILER"
+           printf '%s\n' "$PRODUCER_COMPILER" > target/asm-reports/compiler-receipt.txt
+diff --git CHANGELOG.md CHANGELOG.md
+index 037bdf3af..ee6b3e5e6 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -29,6 +29,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   `purrdf_testkit::bench::counter::run_count_rows` and
+   `purrdf_alloc_probe::whole_process_report`.
+ 
++- **Behaviour change: the Python GTS fold view refuses a damaged file, and the
++  seeking reader refuses an unclassifiable tail item.** `GtsFoldViewNative.from_bytes`
++  and `gts_relational_rows_from_bytes` now raise `ValueError` (with the native `code` and `diagnostic_json`) when
++  the fold reports any diagnostic, as the dataset import does, instead of
++  returning an empty or partial view. `IndexedCatalog::segment` returns the
++  frame-not-a-map refusal when an item after the segment header is not a map, so
++  a catalog over a file with unknown trailing material no longer looks
++  complete. Valid files read as before.
+ - **The change feed and segmented change path decide range and layer equality
+   by canonical Merkle nodes; segmented images move to format version 8.** Range
+   skips, the layer deduplication, baseline reuse, the compaction check and the
+diff --git bindings/python/src/py_gts_view.rs bindings/python/src/py_gts_view.rs
+index b7211b422..54d00cf1a 100644
+--- bindings/python/src/py_gts_view.rs
++++ bindings/python/src/py_gts_view.rs
+@@ -10,6 +10,7 @@ use pyo3::prelude::*;
+ use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyTuple};
+ 
+ use crate::gts_view::{ALL_SCOPE, GtsFoldView, GtsFoldViewConfig, PublicValue, RelationalRows};
++use crate::py_store::presentation::native_error;
+ 
+ type PyTermRow = (
+     u8,
+@@ -48,8 +49,12 @@ impl PyGtsFoldView {
+         data: &[u8],
+         curie_prefixes: Vec<(String, String)>,
+     ) -> PyResult<Self> {
++        // A fold diagnostic is an error here exactly as in every other byte consumer:
++        // a damaged file never becomes an empty or partial view.
++        let graph = py
++            .detach(|| purrdf::gts::read_graph(data, true))
++            .map_err(|diagnostic| native_error(py, &diagnostic))?;
+         py.detach(|| {
+-            let graph = purrdf_gts::reader::read(data, true, None);
+             Ok(Self {
+                 inner: fold_view(graph, curie_prefixes)?,
+             })
+@@ -310,9 +315,11 @@ fn gts_relational_rows_from_bytes<'py>(
+     py: Python<'py>,
+     data: &[u8],
+ ) -> PyResult<Bound<'py, PyDict>> {
++    let graph = py
++        .detach(|| purrdf::gts::read_graph(data, true))
++        .map_err(|diagnostic| native_error(py, &diagnostic))?;
+     let (rows, directions) = py
+         .detach(|| {
+-            let graph = purrdf_gts::reader::read(data, true, None);
+             crate::gts_view::relational_rows(&graph)
+                 .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
+         })
+diff --git bindings/python/tests/test_gts_damaged_bytes.py bindings/python/tests/test_gts_damaged_bytes.py
+new file mode 100644
+index 000000000..f19e718dc
+--- /dev/null
++++ bindings/python/tests/test_gts_damaged_bytes.py
+@@ -0,0 +1,41 @@
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++# Why not Rust: this exercises the Python exception surface (ValueError with code and diagnostic_json attributes) of the compiled extension.
++"""Byte readers of a GTS container refuse a damaged file instead of returning a partial view."""
++
++from __future__ import annotations
++
++import pytest
++
++import purrdf
++
++EX = "https://example.org/"
++CBOR_TEXT_STRAY = b"\x65stray"  # CBOR text string "stray": an item that is no header and no frame
++
++READERS = [
++    purrdf.GtsFoldViewNative.from_bytes,
++    purrdf.gts_relational_rows_from_bytes,
++]
++
++
++def _container() -> bytes:
++    dataset = purrdf.RdfDataset(
++        f"<{EX}a> <{EX}p> <{EX}b> <{EX}g> .\n", purrdf.RdfFormat.N_QUADS
++    )
++    return dataset.to_gts()
++
++
++@pytest.mark.parametrize("read", READERS)
++def test_valid_container_still_reads(read) -> None:
++    assert read(_container()) is not None
++
++
++@pytest.mark.parametrize("read", READERS)
++@pytest.mark.parametrize("position", ["prepended", "appended"])
++def test_damaged_container_raises_with_native_fields(read, position: str) -> None:
++    data = _container()
++    damaged = CBOR_TEXT_STRAY + data if position == "prepended" else data + CBOR_TEXT_STRAY
++    with pytest.raises(ValueError) as caught:
++        read(damaged)
++    assert caught.value.code
++    assert caught.value.diagnostic_json
+diff --git crates/gts/src/reader/indexed/catalog.rs crates/gts/src/reader/indexed/catalog.rs
+index b99dd37d3..a82967cb4 100644
+--- crates/gts/src/reader/indexed/catalog.rs
++++ crates/gts/src/reader/indexed/catalog.rs
+@@ -73,6 +73,7 @@ struct FrameLocation {
+ }
+ struct Discovered {
+     header: bool,
++    map: bool,
+     kind: Option<BoundRange>,
+     id: Option<BoundRange>,
+     data: Option<BoundRange>,
+@@ -218,11 +219,15 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
+             .map_or_else(|| range.clone(), |(_, child)| child);
+         let mut discovered = Discovered {
+             header: false,
++            map: false,
+             kind: None,
+             id: None,
+             data: None,
+             transforms: None,
+         };
++        // The full reader classifies the untagged item: a tag-wrapped map is not a
++        // frame there, so it is not one here.
++        discovered.map = self.input.map(range)?.is_some();
+         let Some(mut entries) = self.input.map(&inner)? else {
+             return Ok(discovered);
+         };
+@@ -354,9 +359,23 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
+                         item: catalog.frame_item(catalog.frames.len())?,
+                     }));
+                 }
++                // Only a self-described or untagged header ends a segment; any
++                // other tag is the original reader's interpretation error.
++                if let Some((tag, _)) = self.input.tag(&range)?
++                    && tag != crate::wire::SELF_DESCRIBE_TAG
++                {
++                    return Err(IndexedError::native(crate::wire::HeaderError::Tag {
++                        actual: tag,
++                    }));
++                }
+                 break;
+             }
+             offset = range.end();
++            // A frame is a map; the full reader reports any other item, so a
++            // catalog must not present a segment with such an item as complete.
++            if !discovered.map {
++                return Err(IndexedError::native(FoldError::FrameMap));
++            }
+             self.admit_metadata(
+                 catalog
+                     .header
+diff --git crates/gts/src/reader/indexed/catalog/tests.rs crates/gts/src/reader/indexed/catalog/tests.rs
+index bb91cd387..aff9caf6a 100644
+--- crates/gts/src/reader/indexed/catalog/tests.rs
++++ crates/gts/src/reader/indexed/catalog/tests.rs
+@@ -455,3 +455,68 @@ fn transformed_index_and_keyed_predecessor_use_the_original_capability_decoder()
+     assert!(matches!(&payload, Value::Array(rows) if rows.len() == 1));
+     assert!(source.work().decoded_payloads > 1);
+ }
++
++#[test]
++fn catalog_refuses_a_segment_whose_tail_holds_an_unclassifiable_item() {
++    let mut writer = Writer::new("rdf");
++    terms(&mut writer);
++    writer.add_index();
++    let valid = writer.into_bytes();
++    assert_eq!(
++        open(valid.clone())
++            .segment(0)
++            .expect("neighbouring valid file")
++            .frame_count(),
++        2
++    );
++
++    let mut trailing = valid.clone();
++    trailing.extend(crate::wire::encode(&Value::Text("stray".into())));
++    let failure = open(trailing)
++        .segment(0)
++        .expect_err("a non-map item after the index is not a legal tail");
++    assert!(matches!(
++        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
++        Some(FoldError::FrameMap)
++    ));
++
++    let mut tagged = valid.clone();
++    tagged.extend(crate::wire::encode(&Value::Tag(
++        1000,
++        Box::new(Value::Map(Vec::new())),
++    )));
++    let failure = open(tagged)
++        .segment(0)
++        .expect_err("a tag-wrapped map is not a frame, as the full reader decides");
++    assert!(matches!(
++        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
++        Some(FoldError::FrameMap)
++    ));
++
++    let mut tagged_header = valid.clone();
++    tagged_header.extend(crate::wire::encode(&Value::Tag(
++        1000,
++        Box::new(Value::Map(vec![(
++            Value::Text("gts".into()),
++            Value::Text(MAGIC.into()),
++        )])),
++    )));
++    let failure = open(tagged_header)
++        .segment(0)
++        .expect_err("a header-shaped item under a foreign tag is not a segment boundary");
++    assert!(matches!(
++        std::error::Error::source(&failure)
++            .and_then(|cause| cause.downcast_ref::<crate::wire::HeaderError>()),
++        Some(crate::wire::HeaderError::Tag { actual: 1000 })
++    ));
++
++    let mut headerless = crate::wire::encode(&Value::Text("stray".into()));
++    headerless.extend(valid);
++    let failure = open(headerless)
++        .segment(0)
++        .expect_err("the first item must be a header");
++    assert!(matches!(
++        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
++        Some(FoldError::FirstHeader)
++    ));
++}
+diff --git crates/hash/src/multiset.rs crates/hash/src/multiset.rs
+index 000dd80a4..499c2eb32 100644
+--- crates/hash/src/multiset.rs
++++ crates/hash/src/multiset.rs
+@@ -4,10 +4,13 @@
+ //! Reversible accounting for multisets of 256-bit member digests.
+ //!
+ //! Members add in Z/(2^256), with an independent exact 128-bit population.
+-//! Order does not matter; repeated members contribute repeatedly. This is a
+-//! multiset fingerprint, not a membership or authentication proof. A caller
+-//! must establish membership before subtraction and obtain the observed source
+-//! state independently of a proposed delta.
++//! Order does not matter; repeated members contribute repeatedly. The sum is an
++//! accounting value for drift and population checks, not an identity: a party
++//! choosing members can build two different multisets with one sum and
++//! population, and it is no membership or authentication proof. A caller must
++//! establish membership before subtraction and obtain the observed source state
++//! independently of a proposed delta. An identity over a row set is
++//! [`sorted_fingerprint`].
+ 
+ use crate::{Domain, blake3, frame::frame_le_with};
+ 
+@@ -152,6 +155,8 @@ impl Multiset256 {
+ 
+     /// BLAKE3 of the framed domain, 16-byte little-endian population, then
+     /// the 32-byte little-endian sum. Every family supplies its explicit domain.
++    /// The value is an accounting check, not collision resistant against chosen
++    /// members; use [`sorted_fingerprint`] for an identity.
+     #[must_use]
+     pub fn fingerprint(&self, domain: Domain) -> [u8; 32] {
+         let mut digest = blake3::Hasher::new();
+diff --git docs/CONFORMANCE.md docs/CONFORMANCE.md
+index c07cf05d5..37f896c80 100644
+--- docs/CONFORMANCE.md
++++ docs/CONFORMANCE.md
+@@ -75,7 +75,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
+ | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
+ | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
+ | rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
+-| Python binding suite | first-party (incl. compat differential vs rdflib) | 4283 | 4 | 4 | 0 | GREEN |
++| Python binding suite | first-party (incl. compat differential vs rdflib) | 4289 | 4 | 4 | 0 | GREEN |
+ <!-- END GENERATED: conformance-matrix -->
+ 
+ The RDFLib row states the required scoreboard under native XSD string-subtype
+@@ -149,7 +149,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
+ | GeoSPARQL 1.1 determinism corpus | first-party, `purrdf_geo::determinism::CORPUS` | **20 / 20** geometries · 0 ledgered. Counts corpus geometries, not test functions. Their WKT/GeoJSON bytes, DE-9IM matrices, exact planar measures and IEEE encodings fold into the single `GOLDEN_DIGEST` in `crates/geo/tests/determinism.rs`; the conformance matrix compares the printed digest with that frozen source value. The polygon/mixed-collection length correction includes polygon boundaries and selects the greatest dimension-total; its deliberate byte change is documented beside the golden. This row grades deterministic planar output, not independent OGC semantic conformance or the geographic numerical corpus. No OGC GeoSPARQL conformance suite is vendored or claimed. The twelve first-party SHACL cases mirror the published validator using caller-selected `example.org` vocabulary; nine query-rewrite, nine scalar-function and four layout cases run separately in `make check`. The explicit carrier-only scalar adapter registers twelve construction/serialization refusals and checks representative named errors rather than plausible default answers. The standard geographic adapter additionally implements `transform`, `buffer` and `metricBuffer` through its selected operation/profile law; nine construction/serialization functions remain named hard errors. The neutral geographic kernel's numerical, geometry, cover, ownership and host cases are separate acceptance, not additional entries in this twenty-geometry row. Native digest execution, release WASM compilation and actual portable/SIMD geographic transcript execution are distinct checks (`make check`, `make wasm`, `make geo-determinism`). |
+ | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
+ | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
+-| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4283** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
++| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4289** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
+ | GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
+ 
+ ## Native YAML-LD Basic
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index eb97207fb..55064f586 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -70,6 +70,15 @@ recorded compiler arguments and content digest, and reevaluates the current mani
+ Parsed functions can be reused; a previous pass verdict cannot. Missing or changed
+ assembly evidence fails explicitly and can be reconstructed with `--fresh`.
+ 
++In CI one job resolves the floating nightly to a single dated toolchain once per
++run. The seven configuration jobs install exactly that toolchain, select it with
++`RUSTUP_TOOLCHAIN`, and refuse to continue when `rustc -vV` differs from the
++resolved version. The aggregate writes the same resolved version as
++`compiler-receipt.txt`, and `--merge-reports` refuses any report that records another
++compiler. A run that spans a nightly publish therefore measures with one compiler, and
++rerunning one job installs the same dated toolchain. The floating channel of
++`rust-toolchain.toml` is unchanged for every other gate.
++
+ Two configurations run concurrently by default, sharing the effective Cargo job
+ budget. `--jobs` changes the number of configuration workers, not the total compiler
+ budget. The Stage Cargo shim recognizes the gate's explicit assembly context, retains

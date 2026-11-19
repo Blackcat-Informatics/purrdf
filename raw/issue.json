@@ -1,0 +1,20 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "Part of #1345 (required behaviours 4 and 6). #1345 stays open until every unit lands.\n\n## Problem\n\nIdentities and fingerprints exposed to callers are still derived from additive `Multiset256` sums: the public source content fingerprint and summary values, binding and index generation values, the snapshot identity of resident datasets and its compositions over composite, delta and paged views (which reaches hosts in execution receipts), and the text index source fingerprint.\n\n## Required behaviour\n\n- Every public identity or fingerprint derived from a set of rows is BLAKE3 over the sorted sequence of row digests with a stated domain, computed where every row is already visited. Every v4 signature stays; the values change in 5.0. No parallel API.\n- Stored identities and receipts produced by 4.x stop matching; `docs/MIGRATION-5.0.md` and the CHANGELOG say so, with the affected receipts named.\n- The additive accumulator is no longer the source of any public value called an identity, digest or fingerprint.\n- Settle the unclear cases explicitly in the code and docs: page certification against a hostile provider, and class-membership edge sets taken from an ontology another party supplies.\n\n## Acceptance\n\n- For each changed identity, a test constructs two different row sets with equal additive sum and population and shows the identity now differs, beside a genuinely equal pair that still matches.\n- Costs in retired instructions and allocations for the touched hot paths, before and after; no time measurements.\n- Frozen goldens that move are updated with the reason stated.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-18T22:19:22Z",
+  "labels": [],
+  "milestone": null,
+  "number": 1382,
+  "state": "OPEN",
+  "title": "Public row-set identities and fingerprints are BLAKE3 over sorted row digests",
+  "updatedAt": "2026-11-18T22:19:22Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1382"
+}

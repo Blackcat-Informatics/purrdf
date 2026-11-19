@@ -1,0 +1,156 @@
+{
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE7CFbQ": {
+    "resolution": "addressed",
+    "reason": "builder_of derives limits from the fixture with the old values as floors; version_fingerprint ran at default and 500000 rows, exit 0",
+    "commit": "052d9cd800f5fccfdcb8887c8284fdcb94b18f4c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:09:56Z",
+      "state": null,
+      "commit": "4261cba68bba5641ece495bf50e093cea54aa123",
+      "path": "crates/rdf-core/benches/source_change_counts.rs",
+      "line": 222,
+      "body_sha256": "0ddd1736abf2ea9b4f93a9915f744ef4dc1c7d0e2bd1b956d5abba22bf39c716"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABoVflNw": {
+    "resolution": "acknowledged",
+    "reason": "Bot summary, no request",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:55:22Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "75b42bd4ddf95f0041a2da90bc00ae2e7adf45f1d75829bfad285bcc3fc6c601"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABY9_RPA": {
+    "resolution": "acknowledged",
+    "reason": "Review body; its inline items are dispositioned individually",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T06:52:47Z",
+      "state": "COMMENTED",
+      "commit": "0e4a82022088f22e59e52f7d924e7dbeaabd2220",
+      "path": null,
+      "line": null,
+      "body_sha256": "6a9bbe760f17d7fc14b725b3685ab4cc1ae176657aee6df370ffeaf179dda8c1"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE7CFfA": {
+    "resolution": "declined",
+    "reason": "Harness measures teardown identically for baseline and candidate; deltas unaffected. Independent review agreed.",
+    "commit": null,
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/1390#discussion_r4625455105",
+    "revision": {
+      "updated_at": "2026-11-19T07:19:23Z",
+      "state": null,
+      "commit": "4261cba68bba5641ece495bf50e093cea54aa123",
+      "path": "crates/testkit/src/bench/counter.rs",
+      "line": 274,
+      "body_sha256": "b564ebde4eefa09e2af9cf1fead85ee1130040a1952a0ec23ed98a95a4b65c22"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE7CFiA": {
+    "resolution": "declined",
+    "reason": "Larger row vector already infallible; the bot withdrew the finding after the reply.",
+    "commit": null,
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/1390#discussion_r4625455328",
+    "revision": {
+      "updated_at": "2026-11-19T07:16:13Z",
+      "state": null,
+      "commit": "4261cba68bba5641ece495bf50e093cea54aa123",
+      "path": "crates/text/src/index.rs",
+      "line": 2859,
+      "body_sha256": "be4fcae18ff4743d6f9cd120c198003c48735a40be8777a16ac0d4c889c98633"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABY-LOHA": {
+    "resolution": "acknowledged",
+    "reason": "Own reply or bot review body; the thread it belongs to is dispositioned",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:11:54Z",
+      "state": "COMMENTED",
+      "commit": "052d9cd800f5fccfdcb8887c8284fdcb94b18f4c",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABY-LPUA": {
+    "resolution": "acknowledged",
+    "reason": "Own reply or bot review body; the thread it belongs to is dispositioned",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:11:56Z",
+      "state": "COMMENTED",
+      "commit": "052d9cd800f5fccfdcb8887c8284fdcb94b18f4c",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABY-OI5w": {
+    "resolution": "acknowledged",
+    "reason": "Own reply or bot review body; the thread it belongs to is dispositioned",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:16:42Z",
+      "state": "COMMENTED",
+      "commit": "052d9cd800f5fccfdcb8887c8284fdcb94b18f4c",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE7LYAQ": {
+    "resolution": "acknowledged",
+    "reason": "Own reply or bot review body; the thread it belongs to is dispositioned",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:11:54Z",
+      "state": null,
+      "commit": "4261cba68bba5641ece495bf50e093cea54aa123",
+      "path": "crates/testkit/src/bench/counter.rs",
+      "line": 274,
+      "body_sha256": "da816c1b8fd3e5affe9dc7eaadf275867a479451b59c4c26553e6998eac68c6c"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE7LY4A": {
+    "resolution": "acknowledged",
+    "reason": "Own reply or bot review body; the thread it belongs to is dispositioned",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:11:56Z",
+      "state": null,
+      "commit": "4261cba68bba5641ece495bf50e093cea54aa123",
+      "path": "crates/text/src/index.rs",
+      "line": 2859,
+      "body_sha256": "c434ca4310e5f2ea6fb699653f54b70fa10baefa6bf8a668395b87d7f9b0bd79"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE7NqfA": {
+    "resolution": "acknowledged",
+    "reason": "Bot withdrew the finding after the reply; thread resolved",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T07:16:42Z",
+      "state": null,
+      "commit": "4261cba68bba5641ece495bf50e093cea54aa123",
+      "path": "crates/text/src/index.rs",
+      "line": 2859,
+      "body_sha256": "973ffc1a4ac5acc1f6d2d2fb34e105a5c9e869461a6ca117cc628c938a4bbc2a"
+    }
+  }
+}
