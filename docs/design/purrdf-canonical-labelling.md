@@ -157,7 +157,9 @@ those tokens and of what each blank leaf is replaced by, so nothing is spelled a
 text and nothing is parsed back. Lowering a dataset view to lines is outside the
 definition; `view.rs` and the migration guide state PurRDF's own rule. A composite
 literal that names a blank node is lowered to a composite node with one `record`
-line, so the blank nodes it names take part in the labelling.
+line, so the blank nodes it names take part in the labelling. A triple term that is
+a component of another triple term is lowered to a term node (section 3.6), so every
+triple term the definition receives from a view has depth one.
 
 ### 3.2 Components and refinement
 
@@ -281,6 +283,73 @@ definition that has none, and the tests compare the two engines, their results a
 the totals of their walks, on a corpus under three relabellings, on the
 enumeration spaces and on every row of the walk.
 
+### 3.6 Nested triple terms and term nodes
+
+The definition admits a triple term inside a triple term and writes it whole into
+every line that holds it, so a chain of `n` statements whose objects each name the
+triple term of the one before gives lines whose bytes grow as `n` squared. The
+lowering of a dataset view (`view.rs`, `nested.rs`) follows the second-generation
+GTS format, section "Nested terms, lowering and term nodes":
+
+* A NESTED TERM is a triple term that stands as a component of another triple term
+  of a line or of a record's term list. Two nested terms equal as values are one.
+  Each distinct nested term becomes one TERM NODE, a blank node of the lines that is
+  no blank node of the view, and one `record` line `record(P, [node, N(s), N(p),
+  N(o)])`, `P` the eleven bytes `E([5, [[1], [1], [1], [1]]])` and `N(x)` the term
+  node of `x` when `x` is a triple term and `x` otherwise. A triple term that stands
+  in a slot of a line or directly in a record's list keeps that place, with its own
+  components lowered.
+* The lowering reads triple terms by the identifiers of their components and
+  interns each nested term once, components first, over a heap work list: no
+  triple term holding another is ever expanded, and the work and memory are linear
+  in the distinct terms. A record's own term values are walked in the same way.
+* The source identifier of a term node is `E([d(x)])` with
+  `d(x) = H(gts2 nested term, E([K(s), K(p), K(o)]))`, BLAKE3 in key-derivation
+  mode. `K` of a blank node is `E([0, h(b)])`, `h(b)` the digest under the same
+  context of its source identifier `E([ordinal, label])`; of a triple term
+  `E([d])`; of an IRI or a literal the byte string of `E([1, text])` or
+  `E([2, lexical, form, x])`, the texts whole as the view holds them. A composite
+  node stands for its literal and takes the literal's `K`. The digests only order
+  nodes: they enter no line, payload or digest.
+* SOURCE ORDER. When a view holds a nested term, every blank node of the view takes
+  the source identifier `E([ordinal, label])`, the scope ordinal as an unsigned
+  integer and the label as a byte string, the bytes the format gives a blank node of
+  a fold. Term nodes (first byte `0x81`) then precede every blank node of the view
+  (`0x82`), and the order of twins and of copies of a top component, the only things
+  source identifiers decide, is the format's. When a view holds no nested term, its
+  blank nodes keep the source identifier of four big-endian bytes of the scope
+  ordinal and the label, which orders labels bytewise; the format's form would
+  order a shorter label first and so move the positions of twins in inputs the
+  lowering does not change. Both forms are injective, so either names each blank
+  node once.
+* A nested term of PurRDF's model may stand as the subject or the predicate of a
+  triple term, which RDF 1.2 and the format's position rules exclude. The lowering
+  treats every component that is a triple term as nested, so such input is lowered
+  in linear size too; for every input the format can hold this is its rule.
+* SIZE AND WEIGHT. The size of an input is its lines before the nested-term records
+  plus its nested candidates: for each distinct triple term reached (and each triple
+  term of a record's values, per occurrence), its components that are triple terms.
+  The weight is the length of the encoding of every line and every nested-term
+  record with each blank leaf written `fixed` (nine bytes), computed from the tokens
+  of the lowered lines and the lengths of the constants. `LabellingCapacity` holds a
+  read's capacity in lines, its capacity in bytes and the total weight admitted;
+  `label_view_with_capacity` judges the size, then the weight against what the read
+  has left, then the collision of two nested terms' digests (`LoweringRefusal`),
+  then the definition's own refusals, the first that applies being the one returned.
+  A weight once admitted stays in the total; after a refusal by weight every later
+  input of the read is refused by weight. The view is read once: size and weight
+  are counted while the view is lowered, from term identifiers, and are judged
+  before any digest is formed, any nested-term record is built or the engine runs.
+* THE THREE CASES. A view with no triple term and a view whose triple terms all
+  have depth one lower to the lines they always gave, with the same source
+  identifiers, positions, identities and digests. A view with a nested term is
+  labelled as its lowered set, whose canonical line sequence, digest and positions
+  differ from those of the unlowered lines.
+* The canonical document spells a term node as the triple term it stands for, read
+  from the components of its record, and writes no nested-term record. Term nodes
+  take positions, so the labels of a view's blank nodes in a document need not be
+  consecutive.
+
 ## 4. Published work consulted
 
 **RDFC-1.0** [1] is the baseline whose cost motivates the work and the RDF
@@ -372,6 +441,13 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
   thirteen inputs of the specification's row `walk` and on the shared comparison
   inputs, and equal outcomes and fields on its rows `limit-rows` and
   `limit-relabel` (`walk_tests.rs`).
+* The lowering of nested triple terms (section 3.6): the lowered sets of the
+  format's worked example and its lowering cases, labelled through a view, agree
+  with the same sets written by hand and labelled by the definition alone, in lines,
+  sources, positions, digests, structural record and walk totals; refusals by size,
+  weight and digest collision beside their neighbouring admitted inputs; linear
+  allocation over chains of nested terms (`nested_tests.rs`,
+  `tests/canonical_labelling_lowering_alloc.rs`).
 
 **Open:**
 
@@ -426,6 +502,11 @@ states why each consequence follows from the design.
   come from the order of components and the structure of calls, not from RDFC-1.0's
   hash order, and the digest is BLAKE3 over the typed line sequence, not SHA-256
   over N-Quads text. The digest also moves for datasets with no blank node.
+* **A dataset with a triple term nested inside a triple term is labelled as its
+  lowered set** (section 3.6): its canonical line sequence, digest and positions are
+  those of the set with one term node and one record per nested term, and the
+  positions of its blank nodes need not be consecutive. A dataset whose triple terms
+  all have depth one, and one with no triple term, are labelled as before.
 * **Labels are output only.** A consumer reads the typed placement, not the decimal
   label. Position order differs from the byte order of labels (`10` precedes `2`),
   so a document read back by its labels is not promised the identity map.
