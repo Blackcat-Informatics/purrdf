@@ -11,10 +11,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **Canonical blank labels of a result that holds nested triple terms are
   renumbered.** A triple term that is a component of another now lowers to one
   term node and one record, so the lowered set of a chain of nested terms is
-  linear in its length. The labelling of that set is not yet: on a chain of
-  1,000, 10,000 and 100,000 terms, `label_view` requests 22.7 MB, 1.31 GB and
-  121 GB from the allocator and its instructions grow alike, quadratically, while
-  its walk, allocations and retained bytes grow linearly. Each term node takes a position among the blank nodes, so the labels
+  linear in its length. On a chain of 1,000, 10,000 and 100,000 terms,
+  `label_view` requests 22.7 MB, 1.31 GB and 121 GB from the allocator and its
+  instructions grow alike, quadratically, in the labelling engine, while its
+  walk, allocations and retained bytes grow linearly. Each term node takes a
+  position among the blank nodes, so the labels
   of the other blank nodes, the canonical digest and the order of equal members
   of such a document change; the statements are the same up to the renaming of
   blank nodes. Inputs with no triple term, and inputs whose triple terms all have

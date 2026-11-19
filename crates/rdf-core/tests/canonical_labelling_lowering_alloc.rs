@@ -9,30 +9,18 @@
 //! `n - 1` records of bounded size, so the bytes requested and retained and the
 //! allocations made while lowering grow linearly.
 
-use std::sync::Arc;
-
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
 use purrdf_core::canonical_labelling::{
     Limit, Scope, ViewError, label_view_with_memory, lines_of_view,
 };
-use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
+
+#[path = "support/nested_chain.rs"]
+mod nested_chain;
+use nested_chain::chain;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
-
-/// The chain of `n` nested triple terms, one row for each.
-fn chain(n: usize) -> Arc<RdfDataset> {
-    let mut builder = RdfDatasetBuilder::new();
-    let a = builder.intern_iri("http://example.org/a").expect("interns");
-    let mut term = builder.intern_triple(a, a, a).expect("interns");
-    builder.push_quad(a, a, term, None).expect("pushes");
-    for _ in 1..n {
-        term = builder.intern_triple(a, a, term).expect("interns");
-        builder.push_quad(a, a, term, None).expect("pushes");
-    }
-    builder.freeze().expect("freezes")
-}
 
 /// The allocation of lowering the chain of `n` terms, the lowered lines held
 /// until the window closes.

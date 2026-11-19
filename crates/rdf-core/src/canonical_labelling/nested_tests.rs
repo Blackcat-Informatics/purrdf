@@ -572,11 +572,13 @@ fn a_stop_during_the_nested_walk_is_not_turned_into_a_capacity_refusal() {
 }
 
 /// RDF 1.2 nests a triple term only in the object of another. A dataset
-/// refuses a triple term as a triple term's subject when it is frozen, and the
-/// lowering refuses one in a caller's record, so the doubling shape
-/// `t(k + 1) = <<( t(k) p t(k) )>>`, whose spelling doubles with each record,
-/// reaches the labelling through no entry. The neighbouring chain in object
-/// position labels.
+/// refuses a triple term as a triple term's subject or predicate when it is
+/// frozen, and the lowering refuses one at each entry that can still carry it,
+/// so the doubling shape `t(k + 1) = <<( t(k) p t(k) )>>`, whose spelling
+/// doubles with each record, reaches the labelling through none: the identifiers
+/// of a view, a caller's record at its top and a triple term inside a record.
+/// Each refusal is executed beside the neighbouring object-position input that
+/// still labels.
 #[test]
 fn a_triple_term_as_the_subject_of_a_triple_term_is_refused_at_every_entry() {
     let mut data = Data::new();
@@ -588,28 +590,70 @@ fn a_triple_term_as_the_subject_of_a_triple_term_is_refused_at_every_entry() {
     data.quad(a, p, term);
     assert!(data.0.freeze().is_err(), "the dataset refuses the shape");
 
-    let view = Data::new().freeze();
-    let mut doubling = TermValue::iri(iri("a"));
-    for _ in 0..4 {
-        doubling = TermValue::Triple {
-            s: crate::TermBox::new(doubling.clone()),
-            p: crate::TermBox::new(TermValue::iri(iri("p"))),
-            o: crate::TermBox::new(doubling),
-        };
-    }
-    let terms = [doubling];
-    let records = [Record::new(&[0x80], &terms)];
-    assert_eq!(
-        label_view(view.as_ref(), &records, Scope::Dataset, Limit::ENGINE, None).err(),
+    fn refused<E>() -> Option<ViewError<E>> {
         Some(ViewError::Refused(Refusal::Input {
-            reason: InputReason::Slot
+            reason: InputReason::Slot,
         }))
-    );
+    }
 
-    let terms = [deep_value(4)];
-    let records = [Record::new(&[0x80], &terms)];
-    let chain = label_view(view.as_ref(), &records, Scope::Dataset, Limit::ENGINE, None)
-        .expect("a chain in object position labels");
+    // The identifiers of a view: a dataset cannot hold the shape, so a view
+    // answers a triple term for an identifier that sits in the slot.
+    let forged_view = |slot: usize| {
+        let mut data = Data::new();
+        let [a, p, x] = data.iris(["a", "p", "x"]);
+        let mut parts = [a, p, a];
+        parts[slot] = x;
+        let outer = data.triple(parts[0], parts[1], parts[2]);
+        data.quad(a, p, outer);
+        Cased {
+            inner: data.freeze(),
+            literal: a,
+            language: String::new(),
+            forged: Some((x, [a, p, a])),
+        }
+    };
+    for slot in [0, 1] {
+        assert_eq!(
+            label_view(&forged_view(slot), &[], Scope::Dataset, Limit::ENGINE, None).err(),
+            refused(),
+            "view, slot {slot}"
+        );
+    }
+    let object = label_view(&forged_view(2), &[], Scope::Dataset, Limit::ENGINE, None)
+        .expect("a nested object labels through a view");
+    assert_eq!(object.size(), 2, "the view's neighbour");
+
+    // A caller's record: its top value and a triple term inside it.
+    let view = Data::new().freeze();
+    let leaf = |name: &str| TermValue::iri(iri(name));
+    let triple = |s: TermValue, p: TermValue, o: TermValue| TermValue::Triple {
+        s: crate::TermBox::new(s),
+        p: crate::TermBox::new(p),
+        o: crate::TermBox::new(o),
+    };
+    let inner = || triple(leaf("a"), leaf("p"), leaf("a"));
+    let labelled_record = |value: TermValue| {
+        let terms = [value];
+        let records = [Record::new(&[0x80], &terms)];
+        label_view(view.as_ref(), &records, Scope::Dataset, Limit::ENGINE, None)
+    };
+    let mut doubling = leaf("a");
+    for _ in 0..4 {
+        doubling = triple(doubling.clone(), leaf("p"), doubling);
+    }
+    for value in [
+        doubling,
+        triple(inner(), leaf("p"), leaf("a")),
+        triple(leaf("a"), inner(), leaf("a")),
+        triple(leaf("a"), leaf("p"), triple(inner(), leaf("p"), leaf("a"))),
+        triple(leaf("a"), leaf("p"), triple(leaf("a"), inner(), leaf("a"))),
+    ] {
+        assert_eq!(labelled_record(value).err(), refused());
+    }
+    let top = labelled_record(triple(leaf("a"), leaf("p"), inner()))
+        .expect("a nested object labels at the top of a record");
+    assert_eq!(top.size(), 2, "the top neighbour");
+    let chain = labelled_record(deep_value(4)).expect("a chain in object position labels");
     assert_eq!(
         chain.size(),
         4,
@@ -968,6 +1012,9 @@ struct Cased {
     inner: Arc<RdfDataset>,
     literal: TermId,
     language: String,
+    /// An identifier the view answers as a triple term of the given component
+    /// identifiers, a shape a dataset cannot hold.
+    forged: Option<(TermId, [TermId; 3])>,
 }
 
 impl DatasetView for Cased {
@@ -989,6 +1036,11 @@ impl DatasetView for Cased {
         DatasetView::named_graphs(self.inner.as_ref())
     }
     fn resolve(&self, id: TermId) -> Result<TermRef<'_>, CallerRefusal> {
+        if let Some((forged, [s, p, o])) = self.forged
+            && id == forged
+        {
+            return Ok(TermRef::Triple { s, p, o });
+        }
         Ok(match self.inner.as_ref().resolve(id) {
             TermRef::Literal {
                 lexical,
@@ -1062,6 +1114,7 @@ fn a_literal_inside_a_nested_term_is_sourced_by_its_texts() {
         inner: data.freeze(),
         literal: language,
         language: "EN-us".to_owned(),
+        forged: None,
     };
     let typed_value = TermValue::Literal {
         lexical_form: "7".to_owned(),

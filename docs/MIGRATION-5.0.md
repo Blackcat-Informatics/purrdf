@@ -111,9 +111,9 @@ another. The lowered set of a chain of `n` nested statements is linear: one
 record of bounded size for each nested term. The bytes of leaf components are
 copied and hashed once for each distinct nested term they stand in, so a long
 leaf shared by every term of a chain is processed once per term. The labelling
-of the lowered chain is not yet linear: its walk, allocations and retained
-bytes grow linearly, but the bytes it requests from the allocator and the
-instructions it executes grow quadratically (the design document records the
+of the lowered chain has a linear walk, linear allocations and linear retained
+bytes, and the bytes it requests from the allocator and the instructions it
+executes grow quadratically in the labelling engine (the design document records the
 measurements at 1,000, 10,000 and 100,000 terms).
 
 RDF 1.2 nests a triple term only in the object of another. A dataset refuses any
