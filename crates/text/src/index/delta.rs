@@ -10,7 +10,7 @@ use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
 use purrdf_core::{GraphSelector, StatisticsStream};
 use purrdf_hash::multiset::Multiset256;
 
-use super::source_digest::row_hashes;
+use super::source_digest::{row_hashes, sorted_source_fingerprint};
 use super::{
     CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
     analyze_rows, collect_rows, collect_subject_rows,
@@ -80,7 +80,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             &removed_coverage,
             &observed_coverage,
         )?;
-        let source_fingerprint = source.fingerprint::<P>();
+        let source_fingerprint = sorted_source_fingerprint::<P>(directory.iter().copied());
         if source_fingerprint == self.source_fingerprint {
             self.coverage = coverage;
             self.row_directory = directory;
@@ -102,7 +102,7 @@ impl<P: CorpusProfile> TextIndex<P> {
             self.config.clone(),
             documents,
             &dictionary,
-            source,
+            (source, source_fingerprint),
             coverage.clone(),
             self.ranking.clone(),
         )?;
@@ -505,8 +505,8 @@ fn validate_delta<P: CorpusProfile>(
     }
     if expected != prior {
         return Err(TextDeltaError::SourceMismatch {
-            expected: expected.fingerprint::<P>(),
-            actual: prior.fingerprint::<P>(),
+            expected: expected.check_value::<P>(),
+            actual: prior.check_value::<P>(),
         });
     }
     for &hash in removed_hashes {
@@ -1088,10 +1088,12 @@ mod tests {
             index.clone().with_delta(&*next, &*old, &*empty),
             Err(TextDeltaError::MissingAddition { ordinal: 0 })
         ));
-        let expected = index.source_fingerprint;
+        // The mismatch reports the additive accounting check values.
+        let expected = index.source_digest.check_value::<crate::GraphLanguage>();
         let actual = TextIndex::from_dataset(&*next, &config())
             .unwrap()
-            .source_fingerprint;
+            .source_digest
+            .check_value::<crate::GraphLanguage>();
         assert_eq!(
             index.with_delta(&*next, &*empty, &*empty).unwrap_err(),
             TextDeltaError::SourceMismatch { expected, actual }

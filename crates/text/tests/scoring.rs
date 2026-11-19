@@ -1150,8 +1150,9 @@ fn two_independently_built_indexes_rank_identically() {
 /// identity because its canonical profile binds exact promotion and the actual
 /// query-bound law. The RDF source, analyzer, term-sequence and score lexical
 /// identities remain frozen across that ranking migration. Index v4 additionally
-/// binds surface presence. Source v2 uses a row-hash multiset with exact
-/// multiplicity; index v6 binds the complete deterministic construction inputs.
+/// binds surface presence. Source v3 is BLAKE3 over the sorted row hashes, with
+/// exact multiplicity, in place of an additive sum; index v6 binds the complete
+/// deterministic construction inputs, so its value moved with the source law.
 /// Analyzer, term-sequence and score lexical identities remain unchanged.
 #[test]
 fn the_published_text_identities_are_frozen() {
@@ -1159,12 +1160,12 @@ fn the_published_text_identities_are_frozen() {
     let index = golden_index();
     assert_eq!(
         hex(index.fingerprint()),
-        "5ec0d3126d065048475c12aec543017c937be47517dcc376fc710943fab65340",
+        "218d98a05af163f2011f21cb7e70d836ed79f50d22ff238a5ee77f5201f949dc",
         "the index fingerprint"
     );
     assert_eq!(
         hex(index.source_fingerprint()),
-        "d8e8d6663daccffa8540bf69895cd42141a2afa08ad32e71fa06f4f1e52b3393",
+        "055082e77e3f64850b859a9caeac597e7c8838f8488c5f574e29fef5994f9fff",
         "the source fingerprint"
     );
     assert_eq!(
