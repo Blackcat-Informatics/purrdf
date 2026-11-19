@@ -316,8 +316,8 @@ GTS format, section "Nested terms, lowering and term nodes":
   lowering reads. When that input holds a nested term, every blank node of it takes
   the source identifier `E([ordinal, label])`, the scope ordinal as an unsigned
   integer and the label as a byte string, the bytes the format gives a blank node of
-  a fold. Term nodes (first byte `0x81`) then precede every other blank node
-  (`0x82`), and the order of twins and of copies of a top component, the only things
+  a fold. Term nodes (first byte `0x81`) then precede every blank node of the
+  input (`0x82`), and the order of twins and of copies of a top component, the only things
   source identifiers decide, is the format's. When the input holds no nested term,
   its blank nodes keep the source identifier of four big-endian bytes of the scope
   ordinal and the label, which orders labels bytewise; the format's form would
@@ -326,14 +326,21 @@ GTS format, section "Nested terms, lowering and term nodes":
   not change the form, and a nested term only in a record changes it even when the
   view holds none. Both forms are injective, so either names each blank node once.
 * THE DATASET PATH AND A GTS READER. The canonical map of the dataset path is not
-  the positions a GTS reader reports or stores for the same data. Source
-  identifiers decide only the order of twin blank nodes and of copies of equal top
-  components, and the reader's source identifiers come from its own folds; for those
-  nodes the two maps can differ by an automorphism of the lowered set. The canonical
-  line sequence, its bytes and its digest are the same. A canonical file written
-  from the dataset path's positions holds the canonical bytes, and the order of
-  delivery a reader reports for it comes from that reader's own run, not from the
-  positions it was written from.
+  the positions a GTS reader reports or stores. Source identifiers decide only the
+  order of twin blank nodes and of copies of equal top components, and the reader's
+  source identifiers come from its own folds; for those nodes the two maps can differ
+  by an automorphism of the lowered set. When the dataset path is given the same
+  lines and records as the reader's labelled set, the canonical line sequence, its
+  bytes and its digest are the same. A GTS fold adds a `record` line for each
+  binding, suppression entry, blob entry and pair of VALUES, and one for each typed
+  literal stored as a typed value; the dataset path adds none unless the caller
+  passes them as records, so without them its sequence and digest differ. The
+  dataset folds the case of a language tag to lower case, and the format keeps the
+  text as written, so a literal whose tag has capitals gives different line bytes
+  unless the view presents the tag as written. A canonical file written from the
+  dataset path's positions holds the canonical bytes of its own set, and the order
+  of delivery a reader reports for it comes from that reader's own run, not from
+  the positions it was written from.
 * A nested term of PurRDF's model may stand as the subject or the predicate of a
   triple term, which RDF 1.2 and the format's position rules exclude. The lowering
   treats every component that is a triple term as nested, so such input is lowered
@@ -523,9 +530,11 @@ states why each consequence follows from the design.
   before.
 * **The dataset path's canonical map is not a GTS reader's.** For twin blank
   nodes and for copies of equal top components, the positions `label_view` gives
-  and those a GTS reader reports or stores for the same data can differ by an
-  automorphism; the canonical bytes and the digest are equal. A canonical file
-  written from the dataset path's positions has the canonical bytes, and a
+  and those a GTS reader reports or stores can differ by an automorphism. The
+  canonical bytes and the digest are equal only when the dataset path is given
+  the same lines and records as the reader's labelled set, including the records
+  of bindings, suppression and blob entries, VALUES pairs and typed values, and
+  language tags as the format writes them (the dataset folds their case). A
   reader's order of delivery comes from the reader's own run.
 * **Labels are output only.** A consumer reads the typed placement, not the decimal
   label. Position order differs from the byte order of labels (`10` precedes `2`),

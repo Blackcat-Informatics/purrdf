@@ -66,12 +66,14 @@
 //! node once.
 //!
 //! The canonical map of a view is not the positions a GTS reader reports or
-//! stores for the same data: the reader's source identifiers come from its own
-//! folds, so for twin blank nodes and for copies of equal top components the
-//! two maps can differ by an automorphism, while the canonical line sequence,
-//! its bytes and its digest are equal. A canonical file written from a view's
-//! positions holds the canonical bytes; the order of delivery a reader reports
-//! for it comes from the reader's own run.
+//! stores: the reader's source identifiers come from its own folds, so for twin
+//! blank nodes and for copies of equal top components the two maps can differ by
+//! an automorphism. The canonical line sequence, its bytes and its digest are
+//! equal only when the view is given the same lines and records as the reader's
+//! labelled set: the records of bindings, suppression and blob entries, VALUES
+//! pairs and typed values come from the caller, and the dataset folds the case
+//! of a language tag where the format keeps it as written. The order of delivery
+//! a reader reports for a canonical file comes from the reader's own run.
 //!
 //! Terms are lowered from the identifiers of their components over heap work
 //! lists: no triple term that holds another is expanded, each nested term is

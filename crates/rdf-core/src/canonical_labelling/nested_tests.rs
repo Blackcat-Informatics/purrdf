@@ -757,6 +757,97 @@ fn view_blank_twins_take_the_order_of_the_source_form_of_their_input() {
     assert!(at[&blank_source(0, b"b9")] < at[&blank_source(0, b"b10")]);
 }
 
+/// The source form is decided by the input the lowering reads. A nested term
+/// only in a graph the scope leaves out leaves the form of the selected
+/// statements as it was: four big-endian bytes of the scope ordinal and the
+/// label, and no term node.
+#[test]
+fn a_nested_term_in_a_graph_the_scope_leaves_out_keeps_the_four_byte_form() {
+    let mut data = Data::new();
+    let [a, p, q, c, g1, g2] = data.iris(["a", "p", "q", "c", "g1", "g2"]);
+    let x = data.blank("x", 0);
+    data.0.push_quad(x, p, c, Some(g1)).expect("pushes");
+    let inner = data.triple(a, q, c);
+    let outer = data.triple(a, p, inner);
+    data.0.push_quad(a, p, outer, Some(g2)).expect("pushes");
+    let view = data.freeze();
+
+    let kept = label_view(
+        view.as_ref(),
+        &[],
+        Scope::Graph(&iri("g1")),
+        Limit::ENGINE,
+        None,
+    )
+    .expect("labelled");
+    assert_eq!(kept.lines().blank_nodes(), 1);
+    let mut legacy = 0u32.to_be_bytes().to_vec();
+    legacy.push(b'x');
+    assert_eq!(kept.lines().source(0), legacy.as_slice());
+    assert_eq!(kept.size(), 1);
+
+    // The neighbouring input that does hold the nested term: the other graph.
+    let taken = label_view(
+        view.as_ref(),
+        &[],
+        Scope::Graph(&iri("g2")),
+        Limit::ENGINE,
+        None,
+    )
+    .expect("labelled");
+    assert_eq!(taken.lines().blank_nodes(), 1);
+    assert!(is_term_node(taken.lines().source(0)));
+}
+
+/// A nested term only in a caller's record switches every blank node of the
+/// input to the text form, including a blank node only the record names, even
+/// though the view holds no nested term.
+#[test]
+fn a_nested_term_only_in_a_record_switches_every_node_to_the_text_form() {
+    let mut data = Data::new();
+    let [p, c] = data.iris(["p", "c"]);
+    let x = data.blank("x", 0);
+    data.quad(x, p, c);
+    let view = data.freeze();
+
+    let blank = |label: &str| TermValue::Blank {
+        label: label.to_owned(),
+        scope: BlankScope(0),
+    };
+    let leaf = |name: &str| TermValue::iri(iri(name));
+    let nested = TermValue::Triple {
+        s: crate::TermBox::new(leaf("a")),
+        p: crate::TermBox::new(leaf("p")),
+        o: crate::TermBox::new(TermValue::Triple {
+            s: crate::TermBox::new(blank("y")),
+            p: crate::TermBox::new(leaf("q")),
+            o: crate::TermBox::new(leaf("c")),
+        }),
+    };
+    let terms = [nested];
+    let records = [Record::new(&[0x80], &terms)];
+    let with =
+        label_view(view.as_ref(), &records, Scope::Dataset, Limit::ENGINE, None).expect("labelled");
+    let sources: Vec<&[u8]> = (0..with.lines().blank_nodes())
+        .map(|node| with.lines().source(node))
+        .collect();
+    assert!(sources.contains(&blank_source(0, b"x").as_slice()));
+    assert!(sources.contains(&blank_source(0, b"y").as_slice()));
+    assert_eq!(sources.iter().filter(|s| is_term_node(s)).count(), 1);
+    assert_eq!(sources.len(), 3);
+
+    // The neighbouring input without the record keeps the four-byte form.
+    let without = labelled(view.as_ref());
+    let mut legacy = 0u32.to_be_bytes().to_vec();
+    legacy.push(b'x');
+    assert_eq!(without.lines().source(0), legacy.as_slice());
+}
+
+/// A term node's source identifier: an array of one, first byte `0x81`.
+fn is_term_node(source: &[u8]) -> bool {
+    source.first() == Some(&0x81)
+}
+
 /// A view whose one literal carries its language as written, for the text's
 /// literal sources: the dataset folds the case of a language tag, the format
 /// does not.
