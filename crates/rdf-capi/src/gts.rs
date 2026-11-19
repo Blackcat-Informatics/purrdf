@@ -1,15 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `purrdf_from_gts` / `purrdf_to_gts`: lossless GTS container read/write.
+//! `purrdf_from_gts` / `purrdf_to_gts`: GTS container read/write.
 //!
 //! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
 //! `gts_write` / `import_gts_events` core), so a language shim
 //! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
 //! "one shared library, not two" clause.
 //!
-//! GTS is a lossless container: both the plain-graph data AND the full RDF-1.2
-//! statement layer (quoted triples + reifier bindings) survive the round-trip.
+//! Both the plain-graph data AND the full RDF-1.2 statement layer (quoted
+//! triples + reifier bindings) survive the round-trip. A language tag that is not
+//! lower case is read folded to lower case, and this entry point returns no loss
+//! report.
 //! The earlier `gts-missing-reifier-binding` gap was closed by the native
 //! text-codec work; see [`purrdf_from_gts`].
 
@@ -30,10 +32,11 @@ use crate::status::PurrdfStatus;
 /// Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
 /// caller-owned handle (free with `purrdf_dataset_free`).
 ///
-/// **Lossless**, including the RDF-1.2 statement layer: a reifier-bound quoted
+/// Keeps the RDF-1.2 statement layer: a reifier-bound quoted
 /// triple written by `to_gts` is read back intact via the canonical fold-back
 /// (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
-/// gap was closed by the native text-codec work.
+/// gap was closed by the native text-codec work. A language tag that is not lower
+/// case is read folded to lower case, and the envelope is not returned.
 ///
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the out-params must be writable.

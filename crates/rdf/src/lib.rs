@@ -49,6 +49,7 @@ mod gts_core;
 mod gts_import_blobs;
 mod gts_import_graph;
 mod gts_import_sink;
+mod gts_language_fold;
 mod gts_resolve;
 // Full content-chain verification: COSE signatures + expected-head replay +
 // digest inclusion, re-exported through the `gts` adapter surface below.
