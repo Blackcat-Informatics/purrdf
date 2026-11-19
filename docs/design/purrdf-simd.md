@@ -70,6 +70,15 @@ recorded compiler arguments and content digest, and reevaluates the current mani
 Parsed functions can be reused; a previous pass verdict cannot. Missing or changed
 assembly evidence fails explicitly and can be reconstructed with `--fresh`.
 
+In CI one job resolves the floating nightly to a single dated toolchain once per
+run. The seven configuration jobs install exactly that toolchain, select it with
+`RUSTUP_TOOLCHAIN`, and refuse to continue when `rustc -vV` differs from the
+resolved version. The aggregate writes the same resolved version as
+`compiler-receipt.txt`, and `--merge-reports` refuses any report that records another
+compiler. A run that spans a nightly publish therefore measures with one compiler, and
+rerunning one job installs the same dated toolchain. The floating channel of
+`rust-toolchain.toml` is unchanged for every other gate.
+
 Two configurations run concurrently by default, sharing the effective Cargo job
 budget. `--jobs` changes the number of configuration workers, not the total compiler
 budget. The Stage Cargo shim recognizes the gate's explicit assembly context, retains
