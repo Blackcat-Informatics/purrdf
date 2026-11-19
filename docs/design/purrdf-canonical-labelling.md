@@ -261,7 +261,10 @@ walk, so they refuse the same inputs with the same fields. No label, digest,
 position, identity, record or map depends on the walk or on `L`.
 `label_with_walk` labels under a given limit and returns, besides the result, the
 walk's totals by kind (`WalkTotals`), the figures the specification's row `walk`
-prints.
+prints. The default canonical form records the walk's total as its
+`SearchEvent::LabellingUnit` count whether the labelling completes or is refused,
+so a receipt reports the same figure either way; `Labelled::explored` is a
+separate engine figure that holds no twin units.
 
 ### 3.5 The optimised engine
 

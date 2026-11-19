@@ -265,30 +265,45 @@ pub(crate) fn twin_tests(
 pub(crate) struct Relation {
     classes: Classes,
     len: usize,
+    /// For the representative of each class, its least member: a member is
+    /// related to an earlier one exactly when its class has a smaller member.
+    least: Vec<usize>,
     /// The version of `TW` at the last pass of (K1): the pass is repeated only
     /// when a join of `TW`, by this call or a nested one, has changed it.
     twin_version: Option<u64>,
     /// The passes of (K1) made.
     #[cfg(test)]
     pub(crate) passes: u64,
+    /// The members and lookups the relation has read, for the bound on the
+    /// work of a walk.
+    #[cfg(test)]
+    pub(crate) reads: u64,
 }
 
 impl Relation {
     pub(crate) fn new(len: usize) -> Self {
         Self {
             classes: Classes::new(len),
+            least: (0..len).collect(),
             len,
             twin_version: None,
             #[cfg(test)]
             passes: 0,
+            #[cfg(test)]
+            reads: 0,
         }
     }
 
     /// Relate the members of indices `i` and `j`.
     pub(crate) fn relate(&mut self, i: usize, j: usize) {
+        #[cfg(test)]
+        {
+            self.reads += 2;
+        }
         let (ri, rj) = (self.classes.find(i), self.classes.find(j));
         if ri != rj {
             self.classes.join(ri, rj);
+            self.least[ri] = self.least[ri].min(self.least[rj]);
         }
     }
 
@@ -305,6 +320,7 @@ impl Relation {
         #[cfg(test)]
         {
             self.passes += 1;
+            self.reads += target.len() as u64;
         }
         let mut keyed: Vec<(usize, usize)> = target
             .iter()
@@ -323,10 +339,14 @@ impl Relation {
     }
 
     /// Step 3(b)(i): whether the member of index `i` is related to an earlier
-    /// one, so that its child is skipped.
+    /// one, so that its child is skipped: its class has a smaller member.
     pub(crate) fn skipped(&mut self, i: usize) -> bool {
+        #[cfg(test)]
+        {
+            self.reads += 1;
+        }
         let root = self.classes.find(i);
-        (0..i).any(|j| self.classes.find(j) == root)
+        self.least[root] < i
     }
 
     /// The number of members whose class holds one of `members`. With the

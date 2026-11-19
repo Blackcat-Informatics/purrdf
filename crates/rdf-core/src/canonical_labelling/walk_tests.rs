@@ -766,12 +766,14 @@ fn the_shared_inputs_with_reifiers_walk_to_their_figures() {
     }
 }
 
-/// The relation of (K1) over a call that visits every member, as a directed
-/// cycle of 2,000 blank nodes makes: the relation is needed at each visit, and
-/// the twin classes change only when a twin test passes, so one pass serves
-/// every visit until a join of the classes (by the call or a nested one)
-/// changes them. A pass relates each member to the first of its class and no
-/// other; a rescan per member is cubic over the visits.
+/// The walk does bounded work on a large target cell. A call that visits every
+/// member, as a directed cycle of 2,000 blank nodes makes, needs the relation
+/// at each visit; the twin classes change only when a twin test passes, so the
+/// walk reads them once until a join (by the call or a nested one) changes
+/// them, and a visit never rescans the earlier members. The skip decisions
+/// are those of the earlier members' rule, and the cycle labels in the
+/// optimised engine with the neighbouring 12-node cycle labelling the same in
+/// both engines.
 #[test]
 fn the_twin_relation_is_read_in_passes_not_per_member_scans() {
     const N: usize = 2_000;
@@ -810,4 +812,72 @@ fn the_twin_relation_is_read_in_passes_not_per_member_scans() {
     optimised::label_walked(&set, Limit::ENGINE.get(), false, None)
         .map_err(super::Halt::expect_refusal)
         .expect("a directed cycle of 2,000 nodes labels");
+}
+
+/// The skip rule is "related to an earlier member", whatever the order of the
+/// relations and the visits: the least member of the class decides it, and
+/// the work of a visit does not grow with the target cell. A model that
+/// scans the earlier members decides every query alike, and 100,000 visits
+/// read a bounded number of members.
+mod skip {
+    use super::{Classes, Relation};
+    use purrdf_testkit::prop::prelude::*;
+
+    /// The members related to an earlier one, by the scan the walk replaced.
+    fn scan(labels: &[usize], i: usize) -> bool {
+        (0..i).any(|j| labels[j] == labels[i])
+    }
+
+    prop_test! {
+        #![prop_config(Config::with_cases(256))]
+
+        /// A skip query agrees with the scan of the earlier members after any
+        /// sequence of relations and twin joins.
+        #[test]
+        fn a_skip_agrees_with_the_scan_of_earlier_members(
+            steps in prop::collection::vec((0usize..24, 0usize..24, any::<bool>()), 0..60)
+        ) {
+            const N: usize = 24;
+            let mut relation = Relation::new(N);
+            let mut labels: Vec<usize> = (0..N).collect();
+            for (i, j, query) in steps {
+                if query {
+                    prop_assert_eq!(relation.skipped(i), scan(&labels, i), "member {}", i);
+                } else {
+                    relation.relate(i, j);
+                    let (from, to) = (labels[j], labels[i]);
+                    for label in &mut labels {
+                        if *label == from {
+                            *label = to;
+                        }
+                    }
+                }
+            }
+            for i in 0..N {
+                prop_assert_eq!(relation.skipped(i), scan(&labels, i), "member {}", i);
+            }
+        }
+    }
+
+    #[test]
+    fn a_visit_of_a_large_target_cell_does_bounded_work() {
+        const N: usize = 100_000;
+        let target: Vec<usize> = (0..N).collect();
+        let mut tw = Classes::new(N);
+        let mut relation = Relation::new(N);
+        for visit in 0..N {
+            relation.twins(&target, &mut tw);
+            // Every tenth member is related to the one before it.
+            if visit % 10 == 9 {
+                relation.relate(visit, visit - 1);
+            }
+            let skipped = relation.skipped(visit);
+            assert_eq!(skipped, visit % 10 == 9, "visit {visit}");
+        }
+        assert!(
+            relation.reads <= 8 * N as u64,
+            "{} reads for {N} visits",
+            relation.reads
+        );
+    }
 }
