@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1339-canonical-labelling-is-factorial-in",
+  "branch": "paudley/1339-canonical-labelling-is-factorial-in",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "5bfdef3375feb02acf406150502271cb251a18c0",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1339-canonical-labelling-is-factorial-in/.stage/canonical-labelling-is-factorial-in/sync/20261119T090013-6c928478035e498e97740e0a0f617a4d",
+  "conflicts": [],
+  "status": "completed",
+  "base": "7529d48913eed643394f6a1887c19a13af10d103",
+  "merge_bases": [
+    "51c3c1534a80f58e7c99746575b0a70e63bed113"
+  ],
+  "merge_index": "2dcf40fb76a860b18032fc4e26454eebf933c1a8c73b56058a8b4f4c4539f72f",
+  "candidate_tree": "cb215762865ff030ee7e12fc04921991c6c03d31",
+  "candidate_patch": "candidate-f82d939b105141649e8e436efbc1c7db.patch",
+  "stdout_log": "commit-f82d939b105141649e8e436efbc1c7db.stdout.log",
+  "stderr_log": "commit-f82d939b105141649e8e436efbc1c7db.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 114.4883199950018,
+  "commit": "e5062f37eca332ed6a519501ce0307e42156fc81",
+  "tree": "cb215762865ff030ee7e12fc04921991c6c03d31",
+  "exit_code": 0
+}

@@ -1,0 +1,3175 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index ebcf15dc6..361094c7f 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -8,6 +8,31 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ## [Unreleased]
+ 
++- **Breaking value change: row-set identities and fingerprints are BLAKE3 over
++  sorted row digests.** The resident snapshot identity and its compositions over
++  composite, delta, paged and segmented views, the SHACL class-membership view
++  identity, `SourceVersion::content_fingerprint`, the text index source
++  fingerprint and generation, and the standalone surface generation hashed an
++  additive `Multiset256` sum, which a party choosing rows can make collide for
++  different row sets. Each row family is now hashed in ascending digest order
++  under its own versioned domain, through the new
++  `purrdf_hash::multiset::sorted_fingerprint`. Every signature stays. Values
++  move: content identities, execution receipts (`contentIdentity`,
++  `executionIdentity`) and text generations recorded by 4.x stop matching, except
++  that a segmented stack made only of image layers, with no removal or
++  declaration owners and no resident head, keeps its 4.x snapshot identity and
++  the receipts bound to it (see "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
++  keeps its 4.x additive value and is deprecated. The first identity request
++  of a dataset frozen without eager statistics now sorts its record digests in a
++  scratch buffer, a text delta hashes the whole row directory, and a standalone
++  surface delta sorts every source digest (about 9% more instructions at 2048
++  rows). `SourceMatchEvidence::literal` of an index-built surface also moves. The new row
++  benches `source_change_counts` (`identity_*`, `version_fingerprint`) and
++  `purrdf-text` `source_identity_counts` report their retired instructions and
++  allocations, through the new shared runner
++  `purrdf_testkit::bench::counter::run_count_rows` and
++  `purrdf_alloc_probe::whole_process_report`.
++
+ - **Behaviour change: the Python GTS fold view refuses a damaged file, and the
+   seeking reader refuses an unclassifiable tail item.** `GtsFoldViewNative.from_bytes`
+   and `gts_relational_rows_from_bytes` now raise `ValueError` (with the native `code` and `diagnostic_json`) when
+@@ -25,8 +50,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   `purrdf-core/source-directory-branch/v1` and
+   `purrdf-core/source-directory-leaf/v1`), kept in sparse checkpoints and in the
+   persistent effective directory so an edit stays logarithmic. The additive sum
+-  remains for content fingerprints and for the agreement check between two values
+-  one process built. `SegmentedBuilder` writes format version `8` (`PURRSEG8`),
++  remains only for the agreement check between two values one process built. `SegmentedBuilder` writes format version `8` (`PURRSEG8`),
+   whose source checkpoints carry those nodes; version `7` images still certify
+   and open, their additive checkpoints serve only as a consistency check, and
+   their ranges are compared from the records. Snapshot identities and receipts of
+@@ -57,8 +81,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   directory of the digest of every selected source row, token-less rows
+   included, and each removed row must consume one occurrence of its digest;
+   otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
+-  The directory is updated by every applied delta and is not part of either
+-  fingerprint. A genuine delta applies as before.
++  The directory is updated by every applied delta, and the source fingerprint
++  hashes it. A genuine delta applies as before.
+ - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
+   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
+   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
+diff --git crates/alloc-probe/src/lib.rs crates/alloc-probe/src/lib.rs
+index be63c2a23..716492f29 100644
+--- crates/alloc-probe/src/lib.rs
++++ crates/alloc-probe/src/lib.rs
+@@ -721,6 +721,30 @@ impl Drop for WholeProcessWindow {
+     }
+ }
+ 
++/// The four quantities as `allocations=… requested_bytes=… retained_bytes=…
++/// peak_working_bytes=…`, the line format of the row benches.
++impl core::fmt::Display for Measurement {
++    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        write!(
++            out,
++            "allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={}",
++            self.allocations, self.requested_bytes, self.retained_bytes, self.peak_working_bytes
++        )
++    }
++}
++
++/// Run `work` in a fresh [`WholeProcessWindow`] and return its value beside
++/// the window's measurement, rendered as [`Measurement`]'s `Display` line.
++///
++/// # Panics
++/// Panics, as [`WholeProcessWindow::open`] does, when another whole-process
++/// window is open.
++pub fn whole_process_report<T>(work: impl FnOnce() -> T) -> (T, String) {
++    let window = WholeProcessWindow::open();
++    let value = work();
++    (value, window.close().to_string())
++}
++
+ /// The process resident set size in KiB, read from `/proc/self/statm` (field 2 is
+ /// the resident page count). Linux-only; on any other platform this reports `0` and
+ /// only the allocator figures carry the evidence.
+diff --git crates/hash/README.md crates/hash/README.md
+index 984e95514..b8510bda9 100644
+--- crates/hash/README.md
++++ crates/hash/README.md
+@@ -596,7 +596,10 @@ source on every run.
+ | `b"purrdf-core/composite-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/composite.rs` |
+ | `b"purrdf-core/content-alias-revision/v1"` | `REVISION_DOMAIN` | `crates/rdf-core/src/content_alias.rs` |
+ | `b"purrdf-core/dataset-state/v1"` | `STATE_DOMAIN` | `crates/rdf-core/src/ir/canon/state.rs` |
+-| `b"purrdf-core/delta-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
++| `b"purrdf-core/delta-snapshot/converted/v2"` | `CONVERTED` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
++| `b"purrdf-core/delta-snapshot/suppressed/v2"` | `SUPPRESSED` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
++| `b"purrdf-core/delta-snapshot/v2"` | `SNAPSHOT` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
++| `b"purrdf-core/delta-snapshot/withdrawn-graphs/v2"` | `WITHDRAWN` | `crates/rdf-core/src/ir/mutable/delta_view.rs` |
+ | `b"purrdf-core/evidence-aggregate-column/v1"` | `(inline)` | `crates/rdf-core/src/evidence.rs` |
+ | `b"purrdf-core/evidence-annotation/v1"` | `ANNOTATION_DOMAIN` | `crates/rdf-core/src/evidence/ledger/row.rs` |
+ | `b"purrdf-core/evidence-frame/v1"` | `FRAME_DOMAIN` | `crates/rdf-core/src/evidence/frame.rs` |
+@@ -607,8 +610,8 @@ source on every run.
+ | `b"purrdf-core/residue-snapshot/v1"` | `RESIDUE` | `crates/rdf-core/src/ir/pipeline_bundle.rs` |
+ | `b"purrdf-core/segmented-stack-snapshot/v1"` | `(inline)` | `crates/rdf-core/src/ir/segmented/stack.rs` |
+ | `b"purrdf-core/snapshot/dictionary/v1"` | `(inline)` | `crates/rdf-core/src/ir/frozen_terms.rs` |
+-| `b"purrdf-core/snapshot/graphs/v1"` | `GRAPHS` | `crates/rdf-core/src/source.rs` |
+-| `b"purrdf-core/snapshot/rows/v1"` | `ROWS` | `crates/rdf-core/src/source.rs` |
++| `b"purrdf-core/snapshot/graphs/v2"` | `GRAPHS` | `crates/rdf-core/src/source.rs` |
++| `b"purrdf-core/snapshot/rows/v2"` | `ROWS` | `crates/rdf-core/src/source.rs` |
+ | `b"purrdf-core/source-directory-branch/v1"` | `BRANCH_DOMAIN` | `crates/rdf-core/src/ir/source_directory/merkle.rs` |
+ | `b"purrdf-core/source-directory-leaf/v1"` | `LEAF_DOMAIN` | `crates/rdf-core/src/ir/source_directory/merkle.rs` |
+ | `b"purrdf-datalog restricted chase witness v1"` | `WITNESS_DIGEST_TAG` | `crates/datalog/src/chase.rs` |
+@@ -685,7 +688,8 @@ source on every run.
+ | `b"purrdf-segmented-node-v1\0"` | `SEGMENTED_NODE_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+ | `b"purrdf-segmented-requests-v2\0"` | `SEGMENTED_REQUESTS_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+ | `b"purrdf-segmented-snapshot-v1\0"` | `SEGMENTED_SNAPSHOT_DOMAIN` | `crates/rdf-core/src/ir/segmented/mod.rs` |
+-| `b"purrdf-shapes/class-membership-snapshot/v1"` | `(inline)` | `crates/shapes/src/class_membership.rs` |
++| `b"purrdf-shapes/class-membership-edges/v1"` | `(inline)` | `crates/shapes/src/class_membership.rs` |
++| `b"purrdf-shapes/class-membership-snapshot/v2"` | `(inline)` | `crates/shapes/src/class_membership.rs` |
+ | `b"purrdf-shapes/data-view-snapshot/v1"` | `(inline)` | `crates/shapes/src/data_view.rs` |
+ | `b"purrdf-shapes/product/class-catalog"` | `CLASS_CATALOG_DOMAIN` | `crates/shapes/src/product/identity.rs` |
+ | `b"purrdf-shapes/rule-execution/v2"` | `(inline)` | `crates/shapes/src/sparql/coordinates.rs` |
+@@ -710,11 +714,14 @@ source on every run.
+ | `b"purrdf-text/index/v6"` | `INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+ | `b"purrdf-text/resolved-analyzer/v4\0"` | `ANALYZER_DOMAIN` | `crates/text/src/analysis.rs` |
+ | `b"purrdf-text/source/v2"` | `SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+-| `b"purrdf-text/surface-generation/v2\0"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
++| `b"purrdf-text/source/v3"` | `SOURCE_IDENTITY_DOMAIN` | `crates/text/src/index.rs` |
++| `b"purrdf-text/surface-generation/v3"` | `GENERATION_DOMAIN` | `crates/text/src/surface.rs` |
+ | `b"purrdf-text/surface-literal/v1\0"` | `LITERAL_DOMAIN` | `crates/text/src/surface.rs` |
+ | `b"purrdf-text/surface-source/v1\0"` | `SOURCE_DOMAIN` | `crates/text/src/surface.rs` |
++| `b"purrdf-text/surface-sources/v1"` | `SOURCES_DOMAIN` | `crates/text/src/surface.rs` |
+ | `b"purrdf-text/triples/index/v3"` | `TRIPLE_INDEX_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
+ | `b"purrdf-text/triples/source/v2"` | `TRIPLE_SOURCE_DIGEST_DOMAIN` | `crates/text/src/index.rs` |
++| `b"purrdf-text/triples/source/v3"` | `TRIPLE_SOURCE_IDENTITY_DOMAIN` | `crates/text/src/index.rs` |
+ | `b"purrdf-toml-document-v1"` | `DOCUMENT_DOMAIN` | `crates/toml/src/profile.rs` |
+ | `b"purrdf-toml-profile-v1"` | `PROFILE_DOMAIN` | `crates/toml/src/profile.rs` |
+ | `b"purrdf-xsd/date-time-representation/v1"` | `(inline)` | `crates/xsd/src/temporal.rs` |
+@@ -743,7 +750,7 @@ source on every run.
+ | `b"purrdf/point-distance-certificate/v1"` | `POINT_CERTIFICATE` | `crates/geo-kernel/src/metric.rs` |
+ | `b"purrdf/source-record/v1"` | `RECORD` | `crates/rdf-core/src/source.rs` |
+ | `b"purrdf/source-row/v1"` | `ROW` | `crates/rdf-core/src/source.rs` |
+-| `b"purrdf/source-version/v1"` | `SOURCE_VERSION` | `crates/rdf-core/src/source.rs` |
++| `b"purrdf/source-version/v2"` | `SOURCE_VERSION` | `crates/rdf-core/src/source.rs` |
+ | `b"purrdf/triples/source-row/v1"` | `TRIPLE_ROW` | `crates/rdf-core/src/source.rs` |
+ | `b"purrdf:evidence:v1"` | `EVIDENCE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
+ | `b"purrdf:fusion-profile:v1"` | `FUSION_PROFILE_ID_DOMAIN` | `crates/retrieval/src/id.rs` |
+diff --git crates/hash/src/multiset.rs crates/hash/src/multiset.rs
+index 58674895c..499c2eb32 100644
+--- crates/hash/src/multiset.rs
++++ crates/hash/src/multiset.rs
+@@ -4,10 +4,13 @@
+ //! Reversible accounting for multisets of 256-bit member digests.
+ //!
+ //! Members add in Z/(2^256), with an independent exact 128-bit population.
+-//! Order does not matter; repeated members contribute repeatedly. This is a
+-//! multiset fingerprint, not a membership or authentication proof. A caller
+-//! must establish membership before subtraction and obtain the observed source
+-//! state independently of a proposed delta.
++//! Order does not matter; repeated members contribute repeatedly. The sum is an
++//! accounting value for drift and population checks, not an identity: a party
++//! choosing members can build two different multisets with one sum and
++//! population, and it is no membership or authentication proof. A caller must
++//! establish membership before subtraction and obtain the observed source state
++//! independently of a proposed delta. An identity over a row set is
++//! [`sorted_fingerprint`].
+ 
+ use crate::{Domain, blake3, frame::frame_le_with};
+ 
+@@ -152,6 +155,8 @@ impl Multiset256 {
+ 
+     /// BLAKE3 of the framed domain, 16-byte little-endian population, then
+     /// the 32-byte little-endian sum. Every family supplies its explicit domain.
++    /// The value is an accounting check, not collision resistant against chosen
++    /// members; use [`sorted_fingerprint`] for an identity.
+     #[must_use]
+     pub fn fingerprint(&self, domain: Domain) -> [u8; 32] {
+         let mut digest = blake3::Hasher::new();
+@@ -164,6 +169,40 @@ impl Multiset256 {
+     }
+ }
+ 
++/// BLAKE3 of the framed domain, every member digest in ascending order, then
++/// the exact member count as 16 little-endian bytes.
++///
++/// This is the identity of a multiset of rows: the hash commits to the sorted
++/// sequence itself, so two different multisets share a fingerprint only through
++/// a BLAKE3 collision. The additive [`Multiset256`] sum is no such identity: a
++/// party choosing the members can construct two different multisets with equal
++/// sums and populations. Every row family supplies its own domain. The caller
++/// supplies the digests already sorted, where it visits every row; a debug
++/// build refuses an unsorted sequence.
++///
++/// # Panics
++/// Panics, in a debug build only, when `members` is not in ascending order.
++#[must_use]
++pub fn sorted_fingerprint(domain: Domain, members: impl IntoIterator<Item = [u8; 32]>) -> [u8; 32] {
++    let mut digest = blake3::Hasher::new();
++    frame_le_with(domain.as_bytes(), &mut |part| {
++        digest.update(part);
++    });
++    let mut population = 0_u128;
++    let mut previous: Option<[u8; 32]> = None;
++    for member in members {
++        debug_assert!(
++            previous.is_none_or(|before| before <= member),
++            "sorted_fingerprint members must be in ascending order"
++        );
++        previous = Some(member);
++        digest.update(&member);
++        population += 1;
++    }
++    digest.update(&population.to_le_bytes());
++    *digest.finalize().as_bytes()
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+@@ -226,4 +265,42 @@ mod tests {
+         left.subtract(duplicate).unwrap();
+         assert_eq!(left, Multiset256::default());
+     }
++
++    /// The row-set identity law: two multisets with equal additive sums and
++    /// populations get different fingerprints, as do a member and its repeat
++    /// and one multiset under two domains; the same multiset agrees.
++    #[test]
++    fn sorted_fingerprints_separate_additive_collisions_multiplicity_and_domains() {
++        const ROWS: Domain = Domain::new(b"purrdf-hash/test/rows");
++        const OTHER: Domain = Domain::new(b"purrdf-hash/test/other");
++        let member = |seed: u8| *blake3::hash(&[seed]).as_bytes();
++        let (a, b, c) = (member(1), member(2), member(3));
++        let mut d = Multiset256::default();
++        d.insert(a).unwrap();
++        d.insert(b).unwrap();
++        d.remove(c).unwrap();
++        let d = *d.sum();
++        let sorted = |mut members: Vec<[u8; 32]>| {
++            members.sort_unstable();
++            members
++        };
++        let (left, right) = (sorted(vec![a, b]), sorted(vec![c, d]));
++        let additive = |members: &[[u8; 32]]| {
++            let mut sum = Multiset256::default();
++            for &member in members {
++                sum.insert(member).unwrap();
++            }
++            sum
++        };
++        assert_eq!(additive(&left), additive(&right));
++        let fingerprint =
++            |domain, members: &[[u8; 32]]| sorted_fingerprint(domain, members.iter().copied());
++        assert_ne!(fingerprint(ROWS, &left), fingerprint(ROWS, &right));
++        assert_eq!(
++            fingerprint(ROWS, &left),
++            fingerprint(ROWS, &sorted(vec![b, a]))
++        );
++        assert_ne!(fingerprint(ROWS, &[a]), fingerprint(ROWS, &[a, a]));
++        assert_ne!(fingerprint(ROWS, &left), fingerprint(OTHER, &left));
++    }
+ }
+diff --git crates/rdf-core/benches/source_change_counts.rs crates/rdf-core/benches/source_change_counts.rs
+index 10bd1e542..abc16e9ae 100644
+--- crates/rdf-core/benches/source_change_counts.rs
++++ crates/rdf-core/benches/source_change_counts.rs
+@@ -23,6 +23,15 @@
+ //!   differs while only the middle row changed.
+ //! * `statistics`: `TripleDatasetBuilder::freeze` of the same rows as
+ //!   triples, which builds the eager statistics and reads no change feed.
++//! * `identity_resident`: the first content identity of the resident freeze
++//!   of the fixture, which has no eager statistics and reads every row.
++//! * `identity_admitted`: the first content identity of the admitted freeze,
++//!   which reads its eager statistics' record directory.
++//! * `identity_delta`: the first content identity of a mutation snapshot that
++//!   removes the middle quad and inserts its changed revision, over a base
++//!   whose identity is already sealed.
++//! * `version_fingerprint`: `SourceVersion::content_fingerprint` of the first
++//!   source version of a one-image stack.
+ //!
+ //! The fixture has `PURRDF_SOURCE_CHANGE_ROWS` rows (2048 by default), each a
+ //! quad (a triple in `statistics`), a reifier and an annotation. Fixture construction, sealing of the
+@@ -34,36 +43,35 @@ use std::hint::black_box;
+ use std::ops::ControlFlow;
+ use std::sync::Arc;
+ 
+-use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
++use purrdf_alloc_probe::CountingAllocator;
+ use purrdf_core::source::SourceVisit;
+ use purrdf_core::{
+-    DatasetView, RdfDataset, RdfLiteral, SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer,
+-    SegmentedLayerMetadata, SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId,
+-    TripleDatasetBuilder,
++    ContentIdentified, DatasetMut, DatasetView, MutableDataset, QuadValues, RdfDataset, RdfLiteral,
++    SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer, SegmentedLayerMetadata,
++    SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId, TripleDatasetBuilder,
+ };
+ 
+ #[path = "../tests/support/source_snapshot.rs"]
+ mod source_snapshot;
+ 
++use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
++
+ #[global_allocator]
+ static GLOBAL: CountingAllocator = CountingAllocator;
+ 
+-const ROWS: [&str; 6] = [
++const ROWS: [&str; 10] = [
+     "seal",
+     "capture",
+     "feed_layers",
+     "feed_head",
+     "feed_regroup",
+     "statistics",
++    "identity_resident",
++    "identity_admitted",
++    "identity_delta",
++    "version_fingerprint",
+ ];
+ 
+-fn rows() -> usize {
+-    std::env::var("PURRDF_SOURCE_CHANGE_ROWS").map_or(2048, |raw| {
+-        raw.parse()
+-            .expect("PURRDF_SOURCE_CHANGE_ROWS is an integer")
+-    })
+-}
+-
+ fn limits() -> SegmentedReadLimits {
+     SegmentedReadLimits::new(1 << 30, 64, 20_000_000, 1 << 34, 32)
+ }
+@@ -73,11 +81,25 @@ fn builder(dataset: &RdfDataset) -> SegmentedBuilder {
+ }
+ 
+ /// A builder over the rows of `dataset` whose subject `keep` admits.
++///
++/// The construction limits are the floor of 2^20 terms, 2^28 term bytes and 2^20
++/// rows, raised to the fixture's own term count, arena bytes and row count, so
++/// every fixture size builds and the default size keeps its floor.
+ fn builder_of(dataset: &RdfDataset, keep: impl Fn(TermId) -> bool) -> SegmentedBuilder {
+-    let mut builder = SegmentedBuilder::new(
+-        SegmentedBuildLimits::new(1 << 20, 1 << 28, 1 << 20, 4096, 64).unwrap(),
++    let fit = |actual: usize, floor: u32| {
++        u32::try_from(actual)
++            .expect("fixture within the u32 construction bounds")
++            .max(floor)
++    };
++    let limits = SegmentedBuildLimits::new(
++        fit(dataset.term_count(), 1 << 20),
++        fit(dataset.rdf_text_bytes(), 1 << 28),
++        fit(dataset.rdf_row_count(), 1 << 20),
++        4096,
++        64,
+     )
+     .unwrap();
++    let mut builder = SegmentedBuilder::new(limits).unwrap();
+     for (stream, rows) in [
+         dataset.quads().collect::<Vec<_>>(),
+         dataset.reifier_quads().collect(),
+@@ -136,7 +158,7 @@ fn head(dataset: Arc<RdfDataset>) -> SegmentedResidentHead {
+ 
+ /// Prepare one row outside the window; the returned closure is the measured
+ /// work and returns its witness.
+-fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
++fn prepare(row: &str, count: usize) -> CountWork {
+     let original = source_snapshot::dataset(count, false, false);
+     let changed = source_snapshot::dataset(count, true, false);
+     match row {
+@@ -154,6 +176,60 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
+                 u64::try_from(version.statement_count()).unwrap()
+             })
+         }
++        "identity_resident" => {
++            let dataset = source_snapshot::dataset(count, false, false);
++            Box::new(move || first_byte(&dataset.content_identity().unwrap()))
++        }
++        "identity_admitted" => {
++            let builder = source_snapshot::builder(count, false, false);
++            let mut admission = purrdf_lex::allocation::Resident;
++            let bytes = builder.native_buffer_bytes().unwrap();
++            let dataset = builder
++                .freeze_with_memory(&mut purrdf_lex::allocation::Memory::resume(
++                    &mut admission,
++                    bytes,
++                ))
++                .unwrap();
++            Box::new(move || first_byte(&dataset.content_identity().unwrap()))
++        }
++        "identity_delta" => {
++            let base = source_snapshot::dataset(count, false, false);
++            base.content_identity().unwrap();
++            let changed = source_snapshot::dataset(count, true, false);
++            let middle = |dataset: &RdfDataset| {
++                let row = dataset
++                    .quads()
++                    .find(|row| {
++                        dataset.term_value(row.s)
++                            == purrdf_core::TermValue::iri(format!("urn:source:{}", count / 2))
++                    })
++                    .unwrap();
++                QuadValues {
++                    s: dataset.term_value(row.s),
++                    p: dataset.term_value(row.p),
++                    o: dataset.term_value(row.o),
++                    g: row.g.map(|id| dataset.term_value(id)),
++                }
++            };
++            let mut mutation = MutableDataset::new(Arc::clone(&base));
++            assert!(mutation.remove(&middle(&base)));
++            assert!(mutation.insert(middle(&changed)).unwrap());
++            let view = mutation.snapshot_view().unwrap();
++            Box::new(move || first_byte(&view.content_identity().unwrap()))
++        }
++        "version_fingerprint" => {
++            let mut stack = SegmentedStack::default();
++            stack.publish(vec![layer(&original)], limits()).unwrap();
++            let version = stack
++                .snapshot()
++                .unwrap()
++                .query(limits())
++                .unwrap()
++                .source_version()
++                .unwrap()
++                .unwrap();
++            Box::new(move || u64::from(black_box(version.content_fingerprint())[0]))
++        }
+         "statistics" => {
+             let builder = triples(count);
+             Box::new(move || u64::try_from(black_box(builder.freeze().unwrap()).len()).unwrap())
+@@ -208,6 +284,11 @@ fn prepare(row: &str, count: usize) -> Box<dyn FnOnce() -> u64> {
+     }
+ }
+ 
++/// A witness that depends on the whole identity.
++fn first_byte(identity: &purrdf_hash::hex::Digest32) -> u64 {
++    u64::from(black_box(identity.as_bytes())[0])
++}
++
+ /// The `statistics` fixture: the source rows as triples, reifiers and
+ /// annotations in a compact builder, which is frozen in the window.
+ fn triples(count: usize) -> TripleDatasetBuilder {
+@@ -233,75 +314,14 @@ fn triples(count: usize) -> TripleDatasetBuilder {
+     builder
+ }
+ 
+-#[cfg(target_os = "linux")]
+-fn child(row: &str, count: usize) {
+-    use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
+-    let work = prepare(row, count);
+-    let mut control = CounterControl::required().expect("admitted instruction counter");
+-    control.command(CounterCommand::Enable).expect("enable");
+-    let witness = work();
+-    control.command(CounterCommand::Disable).expect("disable");
+-    println!("witness={witness}");
+-}
+-
+-#[cfg(target_os = "linux")]
+-fn counts(row: &str, count: usize, witness: u64) {
+-    use purrdf_testkit::bench::counter::collect_instructions;
+-    let samples: usize = std::env::var("PURRDF_SOURCE_CHANGE_COUNT_SAMPLES").map_or(3, |raw| {
+-        raw.parse().expect("the sample count is an integer")
+-    });
+-    let executable = std::env::current_exe().expect("the bench binary path");
+-    let home = std::env::temp_dir().join(format!("source_change_counts_{}", std::process::id()));
+-    std::fs::create_dir_all(&home).expect("the scratch directory");
+-    let mut taken = Vec::new();
+-    for sample in 0..samples {
+-        let directory = home.join(format!("{row}_{sample}"));
+-        let args = ["--child".into(), row.into(), count.to_string().into()];
+-        let sample = collect_instructions(&executable, &args, &directory)
+-            .unwrap_or_else(|error| panic!("{row}: {error}"));
+-        let stdout =
+-            std::fs::read_to_string(directory.join("workload.stdout")).expect("the child's output");
+-        assert_eq!(stdout.trim(), format!("witness={witness}"), "{row}");
+-        taken.push(sample.instructions.to_string());
+-    }
+-    let _ = std::fs::remove_dir_all(&home);
+-    println!(
+-        "[source_change_counts] {row}: rows={count} instructions={}",
+-        taken.join(",")
+-    );
+-}
++const SPEC: CountRows<'static> = CountRows {
++    bench: "source_change_counts",
++    rows: &ROWS,
++    size: ("PURRDF_SOURCE_CHANGE_ROWS", 2048),
++    samples: "PURRDF_SOURCE_CHANGE_COUNT_SAMPLES",
++};
+ 
++/// Run this target's rows through the shared count runner.
+ fn main() {
+-    let args: Vec<String> = std::env::args().skip(1).collect();
+-    if args.first().map(String::as_str) == Some("--child") {
+-        #[cfg(target_os = "linux")]
+-        child(&args[1], args[2].parse().expect("the row count"));
+-        return;
+-    }
+-    let instructions = args.iter().any(|arg| arg == "--counts");
+-    let filters: Vec<&String> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
+-    let count = rows();
+-    for row in ROWS {
+-        if !filters.is_empty() && !filters.iter().any(|filter| row.contains(filter.as_str())) {
+-            continue;
+-        }
+-        let work = prepare(row, count);
+-        let window = WholeProcessWindow::open();
+-        let witness = work();
+-        let measured = window.close();
+-        println!(
+-            "[source_change_counts] {row}: rows={count} witness={witness} allocations={} \
+-             requested_bytes={} retained_bytes={} peak_working_bytes={}",
+-            measured.allocations,
+-            measured.requested_bytes,
+-            measured.retained_bytes,
+-            measured.peak_working_bytes,
+-        );
+-        if instructions {
+-            #[cfg(target_os = "linux")]
+-            counts(row, count, witness);
+-            #[cfg(not(target_os = "linux"))]
+-            panic!("native instruction counting requires Linux perf");
+-        }
+-    }
++    run_count_rows(&SPEC, &prepare, &purrdf_alloc_probe::whole_process_report);
+ }
+diff --git crates/rdf-core/src/dataset_view.rs crates/rdf-core/src/dataset_view.rs
+index 920d90e7e..c1ed3010b 100644
+--- crates/rdf-core/src/dataset_view.rs
++++ crates/rdf-core/src/dataset_view.rs
+@@ -1877,6 +1877,17 @@ pub trait FallibleDatasetView: DatasetView<ReadError = Self::Error> {
+ /// it in a freeze, a seal, a construction or a query: a single use with no later
+ /// reader of the identity never pays for it. Any future identity law keeps that
+ /// property; the method is fallible and computed when asked so it can.
++///
++/// Every row family the identity binds (records, named graphs, the rows a
++/// mutation suppresses or converts, the graphs it withdraws) enters as BLAKE3
++/// over its sorted row digests under the family's own domain. The identity is
++/// therefore collision resistant against a party that chooses the rows: unlike
++/// an additive sum of row digests, no constructed pair of different row sets
++/// shares it. A paged dataset certifies each page it materializes by recomputing
++/// the page's identity from the rows the provider returned and comparing it with
++/// the identity sealed when the page was admitted, so a hostile provider cannot
++/// substitute other rows. A resident dataset's identity also binds its
++/// dictionary layout, so equal rows under different term IDs differ.
+ pub trait ContentIdentified: DatasetView {
+     /// Why this view's identity cannot be produced. Resident carriers use
+     /// [`Infallible`](std::convert::Infallible).
+diff --git crates/rdf-core/src/ir/dataset.rs crates/rdf-core/src/ir/dataset.rs
+index 709871c75..8c4612fb0 100644
+--- crates/rdf-core/src/ir/dataset.rs
++++ crates/rdf-core/src/ir/dataset.rs
+@@ -1133,8 +1133,11 @@ impl RdfDataset {
+     ) -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
+         // No freeze computes this: the first request seals it, and only this
+         // fixed-size content identity is cached.
+-        let graphs = memory.try_scope(|memory| {
+-            let mut graphs = purrdf_hash::multiset::Multiset256::default();
++        let dictionary = self.dictionary.snapshot_fingerprint(memory)?;
++        // A refusal inside the scope drops its buffers and refunds their grant.
++        memory.try_scope(|memory| {
++            let mut graphs = Vec::new();
++            memory.reserve(&mut graphs, self.named_graphs.len())?;
+             let mut pending = Vec::new();
+             for &graph in &self.named_graphs {
+                 memory.admission_mut().checkpoint(1)?;
+@@ -1144,36 +1147,30 @@ impl RdfDataset {
+                         crate::source::source_hash_update(&mut hash, bytes, memory)
+                     })
+                     .map_err(|error| crate::source::source_visit_error(&error))?;
+-                graphs
+-                    .insert(crate::source::source_hash_finalize(&hash, memory)?)
+-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
++                // Reserved above: this push never grows the buffer.
++                graphs.push(crate::source::source_hash_finalize(&hash, memory)?);
+             }
+             memory.release_vec(pending)?;
+-            Ok::<_, purrdf_lex::allocation::StorageError>(graphs)
+-        })?;
+-        let records = if let Some(statistics) = &self.statistics {
+-            statistics.source_directory().content_records()
+-        } else {
+-            let mut records = purrdf_hash::multiset::Multiset256::default();
+-            for relation in [
+-                super::statistics::Relation::Asserted,
+-                super::statistics::Relation::Reifiers,
+-                super::statistics::Relation::Annotations,
+-            ] {
+-                records
+-                    .combine(
+-                        self.native_source_summary(None, GraphMatch::Any, relation)
+-                            .records,
+-                    )
+-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+-            }
+-            records
+-        };
+-        Ok(crate::source::resident_snapshot(
+-            records,
+-            graphs,
+-            self.dictionary.snapshot_fingerprint(memory)?,
+-        ))
++            crate::source::sort_digests(&mut graphs, memory)?;
++            let identity = if let Some(statistics) = &self.statistics {
++                crate::source::resident_snapshot(
++                    statistics.source_directory().digests(),
++                    graphs.iter().copied(),
++                    dictionary,
++                )
++            } else {
++                let records = self.native_record_digests(memory)?;
++                let identity = crate::source::resident_snapshot(
++                    records.iter().copied(),
++                    graphs.iter().copied(),
++                    dictionary,
++                );
++                memory.release_vec(records)?;
++                identity
++            };
++            memory.release_vec(graphs)?;
++            Ok(identity)
++        })
+     }
+ 
+     pub(crate) fn term_fingerprint<S: purrdf_lex::allocation::Admission + ?Sized>(
+diff --git crates/rdf-core/src/ir/dataset/statistics.rs crates/rdf-core/src/ir/dataset/statistics.rs
+index 814e9e1de..6efa42014 100644
+--- crates/rdf-core/src/ir/dataset/statistics.rs
++++ crates/rdf-core/src/ir/dataset/statistics.rs
+@@ -366,6 +366,51 @@ impl RdfDataset {
+         self.native_statistics.scanned.load(Ordering::Relaxed)
+     }
+ 
++    /// The record digest of every physical asserted, reifier and annotation
++    /// row, in ascending order: the record directory eager statistics would
++    /// seal, for a dataset frozen without them.
++    ///
++    /// # Errors
++    /// Returns the admission's storage or progress refusal; the buffer is then
++    /// dropped and its grant is the caller's scope to refund.
++    pub(crate) fn native_record_digests<S: Admission + ?Sized>(
++        &self,
++        memory: &mut Memory<'_, S>,
++    ) -> Result<Vec<[u8; 32]>, StorageError> {
++        let rows = self
++            .quads
++            .len()
++            .checked_add(self.reifiers.len())
++            .and_then(|rows| rows.checked_add(self.annotations.len()))
++            .ok_or(StorageError::SizeOverflow)?;
++        let mut digests = Vec::new();
++        memory.reserve(&mut digests, rows)?;
++        let mut pending = Vec::new();
++        let mut hasher = crate::source::SourceRowHasher::default();
++        for relation in [
++            Relation::Asserted,
++            Relation::Reifiers,
++            Relation::Annotations,
++        ] {
++            for row in self.statistic_rows(relation) {
++                // The summary is scratch: only the row's record digest is kept.
++                let (identity, _) = crate::source::SourceSummary::default().add_row(
++                    relation,
++                    row,
++                    &self.dictionary,
++                    &mut pending,
++                    &mut hasher,
++                    memory,
++                )?;
++                // Reserved above for every physical row: this never grows.
++                digests.push(identity);
++            }
++        }
++        memory.release_vec(pending)?;
++        crate::source::sort_digests(&mut digests, memory)?;
++        Ok(digests)
++    }
++
+     pub(crate) fn native_source_summary(
+         &self,
+         predicate: Option<TermId>,
+diff --git crates/rdf-core/src/ir/mutable/delta_view.rs crates/rdf-core/src/ir/mutable/delta_view.rs
+index 03fc42aee..feb0b9465 100644
+--- crates/rdf-core/src/ir/mutable/delta_view.rs
++++ crates/rdf-core/src/ir/mutable/delta_view.rs
+@@ -84,18 +84,45 @@ pub struct DeltaDatasetView {
+     work: Arc<super::super::view_accounting::WorkCounter>,
+ }
+ 
++/// The identity of a mutation snapshot: its base and delta identities, then
++/// BLAKE3 over each sorted family of row digests (suppressed base records,
++/// converted base records, withdrawn base graphs) under its own domain. A
++/// family is a function of its exact rows, not of an additive sum a party
++/// choosing rows could steer. Every family must be ascending.
++fn delta_snapshot(
++    base: purrdf_hash::hex::Digest32,
++    delta: purrdf_hash::hex::Digest32,
++    [suppressed, converted, withdrawn]: [&[[u8; 32]]; 3],
++) -> purrdf_hash::hex::Digest32 {
++    use purrdf_hash::{Domain, multiset::sorted_fingerprint};
++    const SNAPSHOT: Domain = Domain::new(b"purrdf-core/delta-snapshot/v2");
++    const SUPPRESSED: Domain = Domain::new(b"purrdf-core/delta-snapshot/suppressed/v2");
++    const CONVERTED: Domain = Domain::new(b"purrdf-core/delta-snapshot/converted/v2");
++    const WITHDRAWN: Domain = Domain::new(b"purrdf-core/delta-snapshot/withdrawn-graphs/v2");
++    let mut hash = purrdf_hash::blake3::Hasher::new();
++    hash.update(SNAPSHOT.as_bytes());
++    hash.update(base.as_bytes());
++    hash.update(delta.as_bytes());
++    hash.update(&sorted_fingerprint(SUPPRESSED, suppressed.iter().copied()));
++    hash.update(&sorted_fingerprint(CONVERTED, converted.iter().copied()));
++    hash.update(&sorted_fingerprint(WITHDRAWN, withdrawn.iter().copied()));
++    purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
++}
++
+ impl DeltaDatasetView {
+     fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, crate::RdfDiagnostic> {
+-        const SNAPSHOT: purrdf_hash::Domain =
+-            purrdf_hash::Domain::new(b"purrdf-core/delta-snapshot/v1");
+-        let mut hash = purrdf_hash::blake3::Hasher::new();
+-        hash.update(SNAPSHOT.as_bytes());
+-        hash.update(self.base.frozen_snapshot_identity()?.as_bytes());
+-        hash.update(self.delta.frozen_snapshot_identity()?.as_bytes());
++        let base = self.base.frozen_snapshot_identity()?;
++        let delta = self.delta.frozen_snapshot_identity()?;
+         let mut resident = purrdf_lex::allocation::Resident;
+         let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+-        for records in [&self.suppressed, &self.converted] {
+-            let mut sum = purrdf_hash::multiset::Multiset256::default();
++        let mut families: [Vec<[u8; 32]>; 3] = Default::default();
++        for (records, digests) in [&self.suppressed, &self.converted]
++            .into_iter()
++            .zip(&mut families)
++        {
++            digests
++                .try_reserve_exact(records.len())
++                .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+             for (kind, row) in records.iter() {
+                 let mut record = purrdf_hash::blake3::Hasher::new();
+                 record.update(&[match kind {
+@@ -110,19 +137,25 @@ impl DeltaDatasetView {
+                 if let Some(graph) = row.g {
+                     record.update(&self.base.term_fingerprint(graph, &mut memory)?);
+                 }
+-                sum.insert(*record.finalize().as_bytes())
+-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
++                digests.push(*record.finalize().as_bytes());
+             }
+-            hash.update(&sum.fingerprint(SNAPSHOT));
+         }
+-        let mut graphs = purrdf_hash::multiset::Multiset256::default();
++        families[2]
++            .try_reserve_exact(self.withdrawn_graphs.len())
++            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
+         for &graph in self.withdrawn_graphs.iter() {
+-            graphs
+-                .insert(self.base.term_fingerprint(graph, &mut memory)?)
+-                .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
++            families[2].push(self.base.term_fingerprint(graph, &mut memory)?);
+         }
+-        hash.update(&graphs.fingerprint(SNAPSHOT));
+-        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
++        // The sets iterate in hash order; their identity is of the sorted rows.
++        for digests in &mut families {
++            digests.sort_unstable();
++        }
++        let [suppressed, converted, withdrawn] = &families;
++        Ok(delta_snapshot(
++            base,
++            delta,
++            [suppressed, converted, withdrawn],
++        ))
+     }
+ 
+     /// The construction charge of one term of the frozen delta: its slot in the
+@@ -1000,6 +1033,34 @@ mod tests {
+     use crate::ir::{MutableDataset, RdfDatasetBuilder};
+     use crate::model::{RdfLiteral, RdfTextDirection};
+ 
++    /// Each family of a mutation snapshot's identity is BLAKE3 over its sorted
++    /// rows: suppressed, converted or withdrawn sets whose additive sums and
++    /// populations agree still give different identities, and one set in two
++    /// families gives two identities. Equal mutations reached in another order
++    /// keep the identity (the `content_identity` integration test).
++    #[test]
++    fn delta_snapshot_families_distinguish_an_additive_collision() {
++        let (left, right) = crate::source::additive_collision();
++        let sorted = |pair: [[u8; 32]; 2]| {
++            let mut pair = pair;
++            pair.sort_unstable();
++            pair
++        };
++        let (left, right) = (sorted(left), sorted(right));
++        let identity = purrdf_hash::hex::Digest32::new([1; 32]);
++        let snapshot = |families: [&[[u8; 32]]; 3]| delta_snapshot(identity, identity, families);
++        for family in 0..3 {
++            let mut with_left: [&[[u8; 32]]; 3] = [&[], &[], &[]];
++            let mut with_right = with_left;
++            with_left[family] = &left;
++            with_right[family] = &right;
++            assert_ne!(snapshot(with_left), snapshot(with_right), "family {family}");
++            let mut moved: [&[[u8; 32]]; 3] = [&[], &[], &[]];
++            moved[(family + 1) % 3] = &left;
++            assert_ne!(snapshot(with_left), snapshot(moved), "family {family}");
++        }
++    }
++
+     fn iri(local: &str) -> TermValue {
+         TermValue::Iri(format!("https://example.org/{local}"))
+     }
+diff --git crates/rdf-core/src/ir/paged/mod.rs crates/rdf-core/src/ir/paged/mod.rs
+index f744465eb..9b0e09cfd 100644
+--- crates/rdf-core/src/ir/paged/mod.rs
++++ crates/rdf-core/src/ir/paged/mod.rs
+@@ -1196,6 +1196,8 @@ impl PagedDataset {
+         }
+         // Match query admission: diagnose structural drift first, then refuse
+         // remaining content changes even when every summary count is unchanged.
++        // The recomputed identity commits to the sorted row digests, so this
++        // refusal holds against a provider that chooses the rows it returns.
+         if materialization
+             .dataset
+             .frozen_snapshot_identity()
+diff --git crates/rdf-core/src/ir/paged/query.rs crates/rdf-core/src/ir/paged/query.rs
+index c82cb2b8a..9d11154b3 100644
+--- crates/rdf-core/src/ir/paged/query.rs
++++ crates/rdf-core/src/ir/paged/query.rs
+@@ -808,6 +808,9 @@ impl<'dataset> PagedQueryView<'dataset> {
+         }
+         // Preserve the specific summary-drift diagnostic before checking the
+         // encompassing identity, which also catches changes with equal counts.
++        // The identity is recomputed from the returned rows and is BLAKE3 over
++        // their sorted digests, so a provider choosing rows cannot match it with
++        // other rows: this check certifies the page against a hostile provider.
+         if materialization
+             .dataset
+             .frozen_snapshot_identity()
+diff --git crates/rdf-core/src/ir/segmented/query/changes.rs crates/rdf-core/src/ir/segmented/query/changes.rs
+index 01d4671f5..52aa99f43 100644
+--- crates/rdf-core/src/ir/segmented/query/changes.rs
++++ crates/rdf-core/src/ir/segmented/query/changes.rs
+@@ -41,6 +41,13 @@ pub(crate) struct SegmentedSourceVersion {
+     _storage: QueryStorage,
+ }
+ 
++impl SegmentedSourceVersion {
++    /// The canonical Merkle node of the effective record digests.
++    pub(crate) fn content_node(&self) -> Option<DirectoryNode> {
++        self.directory.root()
++    }
++}
++
+ #[derive(Debug)]
+ struct OwnedRow {
+     subject: SegmentedStackTerm,
+diff --git crates/rdf-core/src/ir/source_directory.rs crates/rdf-core/src/ir/source_directory.rs
+index ab0e25bd2..a0cfecdb3 100644
+--- crates/rdf-core/src/ir/source_directory.rs
++++ crates/rdf-core/src/ir/source_directory.rs
+@@ -194,15 +194,13 @@ impl Eq for LazyNodes {}
+ #[derive(Clone, Debug, Default, PartialEq, Eq)]
+ pub(crate) struct SourceDirectory {
+     records: Box<[SourceRecord]>,
+-    content: Multiset256,
+     nodes: LazyNodes,
+ }
+ 
+ impl SourceDirectory {
+-    /// The additive sum of every record, for content fingerprints and for
+-    /// agreement between two values this process built.
+-    pub(crate) const fn content_records(&self) -> Multiset256 {
+-        self.content
++    /// The record digests in ascending order, one per physical record.
++    pub(crate) fn digests(&self) -> impl ExactSizeIterator<Item = [u8; 32]> + Clone + '_ {
++        self.records.iter().map(|record| record.digest)
+     }
+ 
+     /// The canonical node of every record; `None` when there is none.
+@@ -234,35 +232,22 @@ impl SourceDirectory {
+                 Ok::<_, StorageError>(left.digest.cmp(&right.digest))
+             })?;
+             memory.admission_mut().checkpoint(0)?;
+-            let mut content = Multiset256::default();
+-            for record in &records {
+-                memory.admission_mut().checkpoint(1)?;
+-                content
+-                    .insert(record.digest)
+-                    .map_err(|_| StorageError::SizeOverflow)?;
+-            }
+-            memory.admission_mut().checkpoint(0)?;
+-            Ok::<_, StorageError>(content)
++            Ok::<_, StorageError>(())
+         })();
+-        let content = match prepared {
+-            Ok(content) => content,
+-            Err(cause) => {
+-                let _ = memory.release_vec(records);
+-                return Err(cause);
+-            }
+-        };
+-        Self::from_records(records, content, memory)
++        if let Err(cause) = prepared {
++            let _ = memory.release_vec(records);
++            return Err(cause);
++        }
++        Self::from_records(records, memory)
+     }
+ 
+     /// Publish the originally admitted buffer, retaining nothing on refusal.
+     fn from_records<S: Admission + ?Sized>(
+         records: Vec<SourceRecord>,
+-        content: Multiset256,
+         memory: &mut Memory<'_, S>,
+     ) -> Result<Self, StorageError> {
+         Ok(Self {
+             records: memory.boxed_slice(records)?,
+-            content,
+             nodes: LazyNodes::default(),
+         })
+     }
+@@ -272,7 +257,7 @@ impl SourceDirectory {
+         memory: &mut Memory<'_, S>,
+     ) -> Result<Self, StorageError> {
+         let records = memory.collect(self.records.iter().copied())?;
+-        Self::from_records(records, self.content, memory)
++        Self::from_records(records, memory)
+     }
+ 
+     /// Destroy the record buffer and attempt its exact original refund.
+diff --git crates/rdf-core/src/ir/source_directory/tests.rs crates/rdf-core/src/ir/source_directory/tests.rs
+index 601866ff5..ff36f28fa 100644
+--- crates/rdf-core/src/ir/source_directory/tests.rs
++++ crates/rdf-core/src/ir/source_directory/tests.rs
+@@ -75,25 +75,6 @@ fn checkpointed_nodes_are_the_canonical_node_of_every_prefix_range() {
+     }
+ }
+ 
+-/// Two member sets with equal additive sums and populations: `{a, b}` and
+-/// `{c, a + b - c}` modulo 2^256.
+-fn colliding_pair() -> ([[u8; 32]; 2], [[u8; 32]; 2]) {
+-    let (a, b, c) = (digest(1), digest(2), digest(3));
+-    let mut sum = Multiset256::default();
+-    sum.insert(a).unwrap();
+-    sum.insert(b).unwrap();
+-    sum.remove(c).unwrap();
+-    let d = *sum.sum();
+-    let mut left = Multiset256::default();
+-    left.insert(a).unwrap();
+-    left.insert(b).unwrap();
+-    let mut right = Multiset256::default();
+-    right.insert(c).unwrap();
+-    right.insert(d).unwrap();
+-    assert_eq!(left, right, "the constructed pair collides additively");
+-    ([a, b], [c, d])
+-}
+-
+ fn changes(
+     previous: &[&SourceDirectory],
+     next: &[&SourceDirectory],
+@@ -122,7 +103,7 @@ fn changes(
+ /// physical addresses moved or it is spread over the same carriers.
+ #[test]
+ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
+-    let (removed, added) = colliding_pair();
++    let (removed, added) = crate::source::additive_collision();
+     let shared: Vec<_> = (10..80).map(digest).collect();
+     let with = |pair: &[[u8; 32]]| {
+         let mut digests = shared.clone();
+@@ -132,7 +113,14 @@ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
+     };
+     let before = directory(&with(&removed), 0);
+     let after = directory(&with(&added), 0);
+-    assert_eq!(before.content_records(), after.content_records());
++    let additive = |directory: &SourceDirectory| {
++        let mut sum = Multiset256::default();
++        directory
++            .digests()
++            .for_each(|digest| sum.insert(digest).unwrap());
++        sum
++    };
++    assert_eq!(additive(&before), additive(&after));
+     assert_ne!(before.root().unwrap(), after.root().unwrap());
+     let (seen, _) = changes(&[&before], &[&after]);
+     let mut expected: Vec<_> = removed
+@@ -163,3 +151,40 @@ fn an_additive_collision_is_a_change_and_equal_members_take_the_fast_path() {
+     let (seen, _) = changes(&[&directory(&whole, 0)], &[&low, &high]);
+     assert_eq!(seen, [], "the same members over other carriers");
+ }
++
++/// The public row-set identities decide by the sorted digests: a record or
++/// graph set whose additive sum and population equal another's still has its
++/// own resident snapshot identity and source version fingerprint. The equal
++/// rows of a reordered dataset keep the resident identity (the
++/// `content_identity` integration test); equal members at other physical
++/// ordinals keep the version fingerprint.
++#[test]
++fn row_set_identities_distinguish_an_additive_collision() {
++    let (removed, added) = crate::source::additive_collision();
++    let with = |pair: &[[u8; 32]]| {
++        let mut digests: Vec<_> = (10..40).map(digest).collect();
++        digests.extend_from_slice(pair);
++        digests.sort_unstable();
++        digests
++    };
++    let (before, after) = (with(&removed), with(&added));
++    let snapshot = |records: &[[u8; 32]], graphs: &[[u8; 32]]| {
++        crate::source::resident_snapshot(records.iter().copied(), graphs.iter().copied(), [7; 32])
++    };
++    assert_ne!(snapshot(&before, &[]), snapshot(&after, &[]));
++    assert_ne!(snapshot(&[], &before), snapshot(&[], &after));
++    assert_eq!(
++        snapshot(&before, &after),
++        snapshot(&with(&removed), &with(&added))
++    );
++
++    let fingerprint = |directory: &SourceDirectory| {
++        crate::source::source_version_fingerprint(
++            directory.len() as u128,
++            directory.root().unwrap(),
++        )
++    };
++    let (old, new) = (directory(&before, 0), directory(&after, 0));
++    assert_ne!(fingerprint(&old), fingerprint(&new));
++    assert_eq!(fingerprint(&old), fingerprint(&directory(&before, 500)));
++}
+diff --git crates/rdf-core/src/ir/triple.rs crates/rdf-core/src/ir/triple.rs
+index 0e5a15ffc..1b1e5f575 100644
+--- crates/rdf-core/src/ir/triple.rs
++++ crates/rdf-core/src/ir/triple.rs
+@@ -310,8 +310,8 @@ impl TripleDataset {
+         crate::dataset_view::sealed_identity(&self.snapshot_identity, || {
+             let mut resident = purrdf_lex::allocation::Resident;
+             Ok(crate::source::resident_snapshot(
+-                self.statistics.source_directory().content_records(),
+-                purrdf_hash::multiset::Multiset256::default(),
++                self.statistics.source_directory().digests(),
++                core::iter::empty(),
+                 self.dictionary
+                     .snapshot_fingerprint(&mut purrdf_lex::allocation::Memory::new(
+                         &mut resident,
+diff --git crates/rdf-core/src/source.rs crates/rdf-core/src/source.rs
+index 0603eb015..f92141f43 100644
+--- crates/rdf-core/src/source.rs
++++ crates/rdf-core/src/source.rs
+@@ -4,7 +4,7 @@
+ //! Content-derived source rows, independently of dictionary ordinals or sizing
+ //! statistics. Row hashes preserve blank scopes and every literal coordinate.
+ 
+-use purrdf_hash::multiset::Multiset256;
++use purrdf_hash::multiset::{Multiset256, sorted_fingerprint};
+ use purrdf_hash::{Domain, blake3::RecordHasher, frame::frame_le_with};
+ use purrdf_lex::allocation::{Admission, Memory, StorageError};
+ 
+@@ -15,22 +15,61 @@ use crate::{RdfTextDirection, TermValue};
+ const ROW: Domain = Domain::new(b"purrdf/source-row/v1");
+ const TRIPLE_ROW: Domain = Domain::new(b"purrdf/triples/source-row/v1");
+ const RECORD: Domain = Domain::new(b"purrdf/source-record/v1");
+-const SOURCE_VERSION: Domain = Domain::new(b"purrdf/source-version/v1");
++const SOURCE_VERSION: Domain = Domain::new(b"purrdf/source-version/v2");
+ 
++/// The snapshot identity of a resident dataset: BLAKE3 over the sorted source
++/// record digests, the sorted named-graph digests and the dictionary seal. Each
++/// row family commits to its sorted sequence under its own domain, so the value
++/// is a function of the exact row sets and not of an additive sum a party
++/// choosing rows could steer. Both sequences must be ascending.
+ pub(crate) fn resident_snapshot(
+-    records: Multiset256,
+-    graphs: Multiset256,
++    records: impl IntoIterator<Item = [u8; 32]>,
++    graphs: impl IntoIterator<Item = [u8; 32]>,
+     dictionary: [u8; 32],
+ ) -> purrdf_hash::hex::Digest32 {
+-    const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v1");
+-    const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v1");
++    const ROWS: Domain = Domain::new(b"purrdf-core/snapshot/rows/v2");
++    const GRAPHS: Domain = Domain::new(b"purrdf-core/snapshot/graphs/v2");
+     let mut hash = RecordHasher::new();
+-    hash.update(&records.fingerprint(ROWS));
+-    hash.update(&graphs.fingerprint(GRAPHS));
++    hash.update(&sorted_fingerprint(ROWS, records));
++    hash.update(&sorted_fingerprint(GRAPHS, graphs));
+     hash.update(&dictionary);
+     purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+ }
+ 
++/// The content identity of a source observation: BLAKE3 over its exact
++/// population and the canonical Merkle node of its sorted effective record
++/// digests, which the version maintains incrementally. Equal nodes mean equal
++/// multisets, so the value commits to the rows themselves. An empty source has
++/// no node.
++pub(crate) fn source_version_fingerprint(population: u128, node: Option<[u8; 32]>) -> [u8; 32] {
++    let mut digest = purrdf_hash::blake3::Hasher::new();
++    frame_le_with(SOURCE_VERSION.as_bytes(), &mut |part| {
++        digest.update(part);
++    });
++    digest.update(&population.to_le_bytes());
++    if let Some(node) = node {
++        digest.update(&node);
++    }
++    *digest.finalize().as_bytes()
++}
++
++/// Sort row digests in place for [`sorted_fingerprint`], charging one unit of
++/// work per comparison when the admission meters progress.
++pub(crate) fn sort_digests<S: Admission + ?Sized>(
++    digests: &mut [[u8; 32]],
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    if memory.admission().progress_enabled() {
++        purrdf_lex::walk::try_sort_unstable_by(digests, |left, right| {
++            memory.admission_mut().checkpoint(1)?;
++            Ok::<_, StorageError>(left.cmp(right))
++        })
++    } else {
++        digests.sort_unstable();
++        Ok(())
++    }
++}
++
+ pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 32]) -> [u8; 32] {
+     use crate::ir::statistics::Relation;
+     let mut record = [0; size_of::<u64>() + RECORD.as_bytes().len() + 1 + 32];
+@@ -116,10 +155,12 @@ impl SourceVersion {
+ 
+     /// Content identity of the complete statement union and reifier families,
+     /// independent of dictionary IDs, physical segmentation or classification.
+-    /// This is a fingerprint, not a signature or a membership proof.
++    /// It is BLAKE3 over the exact population and the canonical Merkle node of
++    /// the sorted record digests, so two different record sets never share a
++    /// value. It is a content identity, not a signature.
+     #[must_use]
+     pub fn content_fingerprint(&self) -> [u8; 32] {
+-        self.0.records.fingerprint(SOURCE_VERSION)
++        source_version_fingerprint(self.0.records.population(), self.0.content_node())
+     }
+ }
+ 
+@@ -169,8 +210,16 @@ pub struct SourceDifferenceWork {
+ }
+ 
+ /// Exact content accounting for one predicate, graph selection and physical
+-/// statement stream. This is content evidence, distinct from sizing estimates
+-/// or a statistics cache discriminator. It is not a membership proof.
++/// statement stream: populations and additive sums of row digests, which
++/// combine across physical layers without visiting their rows. It is distinct
++/// from sizing estimates or a statistics cache discriminator.
++///
++/// The sums are a population and drift check between structures one process
++/// built. They are not an identity: a party choosing rows can construct two
++/// different row sets with equal sums and populations, so no equality of row
++/// sets supplied by another party rests on them. Row-set identities are BLAKE3
++/// over sorted row digests ([`SourceVersion::content_fingerprint`] and the
++/// dataset content identity).
+ ///
+ /// Chronological unions must correct overlap and removals before publishing a
+ /// summary; adding their physical layer summaries alone is insufficient.
+@@ -188,14 +237,16 @@ impl SourceSummary {
+     }
+ 
+     /// Literal-source sums in graph-aware, graph-free order. Occurrences in
+-    /// distinct physical streams contribute separately when combined.
++    /// distinct physical streams contribute separately when combined. These
++    /// are accounting sums, not an identity of the literal rows.
+     #[must_use]
+     pub const fn literal_rows(self) -> [Multiset256; 2] {
+         self.literals
+     }
+ 
+-    /// Physical record identity, including the statement stream's kind. Named
+-    /// graph declarations without statements do not enter this multiset.
++    /// The additive sum and population of the physical record digests,
++    /// including the statement stream's kind. Named graph declarations without
++    /// statements do not enter it. It is an accounting sum, not an identity.
+     #[must_use]
+     pub const fn records(self) -> Multiset256 {
+         self.records
+@@ -386,3 +437,26 @@ pub(crate) fn source_visit_error(error: &OwnedTermFoldError<StorageError>) -> St
+         OwnedTermFoldError::Storage(error) | OwnedTermFoldError::Visitor(error) => *error,
+     }
+ }
++
++/// Two member sets with equal additive sums and populations: `{a, b}` and
++/// `{c, a + b - c}` modulo 2^256. Constructing such a pair over real rows takes
++/// a party choosing rows about 2^40 work for 128 members; the identity laws are
++/// checked on the digests directly.
++#[cfg(test)]
++pub(crate) fn additive_collision() -> ([[u8; 32]; 2], [[u8; 32]; 2]) {
++    let digest = |seed: u64| *purrdf_hash::blake3::hash(&seed.to_le_bytes()).as_bytes();
++    let (a, b, c) = (digest(1), digest(2), digest(3));
++    let mut sum = Multiset256::default();
++    sum.insert(a).unwrap();
++    sum.insert(b).unwrap();
++    sum.remove(c).unwrap();
++    let d = *sum.sum();
++    let mut left = Multiset256::default();
++    left.insert(a).unwrap();
++    left.insert(b).unwrap();
++    let mut right = Multiset256::default();
++    right.insert(c).unwrap();
++    right.insert(d).unwrap();
++    assert_eq!(left, right, "the constructed pair collides additively");
++    ([a, b], [c, d])
++}
+diff --git crates/rdf-core/tests/content_identity.rs crates/rdf-core/tests/content_identity.rs
+index 64a508370..df6d68dbe 100644
+--- crates/rdf-core/tests/content_identity.rs
++++ crates/rdf-core/tests/content_identity.rs
+@@ -19,21 +19,29 @@ const EX: &str = "http://example.org/";
+ /// empty named graph, simple, typed and language-tagged literals, a blank node, a
+ /// triple term, a reifier and an annotation on it.
+ fn builder() -> RdfDatasetBuilder {
++    fixture(false)
++}
++
++/// The fixture with its rows pushed in the given order. The dictionary, whose
++/// layout the identity also binds, is interned in one order either way.
++fn fixture(reverse: bool) -> RdfDatasetBuilder {
+     let mut b = RdfDatasetBuilder::new();
+-    let iri =
+-        |b: &mut RdfDatasetBuilder, local: &str| b.intern_iri(&format!("{EX}{local}")).unwrap();
++    let locals = [
++        "alice", "bob", "knows", "name", "age", "g", "empty", "source",
++    ];
++    let mut ids = std::collections::BTreeMap::new();
++    for local in locals {
++        ids.insert(local, b.intern_iri(&format!("{EX}{local}")).unwrap());
++    }
++    let iri = |local: &str| ids[local];
+     let (alice, bob, knows, name, age) = (
+-        iri(&mut b, "alice"),
+-        iri(&mut b, "bob"),
+-        iri(&mut b, "knows"),
+-        iri(&mut b, "name"),
+-        iri(&mut b, "age"),
+-    );
+-    let (graph, empty, source) = (
+-        iri(&mut b, "g"),
+-        iri(&mut b, "empty"),
+-        iri(&mut b, "source"),
++        iri("alice"),
++        iri("bob"),
++        iri("knows"),
++        iri("name"),
++        iri("age"),
+     );
++    let (graph, empty, source) = (iri("g"), iri("empty"), iri("source"));
+     let simple = b.intern_literal(RdfLiteral::simple("Alice")).unwrap();
+     let tagged = b
+         .intern_literal(RdfLiteral::language_tagged("Robert", "en"))
+@@ -42,23 +50,33 @@ fn builder() -> RdfDatasetBuilder {
+         .intern_literal(RdfLiteral::typed("42", XSD_INTEGER))
+         .unwrap();
+     let blank = b.intern_blank("b0", BlankScope::DEFAULT).unwrap();
+-    b.push_quad(alice, knows, bob, None).unwrap();
+-    b.push_quad(alice, name, simple, None).unwrap();
+-    b.push_quad(bob, name, tagged, Some(graph)).unwrap();
+-    b.push_quad(blank, age, typed, Some(graph)).unwrap();
++    let mut quads = [
++        (alice, knows, bob, None),
++        (alice, name, simple, None),
++        (bob, name, tagged, Some(graph)),
++        (blank, age, typed, Some(graph)),
++    ];
++    if reverse {
++        quads.reverse();
++    }
++    for (s, p, o, g) in quads {
++        b.push_quad(s, p, o, g).unwrap();
++    }
+     b.declare_named_graph(empty).unwrap();
+     let statement = b.intern_triple(alice, knows, bob).unwrap();
+-    let reifier = iri(&mut b, "claim");
++    let reifier = b.intern_iri(&format!("{EX}claim")).unwrap();
+     b.push_reifier(reifier, statement).unwrap();
+     b.push_annotation(reifier, source, bob).unwrap();
+     b
+ }
+ 
+ /// The identity this fixture had when the identity law was last changed. A
+-/// change here changes every persisted identity of every dataset.
+-const GOLDEN: &str = "23989607954605f059ee12b49ab3b2a45f55a6b4971cc56eeb05c4b99ec6739c";
+-const COMPOSITE_GOLDEN: &str = "34840a0e7c474035c77265a5de3deef0b4f3484cb4e18f3333d438daba732c7b";
+-const DELTA_GOLDEN: &str = "a658f81754da777a81137e8c8665035993e77b75634a2f5dac322f3b2500e9e4";
++/// change here changes every persisted identity of every dataset. The current
++/// values are those of the 5.0 law, in which each row family is BLAKE3 over its
++/// sorted row digests in place of an additive sum.
++const GOLDEN: &str = "7c7487f99acbb86f921684480bbc792514ba6a10e922bb8d67f46f1d2e837f5b";
++const COMPOSITE_GOLDEN: &str = "ae6b179290d2324b6953e13f9e08398632bc137c0380db1eac80ec5919575704";
++const DELTA_GOLDEN: &str = "38b4a88d90b623cb09b5c2468ab1a116d38270dac720c1d7ec0234d802703d12";
+ 
+ /// Every identity is sealed behind a once-lock the first time it is asked for, so
+ /// an unset lock in a carrier's `Debug` is exactly "no identity was computed".
+@@ -93,6 +111,22 @@ fn both_freezes_leave_the_identity_unsealed_and_compute_the_frozen_value_on_requ
+     assert!(sealed(&resident) && sealed(&admitted));
+ }
+ 
++/// The identity is a function of the row set, not of the order the rows were
++/// pushed in: the same rows pushed in reverse, frozen either way, keep the
++/// golden value.
++#[test]
++fn the_identity_of_equal_rows_does_not_depend_on_their_order() {
++    let resident: Arc<RdfDataset> = fixture(true).freeze().unwrap();
++    let mut admission = Resident;
++    let admitted = fixture(true);
++    let admitted_bytes = admitted.native_buffer_bytes().unwrap();
++    let admitted = admitted
++        .freeze_with_memory(&mut Memory::resume(&mut admission, admitted_bytes))
++        .unwrap();
++    assert_eq!(identity(&resident), GOLDEN);
++    assert_eq!(identity(&admitted), GOLDEN);
++}
++
+ /// One more quad in its own graph, for the composed views.
+ fn other() -> Arc<RdfDataset> {
+     let mut b = RdfDatasetBuilder::new();
+@@ -141,4 +175,14 @@ fn a_mutation_snapshot_hashes_nothing_until_its_identity_is_asked_for() {
+     assert!(!sealed(&delta) && !sealed(&base));
+     assert_eq!(identity(&delta), DELTA_GOLDEN);
+     assert!(sealed(&delta) && sealed(&base));
++
++    // The same mutation in the other order, over a base whose rows were pushed
++    // in reverse, holds the same rows: its identity is a function of them, not
++    // of the edit history.
++    let base = fixture(true).freeze().unwrap();
++    let mut mutation = MutableDataset::new(Arc::clone(&base));
++    let alice = TermValue::Iri(format!("{EX}alice"));
++    assert!(mutation.insert(quad("carol", "knows", alice)).unwrap());
++    assert!(mutation.remove(&quad("alice", "name", TermValue::simple_literal("Alice"))));
++    assert_eq!(identity(&mutation.snapshot_view().unwrap()), DELTA_GOLDEN);
+ }
+diff --git crates/rdf-core/tests/support/source_snapshot.rs crates/rdf-core/tests/support/source_snapshot.rs
+index 4e78eac12..780a7a4a3 100644
+--- crates/rdf-core/tests/support/source_snapshot.rs
++++ crates/rdf-core/tests/support/source_snapshot.rs
+@@ -7,6 +7,11 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
+ use std::sync::Arc;
+ 
+ pub(crate) fn dataset(count: usize, changed: bool, reverse: bool) -> Arc<RdfDataset> {
++    builder(count, changed, reverse).freeze().unwrap()
++}
++
++/// The unfrozen fixture, for callers that choose how it is frozen.
++pub(crate) fn builder(count: usize, changed: bool, reverse: bool) -> RdfDatasetBuilder {
+     let mut builder = RdfDatasetBuilder::new();
+     let p = builder.intern_iri("urn:source:predicate").unwrap();
+     let annotation = builder.intern_iri("urn:source:annotation").unwrap();
+@@ -40,5 +45,5 @@ pub(crate) fn dataset(count: usize, changed: bool, reverse: bool) -> Arc<RdfData
+             .push_annotation_in_graph(reifier, annotation, note, g)
+             .unwrap();
+     }
+-    builder.freeze().unwrap()
++    builder
+ }
+diff --git crates/shapes/src/class_membership.rs crates/shapes/src/class_membership.rs
+index cb97d9f84..70c6acafa 100644
+--- crates/shapes/src/class_membership.rs
++++ crates/shapes/src/class_membership.rs
+@@ -482,14 +482,19 @@ impl ClassMembershipView {
+ /// Bind the asserted-subclass law and its supplementary IRI edges, without
+ /// building or scanning the lazy membership index. Called on the first request
+ /// for the view's identity, not when the view is built.
++///
++/// The edges come from a shapes graph or ontology another party may supply, so
++/// they enter as BLAKE3 over their sorted edge digests: no constructed edge set
++/// shares the identity of another, as it could share an additive sum.
+ fn class_snapshot(
+     base: &ShaclDatasetView,
+     edges: &[(TermId, TermId)],
+ ) -> Result<purrdf_hash::hex::Digest32, DataIdentityError> {
+-    const DOMAIN: purrdf_hash::Domain =
+-        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-snapshot/v1");
+     let source = base.content_identity()?;
+-    let mut members = purrdf_hash::multiset::Multiset256::default();
++    let mut members = Vec::new();
++    members.try_reserve_exact(edges.len()).map_err(|_| {
++        DataIdentityError::Source(purrdf_lex::allocation::StorageError::AllocationFailed.into())
++    })?;
+     for &edge in edges {
+         let mut member = purrdf_hash::blake3::Streaming::<1024>::new();
+         for id in <[TermId; 2]>::from(edge) {
+@@ -502,16 +507,31 @@ fn class_snapshot(
+                 member.update(bytes);
+             });
+         }
+-        // There are at most usize::MAX resident edges, which fits the u64 population.
+-        members
+-            .insert(*member.finalize().as_bytes())
+-            .expect("resident edge count fits fingerprint population");
++        members.push(*member.finalize().as_bytes());
+     }
++    // The edges are sorted by dictionary ID; the identity is of their content.
++    members.sort_unstable();
++    Ok(class_identity(source, &members))
++}
++
++/// The class-membership identity over a base identity and ascending edge
++/// digests.
++fn class_identity(
++    source: purrdf_hash::hex::Digest32,
++    members: &[[u8; 32]],
++) -> purrdf_hash::hex::Digest32 {
++    const DOMAIN: purrdf_hash::Domain =
++        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-snapshot/v2");
++    const EDGES: purrdf_hash::Domain =
++        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-edges/v1");
+     let mut hash = purrdf_hash::blake3::Streaming::<1024>::new();
+     hash.update(DOMAIN.as_bytes());
+     hash.update(source.as_bytes());
+-    hash.update(&members.fingerprint(DOMAIN));
+-    Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
++    hash.update(&purrdf_hash::multiset::sorted_fingerprint(
++        EDGES,
++        members.iter().copied(),
++    ));
++    purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+ }
+ 
+ #[cfg(test)]
+@@ -1206,6 +1226,29 @@ mod tests {
+         assert_eq!(view.content_identity().unwrap(), identity);
+     }
+ 
++    /// Supplementary edges another party supplies enter as BLAKE3 over their
++    /// sorted digests: two edge sets whose additive sums and populations agree
++    /// give two identities, while one edge set keeps one identity.
++    #[test]
++    fn class_identity_distinguishes_an_additive_collision() {
++        use purrdf_hash::multiset::Multiset256;
++        let digest = |seed: u8| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
++        let (a, b, c) = (digest(1), digest(2), digest(3));
++        let mut d = Multiset256::default();
++        d.insert(a).unwrap();
++        d.insert(b).unwrap();
++        d.remove(c).unwrap();
++        let d = *d.sum();
++        let sorted = |mut edges: Vec<[u8; 32]>| {
++            edges.sort_unstable();
++            edges
++        };
++        let source = purrdf_hash::hex::Digest32::new([5; 32]);
++        let left = class_identity(source, &sorted(vec![a, b]));
++        assert_ne!(left, class_identity(source, &sorted(vec![c, d])));
++        assert_eq!(left, class_identity(source, &sorted(vec![b, a])));
++    }
++
+     #[test]
+     fn bound_membership_is_transitive_unique_and_built_once() {
+         let (view, [rdf_type, _, sub, mid, top, _, alice, _]) = fixture();
+diff --git crates/shapes/tests/named_graph_view.rs crates/shapes/tests/named_graph_view.rs
+index 09a7d0d5a..8420d6599 100644
+--- crates/shapes/tests/named_graph_view.rs
++++ crates/shapes/tests/named_graph_view.rs
+@@ -223,7 +223,13 @@ fn construction_and_warm_native_probes_allocate_nothing_and_preserve_term_ids()
+     let (source, graphs) = graph_fixture();
+     let window = CurrentThreadWindow::open();
+     let view = ShaclDatasetView::named_graph(Arc::clone(&source), graphs[0]);
++    let allocation = window.close();
++    assert_eq!(allocation.allocations, 0);
++    assert_eq!(allocation.requested_bytes, 0);
++    // The first identity request sorts the source's row digests in scratch;
++    // the sealed identity is then read without allocating.
+     let snapshot = view.content_identity().unwrap();
++    let window = CurrentThreadWindow::open();
+     assert_eq!(view.content_identity().unwrap(), snapshot);
+     let allocation = window.close();
+     assert_eq!(allocation.allocations, 0);
+diff --git crates/testkit/src/bench/counter.rs crates/testkit/src/bench/counter.rs
+index 5777ebcbf..b4369c3d9 100644
+--- crates/testkit/src/bench/counter.rs
++++ crates/testkit/src/bench/counter.rs
+@@ -255,6 +255,111 @@ pub fn collect_instructions(
+     InstructionSample::from_perf(&csv_text, &verbose_text)
+ }
+ 
++/// A report-only bench of named fixed-work rows: the rows, the fixture size
++/// and the environment variables that override the size and the sample count.
++#[derive(Debug, Clone, Copy)]
++pub struct CountRows<'a> {
++    /// The bench name printed before each row.
++    pub bench: &'a str,
++    /// Every row, in report order.
++    pub rows: &'a [&'a str],
++    /// The variable naming the fixture size, and the size without it.
++    pub size: (&'a str, usize),
++    /// The variable naming the instruction samples per row (3 without it).
++    pub samples: &'a str,
++}
++
++/// The measured work of one row, prepared outside every window. It returns a
++/// witness that must agree between the in-process run and every child sample.
++pub type CountWork = Box<dyn FnOnce() -> u64>;
++
++/// Run a row bench from its command line.
++///
++/// Without arguments every row runs once in process under `measure`, which
++/// wraps the work in an allocation window and returns the witness and the
++/// window's report. Free arguments select rows by substring. With `--counts`
++/// (Linux and `perf`) each selected row also runs in fresh child processes
++/// under [`collect_instructions`], and its retired user-mode instructions are
++/// printed. A child is this executable started as `--child <row> <size>`.
++///
++/// # Panics
++/// Panics on an unknown row, a malformed size or sample count, a failed
++/// instruction sample, or a child whose witness differs: a report built on any
++/// of them would be wrong.
++#[cfg(not(target_arch = "wasm32"))]
++pub fn run_count_rows(
++    spec: &CountRows<'_>,
++    prepare: &dyn Fn(&str, usize) -> CountWork,
++    measure: &dyn Fn(CountWork) -> (u64, String),
++) {
++    let args: Vec<String> = std::env::args().skip(1).collect();
++    if args.first().map(String::as_str) == Some("--child") {
++        #[cfg(target_os = "linux")]
++        count_child(prepare(&args[1], args[2].parse().expect("the row size")));
++        return;
++    }
++    let instructions = args.iter().any(|arg| arg == "--counts");
++    let filters: Vec<&String> = args.iter().filter(|arg| !arg.starts_with("--")).collect();
++    let (variable, default) = spec.size;
++    let size = std::env::var(variable).map_or(default, |raw| {
++        raw.parse()
++            .unwrap_or_else(|_| panic!("{variable} is an integer"))
++    });
++    for &row in spec.rows {
++        if !filters.is_empty() && !filters.iter().any(|filter| row.contains(filter.as_str())) {
++            continue;
++        }
++        let (witness, report) = measure(prepare(row, size));
++        println!(
++            "[{}] {row}: rows={size} witness={witness} {report}",
++            spec.bench
++        );
++        if instructions {
++            #[cfg(target_os = "linux")]
++            count_samples(spec, row, size, witness);
++            #[cfg(not(target_os = "linux"))]
++            panic!("native instruction counting requires Linux perf");
++        }
++    }
++}
++
++/// One child sample: the counter is enabled around the work alone.
++#[cfg(target_os = "linux")]
++fn count_child(work: CountWork) {
++    let mut control = CounterControl::required().expect("admitted instruction counter");
++    control.command(CounterCommand::Enable).expect("enable");
++    let witness = work();
++    control.command(CounterCommand::Disable).expect("disable");
++    println!("witness={witness}");
++}
++
++#[cfg(target_os = "linux")]
++fn count_samples(spec: &CountRows<'_>, row: &str, size: usize, witness: u64) {
++    let samples: usize = std::env::var(spec.samples).map_or(3, |raw| {
++        raw.parse().expect("the sample count is an integer")
++    });
++    let executable = std::env::current_exe().expect("the bench binary path");
++    let home = std::env::temp_dir().join(format!("{}_{}", spec.bench, std::process::id()));
++    std::fs::create_dir_all(&home).expect("the scratch directory");
++    let mut taken = Vec::new();
++    for sample in 0..samples {
++        let directory = home.join(format!("{row}_{sample}"));
++        let args = ["--child".into(), row.into(), size.to_string().into()];
++        let sample = collect_instructions(&executable, &args, &directory)
++            .unwrap_or_else(|error| panic!("{row}: {error}"));
++        let stdout =
++            std::fs::read_to_string(directory.join("workload.stdout")).expect("the child's output");
++        assert_eq!(stdout.trim(), format!("witness={witness}"), "{row}");
++        taken.push(sample.instructions.to_string());
++    }
++    let _ = std::fs::remove_dir_all(&home);
++    println!(
++        "[{}] {row}: rows={size} instructions={}",
++        spec.bench,
++        taken.join(",")
++    );
++}
++
+ /// Save explicit count units through the benchmark store's atomic writer.
+ #[cfg(not(target_arch = "wasm32"))]
+ pub fn save_report(
+diff --git crates/text/Cargo.toml crates/text/Cargo.toml
+index c5154a50c..dfeb8be82 100644
+--- crates/text/Cargo.toml
++++ crates/text/Cargo.toml
+@@ -114,3 +114,9 @@ harness = false
+ [[bench]]
+ name = "emoji"
+ harness = false
++
++# Allocations and retired instructions of the text paths that publish a source
++# identity or a generation. Report-only; no clock is read.
++[[bench]]
++name = "source_identity_counts"
++harness = false
+diff --git crates/text/benches/source_identity_counts.rs crates/text/benches/source_identity_counts.rs
+new file mode 100644
+index 000000000..c2a51b32d
+--- /dev/null
++++ crates/text/benches/source_identity_counts.rs
+@@ -0,0 +1,172 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++// Bench targets are not public API, so the workspace `missing_docs` lint is
++// not asked of their items.
++#![allow(missing_docs)]
++
++//! Fixed work of the text paths that publish a source identity or a
++//! generation: allocations, requested and retained bytes, and retired
++//! user-mode instructions.
++//!
++//! `cargo bench -p purrdf-text --bench source_identity_counts [-- <row filter>]`
++//! prints one allocation line per row, measured in process. With `--counts`
++//! (Linux and `perf`), each row also runs in fresh child processes under the
++//! test kit's counter protocol and prints its instruction samples. Rows:
++//!
++//! * `index_build`: `TextIndex::from_dataset` over the fixture.
++//! * `index_delta`: `TextIndex::with_delta` adding one row to that index.
++//! * `source_digest`: `purrdf_text::source_digest` over the fixture, the walk
++//!   `verify_binding` compares against an index.
++//! * `surface_build`: `SurfaceIndex::from_texts` over the fixture's texts.
++//! * `surface_delta`: `SurfaceIndex::with_documents` replacing one document.
++//!
++//! The fixture has `PURRDF_TEXT_IDENTITY_ROWS` rows (2048 by default). Fixture
++//! construction and every input index are outside the window. The counting
++//! allocator also runs in the instruction samples; its work is the same for
++//! every build compared.
++
++use std::hint::black_box;
++use std::sync::Arc;
++
++use purrdf_alloc_probe::CountingAllocator;
++use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermFactory, TermValue};
++use purrdf_text::{Analyzer, GraphSelector, SurfaceIndex, TextIndex, TextIndexConfig};
++
++use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
++
++#[global_allocator]
++static GLOBAL: CountingAllocator = CountingAllocator;
++
++const ROWS: [&str; 5] = [
++    "index_build",
++    "index_delta",
++    "source_digest",
++    "surface_build",
++    "surface_delta",
++];
++
++const PREDICATE: &str = "https://example.org/resource/text";
++
++fn text(index: usize) -> String {
++    format!("river bank {index} 北京大学")
++}
++
++fn dataset(rows: impl IntoIterator<Item = (String, String)>) -> Arc<RdfDataset> {
++    let mut builder = RdfDatasetBuilder::new();
++    let p = builder.intern_iri(PREDICATE).unwrap();
++    for (subject, text) in rows {
++        let s = builder.intern_value(&TermValue::iri(subject)).unwrap();
++        let o = builder
++            .intern_value(&TermValue::simple_literal(text))
++            .unwrap();
++        builder.push_quad(s, p, o, None).unwrap();
++    }
++    builder.freeze().unwrap()
++}
++
++fn corpus(count: usize) -> Arc<RdfDataset> {
++    dataset((0..count).map(|index| {
++        (
++            format!("https://example.org/document/{index:08}"),
++            text(index),
++        )
++    }))
++}
++
++fn config() -> TextIndexConfig {
++    TextIndexConfig::new(
++        vec![TermValue::iri(PREDICATE)],
++        GraphSelector::Default,
++        Analyzer::empty_lexicon(),
++    )
++    .unwrap()
++}
++
++fn surface(texts: &[String]) -> SurfaceIndex {
++    SurfaceIndex::from_texts(
++        Analyzer::empty_lexicon(),
++        texts
++            .iter()
++            .enumerate()
++            .map(|(id, text)| (u32::try_from(id).unwrap(), text.as_str())),
++    )
++    .unwrap()
++}
++
++/// Prepare one row outside the window; the returned closure is the measured
++/// work and returns its witness.
++fn prepare(row: &str, count: usize) -> CountWork {
++    let config = config();
++    match row {
++        "index_build" => {
++            let source = corpus(count);
++            Box::new(move || {
++                let index = TextIndex::from_dataset(&*source, &config).unwrap();
++                u64::from(black_box(index.source_fingerprint())[0])
++            })
++        }
++        "index_delta" => {
++            let source = corpus(count);
++            let index = TextIndex::from_dataset(&*source, &config).unwrap();
++            let addition = (
++                "https://example.org/document/added".to_owned(),
++                "aardvark bank".to_owned(),
++            );
++            let added = dataset([addition.clone()]);
++            let empty = dataset([]);
++            let next = dataset(
++                (0..count)
++                    .map(|index| {
++                        (
++                            format!("https://example.org/document/{index:08}"),
++                            text(index),
++                        )
++                    })
++                    .chain([addition]),
++            );
++            Box::new(move || {
++                let updated = index.with_delta(&*next, &*added, &*empty).unwrap();
++                u64::from(black_box(updated.fingerprint())[0])
++            })
++        }
++        "source_digest" => {
++            let source = corpus(count);
++            Box::new(move || {
++                let (digest, _) = purrdf_text::source_digest(&*source, &config).unwrap();
++                u64::from(black_box(digest)[0])
++            })
++        }
++        "surface_build" => {
++            let texts: Vec<String> = (0..count).map(text).collect();
++            Box::new(move || {
++                let index = surface(&texts);
++                u64::try_from(black_box(index).words().count()).unwrap()
++            })
++        }
++        "surface_delta" => {
++            let texts: Vec<String> = (0..count).map(text).collect();
++            let index = surface(&texts);
++            let middle = u32::try_from(count / 2).unwrap();
++            let added =
++                SurfaceIndex::from_texts(Analyzer::empty_lexicon(), [(middle, "aardvark bank")])
++                    .unwrap();
++            Box::new(move || {
++                let updated = index.with_documents(added).unwrap();
++                u64::try_from(black_box(updated).words().count()).unwrap()
++            })
++        }
++        _ => panic!("unknown row {row}"),
++    }
++}
++
++const SPEC: CountRows<'static> = CountRows {
++    bench: "source_identity_counts",
++    rows: &ROWS,
++    size: ("PURRDF_TEXT_IDENTITY_ROWS", 2048),
++    samples: "PURRDF_TEXT_IDENTITY_COUNT_SAMPLES",
++};
++
++fn main() {
++    run_count_rows(&SPEC, &prepare, &purrdf_alloc_probe::whole_process_report);
++}
+diff --git crates/text/src/error.rs crates/text/src/error.rs
+index ee96fddfd..05c8c58aa 100644
+--- crates/text/src/error.rs
++++ crates/text/src/error.rs
+@@ -32,11 +32,12 @@ pub enum TextDeltaError {
+         /// Canonical selected addition ordinal.
+         ordinal: usize,
+     },
+-    /// Reversing the delta does not recover the indexed source generation.
++    /// Reversing the delta does not recover the indexed source accounting.
+     SourceMismatch {
+-        /// Existing selected-source identity.
++        /// Check value of the existing selected-source accounting: a domain-bound
++        /// hash of its additive sum, for diagnosis, not a source identity.
+         expected: [u8; 32],
+-        /// Identity reconstructed from the supplied source and delta.
++        /// Check value reconstructed from the supplied source and delta.
+         actual: [u8; 32],
+     },
+     /// Statement populations implied by the delta disagree with the source,
+diff --git crates/text/src/index.rs crates/text/src/index.rs
+index 900b54d13..fc40078d2 100644
+--- crates/text/src/index.rs
++++ crates/text/src/index.rs
+@@ -95,15 +95,21 @@ use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
+ 
+ /// Domain-separation prefix for [`TextIndex::fingerprint`].
+ const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v6");
+-/// Domain-separation prefix for [`TextIndex::source_fingerprint`].
++/// Domain of the additive selected-source check value: the 4.x source
++/// fingerprint law, kept for [`source_fingerprint`] and the delta mismatch report.
+ const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v2");
++/// Domain-separation prefix for [`TextIndex::source_fingerprint`]: BLAKE3 over
++/// the sorted selected-row digests.
++const SOURCE_IDENTITY_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v3");
+ /// Graph-free source and index identities omit every graph coordinate.
+ const TRIPLE_INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/index/v3");
+ const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v2");
++const TRIPLE_SOURCE_IDENTITY_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v3");
+ 
+ mod source_digest;
++#[allow(deprecated, reason = "the 4.x public path stays reachable, deprecated")]
+ pub use source_digest::source_fingerprint;
+-use source_digest::{SourceDigest, row_directory, row_hashes};
++use source_digest::{SourceDigest, row_directory, row_hashes, sorted_source_fingerprint};
+ mod token_streams;
+ use token_streams::TokenTable;
+ pub(crate) use token_streams::{Slice, Table};
+@@ -792,11 +798,12 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
+ 
+     /// The digest of the source rows walked.
+     source_fingerprint: [u8; FINGERPRINT_BYTES],
+-    /// Reversible source accounting, retained independently of its published hash.
++    /// Reversible additive source accounting: the drift check a delta is
++    /// validated against, not the source identity.
+     source_digest: SourceDigest,
+     /// The hash of every selected source row, token-less rows included, sorted,
+     /// with one entry per occurrence. A delta's removed rows are joined against
+-    /// it exactly. Memory only: derived from the source rows, never fingerprinted.
++    /// it exactly, and [`Self::source_fingerprint`] hashes it in this order.
+     row_directory: Table<[u8; 32]>,
+     /// Original source-owned observation for independently discovering changes.
+     source_version: Option<purrdf_core::source::SourceVersion>,
+@@ -899,17 +906,21 @@ impl<P: CorpusProfile> TextIndex<P> {
+         let version = dataset.source_version().map_err(TextError::source_read)?;
+         let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
+         let source = SourceDigest::from_hashes(hashes.iter().copied());
++        let directory = row_directory(hashes)?;
+         let (documents, dictionary) = analyze_rows(&rows, config)?;
+         let mut index = Self::assemble(
+             config.clone(),
+             documents,
+             &dictionary,
+-            source,
++            (
++                source,
++                sorted_source_fingerprint::<P>(directory.iter().copied()),
++            ),
+             coverage,
+             RankingProfile::single_field(),
+         )?;
+         index.source_version = version;
+-        index.row_directory = row_directory(hashes)?;
++        index.row_directory = directory;
+         dataset
+             .checked_read(|_| ())
+             .map_err(TextError::source_read)?;
+@@ -936,17 +947,21 @@ impl<P: CorpusProfile> TextIndex<P> {
+         let version = dataset.source_version().map_err(TextError::source_read)?;
+         let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
+         let source = SourceDigest::from_hashes(hashes.iter().copied());
++        let directory = row_directory(hashes)?;
+         let (documents, dictionary) = analyze_rows(&rows, config)?;
+         let mut index = Self::assemble(
+             config.clone(),
+             documents,
+             &dictionary,
+-            source,
++            (
++                source,
++                sorted_source_fingerprint::<P>(directory.iter().copied()),
++            ),
+             coverage,
+             profile,
+         )?;
+         index.source_version = version;
+-        index.row_directory = row_directory(hashes)?;
++        index.row_directory = directory;
+         dataset
+             .checked_read(|_| ())
+             .map_err(TextError::source_read)?;
+@@ -1838,7 +1853,9 @@ impl<P: CorpusProfile> TextIndex<P> {
+     }
+ 
+     /// The digest of the `(graph, subject, predicate, literal)` rows this index
+-    /// was built by walking.
++    /// was built by walking: BLAKE3 over their sorted row digests, one per
++    /// occurrence, so two different row sets share it only through a BLAKE3
++    /// collision.
+     ///
+     /// [`Self::fingerprint`] identifies the index; this identifies the *data
+     /// under* it. The two are separate because pairing an index with the wrong
+@@ -1944,7 +1961,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+         config: TextIndexConfig<P>,
+         documents: Vec<AnalyzedDocument<P>>,
+         dictionary: &[String],
+-        source: SourceDigest,
++        (source, source_fingerprint): (SourceDigest, [u8; FINGERPRINT_BYTES]),
+         coverage: SourceCoverage,
+         ranking: RankingProfile,
+     ) -> Result<Self, TextError> {
+@@ -2024,7 +2041,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             surface,
+             han_occurrences,
+             fingerprint: [0; FINGERPRINT_BYTES],
+-            source_fingerprint: source.fingerprint::<P>(),
++            source_fingerprint,
+             source_digest: source,
+             row_directory: Table::default(),
+             source_version: None,
+@@ -2053,8 +2070,9 @@ impl<P: CorpusProfile> TextIndex<P> {
+ }
+ 
+ /// Compute the native generation from the immutable inputs that determine text answers.
+-/// Persistent providers use this same preimage with their maintained source multiset
+-/// identity. Derived document tables and postings add no independent identity.
++/// Persistent providers use this same preimage with the source identity of their rows,
++/// BLAKE3 over the sorted selected-row digests that [`source_digest`] computes.
++/// Derived document tables and postings add no independent identity.
+ pub fn snapshot_fingerprint<P: CorpusProfile>(
+     config: &TextIndexConfig<P>,
+     ranking: &RankingProfile,
+@@ -2678,7 +2696,7 @@ fn analyze_rows<P: CorpusProfile>(
+             // buffer, including capacity, before retaining the remaining views.
+             drop(core::mem::take(&mut analysis.lexical));
+             if config.surface || config.projection == IndexProjection::Han {
+-                analyses.push((digest_rows(std::iter::once(row)), analysis));
++                analyses.push((row_fingerprint(row), analysis));
+             }
+         }
+         // Retain auxiliary-only documents without admitting them into the
+@@ -2838,7 +2856,15 @@ where
+ fn digest_rows<'a, P: CorpusProfile + 'a>(
+     rows: impl ExactSizeIterator<Item = &'a SourceRow<P>>,
+ ) -> [u8; FINGERPRINT_BYTES] {
+-    SourceDigest::from_rows(rows).fingerprint::<P>()
++    let mut hashes: Vec<[u8; 32]> = row_hashes(rows).collect();
++    hashes.sort_unstable();
++    sorted_source_fingerprint::<P>(hashes)
++}
++
++/// The source identity of one row alone. A single hash is already sorted, so no
++/// collection is built.
++fn row_fingerprint<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; FINGERPRINT_BYTES] {
++    sorted_source_fingerprint::<P>(row_hashes(std::iter::once(row)))
+ }
+ 
+ /// A streaming digest over the crate's one term encoding.
+diff --git crates/text/src/index/delta.rs crates/text/src/index/delta.rs
+index 028683182..68efdb263 100644
+--- crates/text/src/index/delta.rs
++++ crates/text/src/index/delta.rs
+@@ -10,7 +10,7 @@ use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
+ use purrdf_core::{GraphSelector, StatisticsStream};
+ use purrdf_hash::multiset::Multiset256;
+ 
+-use super::source_digest::row_hashes;
++use super::source_digest::{row_hashes, sorted_source_fingerprint};
+ use super::{
+     CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
+     analyze_rows, collect_rows, collect_subject_rows,
+@@ -80,7 +80,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             &removed_coverage,
+             &observed_coverage,
+         )?;
+-        let source_fingerprint = source.fingerprint::<P>();
++        let source_fingerprint = sorted_source_fingerprint::<P>(directory.iter().copied());
+         if source_fingerprint == self.source_fingerprint {
+             self.coverage = coverage;
+             self.row_directory = directory;
+@@ -102,7 +102,7 @@ impl<P: CorpusProfile> TextIndex<P> {
+             self.config.clone(),
+             documents,
+             &dictionary,
+-            source,
++            (source, source_fingerprint),
+             coverage.clone(),
+             self.ranking.clone(),
+         )?;
+@@ -505,8 +505,8 @@ fn validate_delta<P: CorpusProfile>(
+     }
+     if expected != prior {
+         return Err(TextDeltaError::SourceMismatch {
+-            expected: expected.fingerprint::<P>(),
+-            actual: prior.fingerprint::<P>(),
++            expected: expected.check_value::<P>(),
++            actual: prior.check_value::<P>(),
+         });
+     }
+     for &hash in removed_hashes {
+@@ -1088,10 +1088,12 @@ mod tests {
+             index.clone().with_delta(&*next, &*old, &*empty),
+             Err(TextDeltaError::MissingAddition { ordinal: 0 })
+         ));
+-        let expected = index.source_fingerprint;
++        // The mismatch reports the additive accounting check values.
++        let expected = index.source_digest.check_value::<crate::GraphLanguage>();
+         let actual = TextIndex::from_dataset(&*next, &config())
+             .unwrap()
+-            .source_fingerprint;
++            .source_digest
++            .check_value::<crate::GraphLanguage>();
+         assert_eq!(
+             index.with_delta(&*next, &*empty, &*empty).unwrap_err(),
+             TextDeltaError::SourceMismatch { expected, actual }
+diff --git crates/text/src/index/source_digest.rs crates/text/src/index/source_digest.rs
+index fc87b4aeb..aaf67d564 100644
+--- crates/text/src/index/source_digest.rs
++++ crates/text/src/index/source_digest.rs
+@@ -5,14 +5,19 @@
+ 
+ use purrdf_hash::multiset::Multiset256;
+ 
+-use super::{CorpusProfile, SOURCE_DIGEST_DOMAIN, SourceRow, TRIPLE_SOURCE_DIGEST_DOMAIN};
++use super::{
++    CorpusProfile, SOURCE_DIGEST_DOMAIN, SOURCE_IDENTITY_DOMAIN, SourceRow,
++    TRIPLE_SOURCE_DIGEST_DOMAIN, TRIPLE_SOURCE_IDENTITY_DOMAIN,
++};
+ 
+ /// Sum of the selected row hashes in Z/(2^256), plus their exact population.
+ ///
+ /// A repeated row contributes repeatedly; unlike XOR, two equal rows do not
+ /// disappear. The sum's encoding is explicitly little-endian on every target.
+-/// This is a multiset fingerprint, not an authentication proof. The observed
+-/// source summary must still be supplied independently of the proposed delta.
++/// This is a population and drift check between structures this process
++/// built, not an identity: the index's source identity is BLAKE3 over the
++/// sorted row directory. The observed source summary must still be supplied
++/// independently of the proposed delta.
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+ pub(super) struct SourceDigest {
+     state: Multiset256,
+@@ -59,6 +64,7 @@ impl SourceDigest {
+         .map_err(|error| crate::TextError::data(error.to_string()))
+     }
+ 
++    #[cfg(test)]
+     pub(super) fn from_rows<'a, P: CorpusProfile + 'a>(
+         rows: impl IntoIterator<Item = &'a SourceRow<P>>,
+     ) -> Self {
+@@ -104,17 +110,14 @@ impl SourceDigest {
+             .expect("source membership was validated");
+     }
+ 
+-    pub(super) fn fingerprint<P: CorpusProfile>(&self) -> [u8; 32] {
+-        source_fingerprint::<P>(self.state)
++    /// The accounting check value a delta mismatch reports. It is a drift
++    /// check between structures this process built, not a source identity.
++    pub(super) fn check_value<P: CorpusProfile>(&self) -> [u8; 32] {
++        additive_check_value::<P>(self.state)
+     }
+ }
+ 
+-/// Apply the native source domain to maintained selected literal-row hashes.
+-/// Insert or remove the matching profile's hash from
+-/// `purrdf_core::source::LiteralSourceRow::hashes_with_memory` for each selected
+-/// statement. Counts and membership belong to the original source owner; this
+-/// multiset identity is not an authentication proof.
+-pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
++fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+     state.fingerprint(if P::GRAPH_FREE {
+         TRIPLE_SOURCE_DIGEST_DOMAIN
+     } else {
+@@ -122,6 +125,38 @@ pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+     })
+ }
+ 
++/// The 4.x source law: the additive sum of selected literal-row hashes under
++/// the source domain. No 5.0 index carries this value.
++/// [`TextIndex::source_fingerprint`](super::TextIndex::source_fingerprint) is
++/// BLAKE3 over the sorted selected-row digests, which
++/// [`source_digest`](super::source_digest) computes from a dataset; a party
++/// choosing rows can construct two different row sets with one additive value.
++/// The value is not collision-resistant and must not be used as an identity.
++#[deprecated(
++    since = "5.0.0",
++    note = "this additive value is not collision-resistant and must not be used as an identity: use `source_digest` or `TextIndex::source_fingerprint`"
++)]
++pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
++    additive_check_value::<P>(state)
++}
++
++/// The identity of the selected source rows: BLAKE3 over every selected
++/// literal-row hash in ascending order, one per occurrence, under the
++/// profile's source domain. `sorted` must be ascending; the row directory
++/// already is.
++pub(super) fn sorted_source_fingerprint<P: CorpusProfile>(
++    sorted: impl IntoIterator<Item = [u8; 32]>,
++) -> [u8; 32] {
++    purrdf_hash::multiset::sorted_fingerprint(
++        if P::GRAPH_FREE {
++            TRIPLE_SOURCE_IDENTITY_DOMAIN
++        } else {
++            SOURCE_IDENTITY_DOMAIN
++        },
++        sorted,
++    )
++}
++
+ /// The sorted per-row hashes of every selected source row, token-less rows
+ /// included, each repeated as often as the row occurs.
+ pub(super) fn row_directory(
+@@ -220,10 +255,37 @@ mod tests {
+ 
+     #[test]
+     fn empty_source_profiles_have_distinct_identities() {
+-        let empty = SourceDigest::default();
+         assert_ne!(
+-            empty.fingerprint::<GraphLanguage>(),
+-            empty.fingerprint::<crate::GraphFree>()
++            sorted_source_fingerprint::<GraphLanguage>([]),
++            sorted_source_fingerprint::<crate::GraphFree>([])
+         );
+     }
++
++    /// The source identity is BLAKE3 over the sorted row hashes: two selected
++    /// row sets whose additive sums and populations agree have different
++    /// identities, while the same rows reached in another order agree.
++    #[test]
++    fn source_identity_distinguishes_an_additive_collision() {
++        let digest = |seed: u8| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
++        let (a, b, c) = (digest(1), digest(2), digest(3));
++        let mut d = Multiset256::default();
++        d.insert(a).unwrap();
++        d.insert(b).unwrap();
++        d.remove(c).unwrap();
++        let d = *d.sum();
++        let sorted = |mut hashes: Vec<[u8; 32]>| {
++            hashes.sort_unstable();
++            hashes
++        };
++        let (left, right) = (sorted(vec![a, b]), sorted(vec![c, d]));
++        assert_eq!(
++            SourceDigest::from_hashes(left.iter().copied()),
++            SourceDigest::from_hashes(right.iter().copied())
++        );
++        let identity = |hashes: &[[u8; 32]]| {
++            sorted_source_fingerprint::<GraphLanguage>(hashes.iter().copied())
++        };
++        assert_ne!(identity(&left), identity(&right));
++        assert_eq!(identity(&left), identity(&sorted(vec![b, a])));
++    }
+ }
+diff --git crates/text/src/lib.rs crates/text/src/lib.rs
+index 153081d0d..04b8d16af 100644
+--- crates/text/src/lib.rs
++++ crates/text/src/lib.rs
+@@ -138,9 +138,11 @@ pub use analysis::{
+ pub use corpus::{CorpusProfile, GraphFree, GraphLanguage};
+ pub use error::{TextDeltaError, TextError};
+ pub use fixed::{Fixed, SCALE_DIGITS};
++#[allow(deprecated, reason = "the 4.x public path stays reachable, deprecated")]
++pub use index::source_fingerprint;
+ pub use index::{
+     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
+-    TextIndexConfig, TokenOccurrence, snapshot_fingerprint, source_digest, source_fingerprint,
++    TextIndexConfig, TokenOccurrence, snapshot_fingerprint, source_digest,
+ };
+ pub use profile::{
+     AccentFold, AccentScripts, AnalyzerProfile, InputMode, MAX_TOKEN_SCALARS, Segmentation,
+diff --git crates/text/src/source.rs crates/text/src/source.rs
+index ee95fe278..35a77bdcb 100644
+--- crates/text/src/source.rs
++++ crates/text/src/source.rs
+@@ -93,7 +93,8 @@ pub trait TextSource<P: CorpusProfile>: std::fmt::Debug + Send + Sync + 'static
+     fn ranking_profile(&self) -> &RankingProfile;
+     /// Native content identity of the complete snapshot.
+     fn fingerprint(&self) -> [u8; 32];
+-    /// Exact selected literal-row multiset identity.
++    /// Identity of the selected literal rows: BLAKE3 over their sorted row
++    /// digests, one per occurrence.
+     fn source_fingerprint(&self) -> [u8; 32];
+     /// Coverage of the configured predicates in this same immutable snapshot.
+     fn source_coverage(&self) -> &SourceCoverage;
+diff --git crates/text/src/surface.rs crates/text/src/surface.rs
+index c3db38f8e..9f2fc22e0 100644
+--- crates/text/src/surface.rs
++++ crates/text/src/surface.rs
+@@ -7,7 +7,7 @@ use crate::analysis::{AlignedText, Analysis, Projection};
+ use crate::index::{Document, Table, compare_document_keys, share_index};
+ use crate::phonetic::{self, DoubleMetaphone, PhoneticCodes, PhoneticRefusal, PreparedDistance};
+ use crate::{Analyzer, CorpusProfile, GraphLanguage, TextError};
+-use purrdf_hash::{Domain, blake3, frame::frame_le_into, multiset::Multiset256};
++use purrdf_hash::{Domain, blake3, frame::frame_le_into, multiset::sorted_fingerprint};
+ use purrdf_lex::allocation::shared::Shared;
+ use std::{
+     borrow::Borrow,
+@@ -25,7 +25,9 @@ pub use substring::{
+     SubstringLimits, SubstringRefusal, SubstringRefusalReason, SubstringReport, SubstringWork,
+ };
+ 
+-const GENERATION_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-generation/v2\0");
++const GENERATION_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-generation/v3");
++/// The surface's source rows: BLAKE3 over their sorted digests.
++const SOURCES_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-sources/v1");
+ const SOURCE_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-source/v1\0");
+ const LITERAL_DOMAIN: Domain = Domain::new(b"purrdf-text/surface-literal/v1\0");
+ 
+@@ -313,7 +315,6 @@ pub struct SurfaceIndex<P: CorpusProfile = GraphLanguage> {
+     words: Table<StoredTerm<P>>,
+     spans: Table<StoredTerm<P>>,
+     sources: Table<Shared<Source<P>>>,
+-    source_state: Multiset256,
+     grams: [FlatPostings<u64, GramPosting>; 3],
+     phonetic_postings: FlatPostings<String, Spelling>,
+ }
+@@ -388,7 +389,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+         let mut words = BTreeMap::new();
+         let mut spans = BTreeMap::new();
+         let mut sources = Vec::with_capacity(rows.len());
+-        let mut source_state = Multiset256::default();
+         for (document, identity, analysis) in rows {
+             let names = |projections: &[Projection],
+                          pool: &mut BTreeMap<String, Spelling>|
+@@ -422,9 +422,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+             }
+             frame_le_into(&mut digest, &identity);
+             let digest = *digest.finalize().as_bytes();
+-            source_state
+-                .insert(digest)
+-                .map_err(|e| TextError::data(e.to_string()))?;
+             let source = share_index(Source {
+                 document,
+                 identity,
+@@ -467,7 +464,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+             words,
+             spans,
+             sources: Table::from_streams(sources)?,
+-            source_state,
+             grams: [
+                 FlatPostings::build(std::mem::take(&mut gram_rows[0]))?,
+                 FlatPostings::build(std::mem::take(&mut gram_rows[1]))?,
+@@ -475,7 +471,7 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+             ],
+             phonetic_postings: FlatPostings::build(code_rows)?,
+         };
+-        result.generation = result.content_generation();
++        result.generation = result.content_generation()?;
+         Ok(result)
+     }
+ 
+@@ -631,25 +627,51 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+         result
+     }
+ 
+-    fn content_generation(&self) -> [u8; 32] {
+-        let mut digest = blake3::Hasher::new();
+-        digest.update(GENERATION_DOMAIN.as_bytes());
+-        frame_le_into(&mut digest, &self.analyzer.fingerprint());
+-        match self.coordinate_generation {
+-            Some(generation) => {
+-                digest.update(&[1]);
+-                frame_le_into(&mut digest, &generation);
+-            }
+-            None => {
+-                digest.update(&[0]);
+-            }
+-        }
+-        frame_le_into(&mut digest, &self.source_state.population().to_le_bytes());
+-        frame_le_into(&mut digest, self.source_state.sum());
+-        *digest.finalize().as_bytes()
++    /// The standalone generation: the analyzer, the coordinate owner and the
++    /// identity of the source rows, BLAKE3 over their sorted digests, so two
++    /// different source sets never share it through an additive sum.
++    fn content_generation(&self) -> Result<[u8; 32], TextError> {
++        let mut sources = Vec::new();
++        sources.try_reserve_exact(self.sources.len()).map_err(|_| {
++            TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
++                construct: "surface source identity",
++            })
++        })?;
++        sources.extend(self.sources.iter().map(|source| source.digest));
++        sources.sort_unstable();
++        Ok(surface_generation(
++            &self.analyzer.fingerprint(),
++            self.coordinate_generation,
++            &sources,
++        ))
+     }
+ }
+ 
++/// The preimage of [`SurfaceIndex::content_generation`]; `sources` ascending.
++fn surface_generation(
++    analyzer: &[u8; 32],
++    coordinate_generation: Option<[u8; 32]>,
++    sources: &[[u8; 32]],
++) -> [u8; 32] {
++    let mut digest = blake3::Hasher::new();
++    digest.update(GENERATION_DOMAIN.as_bytes());
++    frame_le_into(&mut digest, analyzer);
++    match coordinate_generation {
++        Some(generation) => {
++            digest.update(&[1]);
++            frame_le_into(&mut digest, &generation);
++        }
++        None => {
++            digest.update(&[0]);
++        }
++    }
++    frame_le_into(
++        &mut digest,
++        &sorted_fingerprint(SOURCES_DOMAIN, sources.iter().copied()),
++    );
++    *digest.finalize().as_bytes()
++}
++
+ struct TermBuild<P: CorpusProfile> {
+     occurrences: Vec<Occurrence<P>>,
+ }
+@@ -777,6 +799,31 @@ fn distinct_codes(codes: &PhoneticCodes) -> impl Iterator<Item = &str> {
+ mod tests {
+     use super::{Analyzer, SurfaceIndex};
+ 
++    /// The standalone generation binds the sorted source digests: two source
++    /// sets whose additive sums and populations agree give two generations.
++    /// Equal sources reached through deltas keep the fresh generation (the
++    /// next test).
++    #[test]
++    fn surface_generation_distinguishes_an_additive_collision() {
++        use purrdf_hash::multiset::Multiset256;
++        let digest = |seed: u8| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
++        let (a, b, c) = (digest(1), digest(2), digest(3));
++        let mut d = Multiset256::default();
++        d.insert(a).unwrap();
++        d.insert(b).unwrap();
++        d.remove(c).unwrap();
++        let d = *d.sum();
++        let sorted = |mut sources: Vec<[u8; 32]>| {
++            sources.sort_unstable();
++            sources
++        };
++        let generation = |sources: &[[u8; 32]]| super::surface_generation(&[9; 32], None, sources);
++        assert_ne!(
++            generation(&sorted(vec![a, b])),
++            generation(&sorted(vec![c, d]))
++        );
++    }
++
+     #[test]
+     fn successive_document_deltas_preserve_fresh_generations_and_queries() {
+         let analyzer = Analyzer::empty_lexicon();
+diff --git crates/text/src/surface/delta.rs crates/text/src/surface/delta.rs
+index 1ddc52d5e..81cc82aa0 100644
+--- crates/text/src/surface/delta.rs
++++ crates/text/src/surface/delta.rs
+@@ -43,7 +43,7 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+             .collect();
+         self.remove_document_keys(&documents)?;
+         self = self.merge_disjoint(added)?;
+-        self.generation = self.content_generation();
++        self.generation = self.content_generation()?;
+         Ok(self)
+     }
+ 
+@@ -64,7 +64,7 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+             })
+             .collect();
+         if self.remove_document_keys(&documents)? {
+-            self.generation = self.content_generation();
++            self.generation = self.content_generation()?;
+         }
+         Ok(self)
+     }
+@@ -123,9 +123,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+                     .binary_search_by(|candidate| compare_sources(candidate, &source))
+                     .expect("a removed surface source is still present");
+                 self.sources = self.sources.remove(at)?;
+-                self.source_state
+-                    .remove(source.digest)
+-                    .map_err(|error| TextError::data(error.to_string()))?;
+             }
+         }
+         Ok(changed)
+@@ -187,7 +184,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+             sources,
+             words,
+             spans,
+-            source_state,
+             ..
+         } = added;
+         for source in sources.iter() {
+@@ -204,9 +200,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
+                 Err(at) => self.sources = self.sources.insert(at, source.clone())?,
+             }
+         }
+-        self.source_state
+-            .combine(source_state)
+-            .map_err(|error| TextError::data(error.to_string()))?;
+         for (span, table) in [(false, words), (true, spans)] {
+             for term in table.iter() {
+                 self.insert_term(term, span)?;
+diff --git crates/text/tests/scoring.rs crates/text/tests/scoring.rs
+index dc5c078dc..bfce3346a 100644
+--- crates/text/tests/scoring.rs
++++ crates/text/tests/scoring.rs
+@@ -1150,8 +1150,9 @@ fn two_independently_built_indexes_rank_identically() {
+ /// identity because its canonical profile binds exact promotion and the actual
+ /// query-bound law. The RDF source, analyzer, term-sequence and score lexical
+ /// identities remain frozen across that ranking migration. Index v4 additionally
+-/// binds surface presence. Source v2 uses a row-hash multiset with exact
+-/// multiplicity; index v6 binds the complete deterministic construction inputs.
++/// binds surface presence. Source v3 is BLAKE3 over the sorted row hashes, with
++/// exact multiplicity, in place of an additive sum; index v6 binds the complete
++/// deterministic construction inputs, so its value moved with the source law.
+ /// Analyzer, term-sequence and score lexical identities remain unchanged.
+ #[test]
+ fn the_published_text_identities_are_frozen() {
+@@ -1159,12 +1160,12 @@ fn the_published_text_identities_are_frozen() {
+     let index = golden_index();
+     assert_eq!(
+         hex(index.fingerprint()),
+-        "5ec0d3126d065048475c12aec543017c937be47517dcc376fc710943fab65340",
++        "218d98a05af163f2011f21cb7e70d836ed79f50d22ff238a5ee77f5201f949dc",
+         "the index fingerprint"
+     );
+     assert_eq!(
+         hex(index.source_fingerprint()),
+-        "d8e8d6663daccffa8540bf69895cd42141a2afa08ad32e71fa06f4f1e52b3393",
++        "055082e77e3f64850b859a9caeac597e7c8838f8488c5f574e29fef5994f9fff",
+         "the source fingerprint"
+     );
+     assert_eq!(
+diff --git crates/text/tests/support/shape_cases.rs crates/text/tests/support/shape_cases.rs
+index 1abcbdd5b..cea6b9952 100644
+--- crates/text/tests/support/shape_cases.rs
++++ crates/text/tests/support/shape_cases.rs
+@@ -126,14 +126,17 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
+     assert_eq!(quad.corpus_profile(), purrdf_text::INDEX_CORPUS_PROFILE_ID);
+     assert_ne!(index.fingerprint(), quad.fingerprint());
+     assert_ne!(index.source_fingerprint(), quad.source_fingerprint());
++    // Moved with the 5.0 sorted-digest source law: the graph-free source
++    // identity is BLAKE3 over the sorted row hashes, and the index identity
++    // binds that source identity.
+     assert_eq!(
+         purrdf_hash::hex::encode(&index.fingerprint()),
+-        "a3b848138dd6e067908437f62a086b82f3ecda0104cee1b0943b41d67b9b239a",
++        "16a0b745250f76adf61a0ce4b503fe2213444798cb61a4de709b52631124b375",
+         "the graph-free index identity"
+     );
+     assert_eq!(
+         purrdf_hash::hex::encode(&index.source_fingerprint()),
+-        "b857dde328bad38b1551da367e6a4991d2b2fa86e6efe1568573b9ca774ff7ed",
++        "d6e49c8701056f1bb5020995dec6076c5eb39bc1eb1e1b329347ce2e49059e5a",
+         "the graph-free source identity"
+     );
+ 
+diff --git docs/MIGRATION-5.0.md docs/MIGRATION-5.0.md
+index c3807e137..8887ce457 100644
+--- docs/MIGRATION-5.0.md
++++ docs/MIGRATION-5.0.md
+@@ -34,6 +34,10 @@ digests before opening a 4.x artifact.
+   same inputs with the same fields. Refusal is the labelling's typed `limit`
+   outcome.
+ - `DatasetStateDigest` is a separate algorithm and is unchanged.
++- Every identity and fingerprint of a set of rows is BLAKE3 over the sorted row
++  digests, not an additive sum. Content identities, execution receipts, source
++  version fingerprints and text index generations recorded by 4.x stop
++  matching (see "Row-set identities").
+ 
+ ## The canonical line sequence
+ 
+@@ -171,6 +175,55 @@ caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
+ reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
+ them.
+ 
++## Row-set identities
++
++In 4.x, the identities and fingerprints derived from a set of rows added the
++256-bit row digests modulo 2^256 and hashed the sum with the row count. A party
++that chooses rows can construct two different row sets with the same sum and
++count (D. Wagner, "A Generalized Birthday Problem", CRYPTO 2002), so equal
++values did not prove equal rows. In 5.0 each row family is BLAKE3 over its row
++digests in ascending order, repeats kept, followed by the row count, under a
++domain of its own (`purrdf_hash::multiset::sorted_fingerprint`). Two different
++row sets share a value only through a BLAKE3 collision.
++
++Every value below moves for every input, except that a segmented stack made only
++of image layers, with no removal or declaration owners and no resident head,
++hashes image snapshots alone and keeps its 4.x snapshot identity and the
++receipts bound to it. A value recorded by 4.x otherwise never equals the 5.0
++value of the same data. Nothing recomputes a 4.x value: recompute
++the identity from the data and record it again.
++
++| Value | What moved |
++|---|---|
++| `ContentIdentified::content_identity` of `RdfDataset`, of a triple dataset, and of `CompositeDatasetView`, `DeltaDatasetView`, paged datasets and segmented stack snapshots and queries (see the exception above), and the SHACL data and class-membership views | The resident record and named-graph families, and a mutation snapshot's suppressed, converted and withdrawn-graph families, are sorted-digest fingerprints (domains `purrdf-core/snapshot/rows/v2`, `purrdf-core/snapshot/graphs/v2`, `purrdf-core/delta-snapshot/v2` and its family domains). Composed views hash these identities, so they move with them. The class-membership view hashes its supplementary subclass edges the same way (`purrdf-shapes/class-membership-snapshot/v2`). |
++| Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt` or `bind_execution_receipt_hex`, by Python `bind_execution_receipt`, by JavaScript `bindExecutionReceipt` and by C `purrdf_execution_receipt_bind`; `QueryCoordinates::execution_identity`, `SuppliedQueryCoordinates::execution_identity` and `RuleCoordinates::execution_identity`, which take these content identities. |
++| `SourceVersion::content_fingerprint` | BLAKE3 over the population and the canonical Merkle node of the sorted record digests (`purrdf/source-version/v2`). |
++| `TextIndex::source_fingerprint`, `TextSource::source_fingerprint` and `purrdf_text::source_digest` | BLAKE3 over the sorted selected-row digests (`purrdf-text/source/v3`, `purrdf-text/triples/source/v3`). `verify_binding` refuses an index whose stored source identity came from 4.x. |
++| `TextIndex::fingerprint`, `snapshot_fingerprint` and the generation retrieval strata attest | The index generation binds the source identity, so it moves with it, and so does every retrieval evidence identity recorded over a 4.x generation. |
++| `SourceMatchEvidence::literal` of a match from an index-built surface, and the literal identity Han occurrences carry | The per-row source identity moved from the additive `purrdf-text/source/v2` law to the sorted `purrdf-text/source/v3` law. |
++| `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
++
++`purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
++deprecated: no 5.0 index carries that value. The value is not
++collision-resistant and must not be used as an identity; use
++`purrdf_text::source_digest` or `TextIndex::source_fingerprint` instead. The
++function is removed in the next major version. `SourceSummary::records` and
++`SourceSummary::literal_rows` keep their additive `Multiset256` values, which
++combine across physical layers without visiting rows; they are accounting sums
++for drift and population checks between structures one process built, and no
++identity is derived from them. `TextDeltaError::SourceMismatch` reports check
++values of the same accounting. `DatasetStateDigest`, pack identities and
++the image snapshots inside a segmented stack already hashed bytes or sorted rows
++and are unchanged.
++
++Two cases are settled by the new law. A paged dataset certifies a page it
++materializes by recomputing the page's content identity from the rows the
++provider returned and comparing it with the identity sealed at admission; that
++refusal now holds against a provider that chooses the rows it returns. The
++supplementary subclass edges of a class-membership view, taken from a shapes
++graph or ontology another party supplies, no longer admit an edge set that
++collides with another.
++
+ ## Items that left the crate root
+ 
+ These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
+diff --git docs/design/purrdf-simd.md docs/design/purrdf-simd.md
+index 55064f586..79b6e8cf6 100644
+--- docs/design/purrdf-simd.md
++++ docs/design/purrdf-simd.md
+@@ -1082,6 +1082,7 @@ and an identical warm-up remain outside each process-local allocation window.
+ | `crates/text/benches/emoji.rs` | text.emoji-recognition |
+ | `crates/text/benches/phonetic.rs` | text.phonetic-spelling, text.phonetic-distance |
+ | `crates/text/benches/surface.rs` | text.surface-build, text.surface-substring |
++| `crates/text/benches/source_identity_counts.rs` | text.unicode-ascii-lower, text.surface-build, blake3.single-block |
+ | `crates/xsd/benches/exact.rs` | xsd.exact-arith |
+ | `crates/xsd/benches/lexical.rs` | xsd.whitespace, xsd.canonical-double |
+ <!-- simd-asm:benches:end -->
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 8dc7db2bb..80840aab1 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -1850,6 +1850,16 @@ constants = []
+ fingerprints = []
+ names = ["^(rule|infer)_options$", "^run_rules_(dispatch|for_host)$"]
+ 
++[[distinct]]
++members = [
++"purrdf_core::bench_crate::source_change_counts::main",
++"purrdf_text::bench_crate::source_identity_counts::main",
++]
++kind = "shim"
++criterion = "b"
++anchor = "purrdf_core::bench_crate::source_change_counts::main"
++reason = "Each bench target hands its own row specification and its own row preparation to the one shared count runner; the targets measure different crates and the shim differs only in the callee arguments it names."
++
+ [[distinct]]
+ members = [
+     "purrdf_geo_kernel::geojson::parse",
+@@ -3393,11 +3403,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3409,11 +3419,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3425,11 +3435,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3441,11 +3451,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3457,11 +3467,11 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3474,11 +3484,11 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+     "crates/rdf-core/src/ir/composite.rs=source:7ab4f23bbe15ba7a",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3491,27 +3501,27 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+     "crates/rdf-core/src/ir/composite.rs=source:7ab4f23bbe15ba7a",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/dataset.rs"
+ symbol = "crates/rdf-core/src/ir/dataset.rs::permutation"
+-line = 1485
++line = 1482
+ sink = "source:93359fa72451a90c"
+ class = "resident-permutation"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3523,11 +3533,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3539,11 +3549,11 @@ class = "local-stored-index"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3559,7 +3569,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3576,7 +3586,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3593,7 +3603,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3605,12 +3615,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3622,80 +3632,80 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
+ symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::new"
+-line = 163
++line = 196
+ sink = "source:3d42d43948575620"
+ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
++    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
+ symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::new"
+-line = 163
++line = 196
+ sink = "source:bfcc85921a648621"
+ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
++    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
+ symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids"
+-line = 253
++line = 286
+ sink = "source:c4edb708dec6980b"
+ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
++    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+ file = "crates/rdf-core/src/ir/mutable/delta_view.rs"
+ symbol = "crates/rdf-core/src/ir/mutable/delta_view.rs::term_ids"
+-line = 253
++line = 286
+ sink = "source:eb9a0b3db238c761"
+ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+-    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:b8bf719c55de9ead",
++    "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3707,12 +3717,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/event_sink.rs=source:06dde97381917c60",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3725,7 +3735,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3738,7 +3748,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3750,12 +3760,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3767,12 +3777,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3784,12 +3794,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3801,12 +3811,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3818,13 +3828,13 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/query.rs=source:5dfb4e84049ab356",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3836,13 +3846,13 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/query.rs=source:5dfb4e84049ab356",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3856,7 +3866,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:eedeecf1469d8070",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3868,12 +3878,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3885,12 +3895,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3902,12 +3912,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3919,12 +3929,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3936,14 +3946,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:4d9cdbb680b24fef",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3955,14 +3965,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:4d9cdbb680b24fef",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3974,14 +3984,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:4d9cdbb680b24fef",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3993,14 +4003,14 @@ class = "segmented-checked-interval"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/segmented/build.rs=source:4d9cdbb680b24fef",
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "encode_prepared_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4012,12 +4022,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4029,12 +4039,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4046,12 +4056,12 @@ class = "concrete-frozen-term-range"
+ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/builder.rs=source:fe7a4acdf27fe720",
+-    "crates/rdf-core/src/ir/dataset.rs=source:2d420963efd77480",
++    "crates/rdf-core/src/ir/dataset.rs=source:099a1461b1fb768d",
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:907d99921ec40858"
++constructors = "source:2a984f1f66cd95b5"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]
+@@ -4071,6 +4081,23 @@ constants = []
+ fingerprints = []
+ names = []
+ 
++[[job]]
++id = "sorted-row-set-fingerprint"
++summary = "The identity of a multiset of rows: domain-bound BLAKE3 over its member digests in ascending order and its exact population"
++home = "purrdf_hash::multiset::sorted_fingerprint"
++entry_points = []
++spec = "BLAKE3 of the little-endian framed domain, every 32-byte member digest in ascending order with repeats kept, then the population as 16 little-endian bytes; each row family supplies its own domain and sorts where it visits every row"
++vectors = []
++bench = []
++sites = []
++replaces_external = []
++enforced = true
++
++[job.forbidden]
++constants = []
++fingerprints = []
++names = []
++
+ [[job]]
+ id = "checked-word-identity"
+ summary = "Frozen full and prefix checked word spellings over the original 32-byte digest identity"

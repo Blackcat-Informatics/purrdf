@@ -1,0 +1,184 @@
+{
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE8djIg": {
+    "resolution": "addressed",
+    "reason": "The counts bench rejects a zero path size with a message naming PURRDF_LABELLING_COUNT_NODES; size 2 stays a one-edge path.",
+    "commit": "d76a82402a6cf9f42d109f7d884a76def488817e",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T10:59:44Z",
+      "state": null,
+      "commit": "7f59379736a83b7c0009f30a0357dbe75b2dc254",
+      "path": "crates/rdf-core/benches/canonical_labelling_counts.rs",
+      "line": null,
+      "body_sha256": "472e7af1d1472f13ba3ecce364573b81bd86b80f479bb2ffef29bdb20aeb4f75"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE8djMQ": {
+    "resolution": "addressed",
+    "reason": "A completed run records the walk total carried as Labelling::walked_units; a test asserts it differs from the explored total on a blank cycle.",
+    "commit": "1283198982c190c6bd98e19943ac742a4a8c631d",
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/1392#discussion_r4633547841",
+    "revision": {
+      "updated_at": "2026-11-19T18:54:54Z",
+      "state": null,
+      "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+      "path": "crates/rdf-core/src/canonical_labelling/optimised.rs",
+      "line": 1326,
+      "body_sha256": "1c74b857728281afa4b61145ae1302eaee5edfcf40edc732ed074981b7a1dd1e"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE8djOg": {
+    "resolution": "addressed",
+    "reason": "Walk::enter no longer copies the source identifier; the refusal takes it from the component when the walk ends, with unchanged diagnostic content.",
+    "commit": "1283198982c190c6bd98e19943ac742a4a8c631d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T17:23:37Z",
+      "state": null,
+      "commit": "3824763c06d8560b748b808e71341f49c973ef0e",
+      "path": "crates/rdf-core/src/canonical_labelling/walk.rs",
+      "line": null,
+      "body_sha256": "c5fe22e878ece3da0bddf02668cdf1babc654a2ac2c1fb295c8d34dcbfcd89cd"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE8djRA": {
+    "resolution": "addressed",
+    "reason": "Relation::twins reads the twin classes in passes repeated only after a join, and Relation::skipped decides a skip by the least member of its class. A bounded-work test over 100,000 visits fails on the per-visit scan (5,000,170,000 reads); a property test compares the skip with the old scan.",
+    "commit": "bf20700201b8aad97a2aa30b30a91aae0fd64e25",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T17:24:24Z",
+      "state": null,
+      "commit": "3824763c06d8560b748b808e71341f49c973ef0e",
+      "path": "crates/rdf-core/src/canonical_labelling/walk.rs",
+      "line": null,
+      "body_sha256": "1531149cb794a1e1c9bd5d9706c6bde67b77bc2f68f70546eb64b4e75e000a15"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABE9bwQA": {
+    "resolution": "addressed",
+    "reason": "The path row rejects size zero with a message naming PURRDF_LABELLING_COUNT_NODES; size 1 and the default stay valid.",
+    "commit": "1283198982c190c6bd98e19943ac742a4a8c631d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T17:23:39Z",
+      "state": null,
+      "commit": "3824763c06d8560b748b808e71341f49c973ef0e",
+      "path": "crates/rdf-core/benches/canonical_labelling.rs",
+      "line": null,
+      "body_sha256": "3bf30f330b4115d3e2dbd6c1c3d57304e5c0096a656638fc4d9fb183a3ffbded"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFCRd7g": {
+    "resolution": "addressed",
+    "reason": "The receipt, design-document and migration texts state that a completed run reports the walk total and a limit refusal reports the units after the charge that passed the limit, with QR13 as the example.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T18:09:22Z",
+      "state": null,
+      "commit": "bf20700201b8aad97a2aa30b30a91aae0fd64e25",
+      "path": "crates/rdf-core/src/ir/canon/control.rs",
+      "line": null,
+      "body_sha256": "382859c6a35b53aa9e806e90d6f5ae457525660c68c10350da60d381274d971a"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABY_06QQ": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T09:35:59Z",
+      "state": "COMMENTED",
+      "commit": "7f59379736a83b7c0009f30a0357dbe75b2dc254",
+      "path": null,
+      "line": null,
+      "body_sha256": "39206da97d5015c004c97913d1cfb1feea580177ef90a635052f823f1d84b372"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZBGb_Q": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T11:06:36Z",
+      "state": "COMMENTED",
+      "commit": "d76a82402a6cf9f42d109f7d884a76def488817e",
+      "path": null,
+      "line": null,
+      "body_sha256": "645f2af6e480a73ceba400af800205a7e7a0cdfdf437babbe191eb47901d6333"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZCCKxQ": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T12:17:04Z",
+      "state": "COMMENTED",
+      "commit": "3824763c06d8560b748b808e71341f49c973ef0e",
+      "path": null,
+      "line": null,
+      "body_sha256": "5931f114d08071c64ff4fc9aabf3a4e6fe2c5ce219b2e2d4373f94183f800e56"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZHDGhQ": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T17:31:00Z",
+      "state": "COMMENTED",
+      "commit": "1283198982c190c6bd98e19943ac742a4a8c631d",
+      "path": null,
+      "line": null,
+      "body_sha256": "ce86dd2a0e32a64890f00ec3d74fc925d160d8d3e78db8ffcf2b0ca9b739c243"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZHbmxA": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T17:57:18Z",
+      "state": "COMMENTED",
+      "commit": "bf20700201b8aad97a2aa30b30a91aae0fd64e25",
+      "path": null,
+      "line": null,
+      "body_sha256": "6fa7c822b523c974ff85a9fe2ace8260247d1c43ca45e24be86a11b046e6c82e"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABoYj8uQ": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T18:09:12Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "a1d08040e3849fd9188bbf62d0c52518fda974cdd8d95a1f2ad9e6887a302174"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFC5UQQ": {
+    "resolution": "acknowledged",
+    "reason": "My own reply on the resolved thread.",
+    "commit": "1283198982c190c6bd98e19943ac742a4a8c631d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T18:54:48Z",
+      "state": null,
+      "commit": "a5b46826f2ac350d05a62561c79c4e05232c941c",
+      "path": "crates/rdf-core/src/canonical_labelling/optimised.rs",
+      "line": 1326,
+      "body_sha256": "3c49221b2daf06e2babb8242546b924443a1bde5447146a68dd736d3fc8add7f"
+    }
+  }
+}
