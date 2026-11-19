@@ -4,8 +4,8 @@
 //! The walk of 8.3 in the reference engine, against the rows `walk`,
 //! `limit-rows` and `limit-relabel` of 13.2. The walk decides whether an
 //! input is refused with `limit` and the fields of that refusal; its totals
-//! are the ones every engine reports, so these figures are shared with the
-//! other engines of the labelling and are compared charge for charge.
+//! are the ones every engine reports, so these figures, totals by kind and the
+//! fields of each refusal, are shared with the other engines of the labelling.
 
 use super::optimised_tests::{complement_of_cycles, cub8, fifteen, k4_pair};
 use super::reference;

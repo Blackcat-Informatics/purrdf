@@ -71,14 +71,6 @@ impl Totals {
     }
 }
 
-/// One charge of the walk, as the tests read it: its parts and `R` after it.
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct Charge {
-    pub(crate) parts: Vec<(Kind, u64)>,
-    pub(crate) total: u64,
-}
-
 /// The running total of a walk and its limit test (8.3, steps 1 and 6). The
 /// default walk has no bound and trips on nothing.
 #[derive(Default)]
@@ -92,9 +84,6 @@ pub(crate) struct Walk {
     /// whose step 2 is running: the fields of a refusal.
     source: Box<[u8]>,
     nodes: u64,
-    /// Every charge in order.
-    #[cfg(test)]
-    pub(crate) charges: Vec<Charge>,
 }
 
 impl Walk {
@@ -109,8 +98,6 @@ impl Walk {
             totals: Totals::default(),
             source: Box::default(),
             nodes: 0,
-            #[cfg(test)]
-            charges: Vec::new(),
         };
         walk.add(&[(Kind::Split, split)]);
         walk
@@ -154,11 +141,6 @@ impl Walk {
             self.totals.add(kind, units);
         }
         self.total = self.total.saturating_add(units);
-        #[cfg(test)]
-        self.charges.push(Charge {
-            parts: parts.iter().copied().filter(|&(_, u)| u != 0).collect(),
-            total: self.total,
-        });
     }
 
     /// Step 6: the walk ends when `R` exceeds `max(L, A)`.

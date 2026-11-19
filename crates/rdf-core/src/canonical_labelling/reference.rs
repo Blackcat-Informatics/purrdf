@@ -788,6 +788,7 @@ impl<'a> Engine<'a> {
 
     /// Relate the members of the target cell that a known map moves onto one
     /// another, when the map passes its check against the call (step 5).
+    /// Whether it passed; a map that fails is dropped whole.
     fn relate_by(
         &mut self,
         relation: &mut Relation,
@@ -795,7 +796,7 @@ impl<'a> Engine<'a> {
         lines: &[usize],
         target: &[usize],
         map: &[(usize, usize)],
-    ) {
+    ) -> bool {
         let index = |x: usize| target.iter().position(|&t| t == x);
         let checked = carries(
             self.set,
@@ -807,14 +808,14 @@ impl<'a> Engine<'a> {
             map,
             &mut self.image,
         );
-        if !checked {
-            return;
-        }
-        for &(x, y) in map {
-            if let (Some(i), Some(j)) = (index(x), index(y)) {
-                relation.relate(i, j);
+        if checked {
+            for &(x, y) in map {
+                if let (Some(i), Some(j)) = (index(x), index(y)) {
+                    relation.relate(i, j);
+                }
             }
         }
+        checked
     }
 
     /// A call on the component of `pair` with argument `p` and constants.
@@ -981,8 +982,9 @@ impl<'a> Engine<'a> {
                 .collect();
             let known = witnesses.complete(&child.cert, by_position);
             for map in known.into_iter().chain(carried) {
-                self.relate_by(&mut relation, pair, lines, target, &map);
-                own.push(map);
+                if self.relate_by(&mut relation, pair, lines, target, &map) {
+                    own.push(map);
+                }
             }
             // (ix) The best of the walk.
             if walk_best.as_ref().is_none_or(|b| child.cert < *b) {
