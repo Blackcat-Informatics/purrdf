@@ -41,7 +41,7 @@
 //! mutable file: the safety is enforced by [`ImmutableInput`](crate::immutable), not
 //! promised by a contract on the caller.
 //!
-//! ## GTS sources and the envelope
+//! ## GTS sources, the envelope and the tag fold
 //!
 //! A GTS file is folded by [`import_gts_events`] — the AUTHORITATIVE importer, which
 //! drives the reader in per-segment mode so **per-segment blank-node scope survives**
@@ -51,11 +51,16 @@
 //! entry of `purrdf_core::gts_to_rdf_loss_ledger` describes a loss that **did not
 //! happen** on this path and is never attached here.
 //!
-//! What a GTS read genuinely does drop is the ENVELOPE: the segment ledger, sidecar
+//! A GTS read genuinely drops two kinds of material. The first is the ENVELOPE: the segment ledger, sidecar
 //! resources, scoped metadata, blob references, suppression directives, opaque nodes and
 //! signature records that travel beside the hot graph and have no home in an RDF dataset.
 //! [`gts_envelope_ledger`] records exactly those, with counts read off the bundle the
 //! importer actually returned — never a count this module assumed.
+//!
+//! The second is the written spelling of a language tag that is not lower case: a GTS
+//! file compares tags bytewise and a dataset holds them folded, so the importer records
+//! one `language-tag-case-folded` entry per affected literal in the envelope's loss
+//! ledger, and [`load_gts`] adds those entries to the ledger it returns.
 //!
 //! ## Transport encoding
 //!
@@ -579,7 +584,8 @@ pub(crate) fn verified_pack_input(
     Ok(input)
 }
 
-/// Fold a GTS source into its dataset AND the ledger of what its envelope dropped.
+/// Fold a GTS source into its dataset AND the ledger of what the read dropped: the
+/// envelope material and every language tag the dataset folded to lower case.
 ///
 /// This is the one GTS ingestion seam in the CLI. It calls [`import_gts_events`], the
 /// authoritative importer that preserves per-segment blank-node scope and hard-fails on
@@ -789,8 +795,9 @@ pub(crate) fn load_dataset(
 
 /// [`load_dataset`] plus the ledger of what reading this source dropped.
 ///
-/// The ledger is empty for every source but GTS, whose envelope is the only input-side
-/// material this pipeline loses on the way in (see [`gts_envelope_ledger`]).
+/// The ledger is empty for every source but GTS, whose envelope and folded language
+/// tags are the only input-side material this pipeline loses on the way in (see
+/// [`gts_envelope_ledger`] and [`load_gts`]).
 pub(crate) fn load_dataset_reporting(
     path: &str,
     format: SourceFormat,

@@ -8,6 +8,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Reading a GTS file into a dataset reports language tags folded to lower case.**
+  A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
+  terms; a dataset folds the tag and holds one. `import_gts_events`,
+  `import_gts_graph` and the GTS-to-columnar export now record a
+  `language-tag-case-folded` loss for each affected literal, in the new
+  `RdfEnvelope::losses` field (additive on a non-exhaustive struct) and in
+  `GtsBlobExportReport`, and `convert` reports it with the other read losses. The
+  loss contract and both generated loss matrices list the new code. The dataset
+  fold is unchanged.
 - **Behaviour change: the Python GTS fold view refuses a damaged file, and the
   seeking reader refuses an unclassifiable tail item.** `GtsFoldViewNative.from_bytes`
   and `gts_relational_rows_from_bytes` now raise `ValueError` (with the native `code` and `diagnostic_json`) when

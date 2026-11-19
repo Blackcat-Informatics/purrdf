@@ -62,7 +62,7 @@ default graph is the absent graph option.
 ### Language tags
 
 RDF 1.2 compares language tags without regard to case, so a dataset holds each
-tag folded to ASCII lower case and the labelling lowers the tag as the dataset
+tag folded to ASCII lower case and the labelling encodes the tag as the dataset
 holds it. A format that compares a language text whole and bytewise, as GTS
 does, keeps `"x"@EN-us` and `"x"@en-us` as two terms. The canonical RDF digest
 of a dataset folds tags; a digest over terms as written does not. The two

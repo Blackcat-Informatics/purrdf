@@ -326,8 +326,7 @@ const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[
         "language-tag-case-folded",
         "A GTS file compares a language tag bytewise; a dataset holds the tag folded to \
          ASCII lower case, so a tag that is not already lower case loses its written \
-         spelling and two terms that differ only in tag case become one. The content \
-         digest of the file is computed over the terms as written.",
+         spelling and two terms that differ only in tag case become one.",
     ),
 ];
 

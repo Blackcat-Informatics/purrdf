@@ -109,7 +109,8 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
 
 /// Load a real `purrdf_gts::model::Graph` (read from a GTS bundle) into a frozen
 /// [`RdfDataset`](crate::RdfDataset), **preserving** every named graph on its base
-/// quads. This is the lossless container→dataset bridge for the release fold:
+/// quads. This is the container→dataset bridge for the release fold, which holds a language
+/// tag folded to lower case and returns no loss report (use [`crate::import_gts_events`] for one). The fold runs
 /// `purrdf_gts::model::Graph` → `gts_to_ser` → the native statement-layer fold
 /// (`dataset_from_ser_graph`),
 /// which re-binds the `rdf:reifies` reifier/annotation side-tables and keeps each base
