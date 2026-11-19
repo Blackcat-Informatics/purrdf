@@ -690,7 +690,9 @@ fn native_eviction_reopening_and_actual_import_export_preserve_complete_rdf() {
         Term::lang_literal("ordinary", "FR"),
         directional,
     ]);
-    writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None)]);
+    // The first literal is the object of two rows: the fold is recorded once per
+    // term on both routes, not once per row naming it.
+    writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None), (1, 1, 2, None)]);
     let bytes = writer.into_bytes();
     let resident = import_gts_events(&bytes).unwrap();
     let mut files = storage::Files::new(&root.join("language-fold"));
@@ -736,7 +738,9 @@ fn export_envelope_equals_import_envelope_for_language_tag_case() {
         ];
         terms.extend(tags.iter().map(|tag| Term::lang_literal("x", *tag)));
         writer.add_terms(&terms);
-        writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None)]);
+        // The first literal is the object of two rows: the fold is recorded once per
+        // term on both routes, not once per row naming it.
+        writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None), (1, 1, 2, None)]);
         let bytes = writer.into_bytes();
         let resident = import_gts_events(&bytes).expect("resident import");
         assert_eq!(resident.envelope.losses.entries().len(), expected, "{name}");
