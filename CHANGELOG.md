@@ -8,6 +8,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking value change: row-set identities and fingerprints are BLAKE3 over
+  sorted row digests.** The resident snapshot identity and its compositions over
+  composite, delta, paged and segmented views, the SHACL class-membership view
+  identity, `SourceVersion::content_fingerprint`, the text index source
+  fingerprint and generation, and the standalone surface generation hashed an
+  additive `Multiset256` sum, which a party choosing rows can make collide for
+  different row sets. Each row family is now hashed in ascending digest order
+  under its own versioned domain, through the new
+  `purrdf_hash::multiset::sorted_fingerprint`. Every signature stays and every
+  value moves: content identities, execution receipts (`contentIdentity`,
+  `executionIdentity`) and text generations recorded by 4.x stop matching (see
+  "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
+  keeps its 4.x additive value and is deprecated. The first identity request
+  of a dataset frozen without eager statistics now sorts its record digests in a
+  scratch buffer, and a text delta hashes the whole row directory. The new row
+  benches `source_change_counts` (`identity_*`, `version_fingerprint`) and
+  `purrdf-text` `source_identity_counts` report their retired instructions and
+  allocations, through the new shared runner
+  `purrdf_testkit::bench::counter::run_count_rows` and
+  `purrdf_alloc_probe::whole_process_report`.
+
 - **The change feed and segmented change path decide range and layer equality
   by canonical Merkle nodes; segmented images move to format version 8.** Range
   skips, the layer deduplication, baseline reuse, the compaction check and the
@@ -17,8 +38,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `purrdf-core/source-directory-branch/v1` and
   `purrdf-core/source-directory-leaf/v1`), kept in sparse checkpoints and in the
   persistent effective directory so an edit stays logarithmic. The additive sum
-  remains for content fingerprints and for the agreement check between two values
-  one process built. `SegmentedBuilder` writes format version `8` (`PURRSEG8`),
+  remains only for the agreement check between two values one process built. `SegmentedBuilder` writes format version `8` (`PURRSEG8`),
   whose source checkpoints carry those nodes; version `7` images still certify
   and open, their additive checkpoints serve only as a consistency check, and
   their ranges are compared from the records. Snapshot identities and receipts of
@@ -49,8 +69,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   directory of the digest of every selected source row, token-less rows
   included, and each removed row must consume one occurrence of its digest;
   otherwise the delta is refused with the new `TextDeltaError::UnheldRemoval`.
-  The directory is updated by every applied delta and is not part of either
-  fingerprint. A genuine delta applies as before.
+  The directory is updated by every applied delta, and the source fingerprint
+  hashes it. A genuine delta applies as before.
 - **Behaviour change: `Iri::normalize` keeps an encoded dot segment under a
   scheme, an authority or a root.** A path segment that decodes to `.` or `..`
   without being spelled so stays percent-encoded as `%2E` or `%2E%2E` in every
