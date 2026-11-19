@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_iri::vocab::rdf::DIR_LANG_STRING;
-use purrdf_lex::cbor::head::{ARRAY, BYTES, TEXT, UNSIGNED, push_head};
+use purrdf_lex::cbor::head::{ARRAY, UNSIGNED, push_head, write_bytes, write_text};
 use purrdf_testkit::error_capture::CallerRefusal;
 use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
 
@@ -41,14 +41,12 @@ fn iri(name: &str) -> String {
 /// `E(bytes)` as a CBOR byte string.
 fn byte_string(bytes: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    push_head(&mut out, BYTES, bytes.len() as u64);
-    out.extend_from_slice(bytes);
+    write_bytes(&mut out, bytes).expect("writes to a Vec");
     out
 }
 
 fn push_text(out: &mut Vec<u8>, text: &str) {
-    push_head(out, TEXT, text.len() as u64);
-    out.extend_from_slice(text.as_bytes());
+    write_text(out, text).expect("writes to a Vec");
 }
 
 /// The payload of a nested-term record: `E([5, [[1], [1], [1], [1]]])`.

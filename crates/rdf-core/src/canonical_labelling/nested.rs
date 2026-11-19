@@ -28,7 +28,9 @@
 //! orders nodes; it enters no line, payload or other digest.
 
 use purrdf_hash::Domain;
-use purrdf_lex::cbor::head::{ARRAY, BYTES, TEXT, UNSIGNED, push_head, read_argument};
+use purrdf_lex::cbor::head::{
+    ARRAY, UNSIGNED, push_head, read_argument, read_bytes, write_bytes, write_text,
+};
 
 use super::digest_of;
 use crate::{FastMap, RdfTextDirection, TermValue};
@@ -172,14 +174,12 @@ impl NestedTerms {
                             let h = *blank_digests.entry(b).or_insert_with(|| hash(&nodes[b]));
                             push_head(&mut source, ARRAY, 2);
                             push_head(&mut source, UNSIGNED, 0);
-                            push_head(&mut source, BYTES, 32);
-                            source.extend_from_slice(&h);
+                            push_bytes(&mut source, &h);
                         }
                     },
                     Part::Nested(n) => source.extend_from_slice(&term_node_source(&digests[n])),
                 }
-                push_head(&mut message, BYTES, source.len() as u64);
-                message.extend_from_slice(&source);
+                push_bytes(&mut message, &source);
             }
             let digest = hash(&message);
             if seen.insert(digest, ()).is_some() {
@@ -223,8 +223,7 @@ pub(crate) fn text_blank_source(ordinal: u32, label: &[u8]) -> Vec<u8> {
     let mut source = Vec::with_capacity(16 + label.len());
     push_head(&mut source, ARRAY, 2);
     push_head(&mut source, UNSIGNED, u64::from(ordinal));
-    push_head(&mut source, BYTES, label.len() as u64);
-    source.extend_from_slice(label);
+    push_bytes(&mut source, label);
     source
 }
 
@@ -233,8 +232,8 @@ pub(crate) fn text_blank_source(ordinal: u32, label: &[u8]) -> Vec<u8> {
 pub(crate) fn parse_text_blank_source(source: &[u8]) -> Option<(u32, &[u8])> {
     let mut rest = source.strip_prefix(&[TEXT_BLANK_HEAD])?;
     let ordinal = u32::try_from(read_argument(&mut rest, UNSIGNED)?).ok()?;
-    let length = usize::try_from(read_argument(&mut rest, BYTES)?).ok()?;
-    (rest.len() == length).then_some((ordinal, rest))
+    let label = read_bytes(&mut rest)?;
+    rest.is_empty().then_some((ordinal, label))
 }
 
 /// `K` of the IRI or literal `value`, the byte string of `E(v)`, or `None`
@@ -269,13 +268,22 @@ pub(crate) fn leaf_source(value: &TermValue) -> Option<Box<[u8]>> {
         TermValue::Blank { .. } | TermValue::Triple { .. } => return None,
     }
     let mut source = Vec::with_capacity(9 + v.len());
-    push_head(&mut source, BYTES, v.len() as u64);
-    source.extend_from_slice(&v);
+    push_bytes(&mut source, &v);
     Some(source.into_boxed_slice())
+}
+
+/// Append `bytes` as a CBOR byte string.
+fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
+    let Ok(()) = write_bytes(out, bytes) else {
+        // INVARIANT: writing to a `Vec` grows it or aborts; it never errs.
+        unreachable!("writing to a Vec cannot fail")
+    };
 }
 
 /// Append `text` as a CBOR text string.
 fn push_text(out: &mut Vec<u8>, text: &str) {
-    push_head(out, TEXT, text.len() as u64);
-    out.extend_from_slice(text.as_bytes());
+    let Ok(()) = write_text(out, text) else {
+        // INVARIANT: writing to a `Vec` grows it or aborts; it never errs.
+        unreachable!("writing to a Vec cannot fail")
+    };
 }
