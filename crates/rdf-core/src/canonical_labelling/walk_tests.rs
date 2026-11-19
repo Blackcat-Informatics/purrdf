@@ -102,6 +102,82 @@ fn cuber() -> Vec<Line> {
     lines
 }
 
+/// The ordered pairs of node indices of the `quad` lines of `lines`, whose
+/// nodes are a one-byte prefix followed by a decimal index.
+fn pairs_of(lines: &[Line]) -> Vec<(usize, usize)> {
+    let index = |t: &Term| match t {
+        Term::Blank(source) => std::str::from_utf8(&source[1..])
+            .expect("a decimal index")
+            .parse::<usize>()
+            .expect("a decimal index"),
+        other => panic!("a blank node, not {other:?}"),
+    };
+    let mut pairs: Vec<(usize, usize)> = lines
+        .iter()
+        .filter_map(|line| match line {
+            Line::Quad {
+                subject, object, ..
+            } => Some((index(subject), index(object))),
+            _ => None,
+        })
+        .collect();
+    pairs.sort_unstable();
+    pairs
+}
+
+/// The shared comparison inputs built on a graph of named nodes: its lines,
+/// then for each pair `(i, j)` of `pairs` in ascending order a blank reifier
+/// `w_ij` (each index with `width` digits) of `<<(x_i <p> x_j)>>`, `x` the
+/// node prefix, with the annotation `(2, w_ij, <q>, "x"^^xsd:string)`.
+fn reified(
+    lines: Vec<Line>,
+    prefix: &str,
+    node_width: usize,
+    pairs: &[(usize, usize)],
+    width: usize,
+) -> Vec<Line> {
+    let node = |i: usize| term(&format!("{prefix}{i:0node_width$}"));
+    let mut out = lines;
+    for &(i, j) in pairs {
+        let reifier = term(&format!("w{i:0width$}{j:0width$}"));
+        out.push(Line::ReifierBinding {
+            reifier: reifier.clone(),
+            triple: Term::triple(node(i), term("<p>"), node(j)),
+            graph: None,
+        });
+        out.push(Line::Annotation {
+            count: 2,
+            reifier,
+            predicate: term("<q>"),
+            object: Term::typed(b"x", XSD_STRING.as_bytes()),
+            graph: None,
+        });
+    }
+    out
+}
+
+/// `COMPLR` (one reifier per edge, `i < j`) or `COMPLRD` (one per ordered
+/// pair): shared comparison inputs on `COMPL(3, 5)`.
+fn complr(ordered: bool) -> Vec<Line> {
+    let lines = complement_of_cycles(3, 5, false);
+    let mut pairs = pairs_of(&lines);
+    if !ordered {
+        pairs.retain(|&(i, j)| i < j);
+    }
+    reified(lines, "n", 1, &pairs, 1)
+}
+
+/// `QR13R` (one reifier per edge) or `QR13RD` (one per ordered pair): shared
+/// comparison inputs on `QR13`.
+fn qr13r(ordered: bool) -> Vec<Line> {
+    let lines = quadratic_residue_13("r");
+    let mut pairs = pairs_of(&lines);
+    if !ordered {
+        pairs.retain(|&(i, j)| i < j);
+    }
+    reified(lines, "r", 2, &pairs, 2)
+}
+
 /// `QR13` with `QR13S`: two top components of equal identity.
 fn qr13_with_qr13s() -> Vec<Line> {
     let mut lines = quadratic_residue_13("r");
@@ -126,6 +202,10 @@ fn walk_inputs() -> Vec<(&'static str, Vec<Line>)> {
         ("12.10", cycle_with_records(&["a", "c"])),
         ("CUBET", cubet()),
         ("CUBER (shared comparison input)", cuber()),
+        ("COMPLR (shared comparison input)", complr(false)),
+        ("QR13R (shared comparison input)", qr13r(false)),
+        ("QR13RD (shared comparison input)", qr13r(true)),
+        ("COMPLRD (shared comparison input)", complr(true)),
     ]
 }
 
@@ -154,14 +234,15 @@ fn row(walk: &Walk, allowance: u64) -> [u64; 7] {
 
 /// Row `walk` of 13.2: the totals by kind of the walk of each input in its
 /// given naming, its total and its allowance, equal to the figures the text
-/// prints, and those of the shared comparison input `CUBER`; and the bounds of Lemma W (4): the units (a) to (d) of the walk
+/// prints, and those of the shared comparison inputs `CUBER`, `COMPLR`,
+/// `QR13R`, `QR13RD` and `COMPLRD`; and the bounds of Lemma W (4): the units (a) to (d) of the walk
 /// are at most those of the reference tree, and the total of a guaranteed
 /// input is at most its allowance with the twin units of its search-free
 /// run. A change in the order of the charges, in a skip, a stop or a known
 /// map moves one of these figures.
 #[test]
 fn the_walk_charges_the_totals_of_the_text() {
-    let expected: [(&str, [u64; 7]); 14] = [
+    let expected: [(&str, [u64; 7]); 18] = [
         ("QR13", [234, 2_628, 3_770, 0, 1_512, 8_144, 5_473]),
         ("CUBE", [72, 368, 772, 48, 378, 1_638, 1_584]),
         ("CUB8", [72, 500, 710, 0, 354, 1_636, 1_584]),
@@ -178,6 +259,22 @@ fn the_walk_charges_the_totals_of_the_text() {
         (
             "CUBER (shared comparison input)",
             [240, 717, 1_460, 0, 140, 2_557, 4_028],
+        ),
+        (
+            "COMPLR (shared comparison input)",
+            [400, 718, 828, 52, 0, 1_998, 6_676],
+        ),
+        (
+            "QR13R (shared comparison input)",
+            [780, 1_470, 1_612, 0, 0, 3_862, 13_832],
+        ),
+        (
+            "QR13RD (shared comparison input)",
+            [1_326, 5_736, 10_348, 0, 2_156, 19_566, 23_049],
+        ),
+        (
+            "COMPLRD (shared comparison input)",
+            [680, 5_468, 15_531, 0, 1_428, 23_107, 11_184],
         ),
     ];
     let mut got = Vec::new();
@@ -465,5 +562,80 @@ fn the_shared_input_cuber_is_labelled_at_every_limit() {
             "seed {seed}"
         );
         assert_eq!(again.digest, labelled.digest, "seed {seed}");
+    }
+}
+
+/// The shared comparison inputs with reifiers on `COMPL(3, 5)` and `QR13`:
+/// their record, digest and outcome at each stated limit, and the totals of
+/// their first five relabellings, every relabelling labelled to the same
+/// digest. `COMPLR` and `QR13R` are guaranteed; `QR13RD` is not and stays
+/// below its allowance; `COMPLRD` passes its allowance and is the refused row,
+/// each refusal next to the labelled limit one unit above it.
+#[test]
+fn the_shared_inputs_with_reifiers_walk_to_their_figures() {
+    use Outcome::{Labelled, Limit};
+    type Case = (
+        &'static str,
+        Vec<Line>,
+        Vec<FailureRecord>,
+        &'static str,
+        Vec<(u64, Outcome)>,
+        Option<[u64; 5]>,
+    );
+    let cases: Vec<Case> = vec![
+        (
+            "COMPLR",
+            complr(false),
+            vec![],
+            "ef79c35b1de94a222f9c723c48908c246582684da3fc7e12d20a3fb28691d2ec",
+            vec![(0, Labelled), (1_997, Labelled), (1_998, Labelled)],
+            Some([1_998; 5]),
+        ),
+        (
+            "QR13R",
+            qr13r(false),
+            vec![],
+            "de4d35e2cf8068210abc33f3eae5e015db16d2464ea842e4e65e3aa3d0a7e33a",
+            vec![(0, Labelled), (3_861, Labelled), (3_862, Labelled)],
+            Some([3_862; 5]),
+        ),
+        (
+            "QR13RD",
+            qr13r(true),
+            vec![failure_record(0, 78, 91, 234)],
+            "6ab7e9cea0bb5d9e930e35d6efd2557560101e41491a14c174deec45de49c68b",
+            vec![(0, Labelled)],
+            None,
+        ),
+        (
+            "COMPLRD",
+            complr(true),
+            vec![failure_record(0, 40, 48, 120)],
+            "edf826a95d4f64ed9e0d33f1662492da26f99203d91076139b69b24bb267ea17",
+            vec![
+                (23_107, Labelled),
+                (23_106, Limit("n0", 48, 23_107)),
+                (0, Limit("n0", 48, 12_348)),
+            ],
+            Some([13_990, 18_139, 13_171, 19_154, 23_107]),
+        ),
+    ];
+    for (name, lines, broken_by, digest, outcomes, relabelled) in cases {
+        let (labelled, _) = walked(&lines, u64::MAX).expect("labelled with no limit");
+        assert_eq!(labelled.record.broken_by, broken_by, "{name}");
+        assert_eq!(labelled.record.guaranteed, broken_by.is_empty(), "{name}");
+        assert_eq!(hex::encode(&labelled.digest), digest, "{name}");
+        for (limit, outcome) in outcomes {
+            assert_outcome(name, &lines, limit, outcome, "");
+        }
+        if let Some(totals) = relabelled {
+            let mut got = Vec::new();
+            for seed in 1..=5 {
+                let (again, walk) = walked(&relabel(&lines, seed), u64::MAX).expect("labelled");
+                assert_eq!(again.digest, labelled.digest, "{name} seed {seed}");
+                got.push(walk.total());
+            }
+            assert_eq!(got, totals, "{name}");
+        }
     }
 }
