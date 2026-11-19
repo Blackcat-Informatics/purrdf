@@ -105,9 +105,11 @@ impl SinkImporter<'_> {
                 &mut self.losses,
                 lexical,
                 tag,
-                RdfLocation::logical("gts:sink")
-                    .with_gts_segment(segment_index)
-                    .with_gts_term(gts_id as u64),
+                crate::gts_language_fold::FoldSite {
+                    logical: "gts:sink",
+                    segment: Some(segment_index),
+                    term: gts_id as u64,
+                },
                 &mut memory,
             )?;
         }

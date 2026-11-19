@@ -95,9 +95,11 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                 &mut self.metadata.losses,
                 lexical,
                 tag,
-                crate::RdfLocation::logical("gts:sink")
-                    .with_gts_segment(key.segment)
-                    .with_gts_term(key.term as u64),
+                crate::gts_language_fold::FoldSite {
+                    logical: "gts:sink",
+                    segment: Some(key.segment),
+                    term: key.term as u64,
+                },
                 self.memory,
             )?;
         }
@@ -517,6 +519,8 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
 /// A diagnostic constructed by the exporter retains its charge in `memory`;
 /// keep that account alive and release the retained delta after destroying it.
 /// Host errors whose diagnostics own independent accounts add no such charge.
+/// On success the function refunds every byte it charged to `memory`, including
+/// those of the returned loss entries, which the caller then owns uncharged.
 pub fn export_gts_rdf_nquads_with_dictionary<D, A: Admission + ?Sized>(
     bytes: &[u8],
     dictionary: &mut dyn TermStorage,
