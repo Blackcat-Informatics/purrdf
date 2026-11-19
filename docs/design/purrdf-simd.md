@@ -1082,6 +1082,7 @@ and an identical warm-up remain outside each process-local allocation window.
 | `crates/text/benches/emoji.rs` | text.emoji-recognition |
 | `crates/text/benches/phonetic.rs` | text.phonetic-spelling, text.phonetic-distance |
 | `crates/text/benches/surface.rs` | text.surface-build, text.surface-substring |
+| `crates/text/benches/source_identity_counts.rs` | text.unicode-ascii-lower, text.surface-build, blake3.single-block |
 | `crates/xsd/benches/exact.rs` | xsd.exact-arith |
 | `crates/xsd/benches/lexical.rs` | xsd.whitespace, xsd.canonical-double |
 <!-- simd-asm:benches:end -->
