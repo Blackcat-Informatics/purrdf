@@ -78,8 +78,8 @@ use super::lines::{
     Tok, iri_encoding, literal_encoding, push_bytes,
 };
 use super::nested::{
-    NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source, nested_term_digest,
-    parse_text_blank_source, term_node_source, text_blank_source,
+    NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source, leaf_source,
+    nested_term_digest, parse_text_blank_source, term_node_source, text_blank_source,
 };
 use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::cdt_blank::cdt_blank_segments;
@@ -416,6 +416,18 @@ struct Lowering<'a, 's, 'm, D: DatasetView> {
 /// Admits `bytes` of the lowered set through the caller's account.
 pub(super) type Meter<'m> = dyn FnMut(usize) -> Result<(), StorageError> + 'm;
 
+/// The bytes the lowering keeps for one nested term: its components in the
+/// list and as the key of the index, its index and term-node entries, and the
+/// term node's source slot in the set.
+const NESTED_ENTRY_BYTES: usize =
+    2 * size_of::<[Part; 3]>() + 2 * size_of::<usize>() + size_of::<Box<[u8]>>();
+
+/// The bytes the lowering keeps for the source `K` of `len` bytes of a
+/// component of a nested term: the bytes, their box and their key.
+const fn kept_source_bytes(len: usize) -> usize {
+    interned_bytes(len).saturating_add(size_of::<Part>())
+}
+
 /// The bytes the set holds for one interned byte string.
 const fn interned_bytes(len: usize) -> usize {
     len.saturating_add(size_of::<Box<[u8]>>())
@@ -464,8 +476,7 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
 
     /// The component of the IRI, literal or blank node `value`, or `None` for
     /// a triple term. A composite node reached for the first time queues its
-    /// `record` line in `pending`. The source of a constant or composite
-    /// component is kept for the digests of term nodes.
+    /// `record` line in `pending`.
     fn leaf(&mut self, value: &TermValue) -> Result<Option<Part>, ViewError<D::ReadError>> {
         let interner = &mut self.admitter.interner;
         let meter = &mut self.meter;
@@ -524,8 +535,23 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             }
             TermValue::Triple { .. } => return Ok(None),
         };
-        self.nested.note_source(part, value);
         Ok(Some(part))
+    }
+
+    /// The leaf `value`, a component of a nested term: its part, its source
+    /// `K` kept and admitted when it is a constant or composite node met for
+    /// the first time in a nested term.
+    fn nested_leaf(&mut self, value: &TermValue) -> Result<Part, ViewError<D::ReadError>> {
+        // A view that answers a leaf for an identifier once and a triple term
+        // for it later does not present one dataset.
+        let part = self.leaf(value)?.ok_or(ViewError::ForeignId)?;
+        if self.nested.needs_source(part)
+            && let Some(source) = leaf_source(value)
+        {
+            admit(&mut self.meter, kept_source_bytes(source.len()))?;
+            self.nested.keep_source(part, source);
+        }
+        Ok(part)
     }
 
     /// The token of a component: a term node stands as its blank leaf.
@@ -539,14 +565,15 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
 
     /// The nested term of the components `parts`, interned once with its term
     /// node.
-    fn intern_nested(&mut self, parts: [Part; 3]) -> usize {
+    fn intern_nested(&mut self, parts: [Part; 3]) -> Result<usize, ViewError<D::ReadError>> {
         if let Some(n) = self.nested.get(&parts) {
-            return n;
+            return Ok(n);
         }
+        admit(&mut self.meter, NESTED_ENTRY_BYTES)?;
         let n = self.nested.push(parts);
         let node = self.admitter.interner.term_node();
         self.term_nodes.push(node);
-        n
+        Ok(n)
     }
 
     /// The nested term of the triple term `root`, a component of another
@@ -570,14 +597,14 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
                     self.candidates = self.candidates.saturating_add(inner);
                     steps.extend([Step::Exit, Step::Enter(o), Step::Enter(p), Step::Enter(s)]);
                 }
-                Step::Enter(leaf) => done.push(self.component_value(leaf)?),
+                Step::Enter(leaf) => done.push(self.nested_leaf(leaf)?),
                 Step::Exit => {
                     // INVARIANT: an exit is pushed under the entries of its
                     // three components, and each entry leaves one part.
                     let (Some(o), Some(p), Some(s)) = (done.pop(), done.pop(), done.pop()) else {
                         unreachable!("a triple term's exit precedes its components")
                     };
-                    done.push(Part::Nested(self.intern_nested([s, p, o])));
+                    done.push(Part::Nested(self.intern_nested([s, p, o])?));
                 }
             }
         }
@@ -586,14 +613,6 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             unreachable!("the walk of a term leaves its part")
         };
         Ok(part)
-    }
-
-    /// The component of `value` as a term node or a leaf.
-    fn component_value(&mut self, value: &TermValue) -> Result<Part, ViewError<D::ReadError>> {
-        match self.leaf(value)? {
-            Some(part) => Ok(part),
-            None => self.nested_value(value),
-        }
     }
 
     /// The tokens of `value` in a slot of a line or in a record's list: a
@@ -605,7 +624,11 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         out: &mut Vec<Tok>,
     ) -> Result<GraphTerm, ViewError<D::ReadError>> {
         let TermValue::Triple { s, p, o } = value else {
-            let part = self.component_value(value)?;
+            let Some(part) = self.leaf(value)? else {
+                // INVARIANT: `value` is not a triple term, the only value
+                // `leaf` answers `None` for.
+                unreachable!("a value that is not a triple term is a leaf")
+            };
             out.push(self.token(part));
             return Ok(variant_of(value));
         };
@@ -617,7 +640,10 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         self.candidates = self.candidates.saturating_add(inner);
         out.push(Tok::Tag(TAG_TRIPLE));
         for component in components {
-            let part = self.component_value(component)?;
+            let part = match self.leaf(component)? {
+                Some(part) => part,
+                None => self.nested_value(component)?,
+            };
             out.push(self.token(part));
         }
         Ok(GraphTerm::Triple)
@@ -648,27 +674,48 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             .map_err(ViewError::Read)
     }
 
+    /// The value of the term `id`, which is not a triple term.
+    fn leaf_value(&self, id: D::Id) -> Result<TermValue, ViewError<D::ReadError>> {
+        self.view.term_value(id).map_err(|error| match error {
+            TermLookupError::ForeignId => ViewError::ForeignId,
+            TermLookupError::Read(error) => ViewError::Read(error),
+        })
+    }
+
     /// The leaf `id`, which is not a triple term, as a component, and its
     /// variant.
     fn leaf_id(&mut self, id: D::Id) -> Result<(Part, GraphTerm), ViewError<D::ReadError>> {
-        let value = self.view.term_value(id).map_err(|error| match error {
-            TermLookupError::ForeignId => ViewError::ForeignId,
-            TermLookupError::Read(error) => ViewError::Read(error),
-        })?;
-        Ok((self.component_value(&value)?, variant_of(&value)))
+        let value = self.leaf_value(id)?;
+        // A view that answers a leaf for an identifier once and a triple term
+        // for it later does not present one dataset.
+        let part = self.leaf(&value)?.ok_or(ViewError::ForeignId)?;
+        Ok((part, variant_of(&value)))
     }
 
-    /// Count the nested candidates of the triple term `id` of `components`,
-    /// once for each identifier.
-    fn hold(&mut self, id: D::Id, components: [D::Id; 3]) -> Result<(), ViewError<D::ReadError>> {
-        if !self.holders.insert(id) {
+    /// Which of `components` are triple terms: the nested components of the
+    /// triple term that holds them.
+    fn nested_components(
+        &self,
+        components: [D::Id; 3],
+    ) -> Result<[bool; 3], ViewError<D::ReadError>> {
+        let mut nested = [false; 3];
+        for (slot, component) in nested.iter_mut().zip(components) {
+            *slot = self.triple_of(component)?.is_some();
+        }
+        Ok(nested)
+    }
+
+    /// Count the nested candidates `nested` of the triple term `id`, once for
+    /// each identifier. A triple term with no nested component is recorded
+    /// nowhere.
+    fn hold(&mut self, id: D::Id, nested: [bool; 3]) -> Result<(), ViewError<D::ReadError>> {
+        let count = nested.iter().filter(|&&n| n).count() as u64;
+        if count == 0 || self.holders.contains(&id) {
             return Ok(());
         }
-        for component in components {
-            if self.triple_of(component)?.is_some() {
-                self.candidates = self.candidates.saturating_add(1);
-            }
-        }
+        admit(&mut self.meter, size_of::<D::Id>())?;
+        self.holders.insert(id);
+        self.candidates = self.candidates.saturating_add(count);
         Ok(())
     }
 
@@ -685,12 +732,11 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             // leaf for it later does not present one dataset.
             let components = self.triple_of(id)?.ok_or(ViewError::ForeignId)?;
             if !ready {
-                self.hold(id, components)?;
+                let nested = self.nested_components(components)?;
+                self.hold(id, nested)?;
                 pending.push((id, true));
-                for component in components {
-                    if !self.nested_ids.contains_key(&component)
-                        && self.triple_of(component)?.is_some()
-                    {
+                for (component, is_nested) in components.into_iter().zip(nested) {
+                    if is_nested && !self.nested_ids.contains_key(&component) {
                         pending.push((component, false));
                     }
                 }
@@ -700,26 +746,20 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             for (slot, component) in parts.iter_mut().zip(components) {
                 *slot = match self.nested_ids.get(&component) {
                     Some(&n) => Part::Nested(n),
-                    None => self.leaf_id(component)?.0,
+                    None => {
+                        let value = self.leaf_value(component)?;
+                        self.nested_leaf(&value)?
+                    }
                 };
             }
-            let n = self.intern_nested(parts);
+            let n = self.intern_nested(parts)?;
+            admit(&mut self.meter, size_of::<(D::Id, usize)>())?;
             self.nested_ids.insert(id, n);
         }
         self.nested_ids
             .get(&root)
             .map(|&n| Part::Nested(n))
             .ok_or(ViewError::ForeignId)
-    }
-
-    /// The component `id` of a triple term: its term node when it is a triple
-    /// term, its leaf otherwise.
-    fn component_id(&mut self, id: D::Id) -> Result<Part, ViewError<D::ReadError>> {
-        if self.triple_of(id)?.is_some() {
-            self.nested_id(id)
-        } else {
-            Ok(self.leaf_id(id)?.0)
-        }
     }
 
     /// The tokens of the term `id` in a slot of a line, and its variant: a
@@ -735,10 +775,15 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             out.push(self.token(part));
             return Ok(variant);
         };
-        self.hold(id, components)?;
+        let nested = self.nested_components(components)?;
+        self.hold(id, nested)?;
         out.push(Tok::Tag(TAG_TRIPLE));
-        for component in components {
-            let part = self.component_id(component)?;
+        for (component, is_nested) in components.into_iter().zip(nested) {
+            let part = if is_nested {
+                self.nested_id(component)?
+            } else {
+                self.leaf_id(component)?.0
+            };
             out.push(self.token(part));
         }
         Ok(GraphTerm::Triple)
@@ -1026,6 +1071,7 @@ pub(super) fn lowered<D: DatasetView>(
             admit(&mut meter, text.len().saturating_sub(source.len()))?;
             interner.set.nodes[node] = text.into_boxed_slice();
         }
+        admit(&mut meter, nested.digest_bytes())?;
         let digests = nested
             .digests(&interner.set.nodes, hash)
             .map_err(|digest| ViewError::Lowering(LoweringRefusal::TermNode { digest }))?;
@@ -1263,7 +1309,17 @@ fn grant<E, S: StorageAdmission + ?Sized>(
 /// the caller's `memory`.
 ///
 /// Each constant and blank node is admitted as lowering interns it, before it
-/// is copied into the set. After lowering, the grant covers the rest of the
+/// is copied into the set. When the input holds a nested triple term, the
+/// lowering also admits, as it keeps them: for each nested term, its
+/// components in the list and as the key of its index, its index and
+/// term-node entries and the term node's source slot; for each triple-term
+/// identifier lowered as a nested term, its index entry; for each triple-term
+/// identifier with a nested component, its entry in the set of counted
+/// holders; for each constant or composite node first reached as a component
+/// of a nested term, its source `K` with its box and key; before the digests,
+/// an upper bound of the digests and blank-node digests they keep; the growth
+/// of each blank node's source to the text form; and each term node's source.
+/// An input with no nested triple term keeps none of these. After lowering, the grant covers the rest of the
 /// lowered lines and an upper bound of the arrays the engine builds for the
 /// components and their first calls, proportional to the incidences, the
 /// constant leaf occurrences, the vertices and the structs each top component
@@ -1275,9 +1331,9 @@ fn grant<E, S: StorageAdmission + ?Sized>(
 /// encoding of one literal while it is interned, the second copy of each
 /// constant and node held by the interning index, the token copies the
 /// admission of lines keeps to detect repeats (together about the size of the
-/// admitted lines again, at the peak of lowering), the table of nested triple
-/// terms with their components' sources and digests (bounded by the lowered
-/// lines it produces), and the certificates and nested instances held while a
+/// admitted lines again, at the peak of lowering), the spare capacity of the
+/// nested-term tables and the work lists and message buffers of the nested
+/// walks and digests, and the certificates and nested instances held while a
 /// search runs. The admission is the bound of the
 /// up-front working state, and the engine holds nothing else of that order
 /// before it starts.

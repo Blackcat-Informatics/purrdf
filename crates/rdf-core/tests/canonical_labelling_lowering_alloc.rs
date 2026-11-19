@@ -12,8 +12,11 @@
 use std::sync::Arc;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, Measurement};
-use purrdf_core::canonical_labelling::lines_of_view;
+use purrdf_core::canonical_labelling::{
+    Limit, Scope, ViewError, label_view_with_memory, lines_of_view,
+};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
+use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -60,9 +63,48 @@ fn lowering_a_chain_of_nested_terms_costs_linear_memory() {
         within(small.allocations, large.allocations),
         "allocations {small:?} then {large:?}"
     );
-    let retained = |m: &Measurement| u64::try_from(m.retained_bytes).unwrap_or(0);
+    let retained =
+        |m: &Measurement| u64::try_from(m.retained_bytes).expect("lowering retains its lines");
     assert!(
         within(retained(&small), retained(&large)),
         "retained bytes {small:?} then {large:?}"
+    );
+}
+
+/// The working state a nested input keeps is admitted through the caller's
+/// memory: the bytes the labelling of the chain still holds when it returns are
+/// within its grant, the grant labels the chain at its exact size, and one byte
+/// less refuses with the typed storage outcome.
+#[test]
+fn the_state_a_nested_input_keeps_is_within_its_grant() {
+    let view = chain(1_000);
+    let label = |memory: &mut Memory<'_, _>| {
+        label_view_with_memory(
+            view.as_ref(),
+            &[],
+            Scope::Dataset,
+            Limit::ENGINE,
+            None,
+            memory,
+        )
+    };
+    let mut open = Ceiling(usize::MAX);
+    let window = CurrentThreadWindow::open();
+    let (labelling, granted) = label(&mut Memory::new(&mut open)).expect("labelled");
+    let measurement = window.close();
+    let retained = usize::try_from(measurement.retained_bytes).expect("the labelling is held");
+    assert!(
+        retained <= granted,
+        "retained {retained} bytes beyond the grant of {granted}"
+    );
+    assert_eq!(labelling.lines().len(), 1_999);
+    drop(labelling);
+
+    let mut at_grant = Ceiling(granted);
+    assert!(label(&mut Memory::new(&mut at_grant)).is_ok());
+    let mut under = Ceiling(granted - 1);
+    assert_eq!(
+        label(&mut Memory::new(&mut under)).err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
     );
 }

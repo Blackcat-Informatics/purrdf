@@ -86,8 +86,9 @@ pub(crate) enum Part {
 pub(crate) struct NestedTerms {
     parts: Vec<[Part; 3]>,
     index: FastMap<[Part; 3], usize>,
-    /// `K` of each constant and composite node that is a component, formed
-    /// from its term value when the component is first reached.
+    /// `K` of each constant and composite node that is a component of a
+    /// nested term, formed from its term value when it is first reached as
+    /// one.
     sources: FastMap<Part, Box<[u8]>>,
 }
 
@@ -110,13 +111,24 @@ impl NestedTerms {
         n
     }
 
-    /// Keep `K` of the component `part`, the leaf `value`, unless it is kept.
-    pub(crate) fn note_source(&mut self, part: Part, value: &TermValue) {
-        if !self.sources.contains_key(&part)
-            && let Some(source) = leaf_source(value)
-        {
-            self.sources.insert(part, source);
-        }
+    /// Whether `K` of the component `part` is not yet kept.
+    pub(crate) fn needs_source(&self, part: Part) -> bool {
+        !self.sources.contains_key(&part)
+    }
+
+    /// Keep `source`, `K` of the component `part`, which is not yet kept.
+    pub(crate) fn keep_source(&mut self, part: Part, source: Box<[u8]>) {
+        self.sources.insert(part, source);
+    }
+
+    /// An upper bound of the bytes [`Self::digests`] keeps until the nested
+    /// records are pushed: the digest of each nested term, in the list and as
+    /// the key of the collision check, and the digest `h` of each blank node
+    /// that is a component, at most three for each nested term.
+    pub(crate) fn digest_bytes(&self) -> usize {
+        self.parts
+            .len()
+            .saturating_mul(2 * 32 + 3 * (32 + size_of::<usize>()))
     }
 
     /// The components of nested term `n`.
@@ -145,7 +157,7 @@ impl NestedTerms {
     /// identifiers of the blank nodes in the text form.
     ///
     /// Every constant and composite component has its source kept by
-    /// [`Self::note_source`]: the lowering keeps it as it forms the component.
+    /// [`Self::keep_source`]: the lowering keeps it as it forms the component.
     ///
     /// # Errors
     /// The digest two different nested terms share: the refusal `term_node`.

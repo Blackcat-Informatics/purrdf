@@ -679,15 +679,82 @@ fn twins_inside_nested_terms_are_ordered_by_their_term_nodes() {
     assert!(expected.record.guaranteed);
     assert_eq!(expected.record.top_components, 2);
     let at = positions(twins.lines(), twins.labelled());
-    let first =
-        |label: &[u8], digest: &[u8; 32]| at[&blank_source(0, label)].min(at[&node(digest)]);
-    assert_eq!(first(b"w", &dw) < first(b"u", &du), dw < du);
+    let placed = |at: &BTreeMap<Vec<u8>, u64>| {
+        [
+            at[&blank_source(0, b"u")],
+            at[&blank_source(0, b"w")],
+            at[&node(&du)],
+            at[&node(&dw)],
+        ]
+    };
+    // `lowering-twins`: u 2, w 0, n_u 3, n_w 1.
+    assert_eq!(placed(&at), [2, 0, 3, 1]);
 
     let linked = labelled(build(true).as_ref());
     let expected = agree(&linked, &lowered_lines(true));
     assert_eq!(expected.record.top_components, 1);
     assert!(!expected.record.guaranteed);
     assert_eq!(linked.size(), 6);
+    // `lowering-twins-one-component`: u 0, w 1, n_u 2, n_w 3, and the walk
+    // charges 282 units against an allowance of 552.
+    assert_eq!(
+        placed(&positions(linked.lines(), linked.labelled())),
+        [0, 1, 2, 3]
+    );
+    let (_, _, walk) = label_with_walk(&lowered_lines(true), Limit::ENGINE).expect("labelled");
+    assert_eq!((walk.total(), expected.record.allowance), (282, 552));
+}
+
+/// The case the two forms of a view blank node's source exist for: twins
+/// outside any nested term whose labels differ in length. The four-byte form
+/// orders `b10` before `b9` bytewise; the text form `E([ordinal, label])`
+/// orders the shorter label first. With no nested term in the input the twins
+/// keep the order they always had; with one, they take the text's order.
+#[test]
+fn view_blank_twins_take_the_order_of_the_source_form_of_their_input() {
+    let build = |nested: bool| {
+        let mut data = Data::new();
+        let [a, p, q, c] = data.iris(["a", "p", "q", "c"]);
+        for label in ["b9", "b10"] {
+            let blank = data.blank(label, 0);
+            data.quad(blank, p, c);
+        }
+        if nested {
+            let x = data.triple(a, q, c);
+            let tt = data.triple(a, p, x);
+            data.quad(a, p, tt);
+        }
+        data.freeze()
+    };
+    let legacy = |label: &[u8]| {
+        let mut source = 0u32.to_be_bytes().to_vec();
+        source.extend_from_slice(label);
+        source
+    };
+
+    let plain = labelled(build(false).as_ref());
+    let lines: Vec<Line> = [b"b9".as_slice(), b"b10"]
+        .map(|label| quad(Term::blank(&legacy(label)), t("p"), t("c")))
+        .into();
+    agree(&plain, &lines);
+    let at = positions(plain.lines(), plain.labelled());
+    assert_eq!((at[&legacy(b"b10")], at[&legacy(b"b9")]), (0, 1));
+
+    let with_nested = labelled(build(true).as_ref());
+    let (dx, _) = d([&k_iri("a"), &k_iri("q"), &k_iri("c")]);
+    let n = Term::blank(&node(&dx));
+    let mut lines: Vec<Line> = [b"b9".as_slice(), b"b10"]
+        .map(|label| quad(Term::blank(&blank_source(0, label)), t("p"), t("c")))
+        .into();
+    lines.push(quad(
+        t("a"),
+        t("p"),
+        Term::triple(t("a"), t("p"), n.clone()),
+    ));
+    lines.push(record(vec![n, t("a"), t("q"), t("c")]));
+    agree(&with_nested, &lines);
+    let at = positions(with_nested.lines(), with_nested.labelled());
+    assert!(at[&blank_source(0, b"b9")] < at[&blank_source(0, b"b10")]);
 }
 
 /// A view whose one literal carries its language as written, for the text's
