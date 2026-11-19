@@ -95,17 +95,29 @@ impl WalkTotals {
 
 /// The running total of a walk and its limit test (8.3, steps 1 and 6). The
 /// default walk has no bound and trips on nothing.
-#[derive(Default)]
 pub(crate) struct Walk {
     /// `R`, saturating at `2^64 - 1` (7.11).
     total: u64,
-    /// `max(L, A)`, or nothing when `A` is saturated and the walk never trips.
-    bound: Option<u64>,
+    /// `max(L, A)`; `2^64 - 1` when `A` is saturated, which a saturated `R`
+    /// does not exceed, so the walk never trips.
+    bound: u64,
     totals: WalkTotals,
     /// The smallest source identifier and the node count of the top component
     /// whose step 2 is running: the fields of a refusal.
     source: Box<[u8]>,
     nodes: u64,
+}
+
+impl Default for Walk {
+    fn default() -> Self {
+        Self {
+            total: 0,
+            bound: u64::MAX,
+            totals: WalkTotals::default(),
+            source: Box::default(),
+            nodes: 0,
+        }
+    }
 }
 
 impl Walk {
@@ -116,7 +128,11 @@ impl Walk {
     pub(crate) fn new(limit: u64, allowance: u64, split: u64) -> Self {
         let mut walk = Self {
             total: 0,
-            bound: (allowance != u64::MAX).then_some(limit.max(allowance)),
+            bound: if allowance == u64::MAX {
+                u64::MAX
+            } else {
+                limit.max(allowance)
+            },
             totals: WalkTotals::default(),
             source: Box::default(),
             nodes: 0,
@@ -157,9 +173,7 @@ impl Walk {
     /// was added, and the walk ends inside them, so the step is walked charge
     /// by charge to find where.
     pub(crate) fn absorb(&mut self, totals: &WalkTotals) -> bool {
-        let fits = self
-            .bound
-            .is_none_or(|bound| self.total.saturating_add(totals.total()) <= bound);
+        let fits = self.total.saturating_add(totals.total()) <= self.bound;
         if fits {
             for (kind, units) in [
                 (Kind::Start, totals.start),
@@ -190,9 +204,10 @@ impl Walk {
 
     /// Step 6: the walk ends when `R` exceeds `max(L, A)`.
     fn test(&self) -> Result<(), Stop> {
-        match self.bound {
-            Some(bound) if self.total > bound => Err(Stop::Limit),
-            _ => Ok(()),
+        if self.total > self.bound {
+            Err(Stop::Limit)
+        } else {
+            Ok(())
         }
     }
 

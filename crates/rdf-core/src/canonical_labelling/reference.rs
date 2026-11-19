@@ -875,7 +875,7 @@ impl<'a> Engine<'a> {
                 }
                 let (child, steps) = self.explore_child(pair, lines, p, constants, u, mode)?;
                 self.consider(&mut best, child, u, steps, at);
-                // Every member of one twin class attains (F2).
+                // Every member of one twin class attains.
                 best.attaining = target.len() as u64;
                 Vec::new()
             }
