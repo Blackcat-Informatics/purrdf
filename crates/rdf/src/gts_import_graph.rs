@@ -51,6 +51,8 @@ struct GraphInterner {
     /// GTS term id → interned [`TermId`]. A term interns at most once.
     remap: crate::FastMap<usize, Option<TermId>>,
     remap_bytes: usize,
+    /// Losses of the read that the dataset cannot represent.
+    losses: purrdf_core::LossLedger,
 }
 
 #[derive(Clone, Copy)]
@@ -127,7 +129,7 @@ impl GraphInterner {
                         let resolved = match self.terms[id].kind {
                             TermKind::Iri => self.intern_iri(id)?,
                             TermKind::Bnode => self.intern_blank(id)?,
-                            TermKind::Literal => self.intern_literal(id)?,
+                            TermKind::Literal => self.intern_literal(id, memory)?,
                             TermKind::Triple => self.intern_triple(id)?,
                         };
                         self.remap.insert(id, Some(resolved));
@@ -165,7 +167,11 @@ impl GraphInterner {
         Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
     }
 
-    fn intern_literal(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
+    fn intern_literal(
+        &mut self,
+        gts_id: usize,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<TermId, RdfDiagnostic> {
         // The datatype is a term id; resolve (and intern) it first, then read its
         // interned IRI string. This applies the SAME datatype-must-be-IRI rule the
         // shared resolver enforces.
@@ -176,6 +182,19 @@ impl GraphInterner {
         // MOVE the lexical form and language tag out.
         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
         let language = std::mem::take(&mut self.terms[gts_id].lang);
+        if let Some(tag) = language.as_deref() {
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.losses,
+                &lexical_form,
+                tag,
+                crate::gts_language_fold::FoldSite {
+                    logical: "gts:graph",
+                    segment: None,
+                    term: gts_id as u64,
+                },
+                memory,
+            )?;
+        }
         let direction = crate::gts_resolve::parse_gts_direction(
             self.terms[gts_id].direction.as_deref(),
             language.as_deref(),
@@ -322,6 +341,7 @@ fn import_graph_with_memory(
         reifier_bindings,
         remap: crate::FastMap::default(),
         remap_bytes: 0,
+        losses: purrdf_core::LossLedger::new(),
     };
 
     // Intern every term up front (idempotent through the remap), so leaf strings are
@@ -375,12 +395,16 @@ fn import_graph_with_memory(
         builder,
         remap,
         remap_bytes,
+        losses,
         ..
     } = interner;
     drop(remap);
     memory.release_bytes(remap_bytes)?;
     let dataset = builder.freeze()?;
-    Ok(GtsBundle::new(dataset, RdfEnvelope::new(lookaside)))
+    Ok(GtsBundle::new(
+        dataset,
+        RdfEnvelope::new(lookaside).with_losses(losses),
+    ))
 }
 
 #[cfg(test)]

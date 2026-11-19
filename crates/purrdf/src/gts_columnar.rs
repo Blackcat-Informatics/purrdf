@@ -110,15 +110,17 @@ impl GtsColumnarSource {
 
 /// Admit inline blobs with caller policy; never performs a discovery fold.
 ///
-/// This preserves the strict event import's RDF behavior. That native bundle
-/// currently has no loss ledger; its diagnostics are hard errors. Only actual
-/// blob omissions and actual downstream writer losses enter this report.
+/// This preserves the strict event import's RDF behavior: its diagnostics are
+/// hard errors. The report holds the losses of reading the file into the
+/// dataset (a language tag folded to lower case), actual blob omissions and
+/// actual downstream writer losses.
 pub fn prepare_gts_columnar(
     bytes: &[u8],
     limits: GtsBlobLimits,
 ) -> Result<GtsColumnarSource, GtsColumnarError> {
-    let (dataset, imported, omissions, usage) =
-        purrdf_rdf::import_gts_inline_for_export(bytes, limits)?.into_parts();
+    let mut export = purrdf_rdf::import_gts_inline_for_export(bytes, limits)?;
+    let read_losses = export.take_read_losses();
+    let (dataset, imported, omissions, usage) = export.into_parts();
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     let mut blobs = ContentStore::new();
@@ -127,7 +129,7 @@ pub fn prepare_gts_columnar(
         // This interim eager API still owns the admitted payload set.
         blobs.insert(memory.collect(blob.bytes.iter().copied())?);
     }
-    let report = blob_report(omissions, usage)?;
+    let report = blob_report(read_losses, omissions, usage)?;
     Ok(GtsColumnarSource {
         dataset,
         blobs,
@@ -152,17 +154,19 @@ pub fn prepare_gts_columnar_to(
     limits: GtsBlobLimits,
     sink: &mut dyn purrdf_rdf::GtsBlobStager,
 ) -> Result<GtsStagedColumnarSource, GtsColumnarError> {
-    let (dataset, mut blobs, omissions, usage) =
-        purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?.into_parts();
+    let mut export = purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?;
+    let read_losses = export.take_read_losses();
+    let (dataset, mut blobs, omissions, usage) = export.into_parts();
     blobs.sort_unstable_by_key(|blob| blob.bytes.sha256);
     Ok(GtsStagedColumnarSource {
         dataset,
         blobs,
-        report: blob_report(omissions, usage)?,
+        report: blob_report(read_losses, omissions, usage)?,
     })
 }
 
 fn blob_report(
+    read_losses: LossLedger,
     omissions: Vec<GtsBlobOmission>,
     usage: GtsBlobUsage,
 ) -> Result<GtsBlobExportReport, GtsColumnarError> {
@@ -170,6 +174,7 @@ fn blob_report(
     let mut memory = Memory::new(&mut resident);
     let profile = purrdf_rdf::loss::gts_to_columnar_loss_ledger();
     let mut losses = LossLedger::default();
+    losses.append_with_memory(read_losses, &mut memory)?;
     for omission in &omissions {
         let mut entry = profile
             .entries()

@@ -236,6 +236,44 @@ fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
     );
 }
 
+/// A GTS file that holds `"x"@EN-us` and `"x"@en-us` is two terms; the dataset holds one,
+/// so `convert` reports the fold in the loss ledger, and a file whose tags are already
+/// lower case reports none.
+#[test]
+fn gts_language_tag_case_fold_is_surfaced_in_the_loss_ledger() {
+    let file = |tags: &[&str]| {
+        let mut writer = Writer::new("purrdf.gts");
+        let mut terms = vec![
+            Term::iri("http://example.org/s"),
+            Term::iri("http://example.org/p"),
+        ];
+        terms.extend(tags.iter().map(|tag| Term::lang_literal("x", *tag)));
+        writer.add_terms(&terms);
+        let quads: Vec<_> = (0..tags.len()).map(|i| (0, 1, 2 + i, None)).collect();
+        writer.add_quads(&quads);
+        writer.into_bytes()
+    };
+    let ledger_of = |name: &str, tags: &[&str]| {
+        let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+        let dir = dir.path();
+        let gts = write_bytes(dir, name, &file(tags));
+        let out = path(dir, "out.nq");
+        let ledger_path = path(dir, "ledger.json");
+        let ledger_flag = format!("--loss-ledger={ledger_path}");
+        let o = run(&["convert", &ledger_flag, &gts, &out]);
+        assert!(o.status.success(), "gts convert failed: {}", stderr(&o));
+        std::fs::read_to_string(&ledger_path).expect("read ledger")
+    };
+    let variant = ledger_of("variant.gts", &["EN-us", "en-us"]);
+    assert!(variant.contains("language-tag-case-folded"), "{variant}");
+    assert!(
+        variant.contains("EN-us"),
+        "the written tag is named: {variant}"
+    );
+    let lower = ledger_of("lower.gts", &["en-us", "fr"]);
+    assert!(!lower.contains("language-tag-case-folded"), "{lower}");
+}
+
 /// GTS is an INPUT container: named as a `--to` target it is refused BY NAME, with the
 /// reason, rather than accepted and written as something else.
 #[test]

@@ -66,6 +66,8 @@ struct SinkImporter<'a> {
     /// Out-of-band material accumulated from blob / signature / suppression /
     /// segment-head / opaque events.
     lookaside: RdfLookaside,
+    /// Losses of the read that the dataset cannot represent.
+    losses: purrdf_core::LossLedger,
 }
 
 impl SinkImporter<'_> {
@@ -97,13 +99,27 @@ impl SinkImporter<'_> {
         let direction = crate::gts_resolve::parse_gts_direction(direction, lang)?;
         let mut resident = purrdf_lex::allocation::Resident;
         let bytes = self.builder.native_buffer_bytes()?;
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut resident, bytes);
+        if let Some(tag) = lang {
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.losses,
+                lexical,
+                tag,
+                crate::gts_language_fold::FoldSite {
+                    logical: "gts:sink",
+                    segment: Some(segment_index),
+                    term: gts_id as u64,
+                },
+                &mut memory,
+            )?;
+        }
         Ok(self.builder.intern_literal_parts_bound_with_memory(
             lexical,
             datatype.as_deref(),
             lang,
             direction,
             BlankBinding::Ambient(segment_scope(segment_index)?),
-            &mut purrdf_lex::allocation::Memory::resume(&mut resident, bytes),
+            &mut memory,
         )?)
     }
 
@@ -112,6 +128,7 @@ impl SinkImporter<'_> {
             blobs: None,
             builder: RdfDatasetBuilder::new(),
             lookaside: RdfLookaside::default(),
+            losses: purrdf_core::LossLedger::new(),
         }
     }
 }
@@ -675,9 +692,10 @@ fn finish_importer(
     importer: SinkImporter<'_>,
 ) -> Result<(GtsBundle, Option<BlobCollector<'_>>), RdfDiagnostic> {
     let lookaside = importer.lookaside;
+    let losses = importer.losses;
     let dataset = importer.builder.freeze()?;
     Ok((
-        GtsBundle::new(dataset, RdfEnvelope::new(lookaside)),
+        GtsBundle::new(dataset, RdfEnvelope::new(lookaside).with_losses(losses)),
         importer.blobs,
     ))
 }

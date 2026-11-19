@@ -315,12 +315,20 @@ pub fn gts_to_columnar_loss_ledger() -> LossLedger {
     )
 }
 
-const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[(
-    "bnode-scope-flatten",
-    "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
-     per-segment blank-node scope; the distinct scopes are recovered only via the \
-     streaming-event importer.",
-)];
+const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[
+    (
+        "bnode-scope-flatten",
+        "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
+         per-segment blank-node scope; the distinct scopes are recovered only via the \
+         streaming-event importer.",
+    ),
+    (
+        "language-tag-case-folded",
+        "A GTS file compares a language tag bytewise; a dataset holds the tag folded to \
+         ASCII lower case, so a tag that is not already lower case loses its written \
+         spelling and two terms that differ only in tag case become one.",
+    ),
+];
 
 const RDF_TO_OKF_PROFILE: &[(&str, &str)] = &[
     (
@@ -2520,7 +2528,11 @@ mod tests {
     /// `direction-dropped` was retired once `Term.direction` round-tripped
     /// losslessly, and `multi-reifier-collapsed` once reifier-id-keyed
     /// `Graph.reifiers` did the same; neither is an accepted loss any more.
-    const EXPECTED_CODES: [&str; 2] = ["blob-bytes-absent", "bnode-scope-flatten"];
+    const EXPECTED_CODES: [&str; 3] = [
+        "blob-bytes-absent",
+        "bnode-scope-flatten",
+        "language-tag-case-folded",
+    ];
 
     fn matrix_codes() -> Vec<String> {
         let mut codes: Vec<String> = Vec::new();

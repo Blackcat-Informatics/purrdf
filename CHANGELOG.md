@@ -28,6 +28,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   maximum, owned maximum and identities follow the larger lowered set. The
   lowering refuses a triple term as the subject or the predicate of a triple term
   in any view or record, as a dataset already does when it is frozen.
+- **Reading a GTS file into a dataset reports language tags folded to lower case.**
+  A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
+  terms; a dataset folds the tag and holds one. `import_gts_events`,
+  `import_gts_graph`, the GTS-to-N-Quads export and the GTS-to-columnar export now record a
+  `language-tag-case-folded` loss for each affected literal, in the new
+  `RdfEnvelope::losses` field (additive on a non-exhaustive struct) and in
+  `GtsBlobExportReport` (read through the new `GtsInlineExport::read_losses`), and `convert` reports it with the other read losses. The
+  loss contract and both generated loss matrices list the new code. The dataset
+  fold is unchanged.
 - **Breaking value change: row-set identities and fingerprints are BLAKE3 over
   sorted row digests.** The resident snapshot identity and its compositions over
   composite, delta, paged and segmented views, the SHACL class-membership view

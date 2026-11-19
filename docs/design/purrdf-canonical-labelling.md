@@ -161,6 +161,12 @@ line, so the blank nodes it names take part in the labelling. A triple term that
 a component of another triple term is lowered to a term node (section 3.6), so every
 triple term the definition receives from a view has depth one.
 
+The labelling encodes a language tag as the bytes its input gives, so the fold
+belongs to the input. A dataset view supplies the tag folded to lower case; a
+format that compares tags as bytes does not fold. The canonical RDF digest of a
+dataset and a digest over terms as written are two identities, equal exactly
+when every tag is already lower case.
+
 ### 3.2 Components and refinement
 
 The incidence graph has the blank nodes on one side and the lines that hold a blank
