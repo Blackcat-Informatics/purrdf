@@ -455,3 +455,68 @@ fn transformed_index_and_keyed_predecessor_use_the_original_capability_decoder()
     assert!(matches!(&payload, Value::Array(rows) if rows.len() == 1));
     assert!(source.work().decoded_payloads > 1);
 }
+
+#[test]
+fn catalog_refuses_a_segment_whose_tail_holds_an_unclassifiable_item() {
+    let mut writer = Writer::new("rdf");
+    terms(&mut writer);
+    writer.add_index();
+    let valid = writer.into_bytes();
+    assert_eq!(
+        open(valid.clone())
+            .segment(0)
+            .expect("neighbouring valid file")
+            .frame_count(),
+        2
+    );
+
+    let mut trailing = valid.clone();
+    trailing.extend(crate::wire::encode(&Value::Text("stray".into())));
+    let failure = open(trailing)
+        .segment(0)
+        .expect_err("a non-map item after the index is not a legal tail");
+    assert!(matches!(
+        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
+        Some(FoldError::FrameMap)
+    ));
+
+    let mut tagged = valid.clone();
+    tagged.extend(crate::wire::encode(&Value::Tag(
+        1000,
+        Box::new(Value::Map(Vec::new())),
+    )));
+    let failure = open(tagged)
+        .segment(0)
+        .expect_err("a tag-wrapped map is not a frame, as the full reader decides");
+    assert!(matches!(
+        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
+        Some(FoldError::FrameMap)
+    ));
+
+    let mut tagged_header = valid.clone();
+    tagged_header.extend(crate::wire::encode(&Value::Tag(
+        1000,
+        Box::new(Value::Map(vec![(
+            Value::Text("gts".into()),
+            Value::Text(MAGIC.into()),
+        )])),
+    )));
+    let failure = open(tagged_header)
+        .segment(0)
+        .expect_err("a header-shaped item under a foreign tag is not a segment boundary");
+    assert!(matches!(
+        std::error::Error::source(&failure)
+            .and_then(|cause| cause.downcast_ref::<crate::wire::HeaderError>()),
+        Some(crate::wire::HeaderError::Tag { actual: 1000 })
+    ));
+
+    let mut headerless = crate::wire::encode(&Value::Text("stray".into()));
+    headerless.extend(valid);
+    let failure = open(headerless)
+        .segment(0)
+        .expect_err("the first item must be a header");
+    assert!(matches!(
+        std::error::Error::source(&failure).and_then(|cause| cause.downcast_ref::<FoldError>()),
+        Some(FoldError::FirstHeader)
+    ));
+}
