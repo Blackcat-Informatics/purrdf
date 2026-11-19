@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1360,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1360-simd-assembly-aggregation-fails-when",
+  "branch": "paudley/1360-simd-assembly-aggregation-fails-when",
+  "slug": "simd-assembly-aggregation-fails-when",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1360-simd-assembly-aggregation-fails-when/.stage/simd-assembly-aggregation-fails-when",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "9dd3d6c59f0f87f428856e8e90e975abd9d1f036",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1360-simd-assembly-aggregation-fails-when",
+    "branch:paudley/1360-simd-assembly-aggregation-fails-when",
+    "ignored:30313 files (30311 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1382-public-row-set-identities-and caches into /home/paudley/Active/purrdf/.worktrees/1360-simd-assembly-aggregation-fails-when plus 0 dependency units from 0 other checkouts in 12.9s; 20867 unchanged files keep their built mtimes; 0 other files take the seed time and rebuild; 9 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1360-simd-assembly-aggregation-fails-when/.stage/simd-assembly-aggregation-fails-when",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1360-simd-assembly-aggregation-fails-when/.stage/simd-assembly-aggregation-fails-when/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-18T16:21:32-0600",
+  "seed_error": ""
+}
