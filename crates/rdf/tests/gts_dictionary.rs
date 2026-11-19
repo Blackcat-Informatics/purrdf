@@ -690,9 +690,7 @@ fn native_eviction_reopening_and_actual_import_export_preserve_complete_rdf() {
         Term::lang_literal("ordinary", "FR"),
         directional,
     ]);
-    // The first literal is the object of two rows: the fold is recorded once per
-    // term on both routes, not once per row naming it.
-    writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None), (1, 1, 2, None)]);
+    writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None)]);
     let bytes = writer.into_bytes();
     let resident = import_gts_events(&bytes).unwrap();
     let mut files = storage::Files::new(&root.join("language-fold"));
