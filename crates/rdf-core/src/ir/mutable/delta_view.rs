@@ -84,18 +84,45 @@ pub struct DeltaDatasetView {
     work: Arc<super::super::view_accounting::WorkCounter>,
 }
 
+/// The identity of a mutation snapshot: its base and delta identities, then
+/// BLAKE3 over each sorted family of row digests (suppressed base records,
+/// converted base records, withdrawn base graphs) under its own domain. A
+/// family is a function of its exact rows, not of an additive sum a party
+/// choosing rows could steer. Every family must be ascending.
+fn delta_snapshot(
+    base: purrdf_hash::hex::Digest32,
+    delta: purrdf_hash::hex::Digest32,
+    [suppressed, converted, withdrawn]: [&[[u8; 32]]; 3],
+) -> purrdf_hash::hex::Digest32 {
+    use purrdf_hash::{Domain, multiset::sorted_fingerprint};
+    const SNAPSHOT: Domain = Domain::new(b"purrdf-core/delta-snapshot/v2");
+    const SUPPRESSED: Domain = Domain::new(b"purrdf-core/delta-snapshot/suppressed/v2");
+    const CONVERTED: Domain = Domain::new(b"purrdf-core/delta-snapshot/converted/v2");
+    const WITHDRAWN: Domain = Domain::new(b"purrdf-core/delta-snapshot/withdrawn-graphs/v2");
+    let mut hash = purrdf_hash::blake3::Hasher::new();
+    hash.update(SNAPSHOT.as_bytes());
+    hash.update(base.as_bytes());
+    hash.update(delta.as_bytes());
+    hash.update(&sorted_fingerprint(SUPPRESSED, suppressed.iter().copied()));
+    hash.update(&sorted_fingerprint(CONVERTED, converted.iter().copied()));
+    hash.update(&sorted_fingerprint(WITHDRAWN, withdrawn.iter().copied()));
+    purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
+}
+
 impl DeltaDatasetView {
     fn seal_content_identity(&self) -> Result<purrdf_hash::hex::Digest32, crate::RdfDiagnostic> {
-        const SNAPSHOT: purrdf_hash::Domain =
-            purrdf_hash::Domain::new(b"purrdf-core/delta-snapshot/v1");
-        let mut hash = purrdf_hash::blake3::Hasher::new();
-        hash.update(SNAPSHOT.as_bytes());
-        hash.update(self.base.frozen_snapshot_identity()?.as_bytes());
-        hash.update(self.delta.frozen_snapshot_identity()?.as_bytes());
+        let base = self.base.frozen_snapshot_identity()?;
+        let delta = self.delta.frozen_snapshot_identity()?;
         let mut resident = purrdf_lex::allocation::Resident;
         let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-        for records in [&self.suppressed, &self.converted] {
-            let mut sum = purrdf_hash::multiset::Multiset256::default();
+        let mut families: [Vec<[u8; 32]>; 3] = Default::default();
+        for (records, digests) in [&self.suppressed, &self.converted]
+            .into_iter()
+            .zip(&mut families)
+        {
+            digests
+                .try_reserve_exact(records.len())
+                .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
             for (kind, row) in records.iter() {
                 let mut record = purrdf_hash::blake3::Hasher::new();
                 record.update(&[match kind {
@@ -110,19 +137,25 @@ impl DeltaDatasetView {
                 if let Some(graph) = row.g {
                     record.update(&self.base.term_fingerprint(graph, &mut memory)?);
                 }
-                sum.insert(*record.finalize().as_bytes())
-                    .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                digests.push(*record.finalize().as_bytes());
             }
-            hash.update(&sum.fingerprint(SNAPSHOT));
         }
-        let mut graphs = purrdf_hash::multiset::Multiset256::default();
+        families[2]
+            .try_reserve_exact(self.withdrawn_graphs.len())
+            .map_err(|_| purrdf_lex::allocation::StorageError::AllocationFailed)?;
         for &graph in self.withdrawn_graphs.iter() {
-            graphs
-                .insert(self.base.term_fingerprint(graph, &mut memory)?)
-                .map_err(|_| purrdf_lex::allocation::StorageError::SizeOverflow)?;
+            families[2].push(self.base.term_fingerprint(graph, &mut memory)?);
         }
-        hash.update(&graphs.fingerprint(SNAPSHOT));
-        Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+        // The sets iterate in hash order; their identity is of the sorted rows.
+        for digests in &mut families {
+            digests.sort_unstable();
+        }
+        let [suppressed, converted, withdrawn] = &families;
+        Ok(delta_snapshot(
+            base,
+            delta,
+            [suppressed, converted, withdrawn],
+        ))
     }
 
     /// The construction charge of one term of the frozen delta: its slot in the
@@ -999,6 +1032,34 @@ mod tests {
     use crate::ir::pack::dataset_from_view;
     use crate::ir::{MutableDataset, RdfDatasetBuilder};
     use crate::model::{RdfLiteral, RdfTextDirection};
+
+    /// Each family of a mutation snapshot's identity is BLAKE3 over its sorted
+    /// rows: suppressed, converted or withdrawn sets whose additive sums and
+    /// populations agree still give different identities, and one set in two
+    /// families gives two identities. Equal mutations reached in another order
+    /// keep the identity (the `content_identity` integration test).
+    #[test]
+    fn delta_snapshot_families_distinguish_an_additive_collision() {
+        let (left, right) = crate::source::additive_collision();
+        let sorted = |pair: [[u8; 32]; 2]| {
+            let mut pair = pair;
+            pair.sort_unstable();
+            pair
+        };
+        let (left, right) = (sorted(left), sorted(right));
+        let identity = purrdf_hash::hex::Digest32::new([1; 32]);
+        let snapshot = |families: [&[[u8; 32]]; 3]| delta_snapshot(identity, identity, families);
+        for family in 0..3 {
+            let mut with_left: [&[[u8; 32]]; 3] = [&[], &[], &[]];
+            let mut with_right = with_left;
+            with_left[family] = &left;
+            with_right[family] = &right;
+            assert_ne!(snapshot(with_left), snapshot(with_right), "family {family}");
+            let mut moved: [&[[u8; 32]]; 3] = [&[], &[], &[]];
+            moved[(family + 1) % 3] = &left;
+            assert_ne!(snapshot(with_left), snapshot(moved), "family {family}");
+        }
+    }
 
     fn iri(local: &str) -> TermValue {
         TermValue::Iri(format!("https://example.org/{local}"))

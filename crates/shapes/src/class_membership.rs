@@ -482,14 +482,19 @@ impl ClassMembershipView {
 /// Bind the asserted-subclass law and its supplementary IRI edges, without
 /// building or scanning the lazy membership index. Called on the first request
 /// for the view's identity, not when the view is built.
+///
+/// The edges come from a shapes graph or ontology another party may supply, so
+/// they enter as BLAKE3 over their sorted edge digests: no constructed edge set
+/// shares the identity of another, as it could share an additive sum.
 fn class_snapshot(
     base: &ShaclDatasetView,
     edges: &[(TermId, TermId)],
 ) -> Result<purrdf_hash::hex::Digest32, DataIdentityError> {
-    const DOMAIN: purrdf_hash::Domain =
-        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-snapshot/v1");
     let source = base.content_identity()?;
-    let mut members = purrdf_hash::multiset::Multiset256::default();
+    let mut members = Vec::new();
+    members.try_reserve_exact(edges.len()).map_err(|_| {
+        DataIdentityError::Source(purrdf_lex::allocation::StorageError::AllocationFailed.into())
+    })?;
     for &edge in edges {
         let mut member = purrdf_hash::blake3::Streaming::<1024>::new();
         for id in <[TermId; 2]>::from(edge) {
@@ -502,16 +507,31 @@ fn class_snapshot(
                 member.update(bytes);
             });
         }
-        // There are at most usize::MAX resident edges, which fits the u64 population.
-        members
-            .insert(*member.finalize().as_bytes())
-            .expect("resident edge count fits fingerprint population");
+        members.push(*member.finalize().as_bytes());
     }
+    // The edges are sorted by dictionary ID; the identity is of their content.
+    members.sort_unstable();
+    Ok(class_identity(source, &members))
+}
+
+/// The class-membership identity over a base identity and ascending edge
+/// digests.
+fn class_identity(
+    source: purrdf_hash::hex::Digest32,
+    members: &[[u8; 32]],
+) -> purrdf_hash::hex::Digest32 {
+    const DOMAIN: purrdf_hash::Domain =
+        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-snapshot/v2");
+    const EDGES: purrdf_hash::Domain =
+        purrdf_hash::Domain::new(b"purrdf-shapes/class-membership-edges/v1");
     let mut hash = purrdf_hash::blake3::Streaming::<1024>::new();
     hash.update(DOMAIN.as_bytes());
     hash.update(source.as_bytes());
-    hash.update(&members.fingerprint(DOMAIN));
-    Ok(purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes()))
+    hash.update(&purrdf_hash::multiset::sorted_fingerprint(
+        EDGES,
+        members.iter().copied(),
+    ));
+    purrdf_hash::hex::Digest32::new(*hash.finalize().as_bytes())
 }
 
 #[cfg(test)]
@@ -1204,6 +1224,29 @@ mod tests {
         let identity = clone.content_identity().unwrap();
         assert!(sealed(&view));
         assert_eq!(view.content_identity().unwrap(), identity);
+    }
+
+    /// Supplementary edges another party supplies enter as BLAKE3 over their
+    /// sorted digests: two edge sets whose additive sums and populations agree
+    /// give two identities, while one edge set keeps one identity.
+    #[test]
+    fn class_identity_distinguishes_an_additive_collision() {
+        use purrdf_hash::multiset::Multiset256;
+        let digest = |seed: u8| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
+        let (a, b, c) = (digest(1), digest(2), digest(3));
+        let mut d = Multiset256::default();
+        d.insert(a).unwrap();
+        d.insert(b).unwrap();
+        d.remove(c).unwrap();
+        let d = *d.sum();
+        let sorted = |mut edges: Vec<[u8; 32]>| {
+            edges.sort_unstable();
+            edges
+        };
+        let source = purrdf_hash::hex::Digest32::new([5; 32]);
+        let left = class_identity(source, &sorted(vec![a, b]));
+        assert_ne!(left, class_identity(source, &sorted(vec![c, d])));
+        assert_eq!(left, class_identity(source, &sorted(vec![b, a])));
     }
 
     #[test]

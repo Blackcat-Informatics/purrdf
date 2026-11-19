@@ -126,14 +126,17 @@ pub(crate) fn graph_free_corpus_keys_ranking_and_query() {
     assert_eq!(quad.corpus_profile(), purrdf_text::INDEX_CORPUS_PROFILE_ID);
     assert_ne!(index.fingerprint(), quad.fingerprint());
     assert_ne!(index.source_fingerprint(), quad.source_fingerprint());
+    // Moved with the 5.0 sorted-digest source law: the graph-free source
+    // identity is BLAKE3 over the sorted row hashes, and the index identity
+    // binds that source identity.
     assert_eq!(
         purrdf_hash::hex::encode(&index.fingerprint()),
-        "a3b848138dd6e067908437f62a086b82f3ecda0104cee1b0943b41d67b9b239a",
+        "16a0b745250f76adf61a0ce4b503fe2213444798cb61a4de709b52631124b375",
         "the graph-free index identity"
     );
     assert_eq!(
         purrdf_hash::hex::encode(&index.source_fingerprint()),
-        "b857dde328bad38b1551da367e6a4991d2b2fa86e6efe1568573b9ca774ff7ed",
+        "d6e49c8701056f1bb5020995dec6076c5eb39bc1eb1e1b329347ce2e49059e5a",
         "the graph-free source identity"
     );
 

@@ -43,7 +43,7 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
             .collect();
         self.remove_document_keys(&documents)?;
         self = self.merge_disjoint(added)?;
-        self.generation = self.content_generation();
+        self.generation = self.content_generation()?;
         Ok(self)
     }
 
@@ -64,7 +64,7 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
             })
             .collect();
         if self.remove_document_keys(&documents)? {
-            self.generation = self.content_generation();
+            self.generation = self.content_generation()?;
         }
         Ok(self)
     }
@@ -123,9 +123,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
                     .binary_search_by(|candidate| compare_sources(candidate, &source))
                     .expect("a removed surface source is still present");
                 self.sources = self.sources.remove(at)?;
-                self.source_state
-                    .remove(source.digest)
-                    .map_err(|error| TextError::data(error.to_string()))?;
             }
         }
         Ok(changed)
@@ -187,7 +184,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
             sources,
             words,
             spans,
-            source_state,
             ..
         } = added;
         for source in sources.iter() {
@@ -204,9 +200,6 @@ impl<P: CorpusProfile> SurfaceIndex<P> {
                 Err(at) => self.sources = self.sources.insert(at, source.clone())?,
             }
         }
-        self.source_state
-            .combine(source_state)
-            .map_err(|error| TextError::data(error.to_string()))?;
         for (span, table) in [(false, words), (true, spans)] {
             for term in table.iter() {
                 self.insert_term(term, span)?;

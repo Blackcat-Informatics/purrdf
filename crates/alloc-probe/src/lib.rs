@@ -721,6 +721,30 @@ impl Drop for WholeProcessWindow {
     }
 }
 
+/// The four quantities as `allocations=… requested_bytes=… retained_bytes=…
+/// peak_working_bytes=…`, the line format of the row benches.
+impl core::fmt::Display for Measurement {
+    fn fmt(&self, out: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            out,
+            "allocations={} requested_bytes={} retained_bytes={} peak_working_bytes={}",
+            self.allocations, self.requested_bytes, self.retained_bytes, self.peak_working_bytes
+        )
+    }
+}
+
+/// Run `work` in a fresh [`WholeProcessWindow`] and return its value beside
+/// the window's measurement, rendered as [`Measurement`]'s `Display` line.
+///
+/// # Panics
+/// Panics, as [`WholeProcessWindow::open`] does, when another whole-process
+/// window is open.
+pub fn whole_process_report<T>(work: impl FnOnce() -> T) -> (T, String) {
+    let window = WholeProcessWindow::open();
+    let value = work();
+    (value, window.close().to_string())
+}
+
 /// The process resident set size in KiB, read from `/proc/self/statm` (field 2 is
 /// the resident page count). Linux-only; on any other platform this reports `0` and
 /// only the allocator figures carry the evidence.

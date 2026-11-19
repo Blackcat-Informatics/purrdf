@@ -41,6 +41,13 @@ pub(crate) struct SegmentedSourceVersion {
     _storage: QueryStorage,
 }
 
+impl SegmentedSourceVersion {
+    /// The canonical Merkle node of the effective record digests.
+    pub(crate) fn content_node(&self) -> Option<DirectoryNode> {
+        self.directory.root()
+    }
+}
+
 #[derive(Debug)]
 struct OwnedRow {
     subject: SegmentedStackTerm,

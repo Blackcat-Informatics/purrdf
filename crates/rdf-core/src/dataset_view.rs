@@ -1877,6 +1877,17 @@ pub trait FallibleDatasetView: DatasetView<ReadError = Self::Error> {
 /// it in a freeze, a seal, a construction or a query: a single use with no later
 /// reader of the identity never pays for it. Any future identity law keeps that
 /// property; the method is fallible and computed when asked so it can.
+///
+/// Every row family the identity binds (records, named graphs, the rows a
+/// mutation suppresses or converts, the graphs it withdraws) enters as BLAKE3
+/// over its sorted row digests under the family's own domain. The identity is
+/// therefore collision resistant against a party that chooses the rows: unlike
+/// an additive sum of row digests, no constructed pair of different row sets
+/// shares it. A paged dataset certifies each page it materializes by recomputing
+/// the page's identity from the rows the provider returned and comparing it with
+/// the identity sealed when the page was admitted, so a hostile provider cannot
+/// substitute other rows. A resident dataset's identity also binds its
+/// dictionary layout, so equal rows under different term IDs differ.
 pub trait ContentIdentified: DatasetView {
     /// Why this view's identity cannot be produced. Resident carriers use
     /// [`Infallible`](std::convert::Infallible).

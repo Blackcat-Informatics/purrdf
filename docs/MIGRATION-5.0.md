@@ -32,6 +32,10 @@ digests before opening a 4.x artifact.
 - The search bound is a limit on the engine's own work. Refusal is the labelling's
   typed `limit` outcome.
 - `DatasetStateDigest` is a separate algorithm and is unchanged.
+- Every identity and fingerprint of a set of rows is BLAKE3 over the sorted row
+  digests, not an additive sum. Content identities, execution receipts, source
+  version fingerprints and text index generations recorded by 4.x stop
+  matching (see "Row-set identities").
 
 ## The canonical line sequence
 
@@ -168,6 +172,55 @@ caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
 `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
 reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
 them.
+
+## Row-set identities
+
+In 4.x, the identities and fingerprints derived from a set of rows added the
+256-bit row digests modulo 2^256 and hashed the sum with the row count. A party
+that chooses rows can construct two different row sets with the same sum and
+count (D. Wagner, "A Generalized Birthday Problem", CRYPTO 2002), so equal
+values did not prove equal rows. In 5.0 each row family is BLAKE3 over its row
+digests in ascending order, repeats kept, followed by the row count, under a
+domain of its own (`purrdf_hash::multiset::sorted_fingerprint`). Two different
+row sets share a value only through a BLAKE3 collision.
+
+Every value below moves for every input, except that a segmented stack made only
+of image layers, with no removal or declaration owners and no resident head,
+hashes image snapshots alone and keeps its 4.x snapshot identity and the
+receipts bound to it. A value recorded by 4.x otherwise never equals the 5.0
+value of the same data. Nothing recomputes a 4.x value: recompute
+the identity from the data and record it again.
+
+| Value | What moved |
+|---|---|
+| `ContentIdentified::content_identity` of `RdfDataset`, of a triple dataset, and of `CompositeDatasetView`, `DeltaDatasetView`, paged datasets and segmented stack snapshots and queries (see the exception above), and the SHACL data and class-membership views | The resident record and named-graph families, and a mutation snapshot's suppressed, converted and withdrawn-graph families, are sorted-digest fingerprints (domains `purrdf-core/snapshot/rows/v2`, `purrdf-core/snapshot/graphs/v2`, `purrdf-core/delta-snapshot/v2` and its family domains). Composed views hash these identities, so they move with them. The class-membership view hashes its supplementary subclass edges the same way (`purrdf-shapes/class-membership-snapshot/v2`). |
+| Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt` or `bind_execution_receipt_hex`, by Python `bind_execution_receipt`, by JavaScript `bindExecutionReceipt` and by C `purrdf_execution_receipt_bind`; `QueryCoordinates::execution_identity`, `SuppliedQueryCoordinates::execution_identity` and `RuleCoordinates::execution_identity`, which take these content identities. |
+| `SourceVersion::content_fingerprint` | BLAKE3 over the population and the canonical Merkle node of the sorted record digests (`purrdf/source-version/v2`). |
+| `TextIndex::source_fingerprint`, `TextSource::source_fingerprint` and `purrdf_text::source_digest` | BLAKE3 over the sorted selected-row digests (`purrdf-text/source/v3`, `purrdf-text/triples/source/v3`). `verify_binding` refuses an index whose stored source identity came from 4.x. |
+| `TextIndex::fingerprint`, `snapshot_fingerprint` and the generation retrieval strata attest | The index generation binds the source identity, so it moves with it, and so does every retrieval evidence identity recorded over a 4.x generation. |
+| `SourceMatchEvidence::literal` of a match from an index-built surface, and the literal identity Han occurrences carry | The per-row source identity moved from the additive `purrdf-text/source/v2` law to the sorted `purrdf-text/source/v3` law. |
+| `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
+
+`purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
+deprecated: no 5.0 index carries that value. The value is not
+collision-resistant and must not be used as an identity; use
+`purrdf_text::source_digest` or `TextIndex::source_fingerprint` instead. The
+function is removed in the next major version. `SourceSummary::records` and
+`SourceSummary::literal_rows` keep their additive `Multiset256` values, which
+combine across physical layers without visiting rows; they are accounting sums
+for drift and population checks between structures one process built, and no
+identity is derived from them. `TextDeltaError::SourceMismatch` reports check
+values of the same accounting. `DatasetStateDigest`, pack identities and
+the image snapshots inside a segmented stack already hashed bytes or sorted rows
+and are unchanged.
+
+Two cases are settled by the new law. A paged dataset certifies a page it
+materializes by recomputing the page's content identity from the rows the
+provider returned and comparing it with the identity sealed at admission; that
+refusal now holds against a provider that chooses the rows it returns. The
+supplementary subclass edges of a class-membership view, taken from a shapes
+graph or ontology another party supplies, no longer admit an edge set that
+collides with another.
 
 ## Items that left the crate root
 

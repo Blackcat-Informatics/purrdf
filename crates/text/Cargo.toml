@@ -114,3 +114,9 @@ harness = false
 [[bench]]
 name = "emoji"
 harness = false
+
+# Allocations and retired instructions of the text paths that publish a source
+# identity or a generation. Report-only; no clock is read.
+[[bench]]
+name = "source_identity_counts"
+harness = false
