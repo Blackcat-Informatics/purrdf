@@ -95,17 +95,27 @@ impl WalkTotals {
 
 /// The running total of a walk and its limit test (8.3, steps 1 and 6). The
 /// default walk has no bound and trips on nothing.
-#[derive(Default)]
 pub(crate) struct Walk {
     /// `R`, saturating at `2^64 - 1` (7.11).
     total: u64,
-    /// `max(L, A)`, or nothing when `A` is saturated and the walk never trips.
-    bound: Option<u64>,
+    /// `max(L, A)`; `2^64 - 1` when `A` is saturated, which a saturated `R`
+    /// does not exceed, so the walk never trips.
+    bound: u64,
     totals: WalkTotals,
-    /// The smallest source identifier and the node count of the top component
-    /// whose step 2 is running: the fields of a refusal.
-    source: Box<[u8]>,
+    /// The node count of the top component whose step 2 is running: a field
+    /// of a refusal.
     nodes: u64,
+}
+
+impl Default for Walk {
+    fn default() -> Self {
+        Self {
+            total: 0,
+            bound: u64::MAX,
+            totals: WalkTotals::default(),
+            nodes: 0,
+        }
+    }
 }
 
 impl Walk {
@@ -116,19 +126,20 @@ impl Walk {
     pub(crate) fn new(limit: u64, allowance: u64, split: u64) -> Self {
         let mut walk = Self {
             total: 0,
-            bound: (allowance != u64::MAX).then_some(limit.max(allowance)),
+            bound: if allowance == u64::MAX {
+                u64::MAX
+            } else {
+                limit.max(allowance)
+            },
             totals: WalkTotals::default(),
-            source: Box::default(),
             nodes: 0,
         };
         walk.add(&[(Kind::Split, split)]);
         walk
     }
 
-    /// Step 2 begins on the top component of smallest source identifier
-    /// `source` and `nodes` nodes.
-    pub(crate) fn enter(&mut self, source: &[u8], nodes: u64) {
-        self.source = source.into();
+    /// Step 2 begins on a top component of `nodes` nodes.
+    pub(crate) const fn enter(&mut self, nodes: u64) {
         self.nodes = nodes;
     }
 
@@ -157,9 +168,7 @@ impl Walk {
     /// was added, and the walk ends inside them, so the step is walked charge
     /// by charge to find where.
     pub(crate) fn absorb(&mut self, totals: &WalkTotals) -> bool {
-        let fits = self
-            .bound
-            .is_none_or(|bound| self.total.saturating_add(totals.total()) <= bound);
+        let fits = self.total.saturating_add(totals.total()) <= self.bound;
         if fits {
             for (kind, units) in [
                 (Kind::Start, totals.start),
@@ -190,18 +199,20 @@ impl Walk {
 
     /// Step 6: the walk ends when `R` exceeds `max(L, A)`.
     fn test(&self) -> Result<(), Stop> {
-        match self.bound {
-            Some(bound) if self.total > bound => Err(Stop::Limit),
-            _ => Ok(()),
+        if self.total > self.bound {
+            Err(Stop::Limit)
+        } else {
+            Ok(())
         }
     }
 
-    /// The refusal of a walk that ended at its last charge, with the first
+    /// The refusal of a walk that ended at its last charge, in the top
+    /// component whose smallest source identifier is `source`, with the first
     /// failures of the search-free run.
-    pub(crate) fn refusal(&self, broken_by: Vec<FailureRecord>) -> Refusal {
+    pub(crate) fn refusal(&self, source: &[u8], broken_by: Vec<FailureRecord>) -> Refusal {
         Refusal::Limit {
             broken_by,
-            source: self.source.clone(),
+            source: source.into(),
             nodes: self.nodes,
             units: self.total,
         }
@@ -254,39 +265,89 @@ pub(crate) fn twin_tests(
 pub(crate) struct Relation {
     classes: Classes,
     len: usize,
+    /// For the representative of each class, its least member: a member is
+    /// related to an earlier one exactly when its class has a smaller member.
+    least: Vec<usize>,
+    /// The version of `TW` at the last pass of (K1): the pass is repeated only
+    /// when a join of `TW`, by this call or a nested one, has changed it.
+    twin_version: Option<u64>,
+    /// The passes of (K1) made.
+    #[cfg(test)]
+    pub(crate) passes: u64,
+    /// The members the passes of (K1) read and the class lookups the relation
+    /// made, for the bound on the work of a walk.
+    #[cfg(test)]
+    pub(crate) reads: u64,
 }
 
 impl Relation {
     pub(crate) fn new(len: usize) -> Self {
         Self {
             classes: Classes::new(len),
+            least: (0..len).collect(),
             len,
+            twin_version: None,
+            #[cfg(test)]
+            passes: 0,
+            #[cfg(test)]
+            reads: 0,
         }
+    }
+
+    /// The representative of the class of member `i`.
+    fn find(&mut self, i: usize) -> usize {
+        #[cfg(test)]
+        {
+            self.reads += 1;
+        }
+        self.classes.find(i)
     }
 
     /// Relate the members of indices `i` and `j`.
     pub(crate) fn relate(&mut self, i: usize, j: usize) {
-        let (ri, rj) = (self.classes.find(i), self.classes.find(j));
+        let (ri, rj) = (self.find(i), self.find(j));
         if ri != rj {
             self.classes.join(ri, rj);
+            self.least[ri] = self.least[ri].min(self.least[rj]);
         }
     }
 
     /// (K1): every two members of `target` in one class of `TW` are related.
+    ///
+    /// One pass groups the members by their root in `TW` and relates each
+    /// member to the first of its group. The relation only grows, so a pass
+    /// is needed only after a join of `TW`.
     pub(crate) fn twins(&mut self, target: &[usize], tw: &mut Classes) {
-        let roots: Vec<usize> = target.iter().map(|&v| tw.find(v)).collect();
-        for i in 1..self.len {
-            if let Some(j) = (0..i).find(|&j| roots[j] == roots[i]) {
-                self.relate(i, j);
+        if self.twin_version == Some(tw.unions()) {
+            return;
+        }
+        self.twin_version = Some(tw.unions());
+        #[cfg(test)]
+        {
+            self.passes += 1;
+            self.reads += target.len() as u64;
+        }
+        let mut keyed: Vec<(usize, usize)> = target
+            .iter()
+            .take(self.len)
+            .enumerate()
+            .map(|(i, &v)| (tw.find(v), i))
+            .collect();
+        keyed.sort_unstable();
+        let mut first = None;
+        for (root, i) in keyed {
+            match first {
+                Some((group, head)) if group == root => self.relate(i, head),
+                _ => first = Some((root, i)),
             }
         }
     }
 
     /// Step 3(b)(i): whether the member of index `i` is related to an earlier
-    /// one, so that its child is skipped.
+    /// one, so that its child is skipped: its class has a smaller member.
     pub(crate) fn skipped(&mut self, i: usize) -> bool {
-        let root = self.classes.find(i);
-        (0..i).any(|j| self.classes.find(j) == root)
+        let root = self.find(i);
+        self.least[root] < i
     }
 
     /// The number of members whose class holds one of `members`. With the
@@ -294,11 +355,11 @@ impl Relation {
     /// first member of a class is visited, every member of a class has the
     /// certificate of the others, and a stopped member's exceeds the best's.
     pub(crate) fn related_to(&mut self, members: &[usize]) -> u64 {
-        let mut roots: Vec<usize> = members.iter().map(|&i| self.classes.find(i)).collect();
+        let mut roots: Vec<usize> = members.iter().map(|&i| self.find(i)).collect();
         roots.sort_unstable();
         roots.dedup();
         (0..self.len)
-            .filter(|&i| roots.binary_search(&self.classes.find(i)).is_ok())
+            .filter(|&i| roots.binary_search(&self.find(i)).is_ok())
             .count() as u64
     }
 }

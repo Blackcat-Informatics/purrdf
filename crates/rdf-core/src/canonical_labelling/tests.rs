@@ -764,7 +764,7 @@ fn bipartite_both_directions() -> Vec<Line> {
     both_directions(&edges)
 }
 
-fn directed_cycle(n: usize) -> Vec<Line> {
+pub(super) fn directed_cycle(n: usize) -> Vec<Line> {
     (0..n)
         .map(|i| quad(&named("n", i), "<p>", &named("n", (i + 1) % n)))
         .collect()

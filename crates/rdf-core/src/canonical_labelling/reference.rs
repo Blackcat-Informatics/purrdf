@@ -875,7 +875,7 @@ impl<'a> Engine<'a> {
                 }
                 let (child, steps) = self.explore_child(pair, lines, p, constants, u, mode)?;
                 self.consider(&mut best, child, u, steps, at);
-                // Every member of one twin class attains (F2).
+                // Every member of one twin class attains.
                 best.attaining = target.len() as u64;
                 Vec::new()
             }
@@ -1047,13 +1047,21 @@ pub(crate) struct TwinTest {
 /// A union-find over `0..n` with path halving.
 pub(crate) struct Classes {
     parent: Vec<usize>,
+    /// The joins made so far: the version of the partition.
+    unions: u64,
 }
 
 impl Classes {
     pub(crate) fn new(n: usize) -> Self {
         Self {
             parent: (0..n).collect(),
+            unions: 0,
         }
+    }
+
+    /// The number of joins made, which changes exactly when the partition does.
+    pub(crate) const fn unions(&self) -> u64 {
+        self.unions
     }
 
     /// The representative of `x`'s class, halving the path on the way up.
@@ -1068,6 +1076,7 @@ impl Classes {
     /// Join the class of representative `other` into that of `into`.
     pub(crate) fn join(&mut self, into: usize, other: usize) {
         self.parent[other] = into;
+        self.unions += 1;
     }
 }
 
@@ -1852,7 +1861,7 @@ pub(crate) fn drive<R: ComponentRun>(
     order.sort_by(|&a, &b| runs[a].source().cmp(runs[b].source()));
     for i in order {
         let run = &mut runs[i];
-        walk.enter(run.source(), run.blank_nodes());
+        walk.enter(run.blank_nodes());
         let label = force_search || !run.is_labelled();
         let (back, outcome) = run.walk(walk, label);
         walk = back;
@@ -1862,9 +1871,10 @@ pub(crate) fn drive<R: ComponentRun>(
             // A walked branching call always completes its first child, so no
             // call of the walk fails; a stop of the walk is its limit.
             Err(Stop::Limit | Stop::Failed) => {
-                return Err(Halt::Refused(
-                    walk.refusal(failures.iter().map(|f| f.record).collect()),
-                ));
+                return Err(Halt::Refused(walk.refusal(
+                    runs[i].source(),
+                    failures.iter().map(|f| f.record).collect(),
+                )));
             }
         }
     }

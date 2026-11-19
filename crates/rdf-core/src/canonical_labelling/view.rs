@@ -1206,7 +1206,7 @@ pub fn compare_view<D: DatasetView>(
         .admission
         .into_result()
         .map_err(ViewError::Refused)?;
-    let labelled = label_lines(&lines, limit, stop)?;
+    let (labelled, _) = label_lines(&lines, limit, stop)?;
     Ok(Comparison {
         present: outcome,
         lines,
@@ -1215,16 +1215,19 @@ pub fn compare_view<D: DatasetView>(
     })
 }
 
-/// Label admitted lines with the optimised engine.
+/// Label admitted lines with the optimised engine, with the units the walk of
+/// 8.3 charged.
 fn label_lines<E>(
     lines: &LineSet,
     limit: Limit,
     stop: Option<&dyn StopSignal>,
-) -> Result<Labelled, ViewError<E>> {
-    optimised::label_set(lines, limit.get(), false, stop).map_err(|halt| match halt {
-        super::Halt::Refused(refusal) => ViewError::Refused(refusal),
-        super::Halt::Stopped => ViewError::Stopped,
-    })
+) -> Result<(Labelled, u64), ViewError<E>> {
+    optimised::label_walked(lines, limit.get(), false, stop)
+        .map(|(labelled, walk)| (labelled, walk.totals().total()))
+        .map_err(|halt| match halt {
+            super::Halt::Refused(refusal) => ViewError::Refused(refusal),
+            super::Halt::Stopped => ViewError::Stopped,
+        })
 }
 
 /// The admitted lines of `view` and `records`, each constant and blank node
@@ -1372,7 +1375,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     let (admitted, charged) = lowered_in(view, Scope::Dataset, records, stop, memory)?;
     let (lines, bytes) = grant(admitted.lines, charged, memory)?;
     match label_lines(&lines, limit, stop) {
-        Ok(labelled) => Ok(Comparison {
+        Ok((labelled, _)) => Ok(Comparison {
             present: outcome,
             lines,
             labelled,
@@ -1395,6 +1398,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
 pub struct Labelling<Id> {
     lines: LineSet,
     labelled: Labelled,
+    walked: u64,
     blanks: Vec<Option<Id>>,
     /// Whether the lines hold term nodes, and so every blank node of the view
     /// has the text form of its source identifier.
@@ -1415,6 +1419,15 @@ impl<Id: Copy> Labelling<Id> {
     #[must_use]
     pub const fn labelled(&self) -> &Labelled {
         &self.labelled
+    }
+
+    /// The limited units the walk of 8.3 charged, the figure a refusal of
+    /// `limit` reports as its units: START, REFINE, FIX-SUM, SPLIT and TWIN.
+    /// [`Labelled::explored`] is a separate engine figure that has no twin
+    /// units.
+    #[must_use]
+    pub const fn walked_units(&self) -> u64 {
+        self.walked
     }
 
     /// The view's identifier of the blank node with index `node` in
@@ -1504,7 +1517,7 @@ fn labelling_of<D: DatasetView>(
         size,
         weight,
     } = admitted;
-    let labelled = label_lines(&lines, limit, stop)?;
+    let (labelled, walked) = label_lines(&lines, limit, stop)?;
     let text_form = term_nodes > 0;
     let mut blanks = Vec::with_capacity(lines.blank_nodes());
     for node in 0..lines.blank_nodes() {
@@ -1525,6 +1538,7 @@ fn labelling_of<D: DatasetView>(
     Ok(Labelling {
         lines,
         labelled,
+        walked,
         blanks,
         term_nodes: text_form,
         size,

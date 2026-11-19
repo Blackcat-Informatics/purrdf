@@ -33,8 +33,7 @@ use super::reference::{
     prepare,
 };
 use super::walk::{
-    Kind, Map, Relation, Walk, WalkTotals, Witnesses, carries, nodes_below, tied_exchanges,
-    twin_tests,
+    Kind, Map, Relation, Walk, Witnesses, carries, nodes_below, tied_exchanges, twin_tests,
 };
 use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
 use crate::StopSignal;
@@ -430,13 +429,12 @@ struct Engine<'a> {
     twin: TwinTest,
     /// Whether the calls run are the walk's, or the search-free run's.
     walking: bool,
-    /// The walk while this component's step 2 runs.
+    /// The walk while this component's step 2 runs. Before it, the walk of
+    /// the search-free run, which has no bound: when that run labels the
+    /// component its charges, kind by kind, are those the walk makes there
+    /// (one child at each branching call with the same twin tests, Lemma W
+    /// (4)(d)).
     walk: Walk,
-    /// The charges the walk makes on this component when the search-free run
-    /// labels it: there the walk runs the calls of the search-free run, one
-    /// child at each branching call with the same twin tests (Lemma W
-    /// (4)(d)), so its charges, kind by kind, are those of the run.
-    free_totals: WalkTotals,
     /// `TW`: the twin classes of the tests of the walk.
     tw: Classes,
     /// Engine figure: units over the calls explored.
@@ -474,7 +472,6 @@ impl<'a> Engine<'a> {
             twin: TwinTest::new(set, comp, start),
             walking: false,
             walk: Walk::default(),
-            free_totals: WalkTotals::default(),
             tw: Classes::new(n),
             explored: Units::default(),
             twin_units: 0,
@@ -491,26 +488,14 @@ impl<'a> Engine<'a> {
         self.set.source(self.comp.nodes[v])
     }
 
-    /// A charge of the walk. The search-free run charges no walk; it records
-    /// the charge the walk would make on a component it labels.
+    /// A charge of the walk; the walk of the search-free run has no bound.
     fn charge(&mut self, kind: Kind, units: u64) -> Result<(), Stop> {
-        if self.walking {
-            self.walk.charge(kind, units)
-        } else {
-            self.free_totals.add(kind, units);
-            Ok(())
-        }
+        self.walk.charge(kind, units)
     }
 
     /// The one charge of a fixing that is not stopped: its FIX-SUM and SPLIT.
     fn charge_fixing(&mut self, fix_sum: u64, split: u64) -> Result<(), Stop> {
-        if self.walking {
-            self.walk.charge_fixing(fix_sum, split)
-        } else {
-            self.free_totals.add(Kind::FixSum, fix_sum);
-            self.free_totals.add(Kind::Split, split);
-            Ok(())
-        }
+        self.walk.charge_fixing(fix_sum, split)
     }
 
     /// The fresh start of the top component, refined.
@@ -593,7 +578,7 @@ impl<'a> Engine<'a> {
                 }
                 let (passed, units) = self.twin.test(self.set, self.comp, u, w);
                 self.twin_units = self.twin_units.saturating_add(units);
-                self.free_totals.add(Kind::Twin, units);
+                self.charge(Kind::Twin, units)?;
                 if passed {
                     self.twin.join(ru, rw);
                 } else {
@@ -1125,7 +1110,7 @@ impl<'a> Engine<'a> {
 
     /// The branching call is complete: its tree, the chosen child being the
     /// best, with the maps it owns. Every member of the target cell attains in
-    /// the search-free run (F2); in a walk the attaining members are those
+    /// the search-free run, being one twin class; in a walk the attaining members are those
     /// whose class of `~` holds a completed child equal to the best.
     fn finish_branch(&self, mut b: Branch) -> Result<Event, Stop> {
         let Some(child) = b.best.take() else {
@@ -1261,7 +1246,7 @@ impl ComponentRun for Run<'_> {
         if !label {
             // The search-free run labelled the component: the walk's charges
             // here are its own, made at once unless the walk ends among them.
-            let mut totals = self.engine.free_totals;
+            let mut totals = std::mem::take(&mut self.engine.walk).totals();
             totals.add(Kind::Start, self.record.units.start);
             totals.add(Kind::Refine, self.fresh_units);
             if walk.absorb(&totals) {
