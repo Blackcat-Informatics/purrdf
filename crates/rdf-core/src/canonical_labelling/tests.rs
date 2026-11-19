@@ -52,7 +52,7 @@ fn path() -> Vec<Line> {
     quads(&[("a", "<p>", "b"), ("b", "<p>", "c"), ("c", "<p>", "d")])
 }
 
-fn two_cycles() -> Vec<Line> {
+pub(super) fn two_cycles() -> Vec<Line> {
     quads(&[
         ("a", "<p>", "b"),
         ("b", "<p>", "c"),
@@ -141,7 +141,7 @@ pub(super) fn record(payload: &str, terms: &[Term]) -> Line {
 }
 
 /// The directed 4-cycle of 12.8 to 12.10, with the records on the nodes named.
-fn cycle_with_records(on: &[&str]) -> Vec<Line> {
+pub(super) fn cycle_with_records(on: &[&str]) -> Vec<Line> {
     let mut lines = quads(&[
         ("a", "<p>", "b"),
         ("b", "<p>", "c"),
@@ -711,7 +711,7 @@ fn named(prefix: &str, i: usize) -> String {
     format!("{prefix}{i}")
 }
 
-fn complete_bipartite_one_direction(side: usize) -> Vec<Line> {
+pub(super) fn complete_bipartite_one_direction(side: usize) -> Vec<Line> {
     let mut lines = Vec::new();
     for i in 0..side {
         for j in 0..side {
@@ -764,13 +764,13 @@ fn bipartite_both_directions() -> Vec<Line> {
     both_directions(&edges)
 }
 
-fn directed_cycle(n: usize) -> Vec<Line> {
+pub(super) fn directed_cycle(n: usize) -> Vec<Line> {
     (0..n)
         .map(|i| quad(&named("n", i), "<p>", &named("n", (i + 1) % n)))
         .collect()
 }
 
-fn cube_both_directions() -> Vec<Line> {
+pub(super) fn cube_both_directions() -> Vec<Line> {
     let mut edges = Vec::new();
     for u in 0..8usize {
         for bit in [1, 2, 4] {
@@ -783,13 +783,16 @@ fn cube_both_directions() -> Vec<Line> {
     both_directions(&edges)
 }
 
+/// `QR13` of 13.2 on the nodes `{prefix}00` to `{prefix}12`: `u`, `v`
+/// adjacent when `v - u` is a non-zero square modulo 13.
 pub(super) fn quadratic_residue_13(prefix: &str) -> Vec<Line> {
     let squares: Vec<usize> = (1..13).map(|x| x * x % 13).collect();
+    let name = |i: usize| format!("{prefix}{i:02}");
     let mut edges = Vec::new();
     for u in 0..13 {
         for v in u + 1..13 {
             if squares.contains(&((v - u) % 13)) {
-                edges.push((named(prefix, u), named(prefix, v)));
+                edges.push((name(u), name(v)));
             }
         }
     }
@@ -1109,7 +1112,7 @@ pub(super) fn relabel(lines: &[Line], seed: u64) -> Vec<Line> {
 }
 
 /// `lines` with every blank leaf, at any depth, renamed by `rename`.
-fn rename_lines(lines: &[Line], rename: &dyn Fn(&[u8]) -> Term) -> Vec<Line> {
+pub(super) fn rename_lines(lines: &[Line], rename: &dyn Fn(&[u8]) -> Term) -> Vec<Line> {
     let r = |t: &Term| rename_term(t, rename);
     lines
         .iter()
@@ -1240,8 +1243,11 @@ fn the_empty_input_is_labelled() {
 }
 
 /// Property 1 (test `relabel`): twenty relabellings with line reorderings
-/// give the same canonical line sequence, digest, structural record and
-/// identities on every input of the corpus.
+/// give the same canonical line sequence, digest, structural record and list
+/// of identities on every input of the corpus: the stable identity of each
+/// node, its copy index included, in ascending position. A naming that moved
+/// a copy index or exchanged two positions would pass a comparison of the
+/// identities as a set.
 #[test]
 fn relabelling_and_line_order_change_only_the_map() {
     for lines in corpus() {
@@ -1250,10 +1256,12 @@ fn relabelling_and_line_order_change_only_the_map() {
             let mut ids: Vec<_> = l
                 .placements
                 .iter()
-                .map(|p| (p.identity.component, p.identity.local_position))
+                .map(|p| (p.position, p.identity))
                 .collect();
-            ids.sort_unstable();
-            ids
+            ids.sort_unstable_by_key(|&(position, _)| position);
+            ids.into_iter()
+                .map(|(_, identity)| identity)
+                .collect::<Vec<_>>()
         };
         for seed in 1..=20 {
             let (_, other) = label(&relabel(&lines, seed));

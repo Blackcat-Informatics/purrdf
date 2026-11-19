@@ -125,7 +125,7 @@ fn labelled<D: DatasetView, T>(
                     }
                     lift(error)
                 })?;
-        run.record_units(labelling.labelled().explored.total());
+        run.record_units(labelling.walked_units());
         run.phase(CanonPhase::Output);
         let out = finish(&labelling)?;
         // The lines the grant covers are destroyed before it is refunded.
@@ -562,6 +562,7 @@ pub fn canonical_relabel_with_mapping(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::canonical_labelling::label_view;
     use crate::{BlankScope, CanonPhase, RdfDatasetBuilder, SearchEvent};
 
     /// Two interchangeable blank nodes: the labelling must search to tell them
@@ -573,6 +574,23 @@ mod tests {
         for label in ["a", "b"] {
             let s = b.intern_blank(label, BlankScope::DEFAULT).unwrap();
             b.push_quad(s, p, o, None).unwrap();
+        }
+        b.freeze().unwrap()
+    }
+
+    /// A directed cycle of blank nodes: its one branching call makes twin
+    /// tests, which the walk charges and the engine's explored units omit.
+    fn blank_cycle(n: usize) -> std::sync::Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri("http://example.org/p").unwrap();
+        let nodes: Vec<_> = (0..n)
+            .map(|i| {
+                b.intern_blank(&format!("n{i}"), BlankScope::DEFAULT)
+                    .unwrap()
+            })
+            .collect();
+        for i in 0..n {
+            b.push_quad(nodes[i], p, nodes[(i + 1) % n], None).unwrap();
         }
         b.freeze().unwrap()
     }
@@ -605,5 +623,28 @@ mod tests {
         assert_eq!(receipt.phase, CanonPhase::Output);
         assert!(receipt.work.count(SearchEvent::LabellingUnit) > 0);
         assert_eq!(receipt.work.count(SearchEvent::RdfcFrame), 0);
+    }
+
+    /// A completed run records the units of the walk, the figure a refusal of
+    /// the same limit reports, and not the engine's explored units.
+    #[test]
+    fn a_completed_run_records_the_units_of_the_walk() {
+        let dataset = blank_cycle(6);
+        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
+        try_canonicalize(&dataset, &mut control).unwrap();
+        let [receipt] = control.receipts() else {
+            panic!("one run, one receipt");
+        };
+        let labelling =
+            label_view(&*dataset, &[], Scope::Dataset, Limit::new(1_000_000), None).unwrap();
+        assert_eq!(
+            receipt.work.count(SearchEvent::LabellingUnit),
+            labelling.walked_units()
+        );
+        assert_ne!(
+            labelling.walked_units(),
+            labelling.labelled().explored.total(),
+            "the walk charges twin units the explored figure leaves out"
+        );
     }
 }

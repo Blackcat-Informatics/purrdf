@@ -13,8 +13,8 @@ digests before opening a 4.x artifact.
 
 - The default canonicalization family routes to the labelling named
   `nested-refinement-labelling`, version `1` (frozen specification, revision
-  3.11, SHA-256
-  `a2dc6ea69735f62cde18be17bc14890d89b4416e8dcf3bba42e3cfe55e283c15`).
+  3.12, SHA-256
+  `088cb74fba0f5f733224157ab7c3a6e06f4a3f3447edf4c01bb15cf15c58809a`).
 - The canonical document is the canonical line sequence, spelled as N-Quads 1.2.
   Blank nodes are `_:0`, `_:1`, and so on, in decimal. `_:c14nN` no longer
   appears in canonical output.
@@ -29,8 +29,10 @@ digests before opening a 4.x artifact.
   form of RDF 1.2 N-Quads; every other stored digest recomputes unchanged. No
   writer records a 4.x digest in a new artifact. A GTS compaction certificate names the function that recorded its
   refold digests (see "Containers").
-- The search bound is a limit on the engine's own work. Refusal is the labelling's
-  typed `limit` outcome.
+- The search bound is a limit on the walk of the specification (section 8.3), a
+  function of the input as given and of the bound, so every engine refuses the
+  same inputs with the same fields. Refusal is the labelling's typed `limit`
+  outcome.
 - `DatasetStateDigest` is a separate algorithm and is unchanged.
 - Every identity and fingerprint of a set of rows is BLAKE3 over the sorted row
   digests, not an additive sum. Content identities, execution receipts, source
@@ -287,7 +289,7 @@ compiling until it handles the new variant. The enums themselves keep their
 |---|---|---|
 | `CanonOutput` | `LinesDigest`, `DocumentLinesDigest` | Add arms for both. They are the digest of the canonical line sequence, alone and together with the document and label table; the 4.x arms keep their meaning |
 | `SearchConfiguration` | `Labelling { version, selection, output }` | Add an arm. It names the labelling run, where `Rdfc { .. }` names an RDFC-1.0 run; a caller that only inspects 4.x runs can bind it with a wildcard |
-| `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)` |
+| `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)`; the running total of the walk of 8.3: its total when the labelling completes, and on a refusal with `limit` its value after the charge that passed the limit, the refusal's `units` |
 
 A variant payload that changed. `CanonError` is `#[non_exhaustive]`, but a
 payload is matched by shape:
@@ -388,8 +390,8 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **Labels and receipts.** Every host returns `_:N` labels. Receipts name the
   labelling, its version and the `line-sequence` presentation.
 - **The bound.** The `canonical_search` argument and `--canonical-search` map onto
-  the engine's typed limit: a finite value is a number of the engine's limited
-  work units, and `unlimited` is the engine's own limit. A finite bound that the
+  the engine's typed limit: a finite value is a number of limited work units of
+  the walk, and `unlimited` is the engine's own limit. A finite bound that the
   input exceeds is refused with the labelling's `limit` outcome, and no canonical
   bytes are published. An input the labelling can finish without a search
   succeeds under every bound, including `0`.
