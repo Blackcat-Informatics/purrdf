@@ -762,15 +762,47 @@ jobs:
         run: node crates/shapes/tests/graphql_oracle.mjs
 
 
+  # Resolve the floating nightly ONCE per run. The seven configuration jobs and
+  # the aggregate all use the dated toolchain named here, so a run that spans a
+  # nightly publish still measures with one compiler; a rerun of a single job
+  # installs the same dated toolchain rather than the newest one. The pin of
+  # rust-toolchain.toml stays the floating channel for every other gate.
+  simd-asm-compiler:
+    if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      toolchain: ${{ steps.resolve.outputs.toolchain }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve the nightly to one dated toolchain and record its compiler
+        id: resolve
+        run: |
+          date="$(curl --fail --silent --show-error --location --retry 5 \
+            https://static.rust-lang.org/dist/channel-rust-nightly.toml \
+            | sed -n 's/^date = "\([0-9-]*\)"$/\1/p' | head -n 1)"
+          test -n "$date"
+          toolchain="nightly-$date"
+          rustup toolchain install "$toolchain" --profile minimal --no-self-update
+          {
+            echo "toolchain=$toolchain"
+            echo 'version<<RUSTC_VERSION'
+            RUSTUP_TOOLCHAIN="$toolchain" rustc -vV
+            echo 'RUSTC_VERSION'
+          } >> "$GITHUB_OUTPUT"
+
   # One configuration per runner; the stable aggregate requires every shard.
   simd-asm-config:
+    needs: simd-asm-compiler
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
     # A cold x86_64-v4 build can consume 30 minutes; retain time to upload its
     # checked report instead of cancelling immediately after measurement passes.
     timeout-minutes: 45
-    outputs:
-      compiler-version: ${{ steps.compiler.outputs.version }}
+    env:
+      # Outranks rust-toolchain.toml, so every step of this job runs the one
+      # compiler the resolver chose rather than the floating nightly.
+      RUSTUP_TOOLCHAIN: ${{ needs.simd-asm-compiler.outputs.toolchain }}
     strategy:
       fail-fast: false
       matrix:
@@ -783,19 +815,19 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
-          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          toolchain: ${{ needs.simd-asm-compiler.outputs.toolchain }}
           targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
+        env:
+          RUSTUP_TOOLCHAIN: ${{ needs.simd-asm-compiler.outputs.toolchain }}
       - name: Identify the actual compiler
         id: compiler
+        env:
+          EXPECTED_COMPILER: ${{ needs.simd-asm-compiler.outputs.version }}
         run: |
           mkdir -p target
           rustc -vV > target/asm-compiler.txt
+          test "$(cat target/asm-compiler.txt)" = "$EXPECTED_COMPILER"
           echo "identity=$(sha256sum target/asm-compiler.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-          {
-            echo 'version<<RUSTC_VERSION'
-            cat target/asm-compiler.txt
-            echo 'RUSTC_VERSION'
-          } >> "$GITHUB_OUTPUT"
       - name: Restore assembly build contexts and evidence
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
@@ -932,7 +964,7 @@ jobs:
           if-no-files-found: error
 
   simd-asm:
-    needs: simd-asm-config
+    needs: [simd-asm-compiler, simd-asm-config]
     if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -957,7 +989,7 @@ jobs:
           path: target/asm-reports
       - name: Check complete matrix and document parity
         env:
-          PRODUCER_COMPILER: ${{ needs.simd-asm-config.outputs.compiler-version }}
+          PRODUCER_COMPILER: ${{ needs.simd-asm-compiler.outputs.version }}
         run: |
           test -n "$PRODUCER_COMPILER"
           printf '%s\n' "$PRODUCER_COMPILER" > target/asm-reports/compiler-receipt.txt

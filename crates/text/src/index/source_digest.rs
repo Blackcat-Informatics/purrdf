@@ -131,9 +131,10 @@ fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
 /// BLAKE3 over the sorted selected-row digests, which
 /// [`source_digest`](super::source_digest) computes from a dataset; a party
 /// choosing rows can construct two different row sets with one additive value.
+/// The value is not collision-resistant and must not be used as an identity.
 #[deprecated(
     since = "5.0.0",
-    note = "an additive sum is not a source identity: use `source_digest` or `TextIndex::source_fingerprint`"
+    note = "this additive value is not collision-resistant and must not be used as an identity: use `source_digest` or `TextIndex::source_fingerprint`"
 )]
 pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
     additive_check_value::<P>(state)

@@ -10,6 +10,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyTuple};
 
 use crate::gts_view::{ALL_SCOPE, GtsFoldView, GtsFoldViewConfig, PublicValue, RelationalRows};
+use crate::py_store::presentation::native_error;
 
 type PyTermRow = (
     u8,
@@ -48,8 +49,12 @@ impl PyGtsFoldView {
         data: &[u8],
         curie_prefixes: Vec<(String, String)>,
     ) -> PyResult<Self> {
+        // A fold diagnostic is an error here exactly as in every other byte consumer:
+        // a damaged file never becomes an empty or partial view.
+        let graph = py
+            .detach(|| purrdf::gts::read_graph(data, true))
+            .map_err(|diagnostic| native_error(py, &diagnostic))?;
         py.detach(|| {
-            let graph = purrdf_gts::reader::read(data, true, None);
             Ok(Self {
                 inner: fold_view(graph, curie_prefixes)?,
             })
@@ -310,9 +315,11 @@ fn gts_relational_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
 ) -> PyResult<Bound<'py, PyDict>> {
+    let graph = py
+        .detach(|| purrdf::gts::read_graph(data, true))
+        .map_err(|diagnostic| native_error(py, &diagnostic))?;
     let (rows, directions) = py
         .detach(|| {
-            let graph = purrdf_gts::reader::read(data, true, None);
             crate::gts_view::relational_rows(&graph)
                 .map(|rows| (rows, crate::gts_view::term_directions(&graph)))
         })

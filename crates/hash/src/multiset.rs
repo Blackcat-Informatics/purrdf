@@ -4,10 +4,13 @@
 //! Reversible accounting for multisets of 256-bit member digests.
 //!
 //! Members add in Z/(2^256), with an independent exact 128-bit population.
-//! Order does not matter; repeated members contribute repeatedly. This is a
-//! multiset fingerprint, not a membership or authentication proof. A caller
-//! must establish membership before subtraction and obtain the observed source
-//! state independently of a proposed delta.
+//! Order does not matter; repeated members contribute repeatedly. The sum is an
+//! accounting value for drift and population checks, not an identity: a party
+//! choosing members can build two different multisets with one sum and
+//! population, and it is no membership or authentication proof. A caller must
+//! establish membership before subtraction and obtain the observed source state
+//! independently of a proposed delta. An identity over a row set is
+//! [`sorted_fingerprint`].
 
 use crate::{Domain, blake3, frame::frame_le_with};
 
@@ -152,6 +155,8 @@ impl Multiset256 {
 
     /// BLAKE3 of the framed domain, 16-byte little-endian population, then
     /// the 32-byte little-endian sum. Every family supplies its explicit domain.
+    /// The value is an accounting check, not collision resistant against chosen
+    /// members; use [`sorted_fingerprint`] for an identity.
     #[must_use]
     pub fn fingerprint(&self, domain: Domain) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();

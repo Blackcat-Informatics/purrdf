@@ -73,6 +73,7 @@ struct FrameLocation {
 }
 struct Discovered {
     header: bool,
+    map: bool,
     kind: Option<BoundRange>,
     id: Option<BoundRange>,
     data: Option<BoundRange>,
@@ -218,11 +219,15 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
             .map_or_else(|| range.clone(), |(_, child)| child);
         let mut discovered = Discovered {
             header: false,
+            map: false,
             kind: None,
             id: None,
             data: None,
             transforms: None,
         };
+        // The full reader classifies the untagged item: a tag-wrapped map is not a
+        // frame there, so it is not one here.
+        discovered.map = self.input.map(range)?.is_some();
         let Some(mut entries) = self.input.map(&inner)? else {
             return Ok(discovered);
         };
@@ -354,9 +359,23 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
                         item: catalog.frame_item(catalog.frames.len())?,
                     }));
                 }
+                // Only a self-described or untagged header ends a segment; any
+                // other tag is the original reader's interpretation error.
+                if let Some((tag, _)) = self.input.tag(&range)?
+                    && tag != crate::wire::SELF_DESCRIBE_TAG
+                {
+                    return Err(IndexedError::native(crate::wire::HeaderError::Tag {
+                        actual: tag,
+                    }));
+                }
                 break;
             }
             offset = range.end();
+            // A frame is a map; the full reader reports any other item, so a
+            // catalog must not present a segment with such an item as complete.
+            if !discovered.map {
+                return Err(IndexedError::native(FoldError::FrameMap));
+            }
             self.admit_metadata(
                 catalog
                     .header

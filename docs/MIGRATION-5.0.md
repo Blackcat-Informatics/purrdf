@@ -202,7 +202,10 @@ the identity from the data and record it again.
 | `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
 
 `purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
-deprecated: no 5.0 index carries that value. `SourceSummary::records` and
+deprecated: no 5.0 index carries that value. The value is not
+collision-resistant and must not be used as an identity; use
+`purrdf_text::source_digest` or `TextIndex::source_fingerprint` instead. The
+function is removed in the next major version. `SourceSummary::records` and
 `SourceSummary::literal_rows` keep their additive `Multiset256` values, which
 combine across physical layers without visiting rows; they are accounting sums
 for drift and population checks between structures one process built, and no
