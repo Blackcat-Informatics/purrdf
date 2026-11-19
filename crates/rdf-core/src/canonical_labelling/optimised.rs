@@ -33,7 +33,8 @@ use super::reference::{
     prepare,
 };
 use super::walk::{
-    Kind, Map, Relation, Totals, Walk, Witnesses, carries, nodes_below, tied_exchanges, twin_tests,
+    Kind, Map, Relation, Walk, WalkTotals, Witnesses, carries, nodes_below, tied_exchanges,
+    twin_tests,
 };
 use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
 use crate::StopSignal;
@@ -435,7 +436,7 @@ struct Engine<'a> {
     /// labels it: there the walk runs the calls of the search-free run, one
     /// child at each branching call with the same twin tests (Lemma W
     /// (4)(d)), so its charges, kind by kind, are those of the run.
-    free_totals: Totals,
+    free_totals: WalkTotals,
     /// `TW`: the twin classes of the tests of the walk.
     tw: Classes,
     /// Engine figure: units over the calls explored.
@@ -473,7 +474,7 @@ impl<'a> Engine<'a> {
             twin: TwinTest::new(set, comp, start),
             walking: false,
             walk: Walk::default(),
-            free_totals: Totals::default(),
+            free_totals: WalkTotals::default(),
             tw: Classes::new(n),
             explored: Units::default(),
             twin_units: 0,

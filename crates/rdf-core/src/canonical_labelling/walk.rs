@@ -48,17 +48,38 @@ pub(crate) enum Kind {
     Twin,
 }
 
-/// The limited units of a walk by kind, each saturating at `2^64 - 1`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct Totals {
-    pub(crate) start: u64,
-    pub(crate) refine: u64,
-    pub(crate) fix_sum: u64,
-    pub(crate) split: u64,
-    pub(crate) twin: u64,
+/// The limited units the walk of 8.3 charged, by the kinds of charge whose
+/// totals 13.2 prints, each saturating at `2^64 - 1`. They are a function of
+/// the input as given, source identifiers included, and of the limit, the
+/// same from every engine, and are NOT a property of the dataset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct WalkTotals {
+    /// START: the start charges of the lines of the top components walked.
+    pub start: u64,
+    /// REFINE: the refinements of fresh starts and of the children visited.
+    pub refine: u64,
+    /// FIX-SUM: the fixings without the splits of their remainders, with
+    /// their entries.
+    pub fix_sum: u64,
+    /// SPLIT: the split of the input and of the remainders of the fixings
+    /// that were not stopped.
+    pub split: u64,
+    /// TWIN: the twin tests of the branching calls visited.
+    pub twin: u64,
 }
 
-impl Totals {
+impl WalkTotals {
+    /// The sum of the kinds, saturating: the running total `R` of the walk.
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.start
+            .saturating_add(self.refine)
+            .saturating_add(self.fix_sum)
+            .saturating_add(self.split)
+            .saturating_add(self.twin)
+    }
+
     /// Add `units` of one kind.
     pub(crate) fn add(&mut self, kind: Kind, units: u64) {
         let slot = match kind {
@@ -70,15 +91,6 @@ impl Totals {
         };
         *slot = slot.saturating_add(units);
     }
-
-    /// The sum of the kinds, saturating.
-    const fn sum(&self) -> u64 {
-        self.start
-            .saturating_add(self.refine)
-            .saturating_add(self.fix_sum)
-            .saturating_add(self.split)
-            .saturating_add(self.twin)
-    }
 }
 
 /// The running total of a walk and its limit test (8.3, steps 1 and 6). The
@@ -89,7 +101,7 @@ pub(crate) struct Walk {
     total: u64,
     /// `max(L, A)`, or nothing when `A` is saturated and the walk never trips.
     bound: Option<u64>,
-    totals: Totals,
+    totals: WalkTotals,
     /// The smallest source identifier and the node count of the top component
     /// whose step 2 is running: the fields of a refusal.
     source: Box<[u8]>,
@@ -105,7 +117,7 @@ impl Walk {
         let mut walk = Self {
             total: 0,
             bound: (allowance != u64::MAX).then_some(limit.max(allowance)),
-            totals: Totals::default(),
+            totals: WalkTotals::default(),
             source: Box::default(),
             nodes: 0,
         };
@@ -144,10 +156,10 @@ impl Walk {
     /// them could fail. Whether they were made; when they were not, nothing
     /// was added, and the walk ends inside them, so the step is walked charge
     /// by charge to find where.
-    pub(crate) fn absorb(&mut self, totals: &Totals) -> bool {
+    pub(crate) fn absorb(&mut self, totals: &WalkTotals) -> bool {
         let fits = self
             .bound
-            .is_none_or(|bound| self.total.saturating_add(totals.sum()) <= bound);
+            .is_none_or(|bound| self.total.saturating_add(totals.total()) <= bound);
         if fits {
             for (kind, units) in [
                 (Kind::Start, totals.start),
@@ -196,14 +208,7 @@ impl Walk {
     }
 
     /// The totals by kind; their sum is `R`.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the totals by kind are read by the tests of the rows of 13.2"
-        )
-    )]
-    pub(crate) const fn totals(&self) -> Totals {
+    pub(crate) const fn totals(&self) -> WalkTotals {
         self.totals
     }
 

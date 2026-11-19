@@ -247,6 +247,9 @@ call for its result and charges only what the walk charges; the optimised engine
 explores what the walk visits and nothing else. Both make every charge of the
 walk, so they refuse the same inputs with the same fields. No label, digest,
 position, identity, record or map depends on the walk or on `L`.
+`label_with_walk` labels under a given limit and returns, besides the result, the
+walk's totals by kind (`WalkTotals`), the figures the specification's row `walk`
+prints.
 
 ### 3.5 The optimised engine
 

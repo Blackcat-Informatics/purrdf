@@ -14,7 +14,7 @@ use super::tests::{
     hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
 };
 use super::walk::Walk;
-use super::{FailureRecord, Labelled, Line, Refusal, Term, admit};
+use super::{FailureRecord, Labelled, Limit, Line, Refusal, Term, admit};
 use super::{optimised, reference};
 use purrdf_hash::hex;
 use purrdf_xsd::datatype::XSD_STRING;
@@ -554,6 +554,38 @@ fn the_limit_moves_with_the_naming_and_the_result_does_not() {
             }
         }
         assert_eq!(got, totals, "{name}");
+    }
+}
+
+/// The public entry returns the walk's totals by kind: on `QR13` those of the
+/// row `walk` of 13.2, their sum the printed total, with the result `label`
+/// gives; and the limit it is given decides the refusal, one unit below the
+/// total refused with the total as its units and the total itself labelled.
+#[test]
+fn the_public_entry_returns_the_totals_of_the_walk() {
+    let lines = quadratic_residue_13("r");
+    let (_, labelled, totals) =
+        super::label_with_walk(&lines, Limit::ENGINE).expect("labelled under the engine limit");
+    assert_eq!(
+        [
+            totals.start,
+            totals.refine,
+            totals.fix_sum,
+            totals.split,
+            totals.twin
+        ],
+        [234, 2_628, 3_770, 0, 1_512]
+    );
+    assert_eq!(totals.total(), 8_144);
+    let (_, plain) = super::label(&lines).expect("labelled");
+    assert_eq!(labelled.digest, plain.digest);
+    assert!(super::label_with_walk(&lines, Limit::new(8_144)).is_ok());
+    match super::label_with_walk(&lines, Limit::new(8_143)) {
+        Err(Refusal::Limit { units, .. }) => assert_eq!(units, 8_144),
+        other => panic!(
+            "expected a limit refusal, got {:?}",
+            other.map(|(_, l, _)| l.digest)
+        ),
     }
 }
 

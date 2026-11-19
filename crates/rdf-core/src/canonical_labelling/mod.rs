@@ -58,6 +58,7 @@ pub use view::{
     Comparison, Labelling, Record, Scope, ViewError, compare_view, compare_view_with_memory,
     label_view, label_view_with_memory, lines_of_view,
 };
+pub use walk::WalkTotals;
 
 use purrdf_hash::Domain;
 use purrdf_lex::term_syntax::write_blank;
@@ -561,6 +562,23 @@ pub fn label(lines: &[Line]) -> Result<(LineSet, Labelled), Refusal> {
     let labelled = optimised::label_set(&set, optimised::ENGINE_LIMIT, false, None)
         .map_err(Halt::expect_refusal)?;
     Ok((set, labelled))
+}
+
+/// Admit `lines` and label them with the optimised engine under `limit`, with
+/// the totals by kind of the walk of 8.3 that decided the outcome. The walk
+/// is the same in every engine, so the totals are those the definition's
+/// rows print for the input as given.
+///
+/// # Errors
+/// As [`label`], the refusal `limit` being decided by `limit`.
+pub fn label_with_walk(
+    lines: &[Line],
+    limit: Limit,
+) -> Result<(LineSet, Labelled, WalkTotals), Refusal> {
+    let set = admit(lines)?;
+    let (labelled, walk) =
+        optimised::label_walked(&set, limit.get(), false, None).map_err(Halt::expect_refusal)?;
+    Ok((set, labelled, walk.totals()))
 }
 
 /// Admit `lines` and label them with the reference engine: the definition
