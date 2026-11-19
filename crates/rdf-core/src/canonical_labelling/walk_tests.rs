@@ -15,6 +15,8 @@ use super::tests::{
 };
 use super::walk::Walk;
 use super::{FailureRecord, Labelled, Line, Refusal, Term, admit};
+use purrdf_hash::hex;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// The directed 4-cycle `C4D` of 13.2.
 fn c4d() -> Vec<Line> {
@@ -60,6 +62,46 @@ fn cubet() -> Vec<Line> {
     lines
 }
 
+/// `CUBER`, a comparison input shared with the other engines and not a row of
+/// the text: `CUBE`, and for every edge `{v_i, v_j}`, `i < j`, a blank reifier
+/// `w_ij` of the triple term `<<(v_i <p> v_j)>>` with the annotation
+/// `(2, w_ij, <q>, "x"^^xsd:string)`. It holds reifier bindings and
+/// annotations, which no input of the text's rows does.
+fn cuber() -> Vec<Line> {
+    let mut edges = Vec::new();
+    for i in 0..8usize {
+        for bit in [1, 2, 4] {
+            let j = i ^ bit;
+            if i < j {
+                edges.push((i, j));
+            }
+        }
+    }
+    edges.sort_unstable();
+    let mut lines = Vec::new();
+    for &(i, j) in &edges {
+        let (vi, vj) = (format!("v{i}"), format!("v{j}"));
+        lines.push(quad(&vi, "<p>", &vj));
+        lines.push(quad(&vj, "<p>", &vi));
+    }
+    for &(i, j) in &edges {
+        let reifier = term(&format!("w{i}{j}"));
+        lines.push(Line::ReifierBinding {
+            reifier: reifier.clone(),
+            triple: Term::triple(term(&format!("v{i}")), term("<p>"), term(&format!("v{j}"))),
+            graph: None,
+        });
+        lines.push(Line::Annotation {
+            count: 2,
+            reifier,
+            predicate: term("<q>"),
+            object: Term::typed(b"x", XSD_STRING.as_bytes()),
+            graph: None,
+        });
+    }
+    lines
+}
+
 /// `QR13` with `QR13S`: two top components of equal identity.
 fn qr13_with_qr13s() -> Vec<Line> {
     let mut lines = quadratic_residue_13("r");
@@ -83,6 +125,7 @@ fn walk_inputs() -> Vec<(&'static str, Vec<Line>)> {
         ("12.2", two_cycles()),
         ("12.10", cycle_with_records(&["a", "c"])),
         ("CUBET", cubet()),
+        ("CUBER (shared comparison input)", cuber()),
     ]
 }
 
@@ -111,14 +154,14 @@ fn row(walk: &Walk, allowance: u64) -> [u64; 7] {
 
 /// Row `walk` of 13.2: the totals by kind of the walk of each input in its
 /// given naming, its total and its allowance, equal to the figures the text
-/// prints; and the bounds of Lemma W (4): the units (a) to (d) of the walk
+/// prints, and those of the shared comparison input `CUBER`; and the bounds of Lemma W (4): the units (a) to (d) of the walk
 /// are at most those of the reference tree, and the total of a guaranteed
 /// input is at most its allowance with the twin units of its search-free
 /// run. A change in the order of the charges, in a skip, a stop or a known
 /// map moves one of these figures.
 #[test]
 fn the_walk_charges_the_totals_of_the_text() {
-    let expected: [(&str, [u64; 7]); 13] = [
+    let expected: [(&str, [u64; 7]); 14] = [
         ("QR13", [234, 2_628, 3_770, 0, 1_512, 8_144, 5_473]),
         ("CUBE", [72, 368, 772, 48, 378, 1_638, 1_584]),
         ("CUB8", [72, 500, 710, 0, 354, 1_636, 1_584]),
@@ -132,6 +175,10 @@ fn the_walk_charges_the_totals_of_the_text() {
         ("12.2", [18, 56, 108, 6, 36, 224, 318]),
         ("12.10", [20, 50, 100, 0, 12, 182, 308]),
         ("CUBET", [120, 552, 1_060, 48, 630, 2_410, 2_376]),
+        (
+            "CUBER (shared comparison input)",
+            [240, 717, 1_460, 0, 140, 2_557, 4_028],
+        ),
     ];
     let mut got = Vec::new();
     for (name, lines) in walk_inputs() {
@@ -386,5 +433,37 @@ fn the_limit_moves_with_the_naming_and_the_result_does_not() {
             }
         }
         assert_eq!(got, totals, "{name}");
+    }
+}
+
+/// The shared comparison input `CUBER`: not guaranteed (its first failure
+/// is at the call that fixes two nodes), its walk total `2,557` below its
+/// allowance `4,028`, so it is labelled at every limit, `0` and the total
+/// itself included, with the digest the other engines give; its first five
+/// relabellings walk to the same total and twin units and label to the same
+/// digest.
+#[test]
+fn the_shared_input_cuber_is_labelled_at_every_limit() {
+    let lines = cuber();
+    let (labelled, walk) = walked(&lines, u64::MAX).expect("labelled with no limit");
+    assert!(!labelled.record.guaranteed);
+    assert_eq!(labelled.record.broken_by, [failure_record(2, 6, 20, 48)]);
+    assert_eq!(
+        hex::encode(&labelled.digest),
+        "d0dc836e6ec438226c09ed3b849c08cf85c1c38054d29859cf979cd7484dc6e9"
+    );
+    assert_eq!(walk.total(), 2_557);
+    for limit in [0, 2_556, 2_557] {
+        let (again, _) = walked(&lines, limit).expect("labelled at every limit");
+        assert_eq!(again.digest, labelled.digest, "L = {limit}");
+    }
+    for seed in 1..=5 {
+        let (again, walk) = walked(&relabel(&lines, seed), u64::MAX).expect("labelled");
+        assert_eq!(
+            (walk.total(), walk.totals().twin),
+            (2_557, 140),
+            "seed {seed}"
+        );
+        assert_eq!(again.digest, labelled.digest, "seed {seed}");
     }
 }
