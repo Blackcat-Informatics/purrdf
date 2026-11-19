@@ -61,8 +61,12 @@ view becomes a set of typed lines:
 
 A blank node's source identifier is its scope ordinal, four bytes big-endian,
 followed by its label bytes, so two blank nodes are one node exactly when their
-label and scope are equal; a dataset that holds a nested triple term uses the
-form below instead. A term is an IRI, a literal (lexical form, datatype,
+label and scope are equal. The form is decided per input, the statements the
+scope selects together with the caller's records: when that input holds a
+nested triple term, every blank node of it uses the form below instead, a
+nested term only in a graph the scope leaves out does not change the form,
+and a nested term only in a record changes it even when the dataset holds
+none. A term is an IRI, a literal (lexical form, datatype,
 optional language, optional direction), a blank node or a triple term. The
 default graph is the absent graph option.
 
@@ -103,7 +107,19 @@ An input with no triple term, or whose triple terms all have depth one, lowers
 to the same lines as before and keeps its labels and digests. An input with a
 nested term gets new labels and a new digest. The lowering reads triple terms by
 the identifiers of their components and never expands a term that holds
-another, so a chain of `n` nested statements costs linear work and memory.
+another. The lowered set of a chain of `n` nested statements is linear: one
+record of bounded size for each nested term. The bytes of leaf components are
+copied and hashed once for each distinct nested term they stand in, so a long
+leaf shared by every term of a chain is processed once per term. The labelling
+of the lowered chain is not yet linear: its walk, allocations and retained
+bytes grow linearly, but the bytes it requests from the allocator and the
+instructions it executes grow quadratically (the design document records the
+measurements at 1,000, 10,000 and 100,000 terms).
+
+RDF 1.2 nests a triple term only in the object of another. A dataset refuses any
+other nesting when it is frozen, and the lowering refuses a triple term as the
+subject or the predicate of a triple term in any view or record with the
+`input` refusal (a slot holding a variant it does not admit).
 
 A canonical form that holds a nested triple term renumbers its blank labels:
 each term node takes a position among the blank nodes, so the labels of the

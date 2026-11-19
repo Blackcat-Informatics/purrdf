@@ -41,7 +41,9 @@
 //!   components, every component that is a triple term standing as its own term
 //!   node ([`super::nested`]). A triple term in a slot of a line or directly in
 //!   a record's terms keeps its place with its components lowered, so every
-//!   triple term of the lines has depth one.
+//!   triple term of the lines has depth one. As in RDF 1.2, only the object of
+//!   a triple term may be a triple term; a nested subject or predicate is
+//!   refused as an input whose slot holds a variant it does not admit.
 //!
 //! A blank node's source identifier is its scope ordinal, four bytes
 //! big-endian, followed by its label bytes, so two blank nodes are one node
@@ -96,7 +98,7 @@ use super::nested::{
     NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source, leaf_source,
     nested_term_digest, parse_text_blank_source, term_node_source, text_blank_source,
 };
-use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
+use super::{GraphTerm, InputReason, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::cdt_blank::cdt_blank_segments;
 use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
@@ -213,11 +215,19 @@ impl fmt::Display for LoweringRefusal {
                 weight,
                 total,
                 capacity,
-            } => write!(
-                f,
-                "the weight {weight} of the input with the total {total} of the read exceeds \
-                 the capacity of {capacity} bytes"
-            ),
+            } => match total.checked_add(*weight) {
+                Some(sum) if sum <= *capacity => write!(
+                    f,
+                    "the read is spent: an earlier input of it was refused by weight, so this \
+                     input of weight {weight} is refused although the total {total} of the read \
+                     leaves room for it in the capacity of {capacity} bytes"
+                ),
+                _ => write!(
+                    f,
+                    "the weight {weight} of the input with the total {total} of the read exceeds \
+                     the capacity of {capacity} bytes"
+                ),
+            },
             Self::TermNode { .. } => {
                 f.write_str("two different nested terms have one term-node digest")
             }
@@ -480,6 +490,19 @@ fn admit_node<E>(
     admit(meter, interned_bytes(source.len()))
 }
 
+/// RDF 1.2 nests a triple term only in the object of another: a triple term
+/// that is the subject or the predicate of a triple term is refused as a slot
+/// holding a variant it does not admit, before anything of it is lowered.
+fn object_only<E>(subject_and_predicate_nested: [bool; 2]) -> Result<(), ViewError<E>> {
+    if subject_and_predicate_nested.contains(&true) {
+        Err(ViewError::Refused(Refusal::Input {
+            reason: InputReason::Slot,
+        }))
+    } else {
+        Ok(())
+    }
+}
+
 impl<D: DatasetView> Lowering<'_, '_, '_, D> {
     fn poll(&self) -> Result<(), ViewError<D::ReadError>> {
         if is_stopped(self.stop) {
@@ -603,12 +626,11 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         let mut steps = vec![Step::Enter(root)];
         let mut done: Vec<Part> = Vec::new();
         while let Some(step) = steps.pop() {
+            self.poll()?;
             match step {
                 Step::Enter(TermValue::Triple { s, p, o }) => {
-                    let inner = [&**s, &**p, &**o]
-                        .iter()
-                        .filter(|c| matches!(c, TermValue::Triple { .. }))
-                        .count() as u64;
+                    object_only([&**s, &**p].map(|c| matches!(c, TermValue::Triple { .. })))?;
+                    let inner = u64::from(matches!(&**o, TermValue::Triple { .. }));
                     self.candidates = self.candidates.saturating_add(inner);
                     steps.extend([Step::Exit, Step::Enter(o), Step::Enter(p), Step::Enter(s)]);
                 }
@@ -648,10 +670,8 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
             return Ok(variant_of(value));
         };
         let components = [&**s, &**p, &**o];
-        let inner = components
-            .iter()
-            .filter(|c| matches!(c, TermValue::Triple { .. }))
-            .count() as u64;
+        object_only([&**s, &**p].map(|c| matches!(c, TermValue::Triple { .. })))?;
+        let inner = u64::from(matches!(&**o, TermValue::Triple { .. }));
         self.candidates = self.candidates.saturating_add(inner);
         out.push(Tok::Tag(TAG_TRIPLE));
         for component in components {
@@ -717,6 +737,7 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         for (slot, component) in nested.iter_mut().zip(components) {
             *slot = self.triple_of(component)?.is_some();
         }
+        object_only([nested[0], nested[1]])?;
         Ok(nested)
     }
 
@@ -740,6 +761,7 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
     fn nested_id(&mut self, root: D::Id) -> Result<Part, ViewError<D::ReadError>> {
         let mut pending = vec![(root, false)];
         while let Some((id, ready)) = pending.pop() {
+            self.poll()?;
             if self.nested_ids.contains_key(&id) {
                 continue;
             }
@@ -1057,6 +1079,12 @@ pub(super) fn lowered<D: DatasetView>(
         candidates,
         ..
     } = lowering;
+    // A stop observed at the end of the walk is the outcome, not a capacity
+    // refusal of the input it interrupted. Without a capacity nothing is judged
+    // here, and the engine polls next.
+    if capacity.is_some() && is_stopped(stop) {
+        return Err(ViewError::Stopped);
+    }
     let set = &admitter.interner.set;
     let size = (set.lines.len() as u64).saturating_add(candidates);
     if let Some(capacity) = capacity.as_deref_mut() {
@@ -1075,6 +1103,9 @@ pub(super) fn lowered<D: DatasetView>(
         // Every blank node of the view takes the text form of its source
         // identifier, which the term nodes' digests and source order read.
         for node in 0..interner.set.nodes.len() {
+            if is_stopped(stop) {
+                return Err(ViewError::Stopped);
+            }
             let source = &interner.set.nodes[node];
             if source.is_empty() || is_composite_source(source) {
                 continue;
@@ -1085,6 +1116,9 @@ pub(super) fn lowered<D: DatasetView>(
             let text = text_blank_source(u32::from_be_bytes(*ordinal), label);
             admit(&mut meter, text.len().saturating_sub(source.len()))?;
             interner.set.nodes[node] = text.into_boxed_slice();
+        }
+        if is_stopped(stop) {
+            return Err(ViewError::Stopped);
         }
         admit(&mut meter, nested.digest_bytes())?;
         let digests = nested
@@ -1099,6 +1133,9 @@ pub(super) fn lowered<D: DatasetView>(
             interner.set.nodes[term_nodes[n]] = Box::new(source);
         }
         for (n, &node) in term_nodes.iter().enumerate() {
+            if is_stopped(stop) {
+                return Err(ViewError::Stopped);
+            }
             let mut tokens = Vec::with_capacity(7);
             admitter
                 .interner

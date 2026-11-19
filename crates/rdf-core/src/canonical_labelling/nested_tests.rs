@@ -22,9 +22,9 @@ use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
 
 use super::view::{Run, lowered};
 use super::{
-    Direction, Labelled, Labelling, LabellingCapacity, Limit, Line, LineSet, LoweringRefusal,
-    Record, Scope, Term, ViewError, label, label_view, label_view_with_capacity, label_with_walk,
-    optimised, write_line_with,
+    Direction, InputReason, Labelled, Labelling, LabellingCapacity, Limit, Line, LineSet,
+    LoweringRefusal, Record, Refusal, Scope, Term, ViewError, label, label_view,
+    label_view_with_capacity, label_with_walk, optimised, write_line_with,
 };
 use crate::{
     BlankScope, DatasetView, GraphMatch, QuadIds, RdfDataset, RdfDatasetBuilder, RdfLiteral,
@@ -497,11 +497,124 @@ fn the_size_and_the_weight_of_a_read_are_refused_past_their_capacities() {
         run(&mut read, view),
         Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
     ));
+    let spent = run(&mut read, small.as_ref());
     assert!(matches!(
-        run(&mut read, small.as_ref()),
+        spent,
         Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
     ));
+    // The small input fits what the read has left; it is refused because the
+    // read is spent, and the message says so rather than that it is too heavy.
+    let message = spent
+        .err()
+        .map_or_else(String::new, |error| error.to_string());
+    assert!(message.contains("the read is spent"), "{message}");
     assert_eq!(read.total(), total);
+}
+
+/// A signal that is clear for its first `polls` polls and set afterwards.
+#[derive(Debug)]
+struct After(std::sync::atomic::AtomicU64);
+
+impl crate::StopSignal for After {
+    fn stopped(&self) -> bool {
+        use std::sync::atomic::Ordering;
+        let left = self.0.load(Ordering::Relaxed);
+        if left == 0 {
+            return true;
+        }
+        self.0.store(left - 1, Ordering::Relaxed);
+        false
+    }
+}
+
+/// A record value holding a chain of `depth` nested triple terms in object
+/// position.
+fn deep_value(depth: usize) -> TermValue {
+    let mut term = TermValue::iri(iri("o"));
+    for _ in 0..depth {
+        term = TermValue::Triple {
+            s: crate::TermBox::new(TermValue::iri(iri("s"))),
+            p: crate::TermBox::new(TermValue::iri(iri("p"))),
+            o: crate::TermBox::new(term),
+        };
+    }
+    term
+}
+
+/// A stop set while a deep nested term is walked is observed inside the walk
+/// and is the outcome, before the capacity of the read is judged: the input
+/// whose size exceeds the capacity is refused by size only when the signal
+/// stays clear.
+#[test]
+fn a_stop_during_the_nested_walk_is_not_turned_into_a_capacity_refusal() {
+    let view = Data::new().freeze();
+    let terms = [deep_value(1_000)];
+    let records = [Record::new(&[0x80], &terms)];
+    let run = |stop: &dyn crate::StopSignal| {
+        let mut read = LabellingCapacity::new(1, u64::MAX);
+        label_view_with_capacity(
+            view.as_ref(),
+            &records,
+            Scope::Dataset,
+            Limit::ENGINE,
+            Some(stop),
+            &mut read,
+        )
+    };
+    assert_eq!(
+        run(&After(std::sync::atomic::AtomicU64::new(3))).err(),
+        Some(ViewError::Stopped)
+    );
+    assert!(matches!(
+        run(&After(std::sync::atomic::AtomicU64::new(u64::MAX))),
+        Err(ViewError::Lowering(LoweringRefusal::Size { .. }))
+    ));
+}
+
+/// RDF 1.2 nests a triple term only in the object of another. A dataset
+/// refuses a triple term as a triple term's subject when it is frozen, and the
+/// lowering refuses one in a caller's record, so the doubling shape
+/// `t(k + 1) = <<( t(k) p t(k) )>>`, whose spelling doubles with each record,
+/// reaches the labelling through no entry. The neighbouring chain in object
+/// position labels.
+#[test]
+fn a_triple_term_as_the_subject_of_a_triple_term_is_refused_at_every_entry() {
+    let mut data = Data::new();
+    let [a, p] = data.iris(["a", "p"]);
+    let mut term = data.triple(a, p, a);
+    for _ in 0..4 {
+        term = data.triple(term, p, term);
+    }
+    data.quad(a, p, term);
+    assert!(data.0.freeze().is_err(), "the dataset refuses the shape");
+
+    let view = Data::new().freeze();
+    let mut doubling = TermValue::iri(iri("a"));
+    for _ in 0..4 {
+        doubling = TermValue::Triple {
+            s: crate::TermBox::new(doubling.clone()),
+            p: crate::TermBox::new(TermValue::iri(iri("p"))),
+            o: crate::TermBox::new(doubling),
+        };
+    }
+    let terms = [doubling];
+    let records = [Record::new(&[0x80], &terms)];
+    assert_eq!(
+        label_view(view.as_ref(), &records, Scope::Dataset, Limit::ENGINE, None).err(),
+        Some(ViewError::Refused(Refusal::Input {
+            reason: InputReason::Slot
+        }))
+    );
+
+    let terms = [deep_value(4)];
+    let records = [Record::new(&[0x80], &terms)];
+    let chain = label_view(view.as_ref(), &records, Scope::Dataset, Limit::ENGINE, None)
+        .expect("a chain in object position labels");
+    assert_eq!(
+        chain.size(),
+        4,
+        "the record and its three nested candidates"
+    );
 }
 
 /// Every digest is the same, so any two different nested terms collide.

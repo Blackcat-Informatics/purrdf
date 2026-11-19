@@ -305,8 +305,14 @@ GTS format, section "Nested terms, lowering and term nodes":
   components lowered.
 * The lowering reads triple terms by the identifiers of their components and
   interns each nested term once, components first, over a heap work list: no
-  triple term holding another is ever expanded, and the work and memory are linear
-  in the distinct terms. A record's own term values are walked in the same way.
+  triple term holding another is ever expanded. What is linear in the distinct
+  terms is the representation: the tokens and records the lowered set retains, one
+  record of bounded size for each nested term. The bytes of the leaves are not
+  bounded that way: the source `K` of each leaf component is copied and hashed once
+  for each distinct nested term it stands in, so a chain whose terms share one long
+  interned predicate processes that predicate's bytes once per term, and the leaf
+  bytes processed per occurrence enter the work bound. A record's own term values
+  are walked in the same way, every occurrence of them.
 * The source identifier of a term node is `E([d(x)])` with
   `d(x) = H(gts2 nested term, E([K(s), K(p), K(o)]))`, BLAKE3 in key-derivation
   mode. `K` of a blank node is `E([0, h(b)])`, `h(b)` the digest under the same
@@ -344,10 +350,14 @@ GTS format, section "Nested terms, lowering and term nodes":
   dataset path's positions holds the canonical bytes of its own set, and the order
   of delivery a reader reports for it comes from that reader's own run, not from
   the positions it was written from.
-* A nested term of PurRDF's model may stand as the subject or the predicate of a
-  triple term, which RDF 1.2 and the format's position rules exclude. The lowering
-  treats every component that is a triple term as nested, so such input is lowered
-  in linear size too; for every input the format can hold this is its rule.
+* RDF 1.2 nests a triple term only in the object of another, and a dataset refuses
+  any other nesting when it is frozen. The lowering applies the same rule to every
+  view and every record: a triple term that is the subject or the predicate of a
+  triple term is refused (`input`, a slot holding a variant it does not admit)
+  before anything of it is lowered. Each triple term then holds at most one nested
+  component, so the spelling of a line is one chain, never longer than the
+  input's own written form; a shape whose spelling doubles with each record, such
+  as `t(k + 1) = <<( t(k) p t(k) )>>`, reaches the labelling through no entry.
 * SIZE AND WEIGHT. The size of an input is its lines before the nested-term records
   plus its nested candidates: for each distinct triple term reached (and each triple
   term of a record's values, per occurrence), its components that are triple terms.
@@ -367,11 +377,35 @@ GTS format, section "Nested terms, lowering and term nodes":
   identifiers, positions, identities and digests. An input with a nested term is
   labelled as its lowered set, whose canonical line sequence, digest and positions
   differ from those of the unlowered lines.
-* A document with a nested term has one more line to write for each nested term
-  than the lines it spells: the document loops poll once per line of the sequence
-  in each of their two passes, so the poll total of a document run grows by two
-  for each nested term, and the scratch and owned bytes follow the larger lowered
-  set.
+* POLLS. The lowering polls the caller's stop signal at each step of the nested
+  walks, and at each blank node, before the digests and at each nested-term record
+  of the passes after the walk, so a stop set during a deep nested term is observed
+  there. When a capacity is given, the signal is read before the size and the
+  weight are judged, so an observed stop is the outcome and not a capacity refusal
+  of the input it interrupted. An input with no nested term polls exactly as
+  before. A document with a nested term also has one more line for each nested
+  term than the lines it spells, and the document loops poll once per line of the
+  sequence in each of their two passes.
+* COST OF A CHAIN. The lowered set of a chain is linear; the labelling of it is not
+  yet. For a chain of `n` statements, `t(1) = <<( a a a )>>` and
+  `t(k + 1) = <<( a a t(k) )>>`, each with the quad `a a t(k)`, measured with
+  `purrdf_alloc_probe` (current-thread window) and `perf stat -e instructions:u`
+  on one AMD Ryzen AI MAX+ 395 host, rustc 1.102.0-nightly (5df8c02af
+  2026-11-16), the test profile (`opt-level = 3` with debug assertions and
+  overflow checks), each size alone under a 16 GiB memory scope:
+
+  | `n` | lowered lines | lowering: requested bytes / allocations / retained bytes | `label_view`: requested bytes / allocations / retained bytes / peak working bytes | walk units | instructions (whole process) |
+  |---|---|---|---|---|---|
+  | 1,000 | 1,999 | 2,003,229 / 23,268 / 324,117 | 22,689,938 / 111,404 / 1,513,433 / 3,369,981 | 76,916 | 2.05e8 |
+  | 10,000 | 19,999 | 19,979,565 / 231,798 / 3,536,397 | 1,306,523,706 / 1,111,994 / 15,426,713 / 34,021,253 | 769,916 | 1.16e10 |
+  | 100,000 | 199,999 | 182,359,453 / 2,316,825 / 33,791,421 | 121,106,177,690 / 11,117,073 / 152,691,737 / 351,609,557 | 7,699,916 | 1.08e12 |
+
+  The lowering, the lowered lines, the walk units, the allocations and the retained
+  and peak bytes of `label_view` grow tenfold with `n`. The bytes `label_view`
+  requests from the allocator and the instructions it executes grow about a
+  hundredfold: they are quadratic in `n`. That cost lies in the labelling of the
+  lowered set, not in the lowering, and is not yet removed. The instruction counts
+  include building the chain.
 * The canonical document spells a term node as the triple term it stands for, read
   from the components of its record, and writes no nested-term record. Term nodes
   take positions, so the labels of a view's blank nodes in a document need not be
