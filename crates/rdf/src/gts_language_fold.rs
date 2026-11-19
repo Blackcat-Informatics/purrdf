@@ -9,39 +9,70 @@
 //! each affected literal as `language-tag-case-folded` in the envelope's loss
 //! ledger.
 
-use purrdf_core::{LossEntry, RdfLocation};
-use purrdf_iri::langtag::{identity_fold, is_identity_folded};
+use std::fmt;
 
-/// The loss entry for a language-tagged literal whose written tag is not
-/// already lower case, or `None` when the dataset holds the term as written.
+use purrdf_core::{LossEntry, LossLedger, RdfLocation};
+use purrdf_iri::langtag::is_identity_folded;
+use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+/// A tag as the dataset holds it, written without building the folded copy.
+struct Folded<'a>(&'a str);
+
+impl fmt::Debug for Folded<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("\"")?;
+        for c in self.0.chars() {
+            write!(f, "{}", c.to_ascii_lowercase().escape_debug())?;
+        }
+        f.write_str("\"")
+    }
+}
+
+/// Record the loss for a language-tagged literal whose written tag is not
+/// already lower case into `losses`, admitting the entry's note, location and
+/// slot through `memory`. A tag the dataset holds as written allocates nothing
+/// and records nothing.
 ///
 /// The note names the literal, the written tag and the tag the dataset holds,
 /// so the term the fold merges with its case variant is identified.
-pub(crate) fn language_fold_loss(
+///
+/// # Errors
+/// The storage refusal of `memory`; the ledger is unchanged.
+pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
+    losses: &mut LossLedger,
     lexical: &str,
     tag: &str,
     location: RdfLocation,
-) -> Option<LossEntry> {
+    memory: &mut Memory<'_, S>,
+) -> Result<(), StorageError> {
     if is_identity_folded(tag) {
-        return None;
+        return Ok(());
     }
-    Some(LossEntry {
-        code: "language-tag-case-folded".into(),
-        from: "gts".into(),
-        to: "rdf-1.2-dataset".into(),
-        note: format!(
-            "the literal {lexical:?} with written language tag {tag:?} is held as {:?}; \
-             a term of this file that differs only in tag case is the same dataset term",
-            identity_fold(tag)
-        )
-        .into(),
-        location: Some(Box::new(location)),
-    })
+    let note = memory.format(&format_args!(
+        "the literal {lexical:?} with written language tag {tag:?} is held as {:?}; \
+         a term of this file that differs only in tag case is the same dataset term",
+        Folded(tag)
+    ))?;
+    let location = memory.boxed(location)?;
+    losses.record_with_memory(
+        LossEntry {
+            code: "language-tag-case-folded".into(),
+            from: "gts".into(),
+            to: "rdf-1.2-dataset".into(),
+            note: note.into(),
+            location: Some(location),
+        },
+        memory,
+    )
 }
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::{LossLedger, RdfLocation};
     use purrdf_gts::model::{Graph, Term};
+    use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
+
+    use super::record_language_fold_loss;
 
     fn graph_with(tags: &[&str]) -> Graph {
         let mut graph = Graph::default();
@@ -80,5 +111,37 @@ mod tests {
         let graph = crate::import_gts_graph(crate::gts::read_graph(&variant, true).expect("read"))
             .expect("graph import");
         assert_eq!(graph.envelope.losses.entries().len(), 1);
+    }
+
+    /// The entry's note, location and slot are admitted through the caller's
+    /// memory: a budget too small for them is the typed storage refusal and the
+    /// ledger stays empty; a sufficient budget records the entry; a tag the
+    /// dataset holds as written needs no budget at all.
+    #[test]
+    fn the_loss_entry_is_admitted_through_the_callers_memory() {
+        let record = |tag: &str, budget: usize| {
+            let mut losses = LossLedger::new();
+            let mut ceiling = Ceiling(budget);
+            let result = record_language_fold_loss(
+                &mut losses,
+                "x",
+                tag,
+                RdfLocation::logical("gts:sink"),
+                &mut Memory::new(&mut ceiling),
+            );
+            (result, losses.entries().len())
+        };
+        let (refused, held) = record("EN-us", 8);
+        assert!(
+            matches!(refused, Err(StorageError::AdmissionFailed)),
+            "{refused:?}"
+        );
+        assert_eq!(held, 0);
+        let (admitted, held) = record("EN-us", 64 * 1024);
+        assert!(admitted.is_ok());
+        assert_eq!(held, 1);
+        let (folded, held) = record("en-us", 0);
+        assert!(folded.is_ok());
+        assert_eq!(held, 0);
     }
 }

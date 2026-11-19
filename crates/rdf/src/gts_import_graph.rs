@@ -129,7 +129,7 @@ impl GraphInterner {
                         let resolved = match self.terms[id].kind {
                             TermKind::Iri => self.intern_iri(id)?,
                             TermKind::Bnode => self.intern_blank(id)?,
-                            TermKind::Literal => self.intern_literal(id)?,
+                            TermKind::Literal => self.intern_literal(id, memory)?,
                             TermKind::Triple => self.intern_triple(id)?,
                         };
                         self.remap.insert(id, Some(resolved));
@@ -167,7 +167,11 @@ impl GraphInterner {
         Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
     }
 
-    fn intern_literal(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
+    fn intern_literal(
+        &mut self,
+        gts_id: usize,
+        memory: &mut Memory<'_, Resident>,
+    ) -> Result<TermId, RdfDiagnostic> {
         // The datatype is a term id; resolve (and intern) it first, then read its
         // interned IRI string. This applies the SAME datatype-must-be-IRI rule the
         // shared resolver enforces.
@@ -178,14 +182,15 @@ impl GraphInterner {
         // MOVE the lexical form and language tag out.
         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
         let language = std::mem::take(&mut self.terms[gts_id].lang);
-        if let Some(tag) = language.as_deref()
-            && let Some(entry) = crate::gts_language_fold::language_fold_loss(
+        if let Some(tag) = language.as_deref() {
+            let location = self.location(gts_id);
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.losses,
                 &lexical_form,
                 tag,
-                self.location(gts_id),
-            )
-        {
-            self.losses.record(entry);
+                location,
+                memory,
+            )?;
         }
         let direction = crate::gts_resolve::parse_gts_direction(
             self.terms[gts_id].direction.as_deref(),

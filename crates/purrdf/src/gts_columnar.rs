@@ -118,8 +118,8 @@ pub fn prepare_gts_columnar(
     bytes: &[u8],
     limits: GtsBlobLimits,
 ) -> Result<GtsColumnarSource, GtsColumnarError> {
-    let export = purrdf_rdf::import_gts_inline_for_export(bytes, limits)?;
-    let read_losses = export.read_losses().clone();
+    let mut export = purrdf_rdf::import_gts_inline_for_export(bytes, limits)?;
+    let read_losses = export.take_read_losses();
     let (dataset, imported, omissions, usage) = export.into_parts();
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
@@ -154,8 +154,8 @@ pub fn prepare_gts_columnar_to(
     limits: GtsBlobLimits,
     sink: &mut dyn purrdf_rdf::GtsBlobStager,
 ) -> Result<GtsStagedColumnarSource, GtsColumnarError> {
-    let export = purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?;
-    let read_losses = export.read_losses().clone();
+    let mut export = purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?;
+    let read_losses = export.take_read_losses();
     let (dataset, mut blobs, omissions, usage) = export.into_parts();
     blobs.sort_unstable_by_key(|blob| blob.bytes.sha256);
     Ok(GtsStagedColumnarSource {

@@ -122,6 +122,12 @@ pub struct GtsInlineExport<Payload = Arc<[u8]>> {
 }
 
 impl<Payload> GtsInlineExport<Payload> {
+    /// Move the losses of reading the file into the dataset out of the export,
+    /// leaving it with none; call before [`Self::into_parts`].
+    pub fn take_read_losses(&mut self) -> purrdf_core::LossLedger {
+        std::mem::take(&mut self.losses)
+    }
+
     /// The losses of reading the file into the dataset, read before
     /// [`Self::into_parts`] consumes the export.
     #[must_use]

@@ -96,27 +96,28 @@ impl SinkImporter<'_> {
             },
             None => None,
         };
-        if let Some(tag) = lang
-            && let Some(entry) = crate::gts_language_fold::language_fold_loss(
+        let direction = crate::gts_resolve::parse_gts_direction(direction, lang)?;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let bytes = self.builder.native_buffer_bytes()?;
+        let mut memory = purrdf_lex::allocation::Memory::resume(&mut resident, bytes);
+        if let Some(tag) = lang {
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.losses,
                 lexical,
                 tag,
                 RdfLocation::logical("gts:sink")
                     .with_gts_segment(segment_index)
                     .with_gts_term(gts_id as u64),
-            )
-        {
-            self.losses.record(entry);
+                &mut memory,
+            )?;
         }
-        let direction = crate::gts_resolve::parse_gts_direction(direction, lang)?;
-        let mut resident = purrdf_lex::allocation::Resident;
-        let bytes = self.builder.native_buffer_bytes()?;
         Ok(self.builder.intern_literal_parts_bound_with_memory(
             lexical,
             datatype.as_deref(),
             lang,
             direction,
             BlankBinding::Ambient(segment_scope(segment_index)?),
-            &mut purrdf_lex::allocation::Memory::resume(&mut resident, bytes),
+            &mut memory,
         )?)
     }
 

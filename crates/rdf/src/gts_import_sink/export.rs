@@ -90,16 +90,16 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         direction: Option<&str>,
     ) -> Result<TermKey, RdfDiagnostic> {
         // Once per term, as the importer's resolver callback is.
-        if let Some(tag) = language
-            && let Some(entry) = crate::gts_language_fold::language_fold_loss(
+        if let Some(tag) = language {
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.metadata.losses,
                 lexical,
                 tag,
                 crate::RdfLocation::logical("gts:sink")
                     .with_gts_segment(key.segment)
                     .with_gts_term(key.term as u64),
-            )
-        {
-            self.metadata.losses.record(entry);
+                self.memory,
+            )?;
         }
         let datatype = datatype.map(|key| self.term(key)).transpose()?;
         if datatype
