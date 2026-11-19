@@ -13,7 +13,7 @@ use super::tests::{
     complete_bipartite_one_direction, cube_both_directions, cycle_with_records, failure_record,
     hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
 };
-use super::walk::Walk;
+use super::walk::{Kind, Walk};
 use super::{FailureRecord, Labelled, Limit, Line, Refusal, Term, admit};
 use super::{optimised, reference};
 use purrdf_hash::hex;
@@ -587,6 +587,48 @@ fn the_public_entry_returns_the_totals_of_the_walk() {
             other.map(|(_, l, _)| l.digest)
         ),
     }
+}
+
+/// The limit test at the saturation boundary (7.11, 8.3 step 6): `R` passes
+/// `max(L, A)` exactly one unit above it; a charge that saturates `R` trips
+/// the walk with `units = 2^64 - 1` and `R` stays there; a saturated allowance
+/// disables the trip whatever is charged; and a limit of `2^64 - 1` is never
+/// passed, even by a saturated `R`. Each refusal sits beside the neighbouring
+/// charge that must still pass.
+#[test]
+fn the_walk_trips_exactly_above_its_bound_and_saturates() {
+    let mut walk = Walk::new(5, 0, 0);
+    assert!(walk.charge(Kind::Twin, 5).is_ok(), "R = bound passes");
+    assert!(walk.charge(Kind::Twin, 1).is_err(), "R = bound + 1 trips");
+
+    let mut walk = Walk::new(0, 10, 0);
+    assert!(walk.charge(Kind::Twin, 10).is_ok());
+    assert!(walk.charge(Kind::Twin, u64::MAX).is_err());
+    assert!(
+        walk.charge(Kind::Twin, u64::MAX).is_err(),
+        "R stays saturated"
+    );
+    assert_eq!(walk.total(), u64::MAX);
+    assert_eq!(walk.totals().twin, u64::MAX);
+    match walk.refusal(Vec::new()) {
+        Refusal::Limit { units, .. } => assert_eq!(units, u64::MAX),
+        other => panic!("expected a limit refusal, got {other:?}"),
+    }
+
+    let mut walk = Walk::new(0, u64::MAX, 0);
+    assert!(
+        walk.charge(Kind::Twin, u64::MAX).is_ok(),
+        "A saturated: no trip"
+    );
+    assert!(walk.charge(Kind::Refine, 1).is_ok());
+    assert_eq!(walk.total(), u64::MAX);
+
+    let mut walk = Walk::new(u64::MAX, 10, 0);
+    assert!(
+        walk.charge(Kind::Twin, u64::MAX).is_ok(),
+        "L saturated: never passed"
+    );
+    assert!(walk.charge(Kind::Twin, 1).is_ok());
 }
 
 /// The walk ends inside a component the search-free run labels: `QR13`, then a
