@@ -97,7 +97,7 @@ impl SinkImporter<'_> {
             None => None,
         };
         if let Some(tag) = lang
-            && let Some(entry) = crate::gts_content::language_fold_loss(
+            && let Some(entry) = crate::gts_language_fold::language_fold_loss(
                 lexical,
                 tag,
                 RdfLocation::logical("gts:sink")

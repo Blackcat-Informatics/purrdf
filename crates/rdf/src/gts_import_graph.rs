@@ -179,8 +179,11 @@ impl GraphInterner {
         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
         let language = std::mem::take(&mut self.terms[gts_id].lang);
         if let Some(tag) = language.as_deref()
-            && let Some(entry) =
-                crate::gts_content::language_fold_loss(&lexical_form, tag, self.location(gts_id))
+            && let Some(entry) = crate::gts_language_fold::language_fold_loss(
+                &lexical_form,
+                tag,
+                self.location(gts_id),
+            )
         {
             self.losses.record(entry);
         }

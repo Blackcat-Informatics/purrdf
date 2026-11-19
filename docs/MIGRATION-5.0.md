@@ -59,27 +59,20 @@ label and scope are equal. A term is an IRI, a literal (lexical form, datatype,
 optional language, optional direction), a blank node or a triple term. The
 default graph is the absent graph option.
 
-### Language tags: the dataset digest and the GTS content digest
+### Language tags
 
 RDF 1.2 compares language tags without regard to case, so a dataset holds each
 tag folded to ASCII lower case and the labelling lowers the tag as the dataset
-holds it. A GTS file compares a language text whole and bytewise: a file holding
-`"x"@EN-us` and `"x"@en-us` has two terms and two lines. The two are separate
-identities:
+holds it. A format that compares a language text whole and bytewise, as GTS
+does, keeps `"x"@EN-us` and `"x"@en-us` as two terms. The canonical RDF digest
+of a dataset folds tags; a digest over terms as written does not. The two
+identities are equal exactly when every language tag is already lower case.
 
-- The canonical RDF digest of a dataset is taken over the folded tags.
-- The GTS content digest of a file is taken over the terms as the file holds
-  them. `purrdf::gts_content_digest` and `purrdf::gts_content_labelling` compute
-  it over a graph read from the file, through `GtsWrittenView`, a dataset view
-  that resolves each tag as written and lowers quads, reifier rows, annotation
-  rows and declared empty graphs by the rule above.
-
-They are equal exactly when every language tag of the file is already lower
-case. Reading such a file into a dataset records one `language-tag-case-folded`
-entry per affected literal in the envelope's loss ledger
-(`RdfEnvelope::losses`), naming the literal, the written tag and the tag the
-dataset holds; the `convert` command reports it with the other read losses. A
-dataset written to GTS writes the tag it holds.
+Reading a GTS file that holds a tag that is not lower case into a dataset
+records one `language-tag-case-folded` entry per affected literal in the
+envelope's loss ledger (`RdfEnvelope::losses`), naming the literal, the written
+tag and the tag the dataset holds; the `convert` command reports it with the
+other read losses. A dataset written to GTS writes the tag it holds.
 
 ### Composite literals
 
