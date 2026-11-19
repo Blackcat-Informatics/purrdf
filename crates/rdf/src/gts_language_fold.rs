@@ -65,8 +65,9 @@ pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
          a term of this file that differs only in tag case is the same dataset term",
         Folded(tag)
     ))?;
+    let logical = memory.string(site.logical)?;
     let location = memory.boxed(RdfLocation {
-        logical: Some(memory.string(site.logical)?),
+        logical: Some(logical),
         gts_segment_index: site.segment,
         gts_term_id: Some(site.term),
         ..RdfLocation::default()
