@@ -389,13 +389,14 @@ GTS format, section "Nested terms, lowering and term nodes":
 * POLLS. The lowering polls the caller's stop signal at each step of the nested
   walks. After the walk, an input with a nested term polls at each blank node of
   the text-form pass, once before the digests, once for each nested term in the
-  digest pass and once for each nested term in the term-node source pass, so a
-  stop set during a deep nested term is observed there. When a capacity is given,
+  digest pass, once for each nested term in the term-node source pass and once for
+  each nested term as its record is built, so a stop set during a deep nested term
+  is observed there. When a capacity is given,
   the signal is read once before the size is judged and, for an input whose size
   is admitted, once more before its weight is admitted, so an observed stop is
   the outcome and not a capacity refusal of the input it interrupted. Without a
-  capacity, an input with no nested term polls exactly as before, and an input
-  with a nested term polls the nested-term passes above. A document with a
+  capacity, an input with no nested term polls none of the nested-term passes
+  above, and an input with a nested term polls each of them. A document with a
   nested term also has one more line for each nested term than the lines it
   spells, and the document loops poll once per line of the sequence in each of
   their two passes.
