@@ -7,8 +7,7 @@ This is PurRDF's complete Rust engineering guide. Read it with
 [AGENTS.md](../../AGENTS.md), whose repository constraints take precedence.
 [Cargo.toml](../../Cargo.toml), [layers.toml](../../layers.toml),
 [helpers-ledger.toml](../../helpers-ledger.toml) and the actual gate definitions
-specify the enforced dependency, implementation and build contracts. The older
-[guide location](../RUST_GUIDELINES.md) redirects here.
+specify the enforced dependency, implementation and build contracts.
 
 ## Architecture and shared implementations
 
