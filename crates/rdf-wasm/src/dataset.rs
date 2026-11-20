@@ -893,7 +893,13 @@ impl Dataset {
                 ReceiptBindError::Refused(_) => crate::operation::RECEIPT_CODE,
                 // The view's own refusal is not a bad option: it is reported exactly
                 // as `contentIdentity()` reports one.
-                ReceiptBindError::Identity(cause) => return diag_to_err(&cause.into()),
+                ReceiptBindError::Identity(cause) => {
+                    return diag_to_err(&purrdf_validate::native_error::diagnostic(
+                        "content-identity-refused",
+                        cause,
+                        Some(cause),
+                    ));
+                }
                 _ => crate::operation::OPTIONS_CODE,
             };
             crate::operation::coded_error(&error.to_string(), code)
