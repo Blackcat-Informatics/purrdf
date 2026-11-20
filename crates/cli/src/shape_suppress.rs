@@ -92,6 +92,7 @@ fn exact_sum(cells: &[Count]) -> u64 {
 }
 
 /// One equation: the variable `total` is the sum of the variables `cells`.
+#[derive(Clone)]
 pub(crate) struct Sum {
     pub(crate) total: usize,
     pub(crate) cells: Vec<usize>,
@@ -153,8 +154,18 @@ const fn pinned(count: Count, bound: (u64, u64)) -> bool {
 /// Each variable is its printed form and its true value; a variable in `fixed` keeps the form
 /// it was given and is never recomputed. Totals start as exact when every
 /// cell of every breakdown is exact and as the lower bound the exact cells give otherwise;
-/// then exact cells are withheld, smallest first, until no hidden variable is pinned.
-pub(crate) fn suppress(vars: &mut [(Count, u64)], sums: &[Sum], fixed: &[usize]) {
+/// then exact cells are withheld, smallest first, until no hidden variable is pinned. Only
+/// the variables in `candidates` may be withheld when it is given.
+///
+/// Returns whether it ended with no hidden variable pinned. A caller that gets `false` must
+/// not print the figures as they stand.
+#[must_use]
+pub(crate) fn suppress(
+    vars: &mut [(Count, u64)],
+    sums: &[Sum],
+    fixed: &[usize],
+    candidates: Option<&[usize]>,
+) -> bool {
     let mut settled: Vec<usize> = fixed.to_vec();
     for sum in sums.iter().rev() {
         if settled.contains(&sum.total) {
@@ -184,7 +195,7 @@ pub(crate) fn suppress(vars: &mut [(Count, u64)], sums: &[Sum], fixed: &[usize])
     for _ in 0..=vars.len() {
         let bounds = derive(vars, sums);
         let Some(violation) = (0..vars.len()).find(|&i| pinned(vars[i].0, bounds[i])) else {
-            return;
+            return true;
         };
         // Prefer a breakdown that bounds everything above, then any breakdown that touches
         // the pinned variable, then any at all.
@@ -196,6 +207,7 @@ pub(crate) fn suppress(vars: &mut [(Count, u64)], sums: &[Sum], fixed: &[usize])
         let pick = |from: &[&Sum]| {
             from.iter()
                 .flat_map(|sum| sum.cells.iter().copied())
+                .filter(|&c| candidates.is_none_or(|only| only.contains(&c)))
                 .filter(|&c| matches!(vars[c].0, Count::Exact(n) if n > 0))
                 .min_by_key(|&c| vars[c].1)
         };
@@ -207,10 +219,12 @@ pub(crate) fn suppress(vars: &mut [(Count, u64)], sums: &[Sum], fixed: &[usize])
             .or_else(|| pick(&loose))
             .or_else(|| pick(&all))
         else {
-            return;
+            return false;
         };
         vars[cell].0 = Count::Withheld;
     }
+    let bounds = derive(vars, sums);
+    !(0..vars.len()).any(|i| pinned(vars[i].0, bounds[i]))
 }
 
 #[cfg(test)]
@@ -239,7 +253,7 @@ mod tests {
                 cells: vec![3, 4],
             },
         ];
-        suppress(&mut vars, &sums, &[]);
+        assert!(suppress(&mut vars, &sums, &[], None));
         let bounds = super::derive(&vars, &sums);
         for (index, var) in vars.iter().enumerate() {
             assert!(!super::pinned(var.0, bounds[index]), "{index}");

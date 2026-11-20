@@ -47,9 +47,11 @@
 //! sees the tag as written can report its case form. A GTS read does, through the envelope's
 //! `language_tag_forms`. The text readers record no such census, which the document states as
 //! the omission `text-reader-records-no-census`, and a pack holds only the lower-cased tag,
-//! which it states as `pack-holds-only-folded-tag`. The case forms are suppressed on their own
-//! against the printed count of tagged literals, so no other figure depends on them, and
-//! equality across syntaxes holds for every figure except `case_forms`.
+//! which it states as `pack-holds-only-folded-tag`. The case forms are chosen after every other
+//! figure, each held at its printed form, with the equation that the forms sum to the tagged
+//! literals added; only a form cell may be withheld, so no other figure depends on them. When a
+//! hidden count would still be pinned, they are omitted as `small-counts-would-be-exposed`.
+//! Equality across syntaxes holds for every figure except `case_forms`.
 //!
 //! # Memory
 //!
@@ -186,7 +188,7 @@ pub(crate) fn run(
             _ => read_failure(),
         })?
     }?;
-    let document = measured.render();
+    let document = measured.render()?;
     canonical.before_output()?;
     use std::io::Write as _;
     let mut out = std::io::stdout().lock();
@@ -200,6 +202,9 @@ const TEXT_OMISSION: &str = "text-reader-records-no-census";
 
 /// The reason a pack reports no case forms: it holds only the lower-cased tag.
 const PACK_OMISSION: &str = "pack-holds-only-folded-tag";
+
+/// The reason the case forms are not printed when printing them would expose a small count.
+const SUPPRESSION_OMISSION: &str = "small-counts-would-be-exposed";
 
 /// The written case forms of the language tags, or why a reader has none.
 #[derive(Clone, Copy)]
@@ -688,7 +693,7 @@ fn label<D: DatasetView<ReadError = Infallible>>(
 
 impl Figures {
     /// The one JSON document, newline terminated.
-    fn render(&self) -> String {
+    fn render(&self) -> Result<String, CliError> {
         let length_raw = self.literal_lengths.cells();
         let sibling_cells: Vec<(u64, u64, Count)> = self
             .sibling_largest
@@ -726,7 +731,11 @@ impl Figures {
                 cells: (datatype_at..end).collect(),
             },
         ];
-        suppress(&mut vars, &sums, &[]);
+        if !suppress(&mut vars, &sums, &[], None) {
+            return Err(CliError::Runtime(
+                "shape: a small count could not be suppressed; no figures are printed".to_owned(),
+            ));
+        }
         let length_cells: Vec<(u64, u64, Count)> = length_raw
             .iter()
             .zip(&vars[length_at..])
@@ -741,23 +750,28 @@ impl Figures {
             .collect();
         let other = vars[other_at].0;
         let tagged = vars[tagged_at].0;
-        // The case forms partition the tagged literals, but are suppressed on their own with
-        // the printed tagged-literal count held fixed, so that no other figure depends on them.
+        // The case forms partition the tagged literals. They are chosen against every figure
+        // already printed, each held at its printed form, and only a form cell may be
+        // withheld, so no other figure depends on them. When a hidden count would still be
+        // pinned, the forms are not printed.
         let case_cells: Result<[Count; 3], &str> = match self.forms {
             CaseForms::Omitted(reason) => Err(reason),
             CaseForms::Reported(forms) => {
-                let mut own = vec![
-                    (Count::of(self.tagged_literals), self.tagged_literals),
-                    (Count::of(forms.lower), forms.lower),
-                    (Count::of(forms.upper), forms.upper),
-                    (Count::of(forms.mixed), forms.mixed),
-                ];
-                let sum = [Sum {
-                    total: 0,
-                    cells: vec![1, 2, 3],
-                }];
-                suppress(&mut own, &sum, &[0]);
-                Ok([own[1].0, own[2].0, own[3].0])
+                let mut joint = vars.clone();
+                let form_at = joint.len();
+                joint.extend([forms.lower, forms.upper, forms.mixed].map(|n| (Count::of(n), n)));
+                let mut joint_sums = sums;
+                joint_sums.push(Sum {
+                    total: tagged_at,
+                    cells: (form_at..form_at + 3).collect(),
+                });
+                let printed: Vec<usize> = (0..form_at).collect();
+                let only_forms: Vec<usize> = (form_at..form_at + 3).collect();
+                if suppress(&mut joint, &joint_sums, &printed, Some(&only_forms)) {
+                    Ok([joint[form_at].0, joint[form_at + 1].0, joint[form_at + 2].0])
+                } else {
+                    Err(SUPPRESSION_OMISSION)
+                }
             }
         };
         let parents = Count::total(self.sibling_parents, &sibling_counts);
@@ -855,6 +869,6 @@ impl Figures {
             }
         }
         out.push_str("}\n");
-        out
+        Ok(out)
     }
 }

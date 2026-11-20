@@ -325,7 +325,9 @@ fn assert_same_but_case_forms(document: &str, reference: &str, reader: Reader) {
     assert_eq!(case_forms(reference), TEXT_OMITTED, "{reference}");
     match reader {
         Reader::Gts => assert!(
-            case_forms(document).starts_with("\"case_forms\":{\"status\":\"reported\","),
+            case_forms(document).starts_with("\"case_forms\":{\"status\":\"reported\",")
+                || case_forms(document)
+                    == "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"small-counts-would-be-exposed\"}",
             "{document}"
         ),
         Reader::Text => assert_eq!(case_forms(document), TEXT_OMITTED, "{document}"),
@@ -571,9 +573,15 @@ fn interval(value: &purrdf_lex::json::Value) -> (u64, u64) {
     }
 }
 
+/// A printed count that may be absent from the document.
+fn maybe_interval(value: &purrdf_lex::json::Value) -> Option<(u64, u64)> {
+    (value.as_u64().is_some() || value.as_str().is_some()).then(|| interval(value))
+}
+
 /// What a reader who knows every printed form learns about each cell of the distinct
-/// literals: the cells of the two breakdowns and the total, tightened by the two equations
-/// until nothing changes. Returns each cell's interval beside its printed one.
+/// literals: the cells of the length breakdown, the datatype breakdown and, when the document
+/// reports them, the case forms of the tagged literals, with the totals, tightened by the sum
+/// equations until nothing changes. Returns each cell's interval beside its printed one.
 fn learned(document: &purrdf_lex::json::Value) -> Vec<((u64, u64), (u64, u64))> {
     let mut cells: Vec<(u64, u64)> = document["literal_length_bytes_histogram"]
         .as_array()
@@ -583,22 +591,36 @@ fn learned(document: &purrdf_lex::json::Value) -> Vec<((u64, u64), (u64, u64))> 
         .collect();
     let lengths = cells.len();
     for name in ["integer", "string"] {
-        cells.push(interval(&document["datatypes"]["named_xsd"][name]));
+        cells.extend(maybe_interval(&document["datatypes"]["named_xsd"][name]));
     }
     cells.push(interval(&document["datatypes"]["other"]));
+    let tagged = cells.len();
     cells.push(interval(&document["language_tags"]["tagged_literals"]));
+    let forms = &document["language_tags"]["case_forms"];
+    let form_at = cells.len();
+    if forms["status"].as_str() == Some("reported") {
+        for key in ["lower", "upper", "mixed"] {
+            cells.push(interval(&forms[key]));
+        }
+    }
     let printed = cells.clone();
     let mut total = interval(&document["counts"]["distinct_literals"]);
-    let partitions = [0..lengths, lengths..cells.len()];
-    for _ in 0..16 {
-        for part in &partitions {
+    // Each equation: the total is the sum of the cells in the range; `None` is the literals.
+    let mut equations: Vec<(Option<usize>, std::ops::Range<usize>)> =
+        vec![(None, 0..lengths), (None, lengths..form_at)];
+    if cells.len() > form_at {
+        equations.push((Some(tagged), form_at..cells.len()));
+    }
+    for _ in 0..32 {
+        for (owner, part) in &equations {
             let low: u64 = cells[part.clone()].iter().map(|c| c.0).sum();
             let high = cells[part.clone()]
                 .iter()
                 .fold(0_u64, |acc, c| acc.saturating_add(c.1));
-            total.0 = total.0.max(low);
+            let mut whole = owner.map_or(total, |index| cells[index]);
+            whole.0 = whole.0.max(low);
             if high != u64::MAX {
-                total.1 = total.1.min(high);
+                whole.1 = whole.1.min(high);
             }
             for index in part.clone() {
                 let others_low = low - cells[index].0;
@@ -608,15 +630,34 @@ fn learned(document: &purrdf_lex::json::Value) -> Vec<((u64, u64), (u64, u64))> 
                     .filter(|(i, _)| part.start + i != index)
                     .fold(0_u64, |acc, (_, c)| acc.saturating_add(c.1));
                 if others_high != u64::MAX {
-                    cells[index].0 = cells[index].0.max(total.0.saturating_sub(others_high));
+                    cells[index].0 = cells[index].0.max(whole.0.saturating_sub(others_high));
                 }
-                if total.1 != u64::MAX {
-                    cells[index].1 = cells[index].1.min(total.1.saturating_sub(others_low));
+                if whole.1 != u64::MAX {
+                    cells[index].1 = cells[index].1.min(whole.1.saturating_sub(others_low));
                 }
+            }
+            match owner {
+                None => total = whole,
+                Some(index) => cells[*index] = whole,
             }
         }
     }
     cells.into_iter().zip(printed).collect()
+}
+
+/// Whether every hidden cell of the document is still confined to exactly its printed form:
+/// a `"<5"` cell to one through four and a withheld or lower-bounded cell with no upper
+/// bound. A document that fails this lets a reader recover a small count.
+fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
+    learned(document).into_iter().all(|(learned, printed)| {
+        if printed.0 == printed.1 {
+            true
+        } else if printed.1 == 4 {
+            learned == printed
+        } else {
+            learned.1 == u64::MAX
+        }
+    })
 }
 
 /// Protects: small-count suppression cannot be undone by subtraction, even through two
@@ -781,66 +822,100 @@ fn the_labelling_refusal_is_typed_and_its_neighbour_labels() {
     );
 }
 
-/// Protects: the written case of a language tag is reported where the reader sees it written
-/// (GTS), omitted with a typed reason where the reader folds it first, and a tag count that a
-/// case cell would determine is not printed exactly.
-#[test]
-fn language_tag_case_forms_are_reported_from_gts_and_omitted_elsewhere() {
-    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
-    let tags = [
-        "en", "EN", "En", "en-us", "EN-US", "En-Us", "fr", "FR", "Fr", "de", "it", "es",
-    ];
+/// A GTS file of `integers` xsd:integer literals followed by `tagged` language-tagged
+/// literals, in one segment.
+fn gts_with_literals(integers: &[&str], tagged: &[(&str, &str)]) -> Vec<u8> {
     let mut writer = purrdf_gts::writer::Writer::new("purrdf.gts");
     let mut terms = vec![
         purrdf_gts::model::Term::iri("http://example.org/s"),
         purrdf_gts::model::Term::iri("http://example.org/p"),
+        purrdf_gts::model::Term::iri("http://www.w3.org/2001/XMLSchema#integer"),
     ];
-    let mut quads = Vec::new();
-    for (index, tag) in tags.iter().enumerate() {
-        terms.push(purrdf_gts::model::Term::lang_literal(
-            format!("v{index}"),
-            *tag,
-        ));
-        quads.push((0, 1, 2 + index, None));
+    for lexical in integers {
+        terms.push(purrdf_gts::model::Term::literal(*lexical, Some(2)));
     }
+    for (lexical, tag) in tagged {
+        terms.push(purrdf_gts::model::Term::lang_literal(*lexical, *tag));
+    }
+    let quads: Vec<_> = (3..terms.len())
+        .map(|object| (0, 1, object, None))
+        .collect();
     writer.add_terms(&terms);
     writer.add_quads(&quads);
-    let gts = support::path(dir.path(), "tags.gts");
-    std::fs::write(&gts, writer.into_bytes()).expect("write the GTS fixture");
-    let out = shape(&["--no-labelling", &gts]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
-    let forms = &document["language_tags"]["case_forms"];
-    assert_eq!(forms["status"].as_str(), Some("reported"));
-    // Six lower, three upper, three mixed: the upper and mixed cells are small, so the lower
-    // cell is withheld with the total of the tagged literals, which would give them back.
-    assert_eq!(
-        forms["lower"].as_str(),
-        Some("withheld"),
-        "{}",
-        stdout(&out)
-    );
-    assert_eq!(forms["upper"].as_str(), Some("<5"));
-    assert_eq!(forms["mixed"].as_str(), Some("<5"));
-    // The printed tagged-literal total would give the small form cells by subtraction, so the
-    // case forms hide a cell among themselves; the total itself stays exact.
-    assert_eq!(
-        exact(&document, &["language_tags", "tagged_literals"]),
-        Some(12)
-    );
+    writer.into_bytes()
+}
 
-    let text = tags
-        .iter()
-        .enumerate()
-        .map(|(index, tag)| {
-            format!("<http://example.org/s> <http://example.org/p> \"v{index}\"@{tag} .\n")
-        })
-        .collect::<Vec<_>>()
-        .concat();
-    let nq = write_file(dir.path(), "tags.nq", &text);
-    let out = shape(&["--no-labelling", &nq]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(stdout(&out).contains(TEXT_OMITTED));
+/// Protects: the case forms never let a reader recover a small count. A GTS document either
+/// reports them with nothing hidden that the figures pin, or omits them for suppression. Case A
+/// is five `en` tags and one `EN`; case C is four integers beside eight lower-case tags, where
+/// the main figures already withhold the tagged-literal count. Each is beside a neighbour that
+/// still reports its forms exactly.
+#[test]
+fn case_forms_never_expose_a_small_count() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let words = [
+        "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13",
+        "v14", "v15",
+    ];
+    let tagged = |tags: &[&'static str]| -> Vec<(&'static str, &'static str)> {
+        tags.iter()
+            .enumerate()
+            .map(|(index, tag)| (words[index], *tag))
+            .collect()
+    };
+    let exposed = "{\"status\":\"omitted\",\"reason\":\"small-counts-would-be-exposed\"}";
+    let cases: [(&str, Vec<u8>, bool); 4] = [
+        (
+            "a-five-en-one-EN",
+            gts_with_literals(&[], &tagged(&["en", "en", "en", "en", "en", "EN"])),
+            false,
+        ),
+        (
+            "a-neighbour",
+            gts_with_literals(
+                &[],
+                &tagged(&[
+                    "en", "en", "en", "en", "en", "en", "EN", "EN", "EN", "EN", "EN", "En", "En",
+                    "En", "En", "En",
+                ]),
+            ),
+            true,
+        ),
+        (
+            "c-four-integers-eight-tagged",
+            gts_with_literals(
+                &["10", "11", "12", "13"],
+                &tagged(&["en", "en", "en", "en", "en", "en", "en", "en"]),
+            ),
+            false,
+        ),
+        (
+            "c-neighbour",
+            gts_with_literals(
+                &["10", "11", "12", "13", "14"],
+                &tagged(&["en", "en", "en", "en", "en", "en", "en", "en"]),
+            ),
+            true,
+        ),
+    ];
+    for (name, bytes, reports) in cases {
+        let path = support::path(dir.path(), &format!("{name}.gts"));
+        std::fs::write(&path, bytes).expect("write the GTS fixture");
+        let out = shape(&["--no-labelling", &path]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        let printed = stdout(&out);
+        let document = purrdf_lex::json::read(&printed).expect("one JSON document");
+        assert!(nothing_recoverable(&document), "{name}: {printed}");
+        if reports {
+            assert_eq!(
+                document["language_tags"]["case_forms"]["status"].as_str(),
+                Some("reported"),
+                "{name}: {printed}"
+            );
+        } else {
+            assert!(printed.contains(exposed), "{name}: {printed}");
+        }
+    }
 }
 
 /// A GTS file of `terms` language-tagged literals, one segment per slice of `segments`.
@@ -910,7 +985,7 @@ fn case_forms_count_distinct_literals_across_segments_and_case_variants() {
 }
 
 /// Protects: reporting the case forms changes no other figure. A GTS file with upper-case and
-/// mixed-case tags, where the form cells are small and are suppressed among themselves, gives
+/// mixed-case tags, whose small form cells make the forms an omission for suppression, gives
 /// the document of its text twin in every figure but `case_forms`.
 #[test]
 fn upper_and_mixed_case_gts_matches_its_text_twin_but_for_case_forms() {
@@ -938,7 +1013,10 @@ fn upper_and_mixed_case_gts_matches_its_text_twin_but_for_case_forms() {
     let from_gts = shape(&["--no-labelling", &gts]);
     assert_eq!(code(&from_gts), 0, "{}", stderr(&from_gts));
     assert_same_but_case_forms(&stdout(&from_gts), &stdout(&from_text), Reader::Gts);
-    // Neither the form cells nor anything else exposes the small cells: the upper and mixed
-    // cells are suppressed.
-    assert!(case_forms(&stdout(&from_gts)).contains("\"upper\":\"<5\""));
+    // The small upper and mixed cells cannot be printed beside the exact tagged-literal count,
+    // so the forms are omitted for suppression and no other figure moves.
+    assert_eq!(
+        case_forms(&stdout(&from_gts)),
+        "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"small-counts-would-be-exposed\"}"
+    );
 }

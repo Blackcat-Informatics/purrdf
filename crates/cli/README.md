@@ -1380,8 +1380,13 @@ written can report the figure. A GTS read does, and prints
 `{"status":"reported","lower":…,"upper":…,"mixed":…}`. The text readers feed no such census, so
 for a text syntax it is `{"status":"omitted","reason":"text-reader-records-no-census"}`. A
 pack stores only the lower-cased tag, so for a pack it is
-`{"status":"omitted","reason":"pack-holds-only-folded-tag"}`. The case forms are suppressed
-on their own against the printed `tagged_literals`, so no other figure depends on them.
+`{"status":"omitted","reason":"pack-holds-only-folded-tag"}`. The case forms are chosen after
+every other figure, each held at its printed form, with the equation that the forms sum to
+`tagged_literals` added to the others; only a form cell may be withheld, so no other figure
+depends on them. When a hidden count would still be pinned, as when five `en` tags and one
+`EN` leave the small upper cell equal to the tagged literals less the rest, the forms are not
+printed and `case_forms` is `{"status":"omitted","reason":"small-counts-would-be-exposed"}`.
+Forms print only when nothing they add to the figures pins a hidden count.
 
 A histogram bin has fixed bounds that do not depend on the data: bin `0` holds `0`,
 and every other bin holds `min` through `max` with `min` a power of two and `max` one
