@@ -24,8 +24,8 @@
 //!    a loop, and the fold refuses a row that would. A triple term reaches
 //!    that row through the `rf` it names, and `rf` may be the term's OWN id:
 //!    both must be refused, or a file folds with no diagnostic and kills the
-//!    first consumer that renders it. A row keyed by a quoted-triple term with
-//!    no `tt` and `rf` other than its own id is dropped as a position violation
+//!    first consumer that renders it. Every other quoted-triple reifier row,
+//!    including one whose term carries `tt`, is dropped as a position violation
 //!    before any loop can form.
 //!
 //! Every case below is built through the real [`Writer`] and read back, so
@@ -68,8 +68,8 @@ fn diagnostic_codes(graph: &Graph) -> Vec<&str> {
 /// No folded term may resolve, transitively, back to itself.
 ///
 /// This walks [`Graph::triple_of`] — the accessor every consumer uses — rather
-/// than `term_triple`, which does not read the self-bound spelling
-/// and so cannot see a loop written in it.
+/// than `term_triple`, which does not read the spelling with neither `tt` nor
+/// `rf`, and so cannot see a loop written in it.
 fn assert_no_term_reaches_itself(graph: &Graph) {
     for start in 0..graph.terms.len() {
         let mut stack: Vec<usize> = graph
