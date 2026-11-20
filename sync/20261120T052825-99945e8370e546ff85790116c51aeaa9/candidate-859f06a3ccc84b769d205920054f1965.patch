@@ -1,0 +1,212 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 3f2445d14..0353f5020 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -17,6 +17,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   needs conversion; a caller that persisted `source_fingerprint()` recomputes
+   it from its source, and the old 64-bit value does not compile against the
+   new type.
++- **Breaking rename: `Multiset256::fingerprint` is now `Multiset256::accounting_check`.**
++  The method hashes the population and the additive sum, so it is an accounting
++  check and never identified a row set. The signature and the output bytes are
++  unchanged, and the old name is removed with no alias. Replace each call with
++  `accounting_check`; `purrdf_hash::multiset::sorted_fingerprint` remains the
++  row-set identity.
+ - **Reading a GTS file into a dataset reports language tags folded to lower case.**
+   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
+   terms; a dataset folds the tag and holds one. `import_gts_events`,
+diff --git crates/hash/src/multiset.rs crates/hash/src/multiset.rs
+index 499c2eb32..8d9a6b663 100644
+--- crates/hash/src/multiset.rs
++++ crates/hash/src/multiset.rs
+@@ -155,10 +155,13 @@ impl Multiset256 {
+ 
+     /// BLAKE3 of the framed domain, 16-byte little-endian population, then
+     /// the 32-byte little-endian sum. Every family supplies its explicit domain.
+-    /// The value is an accounting check, not collision resistant against chosen
+-    /// members; use [`sorted_fingerprint`] for an identity.
++    ///
++    /// This is additive accounting over the population and the wrapping sum,
++    /// not the identity of a row set: a party choosing the members can build
++    /// two different multisets with the same check value. [`sorted_fingerprint`] is the
++    /// row-set identity.
+     #[must_use]
+-    pub fn fingerprint(&self, domain: Domain) -> [u8; 32] {
++    pub fn accounting_check(&self, domain: Domain) -> [u8; 32] {
+         let mut digest = blake3::Hasher::new();
+         frame_le_with(domain.as_bytes(), &mut |part| {
+             digest.update(part);
+diff --git crates/hash/tests/multiset_accounting_bytes.rs crates/hash/tests/multiset_accounting_bytes.rs
+new file mode 100644
+index 000000000..19a5be343
+--- /dev/null
++++ crates/hash/tests/multiset_accounting_bytes.rs
+@@ -0,0 +1,73 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! The byte contract of the additive accounting check of [`Multiset256`]:
++//! BLAKE3 of the framed domain, the 16-byte little-endian population, then the
++//! 32-byte little-endian sum. Accounting consumers compare these bytes, so the
++//! values below are frozen.
++
++use purrdf_hash::Domain;
++use purrdf_hash::hex::encode;
++use purrdf_hash::multiset::Multiset256;
++
++const ROWS: Domain = Domain::new(b"purrdf-hash/test/rows");
++const OTHER: Domain = Domain::new(b"purrdf-hash/test/other");
++
++fn member(seed: u8) -> [u8; 32] {
++    let mut bytes = [0_u8; 32];
++    for (i, byte) in bytes.iter_mut().enumerate() {
++        *byte = seed.wrapping_mul(31).wrapping_add(i as u8);
++    }
++    bytes
++}
++
++fn set(members: &[u8]) -> Multiset256 {
++    let mut value = Multiset256::default();
++    for &seed in members {
++        value.insert(member(seed)).unwrap();
++    }
++    value
++}
++
++#[test]
++fn the_accounting_check_bytes_are_frozen() {
++    let cases: [(&str, Multiset256, Domain, &str); 5] = [
++        (
++            "empty",
++            set(&[]),
++            ROWS,
++            "1a9343ced7155159c356a6ce1fa3bee2ab6418ae515da2f894df28a447da8083",
++        ),
++        (
++            "one member",
++            set(&[1]),
++            ROWS,
++            "8f310916adf9ec397eb04c3e0d496203097df4dc4872c1e7c39c96f08df260ba",
++        ),
++        (
++            "repeated member",
++            set(&[1, 1, 1]),
++            ROWS,
++            "9c71e4c0da4f943e596a0a1459aa6fb2a0a66e1594714e436d8c55071bb215e5",
++        ),
++        (
++            "two members",
++            set(&[1, 2]),
++            ROWS,
++            "2582113491bd5831fc9cd770b8273cb0bd68f79421e812e4cbb1b5a04a192ca0",
++        ),
++        (
++            "second domain",
++            set(&[1, 2]),
++            OTHER,
++            "30548d9cc79c7187ad9797c6f4f96e239018e11d632fe81418fa0e98682b72ae",
++        ),
++    ];
++    for (name, value, domain, expected) in cases {
++        assert_eq!(
++            encode(&value.accounting_check(domain)),
++            expected,
++            "accounting bytes of {name}"
++        );
++    }
++}
+diff --git crates/text/src/index/source_digest.rs crates/text/src/index/source_digest.rs
+index aaf67d564..c5a7dca32 100644
+--- crates/text/src/index/source_digest.rs
++++ crates/text/src/index/source_digest.rs
+@@ -118,7 +118,7 @@ impl SourceDigest {
+ }
+ 
+ fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
+-    state.fingerprint(if P::GRAPH_FREE {
++    state.accounting_check(if P::GRAPH_FREE {
+         TRIPLE_SOURCE_DIGEST_DOMAIN
+     } else {
+         SOURCE_DIGEST_DOMAIN
+diff --git crates/validate/src/query.rs crates/validate/src/query.rs
+index 728e2d3ac..13caa3afd 100644
+--- crates/validate/src/query.rs
++++ crates/validate/src/query.rs
+@@ -603,6 +603,45 @@ mod tests {
+         ));
+     }
+ 
++    /// A receipt requested from a view that cannot certify its content is the
++    /// typed `Identity` refusal and carries no identity, while the same receipt
++    /// bound to a view that has the capability succeeds.
++    #[test]
++    fn a_receipt_from_a_view_that_cannot_certify_its_content_is_a_typed_refusal() {
++        use purrdf_lex::allocation::StorageError;
++        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
++        let engine = purrdf_sparql_eval::NativeSparqlEngine::new();
++        let capture = super::ExecutionReceiptCapture::default();
++        engine
++            .query_with_options_view(
++                &dataset,
++                purrdf_core::SparqlRequest {
++                    query: "SELECT (1 AS ?one) WHERE {}",
++                    base_iri: None,
++                    substitutions: &[],
++                },
++                &purrdf_sparql_eval::QueryOptions::new().with_coordinate_observer(&capture),
++            )
++            .unwrap();
++        let receipt = super::execution_receipt_json(&capture.into_coordinates().unwrap());
++
++        let refused =
++            super::bind_execution_receipt(&receipt, || Err(StorageError::AllocationFailed));
++        assert!(matches!(
++            refused,
++            Err(super::ReceiptBindError::Identity(
++                StorageError::AllocationFailed
++            ))
++        ));
++
++        let bound = super::bind_execution_receipt(&receipt, || {
++            purrdf_core::ContentIdentified::content_identity(&dataset)
++        })
++        .unwrap();
++        assert!(bound.contains("\"contentIdentity\""));
++        assert!(bound.contains("\"executionIdentity\""));
++    }
++
+     /// Replacing a prior request must not retain its time or seed by accident.
+     #[test]
+     fn coordinate_inputs_replace_prior_selections_without_resetting_other_options() {
+diff --git docs/MIGRATION-5.0.md docs/MIGRATION-5.0.md
+index 3a5d2a9f8..284e0410c 100644
+--- docs/MIGRATION-5.0.md
++++ docs/MIGRATION-5.0.md
+@@ -203,6 +203,14 @@ digests in ascending order, repeats kept, followed by the row count, under a
+ domain of its own (`purrdf_hash::multiset::sorted_fingerprint`). Two different
+ row sets share a value only through a BLAKE3 collision.
+ 
++`purrdf_hash::multiset::Multiset256::fingerprint` is renamed
++`Multiset256::accounting_check`, with the same signature and the same output
++bytes under the same domain framing; no alias remains. Replace each call with
++the new name. The value is an additive accounting check over the population and
++the wrapping sum, for drift and population checks between structures one
++process built. It is not the identity of a row set: use `sorted_fingerprint`
++where a row set needs an identity.
++
+ Every value below moves for every input, except that a segmented stack made only
+ of image layers, with no removal or declaration owners and no resident head,
+ hashes image snapshots alone and keeps its 4.x snapshot identity and the
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 4d981c585..060335401 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -4058,7 +4058,7 @@ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumer
+ 
+ [[job]]
+ id = "multiset-256"
+-summary = "Reversible little-endian 256-bit member sums with exact population, checked atomic combination/subtraction and domain-bound fingerprints"
++summary = "Reversible little-endian 256-bit member sums with exact population, checked atomic combination/subtraction and domain-bound accounting checks"
+ home = "purrdf_hash::multiset::Multiset256"
+ entry_points = []
+ spec = "Sum in Z/(2^256), with an independent checked u128 population; duplicate members contribute repeatedly, and callers independently establish membership before subtraction"
