@@ -445,16 +445,15 @@ lost or retyped a public field, and none of these enums lost a variant.
   unsupported algorithm at parse, before any status exists; `Unverified` is
   what a direct verification with `verify_sig` or `verify_sig_with_key` returns.
 - **Reifier position in GTS.** The reader drops a `reifies` row whose reifier is
-  a literal or a quoted-triple term, and diagnoses it `PositionConstraint`, as the
-  specification requires; 4.0.2 kept the row without a diagnostic. A quoted
-  triple stays legal as a `quads` subject and as the object of a `reifies` or
-  `annot` row. One quoted-triple reifier is read as before: the indirect
-  spelling that older writers emitted, a quoted-triple term with no `tt` whose
-  `rf` is its own id, keyed by a row on that id, keeps its binding with no
-  diagnostic. Files written by writers before the constraint existed read as they
-  always did. A file whose `reifies` row is keyed by a quoted-triple term that
-  carries `tt`, by one whose `rf` names another term, or by one with neither
-  `tt` nor `rf` now loses that row.
+  a literal or a quoted-triple term, and diagnoses it `PositionConstraint`;
+  4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
+  `quads` subject and as the object of a `reifies` or `annot` row. One
+  quoted-triple reifier is an exception to the specification's rule, because
+  stored files hold it: a quoted-triple term with no `tt` whose `rf` is its own
+  id, keyed by a row on that id, keeps its binding with no diagnostic. A file
+  whose `reifies` row is keyed by a quoted-triple term that carries `tt`, by one
+  whose `rf` names another term, or by one with neither `tt` nor `rf` loses
+  that row.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function

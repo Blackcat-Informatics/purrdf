@@ -148,11 +148,10 @@ pub(crate) fn decode_reifier_row(
     }
     // §7.4: the reifier of a `reifies` row is an IRI or blank node, never a
     // literal or a quoted triple. The row is dropped; the term is untouched.
-    // One quoted-triple spelling is exempt: the indirect form that writers
-    // emitted before the constraint existed, a `k:3` term with no `tt` whose
-    // `rf` names the term's own id, keyed by a row on that id. Existing files
-    // keep reading as they always did, so that binding is kept and states the
-    // term's own triple.
+    // One quoted-triple spelling is an exception to that rule: a `k:3` term
+    // with no `tt` whose `rf` names the term's own id, keyed by a row on that
+    // id. Stored files hold it, so that binding is kept and states the term's
+    // own triple.
     let Some(reifier_kind) = required_kind(terms, rid, failure) else {
         return RowDecode::Storage;
     };

@@ -22,10 +22,11 @@
 //! 2. `dt` and `rf` must too (`rf` may also name the term itself).
 //! 3. A `reifies` row may name ANY term, so it is the one field that can close
 //!    a loop, and the fold refuses a row that would. A triple term reaches
-//!    that row either through the `rf` it names or, when it names none,
-//!    through its OWN id — and BOTH spellings must be refused. Missing the
-//!    second admitted a file that folded with no diagnostic at all and then
-//!    killed the first consumer that rendered it.
+//!    that row through the `rf` it names, and `rf` may be the term's OWN id:
+//!    both must be refused, or a file folds with no diagnostic and kills the
+//!    first consumer that renders it. A row keyed by a quoted-triple term with
+//!    no `tt` and `rf` other than its own id is dropped as a position violation
+//!    before any loop can form.
 //!
 //! Every case below is built through the real [`Writer`] and read back, so
 //! these are claims about the wire and not about hand-assembled structures.
@@ -44,20 +45,6 @@ fn indirect_triple_term(reifier: usize) -> Term {
         lang: None,
         direction: None,
         reifier: Some(reifier),
-        triple: None,
-    }
-}
-
-/// The IMPLICIT self-bound spelling: a `k:3` term carrying neither `tt` nor
-/// `rf`, whose binding is keyed by its own term id (§7.1).
-fn implicit_self_bound_triple_term() -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
         triple: None,
     }
 }
@@ -81,7 +68,7 @@ fn diagnostic_codes(graph: &Graph) -> Vec<&str> {
 /// No folded term may resolve, transitively, back to itself.
 ///
 /// This walks [`Graph::triple_of`] — the accessor every consumer uses — rather
-/// than `term_triple`, which does not read the implicit self-bound spelling
+/// than `term_triple`, which does not read the self-bound spelling
 /// and so cannot see a loop written in it.
 fn assert_no_term_reaches_itself(graph: &Graph) {
     for start in 0..graph.terms.len() {
@@ -106,17 +93,17 @@ fn assert_no_term_reaches_itself(graph: &Graph) {
 }
 
 // --------------------------------------------------------------------------- //
-// The self-bound spelling (`rf` equal to the term's own id) — the one the refusal used to miss.
+// The self-bound spelling: `rf` equal to the term's own id.
 // --------------------------------------------------------------------------- //
 
 /// The regression. A `k:3` term whose `rf` is its OWN id takes its components
 /// from the row keyed by that id, so a row naming that term as its own
 /// subject makes the term contain itself.
 ///
-/// This file folded with an EMPTY diagnostic list and left
-/// `triple_of(2) == Some((2, 1, 1))`, which aborted the first consumer that
-/// rendered term 2. The refusal has to anchor on a term whose `rf` is its
-/// own id as well as on a term naming another reifier.
+/// Without the refusal this file folds with an EMPTY diagnostic list and leaves
+/// `triple_of(2) == Some((2, 1, 1))`, which aborts the first consumer that
+/// renders term 2. The refusal anchors on a term whose `rf` is its own id as
+/// well as on a term naming another reifier.
 #[test]
 fn a_row_keyed_by_a_self_bound_terms_own_id_is_refused() {
     let terms = vec![
@@ -356,29 +343,6 @@ fn the_streaming_reader_refuses_a_binding_loop_across_frame_boundaries() {
     );
 }
 
-/// An explicitly self-bound term (`rf == its own id`) is the same hazard
-/// spelled a third way, and is refused too.
-#[test]
-fn an_explicitly_self_bound_term_naming_itself_is_refused() {
-    let terms = vec![
-        Term::iri("http://example.org/a"),
-        Term::iri("http://example.org/p"),
-        indirect_triple_term(2), // rf == this term's own id, which §7.1 allows
-    ];
-    let mut writer = Writer::new("purrdf-test");
-    writer.add_terms(&terms);
-    writer.add_reifies(&[(2, (2, 1, 1), None)]);
-    let bytes = writer.into_bytes();
-
-    let graph = read(&bytes, false, None);
-    assert!(
-        diagnostic_codes(&graph).contains(&"DamagedFrame"),
-        "{:?}",
-        graph.diagnostics,
-    );
-    assert_no_term_reaches_itself(&graph);
-}
-
 // --------------------------------------------------------------------------- //
 // The id-ordering rules that make `tt`/`rf` acyclic by construction.
 // --------------------------------------------------------------------------- //
@@ -442,7 +406,7 @@ fn a_binding_loop_inside_a_snapshot_is_refused() {
     let mut graph = Graph::default();
     graph.terms.push(Term::iri("http://example.org/a")); // 0
     graph.terms.push(Term::iri("http://example.org/p")); // 1
-    graph.terms.push(implicit_self_bound_triple_term()); // 2
+    graph.terms.push(indirect_triple_term(2)); // 2
     graph.reifiers.push((2, (2, 1, 1), None));
 
     let payload = graph.snapshot_payload();
@@ -452,8 +416,9 @@ fn a_binding_loop_inside_a_snapshot_is_refused() {
 
     let folded = read(&bytes, false, None);
     assert!(
-        !folded.diagnostics.is_empty(),
-        "the loop is refused inside a snapshot, and reported",
+        diagnostic_codes(&folded).contains(&"DamagedFrame"),
+        "the loop is refused inside a snapshot, and reported: {:?}",
+        folded.diagnostics,
     );
     assert_no_term_reaches_itself(&folded);
 }
@@ -466,7 +431,7 @@ fn the_multi_segment_fold_of_an_attempted_loop_terminates() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -495,7 +460,7 @@ fn a_refused_loop_does_not_come_back_through_a_round_trip() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
