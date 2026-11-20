@@ -186,6 +186,11 @@ impl Queue {
 struct Scratch {
     /// `(colour of y, y, label offset, label length)` of each incidence read.
     touches: Vec<(usize, usize, usize, usize)>,
+    /// The new order of the members of the cell being split from its first
+    /// touched member on, which is as large as the cell: kept across splits so
+    /// that peeling a few members off a large cell again and again requests no
+    /// storage per split.
+    order: Vec<usize>,
 }
 
 /// A call's instance: its nodes and lines in compact local indices, their
@@ -241,6 +246,7 @@ fn refine(
                 occ_nums,
                 queue,
                 other,
+                &mut scratch.order,
             );
             at = end;
         }
@@ -258,6 +264,7 @@ fn split_cell(
     occ_nums: &[usize],
     queue: &mut Queue,
     side_index: usize,
+    order: &mut Vec<usize>,
 ) {
     // The touched members, ascending, each with the range of its labels.
     let mut touched: Vec<(usize, usize, usize)> = Vec::new();
@@ -284,13 +291,19 @@ fn split_cell(
     if untouched == 0 && groups == 1 {
         return;
     }
-    let mut order: Vec<usize> = Vec::with_capacity(size);
-    order.extend(
-        side.elems[cy..cy + size]
-            .iter()
-            .copied()
-            .filter(|m| ids.binary_search(m).is_err()),
-    );
+    // The members before the first touched one keep their place, so the new
+    // order is built from there: the untouched members after it in their
+    // order, then the touched groups.
+    let mut at_positions: Vec<usize> = ids.iter().map(|&y| side.pos[y]).collect();
+    at_positions.sort_unstable();
+    let first = at_positions[0];
+    order.clear();
+    let mut from = first;
+    for &q in &at_positions {
+        order.extend_from_slice(&side.elems[from..q]);
+        from = q + 1;
+    }
+    order.extend_from_slice(&side.elems[from..cy + size]);
     let mut fragments: Vec<(usize, usize)> = Vec::with_capacity(groups + 1);
     if untouched > 0 {
         fragments.push((cy, untouched));
@@ -301,16 +314,20 @@ fn split_cell(
         while end < touched.len() && key(&touched[at]).cmp(key(&touched[end])) == Ordering::Equal {
             end += 1;
         }
-        fragments.push((cy + order.len(), end - at));
+        fragments.push((first + order.len(), end - at));
         order.extend(touched[at..end].iter().map(|t| t.0));
         at = end;
     }
     for (i, &v) in order.iter().enumerate() {
-        side.elems[cy + i] = v;
-        side.pos[v] = cy + i;
+        side.elems[first + i] = v;
+        side.pos[v] = first + i;
     }
     for &(colour, count) in &fragments {
         side.size[colour] = count;
+        // The untouched members already carry the colour of the cell.
+        if untouched > 0 && colour == cy {
+            continue;
+        }
         for i in colour..colour + count {
             let v = side.elems[i];
             side.start[v] = colour;
