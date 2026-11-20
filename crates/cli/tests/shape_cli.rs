@@ -864,11 +864,13 @@ fn case_forms_never_expose_a_small_count() {
             .collect()
     };
     let exposed = "{\"status\":\"omitted\",\"reason\":\"small-counts-would-be-exposed\"}";
-    let cases: [(&str, Vec<u8>, bool); 4] = [
+    // What each case must print: the forms omitted for suppression, reported exactly, or never
+    // as the exact count the other figures would otherwise pin.
+    let cases: [(&str, Vec<u8>, &str); 4] = [
         (
             "a-five-en-one-EN",
             gts_with_literals(&[], &tagged(&["en", "en", "en", "en", "en", "EN"])),
-            false,
+            "omitted",
         ),
         (
             "a-neighbour",
@@ -879,7 +881,7 @@ fn case_forms_never_expose_a_small_count() {
                     "En", "En", "En",
                 ]),
             ),
-            true,
+            "reported",
         ),
         (
             "c-four-integers-eight-tagged",
@@ -887,7 +889,7 @@ fn case_forms_never_expose_a_small_count() {
                 &["10", "11", "12", "13"],
                 &tagged(&["en", "en", "en", "en", "en", "en", "en", "en"]),
             ),
-            false,
+            "hidden",
         ),
         (
             "c-neighbour",
@@ -895,10 +897,10 @@ fn case_forms_never_expose_a_small_count() {
                 &["10", "11", "12", "13", "14"],
                 &tagged(&["en", "en", "en", "en", "en", "en", "en", "en"]),
             ),
-            true,
+            "reported",
         ),
     ];
-    for (name, bytes, reports) in cases {
+    for (name, bytes, expected) in cases {
         let path = support::path(dir.path(), &format!("{name}.gts"));
         std::fs::write(&path, bytes).expect("write the GTS fixture");
         let out = shape(&["--no-labelling", &path]);
@@ -906,14 +908,21 @@ fn case_forms_never_expose_a_small_count() {
         let printed = stdout(&out);
         let document = purrdf_lex::json::read(&printed).expect("one JSON document");
         assert!(nothing_recoverable(&document), "{name}: {printed}");
-        if reports {
-            assert_eq!(
-                document["language_tags"]["case_forms"]["status"].as_str(),
-                Some("reported"),
-                "{name}: {printed}"
-            );
-        } else {
-            assert!(printed.contains(exposed), "{name}: {printed}");
+        let forms = &document["language_tags"]["case_forms"];
+        match expected {
+            "reported" => {
+                assert_eq!(
+                    forms["status"].as_str(),
+                    Some("reported"),
+                    "{name}: {printed}"
+                );
+                assert!(forms["lower"].as_u64().is_some(), "{name}: {printed}");
+            }
+            "omitted" => assert!(printed.contains(exposed), "{name}: {printed}"),
+            _ => assert!(
+                forms["lower"].as_u64().is_none(),
+                "{name}: the lower count is not printed exactly: {printed}"
+            ),
         }
     }
 }
