@@ -14,7 +14,7 @@
 //!
 //! `crates/gts/tests/frozen_canonical_bytes.rs` separately covers this vector
 //! for canonical-CBOR byte-exactness; the tests here are the purrdf-local
-//! functional/drift guard on top of that (see `docs/GTS-CONFORMANCE.md` §2).
+//! functional/drift guard on top of that (see `GTS-CONFORMANCE.md` §2 in `gmeow-gts`).
 
 use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
