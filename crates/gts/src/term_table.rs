@@ -17,7 +17,6 @@ pub(crate) trait TermMetadata: Copy {
     fn len(self) -> usize;
     fn kind(self, id: usize) -> Result<TermKind, DictionaryError>;
     fn references(self, id: usize) -> Result<Option<TermReferences>, DictionaryError>;
-    fn traversal_limit(self) -> Option<usize>;
 }
 
 pub(crate) trait StoredTerms {
@@ -62,12 +61,6 @@ impl TermMetadata for TermsRef<'_> {
     fn references(self, id: usize) -> Result<Option<TermReferences>, DictionaryError> {
         self.get(id)
             .map(|term| term.map(|term| TermReferences::from_term(&term)))
-    }
-    fn traversal_limit(self) -> Option<usize> {
-        match self {
-            Self::Stored(storage) => Some(storage.limits().metadata_entries),
-            Self::Owned(_) | Self::Shared(_) => None,
-        }
     }
 }
 

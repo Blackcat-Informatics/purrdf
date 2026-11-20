@@ -8,6 +8,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Behaviour change: a triple term that reaches itself states no triple, and its `reifies` row is kept.**
+  A term that is reachable from its own components, through `tt` or through the
+  first `reifies` row of its reifier id (its own id when it names none), is no
+  longer refused. The GTS reader folds every such row with no diagnostic, where it
+  reported `DamagedFrame` and dropped the row. The term keeps an identity of its
+  own in the multi-segment union and the canonical writer, and the row still
+  projects. `purrdf_gts::resolution::SelfReaching::of` names these terms once per
+  graph and `Graph::resolved_triple_of` answers `None` for each; `Graph::triple_of`
+  keeps returning the declared components. Projections render the term as the
+  fresh blank node of an unbound triple term (`_:unbound_triple_{id}`), so
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView` accept a graph they refused with `gts-self-reaching-term`. That
+  code remains for a literal whose datatype chain leads back to itself. A valid
+  file, whose `tt` names strictly smaller term ids and whose rows name no term
+  that reaches itself, folds, writes and projects as before.
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop

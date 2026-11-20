@@ -758,34 +758,45 @@ impl Graph {
         seen.len()
     }
 
-    /// The `(s, p, o)` of a quoted-triple term.
+    /// The `(s, p, o)` a quoted-triple term declares, before the termination
+    /// rule of §7.3 is applied.
     ///
     /// Prefers the term's own self-describing [`Term::triple`] (wire `"tt"`);
     /// falls back to the legacy indirection through [`Term::reifier`] for terms
     /// written before the triple term carried its own components. This is the
-    /// ONE place a quoted triple's components are resolved from a folded graph.
+    /// ONE place a quoted triple's declared components are read from a folded
+    /// graph.
     ///
     /// # Termination
     ///
-    /// Resolving a component of the returned triple, and so on recursively, is
-    /// what every consumer of a quoted triple does — the segment union, the
-    /// canonical writer, every projection to text. That walk terminates on a
-    /// reader-produced graph and MUST NOT be assumed to on any other: `tt` and
-    /// `dt` ids are sanitized to name strictly earlier terms, and the fold
-    /// REFUSES a `reifies` row that would let a triple term reach itself. A
-    /// [`Graph`] assembled by hand carries no such guarantee, and an unguarded
-    /// walk over a self-reaching one blows the stack, which aborts rather than
-    /// panics. Callers that accept caller-built graphs must bound their own
-    /// recursion.
+    /// The fold records every `reifies` row, including one that lets a triple
+    /// term reach itself, so the declared components of such a term name the
+    /// term. Resolving them recursively never ends, and a blown stack aborts the
+    /// process. A walk over resolved components therefore asks
+    /// [`SelfReaching::of`](crate::resolution::SelfReaching::of) once and takes
+    /// the components through [`Self::resolved_triple_of`], which answers `None`
+    /// for such a term, exactly as it does for a triple term that states no
+    /// triple.
     pub fn triple_of(&self, term_id: usize) -> Option<Triple3> {
+        self.declared_triple_with(term_id, |rid| self.reifier(rid))
+    }
+
+    /// [`Self::triple_of`] with the first binding of a reifier id supplied by
+    /// `first`, so a walk over many terms answers from an index instead of
+    /// scanning the rows once per term.
+    pub(crate) fn declared_triple_with(
+        &self,
+        term_id: usize,
+        first: impl Fn(usize) -> Option<Triple3>,
+    ) -> Option<Triple3> {
         let term = self.terms.get(term_id)?;
+        if term.kind != TermKind::Triple {
+            return None;
+        }
         // A self-bound triple term may leave `rf` implicit, in which case the
         // binding is keyed by the term's own id (§7.1).
-        self.term_triple(term).or_else(|| {
-            (term.kind == TermKind::Triple && term.reifier.is_none())
-                .then(|| self.reifier(term_id))
-                .flatten()
-        })
+        term.triple
+            .or_else(|| first(term.reifier.unwrap_or(term_id)))
     }
 
     /// [`Self::triple_of`] for an already-borrowed [`Term`].
@@ -795,6 +806,25 @@ impl Graph {
         }
         term.triple
             .or_else(|| term.reifier.and_then(|rid| self.reifier(rid)))
+    }
+
+    /// The `(s, p, o)` a quoted-triple term resolves to under GTS-SPEC §7.3:
+    /// [`Self::triple_of`] unless `term_id` reaches itself, in which case the
+    /// term states no triple.
+    ///
+    /// `reaching` is [`SelfReaching::of`](crate::resolution::SelfReaching::of)
+    /// for this graph. Every walk of resolved components takes its answer here,
+    /// so the fold, the multi-segment union, the canonical writer and every
+    /// projection observe the same one.
+    pub fn resolved_triple_of(
+        &self,
+        term_id: usize,
+        reaching: &crate::resolution::SelfReaching,
+    ) -> Option<Triple3> {
+        if reaching.contains(term_id) {
+            return None;
+        }
+        self.triple_of(term_id)
     }
 
     /// Record a reifier row unless the identical row is already present.

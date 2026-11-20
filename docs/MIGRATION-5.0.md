@@ -430,6 +430,19 @@ lost or retyped a public field, and none of these enums lost a variant.
 
 ## Containers
 
+- **Triple terms that reach themselves.** A `k:3` term that is reachable from its
+  own components, through `tt` or through the first `reifies` row of its `rf` (its
+  own id when it names none), states no triple. The reader keeps the `reifies` row
+  and reports no diagnostic, where 4.x reported `DamagedFrame` and dropped the row;
+  the term keeps a distinct identity in the multi-segment union and the canonical
+  writer, and projections render it as the blank node `_:unbound_triple_{id}`.
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView::new` accept such a graph instead of refusing it with
+  `gts-self-reaching-term`, which now names only a literal datatype chain that
+  leads back to itself. A caller that walks `Graph::triple_of` recursively reads
+  the components the term declares, and one that must terminate on a caller-built
+  graph takes `purrdf_gts::resolution::SelfReaching::of(&graph)` once and reads
+  components through `Graph::resolved_triple_of`. Valid files are unchanged.
 - **Unsupported signing algorithm.** `verify_sig` and `verify_sig_with_key`
   return `SigStatus::Unverified` for a COSE_Sign1 whose declared `alg` this
   engine does not implement, where 4.0.2 returned `Invalid`; the file verifiers

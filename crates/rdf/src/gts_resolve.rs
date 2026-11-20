@@ -14,6 +14,7 @@
 //! shared by the production consuming and streaming importers.
 
 use purrdf_gts::model::{Graph, TermKind};
+use purrdf_gts::resolution::SelfReaching;
 
 use crate::{RdfDiagnostic, RdfTextDirection};
 #[cfg(test)]
@@ -24,42 +25,31 @@ use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 /// contributes one (its datatype term) and an IRI or blank node none.
 type TermEdges = ([usize; 3], usize);
 
-/// Refuse a folded [`Graph`] whose term table lets a term reach ITSELF.
+/// The triple terms of `graph` that reach themselves, after proving that no other
+/// chain of the term table does.
 ///
 /// GTS-SPEC §7.3 makes termination normative for EVERY walk of a triple term's
-/// resolved components — the segment union and every projection or re-authoring
-/// pass alike. A term reaches another through exactly two edges, and both are
-/// followed recursively by this crate's walkers:
+/// resolved components. A triple term that is reachable from its own components
+/// states no triple: it keeps an identity of its own and projects as the fresh blank
+/// node an unbound triple term projects as, while every `reifies` row stays recorded.
+/// [`SelfReaching::of`] is the one definition of that set, and the walkers of this
+/// crate read components through
+/// [`Graph::resolved_triple_of`](purrdf_gts::model::Graph::resolved_triple_of) so
+/// each observes the same answer. An unbounded recursion in Rust overflows the stack,
+/// which **aborts the process**, so the set is found with an iterative search.
 ///
-/// * a quoted-triple term reaches its `(s, p, o)` through
-///   [`Graph::triple_of`](purrdf_gts::model::Graph::triple_of), which prefers the
-///   self-describing `tt` components and otherwise resolves the statement layer
-///   through the reifier id the term names — or, when it names none, through its
-///   OWN id (§7.1, a self-bound triple term may leave `rf` implicit);
-/// * a literal reaches its datatype term.
-///
-/// A cycle over those edges makes every such walk non-terminating, and an unbounded
-/// recursion in Rust overflows the stack, which **aborts the process** — it is not a
-/// catchable panic, so no binding can contain it. The GTS reader already refuses a
-/// `reifies` row that would close such a loop, which closes the wire route; a graph
-/// assembled by a caller (`GtsFoldView::new`, the Python `from_parts`, any consumer
-/// holding a `purrdf_gts::model::Graph`) carries no such guarantee, so it is checked
-/// HERE, once, at every boundary where one enters this crate.
-///
-/// This is the fold-time refusal §7.3 permits, taken in preference to guarding each
-/// walker: one O(terms + edges) pass paid once per graph, against a visited set or a
-/// depth counter threaded through every render, every serialization and every fold.
-/// The walk below is iterative — a recursive acyclicity check would abort on exactly
-/// the input it exists to reject.
+/// What remains after those terms stop contributing components is a literal whose
+/// datatype chain leads back to itself. A literal is not a triple term, so §7.3 does
+/// not degrade it, and every walker that resolves a datatype as a term of its own
+/// would never finish; that shape is refused.
 ///
 /// # Errors
 ///
-/// Returns `gts-self-reaching-term` naming the first term that reaches itself. An
+/// Returns `gts-self-reaching-term` naming the first term of such a chain. An
 /// out-of-range component id is NOT this check's business and is skipped: it names no
 /// term, so it closes no loop, and the resolvers report it under their own range codes
 /// (`gts-term-out-of-range`, `native-codec-term-out-of-range`) when they reach it.
-/// Reporting it here would put a range error under a misleading code.
-pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic> {
+pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<SelfReaching, RdfDiagnostic> {
     /// Never visited.
     const UNSEEN: u8 = 0;
     /// On the current DFS path — reaching it again is a cycle.
@@ -67,6 +57,7 @@ pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic>
     /// Fully explored and proven to terminate.
     const SETTLED: u8 = 2;
 
+    let reaching = SelfReaching::of(graph);
     let mut state = vec![UNSEEN; graph.terms.len()];
     // One frame per term on the current path: its id, its outgoing edges resolved
     // once, and how many of them have been followed.
@@ -77,7 +68,7 @@ pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic>
             continue;
         }
         state[root] = ON_PATH;
-        path.push((root, term_edges(graph, root), 0));
+        path.push((root, term_edges(graph, &reaching, root), 0));
         while let Some(frame) = path.last_mut() {
             let (tid, (edges, edge_count), cursor) = *frame;
             if cursor == edge_count {
@@ -101,18 +92,18 @@ pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic>
                 }
                 Some(_) => {
                     state[next] = ON_PATH;
-                    path.push((next, term_edges(graph, next), 0));
+                    path.push((next, term_edges(graph, &reaching, next), 0));
                 }
             }
         }
     }
-    Ok(())
+    Ok(reaching)
 }
 
 /// The term ids `term_id` makes a walker resolve, in the order the walkers follow
 /// them. This MUST mirror what those walkers actually read: an edge omitted here is
 /// a loop the check admits and the first walker then dies on.
-fn term_edges(graph: &Graph, term_id: usize) -> TermEdges {
+fn term_edges(graph: &Graph, reaching: &SelfReaching, term_id: usize) -> TermEdges {
     let Some(term) = graph.terms.get(term_id) else {
         return ([0; 3], 0);
     };
@@ -123,9 +114,9 @@ fn term_edges(graph: &Graph, term_id: usize) -> TermEdges {
             Some(datatype) => ([datatype, 0, 0], 1),
             None => ([0; 3], 0),
         },
-        // `Graph::triple_of` is the ONE place a folded quoted triple's components are
-        // resolved, so it is the one edge set that matters here.
-        TermKind::Triple => match graph.triple_of(term_id) {
+        // `Graph::resolved_triple_of` is the ONE place a folded quoted triple's
+        // components are resolved, so it is the one edge set that matters here.
+        TermKind::Triple => match graph.resolved_triple_of(term_id, reaching) {
             Some(triple) => (<[usize; 3]>::from(triple), 3),
             None => ([0; 3], 0),
         },

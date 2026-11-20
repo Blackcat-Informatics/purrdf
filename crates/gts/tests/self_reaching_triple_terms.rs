@@ -1,37 +1,30 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! A folded quoted-triple term must never resolve back to itself (§7.3,
-//! "Resolution MUST terminate").
+//! A triple term that reaches itself states no triple (§7.3, "Resolution MUST
+//! terminate").
 //!
-//! [`Graph::triple_of`] is the one place a folded quoted triple's components
-//! are resolved, and every consumer of a quoted triple recurses through it —
-//! the segment union, the canonical writer, and every projection to text
-//! (N-Quads, Turtle, TriG, RDF/XML). None of those walks carries a bound of
-//! its own. A term that resolved, transitively, back to itself would make each
-//! of them recurse forever, and in Rust a blown stack ABORTS: no catchable
-//! panic, no diagnostic, just a dead process. `lib.rs` promises the opposite —
-//! the reader is total.
+//! The fold records every `reifies` row, including one that lets a triple term
+//! reach itself. The term, not the row, degrades: [`SelfReaching::of`] names
+//! it, [`Graph::resolved_triple_of`] answers `None` for it, and every walk over
+//! resolved components (the segment union, the canonical writer and every
+//! projection) takes that one answer, so none can recurse forever. In Rust a
+//! blown stack ABORTS: no catchable panic, no diagnostic, just a dead process.
 //!
-//! §7.3 permits two conforming strategies, and this engine takes the first:
-//! REFUSE the binding at fold time (the other is to accept it and give the
-//! term a sentinel identity that states no triple). Because the refusal is the
-//! whole defence, it has to cover every spelling `triple_of` reads:
+//! A triple term reaches itself through any of its spellings:
 //!
-//! 1. `tt` — the term's own components — must name already-introduced terms.
-//! 2. `dt` and `rf` must too (`rf` may also name the term itself).
-//! 3. A `reifies` row may name ANY term, so it is the one field that can close
-//!    a loop, and the fold refuses a row that would. A triple term reaches
-//!    that row either through the `rf` it names or, when it names none,
-//!    through its OWN id — and BOTH spellings must be refused. Missing the
-//!    second admitted a file that folded with no diagnostic at all and then
-//!    killed the first consumer that rendered it.
+//! 1. `tt` names strictly earlier terms, `dt` and `rf` too (`rf` may also name
+//!    the term itself), so none of those closes a loop on its own.
+//! 2. A `reifies` row may name ANY term, so it is the one field that can close
+//!    a loop. A triple term reaches that row either through the `rf` it names
+//!    or, when it names none, through its OWN id; both spellings degrade.
 //!
 //! Every case below is built through the real [`Writer`] and read back, so
 //! these are claims about the wire and not about hand-assembled structures.
 
 use purrdf_gts::model::{Graph, ReifierRow, Term, TermKind};
 use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
+use purrdf_gts::resolution::SelfReaching;
 use purrdf_gts::writer::Writer;
 
 /// The legacy indirect spelling: components come from the `reifies` row bound
@@ -78,15 +71,17 @@ fn diagnostic_codes(graph: &Graph) -> Vec<&str> {
     graph.diagnostics.iter().map(|d| d.code.as_str()).collect()
 }
 
-/// No folded term may resolve, transitively, back to itself.
+/// No term may resolve, transitively, back to itself once self-reaching terms
+/// state no triple, and every term the fold reports as self-reaching is one.
 ///
-/// This walks [`Graph::triple_of`] — the accessor every consumer uses — rather
-/// than `term_triple`, which does not read the implicit self-bound spelling
-/// and so cannot see a loop written in it.
-fn assert_no_term_reaches_itself(graph: &Graph) {
+/// This walks [`Graph::resolved_triple_of`] — the accessor every consumer uses —
+/// rather than `term_triple`, which does not read the implicit self-bound
+/// spelling and so cannot see a loop written in it.
+fn assert_resolution_terminates(graph: &Graph, self_reaching: &[usize]) {
+    let reaching = SelfReaching::of(graph);
     for start in 0..graph.terms.len() {
         let mut stack: Vec<usize> = graph
-            .triple_of(start)
+            .resolved_triple_of(start, &reaching)
             .map_or_default(|spo| <[usize; 3]>::from(spo).to_vec());
         let mut seen = vec![false; graph.terms.len()];
         while let Some(tid) = stack.pop() {
@@ -98,9 +93,25 @@ fn assert_no_term_reaches_itself(graph: &Graph) {
             if std::mem::replace(&mut seen[tid], true) {
                 continue;
             }
-            if let Some(spo) = graph.triple_of(tid) {
+            if let Some(spo) = graph.resolved_triple_of(tid, &reaching) {
                 stack.extend(<[usize; 3]>::from(spo));
             }
+        }
+    }
+    for tid in 0..graph.terms.len() {
+        assert_eq!(
+            reaching.contains(tid),
+            self_reaching.contains(&tid),
+            "term {tid} self-reaching: terms={:?} reifiers={:?}",
+            graph.terms,
+            graph.reifiers,
+        );
+        if reaching.contains(tid) {
+            assert_eq!(
+                graph.resolved_triple_of(tid, &reaching),
+                None,
+                "a self-reaching term states no triple",
+            );
         }
     }
 }
@@ -109,16 +120,11 @@ fn assert_no_term_reaches_itself(graph: &Graph) {
 // The implicit self-bound spelling — the one the refusal used to miss.
 // --------------------------------------------------------------------------- //
 
-/// The regression. A `k:3` term with no `tt` and no `rf` takes its components
-/// from the row keyed by its OWN id, so a row naming that term as its own
-/// subject makes the term contain itself.
-///
-/// This file folded with an EMPTY diagnostic list and left
-/// `triple_of(2) == Some((2, 1, 1))`, which aborted the first consumer that
-/// rendered term 2. The refusal anchored only on terms naming the reifier
-/// through `rf`, and this term names nothing.
+/// A `k:3` term with no `tt` and no `rf` takes its components from the row
+/// keyed by its OWN id, so a row naming that term as its own subject makes the
+/// term contain itself. The term states no triple, and the row is kept.
 #[test]
-fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused() {
+fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_degrades_the_term() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -131,33 +137,18 @@ fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused() {
     let bytes = writer.into_bytes();
 
     let graph = read(&bytes, false, None);
+    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
     assert_eq!(
-        diagnostic_codes(&graph),
-        vec!["DamagedFrame"],
-        "the loop must be REPORTED, not folded in silence: {:?}",
-        graph.diagnostics,
-    );
-    assert!(
-        graph.diagnostics[0].detail.contains("recursive"),
-        "{:?}",
-        graph.diagnostics,
-    );
-    assert!(
-        graph.reifiers.is_empty(),
-        "the self-reaching binding is not recorded: {:?}",
         graph.reifiers,
+        vec![(2, (2, 1, 1), None)],
+        "the row is retained: it is the term that degrades, not the statement",
     );
-    assert_eq!(
-        graph.triple_of(2),
-        None,
-        "term 2 is left stating no triple rather than one containing itself",
-    );
-    assert_no_term_reaches_itself(&graph);
+    assert_resolution_terminates(&graph, &[2]);
 }
 
-/// The implicit spelling is only refused when it LOOPS: a row keyed by an
+/// The implicit spelling degrades only when it LOOPS: a row keyed by an
 /// implicit self-bound term's own id that names other terms is ordinary RDF
-/// 1.2 and must still fold.
+/// 1.2 and still resolves.
 #[test]
 fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
     let terms = vec![
@@ -178,14 +169,14 @@ fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
         Some((0, 1, 0)),
         "the implicit self-bound spelling still resolves through its own id",
     );
-    assert_no_term_reaches_itself(&graph);
+    assert_resolution_terminates(&graph, &[]);
 }
 
 /// A loop that runs THROUGH an implicit self-bound term rather than closing on
-/// it directly. The traversal has to follow the implicit spelling, not just
-/// anchor on it.
+/// it directly. The search has to follow the implicit spelling, and every term
+/// on the loop states no triple.
 #[test]
-fn a_loop_routed_through_an_implicit_self_bound_term_is_refused() {
+fn a_loop_routed_through_an_implicit_self_bound_term_degrades_its_terms() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -201,17 +192,13 @@ fn a_loop_routed_through_an_implicit_self_bound_term_is_refused() {
     let bytes = writer.into_bytes();
 
     let graph = read(&bytes, false, None);
-    assert!(
-        diagnostic_codes(&graph).contains(&"DamagedFrame"),
-        "{:?}",
-        graph.diagnostics,
-    );
+    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
     assert_eq!(
         graph.reifiers,
-        vec![(2, (3, 1, 1), None)],
-        "only the loop-closing row is refused",
+        vec![(2, (3, 1, 1), None), (0, (2, 1, 1), None)],
+        "both rows are retained",
     );
-    assert_no_term_reaches_itself(&graph);
+    assert_resolution_terminates(&graph, &[2, 3]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -221,7 +208,7 @@ fn a_loop_routed_through_an_implicit_self_bound_term_is_refused() {
 /// Term 2 reads its components from reifier 0, and the row bound to reifier 0
 /// has term 2 as its subject.
 #[test]
-fn a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused() {
+fn a_binding_that_makes_an_rf_triple_term_contain_itself_degrades_the_term() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -233,22 +220,16 @@ fn a_binding_that_makes_an_rf_triple_term_contain_itself_is_refused() {
     let bytes = writer.into_bytes();
 
     let graph = read(&bytes, false, None);
-    assert_eq!(
-        diagnostic_codes(&graph),
-        vec!["DamagedFrame"],
-        "{:?}",
-        graph.diagnostics,
-    );
-    assert_eq!(graph.reifiers, [] as [_; 0]);
-    assert_eq!(graph.triple_of(2), None);
-    assert_no_term_reaches_itself(&graph);
+    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+    assert_eq!(graph.reifiers, vec![(0, (2, 1, 1), None)]);
+    assert_resolution_terminates(&graph, &[2]);
 }
 
-/// A two-hop loop: two triple terms whose rows name each other. The refusal
-/// traverses, so it catches this too — a check that only asked "does this row
-/// name its own anchor" would not.
+/// A two-hop loop: two triple terms whose rows name each other. The search
+/// follows the chain, so both terms degrade — a check that only asked "does
+/// this row name its own anchor" would catch neither.
 #[test]
-fn a_two_hop_binding_loop_is_refused() {
+fn a_two_hop_binding_loop_degrades_both_terms() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -258,29 +239,24 @@ fn a_two_hop_binding_loop_is_refused() {
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
     // Row one is innocent on its own: reifier 1 is unbound when it is read.
-    // Row two closes the loop, and that is where the refusal must land.
+    // Row two closes the loop; both rows stay.
     writer.add_reifies(&[(0, (3, 1, 1), None), (1, (2, 1, 1), None)]);
     let bytes = writer.into_bytes();
 
     let graph = read(&bytes, false, None);
-    assert_eq!(
-        diagnostic_codes(&graph),
-        vec!["DamagedFrame"],
-        "{:?}",
-        graph.diagnostics,
-    );
+    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
     assert_eq!(
         graph.reifiers,
-        vec![(0, (3, 1, 1), None)],
-        "the innocent row is kept and only the loop-closing row refused",
+        vec![(0, (3, 1, 1), None), (1, (2, 1, 1), None)],
     );
-    assert_no_term_reaches_itself(&graph);
+    assert_resolution_terminates(&graph, &[2, 3]);
 }
 
-/// The loop is refused however late it is attempted: introducing the terms in
-/// separate frames, and the rows after them, does not get one past the check.
+/// A term resolves through the FIRST row bound to its reifier, so a later row
+/// that names a term reading that reifier closes no loop: the neighbouring
+/// valid case of the loops above, introduced across frame boundaries.
 #[test]
-fn a_binding_loop_is_refused_across_frame_boundaries() {
+fn a_later_binding_of_a_shared_reifier_closes_no_loop() {
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&[
         Term::iri("http://example.org/a"),
@@ -289,30 +265,24 @@ fn a_binding_loop_is_refused_across_frame_boundaries() {
     writer.add_terms(&[indirect_triple_term(0)]); // 2
     writer.add_reifies(&[(0, (1, 1, 1), None)]); // innocent: term 2 = <<( p p p )>>
     writer.add_terms(&[indirect_triple_term(0)]); // 3, sharing reifier 0
-    writer.add_reifies(&[(0, (3, 1, 1), None)]); // would make 3 contain itself
+    writer.add_reifies(&[(0, (3, 1, 1), None)]); // a second row; the first still wins
     let bytes = writer.into_bytes();
 
     let graph = read(&bytes, false, None);
-    assert!(
-        diagnostic_codes(&graph).contains(&"DamagedFrame"),
-        "{:?}",
-        graph.diagnostics,
-    );
     assert_eq!(
         graph.reifiers,
-        vec![(0, (1, 1, 1), None)],
-        "only the innocent binding survives",
+        vec![(0, (1, 1, 1), None), (0, (3, 1, 1), None)],
+        "both bindings are retained",
     );
-    assert_no_term_reaches_itself(&graph);
+    assert_eq!(graph.triple_of(3), Some((1, 1, 1)));
+    assert_resolution_terminates(&graph, &[]);
 }
 
-/// The streaming reader folds each frame with a fresh fold state, so what a
-/// `reifies` row is checked against (the segment's anchors and first bindings)
-/// has to be carried from frame to frame. Dropping it would admit the loop in
-/// silence on exactly the path event importers take: it must refuse the same
-/// row, and report the same diagnostics, as the materializing reader.
+/// The streaming reader folds each frame with a fresh fold state. It must
+/// stream the same rows, and report the same diagnostics, as the materializing
+/// reader, for rows that close a loop as for rows that do not.
 #[test]
-fn the_streaming_reader_refuses_a_binding_loop_across_frame_boundaries() {
+fn the_streaming_reader_streams_the_rows_the_materializing_reader_keeps() {
     #[derive(Default)]
     struct Rows(Vec<ReifierRow>);
     impl StreamingSink for Rows {
@@ -329,7 +299,9 @@ fn the_streaming_reader_refuses_a_binding_loop_across_frame_boundaries() {
     writer.add_terms(&[indirect_triple_term(0)]); // 2
     writer.add_reifies(&[(0, (1, 1, 1), None)]); // innocent: term 2 = <<( p p p )>>
     writer.add_terms(&[indirect_triple_term(0)]); // 3, sharing reifier 0
-    writer.add_reifies(&[(0, (3, 1, 1), None)]); // would make 3 contain itself
+    writer.add_reifies(&[(0, (3, 1, 1), None)]); // a second row for reifier 0
+    writer.add_terms(&[indirect_triple_term(4)]); // 4, naming itself as reifier
+    writer.add_reifies(&[(4, (4, 1, 1), None)]); // 4 contains itself
     let bytes = writer.into_bytes();
 
     let mut rows = Rows::default();
@@ -339,11 +311,6 @@ fn the_streaming_reader_refuses_a_binding_loop_across_frame_boundaries() {
         .iter()
         .map(|d| d.code.as_str())
         .collect();
-    assert!(
-        streamed_codes.contains(&"DamagedFrame"),
-        "{:?}",
-        streamed.diagnostics
-    );
     assert_eq!(
         streamed_codes,
         diagnostic_codes(&read(&bytes, false, None)),
@@ -351,15 +318,19 @@ fn the_streaming_reader_refuses_a_binding_loop_across_frame_boundaries() {
     );
     assert_eq!(
         rows.0,
-        vec![(0, (1, 1, 1), None)],
-        "only the innocent binding is streamed",
+        vec![
+            (0, (1, 1, 1), None),
+            (0, (3, 1, 1), None),
+            (4, (4, 1, 1), None)
+        ],
+        "every binding is streamed, the loop-closing one included",
     );
 }
 
 /// An explicitly self-bound term (`rf == its own id`) is the same hazard
-/// spelled a third way, and is refused too.
+/// spelled a third way, and degrades the same way.
 #[test]
-fn an_explicitly_self_bound_term_naming_itself_is_refused() {
+fn an_explicitly_self_bound_term_naming_itself_degrades() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -371,12 +342,9 @@ fn an_explicitly_self_bound_term_naming_itself_is_refused() {
     let bytes = writer.into_bytes();
 
     let graph = read(&bytes, false, None);
-    assert!(
-        diagnostic_codes(&graph).contains(&"DamagedFrame"),
-        "{:?}",
-        graph.diagnostics,
-    );
-    assert_no_term_reaches_itself(&graph);
+    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+    assert_eq!(graph.reifiers, vec![(2, (2, 1, 1), None)]);
+    assert_resolution_terminates(&graph, &[2]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -407,7 +375,7 @@ fn a_tt_naming_its_own_term_is_dropped_as_a_forward_reference() {
     let graph = read(&bytes, false, None);
     assert_eq!(diagnostic_codes(&graph), vec!["ForwardReference"]);
     assert_eq!(graph.terms[2].triple, None, "the self-naming tt is dropped");
-    assert_no_term_reaches_itself(&graph);
+    assert_resolution_terminates(&graph, &[]);
 }
 
 /// An `rf` naming a term after itself is dropped the same way, so a reifier
@@ -428,7 +396,7 @@ fn an_rf_naming_a_later_term_is_dropped_as_a_forward_reference() {
     assert_eq!(diagnostic_codes(&graph), vec!["ForwardReference"]);
     assert_eq!(graph.terms[2].reifier, None, "the forward rf is dropped");
     assert_eq!(graph.terms[3].reifier, Some(2), "the backward rf survives");
-    assert_no_term_reaches_itself(&graph);
+    assert_resolution_terminates(&graph, &[]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -436,9 +404,9 @@ fn an_rf_naming_a_later_term_is_dropped_as_a_forward_reference() {
 // --------------------------------------------------------------------------- //
 
 /// A snapshot frame shifts its local ids into the outer space and
-/// re-dispatches through the same handlers, so it gets the same refusal.
+/// re-dispatches through the same handlers, so it degrades the same way.
 #[test]
-fn a_binding_loop_inside_a_snapshot_is_refused() {
+fn a_binding_loop_inside_a_snapshot_degrades_the_term() {
     let mut graph = Graph::default();
     graph.terms.push(Term::iri("http://example.org/a")); // 0
     graph.terms.push(Term::iri("http://example.org/p")); // 1
@@ -451,18 +419,16 @@ fn a_binding_loop_inside_a_snapshot_is_refused() {
     let bytes = writer.into_bytes();
 
     let folded = read(&bytes, false, None);
-    assert!(
-        !folded.diagnostics.is_empty(),
-        "the loop is refused inside a snapshot, and reported",
-    );
-    assert_no_term_reaches_itself(&folded);
+    assert!(folded.diagnostics.is_empty(), "{:?}", folded.diagnostics);
+    assert_eq!(folded.reifiers, vec![(2, (2, 1, 1), None)]);
+    assert_resolution_terminates(&folded, &[2]);
 }
 
-/// The multi-segment fold of a file that ATTEMPTED the loop terminates, keeps
-/// the rest of the file, and leaves no self-reaching term. This is the path
-/// the segment union walks, and it has no bound of its own.
+/// The multi-segment fold of a file holding a self-reaching term terminates,
+/// keeps the row and the rest of the file, and gives the term an identity of its
+/// own that states no triple. This is the path the segment union walks.
 #[test]
-fn the_multi_segment_fold_of_an_attempted_loop_terminates() {
+fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -477,7 +443,13 @@ fn the_multi_segment_fold_of_an_attempted_loop_terminates() {
 
     let graph = read(&data, true, None);
     assert_eq!(graph.segment_heads.len(), 2, "both segments folded");
-    assert_no_term_reaches_itself(&graph);
+    assert_eq!(graph.reifiers.len(), 1, "the row survives the union");
+    let reaching = SelfReaching::of(&graph);
+    let degraded: Vec<usize> = (0..graph.terms.len())
+        .filter(|&tid| reaching.contains(tid))
+        .collect();
+    assert_eq!(degraded.len(), 1, "one term still reaches itself");
+    assert_resolution_terminates(&graph, &degraded);
     assert_eq!(graph.quads.len(), 2, "both segments' quads survive");
     assert!(
         graph
@@ -488,10 +460,11 @@ fn the_multi_segment_fold_of_an_attempted_loop_terminates() {
     );
 }
 
-/// Re-authoring a refused file through the canonical writer and reading it
-/// back stays clean: the refusal is not something a round trip can launder.
+/// Re-authoring a file with a self-reaching term through the canonical writer
+/// terminates, and reading the result back gives the same term and the same
+/// row: the degradation is not something a round trip loses.
 #[test]
-fn a_refused_loop_does_not_come_back_through_a_round_trip() {
+fn a_self_reaching_term_survives_a_round_trip_through_the_canonical_writer() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
@@ -507,5 +480,15 @@ fn a_refused_loop_does_not_come_back_through_a_round_trip() {
         .expect("re-author the folded graph")
         .into_bytes();
     let refolded = read(&rewritten, false, None);
-    assert_no_term_reaches_itself(&refolded);
+    assert_eq!(
+        refolded.reifiers.len(),
+        1,
+        "the row survives the round trip"
+    );
+    let reaching = SelfReaching::of(&refolded);
+    let degraded: Vec<usize> = (0..refolded.terms.len())
+        .filter(|&tid| reaching.contains(tid))
+        .collect();
+    assert_eq!(degraded.len(), 1);
+    assert_resolution_terminates(&refolded, &degraded);
 }

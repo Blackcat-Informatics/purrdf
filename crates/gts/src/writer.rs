@@ -31,8 +31,10 @@ use purrdf_lex::cbor::Value;
 use crate::FastMap;
 use crate::codec::{Codec, CodecError, EncodeOptions, encode_chain_with_options};
 use crate::model::{
-    AnnotationRow, Graph, Quad, ReifierRow, Suppression, Term, TermKind, is_literal_direction,
+    AnnotationRow, Graph, Quad, ReifierRow, Suppression, Term, TermKind, Triple3,
+    is_literal_direction,
 };
+use crate::resolution::SelfReaching;
 use crate::wire::{
     SELF_DESCRIBE_TAG, append_canonical, canonical, content_id, digest_str, header_id,
 };
@@ -1678,7 +1680,7 @@ pub struct TermRemap {
 #[cfg(test)]
 fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usize {
     let mut active = vec![false; graph.terms.len()];
-    term_nesting_depth_marked(graph, tid, stack, &mut active)
+    term_nesting_depth_marked(graph, tid, stack, &mut active, &SelfReaching::default())
 }
 
 fn term_nesting_depth_marked(
@@ -1686,9 +1688,15 @@ fn term_nesting_depth_marked(
     tid: usize,
     stack: &mut Vec<usize>,
     active: &mut [bool],
+    reaching: &SelfReaching,
 ) -> usize {
     /// The depth of `tid` if it has no components to walk, or its components.
-    fn enter(graph: &Graph, tid: usize, active: &[bool]) -> Result<usize, [usize; 3]> {
+    fn enter(
+        graph: &Graph,
+        tid: usize,
+        active: &[bool],
+        reaching: &SelfReaching,
+    ) -> Result<usize, [usize; 3]> {
         if active.get(tid).copied().unwrap_or(false) {
             return Ok(0);
         }
@@ -1699,7 +1707,7 @@ fn term_nesting_depth_marked(
             return Ok(0);
         }
         graph
-            .triple_of(tid)
+            .resolved_triple_of(tid, reaching)
             .map_or(Ok(1), |components| Err(components.into()))
     }
     /// A quoted triple being walked: its components, how many have been entered, and
@@ -1709,7 +1717,7 @@ fn term_nesting_depth_marked(
         entered: usize,
         deepest: usize,
     }
-    let components = match enter(graph, tid, active) {
+    let components = match enter(graph, tid, active, reaching) {
         Ok(depth) => return depth,
         Err(components) => components,
     };
@@ -1725,7 +1733,7 @@ fn term_nesting_depth_marked(
         if frame.entered < 3 {
             let component = frame.components[frame.entered];
             frame.entered += 1;
-            match enter(graph, component, active) {
+            match enter(graph, component, active, reaching) {
                 Ok(depth) => frame.deepest = frame.deepest.max(depth),
                 Err(components) => {
                     active[component] = true;
@@ -1747,6 +1755,21 @@ fn term_nesting_depth_marked(
             Some(parent) => parent.deepest = parent.deepest.max(depth),
             None => return depth,
         }
+    }
+}
+
+/// [`Graph::term_triple`] of `term`, the term at `tid`, except that a term that
+/// reaches itself states no triple (GTS-SPEC §7.3).
+fn resolved_term_triple(
+    graph: &Graph,
+    tid: usize,
+    term: &Term,
+    reaching: &SelfReaching,
+) -> Option<Triple3> {
+    if reaching.contains(tid) {
+        None
+    } else {
+        graph.term_triple(term)
     }
 }
 
@@ -1774,7 +1797,8 @@ fn remap_with_identity_work(graph: &Graph) -> (TermRemap, IdentityWork) {
     let mut old_by_new: Vec<usize> = (0..graph.terms.len()).collect();
     let mut stack = Vec::new();
     let mut active = vec![false; graph.terms.len()];
-    if let Some(depths) = acyclic_term_depths(graph, &mut work) {
+    let reaching = SelfReaching::of(graph);
+    if let Some(depths) = acyclic_term_depths(graph, &reaching, &mut work) {
         // A triple identity is a canonical CBOR array of three child identities.
         // Keep the one flat encoding per leaf; the child edges already in `Graph`
         // share the nested identity. No expanded key is retained per ancestor.
@@ -1783,8 +1807,9 @@ fn remap_with_identity_work(graph: &Graph) -> (TermRemap, IdentityWork) {
             .iter()
             .enumerate()
             .map(|(tid, term)| {
-                (term.kind != TermKind::Triple || graph.term_triple(term).is_none())
-                    .then(|| term_identity_key_marked(graph, tid, &mut stack, &mut active))
+                (term.kind != TermKind::Triple
+                    || resolved_term_triple(graph, tid, term, &reaching).is_none())
+                .then(|| term_identity_key_marked(graph, tid, &mut stack, &mut active, &reaching))
             })
             .collect();
         work.flat_identity_bytes = flat_keys
@@ -1829,8 +1854,8 @@ fn remap_with_identity_work(graph: &Graph) -> (TermRemap, IdentityWork) {
             .iter()
             .map(|&tid| {
                 (
-                    term_nesting_depth_marked(graph, tid, &mut stack, &mut active),
-                    term_identity_key_marked(graph, tid, &mut stack, &mut active),
+                    term_nesting_depth_marked(graph, tid, &mut stack, &mut active, &reaching),
+                    term_identity_key_marked(graph, tid, &mut stack, &mut active, &reaching),
                 )
             })
             .collect();
@@ -1852,7 +1877,11 @@ fn remap_with_identity_work(graph: &Graph) -> (TermRemap, IdentityWork) {
 /// Depths of all terms in one pass over an acyclic component graph. A missing
 /// component is a flat marker of depth zero; a cycle selects the path-sensitive
 /// fallback above instead of silently inventing a depth for it.
-fn acyclic_term_depths(graph: &Graph, work: &mut IdentityWork) -> Option<Vec<usize>> {
+fn acyclic_term_depths(
+    graph: &Graph,
+    reaching: &SelfReaching,
+    work: &mut IdentityWork,
+) -> Option<Vec<usize>> {
     let count = graph.terms.len();
     work.source_terms = count;
     let mut parents = vec![Vec::new(); count];
@@ -1863,7 +1892,7 @@ fn acyclic_term_depths(graph: &Graph, work: &mut IdentityWork) -> Option<Vec<usi
             continue;
         }
         depths[tid] = 1;
-        if let Some(components) = graph.term_triple(term) {
+        if let Some(components) = resolved_term_triple(graph, tid, term, reaching) {
             for child in <[usize; 3]>::from(components) {
                 if child < count {
                     work.source_edges += 1;
@@ -2200,7 +2229,7 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
 #[cfg(test)]
 fn term_identity_key(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Vec<u8> {
     let mut active = vec![false; graph.terms.len()];
-    term_identity_key_marked(graph, tid, stack, &mut active)
+    term_identity_key_marked(graph, tid, stack, &mut active, &SelfReaching::default())
 }
 
 fn term_identity_key_marked(
@@ -2208,6 +2237,7 @@ fn term_identity_key_marked(
     tid: usize,
     stack: &mut Vec<usize>,
     active: &mut [bool],
+    reaching: &SelfReaching,
 ) -> Vec<u8> {
     /// A quoted triple being written: its components and how many have begun.
     struct Frame {
@@ -2215,7 +2245,13 @@ fn term_identity_key_marked(
         entered: usize,
     }
     /// Write `tid`'s identity if it is flat, or open its array and return its frame.
-    fn enter(graph: &Graph, tid: usize, active: &[bool], out: &mut Vec<u8>) -> Option<Frame> {
+    fn enter(
+        graph: &Graph,
+        tid: usize,
+        active: &[bool],
+        reaching: &SelfReaching,
+        out: &mut Vec<u8>,
+    ) -> Option<Frame> {
         let flat = if active.get(tid).copied().unwrap_or(false) {
             Value::Array(vec!["cycle".into(), Value::from(tid as u64)])
         } else {
@@ -2241,7 +2277,7 @@ fn term_identity_key_marked(
                             _ => Value::Array(vec!["anonymous".into(), Value::from(tid as u64)]),
                         },
                     ]),
-                    TermKind::Triple => match graph.term_triple(term) {
+                    TermKind::Triple => match resolved_term_triple(graph, tid, term, reaching) {
                         Some(components) => {
                             out.push(0x84);
                             append_canonical(&Value::Text("triple".into()), out);
@@ -2264,7 +2300,7 @@ fn term_identity_key_marked(
         None
     }
     let mut out = Vec::new();
-    let Some(root) = enter(graph, tid, active, &mut out) else {
+    let Some(root) = enter(graph, tid, active, reaching, &mut out) else {
         return out;
     };
     active[tid] = true;
@@ -2279,7 +2315,7 @@ fn term_identity_key_marked(
         }
         let component = frame.components[frame.entered];
         frame.entered += 1;
-        if let Some(inner) = enter(graph, component, active, &mut out) {
+        if let Some(inner) = enter(graph, component, active, reaching, &mut out) {
             active[component] = true;
             stack.push(component);
             frames.push(inner);
@@ -2435,9 +2471,11 @@ mod term_walk_tests {
 
     use super::{
         IdentityWork, Writer, canonical, compare_acyclic_identity, deterministic_term_remap,
-        remap_with_identity_work, term_identity_key, term_nesting_depth, text_or_null,
+        remap_with_identity_work, term_identity_key, term_identity_key_marked, term_nesting_depth,
+        term_nesting_depth_marked, text_or_null,
     };
     use crate::model::{Graph, Term, TermKind};
+    use crate::resolution::SelfReaching;
 
     #[global_allocator]
     static ALLOCATOR: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
@@ -2579,13 +2617,16 @@ mod term_walk_tests {
         graph
     }
 
+    /// The order the walks give when every self-reaching term states no triple.
     fn reference_remap(graph: &Graph) -> Vec<usize> {
         let mut stack = Vec::new();
+        let reaching = SelfReaching::of(graph);
         let keys: Vec<_> = (0..graph.terms.len())
             .map(|tid| {
+                let mut active = vec![false; graph.terms.len()];
                 (
-                    term_nesting_depth(graph, tid, &mut stack),
-                    term_identity_key(graph, tid, &mut stack),
+                    term_nesting_depth_marked(graph, tid, &mut stack, &mut active, &reaching),
+                    term_identity_key_marked(graph, tid, &mut stack, &mut active, &reaching),
                 )
             })
             .collect();

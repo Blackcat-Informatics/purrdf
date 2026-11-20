@@ -36,10 +36,6 @@ pub(super) enum FoldError {
     ReifiesArray {
         snapshot: bool,
     },
-    RecursiveReifier {
-        reifier: usize,
-        triple: crate::model::Triple3,
-    },
     FrameMap,
     SelfHash {
         stored: Option<Vec<u8>>,
@@ -90,7 +86,6 @@ impl FoldError {
             | Self::Direction { .. }
             | Self::RefusedLanguageDirection { .. }
             | Self::ReifiesArray { .. }
-            | Self::RecursiveReifier { .. }
             | Self::FrameMap
             | Self::SelfHash { .. }
             | Self::FirstHeader
@@ -128,10 +123,6 @@ impl fmt::Display for FoldError {
                 "{}reifies payload must be a row array",
                 if *snapshot { "snapshot " } else { "" }
             ),
-            Self::RecursiveReifier { reifier, .. } => write!(
-                f,
-                "reifier {reifier} creates a recursive quoted-triple binding"
-            ),
             Self::FrameMap => f.write_str("frame is not a map"),
             Self::SelfHash { .. } => f.write_str("frame self-hash mismatch"),
             Self::Previous { .. } => f.write_str("prev does not match"),
@@ -168,7 +159,6 @@ impl purrdf_hash::error::StructuredError for FoldError {
             "triple" => List(triple.as_ref().map_or(&[][..], |ids| ids.as_slice()).iter().map(|id| id.map_or(ErrorValue::Absent, ErrorValue::Signed)))
         },
         ReifiesArray { snapshot } => "gts-reifies-not-array" { "snapshot" => Boolean(*snapshot) },
-        RecursiveReifier { reifier, triple } => "gts-recursive-reifier" { "reifier" => Unsigned(*reifier as u128), "subject" => Unsigned(triple.0 as u128), "predicate" => Unsigned(triple.1 as u128), "object" => Unsigned(triple.2 as u128) },
         FrameMap => "gts-frame-not-map" {},
         SelfHash { stored, computed } => "gts-frame-self-hash" { "stored" => Value(stored.as_deref().map_or(ErrorValue::Absent, ErrorValue::Bytes)), "computed" => Bytes(computed) },
         Previous { actual, expected } => "gts-frame-previous" { "actual" => Value(actual.as_deref().map_or(ErrorValue::Absent, ErrorValue::Bytes)), "expected" => Bytes(expected) },

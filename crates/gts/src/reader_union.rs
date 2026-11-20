@@ -8,6 +8,7 @@ use purrdf_lex::cbor::Value;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind, Triple3};
 use crate::reader::{as_idx, text_or};
 use crate::reader_index::DigestIndex;
+use crate::resolution::SelfReaching;
 use crate::wire::map_get;
 
 // --------------------------------------------------------------------------- //
@@ -20,25 +21,11 @@ use crate::wire::map_get;
 //
 // TERMINATION (§7.3, normative) — a quoted triple's VALUE is its `(s, p, o)`
 // binding, so interning one walks its components, and `map_term`'s walk has NO
-// bound of its own. It terminates
-// because a term can never reach itself:
-//
-//   * `tt` and `dt` components must name an ALREADY-INTRODUCED term, and `rf`
-//     must too (or the term itself, handled without recursing) — see the
-//     sanitizing in `reader::Folder::h_terms`. Ids therefore strictly descend.
-//   * the `reifies` statement layer is the one field that may name any term,
-//     so `ReifierIndex::binding_is_recursive` REFUSES, as a `DamagedFrame`,
-//     any binding that would let a triple term reach itself.
-//
-// That is the fold-time-refusal strategy §7.3 permits; the alternative it
-// permits — a per-term sentinel that states no triple — belongs to engines
-// whose readers accept the row. Because the refusal is what this engine does,
-// this walk needs no guard of its own, and adding one would put two hash
-// lookups per term on the fold's hot path to handle input the reader cannot
-// produce. The coupling is not local, so it is pinned:
-// `tests/union_self_reaching_term.rs` builds each attempt at the shape through
-// the real writer and asserts the fold refuses it. Relax the refusal and those
-// tests fail — which is the signal that this walk then needs the sentinel.
+// bound of its own. It terminates because the terms that reach themselves,
+// found once per segment by `SelfReaching::of`, are mapped as terms that state
+// no triple: each keeps an identity of its own (`InternKey::SelfReaching`), and
+// neither its components nor its reifier are walked. Every other walk of
+// components therefore runs over an acyclic term graph.
 // --------------------------------------------------------------------------- //
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -47,6 +34,8 @@ enum InternKey {
     Lit(Option<String>, String, Option<String>, Option<String>),
     Bnode(usize, Option<String>, Option<usize>),
     Qt(Option<Triple3>),
+    /// A triple term that reaches itself: one identity per segment term.
+    SelfReaching(usize, usize),
 }
 
 #[derive(Default)]
@@ -61,6 +50,8 @@ struct Unioner {
     /// instead of walking the term's components again, so mapping a chain costs time
     /// linear in its length.
     mapped: FastMap<(usize, usize), usize>,
+    /// The triple terms of the segment being mapped that reach themselves.
+    reaching: SelfReaching,
 }
 
 /// Where a term being mapped by [`Unioner::map_term`] stands: each stage waits for the
@@ -154,15 +145,9 @@ impl Unioner {
     ///
     /// The walk follows a term's triple components, its datatype and its reifier
     /// with no depth bound and no visited set — see the module-level rationale above
-    /// for why: `union_segments` is `pub(crate)` in a private module, so
-    /// `reader::read_with_options` is its only caller, and every `Graph` reaching it
-    /// has already passed `reader::read`'s per-segment refusal of a self-reaching
-    /// triple term (`ReifierIndex::binding_is_recursive`, `DamagedFrame`, covering the
-    /// implicit self-bound spelling of §7.1 too). A guard was considered and rejected
-    /// here: it would put two hash lookups per term on the fold's hot path to defend
-    /// against a shape the reader cannot produce — a closed decision. Any path into
-    /// this union that does not run through `reader::read` must establish its own
-    /// acyclicity before calling in; this walk will not.
+    /// for why. A triple term that reaches itself (`self.reaching`, found once per
+    /// segment by [`SelfReaching::of`]) states no triple, so neither its components
+    /// nor its reifier are walked and every other chain of components is acyclic.
     fn map_term(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
         let mut frames = vec![MapFrame::new(tid)];
         loop {
@@ -190,13 +175,18 @@ impl Unioner {
             let self_bound = t.kind == TermKind::Triple && t.reifier == Some(frame.tid);
             let mapped = match frame.stage {
                 MapStage::Start => {
-                    match (t.kind, seg.term_triple(t)) {
+                    let degraded = self.reaching.contains(frame.tid);
+                    match (t.kind, seg.term_triple(t).filter(|_| !degraded)) {
                         (TermKind::Triple, Some((s, p, o))) => {
                             frame.calls = vec![o, p, s];
                             frame.stage = MapStage::KeyComponents;
                         }
                         _ => {
-                            frame.key = Some(Self::leaf_key(seg, seg_idx, frame.tid));
+                            frame.key = Some(if degraded {
+                                InternKey::SelfReaching(seg_idx, frame.tid)
+                            } else {
+                                Self::leaf_key(seg, seg_idx, frame.tid)
+                            });
                             frame.stage = MapStage::Lookup;
                         }
                     }
@@ -219,7 +209,7 @@ impl Unioner {
                 }
                 MapStage::Datatype => {
                     frame.datatype = frame.results.pop();
-                    if !self_bound {
+                    if !self_bound && !self.reaching.contains(frame.tid) {
                         frame.calls.extend(t.reifier);
                     }
                     frame.stage = MapStage::Reifier;
@@ -353,6 +343,7 @@ pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
     // make the union quadratic in its rows.
     let mut seen_reifiers: FastSet<ReifierRow> = FastSet::default();
     for (seg_idx, seg) in segments.iter().enumerate() {
+        u.reaching = SelfReaching::of(seg);
         for &(s, p, o, gq) in &seg.quads {
             let q: Quad = (
                 u.map_term(seg, seg_idx, s),

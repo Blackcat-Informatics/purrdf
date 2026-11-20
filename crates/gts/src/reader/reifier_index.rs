@@ -12,9 +12,7 @@
 //! own anchors cost.
 
 use super::term_decode::TermReferences;
-use crate::dictionary::DictionaryError;
-use crate::model::{Graph, ReifierRow, Term, TermKind, Triple3};
-use crate::term_table::TermMetadata;
+use crate::model::{Graph, ReifierRow, Term, Triple3};
 use crate::{FastMap, FastSet};
 
 /// Indexes kept in step with one segment's terms and accepted bindings.
@@ -74,103 +72,5 @@ impl ReifierIndex {
                 graph.reifiers.push(row);
             }
         }
-    }
-
-    /// Would recording `(rid, triple)` let some quoted-triple term contain
-    /// itself?
-    ///
-    /// The anchors are the terms whose components this row would supply: those
-    /// naming `rid` through `rf`, and — because a self-bound triple term may
-    /// leave `rf` implicit — the term whose own id IS `rid`. Miss an anchor and
-    /// the loop is recorded rather than refused.
-    pub(super) fn binding_is_recursive(
-        &self,
-        terms: impl TermMetadata,
-        rid: usize,
-        triple: Triple3,
-    ) -> Result<bool, DictionaryError> {
-        let mut seen: FastSet<usize> = FastSet::default();
-        for &anchor in self.anchors(rid) {
-            for component in <[usize; 3]>::from(triple) {
-                // Each probe starts from an empty set; clearing the hoisted
-                // set reuses its table instead of allocating one per component.
-                seen.clear();
-                if self.depends_on_anchor(terms, component, anchor, (rid, triple), &mut seen)? {
-                    return Ok(true);
-                }
-            }
-        }
-        Ok(false)
-    }
-
-    fn depends_on_anchor(
-        &self,
-        terms: impl TermMetadata,
-        term_id: usize,
-        anchor: usize,
-        pending: (usize, Triple3),
-        seen: &mut FastSet<usize>,
-    ) -> Result<bool, DictionaryError> {
-        let mut work = purrdf_lex::walk::WorkList::<usize, 16>::new();
-        work.push(term_id);
-        while let Some(term_id) = work.pop() {
-            if term_id == anchor {
-                return Ok(true);
-            }
-            if !seen.insert(term_id) {
-                continue;
-            }
-            if let Some(limit) = terms.traversal_limit() {
-                let required = seen.len().saturating_add(work.len()).saturating_add(3);
-                if required > limit {
-                    return Err(DictionaryError::Limit {
-                        resource: "reifier-traversal-entries",
-                        required,
-                        limit,
-                    });
-                }
-            }
-            if let Some((s, p, o)) = self.pending_binding(terms, term_id, pending)? {
-                work.extend([o, p, s]);
-            }
-        }
-        Ok(false)
-    }
-
-    /// The `(s, p, o)` a triple TERM would resolve to once `pending` is
-    /// recorded.
-    ///
-    /// This MUST mirror [`Graph::triple_of`] spelling for spelling. `triple_of`
-    /// is the one place a folded quoted triple's components are resolved, and
-    /// every walker of those components — the segment union, the canonical
-    /// writer, every projection to text — recurses through it. A spelling this
-    /// function fails to follow is a loop the fold admits and the first such
-    /// walker then dies on.
-    fn pending_binding(
-        &self,
-        terms: impl TermMetadata,
-        term_id: usize,
-        pending: (usize, Triple3),
-    ) -> Result<Option<Triple3>, DictionaryError> {
-        let Some(term) = terms.references(term_id)? else {
-            return Ok(None);
-        };
-        if term.kind != TermKind::Triple {
-            return Ok(None);
-        }
-        // A self-describing triple term (`tt`) can only name already-introduced
-        // components, so it is acyclic by construction and takes precedence.
-        if let Some(triple) = term.triple {
-            return Ok(Some(triple));
-        }
-        // Otherwise the components come from the statement layer, through the
-        // reifier id the term names — or, when it names none, through its OWN
-        // id (§7.1: a self-bound triple term may leave `rf` implicit). The row
-        // being read is not recorded yet, so substitute it for the id it binds.
-        let rid = term.reifier.unwrap_or(term_id);
-        if rid == pending.0 {
-            return Ok(Some(pending.1));
-        }
-        Ok(self.first_binding(rid))
     }
 }

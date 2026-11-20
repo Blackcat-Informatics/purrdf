@@ -1047,19 +1047,6 @@ impl Folder<'_, '_, '_> {
         if matches!(self.reifier_index.first_binding(rid), Some(existing) if existing != triple) {
             self.rebound_reifiers.push((rid, index));
         }
-        if self
-            .reifier_index
-            .binding_is_recursive(self.terms(), rid, triple)?
-        {
-            self.diag(
-                FoldError::RecursiveReifier {
-                    reifier: rid,
-                    triple,
-                },
-                index,
-            );
-            return Ok(());
-        }
         self.reifier_index
             .record(self.g, (rid, triple, gslot), self.materialize);
         if let Some(terms) = self.stored_terms {
