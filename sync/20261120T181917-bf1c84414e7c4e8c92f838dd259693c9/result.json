@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view",
+  "branch": "paudley/1404-execution-receipt-binding-takes-a-view",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "e9694c053377d6f42e3e657989af57ba612b909d",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view/.stage/execution-receipt-binding-takes-a-view/sync/20261120T181917-bf1c84414e7c4e8c92f838dd259693c9",
+  "conflicts": [],
+  "status": "completed",
+  "base": "184cb9f77e357d2a9f11e308337395500c647cf2",
+  "merge_bases": [
+    "207c24bd9cf2c370ede64fb46d80a4ba6bd851ab"
+  ],
+  "merge_index": "b9ecc70ac705cad95722564eae993260f44af2285e2c400e616765b464060117",
+  "candidate_tree": "0c79a06aa29b856e85984d727e9d8f3fab4c11c0",
+  "candidate_patch": "candidate-26169b8a89144a1c9af1a4bce6d850d5.patch",
+  "stdout_log": "commit-26169b8a89144a1c9af1a4bce6d850d5.stdout.log",
+  "stderr_log": "commit-26169b8a89144a1c9af1a4bce6d850d5.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 312.5732920790033,
+  "commit": "e3a7a2b185079c81827d0589af3cbfcb02d42d88",
+  "tree": "0c79a06aa29b856e85984d727e9d8f3fab4c11c0",
+  "exit_code": 0
+}

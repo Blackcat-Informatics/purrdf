@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1404,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view",
+  "branch": "paudley/1404-execution-receipt-binding-takes-a-view",
+  "slug": "execution-receipt-binding-takes-a-view",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view/.stage/execution-receipt-binding-takes-a-view",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "207c24bd9cf2c370ede64fb46d80a4ba6bd851ab",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view",
+    "branch:paudley/1404-execution-receipt-binding-takes-a-view",
+    "ignored:30314 files (30312 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to caches into /home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view plus 147 dependency units from 1 other checkouts in 32.4s; 20846 unchanged files keep their built mtimes; 32 other files take the seed time and rebuild; 7 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view/.stage/execution-receipt-binding-takes-a-view",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1404-execution-receipt-binding-takes-a-view/.stage/execution-receipt-binding-takes-a-view/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-20T03:54:13-0600",
+  "seed_error": ""
+}

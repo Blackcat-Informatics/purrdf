@@ -1,0 +1,184 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABo27UYA": {
+    "resolution": "acknowledged",
+    "reason": "Edited walkthrough; now a reviews-paused notice. It states no finding.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:41:05Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "49fd05ffb5e7e62329de3a1e65f43c467c823e46560f66bb8cddb0f6ed30a53f"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFKPXzw": {
+    "resolution": "addressed",
+    "reason": "Edited only to add the reviewer's confirmation; the test call was fixed in f7f6d5a and is unchanged.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:14:47Z",
+      "state": null,
+      "commit": "f9cc2d7368c172d531c8856af48fc3208803e0e5",
+      "path": "bindings/python/tests/test_query_coordinates.py",
+      "line": null,
+      "body_sha256": "3b3ea7ebfdf4e6987abb807c81cce3e7bc8c72f86d769487a69d3a8ea77048e9"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFKPX1w": {
+    "resolution": "addressed",
+    "reason": "Edited only to add the reviewer's addressed marker; the wasm identity refusal is routed through diag_to_err with the storage cause, now shared by contentIdentity() and bindExecutionReceipt in e9694c0.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T14:00:46Z",
+      "state": null,
+      "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+      "path": "crates/rdf-wasm/src/dataset.rs",
+      "line": 911,
+      "body_sha256": "48567e5cf1099d3f82dde191f97b1b864f526596c44896be115432d330bbddcc"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFKPX4A": {
+    "resolution": "addressed",
+    "reason": "Edited only to add the reviewer's addressed marker for 54a6705; no new finding.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:12:50Z",
+      "state": null,
+      "commit": "bd1ae97bec61b174229506a2fe167acaffe17e22",
+      "path": "docs/MIGRATION-5.0.md",
+      "line": null,
+      "body_sha256": "e8821a7fe207e1adc8f6722fc67a6660ee1ef2c0e77a428d7ee9404f5f20cf2a"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZRjDfw": {
+    "resolution": "addressed",
+    "reason": "Valid for the identity refusal: QuadStore.bind_execution_receipt now raises it through presentation::native_error_with_message, so the store's native cause fields stay reachable. The other ReceiptBindError variants remain plain ValueError text: no receipt error presentation exists and the sibling content_identity and other non-diagnostic refusals raise text the same way.",
+    "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T10:20:37Z",
+      "state": "COMMENTED",
+      "commit": "f9cc2d7368c172d531c8856af48fc3208803e0e5",
+      "path": null,
+      "line": null,
+      "body_sha256": "3b15e466d35def3f46a958c93241c0b14cf23ee80a4bdc72c343cc4885d4cb4b"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZV48nA": {
+    "resolution": "acknowledged",
+    "reason": "The agent's own reply to a review thread, recorded with the dispositions it reports; it asks for no change.",
+    "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:05:44Z",
+      "state": "COMMENTED",
+      "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZV4-nw": {
+    "resolution": "acknowledged",
+    "reason": "The agent's own reply to a review thread, recorded with the dispositions it reports; it asks for no change.",
+    "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:05:46Z",
+      "state": "COMMENTED",
+      "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFNhdnA": {
+    "resolution": "acknowledged",
+    "reason": "The agent's own reply to a review thread, recorded with the dispositions it reports; it asks for no change.",
+    "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:05:45Z",
+      "state": null,
+      "commit": "f9cc2d7368c172d531c8856af48fc3208803e0e5",
+      "path": "bindings/python/tests/test_query_coordinates.py",
+      "line": null,
+      "body_sha256": "04fc7ab3d96c5f8b899a3f53a63ab3d47acf18dc29623086f6b51e48de94e6a4"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFNhfAw": {
+    "resolution": "acknowledged",
+    "reason": "The agent's own reply to a review thread, recorded with the dispositions it reports; it asks for no change.",
+    "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:05:47Z",
+      "state": null,
+      "commit": "bd1ae97bec61b174229506a2fe167acaffe17e22",
+      "path": "docs/MIGRATION-5.0.md",
+      "line": null,
+      "body_sha256": "d35a3b520616c10e3ba2d8bca21c64482b706479e0c5faea963d2b2bcea899cd"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFNkPsA": {
+    "resolution": "addressed",
+    "reason": "Valid: the identity refusal now goes through purrdf_validate::native_error::diagnostic with the store's StorageError as classification and retained native cause, so the Python exception carries native_cause and native_cause_json. The wasm refusal is built the same way.",
+    "commit": "8039b213a9bf618bd428336a9beeacc92b065176",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:30:58Z",
+      "state": null,
+      "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+      "path": "bindings/python/src/py_store/quad_store.rs",
+      "line": null,
+      "body_sha256": "fe63ad11015e76cc70ca1238e74c2f88d711eba7f5a34b883e7b0f9bc4403c1e"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZV8cvw": {
+    "resolution": "addressed",
+    "reason": "Its one inline finding (native fields of the Python identity refusal) was fixed in 8039b21: the refusal is built with native_error::diagnostic retaining the StorageError as native cause. e9694c0 gives the wasm entry points the same construction.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:09:53Z",
+      "state": "COMMENTED",
+      "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+      "path": null,
+      "line": null,
+      "body_sha256": "0db0b8cfa4e5cafddb2c2895c26b95f2755a53999bf736b92e7af83872690208"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZWOkFQ": {
+    "resolution": "acknowledged",
+    "reason": "The agent's own review wrapper for a thread reply; asks for no change.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:30:38Z",
+      "state": "COMMENTED",
+      "commit": "8039b213a9bf618bd428336a9beeacc92b065176",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFNym6Q": {
+    "resolution": "acknowledged",
+    "reason": "The agent's own reply on a resolved thread; asks for no change.",
+    "commit": "e9694c053377d6f42e3e657989af57ba612b909d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T16:30:38Z",
+      "state": null,
+      "commit": "54a6705822b90a53728075aa09e676fa1743a29f",
+      "path": "bindings/python/src/py_store/quad_store.rs",
+      "line": null,
+      "body_sha256": "a90368149225a91d414f4225db31d198ecbfce2733f6a4d7b5c7972535cccea9"
+    }
+  }
+}
