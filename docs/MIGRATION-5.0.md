@@ -38,6 +38,8 @@ digests before opening a 4.x artifact.
   digests, not an additive sum. Content identities, execution receipts, source
   version fingerprints and text index generations recorded by 4.x stop
   matching (see "Row-set identities").
+- `GeoIndex::source_fingerprint` is a 32-byte digest, not a `u64` (see "Geo index
+  source identity").
 
 ## The canonical line sequence
 
@@ -316,6 +318,20 @@ supplementary subclass edges of a class-membership view, taken from a shapes
 graph or ontology another party supplies, no longer admit an edge set that
 collides with another.
 
+## Geo index source identity
+
+`GeoIndex::source_fingerprint` returns a 32-byte `purrdf_hash::hex::Digest32`
+instead of a 64-bit `u64`, and `IndexBindingError::Source` carries two of them.
+The value is a BLAKE3 digest, key-derived under `purrdf-geo/index-source/v2`
+and framed through `purrdf_hash::frame`, over the same deterministic index
+projection: the same scope, full geometry precision and admission, with input
+order leaving it unchanged. No index form stores it, so nothing in the library
+needs conversion. Code that holds, compares or hex-formats the value as a `u64`
+no longer compiles; recompute the digest from the source and store its 32 bytes
+or its 64-digit hex form (`Digest32::to_hex`, `Digest32::from_hex`). Code that
+only compares or displays the digests of `IndexBindingError::Source` still
+compiles, and its `Display` output becomes 64 hex digits.
+
 ## Items that left the crate root
 
 These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
@@ -368,7 +384,8 @@ compute.
 
 ## Public types that changed shape
 
-The canonicalization and compaction-certificate types below changed shape
+The canonicalization and compaction-certificate types below, and the geo index
+identity, changed shape
 between `rust-v4.0.2` and 5.0. Enums marked `#[non_exhaustive]` already require
 a wildcard arm in a `match`, so an added variant there compiles unchanged; those
 are listed last.
@@ -400,6 +417,10 @@ Variants added to enums that were already `#[non_exhaustive]` (no change
 needed where a wildcard arm exists): `CanonError::Refused`,
 `CanonError::Lowering` and `CanonError::SourceInconsistent`; `purrdf_rdf::gts_certify::CertifyError::CanonMismatch`;
 `purrdf_rdf::gts_certify::CertificateCborError::UnknownCanon` and `UnexpectedCanon`.
+
+Retyped geo index identity: `GeoIndex::source_fingerprint` returns `Digest32`
+instead of `u64`, and the payload of `IndexBindingError::Source` is two
+`Digest32` values instead of two `u64` values (see "Geo index source identity").
 
 No canonicalization or compaction-certificate struct with public fields gained,
 lost or retyped a public field, and none of these enums lost a variant.

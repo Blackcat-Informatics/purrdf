@@ -140,9 +140,9 @@ pub enum IndexBindingError {
     /// The complete rebuilt projection has another source fingerprint.
     Source {
         /// Original index source fingerprint.
-        expected: u64,
+        expected: purrdf_hash::hex::Digest32,
         /// Original supplied source fingerprint.
-        actual: u64,
+        actual: purrdf_hash::hex::Digest32,
     },
     /// A view supplied an identifier that does not resolve in that view.
     ForeignTermId,
@@ -151,7 +151,7 @@ pub enum IndexBindingError {
 impl purrdf_hash::error::StructuredError for IndexBindingError {
     purrdf_hash::error_visit! {
         Configuration { expected, actual } => "geo-index-binding-configuration" { "expected" => Record(expected), "actual" => Record(actual) },
-        Source { expected, actual } => "geo-index-binding-source" { "expected" => Unsigned(u128::from(*expected)), "actual" => Unsigned(u128::from(*actual)) },
+        Source { expected, actual } => "geo-index-binding-source" { "expected" => Record(expected), "actual" => Record(actual) },
         ForeignTermId => "geo-index-foreign-term-id" {},
     }
 }
@@ -182,7 +182,7 @@ impl core::fmt::Display for IndexBindingError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Configuration { expected: _, actual: _ } => f.write_str("the configuration supplied to verify_binding is not the one this index was built under; the two would project different rows, so the comparison would answer a different question than the one asked"),
-            Self::Source { expected, actual } => write!(f, "this GeoSPARQL index was built over a different dataset: its source digest is {expected:#018x} and the supplied dataset digests to {actual:#018x}. Rebuild the index from the dataset the query runs against, or pair the query with the dataset the index was built from — an index joined to the wrong dataset returns no rows and reports nothing"),
+            Self::Source { expected, actual } => write!(f, "this GeoSPARQL index was built over a different dataset: its source digest is {expected} and the supplied dataset digests to {actual}. Rebuild the index from the dataset the query runs against, or pair the query with the dataset the index was built from — an index joined to the wrong dataset returns no rows and reports nothing"),
             Self::ForeignTermId => f.write_str("the dataset view is inconsistent: a term id does not name a term"),
         }
     }

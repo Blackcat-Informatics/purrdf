@@ -8,6 +8,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: the GeoIndex source identity is a 32-byte BLAKE3 digest.**
+  `GeoIndex::source_fingerprint` returns `purrdf_hash::hex::Digest32`, not a
+  64-bit `u64`, and `IndexBindingError::Source` carries two `Digest32` values.
+  The digest is domain-separated (`purrdf-geo/index-source/v2`) over the same
+  deterministic projection, with the same scope, geometry precision and
+  admission, and `verify_binding` compares it. No stored value in the library
+  needs conversion; a caller that persisted `source_fingerprint()` recomputes
+  it from its source, and the old 64-bit value does not compile against the
+  new type.
 - **Canonical blank labels of a result that holds nested triple terms are
   renumbered.** A triple term that is a component of another now lowers to one
   term node and one record, so the lowered set of a chain of nested terms is

@@ -671,7 +671,7 @@ source on every run.
 | `b"purrdf-geo/geographic-index-law/v1"` | `LAW` | `crates/geo-kernel/src/index/geographic.rs` |
 | `b"purrdf-geo/geographic-index-source/v1"` | `CONTENT` | `crates/geo-kernel/src/index/geographic.rs` |
 | `b"purrdf-geo/geographic-index/v1"` | `INDEX` | `crates/geo-kernel/src/index/geographic.rs` |
-| `b"purrdf-geo/index-source/v1"` | `DIGEST_DOMAIN` | `crates/geo-kernel/src/index.rs` |
+| `b"purrdf-geo/index-source/v2"` | `DIGEST_DOMAIN` | `crates/geo-kernel/src/index.rs` |
 | `b"purrdf-hnsw/space-generation-v1"` | `SPACE_GENERATION_DOMAIN` | `crates/hnsw/src/relation.rs` |
 | `b"purrdf-json-document-v1"` | `DOCUMENT_DOMAIN` | `crates/json/src/profile.rs` |
 | `b"purrdf-json-profile-v1"` | `PROFILE_DOMAIN` | `crates/json/src/profile.rs` |
