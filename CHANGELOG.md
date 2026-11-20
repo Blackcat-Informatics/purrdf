@@ -17,6 +17,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   needs conversion; a caller that persisted `source_fingerprint()` recomputes
   it from its source, and the old 64-bit value does not compile against the
   new type.
+- **Breaking rename: `Multiset256::fingerprint` is now `Multiset256::accounting_check`.**
+  The method hashes the population and the additive sum, so it is an accounting
+  check and never identified a row set. The signature and the output bytes are
+  unchanged, and the old name is removed with no alias. Replace each call with
+  `accounting_check`; `purrdf_hash::multiset::sorted_fingerprint` remains the
+  row-set identity.
 - **Reading a GTS file into a dataset reports language tags folded to lower case.**
   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
   terms; a dataset folds the tag and holds one. `import_gts_events`,

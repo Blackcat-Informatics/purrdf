@@ -203,6 +203,14 @@ digests in ascending order, repeats kept, followed by the row count, under a
 domain of its own (`purrdf_hash::multiset::sorted_fingerprint`). Two different
 row sets share a value only through a BLAKE3 collision.
 
+`purrdf_hash::multiset::Multiset256::fingerprint` is renamed
+`Multiset256::accounting_check`, with the same signature and the same output
+bytes under the same domain framing; no alias remains. Replace each call with
+the new name. The value is an additive accounting check over the population and
+the wrapping sum, for drift and population checks between structures one
+process built. It is not the identity of a row set: use `sorted_fingerprint`
+where a row set needs an identity.
+
 Every value below moves for every input, except that a segmented stack made only
 of image layers, with no removal or declaration owners and no resident head,
 hashes image snapshots alone and keeps its 4.x snapshot identity and the

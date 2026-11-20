@@ -4058,7 +4058,7 @@ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumer
 
 [[job]]
 id = "multiset-256"
-summary = "Reversible little-endian 256-bit member sums with exact population, checked atomic combination/subtraction and domain-bound fingerprints"
+summary = "Reversible little-endian 256-bit member sums with exact population, checked atomic combination/subtraction and domain-bound accounting checks"
 home = "purrdf_hash::multiset::Multiset256"
 entry_points = []
 spec = "Sum in Z/(2^256), with an independent checked u128 population; duplicate members contribute repeatedly, and callers independently establish membership before subtraction"
