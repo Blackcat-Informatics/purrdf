@@ -399,7 +399,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
 ///
 /// A view without the capability does not compile:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0277
 /// use purrdf_core::DatasetView;
 /// fn bind<V: DatasetView>(view: &V) {
 ///     let _ = purrdf_validate::query::bind_execution_receipt("{}", view);
@@ -571,29 +571,6 @@ mod tests {
         }
     }
 
-    /// Collects the variant codes of an error and of every cause nested in it.
-    #[derive(Default)]
-    struct Codes(Vec<&'static str>);
-
-    impl<'error> purrdf_hash::error::ErrorVisitor<'error> for Codes {
-        fn variant(&mut self, code: &'static str) {
-            self.0.push(code);
-        }
-        fn value(
-            &mut self,
-            _: Option<&'static str>,
-            value: purrdf_hash::error::ErrorValue<'error>,
-        ) {
-            if let purrdf_hash::error::ErrorValue::Cause(cause) = value {
-                cause.visit(self);
-            }
-        }
-        fn begin_list(&mut self, _: Option<&'static str>, _: usize) {}
-        fn end_list(&mut self) {}
-        fn begin_record(&mut self, _: Option<&'static str>, _: &'static str) {}
-        fn end_record(&mut self) {}
-    }
-
     impl purrdf_core::DatasetView for Scripted<'_> {
         type Id = purrdf_core::TermId;
         type ReadError = std::convert::Infallible;
@@ -733,12 +710,13 @@ mod tests {
                 .is_some_and(<dyn std::error::Error>::is::<IdentityRefused>)
         );
 
-        let mut codes = Codes::default();
-        purrdf_hash::error::StructuredError::visit(&refused, &mut codes);
-        assert_eq!(
-            codes.0,
-            ["receipt-bind-identity", "scripted-identity-refused"]
-        );
+        let tree = purrdf_testkit::error_capture::Capture::read(&refused);
+        assert_eq!(tree.code, "receipt-bind-identity");
+        assert!(matches!(
+            tree.field("cause"),
+            purrdf_hash::error::ErrorValue::Cause(_)
+        ));
+        assert_eq!(tree.child("cause").code, "scripted-identity-refused");
 
         let bound = super::bind_execution_receipt(&receipt, &dataset).unwrap();
         assert!(bound.contains("\"contentIdentity\""));

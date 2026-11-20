@@ -946,7 +946,7 @@ impl PyQuadStore {
     /// The 64-hex content identity of this store's current content, the frozen
     /// snapshot every query reads: a digest of every row, computed on this call and
     /// never by a query. Equal content has an equal identity, so it binds a query's
-    /// receipt through `bind_execution_receipt` as long as the store has not changed
+    /// receipt through `QuadStore.bind_execution_receipt` as long as the store has not changed
     /// since that query.
     ///
     /// # Errors
