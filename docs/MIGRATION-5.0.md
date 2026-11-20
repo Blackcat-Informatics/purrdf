@@ -403,6 +403,13 @@ compiling until it handles the new variant. The enums themselves keep their
 | `SearchConfiguration` | `Labelling { version, selection, output }` | Add an arm. It names the labelling run, where `Rdfc { .. }` names an RDFC-1.0 run; a caller that only inspects 4.x runs can bind it with a wildcard |
 | `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)`; the running total of the walk of 8.3: its total when the labelling completes, and on a refusal with `limit` its value after the charge that passed the limit, the refusal's `units` |
 
+A signature status enum that gained a variant. `SigStatus` is exhaustive, so a
+4.x `match` on it stops compiling until it handles the new variant:
+
+| Enum (`purrdf_gts::cose`) | New variant | A 4.x caller |
+|---|---|---|
+| `SigStatus` | `Unverified` | Add an arm. `verify_sig` and `verify_sig_with_key` return it for a COSE_Sign1 whose declared algorithm this engine does not implement: the signature was not checked, which is neither `Valid` nor `Invalid`. Where a verified signature is required, accept only `SigStatus::Valid` and refuse everything else with a wildcard arm; do not fold `Unverified` into `Invalid` or into acceptance. The `Valid` and `Invalid` variants keep their meaning |
+
 A variant payload that changed. `CanonError` is `#[non_exhaustive]`, but a
 payload is matched by shape:
 
