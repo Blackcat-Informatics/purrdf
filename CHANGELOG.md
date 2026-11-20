@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Behaviour change: the GTS reader drops a `reifies` row whose reifier is a
+  literal or a quoted triple.** The row is diagnosed `PositionConstraint`, as the
+  specification requires; 4.0.2 kept it silently. The indirect spelling older
+  writers emitted (a quoted-triple term with no `tt` whose `rf` is its own id)
+  still keeps its binding with no diagnostic. See the migration guide.
+
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop

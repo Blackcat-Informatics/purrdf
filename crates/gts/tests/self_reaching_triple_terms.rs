@@ -106,23 +106,23 @@ fn assert_no_term_reaches_itself(graph: &Graph) {
 }
 
 // --------------------------------------------------------------------------- //
-// The implicit self-bound spelling — the one the refusal used to miss.
+// The self-bound spelling (`rf` equal to the term's own id) — the one the refusal used to miss.
 // --------------------------------------------------------------------------- //
 
-/// The regression. A `k:3` term with no `tt` and no `rf` takes its components
-/// from the row keyed by its OWN id, so a row naming that term as its own
+/// The regression. A `k:3` term whose `rf` is its OWN id takes its components
+/// from the row keyed by that id, so a row naming that term as its own
 /// subject makes the term contain itself.
 ///
 /// This file folded with an EMPTY diagnostic list and left
 /// `triple_of(2) == Some((2, 1, 1))`, which aborted the first consumer that
-/// rendered term 2. The refusal anchored only on terms naming the reifier
-/// through `rf`, and this term names nothing.
+/// rendered term 2. The refusal has to anchor on a term whose `rf` is its
+/// own id as well as on a term naming another reifier.
 #[test]
-fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused() {
+fn a_row_keyed_by_a_self_bound_terms_own_id_is_refused() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -155,15 +155,15 @@ fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_is_refused() {
     assert_no_term_reaches_itself(&graph);
 }
 
-/// The implicit spelling is only refused when it LOOPS: a row keyed by an
-/// implicit self-bound term's own id that names other terms is ordinary RDF
+/// The self-bound spelling is only refused when it LOOPS: a row keyed by a
+/// self-bound term's own id that names other terms is ordinary RDF
 /// 1.2 and must still fold.
 #[test]
-fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
+fn a_self_bound_term_binding_other_terms_still_folds() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -176,21 +176,21 @@ fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
     assert_eq!(
         graph.triple_of(2),
         Some((0, 1, 0)),
-        "the implicit self-bound spelling still resolves through its own id",
+        "the self-bound spelling still resolves through its own id",
     );
     assert_no_term_reaches_itself(&graph);
 }
 
-/// A loop that runs THROUGH an implicit self-bound term rather than closing on
-/// it directly. The traversal has to follow the implicit spelling, not just
+/// A loop that runs THROUGH a self-bound term rather than closing on
+/// it directly. The traversal has to follow the self-bound spelling, not just
 /// anchor on it.
 #[test]
-fn a_loop_routed_through_an_implicit_self_bound_term_is_refused() {
+fn a_loop_routed_through_a_self_bound_term_is_refused() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(), // 2, bound by the row keyed on 2
-        indirect_triple_term(0),           // 3, bound by the row keyed on 0
+        indirect_triple_term(2), // 2, bound by the row keyed on 2
+        indirect_triple_term(0), // 3, bound by the row keyed on 0
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);

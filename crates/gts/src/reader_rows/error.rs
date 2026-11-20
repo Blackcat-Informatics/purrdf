@@ -54,6 +54,10 @@ pub(crate) enum RowError {
         id: usize,
         actual: TermKind,
     },
+    ReifierKind {
+        id: usize,
+        actual: TermKind,
+    },
 }
 
 impl fmt::Display for RowError {
@@ -101,6 +105,9 @@ impl fmt::Display for RowError {
             Self::AnnotationGraph { id, .. } => {
                 write!(f, "annot graph name {id} is not an IRI or blank node")
             }
+            Self::ReifierKind { id, .. } => {
+                write!(f, "reifier {id} is not an IRI or blank node")
+            }
         }
     }
 }
@@ -133,5 +140,6 @@ impl purrdf_hash::error::StructuredError for RowError {
         },
         AnnotationPredicate { id, actual } => "gts-annotation-predicate-kind" { "id" => Unsigned(*id as u128), "actual" => Record(actual) },
         AnnotationGraph { id, actual } => "gts-annotation-graph-kind" { "id" => Unsigned(*id as u128), "actual" => Record(actual) },
+        ReifierKind { id, actual } => "gts-reifier-kind" { "id" => Unsigned(*id as u128), "actual" => Record(actual) },
     }
 }
