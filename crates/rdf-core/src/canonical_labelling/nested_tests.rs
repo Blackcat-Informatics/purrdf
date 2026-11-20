@@ -582,17 +582,21 @@ impl crate::StopSignal for Counting {
     }
 }
 
-/// A stop set while the weight of a read is computed is the outcome, not a
-/// weight refusal. The input whose weight exceeds the capacity polls the signal
-/// `polls` times before it is refused; a stop at the last of those polls, the
-/// one taken after the weight is computed, is `Stopped`, and a signal that
-/// stays clear through them still gets the weight refusal. The same input
+/// A stop set after the size of a read is admitted and before its weight is
+/// judged is the outcome, not a weight refusal. The input refused by size polls
+/// the signal `p_size` times, the last being the poll at the end of the walk,
+/// and the size is judged right after it. Under a capacity that admits that
+/// size and refuses the weight, a signal clear for those `p_size` polls and set
+/// at the next one is `Stopped`: that poll stands between the size and the
+/// weight, and without it the weight refusal is returned. A signal that stays
+/// clear one poll longer still gets the weight refusal, and the same input
 /// under a capacity that admits it succeeds.
 #[test]
 fn a_stop_during_the_weight_calculation_is_not_turned_into_a_weight_refusal() {
+    use std::sync::atomic::{AtomicU64, Ordering};
     let (view, _) = chain(8);
-    let run = |stop: &dyn crate::StopSignal, weight: u64| {
-        let mut read = LabellingCapacity::new(u64::MAX, weight);
+    let run = |stop: &dyn crate::StopSignal, lines: u64, weight: u64| {
+        let mut read = LabellingCapacity::new(lines, weight);
         label_view_with_capacity(
             view.as_ref(),
             &[],
@@ -604,20 +608,20 @@ fn a_stop_during_the_weight_calculation_is_not_turned_into_a_weight_refusal() {
     };
     let counting = Counting::default();
     assert!(matches!(
-        run(&counting, 0),
-        Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
+        run(&counting, 0, u64::MAX),
+        Err(ViewError::Lowering(LoweringRefusal::Size { .. }))
     ));
-    let polls = counting.0.load(std::sync::atomic::Ordering::Relaxed);
-    assert!(polls > 0);
+    let p_size = counting.0.load(Ordering::Relaxed);
+    assert!(p_size > 0);
     assert_eq!(
-        run(&After(std::sync::atomic::AtomicU64::new(polls - 1)), 0).err(),
+        run(&After(AtomicU64::new(p_size)), u64::MAX, 0).err(),
         Some(ViewError::Stopped)
     );
     assert!(matches!(
-        run(&After(std::sync::atomic::AtomicU64::new(polls)), 0),
+        run(&After(AtomicU64::new(p_size + 1)), u64::MAX, 0),
         Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
     ));
-    assert!(run(&Counting::default(), u64::MAX).is_ok());
+    assert!(run(&Counting::default(), u64::MAX, u64::MAX).is_ok());
 }
 
 /// RDF 1.2 nests a triple term only in the object of another. A dataset

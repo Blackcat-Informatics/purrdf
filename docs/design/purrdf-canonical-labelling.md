@@ -387,15 +387,18 @@ GTS format, section "Nested terms, lowering and term nodes":
   labelled as its lowered set, whose canonical line sequence, digest and positions
   differ from those of the unlowered lines.
 * POLLS. The lowering polls the caller's stop signal at each step of the nested
-  walks, and at each blank node, before the digests and at each nested-term record
-  of the passes after the walk, so a stop set during a deep nested term is observed
-  there. When a capacity is given, the signal is read before the size and the
-  weight are judged, so an observed stop is the outcome and not a capacity refusal
-  of the input it interrupted. Without a capacity, an input with no nested term
-  polls exactly as before; with one, every input gets that one read of the signal
-  before its size is judged. A document with a nested term also has one more line for each nested
-  term than the lines it spells, and the document loops poll once per line of the
-  sequence in each of their two passes.
+  walks. After the walk, an input with a nested term polls at each blank node of
+  the text-form pass, once before the digests, once for each nested term in the
+  digest pass and once for each nested term in the term-node source pass, so a
+  stop set during a deep nested term is observed there. When a capacity is given,
+  the signal is read once before the size is judged and, for an input whose size
+  is admitted, once more before its weight is admitted, so an observed stop is
+  the outcome and not a capacity refusal of the input it interrupted. Without a
+  capacity, an input with no nested term polls exactly as before, and an input
+  with a nested term polls the nested-term passes above. A document with a
+  nested term also has one more line for each nested term than the lines it
+  spells, and the document loops poll once per line of the sequence in each of
+  their two passes.
 * COST OF A CHAIN. The lowered set of a chain is linear. The walk units, the
   allocations and the retained and peak bytes of the labelling are linear, and the
   bytes it requests from the allocator and its instructions are quadratic. For a
