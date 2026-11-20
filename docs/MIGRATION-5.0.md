@@ -230,9 +230,11 @@ consecutive.
 
 The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
 U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
-XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
-where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
-raw. The digest is over the binary line encodings and does not depend on these
+XML 1.1 `Char` production; 4.0.2 wrote both raw. Every other literal character
+keeps its 4.0.2 spelling, among them U+1FFFE, U+FDD0 and U+0085. An IRI is
+escaped where the `IRIREF` production forbids a scalar. An IRI holding U+00A0 is
+spelled as in 4.0.2, and an IRI holding U+007F, U+0080 or U+009F is refused, as in
+4.0.2. The digest is over the binary line encodings and does not depend on these
 spellings. The retained 4.x `purrdf-rdfc12` output spells U+FFFE and U+FFFF the
 same way (profile version 4), so a stored 4.x digest of a dataset holding either
 in a literal no longer recomputes; see "Stored digests".
@@ -298,7 +300,7 @@ the identity from the data and record it again.
 | Value | What moved |
 |---|---|
 | `ContentIdentified::content_identity` of `RdfDataset`, of a triple dataset, and of `CompositeDatasetView`, `DeltaDatasetView`, paged datasets and segmented stack snapshots and queries (see the exception above), and the SHACL data and class-membership views | The resident record and named-graph families, and a mutation snapshot's suppressed, converted and withdrawn-graph families, are sorted-digest fingerprints (domains `purrdf-core/snapshot/rows/v2`, `purrdf-core/snapshot/graphs/v2`, `purrdf-core/delta-snapshot/v2` and its family domains). Composed views hash these identities, so they move with them. The class-membership view hashes its supplementary subclass edges the same way (`purrdf-shapes/class-membership-snapshot/v2`). |
-| Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt(receipt, &view)`, which takes a view that implements `ContentIdentified` (pass the view the query read), by Python `QuadStore.bind_execution_receipt`, by JavaScript `Dataset#bindExecutionReceipt` and by C `purrdf_execution_receipt_bind`; `bind_execution_receipt_hex` and `ReceiptBindError::ContentIdentity` are removed, so replace a call that passed a hex content identity with `bind_execution_receipt` on the view the query read; `QueryCoordinates::execution_identity`, `SuppliedQueryCoordinates::execution_identity` and `RuleCoordinates::execution_identity`, which take these content identities. |
+| Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt(receipt, &view)` (new in 5.0; pass the view the query read), Python `QuadStore.bind_execution_receipt`, JavaScript `Dataset#bindExecutionReceipt` and C `purrdf_execution_receipt_bind`, and the execution identity from `SuppliedQueryCoordinates::execution_identity`, `RuleCoordinates::execution_identity` and the new `QueryCoordinates::execution_identity`, which take these content identities. |
 | `SourceVersion::content_fingerprint` | BLAKE3 over the population and the canonical Merkle node of the sorted record digests (`purrdf/source-version/v2`). |
 | `TextIndex::source_fingerprint`, `TextSource::source_fingerprint` and `purrdf_text::source_digest` | BLAKE3 over the sorted selected-row digests (`purrdf-text/source/v3`, `purrdf-text/triples/source/v3`). `verify_binding` refuses an index whose stored source identity came from 4.x. |
 | `TextIndex::fingerprint`, `snapshot_fingerprint` and the generation retrieval strata attest | The index generation binds the source identity, so it moves with it, and so does every retrieval evidence identity recorded over a 4.x generation. |
@@ -351,8 +353,8 @@ request. The values follow the law in "Row-set identities".
 |---|---|
 | `DatasetView::snapshot_identity()`, returning `Result<Option<Digest32>, ReadError>` | `ContentIdentified::content_identity()`. A view that cannot certify its content returns an `Err`, not `Ok(None)`, and a view that never can does not implement the trait |
 | `SuppliedQueryCoordinates::snapshot_identity` and `execution_identity` | `run_identity` for the run, and `execution_identity(&ExecutionSources::new(view.content_identity()?))` for the execution, under the `execution-coordinates/v2` law |
-| `RuleCoordinates::execution_identity` over a snapshot identity | `RuleCoordinates::execution_identity(&RuleSources)` under `rule-execution/v2`, refusing with `RuleReceiptError` |
-| A host receipt carrying `executionIdentity` and `snapshotIdentity` | A receipt carrying `runIdentity` and `readsFocusGraph`; a rule receipt keeps `snapshotIdentity`, `shapesIdentity` and `executionIdentity`. Ask for the identities through `bind_execution_receipt`, `purrdf_execution_receipt_bind`, `Dataset#bindExecutionReceipt`, `QuadStore.bind_execution_receipt` or the CLI `query --content-identity` |
+| `RuleCoordinates::snapshot_identity`, `shapes_identity` and `execution_identity`, each returning `Option<&Digest32>` | `RuleCoordinates::execution_identity(&RuleSources)` under `rule-execution/v2`, refusing with `RuleReceiptError`; `snapshot_identity` and `shapes_identity` are removed, and the identities come from `RuleSources::new(data, shapes)` |
+| A host receipt carrying `executionIdentity` and `snapshotIdentity` | A receipt carrying `runIdentity` and `readsFocusGraph`; a rule receipt no longer carries `snapshotIdentity`, `shapesIdentity` or `executionIdentity`; `rule_execution_receipt_value_with_sources` adds `dataIdentity`, `shapesIdentity` and `executionIdentity`. Ask for the identities through `bind_execution_receipt`, `purrdf_execution_receipt_bind`, `Dataset#bindExecutionReceipt`, `QuadStore.bind_execution_receipt` or the CLI `query --content-identity` |
 
 `ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
 which implements `StructuredError`. Stored execution identities change value
@@ -383,7 +385,8 @@ stored normal forms of such IRIs recomputes them.
 
 These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
 or `purrdf`. Each keeps its name, signature and 4.x behaviour under
-`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`). A caller that wants the 5.0
+`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`), except that U+FFFE and U+FFFF
+in a literal are spelled as escapes (profile version 4; see "Stored digests"). A caller that wants the 5.0
 canonical output uses the default-family item in the third column, which is
 exported from the crate root. Two of the functions below keep the name of a
 default-family function: `purrdf_core::try_canonicalize` and
@@ -401,7 +404,6 @@ runs RDFC-1.0.
 | `try_canonicalize_flat_graph_view(view, graph, hash, control)` | flat document of one graph | `try_canonicalize_checked_graph_view(view, graph, control)` |
 | `check_admissible_flat_view(view)` | admission check | `check_admissible_checked_view(view)` |
 | `try_flat_digest_view(view, hash, control)` | flat SHA-256 digest | `try_canonical_digest_checked_view(view, control)` |
-| `try_flat_blake3_view(view, hash, control)` | flat 32-byte digest | `try_canonical_digest_checked_view(view, control)` |
 | `RDFC_V2_CORPUS_POLICY` | `SearchPolicy::Finite(1_000_000)` | `CANON_CORPUS_POLICY`, the same bound for the engine's work units |
 | `CANON_PROFILE_ID`, `CANON_PROFILE_VERSION` | the 4.x profile name and version | `CANON_LABELLING_NAME`, `CANON_LABELLING_VERSION` |
 | `CANON_PRESENTATION_OVERLAY_ID`, `CANON_PRESENTATION_OVERLAY_VERSION`, `CANON_PRESENTATION_FLAT_ASSERTION_ID`, `CANON_PRESENTATION_FLAT_ASSERTION_VERSION` | the 4.x presentation names | `CANON_PRESENTATION_LINES_ID`, `CANON_PRESENTATION_LINES_VERSION` |
