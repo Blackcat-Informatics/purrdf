@@ -155,10 +155,13 @@ impl Multiset256 {
 
     /// BLAKE3 of the framed domain, 16-byte little-endian population, then
     /// the 32-byte little-endian sum. Every family supplies its explicit domain.
-    /// The value is an accounting check, not collision resistant against chosen
-    /// members; use [`sorted_fingerprint`] for an identity.
+    ///
+    /// This is additive accounting over the population and the wrapping sum,
+    /// not the identity of a row set: a party choosing the members can build
+    /// two different multisets with the same check value. [`sorted_fingerprint`] is the
+    /// row-set identity.
     #[must_use]
-    pub fn fingerprint(&self, domain: Domain) -> [u8; 32] {
+    pub fn accounting_check(&self, domain: Domain) -> [u8; 32] {
         let mut digest = blake3::Hasher::new();
         frame_le_with(domain.as_bytes(), &mut |part| {
             digest.update(part);

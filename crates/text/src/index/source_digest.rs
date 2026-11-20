@@ -118,7 +118,7 @@ impl SourceDigest {
 }
 
 fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
-    state.fingerprint(if P::GRAPH_FREE {
+    state.accounting_check(if P::GRAPH_FREE {
         TRIPLE_SOURCE_DIGEST_DOMAIN
     } else {
         SOURCE_DIGEST_DOMAIN
