@@ -1183,28 +1183,6 @@ impl PyQueryBoolean {
     }
 }
 
-/// `bind_execution_receipt(receipt_json, content_identity)` → the receipt JSON with
-/// `contentIdentity` and `executionIdentity` added.
-///
-/// A query's receipt carries the run identity only: no query hashes its store.
-/// `content_identity` is what `content_identity()` returned for the store the query
-/// read; binding it is the explicit request for an execution identity.
-///
-/// # Errors
-///
-/// `ValueError` for a receipt that is not an execution receipt, an identity that is
-/// not 64 hexadecimal digits, or a run that cannot have an execution identity (it
-/// never started, or called extension code without a certified implementation
-/// identity).
-#[pyfunction]
-pub(crate) fn bind_execution_receipt(
-    receipt_json: &str,
-    content_identity: &str,
-) -> PyResult<String> {
-    purrdf_validate::query::bind_execution_receipt_hex(receipt_json, content_identity)
-        .map_err(|error| PyValueError::new_err(error.to_string()))
-}
-
 /// Convert a native [`SparqlResult`] into the materialized Python result object.
 ///
 /// A SELECT becomes [`PyQuerySolutions`] (each cell a [`RdfTerm`]); an ASK becomes

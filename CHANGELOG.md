@@ -268,11 +268,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `snapshotIdentity` (rule receipts: `snapshotIdentity`, `shapesIdentity`,
   `executionIdentity`). The explicit request: the CLI's
   `query --content-identity`; `purrdf_execution_receipt_bind` in the C ABI;
-  `Dataset#contentIdentity()` and `bindExecutionReceipt` in the wasm package;
-  `QuadStore.content_identity()` and `purrdf.bind_execution_receipt` in Python;
+  `Dataset#contentIdentity()` and `Dataset#bindExecutionReceipt` in the wasm package;
+  `QuadStore.content_identity()` and `QuadStore.bind_execution_receipt` in Python;
   `purrdf_validate::query::{execution_receipt_json_with_sources,
-  bind_execution_receipt, bind_execution_receipt_hex,
-  rule_execution_receipt_value_with_sources}` in Rust. Migration: replace
+  bind_execution_receipt, rule_execution_receipt_value_with_sources}` in
+  Rust, where `bind_execution_receipt(receipt, &view)` takes a view that
+  implements `ContentIdentified`, so a view without that capability cannot be
+  passed. Migration: pass the view the query read to `bind_execution_receipt`
+  (the hex-text entry point and `ReceiptBindError::ContentIdentity` are gone;
+  `ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
+  which must implement `StructuredError`); replace
   `DatasetView::snapshot_identity` with `ContentIdentified::content_identity`
   (an `Err`, not `Ok(None)`, where a view cannot certify its content, and no
   method at all on a view that never can); replace

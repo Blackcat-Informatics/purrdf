@@ -2354,8 +2354,8 @@ nothing certifies (`--aggregate-namespace`, `--path-relation`) has no run
 identity; with `--content-identity` it prints its receipt, writes no result and
 exits 2. The flag is refused beside `--entailment`, whose closure is not the
 data source. The C ABI (`purrdf_execution_receipt_bind`), the wasm package
-(`Dataset#contentIdentity`, `bindExecutionReceipt`) and Python
-(`QuadStore.content_identity`, `purrdf.bind_execution_receipt`) bind a returned
+(`Dataset#contentIdentity`, `Dataset#bindExecutionReceipt`) and Python
+(`QuadStore.content_identity`, `QuadStore.bind_execution_receipt`) bind a returned
 receipt to the content identity of the dataset it read.
 
 UPDATE remains transactional: a later-operation failure or governor trip

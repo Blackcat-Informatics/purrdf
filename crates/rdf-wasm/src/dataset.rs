@@ -300,6 +300,18 @@ impl VisualOptions {
     }
 }
 
+/// The JS error for a dataset that refused to produce its content identity, with the
+/// storage refusal retained as the native cause. `contentIdentity()` and
+/// `bindExecutionReceipt` throw this one error. A storage error classifies the
+/// diagnostic itself, so the code passed here is not emitted.
+fn identity_refusal(cause: purrdf_lex::allocation::StorageError) -> JsValue {
+    diag_to_err(&purrdf_validate::native_error::diagnostic(
+        "rdf-storage-refused",
+        cause,
+        Some(cause),
+    ))
+}
+
 /// Map an engine diagnostic to a JS error.
 pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsValue {
     if diag.storage_error().is_some() {
@@ -854,8 +866,8 @@ impl Dataset {
     /// `contentIdentity()` → the 64-hex content identity of this dataset's current
     /// content, the frozen snapshot every query reads: a digest of every row, computed
     /// on this call and never by a query. Equal content has an equal identity, so the
-    /// value a query's receipt binds to through `bindExecutionReceipt` is this call's
-    /// value as long as the dataset has not changed since that query.
+    /// value a query's receipt binds to through `Dataset#bindExecutionReceipt` is this
+    /// call's value as long as the dataset has not changed since that query.
     ///
     /// # Errors
     ///
@@ -863,9 +875,41 @@ impl Dataset {
     #[wasm_bindgen(js_name = contentIdentity)]
     pub fn content_identity(&self) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        let identity = purrdf_core::ContentIdentified::content_identity(&*frozen)
-            .map_err(|e| diag_to_err(&e.into()))?;
+        let identity =
+            purrdf_core::ContentIdentified::content_identity(&*frozen).map_err(identity_refusal)?;
         Ok(identity.to_string())
+    }
+
+    /// `bindExecutionReceipt(receiptJson)` → the receipt with `contentIdentity` and
+    /// `executionIdentity` added, bound to this dataset's current content.
+    ///
+    /// A query's receipt carries the run identity only: no query hashes its dataset.
+    /// Binding is the explicit request for an execution identity; the dataset is
+    /// frozen once and that snapshot supplies the content identity, so the receipt
+    /// binds to the content the call saw.
+    ///
+    /// # Errors
+    ///
+    /// `purrdf-wasm-options` for a receipt that is not an execution receipt;
+    /// `purrdf-wasm-receipt` for a run that cannot have an execution identity (it
+    /// never started, or called extension code without a certified implementation
+    /// identity); the error `contentIdentity()` throws, with neither code, when the
+    /// dataset refuses to produce its content identity; a dataset whose pending
+    /// changes cannot be frozen.
+    #[wasm_bindgen(js_name = bindExecutionReceipt)]
+    pub fn bind_execution_receipt(&self, receipt_json: &str) -> Result<String, JsValue> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        purrdf_validate::query::bind_execution_receipt(receipt_json, &*frozen).map_err(|error| {
+            use purrdf_validate::query::ReceiptBindError;
+            let code = match error {
+                ReceiptBindError::Refused(_) => crate::operation::RECEIPT_CODE,
+                // The view's own refusal is not a bad option: it is reported exactly
+                // as `contentIdentity()` reports one.
+                ReceiptBindError::Identity(cause) => return identity_refusal(cause),
+                _ => crate::operation::OPTIONS_CODE,
+            };
+            crate::operation::coded_error(&error.to_string(), code)
+        })
     }
 
     /// `generation` — how many mutations this dataset's content has seen.
