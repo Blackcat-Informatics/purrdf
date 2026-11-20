@@ -937,7 +937,7 @@ mod tests {
         let index = index_of(&four_branch_rows());
         assert_eq!(
             index.source_fingerprint().to_hex(),
-            "5853f6c1e3138556fa4cb344bfac9681bbdc3a1b0e05404122dad17d62dceffc"
+            "58ea2f08afb0273789e64bb9fea2f3be6f1f02459efcf7e744c4951b4532a00d"
         );
     }
 

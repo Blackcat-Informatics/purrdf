@@ -11,13 +11,14 @@ use projection::ProjectionWork;
 use purrdf_core::FastMap;
 use purrdf_hash::Domain;
 use purrdf_hash::blake3::Hasher;
+use purrdf_hash::frame::{frame_le_into, frame_length_into};
 use purrdf_hash::hex::Digest32;
 
 use crate::topology::relate;
 use crate::{GeoError, GeoTerm, GeoVocab, GeometryLiteral, SpatialRelation};
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermValue};
 
-/// The domain-separation prefix of the index source digest.
+/// The BLAKE3 key-derivation context of the index source digest.
 const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v2");
 
 /// Digest tag for [`GraphSelector::Any`].
@@ -47,10 +48,10 @@ const PRESENT: u8 = 0x21;
 /// function of the bytes fed to it on every target and release, and two distinct
 /// projections do not share an identity.
 ///
-/// Every variable-length field is written **length-prefixed** with its length as
-/// eight big-endian bytes, so no two distinct field sequences can produce the same
-/// byte stream by concatenation. That framing is part of the identity and is not
-/// `purrdf_hash::frame::frame_le`'s.
+/// Every variable-length field is written through the shared
+/// `purrdf_hash::frame` framing (an eight-byte little-endian length, then the
+/// bytes), so no two distinct field sequences can produce the same byte stream
+/// by concatenation. Counts use the same length prefix.
 #[derive(Clone)]
 struct Digest {
     /// The running BLAKE3 state.
@@ -75,20 +76,14 @@ impl Digest {
         self.bytes(&[tag]);
     }
 
-    /// Absorb a `usize` count as eight big-endian bytes.
+    /// Absorb a `usize` count as one eight-byte little-endian length prefix.
     fn count(&mut self, count: usize) {
-        self.bytes(&(count as u64).to_be_bytes());
+        frame_length_into(&mut self.state, count);
     }
 
-    /// Absorb a length-prefixed string: its length as eight **big-endian** bytes,
-    /// then its bytes.
-    ///
-    /// Not `purrdf_hash::frame::frame_le`'s little-endian framing, and never to
-    /// become it: the source identity this digest computes is published, and its
-    /// byte order is part of it.
+    /// Absorb a length-prefixed string through the shared framing home.
     fn field(&mut self, text: &str) {
-        self.bytes(&(text.len() as u64).to_be_bytes());
-        self.bytes(text.as_bytes());
+        frame_le_into(&mut self.state, text.as_bytes());
     }
 
     /// Absorb an optional length-prefixed string, presence byte first.
@@ -151,7 +146,7 @@ impl Digest {
 
     /// Absorb a blank node's scope ordinal.
     fn scope(&mut self, scope: BlankScope) {
-        self.bytes(&scope.ordinal().to_be_bytes());
+        self.bytes(&scope.ordinal().to_le_bytes());
     }
 
     /// The accumulated digest.
