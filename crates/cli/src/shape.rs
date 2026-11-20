@@ -37,10 +37,9 @@
 //! # Subtraction
 //!
 //! A total that is the sum of the cells of a partition would give a suppressed cell by
-//! subtraction. [`Count::total`] prints such a total exactly only when no cell of any
-//! partition of it is hidden, and otherwise as a lower bound the printed cells already
-//! give. [`withhold_in_each`] makes every partition of the distinct literals hide a cell once
-//! any of them does, since partitions of one total determine each other.
+//! subtraction, and two partitions of one total bound each other. [`suppress`] treats each
+//! printed form as an interval, propagates the sum equations to find what a reader learns, and
+//! withholds further cells until every hidden cell is confined to exactly its own printed form.
 //!
 //! # Language-tag case
 //!
@@ -67,14 +66,12 @@ use purrdf_rdf::SourceFormat;
 
 use crate::cli::CliRdfFormat;
 use crate::error::CliError;
+use crate::shape_suppress::{Count, SMALL_COUNT_THRESHOLD, Sum, suppress};
 use crate::source::{InputView, ViewOp};
 use crate::{format, source};
 
 /// The version of the document layout. A figure added, removed or renamed raises it.
 const SCHEMA_VERSION: u64 = 1;
-
-/// A count below this prints as `"<5"` rather than exactly; see the module documentation.
-pub(crate) const SMALL_COUNT_THRESHOLD: u64 = 5;
 
 /// The resolved `shape` flags.
 pub(crate) struct ShapeOptions<'a> {
@@ -115,6 +112,13 @@ pub(crate) fn run(
     })?;
     let token = source_format.token();
     let is_pack = matches!(source_format, SourceFormat::Pack);
+    if options.base.is_some() && matches!(source_format, SourceFormat::Gts | SourceFormat::Pack) {
+        return Err(CliError::Usage(
+            "shape: --base has no effect on a GTS or pack input, whose terms are already \
+             resolved; remove it"
+                .to_owned(),
+        ));
+    }
     if canonical.is_configured() && !is_pack {
         return Err(CliError::Usage(
             "shape: only a pack input canonicalizes; remove --canonical-search and \
@@ -250,14 +254,14 @@ impl Pow2 {
     }
 
     /// The non-empty bins, as `(min, max, count)` in ascending order.
-    fn cells(&self) -> Vec<(u64, u64, Count)> {
+    fn cells(&self) -> Vec<(u64, u64, u64)> {
         self.bins
             .iter()
             .enumerate()
             .filter(|(_, count)| **count != 0)
             .map(|(bin, &count)| {
                 let (min, max) = bin_bounds(bin);
-                (min, max, Count::of(count))
+                (min, max, count)
             })
             .collect()
     }
@@ -294,96 +298,6 @@ fn put(out: &mut String, text: std::fmt::Arguments<'_>) {
     if std::fmt::Write::write_fmt(out, text).is_err() {
         unreachable!("a String accepts every formatted write");
     }
-}
-
-/// A printed count: exact, suppressed for being small, or a lower bound.
-///
-/// The rule for what prints exactly is the module documentation's. A count of one to four is
-/// [`Count::Small`]. A total that equals the sum of the cells of a partition is exact only
-/// when every cell of the partition is exact; otherwise it is the sum of the exact cells as a
-/// lower bound, so no printed figure determines a suppressed cell by subtraction.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Count {
-    Exact(u64),
-    Small,
-    AtLeast(u64),
-    /// An exact cell of at least the threshold, hidden so that its partition's cells do not
-    /// determine a suppressed cell of another partition of the same total.
-    Withheld,
-}
-
-impl Count {
-    /// `count` as itself, or suppressed when it is one to four.
-    const fn of(count: u64) -> Self {
-        if count >= 1 && count < SMALL_COUNT_THRESHOLD {
-            Self::Small
-        } else {
-            Self::Exact(count)
-        }
-    }
-
-    const fn is_exact(self) -> bool {
-        matches!(self, Self::Exact(_))
-    }
-
-    /// The count of a total that is the sum of the cells of each of `partitions`.
-    fn total(total: u64, partitions: &[&[Self]]) -> Self {
-        if (1..SMALL_COUNT_THRESHOLD).contains(&total) {
-            return Self::Small;
-        }
-        let mut exact = true;
-        let mut bound = 0_u64;
-        for cells in partitions {
-            let mut sum = 0_u64;
-            for cell in *cells {
-                match cell {
-                    Self::Exact(n) => sum = sum.saturating_add(*n),
-                    _ => exact = false,
-                }
-            }
-            bound = bound.max(sum);
-        }
-        if exact {
-            Self::of(total)
-        } else {
-            Self::AtLeast(bound)
-        }
-    }
-
-    fn text(self) -> String {
-        match self {
-            Self::Exact(n) => n.to_string(),
-            Self::Small => format!("\"<{SMALL_COUNT_THRESHOLD}\""),
-            Self::AtLeast(n) => format!("\">={n}\""),
-            Self::Withheld => "\"withheld\"".to_owned(),
-        }
-    }
-}
-
-/// Make every partition of one total hide a cell once any of them hides one.
-///
-/// Partitions of one total determine each other: a partition whose cells are all exact gives
-/// the total, and the total then gives the sum of a suppressed partition's hidden cells. So
-/// when any partition holds a hidden cell, each partition that holds none withholds its
-/// smallest non-zero cell. Returns whether any cell is hidden.
-fn withhold_in_each(partitions: &mut [Vec<&mut Count>]) -> bool {
-    let hidden = |cells: &[&mut Count]| cells.iter().any(|cell| !cell.is_exact());
-    if !partitions.iter().any(|cells| hidden(cells)) {
-        return false;
-    }
-    for cells in partitions.iter_mut().filter(|cells| !hidden(cells)) {
-        let smallest = cells
-            .iter_mut()
-            .filter_map(|cell| match **cell {
-                Count::Exact(n) if n > 0 => Some((n, cell)),
-                _ => None,
-            })
-            .min_by_key(|(n, _)| *n);
-        if let Some((_, cell)) = smallest {
-            **cell = Count::Withheld;
-        }
-    }
-    true
 }
 
 /// The canonical labelling figure.
@@ -751,60 +665,71 @@ fn label<D: DatasetView<ReadError = Infallible>>(
 impl Figures {
     /// The one JSON document, newline terminated.
     fn render(&self) -> String {
-        let mut length_cells = self.literal_lengths.cells();
-        let sibling_cells = self.sibling_largest.cells();
+        let length_raw = self.literal_lengths.cells();
+        let sibling_cells: Vec<(u64, u64, Count)> = self
+            .sibling_largest
+            .cells()
+            .into_iter()
+            .map(|(min, max, count)| (min, max, Count::of(count)))
+            .collect();
         let sibling_counts: Vec<Count> = sibling_cells.iter().map(|cell| cell.2).collect();
-        let case_cells = self
-            .forms
-            .map(|forms| [forms.lower, forms.upper, forms.mixed].map(Count::of));
-        let mut tagged = case_cells.as_ref().map_or_else(
-            || Count::of(self.tagged_literals),
-            |cells| Count::total(self.tagged_literals, &[cells]),
+
+        // The distinct literals are partitioned by length and by datatype (the
+        // language-tagged literals being one datatype cell, themselves partitioned by case
+        // form where the reader saw the tag as written). Every printed figure is chosen
+        // together, so no hidden cell is pinned by the others.
+        let mut vars: Vec<(Count, u64)> = vec![(Count::of(self.literals), self.literals)];
+        let length_at = vars.len();
+        vars.extend(length_raw.iter().map(|cell| (Count::of(cell.2), cell.2)));
+        let datatype_at = vars.len();
+        vars.extend(
+            self.named_datatypes
+                .iter()
+                .map(|(_, count)| (Count::of(*count), *count)),
         );
-        let mut named: Vec<(&str, Count)> = self
+        let other_at = vars.len();
+        vars.push((Count::of(self.other_datatypes), self.other_datatypes));
+        let tagged_at = vars.len();
+        vars.push((Count::of(self.tagged_literals), self.tagged_literals));
+        let form_at = vars.len();
+        if let Some(forms) = self.forms {
+            vars.extend([forms.lower, forms.upper, forms.mixed].map(|n| (Count::of(n), n)));
+        }
+        let mut sums = vec![
+            Sum {
+                total: 0,
+                cells: (length_at..datatype_at).collect(),
+            },
+            Sum {
+                total: 0,
+                cells: (datatype_at..form_at).collect(),
+            },
+        ];
+        if self.forms.is_some() {
+            sums.push(Sum {
+                total: tagged_at,
+                cells: (form_at..form_at + 3).collect(),
+            });
+        }
+        suppress(&mut vars, &sums);
+        let length_cells: Vec<(u64, u64, Count)> = length_raw
+            .iter()
+            .zip(&vars[length_at..])
+            .map(|(cell, var)| (cell.0, cell.1, var.0))
+            .collect();
+        let literals = vars[0].0;
+        let named: Vec<(&str, Count)> = self
             .named_datatypes
             .iter()
-            .map(|(name, count)| (*name, Count::of(*count)))
+            .map(|(name, _)| *name)
+            .zip(vars[datatype_at..other_at].iter().map(|var| var.0))
             .collect();
-        let mut other = Count::of(self.other_datatypes);
-
-        // The distinct literals are partitioned by length and by datatype.
-        let hidden = {
-            let by_length: Vec<&mut Count> =
-                length_cells.iter_mut().map(|cell| &mut cell.2).collect();
-            let by_datatype: Vec<&mut Count> = named
-                .iter_mut()
-                .map(|(_, count)| count)
-                .chain([&mut other, &mut tagged])
-                .collect();
-            withhold_in_each(&mut [by_length, by_datatype])
-        };
-        let length_counts: Vec<Count> = length_cells.iter().map(|cell| cell.2).collect();
-        let datatype_counts: Vec<Count> = named
-            .iter()
-            .map(|(_, count)| *count)
-            .chain([other, tagged])
-            .collect();
-        let literals = if hidden {
-            let bound = [&length_counts, &datatype_counts]
-                .iter()
-                .map(|cells| {
-                    cells
-                        .iter()
-                        .map(|cell| if let Count::Exact(n) = cell { *n } else { 0 })
-                        .sum::<u64>()
-                })
-                .max()
-                .unwrap_or(0);
-            if (1..SMALL_COUNT_THRESHOLD).contains(&self.literals) {
-                Count::Small
-            } else {
-                Count::AtLeast(bound)
-            }
-        } else {
-            Count::of(self.literals)
-        };
-        let parents = Count::total(self.sibling_parents, &[&sibling_counts]);
+        let other = vars[other_at].0;
+        let tagged = vars[tagged_at].0;
+        let case_cells: Option<[Count; 3]> = self
+            .forms
+            .map(|_| [vars[form_at].0, vars[form_at + 1].0, vars[form_at + 2].0]);
+        let parents = Count::total(self.sibling_parents, &sibling_counts);
         let quads = Count::of(self.quads);
         let reifiers = Count::of(self.reifiers);
         let annotations = Count::of(self.annotations);

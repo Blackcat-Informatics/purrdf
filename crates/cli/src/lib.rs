@@ -118,6 +118,7 @@ mod reason;
 mod report;
 mod shacl;
 mod shape;
+mod shape_suppress;
 mod shapes_source;
 mod shapes_tools;
 mod shex;

@@ -40,34 +40,36 @@ impl GtsBundle {
     }
 }
 
-/// How many language-tagged literals a read saw, by the case form of the tag as written.
+/// How many distinct language-tagged literals a read saw, by the case form of the tag as
+/// written.
 ///
-/// A dataset holds a tag folded to ASCII lower case, so the written case of a tag is
-/// gone once the read has interned it. A reader that sees the written tag records its
-/// form here. A tag with no upper-case letter is `lower`, one with upper-case and no
-/// lower-case letters is `upper`, and one with both is `mixed`.
+/// A dataset holds a tag folded to ASCII lower case, so the written case of a tag is gone once
+/// the read has interned it. A reader that sees the tag as written records the figure here,
+/// one count per distinct dataset literal. A tag with no upper-case letter is `lower`, one
+/// with upper-case and no lower-case letters is `upper`, and one with both is `mixed`. A
+/// literal written under several case variants of its tag counts once, under the greatest of
+/// `lower`, `upper` and `mixed` that any of them has, so the three counts sum to the number of
+/// language-tagged literals the read produced.
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct LanguageTagForms {
-    /// Literals whose written tag has no upper-case letter.
+    /// Literals every written tag of which has no upper-case letter.
     pub lower: u64,
-    /// Literals whose written tag has upper-case and no lower-case letters.
+    /// Literals with a written tag of upper-case and no lower-case letters, and none mixed.
     pub upper: u64,
-    /// Literals whose written tag has both upper-case and lower-case letters.
+    /// Literals with a written tag of both upper-case and lower-case letters.
     pub mixed: u64,
 }
 
 impl LanguageTagForms {
-    /// Count one literal whose written tag is `tag`.
-    pub fn record(&mut self, tag: &str) {
-        let upper = tag.bytes().any(|b| b.is_ascii_uppercase());
-        let lower = tag.bytes().any(|b| b.is_ascii_lowercase());
-        let count = match (upper, lower) {
-            (false, _) => &mut self.lower,
-            (true, false) => &mut self.upper,
-            (true, true) => &mut self.mixed,
-        };
-        *count = count.saturating_add(1);
+    /// The figure of `lower`, `upper` and `mixed` literals.
+    #[must_use]
+    pub const fn new(lower: u64, upper: u64, mixed: u64) -> Self {
+        Self {
+            lower,
+            upper,
+            mixed,
+        }
     }
 }
 
@@ -87,7 +89,7 @@ pub struct RdfEnvelope {
     /// The losses the read incurred that no RDF dataset can represent, such as
     /// the written spelling of a language tag the dataset folds to lower case.
     pub losses: crate::loss::LossLedger,
-    /// The written case forms of the language tags the read folded.
+    /// The written case forms of the language-tagged literals of the read.
     pub language_tag_forms: LanguageTagForms,
 }
 

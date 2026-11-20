@@ -91,9 +91,11 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
     ) -> Result<TermKey, RdfDiagnostic> {
         // Once per term, as the importer's resolver callback is.
         if let Some(tag) = language {
+            self.metadata
+                .language_tag_forms
+                .record(lexical, tag, &direction);
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.metadata.losses,
-                &mut self.metadata.language_tag_forms,
                 lexical,
                 tag,
                 crate::gts_language_fold::FoldSite {
@@ -577,7 +579,7 @@ where
                 written: output.written,
                 envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside)
                     .with_losses(emitter.metadata.losses)
-                    .with_language_tag_forms(emitter.metadata.language_tag_forms),
+                    .with_language_tag_forms(emitter.metadata.language_tag_forms.finish()),
                 read,
             })
         })();

@@ -54,7 +54,7 @@ struct GraphInterner {
     /// Losses of the read that the dataset cannot represent.
     losses: purrdf_core::LossLedger,
     /// The written case forms of the language tags read.
-    language_tag_forms: purrdf_core::LanguageTagForms,
+    language_tag_forms: crate::gts_language_fold::LanguageFormCensus,
 }
 
 #[derive(Clone, Copy)]
@@ -185,9 +185,10 @@ impl GraphInterner {
         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
         let language = std::mem::take(&mut self.terms[gts_id].lang);
         if let Some(tag) = language.as_deref() {
+            self.language_tag_forms
+                .record(&lexical_form, tag, &self.terms[gts_id].direction);
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
-                &mut self.language_tag_forms,
                 &lexical_form,
                 tag,
                 crate::gts_language_fold::FoldSite {
@@ -345,7 +346,7 @@ fn import_graph_with_memory(
         remap: crate::FastMap::default(),
         remap_bytes: 0,
         losses: purrdf_core::LossLedger::new(),
-        language_tag_forms: purrdf_core::LanguageTagForms::default(),
+        language_tag_forms: crate::gts_language_fold::LanguageFormCensus::default(),
     };
 
     // Intern every term up front (idempotent through the remap), so leaf strings are
@@ -410,7 +411,7 @@ fn import_graph_with_memory(
         dataset,
         RdfEnvelope::new(lookaside)
             .with_losses(losses)
-            .with_language_tag_forms(language_tag_forms),
+            .with_language_tag_forms(language_tag_forms.finish()),
     ))
 }
 

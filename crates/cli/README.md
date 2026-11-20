@@ -1343,7 +1343,9 @@ inferred (exit `2`), an input that cannot be opened (`1`), a pack read without i
 canonical control or with canonical flags on another input (`2`), a pack under a
 transport wrapper (`2`), a source that is not well formed (`1`), and a canonical
 labelling that failed for a reason other than a refusal (`1`). Nothing is written but
-stdout, and `--loss-ledger` and `--jsonld-options` are refused.
+stdout, except that a pack input writes the canonicalization receipt (counters only) to the
+destination the caller names; `--loss-ledger`, `--jsonld-options` and, for a GTS or pack
+input, `--base` are refused.
 
 The document carries `schema_version` (currently `1`), `small_count_threshold`
 and these figures:
@@ -1369,13 +1371,15 @@ each of them agree in direction, predicate, graph and far end, taking the parent
 one marked end and every other blank node as one anonymous end. Only quads are read;
 the statement layer is not.
 
-`case_forms` counts the language-tagged literals whose tag was written all lower case,
-all upper case or mixed. A dataset holds a tag folded to lower case, so only a reader
-that sees the tag as written can report the figure. A GTS read does, and prints
-`{"status":"reported","lower":…,"upper":…,"mixed":…}`. The text and pack readers fold the
-tag before the figure can be taken, so for them it is
-`{"status":"omitted","reason":"reader-folds-before-figure"}`. Every other figure is the
-same for one dataset whatever its syntax.
+`case_forms` counts the distinct language-tagged literals by the case of their tag as
+written: all lower case, all upper case, or mixed. A literal written under several case
+variants of its tag, or repeated across segments, counts once, under the greatest of lower,
+upper and mixed that any variant has, so the three counts sum to the language-tagged
+literals. A dataset holds a tag folded to lower case, so only a reader that sees the tag as
+written can report the figure. A GTS read does, and prints
+`{"status":"reported","lower":…,"upper":…,"mixed":…}`. The text and pack readers do not
+report it, so for them it is `{"status":"omitted","reason":"reader-folds-before-figure"}`.
+Every other figure is the same for one dataset whatever its syntax.
 
 A histogram bin has fixed bounds that do not depend on the data: bin `0` holds `0`,
 and every other bin holds `min` through `max` with `min` a power of two and `max` one
@@ -1391,18 +1395,21 @@ figure shared by five or more items cannot be traced to one of them. A zero name
 item. A maximum or a depth is the extreme of a distribution and not a count of items,
 so it prints exactly.
 
-A total that equals the sum of the cells of a partition would give a suppressed cell by
-subtraction, so one rule governs every such total. A total prints exactly only when no
-cell of any partition of it is hidden. Otherwise it prints as `">=N"`, with `N` the sum
-of the exact cells of its best-known partition, which is derivable from the printed
-cells and so reveals nothing more. Partitions of one total also determine each other, so
-when any partition of the distinct literals (by length, or by datatype with the
-language-tagged literals) holds a hidden cell, every partition with none hides its
-smallest non-zero cell as `"withheld"`. The same rule covers `parents` against its
-histogram and `tagged_literals` against `case_forms`. The labelling's `lines` is the sum
-of the quads, reifier and annotation statements and named graphs, so the labelling
-figure is omitted with the reason `derived-count-suppressed` unless each of those prints
-exactly, and with `below-threshold` when it has fewer than five lines.
+Printed figures must not let a reader narrow a hidden cell. Each printed form is an
+interval: an exact count is a point, `"<5"` is one to four, `"withheld"` is five or more, and
+`">=N"` is `N` or more. The distinct literals are partitioned by length and by datatype (with
+the language-tagged literals one datatype cell, partitioned in turn by case form), and every
+total equals the sum of each of its partitions, so two partitions bound each other. The verb
+derives, by bound propagation over those equations, the interval each hidden cell is confined
+to by everything printed, and hides further cells (as `"withheld"`, smallest non-zero cell
+first) until each hidden cell's interval is exactly its own printed form: a `"<5"` cell still
+ranges over one to four, and a withheld or lower-bounded cell has no upper bound. A total
+prints exactly only when every cell of every partition of it is exact; otherwise it prints as
+`">=N"` with `N` the sum of its exact cells. The same holds for `parents` against its
+histogram. The labelling's `lines` is the sum of the quads, reifier and annotation
+statements and named graphs, so the labelling figure is omitted with the reason
+`derived-count-suppressed` unless each of those prints exactly, and with `below-threshold`
+when it has fewer than five lines.
 
 The figures belong to the dataset and not to the syntax it arrived in, with the
 `case_forms` exception above: Turtle, N-Quads, TriG and GTS holding the same dataset

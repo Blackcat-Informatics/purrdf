@@ -10,10 +10,61 @@
 //! ledger.
 
 use std::fmt;
+use std::hash::BuildHasher as _;
 
 use purrdf_core::{LossEntry, LossLedger, RdfLocation};
 use purrdf_iri::langtag::is_identity_folded;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
+
+/// The written case form of a tag.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Form {
+    Lower,
+    Upper,
+    Mixed,
+}
+
+/// The case forms of the language-tagged literals a read produced, one per distinct literal.
+///
+/// A literal is its lexical form, its folded tag and its direction, so case variants of one
+/// tag and repeats across segments are one literal. It is kept under the greatest form any
+/// of its written tags has, so the figure does not depend on read order. A literal is
+/// identified by a 128-bit fixed-key hash of that identity, not by a copy of its text.
+#[derive(Default)]
+pub(crate) struct LanguageFormCensus {
+    forms: purrdf_core::FastMap<u128, Form>,
+}
+
+impl LanguageFormCensus {
+    /// Count the literal `lexical` written with `tag` and `direction`.
+    pub(crate) fn record<D: std::hash::Hash>(&mut self, lexical: &str, tag: &str, direction: &D) {
+        let upper = tag.bytes().any(|b| b.is_ascii_uppercase());
+        let lower = tag.bytes().any(|b| b.is_ascii_lowercase());
+        let form = match (upper, lower) {
+            (false, _) => Form::Lower,
+            (true, false) => Form::Upper,
+            (true, true) => Form::Mixed,
+        };
+        let folded = purrdf_iri::langtag::identity_fold(tag);
+        let state = purrdf_core::FastHasher::default();
+        let half =
+            |salt: u8| u128::from(state.hash_one((salt, lexical, folded.as_str(), direction)));
+        let key = half(0) << 64 | half(1);
+        let slot = self.forms.entry(key).or_insert(form);
+        *slot = (*slot).max(form);
+    }
+
+    /// The counts of the literals recorded.
+    pub(crate) fn finish(&self) -> purrdf_core::LanguageTagForms {
+        let count =
+            |wanted: Form| self.forms.values().filter(|&&form| form == wanted).count() as u64;
+        purrdf_core::LanguageTagForms::new(
+            count(Form::Lower),
+            count(Form::Upper),
+            count(Form::Mixed),
+        )
+    }
+}
 
 /// A tag as the dataset holds it, written without building the folded copy.
 struct Folded<'a>(&'a str);
@@ -52,13 +103,11 @@ pub(crate) struct FoldSite {
 /// The storage refusal of `memory`; the ledger is unchanged.
 pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
     losses: &mut LossLedger,
-    forms: &mut purrdf_core::LanguageTagForms,
     lexical: &str,
     tag: &str,
     site: FoldSite,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), StorageError> {
-    forms.record(tag);
     if is_identity_folded(tag) {
         return Ok(());
     }
@@ -127,7 +176,8 @@ mod tests {
         );
 
         let forms = bundle.envelope.language_tag_forms;
-        assert_eq!((forms.lower, forms.upper, forms.mixed), (1, 0, 1));
+        // One literal under two case variants of its tag counts once, as mixed.
+        assert_eq!((forms.lower, forms.upper, forms.mixed), (0, 0, 1));
         let shout = crate::import_gts_events(&bytes(&["EN", "En-us"])).expect("import");
         let forms = shout.envelope.language_tag_forms;
         assert_eq!((forms.lower, forms.upper, forms.mixed), (0, 1, 1));
@@ -158,7 +208,6 @@ mod tests {
             let mut ceiling = Ceiling(budget);
             let result = record_language_fold_loss(
                 &mut losses,
-                &mut purrdf_core::LanguageTagForms::default(),
                 "x",
                 tag,
                 site(logical),

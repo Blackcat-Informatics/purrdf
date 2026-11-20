@@ -8,6 +8,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **`purrdf shape` prints aggregate, non-identifying figures of a dataset.** One JSON
+  document of counts, power-of-two histograms with fixed bounds, datatype and language-tag
+  figures and the canonical labelling's line weight, with no term, label, tag, datatype text,
+  file name or parser message on either stream, and small counts suppressed so that no hidden
+  cell can be recovered by subtraction. A GTS read reports the written case form of its
+  language tags through the new `RdfEnvelope::language_tag_forms` field and the new
+  `LanguageTagForms` type (additive on a non-exhaustive struct).
 - **Reading a GTS file into a dataset reports language tags folded to lower case.**
   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
   terms; a dataset folds the tag and holds one. `import_gts_events`,

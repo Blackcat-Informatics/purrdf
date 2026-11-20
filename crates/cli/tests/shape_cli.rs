@@ -388,6 +388,21 @@ fn a_pack_needs_canonical_control_and_only_a_pack_accepts_it() {
     assert!(stderr(&broken).contains("could not be read as"));
     assert!(!stderr(&broken).contains("broken.purrpck"));
 
+    // `--base` has nothing to resolve in a pack, and still resolves a text input.
+    let based = shape(&[
+        "--base",
+        "http://example.org/",
+        "--canonical-search",
+        "unlimited",
+        "--canonicalization-receipts",
+        &support::path(dir.path(), "based.json"),
+        &pack,
+    ]);
+    assert_eq!(code(&based), 2);
+    assert!(stderr(&based).contains("--base has no effect"));
+    let text_based = shape(&["--base", "http://example.org/", "--no-labelling", &ttl]);
+    assert_eq!(code(&text_based), 0, "{}", stderr(&text_based));
+
     let wrapped = flagged(&ttl);
     assert_eq!(code(&wrapped), 2);
     assert!(stderr(&wrapped).contains("only a pack input canonicalizes"));
@@ -508,35 +523,118 @@ fn exact(document: &purrdf_lex::json::Value, path: &[&str]) -> Option<u64> {
         .as_u64()
 }
 
-/// Protects: small-count suppression cannot be undone by subtraction. One literal of length
-/// zero is suppressed in the length histogram, and no printed figure determines it: the
-/// total of the distinct literals and the datatype cell that would give it are withheld.
-/// The neighbouring dataset, with every cell at or above the threshold, prints them all and
-/// the cells add up.
-#[test]
-fn one_suppressed_cell_cannot_be_recovered_by_subtraction() {
-    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
-    let one_small = write_file(
-        dir.path(),
-        "one-small.nq",
-        &literal_fixture(&["aa", "bb", "cc", "dd", "ee"], &[], true),
-    );
-    let out = shape(&["--no-labelling", &one_small]);
-    assert_eq!(code(&out), 0, "{}", stderr(&out));
-    let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
-    let bins = document["literal_length_bytes_histogram"]
+/// The interval a printed count allows: exact, `"<5"`, `"withheld"` or `">=N"`.
+fn interval(value: &purrdf_lex::json::Value) -> (u64, u64) {
+    if let Some(n) = value.as_u64() {
+        return (n, n);
+    }
+    match value.as_str().expect("a count or a suppressed form") {
+        "<5" => (1, 4),
+        "withheld" => (5, u64::MAX),
+        other => (
+            other
+                .strip_prefix(">=")
+                .expect("a lower bound")
+                .parse()
+                .expect("its number"),
+            u64::MAX,
+        ),
+    }
+}
+
+/// What a reader who knows every printed form learns about each cell of the distinct
+/// literals: the cells of the two breakdowns and the total, tightened by the two equations
+/// until nothing changes. Returns each cell's interval beside its printed one.
+fn learned(document: &purrdf_lex::json::Value) -> Vec<((u64, u64), (u64, u64))> {
+    let mut cells: Vec<(u64, u64)> = document["literal_length_bytes_histogram"]
         .as_array()
-        .expect("bins");
-    assert_eq!(bins[0]["count"].as_str(), Some("<5"), "{}", stdout(&out));
-    // Neither the total nor a partition that sums to it is exact, so the suppressed bin
-    // is not the difference of two printed integers.
-    assert_eq!(exact(&document, &["counts", "distinct_literals"]), None);
-    assert_eq!(
-        exact(&document, &["datatypes", "named_xsd", "string"]),
-        None,
-        "{}",
-        stdout(&out)
+        .expect("bins")
+        .iter()
+        .map(|bin| interval(&bin["count"]))
+        .collect();
+    let lengths = cells.len();
+    for name in ["integer", "string"] {
+        cells.push(interval(&document["datatypes"]["named_xsd"][name]));
+    }
+    cells.push(interval(&document["datatypes"]["other"]));
+    cells.push(interval(&document["language_tags"]["tagged_literals"]));
+    let printed = cells.clone();
+    let mut total = interval(&document["counts"]["distinct_literals"]);
+    let partitions = [0..lengths, lengths..cells.len()];
+    for _ in 0..16 {
+        for part in &partitions {
+            let low: u64 = cells[part.clone()].iter().map(|c| c.0).sum();
+            let high = cells[part.clone()]
+                .iter()
+                .fold(0_u64, |acc, c| acc.saturating_add(c.1));
+            total.0 = total.0.max(low);
+            if high != u64::MAX {
+                total.1 = total.1.min(high);
+            }
+            for index in part.clone() {
+                let others_low = low - cells[index].0;
+                let others_high = cells[part.clone()]
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| part.start + i != index)
+                    .fold(0_u64, |acc, (_, c)| acc.saturating_add(c.1));
+                if others_high != u64::MAX {
+                    cells[index].0 = cells[index].0.max(total.0.saturating_sub(others_high));
+                }
+                if total.1 != u64::MAX {
+                    cells[index].1 = cells[index].1.min(total.1.saturating_sub(others_low));
+                }
+            }
+        }
+    }
+    cells.into_iter().zip(printed).collect()
+}
+
+/// Protects: small-count suppression cannot be undone by subtraction, even through two
+/// breakdowns of one total. Each fixture has one hidden length cell; a reader who combines
+/// the length breakdown, the datatype breakdown and the total learns nothing about any
+/// hidden cell beyond its printed form. The neighbour, with every cell at or above the
+/// threshold, prints all of them and the cells add up.
+#[test]
+fn hidden_cells_are_not_recoverable_from_two_breakdowns_of_one_total() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    // Four one-byte strings (the hidden bin), one two-byte string, five two-byte integers.
+    let first = write_file(
+        dir.path(),
+        "first.nq",
+        &literal_fixture(
+            &["a", "b", "c", "d", "xy"],
+            &["10", "11", "12", "13", "14"],
+            false,
+        ),
     );
+    // Five one-byte strings, three two-byte strings (a hidden string count), one integer.
+    let second = write_file(
+        dir.path(),
+        "second.nq",
+        &literal_fixture(&["a", "b", "c", "d", "e", "aa", "bb", "cc"], &["10"], false),
+    );
+    for input in [&first, &second] {
+        let out = shape(&["--no-labelling", input]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
+        let mut hidden = 0;
+        for (learned, printed) in learned(&document) {
+            if printed.1 != 5 - 1 && printed.1 != u64::MAX {
+                continue; // exact
+            }
+            hidden += 1;
+            if printed.1 == 4 {
+                // A "<5" cell still ranges over one to four.
+                assert_eq!(learned, printed, "{}", stdout(&out));
+            } else {
+                // A withheld or lower-bounded cell still has no upper bound.
+                assert_eq!(learned.1, u64::MAX, "{}", stdout(&out));
+            }
+        }
+        assert!(hidden >= 1, "the fixture hides a cell: {}", stdout(&out));
+        assert!(document["counts"]["distinct_literals"].as_u64().is_none());
+    }
 
     let all_exact = write_file(
         dir.path(),
@@ -685,8 +783,14 @@ fn language_tag_case_forms_are_reported_from_gts_and_omitted_elsewhere() {
     let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
     let forms = &document["language_tags"]["case_forms"];
     assert_eq!(forms["status"].as_str(), Some("reported"));
-    // Six lower, three upper, three mixed: only the first is not a small cell.
-    assert_eq!(forms["lower"].as_u64(), Some(6), "{}", stdout(&out));
+    // Six lower, three upper, three mixed: the upper and mixed cells are small, so the lower
+    // cell is withheld with the total of the tagged literals, which would give them back.
+    assert_eq!(
+        forms["lower"].as_str(),
+        Some("withheld"),
+        "{}",
+        stdout(&out)
+    );
     assert_eq!(forms["upper"].as_str(), Some("<5"));
     assert_eq!(forms["mixed"].as_str(), Some("<5"));
     // The tagged-literal total would give a suppressed form cell by subtraction.
@@ -709,4 +813,70 @@ fn language_tag_case_forms_are_reported_from_gts_and_omitted_elsewhere() {
     assert!(stdout(&out).contains(
         "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"reader-folds-before-figure\"}"
     ));
+}
+
+/// A GTS file of `terms` language-tagged literals, one segment per slice of `segments`.
+fn gts_with_tags(segments: &[&[(&str, &str)]]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for rows in segments {
+        let mut writer = purrdf_gts::writer::Writer::new("purrdf.gts");
+        let mut terms = vec![
+            purrdf_gts::model::Term::iri("http://example.org/s"),
+            purrdf_gts::model::Term::iri("http://example.org/p"),
+        ];
+        let mut quads = Vec::new();
+        for (index, (lexical, tag)) in rows.iter().enumerate() {
+            terms.push(purrdf_gts::model::Term::lang_literal(*lexical, *tag));
+            quads.push((0, 1, 2 + index, None));
+        }
+        writer.add_terms(&terms);
+        writer.add_quads(&quads);
+        bytes.extend_from_slice(&writer.into_bytes());
+    }
+    bytes
+}
+
+/// Protects: the case-form figure counts distinct literals, the unit of `tagged_literals`. A
+/// literal repeated across two segments, and a literal written under two case variants of its
+/// tag, each count once, so the forms add up to the tagged literals.
+#[test]
+fn case_forms_count_distinct_literals_across_segments_and_case_variants() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let words = ["v0", "v1", "v2", "v3", "v4", "v5"];
+    let lower: Vec<(&str, &str)> = words.iter().map(|word| (*word, "en")).collect();
+    let upper: Vec<(&str, &str)> = words.iter().map(|word| (*word, "EN")).collect();
+    let both: Vec<(&str, &str)> = lower.iter().chain(&upper).copied().collect();
+    let cases = [
+        ("repeated", gts_with_tags(&[&lower, &lower]), (6, 0, 0)),
+        ("variants", gts_with_tags(&[&both]), (0, 6, 0)),
+        (
+            "variants across segments",
+            gts_with_tags(&[&lower, &upper]),
+            (0, 6, 0),
+        ),
+    ];
+    for (name, bytes, (want_lower, want_upper, want_mixed)) in cases {
+        let path = support::path(dir.path(), &format!("{}.gts", name.replace(' ', "-")));
+        std::fs::write(&path, bytes).expect("write the GTS fixture");
+        let out = shape(&["--no-labelling", &path]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
+        let forms = &document["language_tags"]["case_forms"];
+        let counted = (
+            forms["lower"].as_u64(),
+            forms["upper"].as_u64(),
+            forms["mixed"].as_u64(),
+        );
+        assert_eq!(
+            counted,
+            (Some(want_lower), Some(want_upper), Some(want_mixed)),
+            "{name}: {}",
+            stdout(&out)
+        );
+        assert_eq!(
+            exact(&document, &["language_tags", "tagged_literals"]),
+            Some(6),
+            "{name}: the forms add up to the tagged literals"
+        );
+    }
 }
