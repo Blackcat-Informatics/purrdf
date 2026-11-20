@@ -1790,9 +1790,10 @@ impl QueryEngine {
     /// statements — and nothing for ASK), `max_intermediate_cells` the largest intermediate
     /// bag in `rows * columns`, `max_scratch_bytes` the per-query scratch arena, and
     /// `max_remote_requests` host fetches (each `SERVICE` request and each fetch of a
-    /// `LOAD`, the first fetch and each redirect hop, counts one). Every ceiling is
-    /// **inclusive**: consumption equal to it is admitted, and zero is a valid ceiling
-    /// that trips on the first charged unit of work.
+    /// `LOAD`, the first fetch and each redirect hop, counts one; a redirect the host
+    /// follows itself is part of its fetch). Every ceiling is **inclusive**: consumption
+    /// equal to it is admitted, and zero is a valid ceiling that trips on the first
+    /// charged unit of work.
     ///
     /// **A tripped governor is an outcome, not a thrown error** — see the module header.
     ///

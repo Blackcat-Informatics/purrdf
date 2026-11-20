@@ -294,9 +294,9 @@ impl PyQuadStore {
     /// `max_intermediate_cells` the largest intermediate bag in `rows * columns`,
     /// `max_scratch_bytes` the per-query scratch arena, and `max_remote_requests`
     /// host fetches (each `SERVICE` request and each fetch of a `LOAD`, the first fetch
-    /// and each redirect hop, counts one). Every ceiling is **inclusive**: consumption
-    /// equal to it is admitted, and zero is a valid ceiling that trips on the first
-    /// charged unit of work. `cancel` takes a `CancellationToken` another thread can flip
+    /// and each redirect hop, counts one; a redirect the host follows itself is part of
+    /// its fetch). Every ceiling is **inclusive**: consumption equal to it is admitted,
+    /// and zero is a valid ceiling that trips on the first charged unit of work. `cancel` takes a `CancellationToken` another thread can flip
     /// while this call runs. `no_ceiling=True` declines all ceilings and accounting, retaining
     /// deadline and cancellation signals; combining it with any resource cap raises
     /// `ValueError`, including a cap of zero.

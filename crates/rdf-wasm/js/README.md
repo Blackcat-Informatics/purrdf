@@ -1078,7 +1078,8 @@ export default {
 
 Workers limits how many subrequests one invocation may make. `maxRemoteRequests` is the
 exact control for that limit. Every `SERVICE` request and every fetch of a `LOAD`, the first
-fetch and each redirect hop, is charged against it before it reaches the handler,
+fetch and each redirect hop, is charged against it before it reaches the handler (a
+redirect the host follows itself is part of its fetch),
 including one the cache then answers, so a request never makes more subrequests than
 the ceiling. Set it to the subrequests you allow one
 query. A `SERVICE ?e` bound by a pattern earlier in its group is charged once per

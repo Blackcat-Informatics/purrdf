@@ -19,7 +19,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `RemoteRequests` ceiling, and parsing against the final URL, or the requested
   IRI when the host reports none. A host must return each redirect to the
   resolver for every destination to pass catalog authorization; a redirect the
-  host follows itself is not seen. A relative `Location` resolves against the
+  host follows itself is not seen and is part of one fetch for the
+  `RemoteRequests` ceiling. A relative `Location` resolves against the
   hop's final URL, falling back to its requested IRI. `GraphResolver` gains the
   provided `resolve_admitted` method, taking the new `FetchAdmission` trait (a
   wrapping resolver forwards it so the inner hops are admitted), and

@@ -34,7 +34,8 @@ pub enum PurrdfGovernorFlag {
     /// Enforce `max_scratch_bytes`.
     MaxScratchBytes = 1 << 3,
     /// Enforce `max_remote_requests`, which bounds host fetches: each `SERVICE` request
-    /// and each fetch of a `LOAD`, the first fetch and each redirect hop, counts one.
+    /// and each fetch of a `LOAD`, the first fetch and each redirect hop, counts one. A
+    /// redirect the host follows itself is part of its fetch.
     MaxRemoteRequests = 1 << 4,
     /// Enforce `deadline_millis` from the start of the call.
     DeadlineMillis = 1 << 5,
@@ -81,7 +82,8 @@ pub struct PurrdfQueryGovernors {
     /// Inclusive scratch-byte ceiling.
     pub max_scratch_bytes: u64,
     /// Inclusive remote-request ceiling on host fetches: each `SERVICE` request and each
-    /// fetch of a `LOAD`, the first fetch and each redirect hop, counts one.
+    /// fetch of a `LOAD`, the first fetch and each redirect hop, counts one. A redirect
+    /// the host follows itself is part of its fetch.
     pub max_remote_requests: u64,
     /// Inclusive logical depth when MaxUdfDepth is enabled.
     /// MaxUdfDepth and UnlimitedUdfDepth are mutually exclusive.
