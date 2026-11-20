@@ -391,12 +391,11 @@ GTS format, section "Nested terms, lowering and term nodes":
   the text-form pass, once before the digests, once for each nested term in the
   digest pass, once for each nested term in the term-node source pass and once for
   each nested term as its record is built, so a stop set during a deep nested term
-  is observed there. When a capacity is given,
-  the signal is read once before the size is judged and, for an input whose size
-  is admitted, once more before its weight is admitted, so an observed stop is
-  the outcome and not a capacity refusal of the input it interrupted. Without a
-  capacity, an input with no nested term polls none of the nested-term passes
-  above, and an input with a nested term polls each of them. A document with a
+  is observed there. An input with no nested term makes none of these polls. When
+  a capacity is given, the signal is read once before the size is judged and, for
+  an input whose size is admitted, once more before its weight is admitted, so an
+  observed stop is the outcome and not a capacity refusal of the input it
+  interrupted. A document with a
   nested term also has one more line for each nested term than the lines it
   spells, and the document loops poll once per line of the sequence in each of
   their two passes.
