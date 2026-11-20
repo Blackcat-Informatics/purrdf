@@ -186,11 +186,6 @@ impl Queue {
 struct Scratch {
     /// `(colour of y, y, label offset, label length)` of each incidence read.
     touches: Vec<(usize, usize, usize, usize)>,
-    /// The new order of the members of the cell being split from its first
-    /// touched member on, which is as large as the cell: kept across splits so
-    /// that peeling a few members off a large cell again and again requests no
-    /// storage per split.
-    order: Vec<usize>,
 }
 
 /// A call's instance: its nodes and lines in compact local indices, their
@@ -214,6 +209,11 @@ fn refine(
     scratch: &mut Scratch,
 ) -> u64 {
     let mut units = 0u64;
+    // The new order of the members of the cell being split, from its first
+    // touched member on. It is as large as the cell, so it lives across the
+    // splits of one refinement: peeling a few members off a large cell again
+    // and again then requests no storage per split.
+    let mut order: Vec<usize> = Vec::new();
     while let Some((side, c)) = queue.pop() {
         let other = 1 - side;
         scratch.touches.clear();
@@ -246,7 +246,7 @@ fn refine(
                 occ_nums,
                 queue,
                 other,
-                &mut scratch.order,
+                &mut order,
             );
             at = end;
         }
