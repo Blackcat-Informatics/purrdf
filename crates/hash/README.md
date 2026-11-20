@@ -580,6 +580,7 @@ source on every run.
 | `b"gts-mmr-parent-v1"` | `PARENT_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-mmr-root-v1"` | `ROOT_DOMAIN` | `crates/gts/src/mmr.rs` |
 | `b"gts-segment-heads-v1"` | `SEGMENT_HEADS_DOMAIN` | `crates/gts/src/replication.rs` |
+| `b"gts2 nested term"` | `NESTED_TERM_CONTEXT` | `crates/rdf-core/src/canonical_labelling/nested.rs` |
 | `b"lexical-transparent-controls-letter-dot-colon-v3"` | `LEXICAL_LAW` | `crates/text/src/profile.rs` |
 | `b"merkle-root\x1f"` | `MERKLE_ROOT_DOMAIN` | `crates/slice/src/cache.rs` |
 | `b"nested-refinement-labelling 1 component"` | `COMPONENT_CONTEXT` | `crates/rdf-core/src/canonical_labelling/mod.rs` |

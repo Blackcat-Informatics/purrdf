@@ -63,9 +63,73 @@ view becomes a set of typed lines:
 
 A blank node's source identifier is its scope ordinal, four bytes big-endian,
 followed by its label bytes, so two blank nodes are one node exactly when their
-label and scope are equal. A term is an IRI, a literal (lexical form, datatype,
+label and scope are equal. The form is decided per input, the statements the
+scope selects together with the caller's records: when that input holds a
+nested triple term, every blank node of it uses the form below instead, a
+nested term only in a graph the scope leaves out does not change the form,
+and a nested term only in a record changes it even when the dataset holds
+none. A term is an IRI, a literal (lexical form, datatype,
 optional language, optional direction), a blank node or a triple term. The
 default graph is the absent graph option.
+
+### Nested triple terms
+
+A triple term that is a component of another triple term, in a line or in a
+record's terms, is a nested term; nested terms equal as values are one. Each
+distinct nested term `x = (s, p, o)` is lowered to a term node, a blank node that
+is no blank node of the dataset, with one `record` line:
+
+- The payload is the eleven bytes `82 05 84 81 01 81 01 81 01 81 01`
+  (`E([5, [[1], [1], [1], [1]]])`, `E` the deterministic CBOR encoding). The
+  terms are the term node, then `N(s)`, `N(p)` and `N(o)`, where `N(c)` is the
+  term node of `c` when `c` is a triple term and `c` otherwise.
+- Wherever `x` is a component of a triple term, its term node stands in its
+  place. A triple term that stands in a slot of a line or directly in a record's
+  terms stays there, with its components lowered, so every triple term of the
+  lines has depth one.
+- The term node's source identifier is `E([d(x)])`, with
+  `d(x) = H(E([K(s), K(p), K(o)]))`, `H` BLAKE3 in key-derivation mode under the
+  context `gts2 nested term` and `K(c)` the source of a component as a byte
+  string: `E([0, h(b)])` for a blank node, `h(b) = H(E([ordinal, label]))`;
+  `E([d(c)])` for a triple term; for an IRI the byte string of `E([1, text])`;
+  for a literal the byte string of `E([2, lexical, form, x])` with `form` 1 for a
+  typed literal and 2, 3 or 4 for a language literal with no direction, `ltr` or
+  `rtl`, and `x` the datatype IRI or the language. A composite node takes the
+  source of its literal.
+- When the input of a labelling holds a nested term, every blank node of that
+  input has the source identifier `E([ordinal, label])`, the scope ordinal an
+  unsigned integer and the label a byte string, so every term node precedes every
+  blank node in source order. The input is the statements the scope selects
+  together with the caller's records: a nested term only in a graph the scope
+  leaves out does not change the form, and a nested term only in a record changes
+  it even when the dataset holds none. An input with no nested term keeps the
+  four-byte source identifiers.
+
+An input with no triple term, or whose triple terms all have depth one, lowers
+to the same lines as before and keeps its labels and digests. An input with a
+nested term gets new labels and a new digest. The lowering reads triple terms by
+the identifiers of their components and never expands a term that holds
+another. The lowered set of a chain of `n` nested statements is linear: one
+record of bounded size for each nested term. The bytes of leaf components are
+copied and hashed once for each distinct nested term they stand in, so a long
+leaf shared by every term of a chain is processed once per term. The labelling
+of the lowered chain has a linear walk, linear allocations and linear retained
+bytes, and the bytes it requests from the allocator and the instructions it
+executes grow quadratically in the labelling engine (the design document records the
+measurements at 1,000, 10,000 and 100,000 terms).
+
+RDF 1.2 nests a triple term only in the object of another. A dataset refuses any
+other nesting when it is frozen, and the lowering refuses a triple term as the
+subject or the predicate of a triple term in any view or record with the
+`input` refusal (a slot holding a variant it does not admit).
+
+A canonical form that holds a nested triple term renumbers its blank labels:
+each term node takes a position among the blank nodes, so the labels of the
+view's own blank nodes move up, and the order of members that were equal
+before the renumbering can swap. A consumer that stores or compares the
+canonical text of a result with a nested triple term, such as a recorded
+evaluator trace, regenerates it. The statements of the document are the same
+up to the renaming of blank nodes.
 
 ### Language tags
 
@@ -150,6 +214,11 @@ and a triple term as `<<( s p o )>>`. Each line is spelled as:
 - `reifier-binding`: `reifier <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> triple [g] .`
 - `annotation`: `reifier p o [g] .`, once, whatever its count
 - `empty-graph` and `record`: nothing
+
+A term node is spelled as the triple term it stands for, from the components of
+its record, which may hold term nodes in turn. Term nodes take positions, so
+the labels of the blank nodes of an input with a nested term need not be
+consecutive.
 
 The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
 U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
@@ -345,8 +414,8 @@ A method whose return type changed:
 | `Canonicalized::presentation` | `CanonPresentation` | `Option<rdfc12::CanonPresentation>` | Handle `None`, which a result of the default family returns because its line sequence has one presentation (`CANON_PRESENTATION_LINES_ID`). A result of an `rdfc12` function returns `Some` with the 4.x value |
 
 Variants added to enums that were already `#[non_exhaustive]` (no change
-needed where a wildcard arm exists): `CanonError::Refused` and
-`CanonError::SourceInconsistent`; `purrdf_rdf::gts_certify::CertifyError::CanonMismatch`;
+needed where a wildcard arm exists): `CanonError::Refused`,
+`CanonError::Lowering` and `CanonError::SourceInconsistent`; `purrdf_rdf::gts_certify::CertifyError::CanonMismatch`;
 `purrdf_rdf::gts_certify::CertificateCborError::UnknownCanon` and `UnexpectedCanon`.
 
 Retyped geo index identity: `GeoIndex::source_fingerprint` returns `Digest32`
@@ -440,7 +509,12 @@ lost or retyped a public field, and none of these enums lost a variant.
   bytes are published. An input the labelling can finish without a search
   succeeds under every bound, including `0`.
 - **Rust.** `CanonError::Refused` carries the labelling's typed refusal
-  (`input`, `graph`, `width` or `limit`). The new constants are
+  (`input`, `graph`, `width` or `limit`). `CanonError::Lowering` carries the
+  refusal of the lowering of nested triple terms, `LoweringRefusal::TermNode`,
+  when two different nested terms share a term-node digest, a collision of
+  BLAKE3. A caller that labels several inputs as one read with
+  `label_view_with_capacity` also meets `LoweringRefusal::Size` and
+  `LoweringRefusal::Weight`, judged against its `LabellingCapacity`. The new constants are
   `CANON_LABELLING_NAME`, `CANON_LABELLING_VERSION`,
   `CANON_PRESENTATION_LINES_ID`, `CANON_PRESENTATION_LINES_VERSION` and
   `CANON_CORPUS_POLICY`. The 4.x items that left the crate root are listed in

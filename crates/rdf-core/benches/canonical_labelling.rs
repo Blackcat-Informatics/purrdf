@@ -17,13 +17,24 @@
 //! (1,000 nodes by default) and `PURRDF_LABELLING_COUNT_SAMPLES` the samples.
 //! `claims` is four messages of 20 claims, each a blank reifier of a triple
 //! term with 6 to 8 annotations, the first three claims of a message being
-//! like siblings: a guaranteed input that runs no search.
+//! like siblings: a guaranteed input that runs no search. `chain` is a chain of
+//! nested triple terms, `t(1) = <<( a a a )>>` and `t(k + 1) = <<( a a t(k) )>>`,
+//! each with the quad `a a t(k)`, labelled through the dataset view; its length
+//! is `PURRDF_LABELLING_COUNT_NODES`. Without `--counts` the report prints the
+//! chain rows of 1,000 and 10,000 statements: the lowered lines, the walk units,
+//! and the allocation counts of the lowering and of the labelling.
 
 use std::hint::black_box;
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
-use purrdf_core::canonical_labelling::{Line, Term, admit, label, label_reference};
+use purrdf_core::canonical_labelling::{
+    Limit, Line, Scope, Term, admit, label, label_reference, label_view, lines_of_view,
+};
 use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
+
+#[path = "../tests/support/nested_chain.rs"]
+mod nested_chain;
+use nested_chain::chain;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -207,6 +218,22 @@ fn prepare(row: &str, size: usize) -> CountWork {
         "cube" => cube(),
         "z4_z4" => z4_z4(),
         "claims" => claims(),
+        "chain" => {
+            assert!(
+                size >= 1,
+                "PURRDF_LABELLING_COUNT_NODES must be at least 1, got {size}"
+            );
+            let view = chain(size);
+            return Box::new(move || {
+                let labelling = label_view(view.as_ref(), &[], Scope::Dataset, Limit::ENGINE, None)
+                    .expect("the chain is labelled");
+                u64::from_le_bytes(
+                    labelling.labelled().digest[..8]
+                        .try_into()
+                        .expect("eight bytes"),
+                )
+            });
+        }
         other => panic!("unknown row {other}"),
     };
     Box::new(move || {
@@ -217,7 +244,14 @@ fn prepare(row: &str, size: usize) -> CountWork {
 
 const COUNT_ROWS: CountRows<'static> = CountRows {
     bench: "canonical_labelling",
-    rows: &["path", "quadratic_residue_13", "cube", "z4_z4", "claims"],
+    rows: &[
+        "path",
+        "quadratic_residue_13",
+        "cube",
+        "z4_z4",
+        "claims",
+        "chain",
+    ],
     size: ("PURRDF_LABELLING_COUNT_NODES", 1000),
     samples: "PURRDF_LABELLING_COUNT_SAMPLES",
 };
@@ -265,6 +299,39 @@ fn measure(name: &str, lines: &[Line]) {
     );
 }
 
+fn measure_chain(n: usize) {
+    let view = chain(n);
+    let window = WholeProcessWindow::open();
+    let lines = black_box(lines_of_view(black_box(view.as_ref()), &[]).expect("lowered"));
+    let lowering = window.close();
+    let lowered = lines.len();
+    drop(lines);
+    let window = WholeProcessWindow::open();
+    let result = black_box(label_view(
+        black_box(view.as_ref()),
+        &[],
+        Scope::Dataset,
+        Limit::ENGINE,
+        None,
+    ));
+    let labelling = window.close();
+    let labelled = result.expect("the chain is labelled");
+    println!(
+        "[canonical_labelling] chain: n={n} lowered_lines={lowered} walk_units={} \
+         lowering_requested_bytes={} lowering_allocations={} lowering_retained_bytes={} \
+         label_requested_bytes={} label_allocations={} label_retained_bytes={} \
+         label_peak_working_bytes={}",
+        labelled.walked_units(),
+        lowering.requested_bytes,
+        lowering.allocations,
+        lowering.retained_bytes,
+        labelling.requested_bytes,
+        labelling.allocations,
+        labelling.retained_bytes,
+        labelling.peak_working_bytes,
+    );
+}
+
 fn main() {
     if std::env::args().any(|arg| arg == "--counts" || arg == "--child") {
         run_count_rows(
@@ -286,5 +353,8 @@ fn main() {
         ("z4_z4", z4_z4()),
     ] {
         measure(name, &lines);
+    }
+    for n in [1_000, 10_000] {
+        measure_chain(n);
     }
 }

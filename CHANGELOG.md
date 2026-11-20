@@ -17,6 +17,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   needs conversion; a caller that persisted `source_fingerprint()` recomputes
   it from its source, and the old 64-bit value does not compile against the
   new type.
+- **Canonical blank labels of a result that holds nested triple terms are
+  renumbered.** A triple term that is a component of another now lowers to one
+  term node and one record, so the lowered set of a chain of nested terms is
+  linear in its length. On a chain of 1,000, 10,000 and 100,000 terms,
+  `label_view` requests 22.7 MB, 1.31 GB and 121 GB from the allocator and its
+  instructions grow alike, quadratically, in the labelling engine, while its
+  walk, allocations and retained bytes grow linearly. Each term node takes a
+  position among the blank nodes, so the labels
+  of the other blank nodes, the canonical digest and the order of equal members
+  of such a document change; the statements are the same up to the renaming of
+  blank nodes. Inputs with no triple term, and inputs whose triple terms all have
+  depth one, keep their labels and digests. The first-party evaluator trace golden
+  over the SPARQL 1.2 triple-term cases is regenerated, and the frozen account of
+  the mixed fixture of the canonical output tests moves: its document gains two
+  record lines, one for each nested term, which are polled in both passes, and the
+  lowering polls the stop signal in its nested walks and the passes after them
+  (document poll total 71 to 99, digest poll total 24 to 48), and its scratch
+  maximum, owned maximum and identities follow the larger lowered set. The
+  lowering refuses a triple term as the subject or the predicate of a triple term
+  in any view or record, as a dataset already does when it is frozen.
 - **Breaking rename: `Multiset256::fingerprint` is now `Multiset256::accounting_check`.**
   The method hashes the population and the additive sum, so it is an accounting
   check and never identified a row set. The signature and the output bytes are

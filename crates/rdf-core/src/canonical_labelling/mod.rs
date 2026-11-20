@@ -37,6 +37,9 @@ mod document;
 #[cfg(test)]
 mod document_tests;
 mod lines;
+mod nested;
+#[cfg(test)]
+mod nested_tests;
 mod optimised;
 #[cfg(test)]
 mod optimised_tests;
@@ -55,8 +58,9 @@ pub(crate) use document::write_line_with;
 pub use document::{DocumentError, write_document, write_line};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
 pub use view::{
-    Comparison, Labelling, Record, Scope, ViewError, compare_view, compare_view_with_memory,
-    label_view, label_view_with_memory, lines_of_view,
+    Comparison, Labelling, LabellingCapacity, LoweringRefusal, Record, Scope, ViewError,
+    compare_view, compare_view_with_memory, label_view, label_view_with_capacity,
+    label_view_with_memory, lines_of_view,
 };
 pub use walk::WalkTotals;
 
