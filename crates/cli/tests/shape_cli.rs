@@ -272,7 +272,7 @@ fn the_figures_of_a_known_dataset_are_exact() {
             "{\"min\":8,\"max\":15,\"count\":12}],",
             "\"datatypes\":{\"named_xsd\":{\"integer\":5,\"string\":7},\"other\":0},",
             "\"language_tags\":{\"tagged_literals\":5,\"distinct_tags\":\"<5\",",
-            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}},",
+            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"text-reader-records-no-census\"}},",
             "\"canonical_labelling\":{\"status\":\"omitted\",\"reason\":\"disabled\"}}\n"
         )
     );
@@ -306,24 +306,38 @@ fn case_forms(document: &str) -> &str {
     &document[start..end]
 }
 
+/// The reader a document came from.
+#[derive(Clone, Copy)]
+enum Reader {
+    Text,
+    Gts,
+    Pack,
+}
+
+/// The `case_forms` object a text reader prints.
+const TEXT_OMITTED: &str =
+    "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"text-reader-records-no-census\"}";
+
 /// Assert that `document` equals the text-syntax `reference` in every figure but
-/// `case_forms`, and that `case_forms` is what its reader gives: a reported figure for GTS and
-/// the typed omission for a text syntax.
-fn assert_same_but_case_forms(document: &str, reference: &str, is_gts: bool) {
-    const OMITTED: &str =
-        "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}";
-    assert_eq!(case_forms(reference), OMITTED, "{reference}");
-    if is_gts {
-        assert!(
+/// `case_forms`, and that `case_forms` is what its reader gives: a reported figure for GTS,
+/// and a typed omission with its own reason for a text syntax and for a pack.
+fn assert_same_but_case_forms(document: &str, reference: &str, reader: Reader) {
+    assert_eq!(case_forms(reference), TEXT_OMITTED, "{reference}");
+    match reader {
+        Reader::Gts => assert!(
             case_forms(document).starts_with("\"case_forms\":{\"status\":\"reported\","),
             "{document}"
-        );
-    } else {
-        assert_eq!(case_forms(document), OMITTED, "{document}");
+        ),
+        Reader::Text => assert_eq!(case_forms(document), TEXT_OMITTED, "{document}"),
+        Reader::Pack => assert_eq!(
+            case_forms(document),
+            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"pack-holds-only-folded-tag\"}",
+            "{document}"
+        ),
     }
     assert_eq!(
         document.replace(case_forms(document), ""),
-        reference.replace(OMITTED, ""),
+        reference.replace(TEXT_OMITTED, ""),
         "every other figure is equal"
     );
 }
@@ -348,10 +362,10 @@ fn one_dataset_gives_one_document_from_turtle_nquads_gts_and_pack() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let from_nquads = shape(&[&nq]);
     assert_eq!(code(&from_nquads), 0, "{}", stderr(&from_nquads));
-    for (other, is_gts) in [(&ttl, false), (&gts, true)] {
+    for (other, reader) in [(&ttl, Reader::Text), (&gts, Reader::Gts)] {
         let out = shape(&[other]);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
-        assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), is_gts);
+        assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), reader);
     }
     let shape_receipts = support::path(dir.path(), "shape.json");
     let out = shape(&[
@@ -362,7 +376,7 @@ fn one_dataset_gives_one_document_from_turtle_nquads_gts_and_pack() {
         &pack,
     ]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert_eq!(stdout(&out), stdout(&from_nquads));
+    assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), Reader::Pack);
 }
 
 /// Protects: the verb distinguishes a pack read without its canonical control from a bad pack
@@ -457,10 +471,10 @@ fn a_named_graph_gives_one_document_from_trig_nquads_and_gts() {
     let from_nquads = shape(&[&nq]);
     assert_eq!(code(&from_nquads), 0, "{}", stderr(&from_nquads));
     assert!(stdout(&from_nquads).contains("\"named_graphs\":\"<5\""));
-    for (other, is_gts) in [(&trig, false), (&gts, true)] {
+    for (other, reader) in [(&trig, Reader::Text), (&gts, Reader::Gts)] {
         let out = shape(&[other]);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
-        assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), is_gts);
+        assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), reader);
     }
 }
 
@@ -808,10 +822,11 @@ fn language_tag_case_forms_are_reported_from_gts_and_omitted_elsewhere() {
     );
     assert_eq!(forms["upper"].as_str(), Some("<5"));
     assert_eq!(forms["mixed"].as_str(), Some("<5"));
-    // The tagged-literal total would give a suppressed form cell by subtraction.
+    // The printed tagged-literal total would give the small form cells by subtraction, so the
+    // case forms hide a cell among themselves; the total itself stays exact.
     assert_eq!(
         exact(&document, &["language_tags", "tagged_literals"]),
-        None
+        Some(12)
     );
 
     let text = tags
@@ -825,11 +840,7 @@ fn language_tag_case_forms_are_reported_from_gts_and_omitted_elsewhere() {
     let nq = write_file(dir.path(), "tags.nq", &text);
     let out = shape(&["--no-labelling", &nq]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(
-        stdout(&out).contains(
-            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}"
-        )
-    );
+    assert!(stdout(&out).contains(TEXT_OMITTED));
 }
 
 /// A GTS file of `terms` language-tagged literals, one segment per slice of `segments`.
@@ -896,4 +907,38 @@ fn case_forms_count_distinct_literals_across_segments_and_case_variants() {
             "{name}: the forms add up to the tagged literals"
         );
     }
+}
+
+/// Protects: reporting the case forms changes no other figure. A GTS file with upper-case and
+/// mixed-case tags, where the form cells are small and are suppressed among themselves, gives
+/// the document of its text twin in every figure but `case_forms`.
+#[test]
+fn upper_and_mixed_case_gts_matches_its_text_twin_but_for_case_forms() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let rows: Vec<(String, &str)> = [
+        "en", "en", "en", "en", "en", "en", "EN", "EN", "En-US", "En-US", "en-us", "fr",
+    ]
+    .iter()
+    .enumerate()
+    .map(|(index, tag)| (format!("v{index}"), *tag))
+    .collect();
+    let borrowed: Vec<(&str, &str)> = rows.iter().map(|(l, t)| (l.as_str(), *t)).collect();
+    let gts = support::path(dir.path(), "cased.gts");
+    std::fs::write(&gts, gts_with_tags(&[&borrowed])).expect("write the GTS fixture");
+    let text: String = rows
+        .iter()
+        .map(|(lexical, tag)| {
+            format!("<http://example.org/s> <http://example.org/p> \"{lexical}\"@{tag} .\n")
+        })
+        .collect::<Vec<_>>()
+        .concat();
+    let nq = write_file(dir.path(), "cased.nq", &text);
+    let from_text = shape(&["--no-labelling", &nq]);
+    assert_eq!(code(&from_text), 0, "{}", stderr(&from_text));
+    let from_gts = shape(&["--no-labelling", &gts]);
+    assert_eq!(code(&from_gts), 0, "{}", stderr(&from_gts));
+    assert_same_but_case_forms(&stdout(&from_gts), &stdout(&from_text), Reader::Gts);
+    // Neither the form cells nor anything else exposes the small cells: the upper and mixed
+    // cells are suppressed.
+    assert!(case_forms(&stdout(&from_gts)).contains("\"upper\":\"<5\""));
 }

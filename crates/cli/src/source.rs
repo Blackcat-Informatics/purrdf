@@ -598,10 +598,10 @@ pub(crate) fn load_gts(
     load_gts_with_forms(path, policy).map(|(dataset, ledger, _)| (dataset, ledger))
 }
 
-/// [`load_gts`] and the written case forms of the language tags the read folded.
+/// [`load_gts`] and the written case forms of the language-tagged literals the read produced.
 ///
-/// The forms are what only a reader that sees the tag as written can know; the dataset
-/// holds it lower case.
+/// The census counts every language-tagged literal, not only those whose tag was folded; the
+/// dataset holds each tag lower case.
 pub(crate) fn load_gts_with_forms(
     path: &str,
     policy: TransportPolicy,

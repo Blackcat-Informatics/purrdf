@@ -45,9 +45,11 @@
 //!
 //! The data model lowercases a language tag when the term is interned, so only a reader that
 //! sees the tag as written can report its case form. A GTS read does, through the envelope's
-//! `language_tag_forms`. The text and pack readers do not hand on the distinct-literal count,
-//! which needs the dataset builder, and the document states that as a typed omission. Equality
-//! across syntaxes holds for every figure except this one.
+//! `language_tag_forms`. The text readers record no such census, which the document states as
+//! the omission `text-reader-records-no-census`, and a pack holds only the lower-cased tag,
+//! which it states as `pack-holds-only-folded-tag`. The case forms are suppressed on their own
+//! against the printed count of tagged literals, so no other figure depends on them, and
+//! equality across syntaxes holds for every figure except `case_forms`.
 //!
 //! # Memory
 //!
@@ -159,14 +161,21 @@ pub(crate) fn run(
         let (dataset, _ledger, forms) =
             source::load_gts_with_forms(options.input, source::TransportPolicy::Detect)
                 .map_err(|_| read_failure())?;
-        measure(&*dataset, labelling, Some(forms))
+        measure(&*dataset, labelling, CaseForms::Reported(forms))
     } else {
         source::run_over_input(
             options.input,
             source_format,
             options.base,
             None,
-            ShapeOp { labelling },
+            ShapeOp {
+                labelling,
+                forms: CaseForms::Omitted(if is_pack {
+                    PACK_OMISSION
+                } else {
+                    TEXT_OMISSION
+                }),
+            },
             canonical,
         )
         .map_err(|error| match error {
@@ -186,6 +195,19 @@ pub(crate) fn run(
         .map_err(|_| CliError::Runtime("shape: the figures could not be written".to_owned()))
 }
 
+/// The reason a text reader reports no case forms: it does not feed a case-form census.
+const TEXT_OMISSION: &str = "text-reader-records-no-census";
+
+/// The reason a pack reports no case forms: it holds only the lower-cased tag.
+const PACK_OMISSION: &str = "pack-holds-only-folded-tag";
+
+/// The written case forms of the language tags, or why a reader has none.
+#[derive(Clone, Copy)]
+enum CaseForms {
+    Reported(LanguageTagForms),
+    Omitted(&'static str),
+}
+
 /// Whether and how the canonical labelling figure is taken.
 #[derive(Clone, Copy)]
 enum LabellingRequest {
@@ -198,6 +220,7 @@ enum LabellingRequest {
 /// The measurement as the generic operation [`source::run_over_input`] monomorphizes per view.
 struct ShapeOp {
     labelling: LabellingRequest,
+    forms: CaseForms,
 }
 
 impl ViewOp for ShapeOp {
@@ -209,7 +232,7 @@ impl ViewOp for ShapeOp {
         view: &D,
         _canonical: &mut crate::canonical::Request,
     ) -> Result<Self::Output, CliError> {
-        Ok(measure(view, self.labelling, None))
+        Ok(measure(view, self.labelling, self.forms))
     }
 }
 
@@ -327,7 +350,7 @@ struct Figures {
     tagged_literals: u64,
     distinct_tags: u64,
     /// The written case forms of the language tags, where the reader saw them written.
-    forms: Option<LanguageTagForms>,
+    forms: CaseForms,
     labelling: Labelling,
 }
 
@@ -356,7 +379,7 @@ fn infallible<T>(result: Result<T, Infallible>) -> T {
 fn measure<D: InputView>(
     view: &D,
     labelling: LabellingRequest,
-    forms: Option<LanguageTagForms>,
+    forms: CaseForms,
 ) -> Result<Figures, CliError> {
     let mut census = Census::default();
     let mut quads = 0_u64;
@@ -692,27 +715,18 @@ impl Figures {
         vars.push((Count::of(self.other_datatypes), self.other_datatypes));
         let tagged_at = vars.len();
         vars.push((Count::of(self.tagged_literals), self.tagged_literals));
-        let form_at = vars.len();
-        if let Some(forms) = self.forms {
-            vars.extend([forms.lower, forms.upper, forms.mixed].map(|n| (Count::of(n), n)));
-        }
-        let mut sums = vec![
+        let end = vars.len();
+        let sums = vec![
             Sum {
                 total: 0,
                 cells: (length_at..datatype_at).collect(),
             },
             Sum {
                 total: 0,
-                cells: (datatype_at..form_at).collect(),
+                cells: (datatype_at..end).collect(),
             },
         ];
-        if self.forms.is_some() {
-            sums.push(Sum {
-                total: tagged_at,
-                cells: (form_at..form_at + 3).collect(),
-            });
-        }
-        suppress(&mut vars, &sums);
+        suppress(&mut vars, &sums, &[]);
         let length_cells: Vec<(u64, u64, Count)> = length_raw
             .iter()
             .zip(&vars[length_at..])
@@ -727,9 +741,25 @@ impl Figures {
             .collect();
         let other = vars[other_at].0;
         let tagged = vars[tagged_at].0;
-        let case_cells: Option<[Count; 3]> = self
-            .forms
-            .map(|_| [vars[form_at].0, vars[form_at + 1].0, vars[form_at + 2].0]);
+        // The case forms partition the tagged literals, but are suppressed on their own with
+        // the printed tagged-literal count held fixed, so that no other figure depends on them.
+        let case_cells: Result<[Count; 3], &str> = match self.forms {
+            CaseForms::Omitted(reason) => Err(reason),
+            CaseForms::Reported(forms) => {
+                let mut own = vec![
+                    (Count::of(self.tagged_literals), self.tagged_literals),
+                    (Count::of(forms.lower), forms.lower),
+                    (Count::of(forms.upper), forms.upper),
+                    (Count::of(forms.mixed), forms.mixed),
+                ];
+                let sum = [Sum {
+                    total: 0,
+                    cells: vec![1, 2, 3],
+                }];
+                suppress(&mut own, &sum, &[0]);
+                Ok([own[1].0, own[2].0, own[3].0])
+            }
+        };
         let parents = Count::total(self.sibling_parents, &sibling_counts);
         let quads = Count::of(self.quads);
         let reifiers = Count::of(self.reifiers);
@@ -780,7 +810,7 @@ impl Figures {
             ),
         );
         match case_cells {
-            Some([lower, upper, mixed]) => put(
+            Ok([lower, upper, mixed]) => put(
                 &mut out,
                 format_args!(
                     "{{\"status\":\"reported\",\"lower\":{},\"upper\":{},\"mixed\":{}}}",
@@ -789,9 +819,10 @@ impl Figures {
                     mixed.text()
                 ),
             ),
-            None => {
-                out.push_str("{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}");
-            }
+            Err(reason) => put(
+                &mut out,
+                format_args!("{{\"status\":\"omitted\",\"reason\":\"{reason}\"}}"),
+            ),
         }
         out.push_str("},\"canonical_labelling\":");
         // The line count is the sum of these statements, so it prints exactly only when each

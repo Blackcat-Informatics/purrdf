@@ -150,11 +150,12 @@ const fn pinned(count: Count, bound: (u64, u64)) -> bool {
 
 /// Choose how every variable prints so that no hidden one is pinned.
 ///
-/// Each variable is its printed form and its true value. Totals start as exact when every
+/// Each variable is its printed form and its true value; a variable in `fixed` keeps the form
+/// it was given and is never recomputed. Totals start as exact when every
 /// cell of every breakdown is exact and as the lower bound the exact cells give otherwise;
 /// then exact cells are withheld, smallest first, until no hidden variable is pinned.
-pub(crate) fn suppress(vars: &mut [(Count, u64)], sums: &[Sum]) {
-    let mut settled = Vec::new();
+pub(crate) fn suppress(vars: &mut [(Count, u64)], sums: &[Sum], fixed: &[usize]) {
+    let mut settled: Vec<usize> = fixed.to_vec();
     for sum in sums.iter().rev() {
         if settled.contains(&sum.total) {
             continue;
@@ -238,7 +239,7 @@ mod tests {
                 cells: vec![3, 4],
             },
         ];
-        suppress(&mut vars, &sums);
+        suppress(&mut vars, &sums, &[]);
         let bounds = super::derive(&vars, &sums);
         for (index, var) in vars.iter().enumerate() {
             assert!(!super::pinned(var.0, bounds[index]), "{index}");
