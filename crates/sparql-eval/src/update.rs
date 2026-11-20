@@ -1133,7 +1133,7 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
 /// # The stop signal is polled before the host is asked for anything
 ///
 /// This is the one place a nominally governed engine hands control to the host and blocks
-/// there: [`GraphResolver::resolve`] fetches and parses a document, and how long that takes
+/// there: [`GraphResolver::resolve_admitted`] fetches and parses a document, and how long that takes
 /// is not the evaluator's to bound. A signal only the evaluator polls is unpollable for
 /// exactly as long as the evaluator is not running, which is precisely the window this call
 /// occupies — so a cancelled or expired request must be stopped *before* the request is
@@ -1188,9 +1188,10 @@ fn load(
             let diagnostic =
                 RdfDiagnostic::error(error.code(), format!("LOAD <{source}>: {error}"));
             let Some(kind) = error.silenced_kind() else {
-                // The request's own stop signal, reported by the host: the trip, whatever
-                // `SILENT` says. An ungoverned request has no signal to have fired, so a
-                // host that claims one is reporting a failure.
+                // Failures `SILENT` never absorbs. The request's own stop signal or ceiling,
+                // reported by the resolver, is the trip, whatever `SILENT` says; an
+                // ungoverned request has no governor to have tripped, so a resolver that
+                // claims one is reporting a failure. A storage refusal is a failure too.
                 return Err(match (post_return_trip, governors, error) {
                     (Some(tripped), _, _) => tripped,
                     (None, Some(state), LoadError::Governed(governor)) => {

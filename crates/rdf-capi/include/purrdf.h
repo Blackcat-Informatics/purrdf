@@ -642,8 +642,8 @@ enum PurrdfGovernorFlag
      */
     PURRDF_GOVERNOR_FLAG_MAX_SCRATCH_BYTES = (1 << 3),
     /**
-     * Enforce `max_remote_requests`, which bounds host fetches: each `SERVICE` request and
-     * each redirect hop of a `LOAD` counts one.
+     * Enforce `max_remote_requests`, which bounds host fetches: each `SERVICE` request
+     * and each fetch of a `LOAD`, the first fetch and each redirect hop, counts one.
      */
     PURRDF_GOVERNOR_FLAG_MAX_REMOTE_REQUESTS = (1 << 4),
     /**
@@ -1236,7 +1236,7 @@ typedef struct {
     uint64_t max_scratch_bytes;
     /**
      * Inclusive remote-request ceiling on host fetches: each `SERVICE` request and each
-     * redirect hop of a `LOAD` counts one.
+     * fetch of a `LOAD`, the first fetch and each redirect hop, counts one.
      */
     uint64_t max_remote_requests;
     /**

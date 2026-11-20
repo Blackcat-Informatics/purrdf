@@ -24,7 +24,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   provided `resolve_admitted` method, taking the new `FetchAdmission` trait (a
   wrapping resolver forwards it so the inner hops are admitted), and
   `LoadError` the additive `Storage` variant, a request-header allocation refusal
-  that `LOAD SILENT` does not absorb. An opaque redirect is refused by `SERVICE` as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
+  that `LOAD SILENT` does not absorb. An opaque redirect is refused by `SERVICE`
+  as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
   `LoadError::OpaqueRedirect` (additive variants on non-exhaustive enums). The
   WebAssembly asynchronous lane runs both operations through the exchange with
   its JavaScript interface unchanged; a `LOAD` document delivered without a

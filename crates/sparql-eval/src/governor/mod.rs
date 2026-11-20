@@ -681,8 +681,8 @@ impl QueryGovernors {
         self
     }
 
-    /// Bound host fetches: each `SERVICE` request and each redirect hop of a `LOAD` counts
-    /// one.
+    /// Bound host fetches: each `SERVICE` request and each fetch of a `LOAD`, the first
+    /// fetch and each redirect hop, counts one.
     #[must_use]
     pub fn with_max_remote_requests(mut self, requests: u64) -> Self {
         self.limits.set(ResourceDimension::RemoteRequests, requests);
