@@ -33,7 +33,8 @@ use purrdf_lex::cbor::head::{
 };
 
 use super::digest_of;
-use crate::{FastMap, RdfTextDirection, TermValue};
+use crate::governor::is_stopped;
+use crate::{FastMap, RdfTextDirection, StopSignal, TermValue};
 
 /// The hash context of the digests `d` and `h` of a term node's source
 /// identifier.
@@ -159,19 +160,27 @@ impl NestedTerms {
     /// Every constant and composite component has its source kept by
     /// [`Self::keep_source`]: the lowering keeps it as it forms the component.
     ///
+    /// The caller's `stop` signal is polled before each nested term.
+    ///
     /// # Errors
-    /// The digest two different nested terms share: the refusal `term_node`.
+    /// [`DigestRefusal::Stopped`] when `stop` is set, and
+    /// [`DigestRefusal::Collision`] with the digest two different nested terms
+    /// share: the refusal `term_node`.
     pub(crate) fn digests(
         &self,
         nodes: &[Box<[u8]>],
         hash: NestedHash,
-    ) -> Result<Vec<[u8; 32]>, [u8; 32]> {
+        stop: Option<&dyn StopSignal>,
+    ) -> Result<Vec<[u8; 32]>, DigestRefusal> {
         let mut digests: Vec<[u8; 32]> = Vec::with_capacity(self.parts.len());
         let mut seen: FastMap<[u8; 32], ()> = FastMap::default();
         let mut blank_digests: FastMap<usize, [u8; 32]> = FastMap::default();
         let mut message = Vec::new();
         let mut source = Vec::new();
         for parts in &self.parts {
+            if is_stopped(stop) {
+                return Err(DigestRefusal::Stopped);
+            }
             message.clear();
             push_head(&mut message, ARRAY, 3);
             for part in parts {
@@ -195,12 +204,21 @@ impl NestedTerms {
             }
             let digest = hash(&message);
             if seen.insert(digest, ()).is_some() {
-                return Err(digest);
+                return Err(DigestRefusal::Collision(digest));
             }
             digests.push(digest);
         }
         Ok(digests)
     }
+}
+
+/// Why [`NestedTerms::digests`] stopped before it returned every digest.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DigestRefusal {
+    /// The caller's stop signal was set.
+    Stopped,
+    /// Two different nested terms share this digest.
+    Collision([u8; 32]),
 }
 
 /// The kept source of a constant component.

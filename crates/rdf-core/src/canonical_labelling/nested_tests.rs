@@ -571,6 +571,55 @@ fn a_stop_during_the_nested_walk_is_not_turned_into_a_capacity_refusal() {
     ));
 }
 
+/// A signal that is never set and counts its polls.
+#[derive(Debug, Default)]
+struct Counting(std::sync::atomic::AtomicU64);
+
+impl crate::StopSignal for Counting {
+    fn stopped(&self) -> bool {
+        self.0.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        false
+    }
+}
+
+/// A stop set while the weight of a read is computed is the outcome, not a
+/// weight refusal. The input whose weight exceeds the capacity polls the signal
+/// `polls` times before it is refused; a stop at the last of those polls, the
+/// one taken after the weight is computed, is `Stopped`, and a signal that
+/// stays clear through them still gets the weight refusal. The same input
+/// under a capacity that admits it succeeds.
+#[test]
+fn a_stop_during_the_weight_calculation_is_not_turned_into_a_weight_refusal() {
+    let (view, _) = chain(8);
+    let run = |stop: &dyn crate::StopSignal, weight: u64| {
+        let mut read = LabellingCapacity::new(u64::MAX, weight);
+        label_view_with_capacity(
+            view.as_ref(),
+            &[],
+            Scope::Dataset,
+            Limit::ENGINE,
+            Some(stop),
+            &mut read,
+        )
+    };
+    let counting = Counting::default();
+    assert!(matches!(
+        run(&counting, 0),
+        Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
+    ));
+    let polls = counting.0.load(std::sync::atomic::Ordering::Relaxed);
+    assert!(polls > 0);
+    assert_eq!(
+        run(&After(std::sync::atomic::AtomicU64::new(polls - 1)), 0).err(),
+        Some(ViewError::Stopped)
+    );
+    assert!(matches!(
+        run(&After(std::sync::atomic::AtomicU64::new(polls)), 0),
+        Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
+    ));
+    assert!(run(&Counting::default(), u64::MAX).is_ok());
+}
+
 /// RDF 1.2 nests a triple term only in the object of another. A dataset
 /// refuses a triple term as a triple term's subject or predicate when it is
 /// frozen, and the lowering refuses one at each entry that can still carry it,

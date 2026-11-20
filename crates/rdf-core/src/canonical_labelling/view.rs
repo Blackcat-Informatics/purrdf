@@ -95,8 +95,8 @@ use super::lines::{
     Tok, iri_encoding, literal_encoding, push_bytes,
 };
 use super::nested::{
-    NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source, leaf_source,
-    nested_term_digest, parse_text_blank_source, term_node_source, text_blank_source,
+    DigestRefusal, NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source,
+    leaf_source, nested_term_digest, parse_text_blank_source, term_node_source, text_blank_source,
 };
 use super::{GraphTerm, InputReason, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::cdt_blank::cdt_blank_segments;
@@ -1095,6 +1095,12 @@ pub(super) fn lowered<D: DatasetView>(
         .iter()
         .map(|line| line_weight(&set.consts, line))
         .fold(nested.record_weight(&set.consts), u64::saturating_add);
+    // A stop set while the weight was computed is the outcome, not a weight
+    // refusal of the input it interrupted; the size is judged first when the
+    // signal is clear.
+    if capacity.is_some() && is_stopped(stop) {
+        return Err(ViewError::Stopped);
+    }
     if let Some(capacity) = capacity {
         capacity.admit_weight(weight).map_err(ViewError::Lowering)?;
     }
@@ -1122,12 +1128,20 @@ pub(super) fn lowered<D: DatasetView>(
         }
         admit(&mut meter, nested.digest_bytes())?;
         let digests = nested
-            .digests(&interner.set.nodes, hash)
-            .map_err(|digest| ViewError::Lowering(LoweringRefusal::TermNode { digest }))?;
+            .digests(&interner.set.nodes, hash, stop)
+            .map_err(|refusal| match refusal {
+                DigestRefusal::Stopped => ViewError::Stopped,
+                DigestRefusal::Collision(digest) => {
+                    ViewError::Lowering(LoweringRefusal::TermNode { digest })
+                }
+            })?;
         let mut payload = Vec::with_capacity(8 + NESTED_TERM_PAYLOAD.len());
         push_bytes(&mut payload, &NESTED_TERM_PAYLOAD);
         admit_constant(&mut meter, interner, &payload)?;
         for (n, digest) in digests.iter().enumerate() {
+            if is_stopped(stop) {
+                return Err(ViewError::Stopped);
+            }
             let source = term_node_source(digest);
             admit(&mut meter, interned_bytes(source.len()))?;
             interner.set.nodes[term_nodes[n]] = Box::new(source);
