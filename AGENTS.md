@@ -343,10 +343,8 @@ publishing are the owner's decision; an agent prepares, and does not tag.
 
 ## 7. Provenance
 
-This repository was extracted from `gmeow-ontology` and `gmeow-gts`; see
-[`PROVENANCE.md`](./PROVENANCE.md). The downstream `gmeow-ontology` cutover is
-not complete: its legacy models are migration evidence only and are deleted as
-each PurRDF replacement is integrated.
+See [`PROVENANCE.md`](./PROVENANCE.md). The legacy `gmeow-ontology` models are
+migration evidence only and are deleted as each PurRDF replacement is integrated.
 
 ---
 

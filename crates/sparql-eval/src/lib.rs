@@ -348,7 +348,10 @@ pub use remote::{
     RetainedServiceFailure, ServiceBuildError, ServiceRequest, ServiceResolutionError,
     ServiceResolver, ServiceWorkspaceCertificate,
 };
-pub use remote_http::{AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport};
+pub use remote_http::{
+    AdmittedHttpBody, DocumentDecoder, HttpExchange, HttpExchangeRequest, HttpFailure,
+    HttpGraphResolver, HttpMethod, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus,
+};
 // The per-service policy surface: what a resolver may do for one endpoint, what it
 // sends, and the two resolvers that consume it. Re-exported so a host configures
 // federation without naming the module path.
@@ -360,7 +363,7 @@ pub use service::{
 pub use solution::{
     RetainedRow, RowBag, RowBagIntoIter, SharedSchema, Solution, SolutionSeq, VarSchema, compatible,
 };
-pub use update::{GraphResolveRequest, GraphResolver, LoadError};
+pub use update::{FetchAdmission, GraphResolveRequest, GraphResolver, LoadError};
 pub use user_fn::{
     AdmittedExprFnBody, AdmittedNativeFnBody, Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall,
     ExprFunction, MeteredNativeFnBody, NativeFnBody, NativeFnCall, NativeFnContext, NativeFunction,

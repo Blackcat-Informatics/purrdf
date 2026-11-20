@@ -249,7 +249,7 @@ number of them.
 
 ### The `SERVICE` transport seam
 
-`HttpRequest::stop` can only be honoured by a transport capable of abandoning a
+`HttpExchangeRequest::stop` can only be honoured by a transport capable of abandoning a
 call it is already inside, and nothing forces a host to write one.
 
 | Case | Covers |

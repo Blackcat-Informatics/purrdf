@@ -156,7 +156,7 @@ ID 不变；持久化的句柄标识确切的快照。
 
 常驻内存的数据集保留紧凑的四字节词项 ID、十六字节的四元组行以及借用式的词项访问。
 操作性读取经由同一个 `DatasetView` 扩展点，使用带类型的失败与钉住守卫。存储故障会在
-操作的最终检查点丢弃其结果。有界查询准入目前覆盖基于基本图模式、仅投影变量的普通
+操作的最终检查点丢弃其结果。有界查询准入覆盖基于基本图模式、仅投影变量的普通
 `SELECT`；尚未定价的操作性形式返回带类型的拒绝。构建、完整认证、宿主缓冲区与调用方
 拥有的输出各有独立的内存义务。内核不执行任何文件系统或网络 I/O。确切边界见
 [存储契约](./crates/rdf-core/STORAGE.md)与 [3.0 迁移指南](./docs/MIGRATION-3.0.md)。
@@ -353,15 +353,15 @@ W3C SHACL 1.0 测试套件上 **129/129 通过**，0 例入账；在随库固化
 | ShEx 2.1 验证 | shexTest v2.1.0（`vectors/shexTest/`） | **1,105 / 1,105** 尝试，0 xfail |
 | ShEx 模式 / 负例语法 / 结构 | shexTest v2.1.0 | **425/425 · 99/99 · 14/14** |
 | SHACL | W3C data-shapes（`vectors/shacl/`） | **129 / 129** 通过 · 0 例入账 |
-| SHACL 1.2 | W3C shacl12-test-suite（`vectors/shacl12/`） | **538 / 544** 通过 · 6 个非规范形式的预期小数 · 0 例入账；3 个未列入清单的随库固化文件单独评分 |
+| SHACL 1.2 | W3C `shacl12-test-suite`（`vectors/shacl12/`） | **538 / 544** 通过 · 6 个非规范形式的预期小数 · 0 例入账；3 个未列入清单的随库固化文件单独评分 |
 | SHACL（第一方冻结语料） | `crates/shapes/corpus/` | **73 / 73** |
 | SHACL Rules | DASH + 第一方（`vectors/shacl/af/rules/`） | **20 / 20** |
 | 语法编解码器 | W3C rdf-tests 往返 | **264 / 264** |
 | JSON-LD 1.1 上下文透镜 | W3C JSON-LD 1.1 REC toRDF + 压缩（`crates/rdf/tests/fixtures/jsonld-w3c-rec/`） | **73 / 73** 适用的 toRDF · **13 / 13** 精确压缩 |
-| SPARQL 1.0/1.1/1.2 | 完整的 W3C sparql10（data-r2）+ sparql11 + sparql12 + 第一方，经由 `purrdf-sparql-conformance` | **1393** 通过 · 0 例入台账 |
+| SPARQL 1.0/1.1/1.2 | 完整的 W3C `sparql10`（data-r2）+ `sparql11` + `sparql12` + 第一方，经由 `purrdf-sparql-conformance` | **1393** 通过 · 0 例入台账 |
 | SPARQL CDT（SEP-0009） | 随库固化的 `awslabs/SPARQL-CDTs`（`vectors/sparql-cdt/`） | **658 / 658**，0 例入账——词法空间分歧见 [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md) |
 | SPARQL 执行 governor | 第一方冻结语料（`vectors/sparql-governors/`） | **50 / 50**，0 例入账 |
-| 蕴涵（SPARQL 蕴涵机制） | W3C sparql11 `entailment/` 组 | **70 / 70**，0 例入账 |
+| 蕴涵（SPARQL 蕴涵机制） | W3C `sparql11` `entailment/` 组 | **70 / 70**，0 例入账 |
 | 蕴涵（OWL 2 DL 相容性） | 随库固化的 W3C OWL 2 套件 | **258 / 262** 一致，4 例入台账，0 例未入台账 |
 | 蕴涵（OWL 2 RL，W3C 蕴涵测试） | 随库固化的 W3C OWL 2 蕴涵套件 | **50 / 50** 一致，0 例入账，0 例未入台账——负例通道 **23 / 23**（未发现不可靠之处），正例通道 **27 / 27** |
 | RDFC-1.0 | W3C 规范化夹具 | 绿 |
@@ -405,7 +405,7 @@ nightly 分析工具链；源码不使用任何 nightly 独有特性。CI 单独
 WASM 构建每一个已发布的 crate。发布工件使用 stable Rust 构建。
 
 Cargo 套件、Python 分发包与 npm 包共享同一个协调一致的版本，并遵循语义化版本。C ABI
-单独编号，当前为 **0.8**，带有签名检查，并可在运行时经由 `purrdf_abi_version` 读取。
+单独编号，其版本为 **0.20.0**，带有签名检查，并可在运行时经由 `purrdf_abi_version` 读取。
 经过验证的提交工作流见[贡献指南](./CONTRIBUTING.md)。
 
 PurRDF 由 Blackcat Informatics® Inc. 开发，是

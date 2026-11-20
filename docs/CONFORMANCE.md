@@ -240,8 +240,8 @@ The stage implements ordinary document expansion from the
 It preserves nested and repeated node objects, anonymous objects without minted
 identifiers, list order, indexes, graph/reverse/included structure and original
 JSON values, including `@json` payloads. RDF lexical conversion and node merging
-occur afterward. Standard unmapped-property dropping replaces the earlier
-undefined-property refusal. Unmapped index metadata succeeds structurally and
+occur afterward. Standard unmapped-property dropping applies; an undefined
+property is not refused. Unmapped index metadata succeeds structurally and
 is explicitly refused by RDF lowering; custom index mappings emit RDF properties.
 
 `JsonLdExpansionLimits::max_allocation_bytes` controls a new, separate native
@@ -342,8 +342,6 @@ cases `expanded_jsonld_and_yamlld_cli_bytes_are_frozen` and
 `configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema` pin
 expanded output bytes and compare configured JSON-LD/YAML-LD canonical datasets.
 These are scoped implementation checks, not a complete conformance verdict.
-The complete upstream matrix for the pinned Basic draft and remaining
-deterministic semantic-output acceptance remain open.
 [Context and carrier documentation](book/src/concepts/jsonld.md#yaml-ld-semantic-translation)
 distinguishes standard Basic processing from the RDF 1.2 carrier additions.
 
@@ -561,7 +559,7 @@ A harness never skips silently. The four mechanisms:
    harness asserts each still fails. Fixing one without removing its entry
    breaks the build ("XPASS"), which keeps the ledger honest.
 3. **Trait skips (ShEx only)** — the mechanism to skip whole spec features by
-   their manifest trait tags, counted exactly. The trait-skip list is currently
+   their manifest trait tags, counted exactly. The trait-skip list is
    **empty**: imports and semantic actions are now fully validated, so nothing
    is skipped.
 4. **Monotone budget (ratchet)** — `scripts/conformance-baseline.json` records,
@@ -621,10 +619,10 @@ way the matrix stays honest:
   (`crates/sparql-conformance/suite/`, pinned commit `426c7df`) and every
   non-pass is a typed strict-xfail in `crates/sparql-conformance/src/xfail.rs`.
   The value-mismatch / property-path / update-semantics / cast / function /
-  reifier residuals described in earlier revisions are **resolved**: XSD casts,
+  reifier surfaces all pass: XSD casts,
   numeric/string functions, property paths, UPDATE semantics, `CONSTRUCT WHERE`,
   grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
-  annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
+  annotation surface (including graph-scoped reifiers). **All 7 W3C
   `service` federation cases pass** (via the lateral SERVICE seam), and so do
   all 47 cases of the verbatim `aggregates` group. The SPARQL evaluation corpus
   has **0 ledgered xfails**. The
@@ -689,9 +687,7 @@ way the matrix stays honest:
      cases upstream, and the harness's `OWL2-DL-EXCLUDED` line reports what the
      other **220** did when the probe ran — **172 the tableau decided** (108
      consistent, 64 inconsistent), 0 that did not
-     terminate under a 40 s ceiling (an earlier measurement, before the tableau's
-     clausification and search refinement, found 30; every one of those now
-     resolves within the same ceiling), 25 withheld (20 reasoner, 5 parse),
+     terminate under a 40 s ceiling, 25 withheld (20 reasoner, 5 parse),
      and 23 with no RDF/XML premise. So the exclusion was payload-size triage,
      not a capability limit, and 262 / 262 is a score over a corpus rather than
      over what W3C published.
@@ -775,10 +771,9 @@ way the matrix stays honest:
      nested anonymous operand) and `webont-restriction-005` (a membership in an
      anonymous restriction).
 
-     Every class the ledger used to hold is closed, and **the rule table did not
-     change once**. `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are
+     The lanes do not change the rule table. `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are
      the same 78, `extensions(Regime::OwlRl)` is the one `ext-eq-diff-sym`, and
-     strict `Materialization::OwlRl` output is byte-for-byte what it was.
+     strict `Materialization::OwlRl` output is unaffected by the lanes.
      `purrdf_entail::entails()` reaches a conclusion seven ways, and five of the
      six are not matching:
 
@@ -827,8 +822,7 @@ way the matrix stays honest:
      `EntailmentWarrant` arm and its own checker, and every one of those
      checkers re-decides the claim without running a reasoner.
 
-     The one entry that used to be actionable is CLOSED, and closing it is why
-     the report has an `extension` line. `a owl:differentFrom b` entails
+     The report has an `extension` line for one conclusion outside the tables. `a owl:differentFrom b` entails
      `b owl:differentFrom a` — sound, and shaped exactly like `prp-symp`, yet
      not among the 78 rules because Table 4's `owl:differentFrom` rules only
      ever conclude `false`. PurRDF states it as `ext-eq-diff-sym`, in a rule
@@ -899,8 +893,8 @@ way the matrix stays honest:
   Its snapshot is `40231dfb97c5b606d22ae733947c0d14b4f45c07`, graded under the
   explicit `shacl-ed-2026-11-06` law. That law evaluates list-function arguments
   in the caller's scope before application, and shared run-once rules execute
-  once per focus node. The October law and compatibility defaults keep their
-  earlier behavior. Node-expression evaluation failures are graded as declared;
+  once per focus node. The October law and compatibility defaults retain their
+  own behavior. Node-expression evaluation failures are graded as declared;
   setup, processor and declaration failures cannot satisfy those expectations.
   The independent SPARQL Rules root remains at `4cd46986`, matching the supported
   2026-09-19 Working Draft; it is outside the SHACL EARL. Every negative Rules
@@ -1174,13 +1168,10 @@ coherent, costs a parse on every composite literal, and would change what
 canonicalization sees. Both readings are defensible; this is the one PurRDF
 ships today.
 
-**And exactly what it does not.** The mitigation was originally specified over
-upstream **negative-syntax** entries — "no negative-syntax entry contains the
-new production". Stated that way it is *vacuous*: all 658 entries the vendored
-SEP-0009 corpus declares are `mf:QueryEvaluationTest`, so upstream ships no
-negative-syntax CDT vector at all, and nothing it publishes could observe the
-divergence in either direction. The broader claim above is what is actually
-established, and it is the one worth having. What no test here does is compare
+**And exactly what it does not.** Upstream ships no negative-syntax CDT
+vector: all 658 entries the vendored SEP-0009 corpus declares are
+`mf:QueryEvaluationTest`, so nothing it publishes could observe the divergence
+in either direction. The broader claim above is what is established. What no test here does is compare
 PurRDF against another SEP-0009 implementation.
 
 ### SHACL-AF node expressions: normative surface vs. owned extensions

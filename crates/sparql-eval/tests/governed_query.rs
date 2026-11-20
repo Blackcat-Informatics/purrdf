@@ -26,9 +26,10 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     CHARGE_SCHEDULE, CancellationFlag, ChargePoint, FallibleSparqlError, GOVERNOR_PROFILE_DIGEST,
-    GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, HttpRemoteQuerySource,
-    HttpRequest, NativeSparqlEngine, NodeCharges, PartialAnswers, QueryExplanation, QueryGovernors,
-    QueryOptions, RemoteError, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+    GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernedOutcome, HttpExchangeRequest,
+    HttpFailure, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus, NativeSparqlEngine,
+    NodeCharges, PartialAnswers, QueryExplanation, QueryGovernors, QueryOptions, STOP_POLL_FUEL,
+    StopSignal, WallDeadline, resolve_precedence,
 };
 
 /// The number of `ex:p` edges in the fixture dataset.
@@ -74,14 +75,17 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-fn one_remote_binding(_: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
-    Ok(br#"{
+fn one_remote_binding(_: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
+    Ok(HttpOutcome::Response(HttpResponse::new(
+        HttpStatus::OK,
+        br#"{
       "head": { "vars": ["remote"] },
       "results": { "bindings": [
         { "remote": { "type": "literal", "value": "ok" } }
       ] }
     }"#
-    .to_vec())
+        .to_vec(),
+    )))
 }
 
 /// The all-rows SELECT the ceiling tests bound.

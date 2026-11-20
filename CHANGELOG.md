@@ -8,6 +8,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
+  `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
+  request carries the method, target, ordered headers, body, timeout and stop
+  signal; the outcome is a response (status, headers, body and the final URL),
+  an explicit opaque redirect, or a dataset the host holds, and a host failure
+  is a typed `HttpFailure` rather than a status. `HttpGraphResolver` serves
+  `LOAD` over the same exchange with a caller-supplied `DocumentDecoder`,
+  re-authorizing every redirect hop it follows, admitting each hop against the
+  `RemoteRequests` ceiling, and parsing against the final URL, or the requested
+  IRI when the host reports none. A host must return each redirect to the
+  resolver for every destination to pass catalog authorization; a redirect the
+  host follows itself is not seen and is part of one fetch for the
+  `RemoteRequests` ceiling. A relative `Location` resolves against the
+  hop's final URL, falling back to its requested IRI. `GraphResolver` gains the
+  provided `resolve_admitted` method, taking the new `FetchAdmission` trait (a
+  wrapping resolver forwards it so the inner hops are admitted), and
+  `LoadError` the additive `Storage` variant, a request-header allocation refusal
+  that `LOAD SILENT` does not absorb. An opaque redirect is refused by `SERVICE`
+  as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
+  `LoadError::OpaqueRedirect` (additive variants on non-exhaustive enums). The
+  WebAssembly asynchronous lane runs both operations through the exchange with
+  its JavaScript interface unchanged; a `LOAD` document delivered without a
+  base is parsed against the effect's IRI. The migration guide gives the
+  mapping from the 4.x request. The delivery protocol of the WebAssembly lane has no
+  way to deliver an opaque redirect, so the package's runner reports an opaque `Response`
+  from a `resolveLoad` handler, and the packaged Cloudflare resolver reports a browser's
+  opaque redirect, each as a transport failure.
 - **Breaking: the GeoIndex source identity is a 32-byte BLAKE3 digest.**
   `GeoIndex::source_fingerprint` returns `purrdf_hash::hex::Digest32`, not a
   64-bit `u64`, and `IndexBindingError::Source` carries two `Digest32` values.

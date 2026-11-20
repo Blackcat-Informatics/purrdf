@@ -1354,12 +1354,13 @@ impl From<&purrdf_core::TrippedGovernor> for FailureCode {
 impl From<&LoadError> for FailureCode {
     fn from(error: &LoadError) -> Self {
         match error {
-            LoadError::Transport(_) => Self::LoadFailed,
+            LoadError::Transport(_) | LoadError::OpaqueRedirect(_) => Self::LoadFailed,
             LoadError::Decode(_) => Self::LoadDecode,
             LoadError::Denied(_) => Self::LoadDenied,
             LoadError::HostDenied(_) => Self::LoadHostDenied,
             LoadError::Fault(_) => Self::LoadFault,
             LoadError::Governed(_) => Self::LoadStopped,
+            LoadError::Storage(_) => Self::Evaluation,
         }
     }
 }
@@ -1370,9 +1371,10 @@ impl From<&RemoteError> for FailureCode {
             RemoteError::SourceRead(_)
             | RemoteError::WorkspaceStopped
             | RemoteError::ExchangeIdExhausted => Self::Evaluation,
-            RemoteError::Transport(_) | RemoteError::Decode(_) | RemoteError::Disabled => {
-                Self::ServiceFailed
-            }
+            RemoteError::Transport(_)
+            | RemoteError::Decode(_)
+            | RemoteError::Disabled
+            | RemoteError::OpaqueRedirect { .. } => Self::ServiceFailed,
             RemoteError::Unconfigured(_) => Self::ServiceUnconfigured,
             RemoteError::Denied(_) => Self::ServiceDenied,
             RemoteError::HostDenied { .. } => Self::ServiceHostDenied,

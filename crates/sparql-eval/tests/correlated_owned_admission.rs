@@ -272,19 +272,19 @@ fn service_public_forms_direct_prepared_and_governed_price_the_real_native_produ
 #[test]
 fn http_native_decode_and_blank_ingest_preserve_duplicates_and_physical_refusal_beats_silent() {
     use purrdf_sparql_eval::{
-        AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport, RemoteError,
-        ServiceResolutionError, WorkspaceCapability,
+        AdmittedHttpBody, HttpExchange, HttpExchangeRequest, HttpFailure, HttpOutcome,
+        HttpRemoteQuerySource, ServiceResolutionError, WorkspaceCapability,
     };
     struct Native {
         refuse: bool,
     }
-    impl HttpTransport for Native {
-        fn post(&self, _: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
+    impl HttpExchange for Native {
+        fn exchange(&self, _: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
             panic!("bounded route cannot enter the opaque resident producer")
         }
-        fn post_admitted(
+        fn exchange_admitted(
             &self,
-            _: HttpRequest<'_>,
+            _: HttpExchangeRequest<'_>,
             workspace: WorkspaceCapability,
         ) -> Result<AdmittedHttpBody, ServiceResolutionError> {
             AdmittedHttpBody::try_build(&workspace, |memory| {

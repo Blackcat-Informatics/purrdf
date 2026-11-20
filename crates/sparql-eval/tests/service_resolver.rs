@@ -25,10 +25,11 @@ use purrdf_core::{
     RdfLiteral, SparqlRequest, SparqlResult, StopCause, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    CancellationFlag, FallibleSparqlError, HttpRemoteQuerySource, HttpRequest,
-    InProcessServiceResolver, NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError,
-    ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceCredential, ServiceProfile,
-    ServiceRequest, ServiceResolver, ServiceRouter,
+    CancellationFlag, FallibleSparqlError, HttpExchangeRequest, HttpFailure, HttpOutcome,
+    HttpRemoteQuerySource, HttpResponse, HttpStatus, InProcessServiceResolver, NativeSparqlEngine,
+    QueryGovernors, QueryOptions, RemoteError, ServiceCapabilities, ServiceCapability,
+    ServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver,
+    ServiceRouter,
 };
 
 /// The in-process service, and the one every gated fixture lists.
@@ -86,15 +87,23 @@ impl SpyTransport {
     }
 }
 
-impl purrdf_sparql_eval::HttpTransport for &SpyTransport {
-    fn post(&self, request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
+impl purrdf_sparql_eval::HttpExchange for &SpyTransport {
+    fn exchange(&self, request: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
         // Counted FIRST, before any inspection can bail out: a test asserting zero is
         // then asserting the request was never issued, not that it was declined here.
         self.posts.fetch_add(1, Ordering::Relaxed);
-        *self.headers.lock().expect("lock") = request.headers.to_vec();
-        *self.agent_and_timeout.lock().expect("lock") =
-            Some((request.user_agent.to_owned(), request.timeout));
-        Ok(REMOTE_JSON.to_vec())
+        *self.headers.lock().expect("lock") = request.profile_headers.to_vec();
+        *self.agent_and_timeout.lock().expect("lock") = Some((
+            request
+                .fixed_header("user-agent")
+                .expect("a SERVICE request names its User-Agent")
+                .to_owned(),
+            request.timeout,
+        ));
+        Ok(HttpOutcome::Response(HttpResponse::new(
+            HttpStatus::OK,
+            REMOTE_JSON.to_vec(),
+        )))
     }
 }
 
@@ -438,8 +447,8 @@ fn a_catalog_gates_a_service_nested_inside_a_forwarded_body_too() {
 fn silent_swallows_an_unreachable_endpoint_through_both_resolvers() {
     // Row one of the contract table, both implementations. One local row, so the join
     // identity (a no-op join) keeps it and a dropped clause would not.
-    let unreachable = HttpRemoteQuerySource::new(|_: HttpRequest<'_>| {
-        Err(RemoteError::Transport("connection refused".to_owned()))
+    let unreachable = HttpRemoteQuerySource::new(|_: HttpExchangeRequest<'_>| {
+        Err(HttpFailure::Transport("connection refused".to_owned()))
     });
     let result = run(&unreachable, &service_query(NET_EP, true))
         .expect("SILENT swallows an unreachable endpoint");
