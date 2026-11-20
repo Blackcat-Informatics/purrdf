@@ -35,14 +35,52 @@
 //!   labelling like a label in any other position. A composite literal that
 //!   names no blank node is a constant leaf like any other literal.
 //!
+//! * A triple term that is a component of another triple term is a nested
+//!   term. Each distinct nested term is one term node, a blank node that is no
+//!   blank node of the view, with one `record` line that holds the node and the
+//!   components, every component that is a triple term standing as its own term
+//!   node ([`super::nested`]). A triple term in a slot of a line or directly in
+//!   a record's terms keeps its place with its components lowered, so every
+//!   triple term of the lines has depth one. As in RDF 1.2, only the object of
+//!   a triple term may be a triple term; a nested subject or predicate is
+//!   refused as an input whose slot holds a variant it does not admit.
+//!
 //! A blank node's source identifier is its scope ordinal, four bytes
 //! big-endian, followed by its label bytes, so two blank nodes are one node
 //! exactly when their `(label, scope)` are equal; a blank node of a record is
 //! the view's blank node of the same `(label, scope)`. A composite node's
 //! source identifier is four zero bytes, `0xFF` and its literal's encoding,
-//! which no `(label, scope)` spells. Terms are lowered straight into tokens
-//! over a heap work list: no nested term is built and none is walked on the
-//! machine stack.
+//! which no `(label, scope)` spells.
+//!
+//! The source form is decided per input: the statements of the view that the
+//! scope selects together with the caller's records, which is what the
+//! lowering reads. When that input holds a nested term, every blank node of it
+//! takes the source identifier `E([ordinal, label])`, the deterministic CBOR
+//! encoding the second-generation GTS format gives a blank node of a fold, and
+//! a term node takes `E([d])` with the digest of its nested term. The digests
+//! of term nodes read those bytes, and the source order is the format's: every
+//! term node (first byte `0x81`) precedes every blank node of the input
+//! (`0x82`). An input with no nested term keeps the four-byte form, so the
+//! order of its twins, which the lowering does not change, does not move; the
+//! format's form would order a shorter label first. A nested term only in a
+//! graph the scope leaves out does not change the form, and a nested term only
+//! in a record changes it even when the view holds none. Both forms name each
+//! node once.
+//!
+//! The canonical map of a view is not the positions a GTS reader reports or
+//! stores: the reader's source identifiers come from its own folds, so for twin
+//! blank nodes and for copies of equal top components the two maps can differ by
+//! an automorphism. The canonical line sequence, its bytes and its digest are
+//! equal only when the view is given the same lines and records as the reader's
+//! labelled set: the records of bindings, suppression and blob entries and
+//! pairs of VALUES (one for each typed value) come from the caller, and the
+//! dataset folds the case
+//! of a language tag where the format keeps it as written. The order of delivery
+//! a reader reports for a canonical file comes from the reader's own run.
+//!
+//! Terms are lowered from the identifiers of their components over heap work
+//! lists: no triple term that holds another is expanded, each nested term is
+//! interned once, and nothing is walked on the machine stack.
 
 use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -56,15 +94,19 @@ use super::lines::{
     Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
     Tok, iri_encoding, literal_encoding, push_bytes,
 };
-use super::{GraphTerm, Labelled, Limit, LineSet, Refusal, optimised};
+use super::nested::{
+    DigestRefusal, NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source,
+    leaf_source, nested_term_digest, parse_text_blank_source, term_node_source, text_blank_source,
+};
+use super::{GraphTerm, InputReason, Labelled, Limit, LineSet, Refusal, optimised};
 use crate::cdt_blank::cdt_blank_segments;
 use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
 
 use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 use crate::{
-    BlankScope, CanonError, CanonicalizationControl, ContentDigest, DatasetView, RdfTextDirection,
-    StopSignal, TermLookupError, TermValue,
+    BlankScope, CanonError, CanonicalizationControl, ContentDigest, DatasetView, FastMap, FastSet,
+    RdfTextDirection, StopSignal, TermLookupError, TermRef, TermValue,
 };
 
 /// A caller's record beside a view: an opaque payload, compared whole and never
@@ -122,6 +164,156 @@ pub enum ViewError<E> {
     /// The caller's admission refused the working state of the labelling
     /// ([`compare_view_with_memory`]); nothing was labelled.
     Storage(StorageError),
+    /// The lowering refused to hand the input to the labelling: its size or
+    /// its weight exceeds the capacity of the read, or two different nested
+    /// terms have one digest.
+    Lowering(LoweringRefusal),
+}
+
+/// Why the lowering of a view refused to hand it to the labelling. Each is
+/// judged before the engine runs, in the order of the variants, and the first
+/// that applies is the one returned.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum LoweringRefusal {
+    /// The size of the input exceeds the capacity of the read in lines
+    /// ([`LabellingCapacity::new`]). Nothing is weighed or digested.
+    Size {
+        /// The size of the input ([`Labelling::size`]).
+        size: u64,
+        /// The capacity in lines.
+        capacity: u64,
+    },
+    /// The total labelled weight of the read with the weight of this input
+    /// exceeds the capacity of the read in bytes, or an earlier input of the
+    /// read was refused by weight. The weight is not added to the total.
+    Weight {
+        /// The weight of the input ([`Labelling::weight`]).
+        weight: u64,
+        /// The total labelled weight of the read before this input.
+        total: u64,
+        /// The capacity of the read in bytes.
+        capacity: u64,
+    },
+    /// Two different nested terms have one digest, so two term nodes would
+    /// have one source identifier. Their digests are those of BLAKE3, so this
+    /// is a collision of BLAKE3. The weight stays in the total of the read.
+    TermNode {
+        /// The digest the two share.
+        digest: [u8; 32],
+    },
+}
+
+impl fmt::Display for LoweringRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Size { size, capacity } => write!(
+                f,
+                "the size {size} of the input exceeds the capacity of {capacity} lines"
+            ),
+            Self::Weight {
+                weight,
+                total,
+                capacity,
+            } => match total.checked_add(*weight) {
+                Some(sum) if sum <= *capacity => write!(
+                    f,
+                    "the read is spent: an earlier input of it was refused by weight, so this \
+                     input of weight {weight} is refused although the total {total} of the read \
+                     leaves room for it in the capacity of {capacity} bytes"
+                ),
+                _ => write!(
+                    f,
+                    "the weight {weight} of the input with the total {total} of the read exceeds \
+                     the capacity of {capacity} bytes"
+                ),
+            },
+            Self::TermNode { .. } => {
+                f.write_str("two different nested terms have one term-node digest")
+            }
+        }
+    }
+}
+
+impl std::error::Error for LoweringRefusal {}
+
+impl purrdf_hash::error::StructuredError for LoweringRefusal {
+    purrdf_hash::error_visit! {
+        Size { size, capacity } => "labelling-lowering-size" {
+            "size" => Unsigned(u128::from(*size)),
+            "capacity" => Unsigned(u128::from(*capacity)),
+        },
+        Weight { weight, total, capacity } => "labelling-lowering-weight" {
+            "weight" => Unsigned(u128::from(*weight)),
+            "total" => Unsigned(u128::from(*total)),
+            "capacity" => Unsigned(u128::from(*capacity)),
+        },
+        TermNode { digest } => "labelling-lowering-term-node" {
+            "digest" => Bytes(digest),
+        },
+    }
+}
+
+/// The capacities of a read that labels a sequence of inputs, and the total
+/// labelled weight it has admitted so far. One value is kept for the whole
+/// read and handed to [`label_view_with_capacity`] for each input in turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LabellingCapacity {
+    lines: u64,
+    bytes: u64,
+    total: u64,
+    /// Whether an input of the read was refused by weight, after which every
+    /// input whose size is admitted is refused by weight.
+    spent: bool,
+}
+
+impl LabellingCapacity {
+    /// A read that admits an input of at most `lines` in size and inputs whose
+    /// weights sum to at most `bytes`. A size or a total equal to its capacity
+    /// is admitted.
+    #[must_use]
+    pub const fn new(lines: u64, bytes: u64) -> Self {
+        Self {
+            lines,
+            bytes,
+            total: 0,
+            spent: false,
+        }
+    }
+
+    /// The total labelled weight: the sum of the weights of the inputs the
+    /// read has admitted.
+    #[must_use]
+    pub const fn total(&self) -> u64 {
+        self.total
+    }
+
+    const fn admit_size(&self, size: u64) -> Result<(), LoweringRefusal> {
+        if size > self.lines {
+            return Err(LoweringRefusal::Size {
+                size,
+                capacity: self.lines,
+            });
+        }
+        Ok(())
+    }
+
+    fn admit_weight(&mut self, weight: u64) -> Result<(), LoweringRefusal> {
+        match self.total.checked_add(weight) {
+            Some(total) if !self.spent && total <= self.bytes => {
+                self.total = total;
+                Ok(())
+            }
+            _ => {
+                self.spent = true;
+                Err(LoweringRefusal::Weight {
+                    weight,
+                    total: self.total,
+                    capacity: self.bytes,
+                })
+            }
+        }
+    }
 }
 
 impl<E: fmt::Display> fmt::Display for ViewError<E> {
@@ -140,6 +332,7 @@ impl<E: fmt::Display> fmt::Display for ViewError<E> {
             Self::Storage(error) => {
                 write!(f, "the labelling's working state was not admitted: {error}")
             }
+            Self::Lowering(refusal) => write!(f, "the lowering refused the input: {refusal}"),
         }
     }
 }
@@ -149,6 +342,7 @@ impl<E: std::error::Error + 'static> std::error::Error for ViewError<E> {
         match self {
             Self::Read(error) => Some(error),
             Self::Storage(error) => Some(error),
+            Self::Lowering(refusal) => Some(refusal),
             Self::ForeignId | Self::Refused(_) | Self::Stopped => None,
         }
     }
@@ -164,6 +358,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         },
         Stopped => "labelling-view-stopped" {},
         Storage(cause) => "labelling-view-storage" { "cause" => Cause(cause) },
+        Lowering(cause) => "labelling-view-lowering" { "cause" => Cause(cause) },
     }
 }
 
@@ -229,10 +424,34 @@ struct Lowering<'a, 's, 'm, D: DatasetView> {
     pending: Vec<Vec<Tok>>,
     /// The caller's admission of the bytes a new constant or node adds.
     meter: Option<&'m mut Meter<'m>>,
+    /// The distinct nested terms reached, by their lowered components.
+    nested: NestedTerms,
+    /// The node index of the term node of each nested term.
+    term_nodes: Vec<usize>,
+    /// The nested term of each triple-term identifier lowered as one.
+    nested_ids: FastMap<D::Id, usize>,
+    /// The triple-term identifiers whose nested candidates are counted.
+    holders: FastSet<D::Id>,
+    /// The nested candidates: the components that are triple terms, of each
+    /// distinct triple-term identifier reached and of each triple term of a
+    /// record's values.
+    candidates: u64,
 }
 
 /// Admits `bytes` of the lowered set through the caller's account.
-type Meter<'m> = dyn FnMut(usize) -> Result<(), StorageError> + 'm;
+pub(super) type Meter<'m> = dyn FnMut(usize) -> Result<(), StorageError> + 'm;
+
+/// The bytes the lowering keeps for one nested term: its components in the
+/// list and as the key of the index, its index and term-node entries, and the
+/// term node's source slot in the set.
+const NESTED_ENTRY_BYTES: usize =
+    2 * size_of::<[Part; 3]>() + 2 * size_of::<usize>() + size_of::<Box<[u8]>>();
+
+/// The bytes the lowering keeps for the source `K` of `len` bytes of a
+/// component of a nested term: the bytes, their box and their key.
+const fn kept_source_bytes(len: usize) -> usize {
+    interned_bytes(len).saturating_add(size_of::<Part>())
+}
 
 /// The bytes the set holds for one interned byte string.
 const fn interned_bytes(len: usize) -> usize {
@@ -271,6 +490,19 @@ fn admit_node<E>(
     admit(meter, interned_bytes(source.len()))
 }
 
+/// RDF 1.2 nests a triple term only in the object of another: a triple term
+/// that is the subject or the predicate of a triple term is refused as a slot
+/// holding a variant it does not admit, before anything of it is lowered.
+fn object_only<E>(subject_and_predicate_nested: [bool; 2]) -> Result<(), ViewError<E>> {
+    if subject_and_predicate_nested.contains(&true) {
+        Err(ViewError::Refused(Refusal::Input {
+            reason: InputReason::Slot,
+        }))
+    } else {
+        Ok(())
+    }
+}
+
 impl<D: DatasetView> Lowering<'_, '_, '_, D> {
     fn poll(&self) -> Result<(), ViewError<D::ReadError>> {
         if is_stopped(self.stop) {
@@ -280,51 +512,42 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         }
     }
 
-    /// The tokens of `value` in walk order, and its variant. A composite node
-    /// reached for the first time queues its `record` line in `pending`.
-    fn value(
-        &mut self,
-        value: &TermValue,
-        out: &mut Vec<Tok>,
-    ) -> Result<GraphTerm, ViewError<D::ReadError>> {
+    /// The component of the IRI, literal or blank node `value`, or `None` for
+    /// a triple term. A composite node reached for the first time queues its
+    /// `record` line in `pending`.
+    fn leaf(&mut self, value: &TermValue) -> Result<Option<Part>, ViewError<D::ReadError>> {
         let interner = &mut self.admitter.interner;
         let meter = &mut self.meter;
-        let mut pending = vec![value];
-        while let Some(value) = pending.pop() {
-            match value {
-                TermValue::Iri(iri) => {
-                    let encoding = iri_encoding(iri.as_bytes());
-                    admit_constant(meter, interner, &encoding)?;
-                    let c = interner.constant(&encoding);
-                    out.push(Tok::Const(c));
-                }
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
+        let part = match value {
+            TermValue::Iri(iri) => {
+                let encoding = iri_encoding(iri.as_bytes());
+                admit_constant(meter, interner, &encoding)?;
+                Part::Const(interner.constant(&encoding))
+            }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                let direction = direction.map(|d| match d {
+                    RdfTextDirection::Ltr => Direction::Ltr,
+                    RdfTextDirection::Rtl => Direction::Rtl,
+                });
+                let encoding = literal_encoding(
+                    lexical_form.as_bytes(),
+                    datatype.as_bytes(),
+                    language.as_deref().map(str::as_bytes),
                     direction,
-                } => {
-                    let direction = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => Direction::Ltr,
-                        RdfTextDirection::Rtl => Direction::Rtl,
-                    });
-                    let encoding = literal_encoding(
-                        lexical_form.as_bytes(),
-                        datatype.as_bytes(),
-                        language.as_deref().map(str::as_bytes),
-                        direction,
-                    );
-                    let cut =
-                        cdt_blank_segments(lexical_form, datatype).map_err(ViewError::Storage)?;
-                    if cut.blanks.is_empty() {
-                        admit_constant(meter, interner, &encoding)?;
-                        out.push(Tok::Const(interner.constant(&encoding)));
-                        continue;
-                    }
+                );
+                let cut = cdt_blank_segments(lexical_form, datatype).map_err(ViewError::Storage)?;
+                if cut.blanks.is_empty() {
+                    admit_constant(meter, interner, &encoding)?;
+                    Part::Const(interner.constant(&encoding))
+                } else {
                     let source = composite_source(&encoding);
                     admit_node(meter, interner, &source)?;
                     let node = interner.node(&source);
-                    out.push(Tok::Blank(node));
                     if self.composites.insert(node) {
                         let payload = composite_payload(datatype, &cut.segments);
                         let mut encoded = Vec::with_capacity(8 + payload.len());
@@ -340,19 +563,125 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
                         }
                         self.pending.push(record);
                     }
+                    Part::Blank(node)
                 }
-                TermValue::Blank { label, scope } => {
-                    let source = blank_source(label, *scope);
-                    admit_node(meter, interner, &source)?;
-                    out.push(Tok::Blank(interner.node(&source)));
+            }
+            TermValue::Blank { label, scope } => {
+                let source = blank_source(label, *scope);
+                admit_node(meter, interner, &source)?;
+                return Ok(Some(Part::Blank(interner.node(&source))));
+            }
+            TermValue::Triple { .. } => return Ok(None),
+        };
+        Ok(Some(part))
+    }
+
+    /// The leaf `value`, a component of a nested term: its part, its source
+    /// `K` kept and admitted when it is a constant or composite node met for
+    /// the first time in a nested term.
+    fn nested_leaf(&mut self, value: &TermValue) -> Result<Part, ViewError<D::ReadError>> {
+        // A view that answers a leaf for an identifier once and a triple term
+        // for it later does not present one dataset.
+        let part = self.leaf(value)?.ok_or(ViewError::ForeignId)?;
+        if self.nested.needs_source(part)
+            && let Some(source) = leaf_source(value)
+        {
+            admit(&mut self.meter, kept_source_bytes(source.len()))?;
+            self.nested.keep_source(part, source);
+        }
+        Ok(part)
+    }
+
+    /// The token of a component: a term node stands as its blank leaf.
+    fn token(&self, part: Part) -> Tok {
+        match part {
+            Part::Const(c) => Tok::Const(c),
+            Part::Blank(b) => Tok::Blank(b),
+            Part::Nested(n) => Tok::Blank(self.term_nodes[n]),
+        }
+    }
+
+    /// The nested term of the components `parts`, interned once with its term
+    /// node.
+    fn intern_nested(&mut self, parts: [Part; 3]) -> Result<usize, ViewError<D::ReadError>> {
+        if let Some(n) = self.nested.get(&parts) {
+            return Ok(n);
+        }
+        admit(&mut self.meter, NESTED_ENTRY_BYTES)?;
+        let n = self.nested.push(parts);
+        let node = self.admitter.interner.term_node();
+        self.term_nodes.push(node);
+        Ok(n)
+    }
+
+    /// The nested term of the triple term `root`, a component of another
+    /// triple term of a record's values: its components first, over a heap
+    /// work list. Each triple term of the value counts its components that
+    /// are triple terms as nested candidates.
+    fn nested_value(&mut self, root: &TermValue) -> Result<Part, ViewError<D::ReadError>> {
+        enum Step<'v> {
+            Enter(&'v TermValue),
+            Exit,
+        }
+        let mut steps = vec![Step::Enter(root)];
+        let mut done: Vec<Part> = Vec::new();
+        while let Some(step) = steps.pop() {
+            self.poll()?;
+            match step {
+                Step::Enter(TermValue::Triple { s, p, o }) => {
+                    object_only([&**s, &**p].map(|c| matches!(c, TermValue::Triple { .. })))?;
+                    let inner = u64::from(matches!(&**o, TermValue::Triple { .. }));
+                    self.candidates = self.candidates.saturating_add(inner);
+                    steps.extend([Step::Exit, Step::Enter(o), Step::Enter(p), Step::Enter(s)]);
                 }
-                TermValue::Triple { s, p, o } => {
-                    out.push(Tok::Tag(TAG_TRIPLE));
-                    pending.extend([&**o, &**p, &**s]);
+                Step::Enter(leaf) => done.push(self.nested_leaf(leaf)?),
+                Step::Exit => {
+                    // INVARIANT: an exit is pushed under the entries of its
+                    // three components, and each entry leaves one part.
+                    let (Some(o), Some(p), Some(s)) = (done.pop(), done.pop(), done.pop()) else {
+                        unreachable!("a triple term's exit precedes its components")
+                    };
+                    done.push(Part::Nested(self.intern_nested([s, p, o])?));
                 }
             }
         }
-        Ok(variant_of(value))
+        // INVARIANT: the root's entry leaves exactly one part.
+        let Some(part) = done.pop() else {
+            unreachable!("the walk of a term leaves its part")
+        };
+        Ok(part)
+    }
+
+    /// The tokens of `value` in a slot of a line or in a record's list: a
+    /// triple term of depth one whose components that are triple terms stand
+    /// as their term nodes, or a leaf.
+    fn value(
+        &mut self,
+        value: &TermValue,
+        out: &mut Vec<Tok>,
+    ) -> Result<GraphTerm, ViewError<D::ReadError>> {
+        let TermValue::Triple { s, p, o } = value else {
+            let Some(part) = self.leaf(value)? else {
+                // INVARIANT: `value` is not a triple term, the only value
+                // `leaf` answers `None` for.
+                unreachable!("a value that is not a triple term is a leaf")
+            };
+            out.push(self.token(part));
+            return Ok(variant_of(value));
+        };
+        let components = [&**s, &**p, &**o];
+        object_only([&**s, &**p].map(|c| matches!(c, TermValue::Triple { .. })))?;
+        let inner = u64::from(matches!(&**o, TermValue::Triple { .. }));
+        self.candidates = self.candidates.saturating_add(inner);
+        out.push(Tok::Tag(TAG_TRIPLE));
+        for component in components {
+            let part = match self.leaf(component)? {
+                Some(part) => part,
+                None => self.nested_value(component)?,
+            };
+            out.push(self.token(part));
+        }
+        Ok(GraphTerm::Triple)
     }
 
     /// Push the `record` lines of the composite nodes the last line reached.
@@ -370,17 +699,131 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
         }
     }
 
-    /// The tokens of the term `id`, and its variant.
+    /// The components of the term `id` when it is a triple term.
+    fn triple_of(&self, id: D::Id) -> Result<Option<[D::Id; 3]>, ViewError<D::ReadError>> {
+        self.view
+            .with_term(id, |term| match term {
+                TermRef::Triple { s, p, o } => Some([s, p, o]),
+                _ => None,
+            })
+            .map_err(ViewError::Read)
+    }
+
+    /// The value of the term `id`, which is not a triple term.
+    fn leaf_value(&self, id: D::Id) -> Result<TermValue, ViewError<D::ReadError>> {
+        self.view.term_value(id).map_err(|error| match error {
+            TermLookupError::ForeignId => ViewError::ForeignId,
+            TermLookupError::Read(error) => ViewError::Read(error),
+        })
+    }
+
+    /// The leaf `id`, which is not a triple term, as a component, and its
+    /// variant.
+    fn leaf_id(&mut self, id: D::Id) -> Result<(Part, GraphTerm), ViewError<D::ReadError>> {
+        let value = self.leaf_value(id)?;
+        // A view that answers a leaf for an identifier once and a triple term
+        // for it later does not present one dataset.
+        let part = self.leaf(&value)?.ok_or(ViewError::ForeignId)?;
+        Ok((part, variant_of(&value)))
+    }
+
+    /// Which of `components` are triple terms: the nested components of the
+    /// triple term that holds them.
+    fn nested_components(
+        &self,
+        components: [D::Id; 3],
+    ) -> Result<[bool; 3], ViewError<D::ReadError>> {
+        let mut nested = [false; 3];
+        for (slot, component) in nested.iter_mut().zip(components) {
+            *slot = self.triple_of(component)?.is_some();
+        }
+        object_only([nested[0], nested[1]])?;
+        Ok(nested)
+    }
+
+    /// Count the nested candidates `nested` of the triple term `id`, once for
+    /// each identifier. A triple term with no nested component is recorded
+    /// nowhere.
+    fn hold(&mut self, id: D::Id, nested: [bool; 3]) -> Result<(), ViewError<D::ReadError>> {
+        let count = nested.iter().filter(|&&n| n).count() as u64;
+        if count == 0 || self.holders.contains(&id) {
+            return Ok(());
+        }
+        admit(&mut self.meter, size_of::<D::Id>())?;
+        self.holders.insert(id);
+        self.candidates = self.candidates.saturating_add(count);
+        Ok(())
+    }
+
+    /// The nested term of the triple term `root`, a component of another
+    /// triple term: its components first, over a heap work list, each triple
+    /// term identifier lowered once.
+    fn nested_id(&mut self, root: D::Id) -> Result<Part, ViewError<D::ReadError>> {
+        let mut pending = vec![(root, false)];
+        while let Some((id, ready)) = pending.pop() {
+            self.poll()?;
+            if self.nested_ids.contains_key(&id) {
+                continue;
+            }
+            // A view that answers a triple term for an identifier once and a
+            // leaf for it later does not present one dataset.
+            let components = self.triple_of(id)?.ok_or(ViewError::ForeignId)?;
+            if !ready {
+                let nested = self.nested_components(components)?;
+                self.hold(id, nested)?;
+                pending.push((id, true));
+                for (component, is_nested) in components.into_iter().zip(nested) {
+                    if is_nested && !self.nested_ids.contains_key(&component) {
+                        pending.push((component, false));
+                    }
+                }
+                continue;
+            }
+            let mut parts = [Part::Const(0); 3];
+            for (slot, component) in parts.iter_mut().zip(components) {
+                *slot = match self.nested_ids.get(&component) {
+                    Some(&n) => Part::Nested(n),
+                    None => {
+                        let value = self.leaf_value(component)?;
+                        self.nested_leaf(&value)?
+                    }
+                };
+            }
+            let n = self.intern_nested(parts)?;
+            admit(&mut self.meter, size_of::<(D::Id, usize)>())?;
+            self.nested_ids.insert(id, n);
+        }
+        self.nested_ids
+            .get(&root)
+            .map(|&n| Part::Nested(n))
+            .ok_or(ViewError::ForeignId)
+    }
+
+    /// The tokens of the term `id` in a slot of a line, and its variant: a
+    /// triple term of depth one, read from the identifiers of its components,
+    /// or a leaf. No triple term is expanded.
     fn term(
         &mut self,
         id: D::Id,
         out: &mut Vec<Tok>,
     ) -> Result<GraphTerm, ViewError<D::ReadError>> {
-        let value = self.view.term_value(id).map_err(|error| match error {
-            TermLookupError::ForeignId => ViewError::ForeignId,
-            TermLookupError::Read(error) => ViewError::Read(error),
-        })?;
-        self.value(&value, out)
+        let Some(components) = self.triple_of(id)? else {
+            let (part, variant) = self.leaf_id(id)?;
+            out.push(self.token(part));
+            return Ok(variant);
+        };
+        let nested = self.nested_components(components)?;
+        self.hold(id, nested)?;
+        out.push(Tok::Tag(TAG_TRIPLE));
+        for (component, is_nested) in components.into_iter().zip(nested) {
+            let part = if is_nested {
+                self.nested_id(component)?
+            } else {
+                self.leaf_id(component)?.0
+            };
+            out.push(self.token(part));
+        }
+        Ok(GraphTerm::Triple)
     }
 
     /// The graph slot of a line: its tokens, and the graph term it carries.
@@ -530,14 +973,77 @@ impl<D: DatasetView> Lowering<'_, '_, '_, D> {
     }
 }
 
+/// What a lowering is given beside the view: the caller's stop signal, the
+/// admission of its storage, the capacity of the read and the digest of the
+/// term nodes.
+pub(super) struct Run<'s, 'm, 'c> {
+    pub(super) stop: Option<&'s dyn StopSignal>,
+    pub(super) meter: Option<&'m mut Meter<'m>>,
+    pub(super) capacity: Option<&'c mut LabellingCapacity>,
+    pub(super) hash: NestedHash,
+}
+
+impl<'s> Run<'s, '_, '_> {
+    /// A run with no meter and no capacity, its term nodes digested by the
+    /// one construction.
+    pub(super) const fn plain(stop: Option<&'s dyn StopSignal>) -> Self {
+        Self {
+            stop,
+            meter: None,
+            capacity: None,
+            hash: nested_term_digest,
+        }
+    }
+}
+
+/// The lowered lines of a view before admission, with the figures the
+/// lowering judged.
+pub(super) struct Lowered {
+    pub(super) admission: Admission,
+    /// The number of term nodes.
+    pub(super) term_nodes: usize,
+    /// The size: the lines lowered from the view and the records, and the
+    /// nested candidates.
+    pub(super) size: u64,
+    /// The weight: the bytes of the encodings of every line and every
+    /// nested-term record, each blank leaf written `fixed`.
+    pub(super) weight: u64,
+}
+
+/// The weight of one stored line: the length of its encoding with every blank
+/// leaf `fixed`, which takes nine bytes.
+fn line_weight(consts: &[Box<[u8]>], line: &[Tok]) -> u64 {
+    line.iter()
+        .map(|token| match token {
+            Tok::Tag(_) => 1,
+            Tok::Count(_) | Tok::Len(_) => 8,
+            Tok::Const(c) => consts[*c].len() as u64,
+            Tok::Blank(_) => 9,
+        })
+        .fold(0, u64::saturating_add)
+}
+
 /// The lowered lines of `view` and `records`, before admission.
-fn lowered<'m, D: DatasetView>(
+///
+/// The view is read once. Its lines are lowered with every nested term as a
+/// term node and counted for the size; the size and then the weight are
+/// judged against the capacity of the read before any digest is formed and
+/// before any nested-term record is built; then the term nodes receive their
+/// source identifiers, every blank node of the view takes the text form of
+/// its source identifier, and one record per nested term is added. A refusal
+/// drops what was lowered.
+pub(super) fn lowered<D: DatasetView>(
     view: &D,
     scope: Scope<'_>,
     records: &[Record<'_>],
-    stop: Option<&dyn StopSignal>,
-    meter: Option<&'m mut Meter<'m>>,
-) -> Result<Admission, ViewError<D::ReadError>> {
+    run: Run<'_, '_, '_>,
+) -> Result<Lowered, ViewError<D::ReadError>> {
+    let Run {
+        stop,
+        meter,
+        mut capacity,
+        hash,
+    } = run;
     let selection = match scope {
         Scope::Dataset => Selection::Dataset,
         Scope::Graph(iri) => Selection::Graph(
@@ -554,12 +1060,123 @@ fn lowered<'m, D: DatasetView>(
         composites: BTreeSet::new(),
         pending: Vec::new(),
         meter,
+        nested: NestedTerms::default(),
+        term_nodes: Vec::new(),
+        nested_ids: FastMap::default(),
+        holders: FastSet::default(),
+        candidates: 0,
     };
     match view.checked_read(|_| lowering.lower(records)) {
-        Err(error) => Err(ViewError::Read(error)),
-        Ok(Err(error)) => Err(error),
-        Ok(Ok(())) => Ok(lowering.admitter.finish()),
+        Err(error) => return Err(ViewError::Read(error)),
+        Ok(Err(error)) => return Err(error),
+        Ok(Ok(())) => {}
     }
+    let Lowering {
+        mut admitter,
+        mut meter,
+        nested,
+        term_nodes,
+        candidates,
+        ..
+    } = lowering;
+    // A stop observed at the end of the walk is the outcome, not a capacity
+    // refusal of the input it interrupted. Without a capacity nothing is judged
+    // here, and the engine polls next.
+    if capacity.is_some() && is_stopped(stop) {
+        return Err(ViewError::Stopped);
+    }
+    let set = &admitter.interner.set;
+    let size = (set.lines.len() as u64).saturating_add(candidates);
+    if let Some(capacity) = capacity.as_deref_mut() {
+        capacity.admit_size(size).map_err(ViewError::Lowering)?;
+    }
+    let weight = set
+        .lines
+        .iter()
+        .map(|line| line_weight(&set.consts, line))
+        .fold(nested.record_weight(&set.consts), u64::saturating_add);
+    // A stop set while the weight was computed is the outcome, not a weight
+    // refusal of the input it interrupted; the size is judged first when the
+    // signal is clear.
+    if capacity.is_some() && is_stopped(stop) {
+        return Err(ViewError::Stopped);
+    }
+    if let Some(capacity) = capacity {
+        capacity.admit_weight(weight).map_err(ViewError::Lowering)?;
+    }
+    if !nested.is_empty() {
+        let interner = &mut admitter.interner;
+        // Every blank node of the view takes the text form of its source
+        // identifier, which the term nodes' digests and source order read.
+        for node in 0..interner.set.nodes.len() {
+            if is_stopped(stop) {
+                return Err(ViewError::Stopped);
+            }
+            let source = &interner.set.nodes[node];
+            if source.is_empty() || is_composite_source(source) {
+                continue;
+            }
+            let Some((ordinal, label)) = source.split_first_chunk::<4>() else {
+                continue;
+            };
+            let text = text_blank_source(u32::from_be_bytes(*ordinal), label);
+            admit(&mut meter, text.len().saturating_sub(source.len()))?;
+            interner.set.nodes[node] = text.into_boxed_slice();
+        }
+        if is_stopped(stop) {
+            return Err(ViewError::Stopped);
+        }
+        admit(&mut meter, nested.digest_bytes())?;
+        let digests = nested
+            .digests(&interner.set.nodes, hash, stop)
+            .map_err(|refusal| match refusal {
+                DigestRefusal::Stopped => ViewError::Stopped,
+                DigestRefusal::Collision(digest) => {
+                    ViewError::Lowering(LoweringRefusal::TermNode { digest })
+                }
+            })?;
+        let mut payload = Vec::with_capacity(8 + NESTED_TERM_PAYLOAD.len());
+        push_bytes(&mut payload, &NESTED_TERM_PAYLOAD);
+        admit_constant(&mut meter, interner, &payload)?;
+        for (n, digest) in digests.iter().enumerate() {
+            if is_stopped(stop) {
+                return Err(ViewError::Stopped);
+            }
+            let source = term_node_source(digest);
+            admit(&mut meter, interned_bytes(source.len()))?;
+            interner.set.nodes[term_nodes[n]] = Box::new(source);
+        }
+        for (n, &node) in term_nodes.iter().enumerate() {
+            if is_stopped(stop) {
+                return Err(ViewError::Stopped);
+            }
+            let mut tokens = Vec::with_capacity(7);
+            admitter
+                .interner
+                .record_head(&NESTED_TERM_PAYLOAD, 4, &mut tokens);
+            tokens.push(Tok::Blank(node));
+            tokens.extend(nested.parts(n).map(|part| match part {
+                Part::Const(c) => Tok::Const(c),
+                Part::Blank(b) => Tok::Blank(b),
+                Part::Nested(m) => Tok::Blank(term_nodes[m]),
+            }));
+            admitter.push(
+                tokens,
+                Facts {
+                    slots_ok: true,
+                    zero_count: false,
+                    carried: None,
+                    held: None,
+                },
+            );
+        }
+    }
+    Ok(Lowered {
+        admission: admitter.finish(),
+        term_nodes: term_nodes.len(),
+        size,
+        weight,
+    })
 }
 
 /// The admitted lines of `view` and `records`: well formed, or the typed
@@ -578,7 +1195,8 @@ pub fn lines_of_view<D: DatasetView>(
     view: &D,
     records: &[Record<'_>],
 ) -> Result<LineSet, ViewError<D::ReadError>> {
-    lowered(view, Scope::Dataset, records, None, None)?
+    lowered(view, Scope::Dataset, records, Run::plain(None))?
+        .admission
         .into_result()
         .map_err(ViewError::Refused)
 }
@@ -635,7 +1253,8 @@ pub fn compare_view<D: DatasetView>(
 ) -> Result<Comparison<D::ReadError>, ViewError<D::ReadError>> {
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let lines = lowered(view, Scope::Dataset, records, stop, None)?
+    let lines = lowered(view, Scope::Dataset, records, Run::plain(stop))?
+        .admission
         .into_result()
         .map_err(ViewError::Refused)?;
     let (labelled, _) = label_lines(&lines, limit, stop)?;
@@ -671,7 +1290,7 @@ fn lowered_in<D: DatasetView, S: StorageAdmission + ?Sized>(
     records: &[Record<'_>],
     stop: Option<&dyn StopSignal>,
     memory: &mut Memory<'_, S>,
-) -> Result<(LineSet, usize), ViewError<D::ReadError>> {
+) -> Result<(Admitted, usize), ViewError<D::ReadError>> {
     // The account is polled before any row is read or lowered.
     memory
         .admission_mut()
@@ -684,16 +1303,46 @@ fn lowered_in<D: DatasetView, S: StorageAdmission + ?Sized>(
             charged.set(charged.get().saturating_add(bytes));
             Ok(())
         };
-        lowered(view, scope, records, stop, Some(&mut meter))
+        let run = Run {
+            meter: Some(&mut meter),
+            ..Run::plain(stop)
+        };
+        lowered(view, scope, records, run).and_then(Admitted::of)
     };
-    match result.and_then(|admission| admission.into_result().map_err(ViewError::Refused)) {
-        Ok(lines) => Ok((lines, charged.get())),
+    match result {
+        Ok(admitted) => Ok((admitted, charged.get())),
         Err(error) => {
             // A refusal of the refund cannot replace the error that ended the
             // run: the grant stays outstanding with the caller's account.
             let _ = memory.release_bytes(charged.get());
             Err(error)
         }
+    }
+}
+
+/// Admitted lines with the figures of their lowering.
+struct Admitted {
+    lines: LineSet,
+    term_nodes: usize,
+    size: u64,
+    weight: u64,
+}
+
+impl Admitted {
+    /// The admitted lines of `lowered`, or the refusal of the definition.
+    fn of<E>(lowered: Lowered) -> Result<Self, ViewError<E>> {
+        let Lowered {
+            admission,
+            term_nodes,
+            size,
+            weight,
+        } = lowered;
+        Ok(Self {
+            lines: admission.into_result().map_err(ViewError::Refused)?,
+            term_nodes,
+            size,
+            weight,
+        })
     }
 }
 
@@ -729,7 +1378,17 @@ fn grant<E, S: StorageAdmission + ?Sized>(
 /// the caller's `memory`.
 ///
 /// Each constant and blank node is admitted as lowering interns it, before it
-/// is copied into the set. After lowering, the grant covers the rest of the
+/// is copied into the set. When the input holds a nested triple term, the
+/// lowering also admits, as it keeps them: for each nested term, its
+/// components in the list and as the key of its index, its index and
+/// term-node entries and the term node's source slot; for each triple-term
+/// identifier lowered as a nested term, its index entry; for each triple-term
+/// identifier with a nested component, its entry in the set of counted
+/// holders; for each constant or composite node first reached as a component
+/// of a nested term, its source `K` with its box and key; before the digests,
+/// an upper bound of the digests and blank-node digests they keep; the growth
+/// of each blank node's source to the text form; and each term node's source.
+/// An input with no nested triple term keeps none of these. After lowering, the grant covers the rest of the
 /// lowered lines and an upper bound of the arrays the engine builds for the
 /// components and their first calls, proportional to the incidences, the
 /// constant leaf occurrences, the vertices and the structs each top component
@@ -741,8 +1400,10 @@ fn grant<E, S: StorageAdmission + ?Sized>(
 /// encoding of one literal while it is interned, the second copy of each
 /// constant and node held by the interning index, the token copies the
 /// admission of lines keeps to detect repeats (together about the size of the
-/// admitted lines again, at the peak of lowering), and the certificates and
-/// nested instances held while a search runs. The admission is the bound of the
+/// admitted lines again, at the peak of lowering), the spare capacity of the
+/// nested-term tables and the work lists and message buffers of the nested
+/// walks and digests, and the certificates and nested instances held while a
+/// search runs. The admission is the bound of the
 /// up-front working state, and the engine holds nothing else of that order
 /// before it starts.
 ///
@@ -762,8 +1423,8 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
         .map_err(ViewError::Storage)?;
     let outcome = try_canonical_sha256_view(view, CanonHash::Sha256, present);
     let stop = present.stop_signal();
-    let (lines, charged) = lowered_in(view, Scope::Dataset, records, stop, memory)?;
-    let (lines, bytes) = grant(lines, charged, memory)?;
+    let (admitted, charged) = lowered_in(view, Scope::Dataset, records, stop, memory)?;
+    let (lines, bytes) = grant(admitted.lines, charged, memory)?;
     match label_lines(&lines, limit, stop) {
         Ok((labelled, _)) => Ok(Comparison {
             present: outcome,
@@ -790,6 +1451,11 @@ pub struct Labelling<Id> {
     labelled: Labelled,
     walked: u64,
     blanks: Vec<Option<Id>>,
+    /// Whether the lines hold term nodes, and so every blank node of the view
+    /// has the text form of its source identifier.
+    term_nodes: bool,
+    size: u64,
+    weight: u64,
 }
 
 impl<Id: Copy> Labelling<Id> {
@@ -817,15 +1483,17 @@ impl<Id: Copy> Labelling<Id> {
 
     /// The view's identifier of the blank node with index `node` in
     /// [`Self::lines`] (index `i` of [`Labelled::placements`]). `None` for a
-    /// blank node that only a [`Record`] mentions, and for a composite node:
-    /// the view does not hold it.
+    /// blank node that only a [`Record`] mentions, for a composite node and
+    /// for a term node: the view does not hold them.
     #[must_use]
     pub fn blank_id(&self, node: usize) -> Option<Id> {
         self.blanks.get(node).copied().flatten()
     }
 
     /// Every blank node of the view that occurs in a line, as
-    /// `(view identifier, position)` in node order.
+    /// `(view identifier, position)` in node order. Term nodes and composite
+    /// nodes are not blank nodes of the view and are not listed, so the
+    /// positions listed need not be consecutive.
     pub fn view_positions(&self) -> impl Iterator<Item = (Id, u64)> + '_ {
         self.blanks
             .iter()
@@ -833,36 +1501,83 @@ impl<Id: Copy> Labelling<Id> {
             .filter_map(|(id, placement)| id.map(|id| (id, placement.position)))
     }
 
-    /// The literal each composite node of the canonical line sequence spells.
+    /// The size of the lowered input: its lines before the nested-term
+    /// records, and its nested candidates, the components of its triple terms
+    /// that are triple terms. [`LabellingCapacity`] judges it.
+    #[must_use]
+    pub const fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// The weight of the lowered input: the bytes of the encoding of every line
+    /// and every nested-term record, with each blank leaf written `fixed`,
+    /// saturating at `2^64 - 1`. [`LabellingCapacity`] judges it.
+    #[must_use]
+    pub const fn weight(&self) -> u64 {
+        self.weight
+    }
+
+    /// The literal each composite node and the triple term each term node of
+    /// the canonical line sequence spells.
     pub(crate) fn composites(&self) -> Result<Composites, DocumentError> {
-        let positions: BTreeSet<u64> = (0..self.lines.blank_nodes())
-            .filter(|&node| is_composite_source(self.lines.source(node)))
-            .map(|node| self.labelled.placements[node].position)
-            .collect();
-        Composites::of(&self.labelled.lines, |position| {
-            positions.contains(&position)
-        })
+        let positions = |select: fn(&[u8]) -> bool| -> BTreeSet<u64> {
+            (0..self.lines.blank_nodes())
+                .filter(|&node| select(self.lines.source(node)))
+                .map(|node| self.labelled.placements[node].position)
+                .collect()
+        };
+        let composites = positions(is_composite_source);
+        let term_nodes = if self.term_nodes {
+            positions(is_term_node_source)
+        } else {
+            BTreeSet::new()
+        };
+        Composites::of(
+            &self.labelled.lines,
+            |position| composites.contains(&position),
+            |position| term_nodes.contains(&position),
+        )
     }
 }
 
-/// The labelling of admitted `lines`, with the view's identifier of each
-/// blank node.
+/// The blank node `(label, scope)` of the view that the source identifier
+/// `source` names, in the form the lines hold it.
+fn view_blank(source: &[u8], text_form: bool) -> Option<(&[u8], BlankScope)> {
+    if text_form {
+        parse_text_blank_source(source).map(|(ordinal, label)| (label, BlankScope(ordinal)))
+    } else if is_composite_source(source) {
+        None
+    } else {
+        source
+            .split_first_chunk::<4>()
+            .map(|(ordinal, label)| (label, BlankScope(u32::from_be_bytes(*ordinal))))
+    }
+}
+
+/// The labelling of admitted lines, with the view's identifier of each blank
+/// node.
 fn labelling_of<D: DatasetView>(
     view: &D,
-    lines: LineSet,
+    admitted: Admitted,
     limit: Limit,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
+    let Admitted {
+        lines,
+        term_nodes,
+        size,
+        weight,
+    } = admitted;
     let (labelled, walked) = label_lines(&lines, limit, stop)?;
+    let text_form = term_nodes > 0;
     let mut blanks = Vec::with_capacity(lines.blank_nodes());
     for node in 0..lines.blank_nodes() {
-        let source = lines.source(node);
-        let id = match source.split_first_chunk::<4>() {
-            Some((ordinal, label)) => match std::str::from_utf8(label) {
+        let id = match view_blank(lines.source(node), text_form) {
+            Some((label, scope)) => match std::str::from_utf8(label) {
                 Ok(label) => view
                     .term_id_by_value(&TermValue::Blank {
                         label: label.to_owned(),
-                        scope: BlankScope(u32::from_be_bytes(*ordinal)),
+                        scope,
                     })
                     .map_err(ViewError::Read)?,
                 Err(_) => None,
@@ -876,6 +1591,9 @@ fn labelling_of<D: DatasetView>(
         labelled,
         walked,
         blanks,
+        term_nodes: text_form,
+        size,
+        weight,
     })
 }
 
@@ -891,7 +1609,8 @@ fn labelling_of<D: DatasetView>(
 /// # Errors
 /// As [`lines_of_view`], and [`ViewError::Stopped`] when `stop` is set. A
 /// refusal is [`ViewError::Refused`] with the typed refusal of the
-/// definition, [`Refusal::Limit`] included.
+/// definition, [`Refusal::Limit`] included, or [`ViewError::Lowering`] with
+/// [`LoweringRefusal::TermNode`].
 pub fn label_view<D: DatasetView>(
     view: &D,
     records: &[Record<'_>],
@@ -899,10 +1618,41 @@ pub fn label_view<D: DatasetView>(
     limit: Limit,
     stop: Option<&dyn StopSignal>,
 ) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
-    let lines = lowered(view, scope, records, stop, None)?
-        .into_result()
-        .map_err(ViewError::Refused)?;
-    labelling_of(view, lines, limit, stop)
+    let admitted = Admitted::of(lowered(view, scope, records, Run::plain(stop))?)?;
+    labelling_of(view, admitted, limit, stop)
+}
+
+/// [`label_view`] as one input of a read with the capacities of `capacity`:
+/// the size of the input is judged against its lines, and then its weight
+/// against the bytes the read has left, before any digest of a term node is
+/// formed, any nested-term record is built or the engine runs. An admitted
+/// weight stays in the read's total whatever refusal follows it.
+///
+/// The refusals are judged in one order, and the first that applies is the
+/// one returned: [`LoweringRefusal::Size`], [`LoweringRefusal::Weight`],
+/// [`LoweringRefusal::TermNode`], then the refusals of the definition by
+/// their code. One definition refusal is judged first: a triple term in the
+/// subject or the predicate of a triple term is refused with
+/// [`Refusal::Input`] while the record is read, because no lowered set exists
+/// to measure for that shape.
+///
+/// # Errors
+/// As [`label_view`], and [`ViewError::Lowering`] with the size or weight
+/// refusal.
+pub fn label_view_with_capacity<D: DatasetView>(
+    view: &D,
+    records: &[Record<'_>],
+    scope: Scope<'_>,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+    capacity: &mut LabellingCapacity,
+) -> Result<Labelling<D::Id>, ViewError<D::ReadError>> {
+    let run = Run {
+        capacity: Some(capacity),
+        ..Run::plain(stop)
+    };
+    let admitted = Admitted::of(lowered(view, scope, records, run)?)?;
+    labelling_of(view, admitted, limit, stop)
 }
 
 /// A labelling and the bytes of working state still granted for it.
@@ -925,9 +1675,10 @@ pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
     stop: Option<&dyn StopSignal>,
     memory: &mut Memory<'_, S>,
 ) -> Result<LabellingWithBytes<D::Id>, ViewError<D::ReadError>> {
-    let (lines, charged) = lowered_in(view, scope, records, stop, memory)?;
-    let (lines, bytes) = grant(lines, charged, memory)?;
-    match labelling_of(view, lines, limit, stop) {
+    let (admitted, charged) = lowered_in(view, scope, records, stop, memory)?;
+    let (lines, bytes) = grant(admitted.lines, charged, memory)?;
+    let admitted = Admitted { lines, ..admitted };
+    match labelling_of(view, admitted, limit, stop) {
         Ok(labelling) => Ok((labelling, bytes)),
         Err(error) => {
             // A refusal of the refund cannot replace the error that ended the

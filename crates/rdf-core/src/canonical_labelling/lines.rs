@@ -449,6 +449,15 @@ impl Interner {
         b
     }
 
+    /// The index of a new term node, whose source identifier the lowering
+    /// sets once the digests of the nested terms are formed. A term node is
+    /// never looked up by its source.
+    pub(crate) fn term_node(&mut self) -> usize {
+        let b = self.set.nodes.len();
+        self.set.nodes.push(Box::default());
+        b
+    }
+
     /// The tokens of `term` in walk order (`s`, `p`, `o` inside a triple
     /// term), over a heap work list so that nesting depth costs no stack.
     pub(crate) fn term(&mut self, term: &Term, out: &mut Vec<Tok>) {

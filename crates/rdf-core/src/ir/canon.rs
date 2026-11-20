@@ -2789,6 +2789,10 @@ pub enum CanonError<E = Infallible> {
     /// its definition (`input`, `graph`, `width` or `limit`). Only the default
     /// canonicalization family returns it.
     Refused(Box<crate::canonical_labelling::Refusal>),
+    /// The lowering of the dataset for the labelling refused it: two different
+    /// nested triple terms have one term-node digest, a collision of BLAKE3.
+    /// Only the default canonicalization family returns it.
+    Lowering(crate::canonical_labelling::LoweringRefusal),
     /// The source spelled one term with a different length when it was read
     /// again during the same run. A source must present the same dataset for the
     /// whole of a run; this refusal detects only a change of length, not a
@@ -2808,6 +2812,7 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         CounterCapacity => "canonical-counter-capacity" {},
         OwnedWorkspaceUnavailable => "canonical-owned-workspace-unavailable" {},
         Refused(refusal) => "canonical-refused" { "code" => Unsigned(u128::from(refusal.code())) },
+        Lowering(cause) => "canonical-lowering" { "cause" => Cause(cause) },
         SourceInconsistent => "canonical-source-inconsistent" {},
     }
 }
@@ -2837,6 +2842,12 @@ impl<E: std::fmt::Display> std::fmt::Display for CanonError<E> {
                     labelled::refusal_name(refusal.as_ref())
                 )
             }
+            Self::Lowering(refusal) => {
+                write!(
+                    f,
+                    "the lowering for the canonical labelling refused the input: {refusal}"
+                )
+            }
             Self::SourceInconsistent => f.write_str(
                 "the source spelled a term with a different length when it was read again",
             ),
@@ -2852,6 +2863,7 @@ impl<E: std::error::Error + 'static> std::error::Error for CanonError<E> {
             Self::BudgetExceeded(err) => Some(err.as_ref()),
             Self::ReservedVocabulary(err) => Some(err),
             Self::Read(error) | Self::OwnedAdmission(error) => Some(error),
+            Self::Lowering(refusal) => Some(refusal),
             Self::Stopped
             | Self::CounterCapacity
             | Self::OwnedWorkspaceUnavailable
@@ -2883,6 +2895,7 @@ impl CanonError {
             Self::CounterCapacity => CanonError::CounterCapacity,
             Self::OwnedWorkspaceUnavailable => CanonError::OwnedWorkspaceUnavailable,
             Self::Refused(refusal) => CanonError::Refused(refusal),
+            Self::Lowering(refusal) => CanonError::Lowering(refusal),
             Self::SourceInconsistent => CanonError::SourceInconsistent,
         }
     }
