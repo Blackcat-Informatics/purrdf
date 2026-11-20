@@ -1,0 +1,66 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\nThe GTS verifier reports a signature made with an algorithm the engine does not implement as `Invalid`. The other GTS engines are moving to read the declared signing algorithm and report such a signature as unverified: the engine cannot check it, which is different from having checked it and found it wrong. Once that lands upstream with its new test vectors, this engine will disagree with them.\n\nRead on main, not run:\n\n- `crates/gts/src/cose/sign1.rs` defines `Algorithm` and maps the COSE `alg` value to it.\n- `crates/gts/src/cose/verify.rs` resolves a key with `KeyResolver::resolve(kid, algorithm)`; the documentation of `SigStatus` says an unsupported `alg` yields `Invalid`.\n\n## Expected\n\n- A signature whose declared algorithm this engine does not implement is reported as unverified, with the declared algorithm available to the caller.\n- `Invalid` is kept for a signature that was checked and failed, and for a malformed signature structure.\n- A caller that requires verified signatures still refuses an unverified one. The change must not turn a refusal into an acceptance anywhere; each such caller gets a test.\n- The upstream vectors for this behaviour are vendored when they are published, and pass.\n\n## Acceptance\n\n- A test for each of: an algorithm the engine implements with a good signature (verified), the same with a bad signature (invalid), an unknown algorithm (unverified), a malformed header (invalid).\n- The C, wasm and Python surfaces report the same three outcomes.\n- The frozen vectors under `vectors/` are not regenerated here.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABmNEjsA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "A downstream consumer calls signature verification with a key and refuses a segment that does not verify. Before any release changes what that call returns for an algorithm this engine lacks, that consumer is told, and the change is named in the release notes as a behaviour change. The acceptance line above stands: a caller that requires verified signatures must still refuse an unverified one.",
+      "createdAt": "2026-11-13T16:29:08Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1308#issuecomment-6858810288",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABmQYKwg",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "How Ed25519 verification with a key treats degenerate inputs today. Read from the code on main; nothing was run. No change is proposed by this comment.\n\n`verify` is the strict rule: it calls `verify_strict` (`crates/ed25519/src/keys.rs`). The equation is cofactorless, and the computed point is re-encoded and compared with the signature's `R` bytes.\n\n| Input | Result | Where | Error |\n|---|---|---|---|\n| Small-order public key, all eight points | Decodes, then verification rejects | `keys.rs`, the `is_small_order` check in `verify_strict` | `SmallOrder` |\n| All-zero public key | Rejects; it decodes to a point of order 4 (inferred from the curve equation), so the row above covers it | same | `SmallOrder` |\n| `R` is the identity, or any small-order `R` | Rejects | same check, applied to `R` | `SmallOrder` |\n| `R` with y not reduced modulo p | Rejects | point decoding in `point.rs` | `InvalidR` |\n| `R` with x = 0 and the sign bit set | Rejects | point decoding in `point.rs` | `InvalidR` |\n| Public key with y not reduced, or x = 0 with the sign bit set | Rejects when the key is decoded | `VerifyingKey::from_bytes` | `InvalidPublicKey` |\n| `S` not below the group order | Rejects, checked first | `Scalar::from_canonical_bytes` | `NonCanonicalS` |\n| Mixed-order key or `R` (prime-order point plus a nonzero torsion point) | Accepted as an input; the cofactorless equation decides | `verify_strict` | `Mismatch` when it fails |\n\nTests that pin these are in `crates/ed25519/tests/edge_cases.rs` and `crates/ed25519/src/strictness_tests.rs`, the latter against frozen reference verdicts. Gaps: only the identity key is exercised through `verify_strict` (the other seven small-order keys are covered by the weak-key predicate), and no test names the all-zero key.\n\nAt the GTS layer every one of these becomes `Invalid`: `crates/gts/src/cose/sign1.rs` discards the Ed25519 error variant. No GTS-level test for a small-order key or a small-order `R` was found.\n",
+      "createdAt": "2026-11-13T19:03:19Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1308#issuecomment-6862277314",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABn04y-A",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "PR #1372 delivers the status part: a signature whose `alg` the engine does not implement now verifies as `SigStatus::Unverified`, not `Invalid`. `Invalid` stays for a failed check and a malformed signature, and the only caller that requires verified signatures (`gts_certify.rs`) accepts only `Valid`, so it still refuses.\n\nStill open on this issue after that PR:\n- Expose the declared algorithm to the caller.\n- A refusal test for each caller that requires a verified signature.\n- Upstream vectors, once they are published (not yet available).\n",
+      "createdAt": "2026-11-18T02:59:01Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1308#issuecomment-6967669496",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-11-13T15:59:11Z",
+  "labels": [],
+  "milestone": null,
+  "number": 1308,
+  "state": "OPEN",
+  "title": "GTS verifier reports an unsupported signing algorithm as invalid, not unverified",
+  "updatedAt": "2026-11-18T02:59:01Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1308"
+}

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1308,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1308-gts-verifier-reports-an-unsupported",
+  "branch": "paudley/1308-gts-verifier-reports-an-unsupported",
+  "slug": "gts-verifier-reports-an-unsupported",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1308-gts-verifier-reports-an-unsupported/.stage/gts-verifier-reports-an-unsupported",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "3c2f20cbbe0071d1daee9ed840611487ff8221a9",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1308-gts-verifier-reports-an-unsupported",
+    "branch:paudley/1308-gts-verifier-reports-an-unsupported",
+    "ignored:30314 files (30312 reflinked, 0 written)",
+    "rust-caches:already present",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1308-gts-verifier-reports-an-unsupported/.stage/gts-verifier-reports-an-unsupported",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1308-gts-verifier-reports-an-unsupported/.stage/gts-verifier-reports-an-unsupported/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-20T14:37:48-0600",
+  "seed_error": ""
+}
