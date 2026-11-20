@@ -261,7 +261,7 @@ handles identify the exact snapshot.
 Resident datasets retain compact four-byte term IDs, sixteen-byte quad rows
 and borrowed term access. Operational reads use typed failures and pinned guards
 through the same `DatasetView` seam. A storage failure discards the operation's
-result at its final checkpoint. Bounded query admission currently covers a plain
+result at its final checkpoint. Bounded query admission covers a plain
 variable-projected `SELECT` over a basic graph pattern; unpriced operational
 forms return a typed refusal. Construction, full certification, host buffers
 and caller-owned outputs have separate memory obligations. The kernel performs
@@ -554,8 +554,8 @@ nightly-only features. CI separately enforces the stable MSRV and builds every
 published crate for WASM. Release artifacts use stable Rust.
 
 The Cargo suite, Python distributions and npm package share one coordinated
-version and follow semantic versioning. The C ABI is separately versioned,
-currently **0.20.0**, with signature checks and `purrdf_abi_version` at runtime.
+version and follow semantic versioning. The C ABI is separately versioned;
+its version is **0.20.0**, with signature checks and `purrdf_abi_version` at runtime.
 See [contributing](./CONTRIBUTING.md) for the verified commit workflow.
 
 PurRDF is developed by Blackcat Informatics® Inc. and is the library backbone
