@@ -249,7 +249,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   implements `ContentIdentified`, so a view without that capability cannot be
   passed. Migration: pass the view the query read to `bind_execution_receipt`
   (the hex-text entry point and `ReceiptBindError::ContentIdentity` are gone;
-  `ReceiptBindError::Identity` carries the view's own boxed error); replace
+  `ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
+  which must implement `StructuredError`); replace
   `DatasetView::snapshot_identity` with `ContentIdentified::content_identity`
   (an `Err`, not `Ok(None)`, where a view cannot certify its content, and no
   method at all on a view that never can); replace

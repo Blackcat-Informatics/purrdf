@@ -324,7 +324,7 @@ pub fn execution_receipt_json_with_sources(
 /// Why a host receipt could not be bound to a content identity.
 #[derive(Debug)]
 #[non_exhaustive]
-pub enum ReceiptBindError {
+pub enum ReceiptBindError<E> {
     /// The receipt text is not JSON.
     Json(purrdf_lex::json::Error),
     /// The JSON is not an execution receipt: this member is missing or ill-typed.
@@ -334,11 +334,11 @@ pub enum ReceiptBindError {
     },
     /// The receipt's run cannot have an execution identity.
     Refused(purrdf_sparql_eval::ReceiptError),
-    /// The view refused to produce its content identity; the view's own error is the cause.
-    Identity(Box<dyn std::error::Error + Send + Sync>),
+    /// The view refused to produce its content identity; its own typed error is the cause.
+    Identity(E),
 }
 
-impl std::fmt::Display for ReceiptBindError {
+impl<E: std::fmt::Display> std::fmt::Display for ReceiptBindError<E> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Json(error) => write!(f, "the execution receipt is not JSON: {error}"),
@@ -354,23 +354,25 @@ impl std::fmt::Display for ReceiptBindError {
     }
 }
 
-impl std::error::Error for ReceiptBindError {
+impl<E: std::error::Error + 'static> std::error::Error for ReceiptBindError<E> {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Json(error) => Some(error),
             Self::Refused(error) => Some(error),
-            Self::Identity(error) => Some(&**error),
+            Self::Identity(error) => Some(error),
             Self::NotAReceipt { .. } => None,
         }
     }
 }
 
-impl purrdf_hash::error::StructuredError for ReceiptBindError {
+impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
+    for ReceiptBindError<E>
+{
     purrdf_hash::error_visit! {
         Json(error) => "receipt-bind-json" { "cause" => Record(error) },
         NotAReceipt { member } => "receipt-bind-not-a-receipt" { "member" => Code(member) },
         Refused(error) => "receipt-bind-refused" { "cause" => Record(error) },
-        Identity(_cause) => "receipt-bind-identity" {},
+        Identity(error) => "receipt-bind-identity" { "cause" => Cause(error) },
     }
 }
 
@@ -406,10 +408,14 @@ impl purrdf_hash::error::StructuredError for ReceiptBindError {
 ///
 /// # Errors
 /// [`ReceiptBindError`].
-pub fn bind_execution_receipt<V>(receipt: &str, view: &V) -> Result<String, ReceiptBindError>
+pub fn bind_execution_receipt<V>(
+    receipt: &str,
+    view: &V,
+) -> Result<String, ReceiptBindError<V::IdentityError>>
 where
     V: purrdf_core::ContentIdentified + ?Sized,
-    V::IdentityError: std::error::Error + Send + Sync + 'static,
+    V::IdentityError:
+        std::error::Error + Send + Sync + purrdf_hash::error::StructuredError + 'static,
 {
     use purrdf_lex::json::Value;
     use purrdf_sparql_eval::ReceiptError;
@@ -449,7 +455,7 @@ where
     }
     let sources = purrdf_sparql_eval::ExecutionSources::new(
         view.content_identity()
-            .map_err(|error| ReceiptBindError::Identity(Box::new(error)))?,
+            .map_err(ReceiptBindError::Identity)?,
     );
     let execution = sources
         .execution_identity_of(&run, false)
@@ -558,6 +564,35 @@ mod tests {
     }
 
     impl std::error::Error for IdentityRefused {}
+
+    impl purrdf_hash::error::StructuredError for IdentityRefused {
+        fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+            visitor.variant("scripted-identity-refused");
+        }
+    }
+
+    /// Collects the variant codes of an error and of every cause nested in it.
+    #[derive(Default)]
+    struct Codes(Vec<&'static str>);
+
+    impl<'error> purrdf_hash::error::ErrorVisitor<'error> for Codes {
+        fn variant(&mut self, code: &'static str) {
+            self.0.push(code);
+        }
+        fn value(
+            &mut self,
+            _: Option<&'static str>,
+            value: purrdf_hash::error::ErrorValue<'error>,
+        ) {
+            if let purrdf_hash::error::ErrorValue::Cause(cause) = value {
+                cause.visit(self);
+            }
+        }
+        fn begin_list(&mut self, _: Option<&'static str>, _: usize) {}
+        fn end_list(&mut self) {}
+        fn begin_record(&mut self, _: Option<&'static str>, _: &'static str) {}
+        fn end_record(&mut self) {}
+    }
 
     impl purrdf_core::DatasetView for Scripted<'_> {
         type Id = purrdf_core::TermId;
@@ -696,6 +731,13 @@ mod tests {
             refused
                 .source()
                 .is_some_and(<dyn std::error::Error>::is::<IdentityRefused>)
+        );
+
+        let mut codes = Codes::default();
+        purrdf_hash::error::StructuredError::visit(&refused, &mut codes);
+        assert_eq!(
+            codes.0,
+            ["receipt-bind-identity", "scripted-identity-refused"]
         );
 
         let bound = super::bind_execution_receipt(&receipt, &dataset).unwrap();
