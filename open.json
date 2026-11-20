@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1398,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1398-v5-0-rename-the-additive-multiset",
+  "branch": "paudley/1398-v5-0-rename-the-additive-multiset",
+  "slug": "v5-0-rename-the-additive-multiset",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1398-v5-0-rename-the-additive-multiset/.stage/v5-0-rename-the-additive-multiset",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "d2be07c47375a6eac51013b54dffa87c302ca78a",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1398-v5-0-rename-the-additive-multiset",
+    "branch:paudley/1398-v5-0-rename-the-additive-multiset",
+    "ignored:30313 files (30311 reflinked, 0 written)",
+    "rust-caches:skipping busy source /opt/.cargo/fa/e70d93a84d6da0: /opt/.cargo/fa/e70d93a84d6da0/debug/.cargo-build-lock; skipping busy source /opt/.cargo/d1/d38ce97faf2f80: /opt/.cargo/d1/d38ce97faf2f80/debug/.cargo-build-lock; reflinked /home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes caches into /home/paudley/Active/purrdf/.worktrees/1398-v5-0-rename-the-additive-multiset plus 0 dependency units from 0 other checkouts in 89.6s; 20870 unchanged files keep their built mtimes; 2 other files take the seed time and rebuild; 10 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1398-v5-0-rename-the-additive-multiset/.stage/v5-0-rename-the-additive-multiset",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1398-v5-0-rename-the-additive-multiset/.stage/v5-0-rename-the-additive-multiset/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-19T20:13:37-0600",
+  "seed_error": ""
+}

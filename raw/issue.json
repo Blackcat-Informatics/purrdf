@@ -1,0 +1,41 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\n`purrdf_hash::multiset::Multiset256::fingerprint` is a published v4 method. It hashes the population and additive sum, so it cannot identify a row set. #1345 requires removing the fingerprint name from this public accounting surface. The sorted row-set identity is already implemented by #1382.\n\n## Required before 5.0\n\n- Replace the public fingerprint method with an explicitly named accounting check. Preserve the current domain framing and bytes for accounting consumers. Migrate workspace callers and document the replacement and the distinction from `sorted_fingerprint`.\n- Preserve the separately documented deprecated `purrdf_text::source_fingerprint` result through 5.0. #1388 owns its removal after 5.0.\n- Verify the accounting byte contract and the existing distinct-row-set control. Keep the closed change-feed and text-delta work in #1376 and #1377 out of this change.\n",
+  "closedAt": null,
+  "comments": [
+    {
+      "id": "IC_kwDOTKq-Ms8AAAABoulYXA",
+      "author": {
+        "login": "paudley"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "## Plan\n\n**Surface that breaks.** `purrdf_hash::multiset::Multiset256::fingerprint(&self, domain)` is removed. Its replacement is an explicitly named accounting check, for example `accounting_check`, with the same signature and the same bytes. `sorted_fingerprint` stays as the row-set identity from #1382. Callers inside the workspace move to the new name in one change. Consumers outside the workspace change one method name; the value they get is identical.\n\n**Frozen bytes.** The output does not change. Verification: before the rename, record the current output for a pinned set of inputs as a golden in `crates/hash`, covering the empty set, a single member, repeated members, and two domains. The same golden must pass after the rename. This is the pinned-vector check you asked for.\n\n**Callers.** `grep` finds 121 `.fingerprint(` sites in `crates`. Not all of them are `Multiset256`; I have not yet classified them by type. The first step is the compiler: rename, then let the build list every caller that breaks, so the migration list is exact and not a text guess.\n\n**Migration note.** Name the replacement, state that the bytes are unchanged, and state the difference from `sorted_fingerprint` (additive accounting versus sorted row-set identity).\n\n**Not touched.** `purrdf_text::source_fingerprint` (#1388) and the change-feed work (#1376, #1377).\n\n**Lane.** Touches `crates/hash` and the callers in `rdf-core`, `text` and `shapes`. Independent of #1397 and #1399.\n\n**Estimated size.** Small: a rename plus a golden. The caller count is the uncertain part.\n",
+      "createdAt": "2026-11-20T02:10:36Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1398#issuecomment-7028168796",
+      "viewerDidAuthor": true
+    }
+  ],
+  "createdAt": "2026-11-20T01:05:46Z",
+  "labels": [],
+  "milestone": {
+    "number": 6,
+    "title": "v5.0",
+    "description": "Track PurRDF 5.0 release requirements and the smallest complete changes to published contracts. The release checklist and canonical freeze are in #1383.",
+    "dueOn": null
+  },
+  "number": 1398,
+  "state": "OPEN",
+  "title": "v5.0: rename the additive multiset accounting check",
+  "updatedAt": "2026-11-20T02:10:36Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1398"
+}
