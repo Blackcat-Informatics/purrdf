@@ -20,6 +20,9 @@
 //! `PURRDF_GTS_EMIT_MODE=ingest` (builder construction alone), `emit`
 //! (construction and the consuming emission) or `emit_borrowed` (construction and the borrowing emission) and `PURRDF_GTS_EMIT_QUADS=<n>`; the per-call
 //! figure is the difference between an `n`-call run and a zero-call run, over `n`.
+//!
+//! Set `PURRDF_GTS_ID_QUADS=<n>` to measure the allocations and peak working
+//! bytes of the snapshot content ID alone, after building the same fixture.
 
 use purrdf_alloc_probe::{CountingAllocator, WholeProcessWindow};
 use purrdf_gts::wire::canonical;
@@ -66,6 +69,18 @@ fn calls(n: usize, quads: usize, form: Option<fixture::Form>) {
 }
 
 fn main() {
+    if let Some(quads) = env_usize("PURRDF_GTS_ID_QUADS") {
+        let datasets = fixture::datasets(quads);
+        let builder = fixture::builder(&datasets);
+        let window = WholeProcessWindow::open();
+        let (id, leg) = window.metered(|| builder.snapshot_content_id());
+        let whole = window.close();
+        println!(
+            "[gts_snapshot_id_alloc] quads={quads} id={id} allocations={} requested_bytes={} peak_working_bytes={}",
+            leg.allocations, leg.requested_bytes, whole.peak_working_bytes,
+        );
+        return;
+    }
     if let Some(n) = env_usize("PURRDF_GTS_EMIT_CALLS") {
         let quads = env_usize("PURRDF_GTS_EMIT_QUADS").unwrap_or(ROUTINE_QUADS[0]);
         let mode = match std::env::var("PURRDF_GTS_EMIT_MODE").as_deref() {

@@ -29,7 +29,7 @@ use std::hash::BuildHasher;
 
 use purrdf_core::hash::table::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
-use purrdf_gts::wire::digest_str;
+use purrdf_gts::wire::digest_label;
 use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use purrdf_lex::cbor::{Value, head};
@@ -1299,9 +1299,15 @@ impl SnapshotBuilder {
     /// compared only against another snapshot content id; and it is a
     /// published identity recorded against the GTS archives it attests, so a
     /// domain cannot be added without breaking every recorded id for an
-    /// existing archive.
+    /// existing archive. Feed the canonical encoding directly to BLAKE3.
     pub fn snapshot_content_id(&self) -> String {
-        digest_str(&self.snapshot_canonical_bytes())
+        let (order, remap) = self.canonical_order();
+        let quads = self.canonical_quad_keys(&remap);
+        let (reifies, annot) = self.canonical_binding_rows(&remap);
+        let mut hasher = purrdf_hash::blake3::Hasher::new();
+        self.write_snapshot(&mut hasher, &order, &remap, &quads, &reifies, &annot)
+            .expect("the BLAKE3 writer accepts every write");
+        digest_label(hasher.finalize().as_bytes())
     }
 
     /// The canonical CBOR encoding of [`Self::snapshot_payload`], written straight
@@ -1957,14 +1963,14 @@ mod tests {
             ),
             "application/trig",
         );
-        assert_eq!(
-            builder.snapshot_canonical_bytes(),
-            canonical(&builder.snapshot_payload())
-        );
-        assert_eq!(
-            SnapshotBuilder::new().snapshot_canonical_bytes(),
-            canonical(&SnapshotBuilder::new().snapshot_payload())
-        );
+        for builder in [builder, SnapshotBuilder::new()] {
+            let canonical_bytes = canonical(&builder.snapshot_payload());
+            assert_eq!(builder.snapshot_canonical_bytes(), canonical_bytes);
+            assert_eq!(
+                builder.snapshot_content_id(),
+                purrdf_gts::wire::digest_str(&canonical_bytes)
+            );
+        }
     }
 
     /// Text is measured in bytes, not characters, on the wire: multi-byte IRIs
