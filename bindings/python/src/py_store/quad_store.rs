@@ -977,7 +977,9 @@ impl PyQuadStore {
         py.detach(|| purrdf_validate::query::bind_execution_receipt(receipt_json, &*frozen))
             .map_err(|error| match error {
                 purrdf_validate::query::ReceiptBindError::Identity(cause) => {
-                    PyValueError::new_err(format!("content identity refused: {cause}"))
+                    // The store's own storage refusal keeps its native fields.
+                    let message = format!("content identity refused: {cause}");
+                    presentation::native_error_with_message(py, message, &cause.into())
                 }
                 other => PyValueError::new_err(other.to_string()),
             })
