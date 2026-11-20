@@ -22,9 +22,9 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_sparql_eval::governor::GovernorState;
 use purrdf_sparql_eval::{
-    CancellationFlag, FallibleSparqlError, GovernedEvidence, GovernedOutcome,
-    HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, PreparedQuery, QueryGovernors,
-    QueryOptions, RemoteError, ShaclPrebinding,
+    CancellationFlag, FallibleSparqlError, GovernedEvidence, GovernedOutcome, HttpExchangeRequest,
+    HttpFailure, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus, NativeSparqlEngine,
+    PreparedQuery, QueryGovernors, QueryOptions, ShaclPrebinding,
 };
 
 const SELECT: &str =
@@ -625,14 +625,19 @@ fn explicit_per_call_source_replaces_options_remote_and_preserves_receipts() {
     let prepared = engine.prepare_query(query, None).unwrap();
     let replaced_calls = Arc::new(AtomicUsize::new(0));
     let calls = replaced_calls.clone();
-    let replaced =
-        HttpRemoteQuerySource::new(move |_: HttpRequest<'_>| -> Result<Vec<u8>, RemoteError> {
+    let replaced = HttpRemoteQuerySource::new(
+        move |_: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
             calls.fetch_add(1, Ordering::Relaxed);
-            Err(RemoteError::Disabled)
-        });
-    let source = HttpRemoteQuerySource::new(|_: HttpRequest<'_>| -> Result<Vec<u8>, RemoteError> {
-        Ok(br#"{"head":{"vars":["remote"]},"results":{"bindings":[{"remote":{"type":"literal","value":"ok"}}]}}"#.to_vec())
-    });
+            Err(HttpFailure::Transport(
+                "the replaced source must not be asked".to_owned(),
+            ))
+        },
+    );
+    let source = HttpRemoteQuerySource::new(
+        |_: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
+            Ok(HttpOutcome::Response(HttpResponse::new(HttpStatus::OK, br#"{"head":{"vars":["remote"]},"results":{"bindings":[{"remote":{"type":"literal","value":"ok"}}]}}"#.to_vec())))
+        },
+    );
     let answer = engine
         .query_prepared_governed_fallible_with_source_view(
             &paged.query_view(PagedQueryLimits::UNBOUNDED),
@@ -676,9 +681,9 @@ fn remote_cancellation_prevents_prepared_fallible_publication() {
         let governors = QueryGovernors::METERED.with_stop_signal(stop.clone());
         let state = Arc::new(GovernorState::new(&governors));
         let source = HttpRemoteQuerySource::new(
-            move |_: HttpRequest<'_>| -> Result<Vec<u8>, RemoteError> {
+            move |_: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
                 stop.cancel();
-                Ok(br#"{"head":{"vars":["remote"]},"results":{"bindings":[{"remote":{"type":"literal","value":"ok"}}]}}"#.to_vec())
+                Ok(HttpOutcome::Response(HttpResponse::new(HttpStatus::OK, br#"{"head":{"vars":["remote"]},"results":{"bindings":[{"remote":{"type":"literal","value":"ok"}}]}}"#.to_vec())))
             },
         );
         let result = if shared {

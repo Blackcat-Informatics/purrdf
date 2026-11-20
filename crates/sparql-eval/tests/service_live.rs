@@ -13,7 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, StopCause, TrippedGovernor};
 use purrdf_sparql_algebra::Variable;
 use purrdf_sparql_eval::{
-    CancellationFlag, HttpRemoteQuerySource, HttpRequest, NativeSparqlEngine, PartialAnswers,
+    CancellationFlag, HttpExchangeRequest, HttpFailure, HttpMethod, HttpOutcome,
+    HttpRemoteQuerySource, HttpResponse, HttpStatus, NativeSparqlEngine, PartialAnswers,
     QueryGovernors, QueryOptions, RemoteError, ServiceRequest, ServiceResolver, StopSignal,
 };
 
@@ -33,13 +34,36 @@ const RESULT_JSON: &[u8] = br#"{
   }
 }"#;
 
-fn fixture_transport(request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
-    assert_eq!(request.endpoint, ENDPOINT);
-    assert!(request.query_text.contains("SELECT"));
-    assert_eq!(request.content_type, "application/sparql-query");
-    assert_eq!(request.accept, "application/sparql-results+json");
-    assert!(request.user_agent.contains("purrdf-sparql-eval"));
-    Ok(RESULT_JSON.to_vec())
+/// A `200` response carrying the fixture's SPARQL Results JSON.
+fn result_json() -> Result<HttpOutcome, HttpFailure> {
+    Ok(HttpOutcome::Response(HttpResponse::new(
+        HttpStatus::OK,
+        RESULT_JSON.to_vec(),
+    )))
+}
+
+fn fixture_transport(request: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
+    assert_eq!(request.method, HttpMethod::Post);
+    assert_eq!(request.target, ENDPOINT);
+    assert!(
+        std::str::from_utf8(request.body)
+            .expect("query text")
+            .contains("SELECT")
+    );
+    assert_eq!(
+        request.fixed_header("content-type"),
+        Some("application/sparql-query")
+    );
+    assert_eq!(
+        request.fixed_header("accept"),
+        Some("application/sparql-results+json")
+    );
+    assert!(
+        request
+            .fixed_header("user-agent")
+            .is_some_and(|agent| agent.contains("purrdf-sparql-eval"))
+    );
+    result_json()
 }
 
 #[test]
@@ -83,7 +107,7 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
     let posts = AtomicUsize::new(0);
     let flag = CancellationFlag::new();
     let signal: Arc<dyn StopSignal> = Arc::new(flag.clone());
-    let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+    let source = HttpRemoteQuerySource::new(|request: HttpExchangeRequest<'_>| {
         posts.fetch_add(1, Ordering::Relaxed);
         // A host transport can only abandon an in-flight exchange if the signal reached
         // it; the evaluator is blocked here for the whole duration of the call.
@@ -92,7 +116,7 @@ fn the_stop_signal_travels_with_the_request_and_gates_it() {
             "the executing query's stop signal must reach the transport"
         );
         assert!(request.timeout.as_secs() > 0, "the timeout is still data");
-        Ok(RESULT_JSON.to_vec())
+        result_json()
     });
 
     let query = "SELECT ?x WHERE { BIND(1 AS ?x) }";
@@ -162,9 +186,9 @@ fn service_clause_federates_through_injected_http_transport() {
 #[test]
 fn missing_named_graph_does_not_execute_its_inner_service() {
     let posts = AtomicUsize::new(0);
-    let source = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
+    let source = HttpRemoteQuerySource::new(|_request: HttpExchangeRequest<'_>| {
         posts.fetch_add(1, Ordering::Relaxed);
-        Err(RemoteError::Transport(
+        Err(HttpFailure::Transport(
             "a known-empty GRAPH branch must not issue this request".to_owned(),
         ))
     });
@@ -200,16 +224,16 @@ fn terminal_service_cancelled_during_post(silent: bool) {
     let flag = CancellationFlag::new();
     let transport_flag = flag.clone();
     let transport_posts = Arc::clone(&posts);
-    let source = HttpRemoteQuerySource::new(move |request: HttpRequest<'_>| {
+    let source = HttpRemoteQuerySource::new(move |request: HttpExchangeRequest<'_>| {
         transport_posts.fetch_add(1, Ordering::Relaxed);
         assert!(
             request.stop.is_some(),
             "the stop signal reached the transport"
         );
         // Deliberately deaf for the remainder of this exchange: the request completes
-        // after firing the signal instead of returning `RemoteError::Governed` itself.
+        // after firing the signal instead of failing with `HttpFailure::Governed` itself.
         transport_flag.cancel();
-        Ok(RESULT_JSON.to_vec())
+        result_json()
     });
     let dataset = RdfDatasetBuilder::new()
         .freeze()

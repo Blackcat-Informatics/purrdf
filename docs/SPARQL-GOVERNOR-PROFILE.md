@@ -468,7 +468,7 @@ at all. See `purrdf_datalog::stop` for the full argument.
 
 ## 8. The federated transport seam
 
-`HttpRequest::stop` can only be honoured by a transport capable of abandoning a call
+`HttpExchangeRequest::stop` can only be honoured by a transport capable of abandoning a call
 it is already inside, and nothing forces a host to write one. Ignoring it is a
 supported implementation, and the contract is stated for both cases:
 
