@@ -959,6 +959,30 @@ impl PyQuadStore {
             .map_err(|e| PyValueError::new_err(format!("content identity refused: {e}")))
     }
 
+    /// `bind_execution_receipt(receipt_json)` → the receipt JSON with `contentIdentity`
+    /// and `executionIdentity` added, bound to this store's current content.
+    ///
+    /// A query's receipt carries the run identity only: no query hashes its store.
+    /// The store is frozen once and that snapshot supplies the content identity, so
+    /// the receipt binds to the content the call saw.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the store cannot be frozen, for a receipt that is not an
+    /// execution receipt, a run that cannot have an execution identity (it never
+    /// started, or called extension code without a certified implementation
+    /// identity), or a content identity the store refuses.
+    fn bind_execution_receipt(&self, py: Python<'_>, receipt_json: &str) -> PyResult<String> {
+        let frozen = self.freeze_snapshot(py)?;
+        py.detach(|| purrdf_validate::query::bind_execution_receipt(receipt_json, &*frozen))
+            .map_err(|error| match error {
+                purrdf_validate::query::ReceiptBindError::Identity(cause) => {
+                    PyValueError::new_err(format!("content identity refused: {cause}"))
+                }
+                other => PyValueError::new_err(other.to_string()),
+            })
+    }
+
     /// Iterate the store's quads (a snapshot taken at iteration time).
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyQuadIter>> {
         let quads = self

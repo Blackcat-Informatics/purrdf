@@ -148,7 +148,7 @@ cases, and the assembled playground selects its named Worker case:
 
 | Exact case | Concrete host obligation |
 | --- | --- |
-| `synchronous coordinates cross every query export and package output` | Every synchronous wrapper and direct positional signature transports exact strings and unsigned seeds through wasm-bindgen; supplied seeds avoid the host entropy import; the receipt's run identity, `Dataset#contentIdentity` and `bindExecutionReceipt` cross the boundary, and a refused binding keeps its host code |
+| `synchronous coordinates cross every query export and package output` | Every synchronous wrapper and direct positional signature transports exact strings and unsigned seeds through wasm-bindgen; supplied seeds avoid the host entropy import; the receipt's run identity, `Dataset#contentIdentity` and `Dataset#bindExecutionReceipt` cross the boundary, and a refused binding keeps its host code |
 | `synchronous positional query coordinates reject lossy host values` | Every raw query export checks JavaScript strings and BigInt/number values through shared host readers; errors retain their host type/code |
 | `synchronous omitted coordinates use fresh independent host defaults` | Omitted and null controls reach actual host clock/entropy imports per execution; independently supplied inputs suppress only their own default |
 | `playground synchronous query messages forward exact coordinates and errors` | The assembled Worker's structured-clone message carries BigInts and exact strings into the synchronous package and returns host exceptions without mutating its dataset |

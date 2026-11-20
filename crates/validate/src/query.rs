@@ -332,12 +332,10 @@ pub enum ReceiptBindError {
         /// The receipt member that is missing or ill-typed.
         member: &'static str,
     },
-    /// The content identity is not 64 lowercase hexadecimal digits.
-    ContentIdentity,
     /// The receipt's run cannot have an execution identity.
     Refused(purrdf_sparql_eval::ReceiptError),
-    /// The dataset refused to produce its content identity.
-    Identity(purrdf_lex::allocation::StorageError),
+    /// The view refused to produce its content identity; the view's own error is the cause.
+    Identity(Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl std::fmt::Display for ReceiptBindError {
@@ -350,11 +348,8 @@ impl std::fmt::Display for ReceiptBindError {
                     "not an execution receipt: `{member}` is missing or ill-typed"
                 )
             }
-            Self::ContentIdentity => {
-                f.write_str("the content identity is not 64 lowercase hexadecimal digits")
-            }
             Self::Refused(error) => error.fmt(f),
-            Self::Identity(error) => write!(f, "the dataset's content identity: {error}"),
+            Self::Identity(error) => write!(f, "the view's content identity: {error}"),
         }
     }
 }
@@ -364,8 +359,8 @@ impl std::error::Error for ReceiptBindError {
         match self {
             Self::Json(error) => Some(error),
             Self::Refused(error) => Some(error),
-            Self::Identity(error) => Some(error),
-            Self::NotAReceipt { .. } | Self::ContentIdentity => None,
+            Self::Identity(error) => Some(&**error),
+            Self::NotAReceipt { .. } => None,
         }
     }
 }
@@ -374,28 +369,48 @@ impl purrdf_hash::error::StructuredError for ReceiptBindError {
     purrdf_hash::error_visit! {
         Json(error) => "receipt-bind-json" { "cause" => Record(error) },
         NotAReceipt { member } => "receipt-bind-not-a-receipt" { "member" => Code(member) },
-        ContentIdentity => "receipt-bind-content-identity" {},
         Refused(error) => "receipt-bind-refused" { "cause" => Record(error) },
-        Identity(error) => "receipt-bind-identity" { "cause" => Cause(error) },
+        Identity(_cause) => "receipt-bind-identity" {},
     }
 }
 
-/// Bind a host's execution receipt JSON to the content identity of the dataset
+/// Bind a host's execution receipt JSON to the content identity of the view
 /// its run read: the receipt with `contentIdentity` and `executionIdentity` added,
 /// under the same law as [`execution_receipt_value_with_sources`].
 ///
 /// This is the explicit request every host that hands its caller only receipt
-/// JSON routes through. `content` is called only after the receipt is admitted,
-/// so a refused binding computes no content identity; a refusal of the identity
-/// itself is returned as [`ReceiptBindError::Identity`]. A host receipt carries no
+/// JSON routes through. `view` must declare [`purrdf_core::ContentIdentified`], so a
+/// view that can never certify its content is refused when the call is compiled.
+/// The identity is requested only after the receipt is admitted, so a refused
+/// binding computes no content identity; a refusal of the identity itself is
+/// returned as [`ReceiptBindError::Identity`]. A host receipt carries no
 /// focus-graph identity, so a run that read a focus graph is refused.
+///
+/// A resident dataset is accepted as the view:
+///
+/// ```
+/// let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+/// let receipt = r#"{"state":"not-started"}"#;
+/// // The receipt is refused for its run, not for the view.
+/// assert!(purrdf_validate::query::bind_execution_receipt(receipt, &dataset).is_err());
+/// ```
+///
+/// A view without the capability does not compile:
+///
+/// ```compile_fail
+/// use purrdf_core::DatasetView;
+/// fn bind<V: DatasetView>(view: &V) {
+///     let _ = purrdf_validate::query::bind_execution_receipt("{}", view);
+/// }
+/// ```
 ///
 /// # Errors
 /// [`ReceiptBindError`].
-pub fn bind_execution_receipt(
-    receipt: &str,
-    content: impl FnOnce() -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError>,
-) -> Result<String, ReceiptBindError> {
+pub fn bind_execution_receipt<V>(receipt: &str, view: &V) -> Result<String, ReceiptBindError>
+where
+    V: purrdf_core::ContentIdentified + ?Sized,
+    V::IdentityError: std::error::Error + Send + Sync + 'static,
+{
     use purrdf_lex::json::Value;
     use purrdf_sparql_eval::ReceiptError;
     let mut value = purrdf_lex::json::read(receipt).map_err(ReceiptBindError::Json)?;
@@ -432,8 +447,10 @@ pub fn bind_execution_receipt(
             ReceiptError::FocusGraphIdentityMissing,
         ));
     }
-    let sources =
-        purrdf_sparql_eval::ExecutionSources::new(content().map_err(ReceiptBindError::Identity)?);
+    let sources = purrdf_sparql_eval::ExecutionSources::new(
+        view.content_identity()
+            .map_err(|error| ReceiptBindError::Identity(Box::new(error)))?,
+    );
     let execution = sources
         .execution_identity_of(&run, false)
         .map_err(ReceiptBindError::Refused)?;
@@ -443,21 +460,6 @@ pub fn bind_execution_receipt(
     object.insert("contentIdentity", sources.dataset().to_string());
     object.insert("executionIdentity", execution.to_string());
     Ok(purrdf_lex::json::write_compact(&value))
-}
-
-/// [`bind_execution_receipt`] for a host that holds the content identity as the
-/// 64-hex text a dataset handle returned.
-///
-/// # Errors
-/// [`ReceiptBindError::ContentIdentity`] for text that is not a content identity;
-/// otherwise as [`bind_execution_receipt`].
-pub fn bind_execution_receipt_hex(
-    receipt: &str,
-    content_identity: &str,
-) -> Result<String, ReceiptBindError> {
-    let identity = purrdf_hash::hex::Digest32::from_hex(content_identity)
-        .ok_or(ReceiptBindError::ContentIdentity)?;
-    bind_execution_receipt(receipt, || Ok(identity))
 }
 
 /// The actual nested executions of a rule request, beside its supplied scope.
@@ -533,18 +535,88 @@ mod tests {
     use super::{ENGINE_LABEL, provenance};
     use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
 
-    /// A host binding a receipt's JSON reaches exactly the execution identity the
-    /// native coordinates compute for the same content; every receipt the binding
-    /// refuses computes no content identity, and its neighbour binds.
-    #[test]
-    fn a_host_receipt_binds_to_the_native_execution_identity_and_refusals_hash_nothing() {
-        use purrdf_sparql_eval::{ExecutionSources, ReceiptError};
-        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+    /// A resident dataset's view with a scripted identity request: the dataset's
+    /// own rows, and an identity that is refused or must never be asked for.
+    struct Scripted<'a> {
+        dataset: &'a purrdf_core::RdfDataset,
+        identity: Identity,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Identity {
+        Refused,
+        NeverAsked,
+    }
+
+    #[derive(Debug)]
+    struct IdentityRefused;
+
+    impl std::fmt::Display for IdentityRefused {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("the scripted view cannot certify its content")
+        }
+    }
+
+    impl std::error::Error for IdentityRefused {}
+
+    impl purrdf_core::DatasetView for Scripted<'_> {
+        type Id = purrdf_core::TermId;
+        type ReadError = std::convert::Infallible;
+        type TermGuard<'a>
+            = purrdf_core::TermRef<'a, Self::Id>
+        where
+            Self: 'a;
+        type ProbePlan = ();
+        fn quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            self.dataset.quads()
+        }
+        fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+            purrdf_core::DatasetView::resolve(self.dataset, id)
+        }
+        fn term_id_by_value(
+            &self,
+            value: &purrdf_core::TermValue,
+        ) -> Result<Option<Self::Id>, Self::ReadError> {
+            purrdf_core::DatasetView::term_id_by_value(self.dataset, value)
+        }
+        fn capabilities(&self) -> purrdf_core::RdfStoreCapabilities {
+            purrdf_core::DatasetView::capabilities(self.dataset)
+        }
+        fn probe_plan(&self, _: bool, _: bool, _: bool, _: purrdf_core::GraphMatch) {}
+        fn quads_for_pattern_with_plan(
+            &self,
+            (): &(),
+            s: Option<Self::Id>,
+            p: Option<Self::Id>,
+            o: Option<Self::Id>,
+            g: purrdf_core::GraphMatch,
+        ) -> impl Iterator<Item = purrdf_core::QuadIds> + '_ {
+            self.dataset.quads_for_pattern(s, p, o, g)
+        }
+        fn term_count(&self) -> u64 {
+            purrdf_core::DatasetView::term_count(self.dataset)
+        }
+    }
+
+    impl purrdf_core::ContentIdentified for Scripted<'_> {
+        type IdentityError = IdentityRefused;
+        fn content_identity(&self) -> Result<purrdf_hash::hex::Digest32, IdentityRefused> {
+            match self.identity {
+                Identity::Refused => Err(IdentityRefused),
+                Identity::NeverAsked => panic!("a refusal hashes nothing"),
+            }
+        }
+    }
+
+    /// The receipt of a started run over `dataset`, with its native coordinates.
+    fn started_receipt(
+        dataset: &purrdf_core::RdfDataset,
+    ) -> (String, purrdf_sparql_eval::QueryCoordinates) {
         let engine = purrdf_sparql_eval::NativeSparqlEngine::new();
         let capture = super::ExecutionReceiptCapture::default();
         engine
             .query_with_options_view(
-                &dataset,
+                dataset,
                 purrdf_core::SparqlRequest {
                     query: "SELECT (1 AS ?one) WHERE {}",
                     base_iri: None,
@@ -554,28 +626,34 @@ mod tests {
             )
             .unwrap();
         let coordinates = capture.into_coordinates().unwrap();
-        let content = purrdf_hash::hex::Digest32::new([7; 32]);
+        (super::execution_receipt_json(&coordinates), coordinates)
+    }
+
+    /// A host binding a receipt's JSON reaches exactly the execution identity the
+    /// native coordinates compute for the same content; every receipt the binding
+    /// refuses asks its view for no content identity, and its neighbour binds.
+    #[test]
+    fn a_host_receipt_binds_to_the_native_execution_identity_and_refusals_hash_nothing() {
+        use purrdf_core::ContentIdentified;
+        use purrdf_sparql_eval::{ExecutionSources, ReceiptError};
+        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+        let (receipt, coordinates) = started_receipt(&dataset);
         let native = super::execution_receipt_json_with_sources(
             &coordinates,
-            &ExecutionSources::new(content),
+            &ExecutionSources::new(dataset.content_identity().unwrap()),
         )
         .unwrap();
-        let receipt = super::execution_receipt_json(&coordinates);
         assert!(!receipt.contains("contentIdentity"));
         assert_eq!(
-            super::bind_execution_receipt(&receipt, || Ok(content)).unwrap(),
-            native
-        );
-        assert_eq!(
-            super::bind_execution_receipt_hex(&receipt, &content.to_string()).unwrap(),
+            super::bind_execution_receipt(&receipt, &dataset).unwrap(),
             native
         );
 
-        let unhashed =
-            || -> Result<purrdf_hash::hex::Digest32, purrdf_lex::allocation::StorageError> {
-                panic!("a refusal hashes nothing")
-            };
-        let refused = |text: &str| super::bind_execution_receipt(text, unhashed).unwrap_err();
+        let unhashed = Scripted {
+            dataset: &dataset,
+            identity: Identity::NeverAsked,
+        };
+        let refused = |text: &str| super::bind_execution_receipt(text, &unhashed).unwrap_err();
         assert!(matches!(
             refused(r#"{"state":"not-started"}"#),
             super::ReceiptBindError::Refused(ReceiptError::NotStarted)
@@ -597,47 +675,30 @@ mod tests {
                 member: "runIdentity"
             }
         ));
-        assert!(matches!(
-            super::bind_execution_receipt_hex(&receipt, "not hex"),
-            Err(super::ReceiptBindError::ContentIdentity)
-        ));
     }
 
-    /// A receipt requested from a view that cannot certify its content is the
-    /// typed `Identity` refusal and carries no identity, while the same receipt
-    /// bound to a view that has the capability succeeds.
+    /// A receipt requested from a view whose content identity is refused is the
+    /// typed `Identity` refusal carrying the view's own error and no output, while
+    /// the same receipt bound to a resident dataset succeeds.
     #[test]
     fn a_receipt_from_a_view_that_cannot_certify_its_content_is_a_typed_refusal() {
-        use purrdf_lex::allocation::StorageError;
+        use std::error::Error as _;
         let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
-        let engine = purrdf_sparql_eval::NativeSparqlEngine::new();
-        let capture = super::ExecutionReceiptCapture::default();
-        engine
-            .query_with_options_view(
-                &dataset,
-                purrdf_core::SparqlRequest {
-                    query: "SELECT (1 AS ?one) WHERE {}",
-                    base_iri: None,
-                    substitutions: &[],
-                },
-                &purrdf_sparql_eval::QueryOptions::new().with_coordinate_observer(&capture),
-            )
-            .unwrap();
-        let receipt = super::execution_receipt_json(&capture.into_coordinates().unwrap());
+        let (receipt, _) = started_receipt(&dataset);
 
-        let refused =
-            super::bind_execution_receipt(&receipt, || Err(StorageError::AllocationFailed));
-        assert!(matches!(
-            refused,
-            Err(super::ReceiptBindError::Identity(
-                StorageError::AllocationFailed
-            ))
-        ));
+        let view = Scripted {
+            dataset: &dataset,
+            identity: Identity::Refused,
+        };
+        let refused = super::bind_execution_receipt(&receipt, &view).unwrap_err();
+        assert!(matches!(refused, super::ReceiptBindError::Identity(_)));
+        assert!(
+            refused
+                .source()
+                .is_some_and(<dyn std::error::Error>::is::<IdentityRefused>)
+        );
 
-        let bound = super::bind_execution_receipt(&receipt, || {
-            purrdf_core::ContentIdentified::content_identity(&dataset)
-        })
-        .unwrap();
+        let bound = super::bind_execution_receipt(&receipt, &dataset).unwrap();
         assert!(bound.contains("\"contentIdentity\""));
         assert!(bound.contains("\"executionIdentity\""));
     }

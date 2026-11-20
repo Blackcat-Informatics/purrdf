@@ -4,7 +4,7 @@
 // positional ABI, checked BigInt conversion and actual host clock/entropy imports.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bindExecutionReceipt, CompiledJsonLdContext, Dataset, QueryEngine, ready } from "../index.mjs";
+import { CompiledJsonLdContext, Dataset, QueryEngine, ready } from "../index.mjs";
 
 // Capture the generated positional exports before ready installs package wrappers.
 const raw = Object.fromEntries([
@@ -34,7 +34,7 @@ test("synchronous coordinates cross every query export and package output", () =
   Math.random = () => { draws += 1; return 0.25; };
   try {
     const result = engine.query(data, QUERY, INPUTS); const expected = cells(result); assert.equal(result.executionReceipt.now, NOW); assert.equal(result.executionReceipt.entropySeed, String(INPUTS.entropySeed));
-    assert.equal(expected.t, NOW); assert.equal(result.executionReceipt.runIdentity.length, 64); assert.equal("contentIdentity" in result.executionReceipt, false); const bound = JSON.parse(bindExecutionReceipt(JSON.stringify(result.executionReceipt), data.contentIdentity())); assert.deepEqual([bound.runIdentity, bound.contentIdentity, bound.executionIdentity.length], [result.executionReceipt.runIdentity, data.contentIdentity(), 64]); assert.throws(() => bindExecutionReceipt('{"state":"not-started"}', data.contentIdentity()), { code: "purrdf-wasm-receipt" });
+    assert.equal(expected.t, NOW); assert.equal(result.executionReceipt.runIdentity.length, 64); assert.equal("contentIdentity" in result.executionReceipt, false); const bound = JSON.parse(data.bindExecutionReceipt(JSON.stringify(result.executionReceipt))); assert.deepEqual([bound.runIdentity, bound.contentIdentity, bound.executionIdentity.length], [result.executionReceipt.runIdentity, data.contentIdentity(), 64]); assert.throws(() => data.bindExecutionReceipt('{"state":"not-started"}'), { code: "purrdf-wasm-receipt" });
     assert.deepEqual(cells(engine.select(data, QUERY, INPUTS)), expected);
     assert.equal(engine.ask(data, `ASK { ${FILTER} }`, INPUTS).boolean, true);
     for (const [method, query] of [["construct", GRAPH], ["describe", `DESCRIBE <https://example.org/s> WHERE { ${FILTER} }`]]) {

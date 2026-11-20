@@ -677,6 +677,9 @@ class _QuadStore:
     def content_identity(self) -> str:
         ...
 
+    def bind_execution_receipt(self, receipt_json: str) -> str:
+        ...
+
     def _store_capsule(self) -> CapsuleType:
         ...
 
@@ -763,9 +766,6 @@ class Dataset:
         ...
 
 def parse(input: bytes | str, format: RdfFormat, *, base: str | None=..., input_options: str | None=...) -> list[Quad]:
-    ...
-
-def bind_execution_receipt(receipt_json: str, content_identity: str) -> str:
     ...
 
 @overload

@@ -854,8 +854,8 @@ impl Dataset {
     /// `contentIdentity()` → the 64-hex content identity of this dataset's current
     /// content, the frozen snapshot every query reads: a digest of every row, computed
     /// on this call and never by a query. Equal content has an equal identity, so the
-    /// value a query's receipt binds to through `bindExecutionReceipt` is this call's
-    /// value as long as the dataset has not changed since that query.
+    /// value a query's receipt binds to through `Dataset#bindExecutionReceipt` is this
+    /// call's value as long as the dataset has not changed since that query.
     ///
     /// # Errors
     ///
@@ -866,6 +866,34 @@ impl Dataset {
         let identity = purrdf_core::ContentIdentified::content_identity(&*frozen)
             .map_err(|e| diag_to_err(&e.into()))?;
         Ok(identity.to_string())
+    }
+
+    /// `bindExecutionReceipt(receiptJson)` → the receipt with `contentIdentity` and
+    /// `executionIdentity` added, bound to this dataset's current content.
+    ///
+    /// A query's receipt carries the run identity only: no query hashes its dataset.
+    /// Binding is the explicit request for an execution identity; the dataset is
+    /// frozen once and that snapshot supplies the content identity, so the receipt
+    /// binds to the content the call saw.
+    ///
+    /// # Errors
+    ///
+    /// `purrdf-wasm-options` for a receipt that is not an execution receipt;
+    /// `purrdf-wasm-receipt` for a run that cannot have an execution identity (it
+    /// never started, or called extension code without a certified implementation
+    /// identity); a dataset whose pending changes cannot be frozen.
+    #[wasm_bindgen(js_name = bindExecutionReceipt)]
+    pub fn bind_execution_receipt(&self, receipt_json: &str) -> Result<String, JsValue> {
+        let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
+        purrdf_validate::query::bind_execution_receipt(receipt_json, &*frozen).map_err(|error| {
+            let code = match error {
+                purrdf_validate::query::ReceiptBindError::Refused(_) => {
+                    crate::operation::RECEIPT_CODE
+                }
+                _ => crate::operation::OPTIONS_CODE,
+            };
+            crate::operation::coded_error(&error.to_string(), code)
+        })
     }
 
     /// `generation` — how many mutations this dataset's content has seen.
