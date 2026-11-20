@@ -3,23 +3,31 @@
 
 //! Small-count suppression for the `shape` figures.
 //!
-//! A count of one to four prints as `"<5"`. A printed total that is the sum of printed cells
-//! would give a hidden cell by subtraction, and two breakdowns of one total bound each other,
-//! so the figures are chosen together: [`suppress`] hides further cells until no hidden cell is
-//! known to be anything narrower than what its own printed form says.
+//! A count of one to four prints as `"<5"`. Every printed count is also tied to others: a
+//! total equals the sum of each of its breakdowns, and structural facts of an RDF 1.2 dataset
+//! bound one count by others (a literal is the object of some statement, a parent is a blank
+//! node, and so on). A reader who knows those ties can combine the printed figures, so the
+//! figures are chosen together: [`suppress`] treats each printed form as an interval,
+//! propagates every tie to find what a reader learns, and hides further counts until no
+//! hidden count is narrowed to fewer values than its own printed form leaves it.
 //!
-//! Each printed form is an interval. An exact count is a point, `"<5"` is `[1, 4]`,
-//! `"withheld"` is `[5, inf)` and `">=N"` is `[N, inf)`. Every total equals the sum of each
-//! of its breakdowns, and bound propagation over those equations gives the interval each
-//! hidden cell is confined to by everything printed. A figure is safe when that interval is
-//! its own printed one: a `"<5"` cell still ranges over one to four and a withheld or
-//! lower-bounded cell has no upper bound.
+//! An exact count is a point, `"<5"` is `[1, 4]`, `"withheld"` is `[5, inf)` and `">=N"` is
+//! `[N, inf)`. Each tie is a linear inequality over the counts, and an equality is two
+//! inequalities. A hidden `"<5"` count is safe when its upper bound stays four and at least
+//! three values remain possible for it, and a withheld or lower-bounded count when at least
+//! two do.
 
 /// A count below this prints as `"<5"` rather than exactly.
 pub(crate) const SMALL_COUNT_THRESHOLD: u64 = 5;
 
 /// No upper bound.
-const INF: u64 = u64::MAX;
+const INF: i128 = i128::MAX / 4;
+
+/// The values a hidden `"<5"` count must keep possible.
+const SMALL_KEEPS: i128 = 3;
+
+/// The values a withheld or lower-bounded count must keep possible.
+const LARGE_KEEPS: i128 = 2;
 
 /// A printed count: exact, suppressed for being small, a lower bound, or withheld.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,8 +35,8 @@ pub(crate) enum Count {
     Exact(u64),
     Small,
     AtLeast(u64),
-    /// An exact cell of at least the threshold, hidden so that the cells printed beside it
-    /// do not pin a suppressed cell.
+    /// An exact count of at least the threshold, hidden so that the counts printed beside it
+    /// do not pin a hidden one.
     Withheld,
 }
 
@@ -46,21 +54,6 @@ impl Count {
         matches!(self, Self::Exact(_))
     }
 
-    /// The count of a total that is the sum of the cells of one partition.
-    ///
-    /// With a single partition a hidden cell leaves the total a lower bound that the exact
-    /// cells already give, so nothing more is learned.
-    pub(crate) fn total(total: u64, cells: &[Self]) -> Self {
-        if (1..SMALL_COUNT_THRESHOLD).contains(&total) {
-            return Self::Small;
-        }
-        if cells.iter().all(|cell| cell.is_exact()) {
-            Self::of(total)
-        } else {
-            Self::AtLeast(exact_sum(cells))
-        }
-    }
-
     pub(crate) fn text(self) -> String {
         match self {
             Self::Exact(n) => n.to_string(),
@@ -71,12 +64,12 @@ impl Count {
     }
 
     /// The values the printed form allows.
-    const fn interval(self) -> (u64, u64) {
+    fn interval(self) -> (i128, i128) {
         match self {
-            Self::Exact(n) => (n, n),
-            Self::Small => (1, SMALL_COUNT_THRESHOLD - 1),
-            Self::Withheld => (SMALL_COUNT_THRESHOLD, INF),
-            Self::AtLeast(n) => (n, INF),
+            Self::Exact(n) => (i128::from(n), i128::from(n)),
+            Self::Small => (1, i128::from(SMALL_COUNT_THRESHOLD) - 1),
+            Self::Withheld => (i128::from(SMALL_COUNT_THRESHOLD), INF),
+            Self::AtLeast(n) => (i128::from(n), INF),
         }
     }
 }
@@ -98,71 +91,133 @@ pub(crate) struct Sum {
     pub(crate) cells: Vec<usize>,
 }
 
-/// The interval each variable is confined to by every printed form and every equation.
-fn derive(vars: &[(Count, u64)], sums: &[Sum]) -> Vec<(u64, u64)> {
-    let mut bounds: Vec<(u64, u64)> = vars.iter().map(|var| var.0.interval()).collect();
-    for _ in 0..4 * (vars.len() + 1) {
-        let before = bounds.clone();
-        for sum in sums {
-            let lows: u64 = sum
-                .cells
-                .iter()
-                .fold(0, |acc, &c| acc.saturating_add(bounds[c].0));
-            let highs: u64 = sum
-                .cells
-                .iter()
-                .fold(0, |acc, &c| acc.saturating_add(bounds[c].1));
-            let total = &mut bounds[sum.total];
-            total.0 = total.0.max(lows);
-            if highs != INF {
-                total.1 = total.1.min(highs);
-            }
-            let (total_low, total_high) = *total;
-            for &cell in &sum.cells {
-                let others_low = lows.saturating_sub(bounds[cell].0);
-                let others_high = sum
-                    .cells
-                    .iter()
-                    .filter(|&&c| c != cell)
-                    .fold(0_u64, |acc, &c| acc.saturating_add(bounds[c].1));
-                if others_high != INF {
-                    bounds[cell].0 = bounds[cell].0.max(total_low.saturating_sub(others_high));
+/// One tie: the sum of `coefficient * variable` over `terms` is at most `limit`.
+#[derive(Clone)]
+pub(crate) struct Linear {
+    terms: Vec<(i128, usize)>,
+    limit: i128,
+}
+
+impl Linear {
+    /// The tie `sum(lesser) + constant <= sum(greater)`, each side a list of
+    /// `(coefficient, variable)`.
+    pub(crate) fn at_most(
+        lesser: &[(i128, usize)],
+        constant: i128,
+        greater: &[(i128, usize)],
+    ) -> Self {
+        let mut terms: Vec<(i128, usize)> = lesser.to_vec();
+        terms.extend(greater.iter().map(|(c, v)| (-c, *v)));
+        Self {
+            terms,
+            limit: -constant,
+        }
+    }
+}
+
+/// Every tie of `sums` as inequalities, followed by `ties`.
+fn linearize(sums: &[Sum], ties: &[Linear]) -> Vec<Linear> {
+    let mut all = Vec::new();
+    for sum in sums {
+        let cells: Vec<(i128, usize)> = sum.cells.iter().map(|&c| (1, c)).collect();
+        all.push(Linear::at_most(&cells, 0, &[(1, sum.total)]));
+        all.push(Linear::at_most(&[(1, sum.total)], 0, &cells));
+    }
+    all.extend(ties.iter().cloned());
+    all
+}
+
+/// The interval each variable is confined to by every printed form and every tie.
+fn derive(vars: &[(Count, u64)], constraints: &[Linear]) -> Vec<(i128, i128)> {
+    let mut low: Vec<i128> = Vec::with_capacity(vars.len());
+    let mut high: Vec<i128> = Vec::with_capacity(vars.len());
+    for var in vars {
+        let (l, h) = var.0.interval();
+        low.push(l);
+        high.push(h);
+    }
+    for _ in 0..8 * (vars.len() + 1) {
+        let mut changed = false;
+        for constraint in constraints {
+            for (position, &(coefficient, variable)) in constraint.terms.iter().enumerate() {
+                if coefficient == 0 {
+                    continue;
                 }
-                if total_high != INF {
-                    bounds[cell].1 = bounds[cell].1.min(total_high.saturating_sub(others_low));
+                let mut rest_minimum = 0_i128;
+                let mut unbounded = false;
+                for (other, &(a, v)) in constraint.terms.iter().enumerate() {
+                    if other == position {
+                        continue;
+                    }
+                    if a > 0 {
+                        rest_minimum += a * low[v];
+                    } else if high[v] >= INF {
+                        unbounded = true;
+                        break;
+                    } else {
+                        rest_minimum += a * high[v];
+                    }
+                }
+                if unbounded {
+                    continue;
+                }
+                let bound = constraint.limit - rest_minimum;
+                if coefficient > 0 {
+                    let new_high = bound.div_euclid(coefficient);
+                    if new_high < high[variable] {
+                        high[variable] = new_high;
+                        changed = true;
+                    }
+                } else {
+                    let new_low = -bound.div_euclid(-coefficient);
+                    if new_low > low[variable] {
+                        low[variable] = new_low;
+                        changed = true;
+                    }
                 }
             }
         }
-        if bounds == before {
+        if !changed {
             break;
         }
     }
-    bounds
+    low.into_iter().zip(high).collect()
 }
 
-/// Whether the figures pin `count` to something narrower than its printed form.
-const fn pinned(count: Count, bound: (u64, u64)) -> bool {
+/// Whether the figures pin `count` to fewer values than its printed form should leave.
+fn pinned(count: Count, bound: (i128, i128)) -> bool {
+    let values = bound.1.saturating_sub(bound.0).saturating_add(1);
     match count {
         Count::Exact(_) => false,
-        Count::Small => bound.0 != 1 || bound.1 != SMALL_COUNT_THRESHOLD - 1,
-        Count::Withheld | Count::AtLeast(_) => bound.1 != INF,
+        Count::Small => bound.1 < i128::from(SMALL_COUNT_THRESHOLD) - 1 || values < SMALL_KEEPS,
+        Count::Withheld | Count::AtLeast(_) => values < LARGE_KEEPS,
     }
+}
+
+/// Hide the exact count `variable`: a small one as `"<5"` and any other as withheld.
+fn hide(vars: &mut [(Count, u64)], variable: usize) {
+    vars[variable].0 = if vars[variable].1 < SMALL_COUNT_THRESHOLD {
+        Count::Small
+    } else {
+        Count::Withheld
+    };
 }
 
 /// Choose how every variable prints so that no hidden one is pinned.
 ///
 /// Each variable is its printed form and its true value; a variable in `fixed` keeps the form
-/// it was given and is never recomputed. Totals start as exact when every
-/// cell of every breakdown is exact and as the lower bound the exact cells give otherwise;
-/// then exact cells are withheld, smallest first, until no hidden variable is pinned. Only
-/// the variables in `candidates` may be withheld when it is given.
+/// it was given. Totals start as exact when every cell of every breakdown is exact and as the
+/// lower bound the exact cells give otherwise; then exact non-zero counts are hidden, smallest
+/// first and nearest the pinned count first, until no hidden count is pinned. Only the
+/// variables in `candidates` may be hidden when it is given.
 ///
-/// Returns whether it ended with no hidden variable pinned. A caller that gets `false` must
-/// not print the figures as they stand.
+/// Returns whether it ended with no hidden count pinned. A caller that gets `false` must not
+/// print the figures as they stand.
 #[must_use]
 pub(crate) fn suppress(
     vars: &mut [(Count, u64)],
     sums: &[Sum],
+    ties: &[Linear],
     fixed: &[usize],
     candidates: Option<&[usize]>,
 ) -> bool {
@@ -192,73 +247,75 @@ pub(crate) fn suppress(
             )
         };
     }
+    let constraints = linearize(sums, ties);
     for _ in 0..=vars.len() {
-        let bounds = derive(vars, sums);
+        let bounds = derive(vars, &constraints);
         let Some(violation) = (0..vars.len()).find(|&i| pinned(vars[i].0, bounds[i])) else {
             return true;
         };
-        // Prefer a breakdown that bounds everything above, then any breakdown that touches
-        // the pinned variable, then any at all.
-        let touching: Vec<&Sum> = sums
-            .iter()
-            .filter(|sum| sum.total == violation || sum.cells.contains(&violation))
-            .collect();
-        let bounded = |sum: &&Sum| sum.cells.iter().all(|&c| vars[c].0.interval().1 != INF);
-        let pick = |from: &[&Sum]| {
-            from.iter()
-                .flat_map(|sum| sum.cells.iter().copied())
-                .filter(|&c| candidates.is_none_or(|only| only.contains(&c)))
-                .filter(|&c| matches!(vars[c].0, Count::Exact(n) if n > 0))
+        let hideable = |c: usize| {
+            candidates.is_none_or(|only| only.contains(&c))
+                && matches!(vars[c].0, Count::Exact(n) if n > 0)
+        };
+        let nearest = |from: &mut dyn Iterator<Item = &Linear>| {
+            from.flat_map(|constraint| constraint.terms.iter().map(|term| term.1))
+                .filter(|&c| hideable(c))
                 .min_by_key(|&c| vars[c].1)
         };
-        let all: Vec<&Sum> = sums.iter().collect();
-        let tight: Vec<&Sum> = touching.iter().copied().filter(bounded).collect();
-        let loose: Vec<&Sum> = all.iter().copied().filter(bounded).collect();
-        let Some(cell) = pick(&tight)
-            .or_else(|| pick(&touching))
-            .or_else(|| pick(&loose))
-            .or_else(|| pick(&all))
-        else {
+        let Some(cell) = nearest(
+            &mut constraints
+                .iter()
+                .filter(|c| c.terms.iter().any(|term| term.1 == violation)),
+        )
+        .or_else(|| nearest(&mut constraints.iter()))
+        .or_else(|| {
+            (0..vars.len())
+                .filter(|&c| hideable(c))
+                .min_by_key(|&c| vars[c].1)
+        }) else {
             return false;
         };
-        vars[cell].0 = Count::Withheld;
+        hide(vars, cell);
     }
-    let bounds = derive(vars, sums);
+    let bounds = derive(vars, &constraints);
     !(0..vars.len()).any(|i| pinned(vars[i].0, bounds[i]))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Count, Sum, suppress};
+    use super::{Count, Linear, Sum, derive, pinned, suppress};
 
-    /// P1: the hidden length bin and the withheld integer count are not recoverable from the
-    /// two breakdowns of ten literals.
+    /// Two breakdowns of ten literals leave neither the hidden length bin nor the withheld
+    /// integer count recoverable, and a literal count bounded by the statements that hold
+    /// them is hidden rather than printed beside them.
     #[test]
-    fn two_breakdowns_do_not_pin_a_hidden_cell() {
-        // total; length bins 4 and 6; datatype cells integer 5 and string 5.
+    fn ties_between_printed_counts_do_not_pin_a_hidden_count() {
+        // literals 6; statements 6; length bins 1 and 5; datatype cell integer 6.
         let mut vars = vec![
-            (Count::of(10), 10),
-            (Count::of(4), 4),
             (Count::of(6), 6),
+            (Count::of(6), 6),
+            (Count::of(1), 1),
             (Count::of(5), 5),
-            (Count::of(5), 5),
+            (Count::of(6), 6),
         ];
         let sums = [
             Sum {
                 total: 0,
-                cells: vec![1, 2],
+                cells: vec![2, 3],
             },
             Sum {
                 total: 0,
-                cells: vec![3, 4],
+                cells: vec![4],
             },
         ];
-        assert!(suppress(&mut vars, &sums, &[], None));
-        let bounds = super::derive(&vars, &sums);
+        // literals <= statements
+        let ties = [Linear::at_most(&[(1, 0)], 0, &[(1, 1)])];
+        assert!(suppress(&mut vars, &sums, &ties, &[], None));
+        let constraints = super::linearize(&sums, &ties);
+        let bounds = derive(&vars, &constraints);
         for (index, var) in vars.iter().enumerate() {
-            assert!(!super::pinned(var.0, bounds[index]), "{index}");
+            assert!(!pinned(var.0, bounds[index]), "{index}");
         }
-        assert_eq!(vars[1].0, Count::Small);
-        assert!(!vars[0].0.is_exact());
+        assert_eq!(vars[2].0, Count::Small);
     }
 }

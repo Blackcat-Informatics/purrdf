@@ -34,12 +34,14 @@
 //! nesting depths are single extremes of a distribution rather than counts of items and print
 //! exactly.
 //!
-//! # Subtraction
+//! # Suppression
 //!
-//! A total that is the sum of the cells of a partition would give a suppressed cell by
-//! subtraction, and two partitions of one total bound each other. [`suppress`] treats each
-//! printed form as an interval, propagates the sum equations to find what a reader learns, and
-//! withholds further cells until every hidden cell is confined to exactly its own printed form.
+//! Printed counts are tied to one another by sums and by structural bounds of an RDF 1.2
+//! dataset, and a reader who knows the ties can combine them. [`Figures::plan`] puts every count
+//! and every tie into one system, and [`suppress`] treats each printed form as an interval,
+//! propagates the ties, and withholds further counts until no hidden count is pinned. When that
+//! cannot be done, [`Figures::render`] leaves figure groups out as typed omissions, never the
+//! document.
 //!
 //! # Language-tag case
 //!
@@ -71,7 +73,7 @@ use purrdf_rdf::SourceFormat;
 
 use crate::cli::CliRdfFormat;
 use crate::error::CliError;
-use crate::shape_suppress::{Count, SMALL_COUNT_THRESHOLD, Sum, suppress};
+use crate::shape_suppress::{Count, Linear, SMALL_COUNT_THRESHOLD, Sum, suppress};
 use crate::source::{InputView, ViewOp};
 use crate::{format, source};
 
@@ -691,65 +693,274 @@ fn label<D: DatasetView<ReadError = Infallible>>(
     }
 }
 
+/// The printed counts of one document and the ties between them.
+struct Plan {
+    vars: Vec<(Count, u64)>,
+    sums: Vec<Sum>,
+    ties: Vec<Linear>,
+    at: At,
+}
+
+/// Where each count sits in a [`Plan`].
+struct At {
+    quads: usize,
+    iris: usize,
+    literals: usize,
+    blanks: usize,
+    graphs: usize,
+    triples: usize,
+    reifiers: usize,
+    annotations: usize,
+    depth: usize,
+    parents: usize,
+    group: usize,
+    tags: usize,
+    lengths: usize,
+    datatypes: usize,
+    other: usize,
+    tagged: usize,
+    siblings: usize,
+}
+
+/// A figure group the document leaves out when its counts cannot be printed without pinning a
+/// hidden one.
+///
+/// The groups are left out in order, each level including the ones before it: the maxima, the
+/// length histogram, the sibling histogram, the datatype breakdown.
+#[derive(Clone, Copy)]
+struct Omit(u8);
+
+impl Omit {
+    const fn maxima(self) -> bool {
+        self.0 >= 1
+    }
+    const fn lengths(self) -> bool {
+        self.0 >= 2
+    }
+    const fn siblings(self) -> bool {
+        self.0 >= 3
+    }
+    const fn datatypes(self) -> bool {
+        self.0 >= 4
+    }
+}
+
+/// A maximum as JSON: its count, or the typed omission when it is left out.
+fn maximum_text(omitted: bool, count: Count) -> String {
+    if omitted {
+        format!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}")
+    } else {
+        count.text()
+    }
+}
+
+/// The reason a figure group is left out.
+const GROUP_OMISSION: &str = "small-counts-would-be-exposed";
+
 impl Figures {
+    /// Every printed count and every tie between them, for the groups that are kept.
+    ///
+    /// The ties are facts of an RDF 1.2 dataset: the distinct literals are partitioned by length
+    /// and by datatype, the parents by the size of their largest like group, and each
+    /// literal is the object of a statement, an annotation or a triple term; a parent is a
+    /// blank node with a statement of its own, and a group of like children needs that many
+    /// blank nodes besides its parent; a triple term nests as deep as it has terms; an
+    /// identifier occupies at most the positions of the statements that name it.
+    fn plan(&self, omit: Omit) -> Plan {
+        let mut vars: Vec<(Count, u64)> = Vec::new();
+        let push = |vars: &mut Vec<(Count, u64)>, printed: Count, truth: u64| {
+            vars.push((printed, truth));
+            vars.len() - 1
+        };
+        let counted = |n: u64| Count::of(n);
+        let quads = push(&mut vars, counted(self.quads), self.quads);
+        let iris = push(&mut vars, counted(self.iris), self.iris);
+        let literals = push(&mut vars, counted(self.literals), self.literals);
+        let blanks = push(&mut vars, counted(self.blank_nodes), self.blank_nodes);
+        let graphs = push(&mut vars, counted(self.named_graphs), self.named_graphs);
+        let triples = push(&mut vars, counted(self.triple_terms), self.triple_terms);
+        let reifiers = push(&mut vars, counted(self.reifiers), self.reifiers);
+        let annotations = push(&mut vars, counted(self.annotations), self.annotations);
+        // A left-out maximum stays in the plan as a constant that no tie mentions.
+        let maximum = |value: u64| if omit.maxima() { 0 } else { value };
+        let depth = push(
+            &mut vars,
+            Count::Exact(maximum(self.max_triple_depth)),
+            maximum(self.max_triple_depth),
+        );
+        let parents = push(
+            &mut vars,
+            counted(self.sibling_parents),
+            self.sibling_parents,
+        );
+        let group = push(
+            &mut vars,
+            Count::Exact(maximum(self.sibling_largest.largest)),
+            maximum(self.sibling_largest.largest),
+        );
+        let tags = push(&mut vars, counted(self.distinct_tags), self.distinct_tags);
+        let lengths = vars.len();
+        if !omit.lengths() {
+            for cell in self.literal_lengths.cells() {
+                push(&mut vars, counted(cell.2), cell.2);
+            }
+        }
+        let datatypes = vars.len();
+        for (_, count) in &self.named_datatypes {
+            push(&mut vars, counted(*count), *count);
+        }
+        let other = push(
+            &mut vars,
+            counted(self.other_datatypes),
+            self.other_datatypes,
+        );
+        let tagged = push(
+            &mut vars,
+            counted(self.tagged_literals),
+            self.tagged_literals,
+        );
+        let siblings = vars.len();
+        if !omit.siblings() {
+            for cell in self.sibling_largest.cells() {
+                push(&mut vars, counted(cell.2), cell.2);
+            }
+        }
+        let end = vars.len();
+
+        let mut sums = Vec::new();
+        if !omit.lengths() {
+            sums.push(Sum {
+                total: literals,
+                cells: (lengths..datatypes).collect(),
+            });
+        }
+        if !omit.datatypes() {
+            sums.push(Sum {
+                total: literals,
+                cells: (datatypes..siblings).collect(),
+            });
+        }
+        if !omit.siblings() {
+            sums.push(Sum {
+                total: parents,
+                cells: (siblings..end).collect(),
+            });
+        }
+        let one = |v: usize| (1, v);
+        let mut ties = vec![
+            // every literal is the object of a statement, an annotation or a triple term
+            Linear::at_most(
+                &[one(literals)],
+                0,
+                &[one(quads), one(annotations), one(triples)],
+            ),
+            // tagged literals are literals, and a tag is used by a tagged literal
+            Linear::at_most(&[one(tagged)], 0, &[one(literals)]),
+            Linear::at_most(&[one(tags)], 0, &[one(tagged)]),
+            // a parent is a blank node with a statement of its own
+            Linear::at_most(&[one(parents)], 0, &[one(blanks)]),
+            Linear::at_most(&[one(parents)], 0, &[one(quads)]),
+            // blank nodes and identifiers occupy at most the positions that name them
+            Linear::at_most(
+                &[one(blanks)],
+                0,
+                &[
+                    (3, quads),
+                    (2, annotations),
+                    (3, triples),
+                    one(reifiers),
+                    one(graphs),
+                ],
+            ),
+            Linear::at_most(
+                &[one(iris)],
+                0,
+                &[
+                    (4, quads),
+                    (3, annotations),
+                    (3, triples),
+                    (2, reifiers),
+                    one(graphs),
+                ],
+            ),
+        ];
+        if !omit.maxima() {
+            // a triple term is nested as deep as its depth
+            ties.push(Linear::at_most(&[one(depth)], 0, &[one(triples)]));
+        }
+        if !omit.maxima() && self.sibling_largest.largest > 0 {
+            // a group of like children needs that many blank nodes beside its parent, and a
+            // statement from the parent to each
+            ties.push(Linear::at_most(&[one(group)], 1, &[one(blanks)]));
+            ties.push(Linear::at_most(&[one(group)], 0, &[one(quads)]));
+        }
+        Plan {
+            vars,
+            sums,
+            ties,
+            at: At {
+                quads,
+                iris,
+                literals,
+                blanks,
+                graphs,
+                triples,
+                reifiers,
+                annotations,
+                depth,
+                parents,
+                group,
+                tags,
+                lengths,
+                datatypes,
+                other,
+                tagged,
+                siblings,
+            },
+        }
+    }
+
     /// The one JSON document, newline terminated.
     fn render(&self) -> Result<String, CliError> {
-        let length_raw = self.literal_lengths.cells();
-        let sibling_cells: Vec<(u64, u64, Count)> = self
-            .sibling_largest
-            .cells()
-            .into_iter()
-            .map(|(min, max, count)| (min, max, Count::of(count)))
-            .collect();
-        let sibling_counts: Vec<Count> = sibling_cells.iter().map(|cell| cell.2).collect();
-
-        // The distinct literals are partitioned by length and by datatype (the
-        // language-tagged literals being one datatype cell, themselves partitioned by case
-        // form where the reader saw the tag as written). Every printed figure is chosen
-        // together, so no hidden cell is pinned by the others.
-        let mut vars: Vec<(Count, u64)> = vec![(Count::of(self.literals), self.literals)];
-        let length_at = vars.len();
-        vars.extend(length_raw.iter().map(|cell| (Count::of(cell.2), cell.2)));
-        let datatype_at = vars.len();
-        vars.extend(
-            self.named_datatypes
-                .iter()
-                .map(|(_, count)| (Count::of(*count), *count)),
-        );
-        let other_at = vars.len();
-        vars.push((Count::of(self.other_datatypes), self.other_datatypes));
-        let tagged_at = vars.len();
-        vars.push((Count::of(self.tagged_literals), self.tagged_literals));
-        let end = vars.len();
-        let sums = vec![
-            Sum {
-                total: 0,
-                cells: (length_at..datatype_at).collect(),
-            },
-            Sum {
-                total: 0,
-                cells: (datatype_at..end).collect(),
-            },
-        ];
-        if !suppress(&mut vars, &sums, &[], None) {
+        // Choose every printed count together. When the counts of a group cannot be printed
+        // without pinning a hidden one, the group is left out, never the document.
+        let attempts = [Omit(0), Omit(1), Omit(2), Omit(3), Omit(4)];
+        let mut chosen = None;
+        for omit in attempts {
+            let mut plan = self.plan(omit);
+            if suppress(&mut plan.vars, &plan.sums, &plan.ties, &[], None) {
+                chosen = Some((omit, plan));
+                break;
+            }
+        }
+        let Some((omit, plan)) = chosen else {
             return Err(CliError::Runtime(
                 "shape: a small count could not be suppressed; no figures are printed".to_owned(),
             ));
-        }
-        let length_cells: Vec<(u64, u64, Count)> = length_raw
+        };
+        let at = &plan.at;
+        let vars = &plan.vars;
+        let printed = |index: usize| vars[index].0;
+        let length_cells: Vec<(u64, u64, Count)> = self
+            .literal_lengths
+            .cells()
             .iter()
-            .zip(&vars[length_at..])
+            .zip(&vars[at.lengths..])
             .map(|(cell, var)| (cell.0, cell.1, var.0))
             .collect();
-        let literals = vars[0].0;
+        let sibling_cells: Vec<(u64, u64, Count)> = self
+            .sibling_largest
+            .cells()
+            .iter()
+            .zip(&vars[at.siblings..])
+            .map(|(cell, var)| (cell.0, cell.1, var.0))
+            .collect();
         let named: Vec<(&str, Count)> = self
             .named_datatypes
             .iter()
             .map(|(name, _)| *name)
-            .zip(vars[datatype_at..other_at].iter().map(|var| var.0))
+            .zip(vars[at.datatypes..at.other].iter().map(|var| var.0))
             .collect();
-        let other = vars[other_at].0;
-        let tagged = vars[tagged_at].0;
         // The case forms partition the tagged literals. They are chosen against every figure
         // already printed, each held at its printed form, and only a form cell may be
         // withheld, so no other figure depends on them. When a hidden count would still be
@@ -757,28 +968,35 @@ impl Figures {
         let case_cells: Result<[Count; 3], &str> = match self.forms {
             CaseForms::Omitted(reason) => Err(reason),
             CaseForms::Reported(forms) => {
-                let mut joint = vars.clone();
+                let mut joint = plan.vars.clone();
                 let form_at = joint.len();
                 joint.extend([forms.lower, forms.upper, forms.mixed].map(|n| (Count::of(n), n)));
-                let mut joint_sums = sums;
+                let mut joint_sums = plan.sums.clone();
                 joint_sums.push(Sum {
-                    total: tagged_at,
+                    total: at.tagged,
                     cells: (form_at..form_at + 3).collect(),
                 });
-                let printed: Vec<usize> = (0..form_at).collect();
+                let fixed: Vec<usize> = (0..form_at).collect();
                 let only_forms: Vec<usize> = (form_at..form_at + 3).collect();
-                if suppress(&mut joint, &joint_sums, &printed, Some(&only_forms)) {
+                if suppress(
+                    &mut joint,
+                    &joint_sums,
+                    &plan.ties,
+                    &fixed,
+                    Some(&only_forms),
+                ) {
                     Ok([joint[form_at].0, joint[form_at + 1].0, joint[form_at + 2].0])
                 } else {
                     Err(SUPPRESSION_OMISSION)
                 }
             }
         };
-        let parents = Count::total(self.sibling_parents, &sibling_counts);
-        let quads = Count::of(self.quads);
-        let reifiers = Count::of(self.reifiers);
-        let annotations = Count::of(self.annotations);
-        let named_graphs = Count::of(self.named_graphs);
+        let (quads, reifiers) = (printed(at.quads), printed(at.reifiers));
+        let (annotations, named_graphs) = (printed(at.annotations), printed(at.graphs));
+        let literals = printed(at.literals);
+        let parents = printed(at.parents);
+        let other = printed(at.other);
+        let tagged = printed(at.tagged);
 
         let mut out = String::new();
         put(
@@ -786,14 +1004,14 @@ impl Figures {
             format_args!(
                 "{{\"schema_version\":{SCHEMA_VERSION},\"small_count_threshold\":{SMALL_COUNT_THRESHOLD},\"counts\":{{\"quads\":{},\"distinct_iris\":{},\"distinct_literals\":{},\"blank_nodes\":{},\"named_graphs\":{},\"triple_terms\":{},\"reifiers\":{},\"annotations\":{}}},\"max_triple_term_depth\":{},",
                 quads.text(),
-                Count::of(self.iris).text(),
+                printed(at.iris).text(),
                 literals.text(),
-                Count::of(self.blank_nodes).text(),
+                printed(at.blanks).text(),
                 named_graphs.text(),
-                Count::of(self.triple_terms).text(),
+                printed(at.triples).text(),
                 reifiers.text(),
                 annotations.text(),
-                self.max_triple_depth,
+                maximum_text(omit.maxima(), printed(at.depth)),
             ),
         );
         put(
@@ -801,26 +1019,49 @@ impl Figures {
             format_args!(
                 "\"blank_siblings\":{{\"parents\":{},\"max_largest_like_group\":{},\"largest_like_group_histogram\":",
                 parents.text(),
-                self.sibling_largest.largest,
+                maximum_text(omit.maxima(), printed(at.group)),
             ),
         );
-        render_cells(&sibling_cells, &mut out);
+        if omit.siblings() {
+            put(
+                &mut out,
+                format_args!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}"),
+            );
+        } else {
+            render_cells(&sibling_cells, &mut out);
+        }
         out.push_str("},\"literal_length_bytes_histogram\":");
-        render_cells(&length_cells, &mut out);
-        out.push_str(",\"datatypes\":{\"named_xsd\":{");
-        for (index, (name, count)) in named.iter().enumerate() {
-            if index != 0 {
-                out.push(',');
+        if omit.lengths() {
+            put(
+                &mut out,
+                format_args!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}"),
+            );
+        } else {
+            render_cells(&length_cells, &mut out);
+        }
+        out.push_str(",\"datatypes\":{\"named_xsd\":");
+        if omit.datatypes() {
+            put(
+                &mut out,
+                format_args!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}"),
+            );
+        } else {
+            out.push('{');
+            for (index, (name, count)) in named.iter().enumerate() {
+                if index != 0 {
+                    out.push(',');
+                }
+                put(&mut out, format_args!("\"{name}\":{}", count.text()));
             }
-            put(&mut out, format_args!("\"{name}\":{}", count.text()));
+            out.push('}');
         }
         put(
             &mut out,
             format_args!(
-                "}},\"other\":{}}},\"language_tags\":{{\"tagged_literals\":{},\"distinct_tags\":{},\"case_forms\":",
+                ",\"other\":{}}},\"language_tags\":{{\"tagged_literals\":{},\"distinct_tags\":{},\"case_forms\":",
                 other.text(),
                 tagged.text(),
-                Count::of(self.distinct_tags).text(),
+                printed(at.tags).text(),
             ),
         );
         match case_cells {

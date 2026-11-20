@@ -555,116 +555,212 @@ fn exact(document: &purrdf_lex::json::Value, path: &[&str]) -> Option<u64> {
 }
 
 /// The interval a printed count allows: exact, `"<5"`, `"withheld"` or `">=N"`.
-fn interval(value: &purrdf_lex::json::Value) -> (u64, u64) {
+fn interval(value: &purrdf_lex::json::Value) -> Option<(i128, i128)> {
+    const OPEN: i128 = i128::MAX / 4;
     if let Some(n) = value.as_u64() {
-        return (n, n);
+        return Some((i128::from(n), i128::from(n)));
     }
-    match value.as_str().expect("a count or a suppressed form") {
+    Some(match value.as_str()? {
         "<5" => (1, 4),
-        "withheld" => (5, u64::MAX),
-        other => (
-            other
-                .strip_prefix(">=")
-                .expect("a lower bound")
-                .parse()
-                .expect("its number"),
-            u64::MAX,
-        ),
-    }
-}
-
-/// A printed count that may be absent from the document.
-fn maybe_interval(value: &purrdf_lex::json::Value) -> Option<(u64, u64)> {
-    (value.as_u64().is_some() || value.as_str().is_some()).then(|| interval(value))
-}
-
-/// What a reader who knows every printed form learns about each cell of the distinct
-/// literals: the cells of the length breakdown, the datatype breakdown and, when the document
-/// reports them, the case forms of the tagged literals, with the totals, tightened by the sum
-/// equations until nothing changes. Returns each cell's interval beside its printed one.
-fn learned(document: &purrdf_lex::json::Value) -> Vec<((u64, u64), (u64, u64))> {
-    let mut cells: Vec<(u64, u64)> = document["literal_length_bytes_histogram"]
-        .as_array()
-        .expect("bins")
-        .iter()
-        .map(|bin| interval(&bin["count"]))
-        .collect();
-    let lengths = cells.len();
-    for name in ["integer", "string"] {
-        cells.extend(maybe_interval(&document["datatypes"]["named_xsd"][name]));
-    }
-    cells.push(interval(&document["datatypes"]["other"]));
-    let tagged = cells.len();
-    cells.push(interval(&document["language_tags"]["tagged_literals"]));
-    let forms = &document["language_tags"]["case_forms"];
-    let form_at = cells.len();
-    if forms["status"].as_str() == Some("reported") {
-        for key in ["lower", "upper", "mixed"] {
-            cells.push(interval(&forms[key]));
-        }
-    }
-    let printed = cells.clone();
-    let mut total = interval(&document["counts"]["distinct_literals"]);
-    // Each equation: the total is the sum of the cells in the range; `None` is the literals.
-    let mut equations: Vec<(Option<usize>, std::ops::Range<usize>)> =
-        vec![(None, 0..lengths), (None, lengths..form_at)];
-    if cells.len() > form_at {
-        equations.push((Some(tagged), form_at..cells.len()));
-    }
-    for _ in 0..32 {
-        for (owner, part) in &equations {
-            let low: u64 = cells[part.clone()].iter().map(|c| c.0).sum();
-            let high = cells[part.clone()]
-                .iter()
-                .fold(0_u64, |acc, c| acc.saturating_add(c.1));
-            let mut whole = owner.map_or(total, |index| cells[index]);
-            whole.0 = whole.0.max(low);
-            if high != u64::MAX {
-                whole.1 = whole.1.min(high);
-            }
-            for index in part.clone() {
-                let others_low = low - cells[index].0;
-                let others_high = cells[part.clone()]
-                    .iter()
-                    .enumerate()
-                    .filter(|(i, _)| part.start + i != index)
-                    .fold(0_u64, |acc, (_, c)| acc.saturating_add(c.1));
-                if others_high != u64::MAX {
-                    cells[index].0 = cells[index].0.max(whole.0.saturating_sub(others_high));
-                }
-                if whole.1 != u64::MAX {
-                    cells[index].1 = cells[index].1.min(whole.1.saturating_sub(others_low));
-                }
-            }
-            match owner {
-                None => total = whole,
-                Some(index) => cells[*index] = whole,
-            }
-        }
-    }
-    cells.into_iter().zip(printed).collect()
-}
-
-/// Whether every hidden cell of the document is still confined to exactly its printed form:
-/// a `"<5"` cell to one through four and a withheld or lower-bounded cell with no upper
-/// bound. A document that fails this lets a reader recover a small count.
-fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
-    learned(document).into_iter().all(|(learned, printed)| {
-        if printed.0 == printed.1 {
-            true
-        } else if printed.1 == 4 {
-            learned == printed
-        } else {
-            learned.1 == u64::MAX
-        }
+        "withheld" => (5, OPEN),
+        other => (other.strip_prefix(">=")?.parse().ok()?, OPEN),
     })
 }
 
+/// A tie between printed counts: the sum of `lesser` plus `constant` is at most the sum of
+/// `greater`, each a list of `(coefficient, variable)`.
+type Tie = (Vec<(i128, usize)>, i128, Vec<(i128, usize)>);
+
+/// What a reader who knows the structure of an RDF 1.2 dataset learns from a document: every
+/// printed count as an interval, tightened by the sums that tie a total to its breakdowns and by
+/// the facts that bound one count by others, until nothing changes. A count is recoverable
+/// when it is hidden and fewer values remain possible for it than its printed form leaves: three
+/// for `"<5"`, two for a withheld or lower-bounded count. The facts are those of the verb's
+/// documentation: a literal is the object of a statement, an annotation or a triple term; a
+/// parent is a blank node with a statement of its own; a group of like children needs that
+/// many blank nodes besides its parent; a triple term nests as deep as it has terms; an
+/// identifier occupies at most the positions that name it.
+fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
+    const OPEN: i128 = i128::MAX / 4;
+    let mut names: Vec<String> = Vec::new();
+    let mut bounds: Vec<(i128, i128)> = Vec::new();
+    let mut add = |name: &str, value: &purrdf_lex::json::Value| -> Option<usize> {
+        let found = interval(value).or_else(|| value["status"].as_str().map(|_| (0, 0)))?;
+        names.push(name.to_owned());
+        bounds.push(found);
+        Some(bounds.len() - 1)
+    };
+    let counts = &document["counts"];
+    let quads = add("quads", &counts["quads"]).expect("quads");
+    let iris = add("iris", &counts["distinct_iris"]).expect("iris");
+    let literals = add("literals", &counts["distinct_literals"]).expect("literals");
+    let blanks = add("blanks", &counts["blank_nodes"]).expect("blanks");
+    let graphs = add("graphs", &counts["named_graphs"]).expect("graphs");
+    let triples = add("triples", &counts["triple_terms"]).expect("triples");
+    let reifiers = add("reifiers", &counts["reifiers"]).expect("reifiers");
+    let annotations = add("annotations", &counts["annotations"]).expect("annotations");
+    let depth = add("depth", &document["max_triple_term_depth"]).expect("depth");
+    let siblings = &document["blank_siblings"];
+    let parents = add("parents", &siblings["parents"]).expect("parents");
+    let group = add("group", &siblings["max_largest_like_group"]).expect("group");
+    let tags_doc = &document["language_tags"];
+    let tags = add("tags", &tags_doc["distinct_tags"]).expect("tags");
+    let tagged = add("tagged", &tags_doc["tagged_literals"]).expect("tagged");
+    let datatypes = &document["datatypes"];
+    let other = add("other", &datatypes["other"]).expect("other");
+    let mut sums: Vec<(usize, Vec<usize>)> = Vec::new();
+    let mut by_length = Vec::new();
+    for bin in document["literal_length_bytes_histogram"]
+        .as_array()
+        .map_or(&[][..], |bins| &bins[..])
+    {
+        by_length.push(add("length", &bin["count"]).expect("bin"));
+    }
+    if !by_length.is_empty() {
+        sums.push((literals, by_length));
+    }
+    let mut by_datatype = vec![other, tagged];
+    for name in ["integer", "string"] {
+        if let Some(index) = add(name, &datatypes["named_xsd"][name]) {
+            by_datatype.push(index);
+        }
+    }
+    if datatypes["named_xsd"].as_object().is_some()
+        && datatypes["named_xsd"]["status"].as_str().is_none()
+    {
+        sums.push((literals, by_datatype));
+    }
+    let mut by_group = Vec::new();
+    for bin in siblings["largest_like_group_histogram"]
+        .as_array()
+        .map_or(&[][..], |bins| &bins[..])
+    {
+        by_group.push(add("group bin", &bin["count"]).expect("bin"));
+    }
+    if !by_group.is_empty() {
+        sums.push((parents, by_group));
+    }
+    let forms = &tags_doc["case_forms"];
+    if forms["status"].as_str() == Some("reported") {
+        let by_form: Vec<usize> = ["lower", "upper", "mixed"]
+            .iter()
+            .map(|key| add(key, &forms[*key]).expect("form"))
+            .collect();
+        sums.push((tagged, by_form));
+    }
+    let mut ties: Vec<Tie> = Vec::new();
+    let one = |v: usize| (1_i128, v);
+    ties.push((
+        vec![one(literals)],
+        0,
+        vec![one(quads), one(annotations), one(triples)],
+    ));
+    ties.push((vec![one(tagged)], 0, vec![one(literals)]));
+    ties.push((vec![one(tags)], 0, vec![one(tagged)]));
+    ties.push((vec![one(parents)], 0, vec![one(blanks)]));
+    ties.push((vec![one(parents)], 0, vec![one(quads)]));
+    ties.push((vec![one(depth)], 0, vec![one(triples)]));
+    ties.push((
+        vec![one(blanks)],
+        0,
+        vec![
+            (3, quads),
+            (2, annotations),
+            (3, triples),
+            one(reifiers),
+            one(graphs),
+        ],
+    ));
+    ties.push((
+        vec![one(iris)],
+        0,
+        vec![
+            (4, quads),
+            (3, annotations),
+            (3, triples),
+            (2, reifiers),
+            one(graphs),
+        ],
+    ));
+    if bounds[group].0 > 0 {
+        ties.push((vec![one(group)], 1, vec![one(blanks)]));
+        ties.push((vec![one(group)], 0, vec![one(quads)]));
+    }
+    for (total, cells) in &sums {
+        let cells: Vec<(i128, usize)> = cells.iter().map(|c| (1, *c)).collect();
+        ties.push((cells.clone(), 0, vec![(1, *total)]));
+        ties.push((vec![(1, *total)], 0, cells));
+    }
+    let printed = bounds.clone();
+    for _ in 0..200 {
+        let mut changed = false;
+        for (lesser, constant, greater) in &ties {
+            // sum(lesser) - sum(greater) <= -constant
+            let terms: Vec<(i128, usize)> = lesser
+                .iter()
+                .copied()
+                .chain(greater.iter().map(|(c, v)| (-c, *v)))
+                .collect();
+            for (k, (coefficient, variable)) in terms.iter().enumerate() {
+                let mut rest = 0_i128;
+                let mut open = false;
+                for (j, (a, v)) in terms.iter().enumerate() {
+                    if j == k {
+                        continue;
+                    }
+                    if *a > 0 {
+                        rest += a * bounds[*v].0;
+                    } else if bounds[*v].1 >= OPEN {
+                        open = true;
+                    } else {
+                        rest += a * bounds[*v].1;
+                    }
+                }
+                if open {
+                    continue;
+                }
+                let room = -constant - rest;
+                if *coefficient > 0 {
+                    let high = room.div_euclid(*coefficient);
+                    if high < bounds[*variable].1 {
+                        bounds[*variable].1 = high;
+                        changed = true;
+                    }
+                } else {
+                    let low = -room.div_euclid(-*coefficient);
+                    if low > bounds[*variable].0 {
+                        bounds[*variable].0 = low;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    printed
+        .iter()
+        .zip(&bounds)
+        .zip(&names)
+        .all(|((print, learned), name)| {
+            let values = learned.1 - learned.0 + 1;
+            let ok = if print.0 == print.1 {
+                true
+            } else if print.1 == 4 {
+                learned.1 == 4 && values >= 3
+            } else {
+                values >= 2
+            };
+            assert!(ok || values > 0, "{name}: inconsistent");
+            ok
+        })
+}
+
 /// Protects: small-count suppression cannot be undone by subtraction, even through two
-/// breakdowns of one total. Each fixture has one hidden length cell; a reader who combines
-/// the length breakdown, the datatype breakdown and the total learns nothing about any
-/// hidden cell beyond its printed form. The neighbour, with every cell at or above the
-/// threshold, prints all of them and the cells add up.
+/// breakdowns of one total. Each fixture hides a count; a reader who combines every printed
+/// count and every structural tie between them cannot narrow a hidden one. The neighbour, with
+/// every count at or above the threshold, prints all of them and they add up.
 #[test]
 fn hidden_cells_are_not_recoverable_from_two_breakdowns_of_one_total() {
     let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
@@ -687,23 +783,13 @@ fn hidden_cells_are_not_recoverable_from_two_breakdowns_of_one_total() {
     for input in [&first, &second] {
         let out = shape(&["--no-labelling", input]);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
-        let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
-        let mut hidden = 0;
-        for (learned, printed) in learned(&document) {
-            if printed.1 != 5 - 1 && printed.1 != u64::MAX {
-                continue; // exact
-            }
-            hidden += 1;
-            if printed.1 == 4 {
-                // A "<5" cell still ranges over one to four.
-                assert_eq!(learned, printed, "{}", stdout(&out));
-            } else {
-                // A withheld or lower-bounded cell still has no upper bound.
-                assert_eq!(learned.1, u64::MAX, "{}", stdout(&out));
-            }
-        }
-        assert!(hidden >= 1, "the fixture hides a cell: {}", stdout(&out));
-        assert!(document["counts"]["distinct_literals"].as_u64().is_none());
+        let printed = stdout(&out);
+        let document = purrdf_lex::json::read(&printed).expect("one JSON document");
+        assert!(nothing_recoverable(&document), "{printed}");
+        assert!(
+            printed.contains("\"<5\"") || printed.contains("withheld"),
+            "the fixture hides a count: {printed}"
+        );
     }
 
     let all_exact = write_file(
@@ -718,6 +804,7 @@ fn hidden_cells_are_not_recoverable_from_two_breakdowns_of_one_total() {
     let out = shape(&["--no-labelling", &all_exact]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
+    assert!(nothing_recoverable(&document));
     let bins = document["literal_length_bytes_histogram"]
         .as_array()
         .expect("bins");
@@ -737,6 +824,99 @@ fn hidden_cells_are_not_recoverable_from_two_breakdowns_of_one_total() {
         exact(&document, &["datatypes", "named_xsd", "integer"]),
         Some(5)
     );
+}
+
+/// Protects: a small dataset of integers prints every figure group or a typed omission of the
+/// group, and never refuses the document or lets the statement count bound a hidden literal
+/// count. The refused or pinned shapes are `1 10 11 12 13`, `1 2 10 11 12`, `10..13 1000..1003`
+/// and `1 10..14` (six statements, so six literals); each is beside a dataset whose counts are
+/// all at or above the threshold and print exactly.
+#[test]
+fn small_integer_datasets_print_without_pinning_or_refusing() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let shapes: [(&str, &[&str]); 4] = [
+        ("j", &["1", "10", "11", "12", "13"]),
+        ("k", &["1", "2", "10", "11", "12"]),
+        (
+            "m",
+            &["10", "11", "12", "13", "1000", "1001", "1002", "1003"],
+        ),
+        ("l", &["1", "10", "11", "12", "13", "14"]),
+    ];
+    for (name, integers) in shapes {
+        let input = write_file(
+            dir.path(),
+            &format!("{name}.nq"),
+            &literal_fixture(&[], integers, false),
+        );
+        let out = shape(&["--no-labelling", &input]);
+        assert_eq!(code(&out), 0, "{name}: {}", stderr(&out));
+        let printed = stdout(&out);
+        let document = purrdf_lex::json::read(&printed).expect("one JSON document");
+        assert!(nothing_recoverable(&document), "{name}: {printed}");
+    }
+    let exact_neighbour = write_file(
+        dir.path(),
+        "neighbour.nq",
+        &literal_fixture(
+            &[],
+            &["1", "2", "3", "4", "5", "10", "11", "12", "13", "14"],
+            false,
+        ),
+    );
+    let out = shape(&["--no-labelling", &exact_neighbour]);
+    assert_eq!(code(&out), 0, "{}", stderr(&out));
+    let document = purrdf_lex::json::read(&stdout(&out)).expect("one JSON document");
+    assert!(nothing_recoverable(&document));
+    assert_eq!(exact(&document, &["counts", "quads"]), Some(10));
+    assert_eq!(exact(&document, &["counts", "distinct_literals"]), Some(10));
+    assert_eq!(
+        exact(&document, &["datatypes", "named_xsd", "integer"]),
+        Some(10)
+    );
+}
+
+/// Protects: the parent count and the largest like group do not pin the blank-node count. One
+/// parent with three like children needs four blank nodes, so a hidden blank-node count and an
+/// exact group size would give it exactly; the neighbour has every count at or above the
+/// threshold and prints them exactly.
+#[test]
+fn a_like_group_does_not_pin_the_blank_node_count() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let mut small = String::new();
+    for child in 0..3 {
+        push(
+            &mut small,
+            &format!(
+                "_:parent <http://example.org/has> _:child{child} .\n_:child{child} <http://example.org/v> \"same\" .\n"
+            ),
+        );
+    }
+    let small = write_file(dir.path(), "small.nq", &small);
+    let mut large = String::new();
+    for parent in 0..5 {
+        for child in 0..5 {
+            push(
+                &mut large,
+                &format!(
+                    "_:parent{parent} <http://example.org/has> _:child{parent}x{child} .\n_:child{parent}x{child} <http://example.org/v> \"same\" .\n"
+                ),
+            );
+        }
+    }
+    let large = write_file(dir.path(), "large.nq", &large);
+    for (input, exact_counts) in [(&small, false), (&large, true)] {
+        let out = shape(&["--no-labelling", input]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let printed = stdout(&out);
+        let document = purrdf_lex::json::read(&printed).expect("one JSON document");
+        assert!(nothing_recoverable(&document), "{printed}");
+        assert_eq!(
+            exact(&document, &["counts", "blank_nodes"]).is_some(),
+            exact_counts,
+            "{printed}"
+        );
+    }
 }
 
 /// Protects: the four XSD datatypes RDF treats as compatible but `purrdf_xsd` does not model
@@ -855,7 +1035,7 @@ fn case_forms_never_expose_a_small_count() {
     let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
     let words = [
         "v0", "v1", "v2", "v3", "v4", "v5", "v6", "v7", "v8", "v9", "v10", "v11", "v12", "v13",
-        "v14", "v15",
+        "v14", "v15", "v16",
     ];
     let tagged = |tags: &[&'static str]| -> Vec<(&'static str, &'static str)> {
         tags.iter()
@@ -877,8 +1057,8 @@ fn case_forms_never_expose_a_small_count() {
             gts_with_literals(
                 &[],
                 &tagged(&[
-                    "en", "en", "en", "en", "en", "en", "EN", "EN", "EN", "EN", "EN", "En", "En",
-                    "En", "En", "En",
+                    "en", "en", "en", "en", "en", "en", "EN", "EN", "EN", "EN", "EN", "EN", "En",
+                    "En", "En", "En", "En",
                 ]),
             ),
             "reported",
@@ -917,6 +1097,18 @@ fn case_forms_never_expose_a_small_count() {
                     "{name}: {printed}"
                 );
                 assert!(forms["lower"].as_u64().is_some(), "{name}: {printed}");
+                if name == "a-neighbour" {
+                    // Different upper and mixed counts, so each cell renders in its own slot.
+                    assert_eq!(
+                        (
+                            forms["lower"].as_u64(),
+                            forms["upper"].as_u64(),
+                            forms["mixed"].as_u64()
+                        ),
+                        (Some(6), Some(6), Some(5)),
+                        "{printed}"
+                    );
+                }
             }
             "omitted" => assert!(printed.contains(exposed), "{name}: {printed}"),
             _ => assert!(
@@ -994,7 +1186,7 @@ fn case_forms_count_distinct_literals_across_segments_and_case_variants() {
 }
 
 /// Protects: reporting the case forms changes no other figure. A GTS file with upper-case and
-/// mixed-case tags, whose small form cells make the forms an omission for suppression, gives
+/// mixed-case tags, whose small form cells print as `"<5"` beside a withheld lower cell, gives
 /// the document of its text twin in every figure but `case_forms`.
 #[test]
 fn upper_and_mixed_case_gts_matches_its_text_twin_but_for_case_forms() {
@@ -1022,10 +1214,10 @@ fn upper_and_mixed_case_gts_matches_its_text_twin_but_for_case_forms() {
     let from_gts = shape(&["--no-labelling", &gts]);
     assert_eq!(code(&from_gts), 0, "{}", stderr(&from_gts));
     assert_same_but_case_forms(&stdout(&from_gts), &stdout(&from_text), Reader::Gts);
-    // The small upper and mixed cells cannot be printed beside the exact tagged-literal count,
-    // so the forms are omitted for suppression and no other figure moves.
-    assert_eq!(
-        case_forms(&stdout(&from_gts)),
-        "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"small-counts-would-be-exposed\"}"
-    );
+    // The small upper and mixed cells keep their range beside the exact tagged-literal count
+    // because the lower cell is withheld, so the forms print and no other figure moves.
+    let forms = case_forms(&stdout(&from_gts)).to_owned();
+    assert!(forms.contains("\"lower\":\"withheld\""), "{forms}");
+    assert!(forms.contains("\"upper\":\"<5\""), "{forms}");
+    assert!(forms.contains("\"mixed\":\"<5\""), "{forms}");
 }

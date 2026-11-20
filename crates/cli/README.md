@@ -1341,8 +1341,9 @@ message is printed on either stream. Each failure is a fixed sentence that names
 class and quotes neither the input's text nor its name: a format that cannot be
 inferred (exit `2`), an input that cannot be opened (`1`), a pack read without its
 canonical control or with canonical flags on another input (`2`), a pack under a
-transport wrapper (`2`), a source that is not well formed (`1`), and a canonical
-labelling that failed for a reason other than a refusal (`1`). Nothing is written but
+transport wrapper (`2`), a source that is not well formed (`1`), a canonical
+labelling that failed for a reason other than a refusal (`1`), and, only if leaving out every
+figure group still pins a hidden count, a refusal to print (`1`). Nothing is written but
 stdout, except that a pack input writes the canonicalization receipt (counters only) to the
 destination the caller names; `--loss-ledger`, `--jsonld-options` and, for a GTS or pack
 input, `--base` are refused.
@@ -1402,21 +1403,44 @@ figure shared by five or more items cannot be traced to one of them. A zero name
 item. A maximum or a depth is the extreme of a distribution and not a count of items,
 so it prints exactly.
 
-Printed figures must not let a reader narrow a hidden cell. Each printed form is an
+Printed figures must not let a reader narrow a hidden count. Each printed form is an
 interval: an exact count is a point, `"<5"` is one to four, `"withheld"` is five or more, and
-`">=N"` is `N` or more. The distinct literals are partitioned by length and by datatype (with
-the language-tagged literals one datatype cell, partitioned in turn by case form), and every
-total equals the sum of each of its partitions, so two partitions bound each other. The verb
-derives, by bound propagation over those equations, the interval each hidden cell is confined
-to by everything printed, and hides further cells (as `"withheld"`, smallest non-zero cell
-first) until each hidden cell's interval is exactly its own printed form: a `"<5"` cell still
-ranges over one to four, and a withheld or lower-bounded cell has no upper bound. A total
-prints exactly only when every cell of every partition of it is exact; otherwise it prints as
-`">=N"` with `N` the sum of its exact cells. The same holds for `parents` against its
-histogram. The labelling's `lines` is the sum of the quads, reifier and annotation
-statements and named graphs, so the labelling figure is omitted with the reason
-`derived-count-suppressed` unless each of those prints exactly, and with `below-threshold`
-when it has fewer than five lines.
+`">=N"` is `N` or more. Counts are tied to one another, and a reader who knows the ties can
+combine the figures. The ties are equalities: the distinct literals are the sum of the length
+bins and also the sum of the datatype cells (the language-tagged literals being one datatype
+cell, partitioned in turn by case form), and the parents are the sum of the sibling
+histogram. They are also inequalities that hold for an RDF 1.2 dataset:
+
+- a literal is the object of a statement, an annotation or a triple term, so the distinct
+  literals are at most the quads, annotations and triple terms together;
+- the tagged literals are literals, and a tag is used by a tagged literal;
+- a parent is a blank node with a statement of its own, so the parents are at most the blank
+  nodes and at most the quads;
+- a group of like children needs that many blank nodes besides its parent and a statement to
+  each, so the largest like group plus one is at most the blank nodes and the group is at most
+  the quads;
+- a triple term nests as deep as its depth, so the maximum depth is at most the triple terms;
+- blank nodes and IRIs occupy at most the positions that name them: three blank positions
+  per quad, two per annotation, three per triple term, one per reifier and one per named
+  graph, and four IRI positions per quad, three per annotation, three per triple term, two per
+  reifier and one per named graph.
+
+The verb puts every figure and every tie into one system, derives by bound propagation the
+interval each hidden count is confined to by everything printed, and hides further counts (as
+`"withheld"`, or `"<5"` for a maximum under five), smallest first and nearest the pinned count
+first, until nothing is pinned. A hidden `"<5"` count is pinned when its upper bound falls
+below four or fewer than three values remain, and a withheld or lower-bounded count when fewer
+than two remain. A total prints exactly only when every cell of every breakdown of it is exact;
+otherwise it prints as `">=N"` with `N` the sum of its exact cells. So a statement count that
+would give the literal count exactly is itself withheld.
+
+When no hiding leaves nothing pinned, a figure group is left out, in this order, until it does:
+the two maxima, the length histogram, the sibling histogram and the datatype breakdown. Each
+left-out group prints `{"status":"omitted","reason":"small-counts-would-be-exposed"}` in place
+of its figures, and the document is always printed. The labelling's `lines` is the sum of the
+quads, reifier and annotation statements and named graphs, so the labelling figure is omitted
+with the reason `derived-count-suppressed` unless each of those prints exactly, and with
+`below-threshold` when it has fewer than five lines.
 
 The figures belong to the dataset and not to the syntax it arrived in. Equality across
 syntaxes holds for every figure except `case_forms`, which is a figure for a GTS read and a
