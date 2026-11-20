@@ -1678,3 +1678,102 @@ fn compose_refuses_certificates_of_different_canonicalizations() {
     assert_eq!(chained.certificate.post_refold_digest, "z");
     assert!(compose_versioned(&same, &first).unwrap().is_none());
 }
+
+/// `bytes` with the algorithm of the COSE_Sign1 selected by `pick` rewritten
+/// in place from EdDSA (-8, `0x27`) to COSE algorithm -9 (`0x28`), one byte
+/// that keeps every length, offset and frame id unchanged. This engine
+/// implements no algorithm -9, so the signature is one it cannot check.
+fn with_an_unsupported_signing_algorithm(
+    bytes: &[u8],
+    pick: impl Fn(&purrdf_gts::model::Signature) -> bool,
+) -> Vec<u8> {
+    let graph = read(bytes, true, None);
+    let cose = graph
+        .signatures
+        .iter()
+        .find(|signature| pick(signature))
+        .and_then(|signature| signature.cose.clone())
+        .expect("the source carries the signature to rewrite");
+    let at = bytes
+        .windows(cose.len())
+        .position(|window| window == cose.as_slice())
+        .expect("the COSE_Sign1 bytes sit verbatim in the file");
+    let alg = cose
+        .windows(3)
+        .position(|window| window == [0xa1, 0x01, 0x27])
+        .expect("the protected header names EdDSA");
+    let mut out = bytes.to_vec();
+    out[at + alg + 2] = 0x28;
+    out
+}
+
+/// A carried authorship signature made with an algorithm this engine does not
+/// implement is unverified, and `verify_compaction` refuses it in
+/// `signatures_verify`; the same frame signed with the supported algorithm is
+/// accepted by the same check under the same key.
+#[test]
+fn an_unsupported_authorship_algorithm_is_refused_and_the_supported_one_accepted() {
+    let source = source_with_content(1, "author", 5, None);
+    let ring = keyring(&[("author", 1)]);
+    let control =
+        || purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+
+    let accepted = verify_compaction(&source, &source, &ring, &mut control())
+        .expect("verify_compaction succeeds");
+    assert!(
+        accepted.signatures_verify,
+        "a supported-algorithm signature under the right key is accepted: {accepted:?}"
+    );
+
+    let unsupported =
+        with_an_unsupported_signing_algorithm(&source, |signature| !signature.packaging);
+    let refused = verify_compaction(&source, &unsupported, &ring, &mut control())
+        .expect("verify_compaction succeeds");
+    assert!(
+        refused.seam_chain_ok,
+        "the rewrite keeps the hash chain intact, so the refusal is the signature's: {refused:?}"
+    );
+    assert!(
+        !refused.signatures_verify,
+        "a signature this engine cannot check is not a verified signature: {refused:?}"
+    );
+}
+
+/// The packaging signature on the final index frame, made with an algorithm
+/// this engine does not implement, is refused by `packaging_sig_ok`; the
+/// untouched pack, same key and same frame, is accepted.
+#[test]
+fn an_unsupported_packaging_algorithm_is_refused_and_the_supported_one_accepted() {
+    let source = source_with_content(1, "author", 5, None);
+    let (pack, _cert) = compact_and_certify(
+        &source,
+        DictPlan::undicted(),
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
+    )
+    .expect("compact_and_certify succeeds");
+    let ring = keyring(&[("author", 1), ("pack", 7)]);
+    let control =
+        || purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+
+    let accepted = verify_compaction(&source, &pack, &ring, &mut control())
+        .expect("verify_compaction succeeds");
+    assert!(
+        accepted.packaging_sig_ok,
+        "the supported-algorithm packaging signature is accepted: {accepted:?}"
+    );
+
+    let unsupported = with_an_unsupported_signing_algorithm(&pack, |signature| signature.packaging);
+    let refused = verify_compaction(&source, &unsupported, &ring, &mut control())
+        .expect("verify_compaction succeeds");
+    assert!(
+        refused.seam_chain_ok,
+        "the rewrite keeps the hash chain intact, so the refusal is the signature's: {refused:?}"
+    );
+    assert!(
+        !refused.packaging_sig_ok,
+        "a packaging signature this engine cannot check is refused: {refused:?}"
+    );
+}
