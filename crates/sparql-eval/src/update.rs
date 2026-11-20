@@ -254,8 +254,10 @@ fn charge_host_fetch(governors: Option<&Arc<GovernorState>>) -> Result<(), Updat
 /// The fuel charge point and the `RemoteRequests` unit of one host fetch.
 ///
 /// A resolver that follows redirects admits each further hop through this same pair
-/// ([`GraphResolver::resolve_admitted`]), so `max_remote_requests` bounds host fetches,
-/// not `LOAD` operations.
+/// ([`GraphResolver::resolve_admitted`]), so for a resolver that admits through it, as
+/// `HttpGraphResolver` does, `max_remote_requests` bounds host fetches, not `LOAD`
+/// operations. A resolver that overrides only [`GraphResolver::resolve`] is charged once
+/// per `LOAD`.
 fn admit_host_fetch(state: &GovernorState) -> Result<(), TrippedGovernor> {
     state
         .charge_point_if_engaged(ChargePoint::RemoteRequestIssued)
@@ -318,7 +320,8 @@ pub enum LoadError {
     HostDenied(String),
     /// The host's source answered with something that is not an answer to the request.
     Fault(String),
-    /// This request's stop signal fired while the host held the request.
+    /// This request's stop signal fired while the host held the request, or a hop after
+    /// the first was refused by the request's `RemoteRequests` ceiling.
     Governed(TrippedGovernor),
     /// A physical storage refusal while the resolver prepared a fetch, such as the
     /// request headers. It is not an HTTP or transport failure, and `LOAD SILENT` does not
@@ -381,7 +384,14 @@ impl core::fmt::Display for LoadError {
     }
 }
 
-impl std::error::Error for LoadError {}
+impl std::error::Error for LoadError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
+}
 
 /// One governed request handed to a SPARQL `LOAD` host resolver.
 #[derive(Clone, Copy)]
@@ -391,7 +401,7 @@ pub struct GraphResolveRequest<'a> {
     /// The executing request's latching stop signal, when one was supplied.
     ///
     /// A resolver that can abandon an in-flight fetch should poll it while waiting. The
-    /// evaluator also polls immediately after [`GraphResolver::resolve`] returns, so a
+    /// evaluator also polls immediately after [`GraphResolver::resolve_admitted`] returns, so a
     /// resolver that cannot abandon still cannot publish work completed after a stop.
     pub stop: Option<&'a dyn StopSignal>,
 }
@@ -417,8 +427,9 @@ impl core::fmt::Debug for GraphResolveRequest<'_> {
 /// fault. SPARQL 1.1 Update §3.1.4 has `LOAD SILENT` "still return success" when the
 /// operation fails, so under `SILENT` every one of them — and the absence of a resolver
 /// — is a success with nothing loaded, recorded on the request's evidence as a
-/// [`purrdf_core::SilencedInvocation`]. Only this request's own stop signal
-/// ([`LoadError::Governed`]) is not.
+/// [`purrdf_core::SilencedInvocation`]. Two failures are not silenced: this request's own
+/// stop signal or ceiling ([`LoadError::Governed`]) and a physical storage refusal
+/// ([`LoadError::Storage`]).
 pub trait GraphResolver {
     /// Resolve `request.iri` to a frozen dataset.
     ///
@@ -435,7 +446,9 @@ pub trait GraphResolver {
     /// [`FetchAdmission::admit`] before dispatching each one and returns the trip as
     /// [`LoadError::Governed`], so the request's `RemoteRequests` ceiling bounds host
     /// fetches. The default ignores `admission` and delegates to [`Self::resolve`], which
-    /// is right for a resolver that issues exactly one fetch.
+    /// is right for a resolver that issues exactly one fetch. A resolver that wraps another
+    /// forwards this method, not [`Self::resolve`], so the inner resolver's hops are
+    /// admitted.
     ///
     /// # Errors
     ///
@@ -2656,6 +2669,33 @@ mod tests {
         assert!(outcome.is_ok());
         assert_eq!(quads, 2, "the loaded quad beside the original");
         assert_eq!(silenced, Vec::<(String, &str)>::new());
+    }
+
+    /// A storage refusal is operational: `LOAD SILENT` fails the request with the
+    /// evaluation code, records nothing and leaves the store unchanged, and the error
+    /// keeps its native cause. Its neighbour, a transport failure, is absorbed.
+    #[test]
+    fn load_silent_does_not_absorb_a_storage_refusal() {
+        use purrdf_lex::allocation::StorageError;
+        let storage = FailingResolver(|| LoadError::Storage(StorageError::AllocationFailed));
+        let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&storage));
+        match outcome {
+            Err(UpdateAbort::Failed(diagnostic)) => {
+                assert_eq!(diagnostic.code, "native-sparql-evaluation");
+            }
+            other => panic!("expected the storage failure, got {other:?}"),
+        }
+        assert_eq!(quads, 1, "nothing loaded");
+        assert_eq!(silenced, Vec::<(String, &str)>::new());
+        let cause = std::error::Error::source(&LoadError::Storage(StorageError::AllocationFailed))
+            .and_then(|cause| cause.downcast_ref::<StorageError>());
+        assert_eq!(cause, Some(&StorageError::AllocationFailed));
+
+        let transport = FailingResolver(|| LoadError::Transport("unreachable".to_owned()));
+        let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&transport));
+        assert!(outcome.is_ok(), "SILENT absorbs a transport failure");
+        assert_eq!(quads, 1);
+        assert_eq!(silenced, [(format!("{EX}doc"), "transport")]);
     }
 
     #[test]

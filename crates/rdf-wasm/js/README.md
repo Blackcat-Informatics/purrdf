@@ -1077,8 +1077,8 @@ export default {
 ```
 
 Workers limits how many subrequests one invocation may make. `maxRemoteRequests` is the
-exact control for that limit. Every `SERVICE` request and every `LOAD` is charged against
-it before it reaches the handler, including one the cache then answers, so a request
+exact control for that limit. Every `SERVICE` request and every redirect hop of a `LOAD` (the
+first fetch included) is charged against it before it reaches the handler, including one the cache then answers, so a request
 never makes more subrequests than the ceiling. Set it to the subrequests you allow one
 query. A `SERVICE ?e` bound by a pattern earlier in its group is charged once per
 solution that reaches it, not once per endpoint (see

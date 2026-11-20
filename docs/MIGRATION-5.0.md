@@ -580,7 +580,8 @@ same base. A host must return each redirect to the resolver for every
 destination to pass catalog authorization: a redirect the host follows
 internally is never shown to the resolver. Each hop after the first is a host
 fetch charged against the `RemoteRequests` ceiling through
-`GraphResolver::resolve_admitted`, and the stop signal is polled after every
+the provided `GraphResolver::resolve_admitted` method and its `FetchAdmission`
+argument (a resolver that wraps another forwards it), and the stop signal is polled after every
 completed hop.
 
 The WebAssembly package keeps its JavaScript interface: the effects and the

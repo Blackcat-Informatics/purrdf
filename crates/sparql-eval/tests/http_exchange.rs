@@ -841,8 +841,8 @@ fn a_stop_fired_during_a_hop_prevents_the_next_redirect_hop() {
 
 /// A relative `Location` is resolved against the URL the host reports for the hop it
 /// already followed, and against the hop's IRI when it reports none. The catalog still
-/// authorizes the resulting target: only the host-reported base is granted here, so the
-/// hop's own base would be refused.
+/// authorizes the resulting target: a catalog that grants only the hop's own start IRI
+/// refuses the host-reported destination before it is fetched.
 #[test]
 fn a_relative_location_resolves_against_the_hosts_final_url() {
     let targets = Mutex::new(Vec::<String>::new());

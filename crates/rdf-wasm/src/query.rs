@@ -1789,7 +1789,8 @@ impl QueryEngine {
     /// statements for CONSTRUCT/DESCRIBE — including RDF 1.2 reifier and annotation
     /// statements — and nothing for ASK), `max_intermediate_cells` the largest intermediate
     /// bag in `rows * columns`, `max_scratch_bytes` the per-query scratch arena, and
-    /// `max_remote_requests` federated requests. Every ceiling is **inclusive**:
+    /// `max_remote_requests` host fetches (each `SERVICE` request and each redirect hop
+    /// of a `LOAD` counts one). Every ceiling is **inclusive**:
     /// consumption equal to it is admitted, and zero is a valid ceiling that trips on the
     /// first charged unit of work.
     ///

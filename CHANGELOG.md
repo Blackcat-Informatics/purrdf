@@ -21,7 +21,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   resolver for every destination to pass catalog authorization; a redirect the
   host follows itself is not seen. A relative `Location` resolves against the
   hop's final URL, falling back to its requested IRI. `GraphResolver` gains the
-  provided `resolve_admitted` method and `LoadError` the additive `Storage`
+  provided `resolve_admitted` method, taking the new `FetchAdmission` trait (a
+  wrapping resolver forwards it so the inner hops are admitted), and `LoadError` the additive `Storage`
   variant, a request-header allocation refusal that `LOAD SILENT` does not
   absorb. An opaque redirect is refused by
   `SERVICE` as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
