@@ -1,0 +1,30 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABo0EBUg": {
+    "resolution": "acknowledged",
+    "reason": "Walkthrough summary with no actionable comments; nothing to change.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T08:38:04Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "10aed5242d03ee9341a2d9ffd64fd1baf29fae7ce92870280000556f3952b364"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZP6mgA": {
+    "resolution": "addressed",
+    "reason": "The review read head 261c0aa43. At d795f8c8e the separate ids vector is gone: the position list is built directly from the touched members and the split's untouched count uses its length, so the extra allocation and copy per split no longer exist.",
+    "commit": "d795f8c8e09a7b4dcccf48916a5cb5b0b06db609",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T08:06:34Z",
+      "state": "COMMENTED",
+      "commit": "261c0aa432bfa2ec61f49fbedbcf0da2220dfb55",
+      "path": null,
+      "line": null,
+      "body_sha256": "99102f2664ad78b0d55a29e8c43a9fc10b00a5aa1185c433711c9706acfed5c6"
+    }
+  }
+}

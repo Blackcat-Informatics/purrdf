@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1394,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes",
+  "branch": "paudley/1394-canonical-labelling-requests-bytes",
+  "slug": "canonical-labelling-requests-bytes",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes/.stage/canonical-labelling-requests-bytes",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "3d74f50b40a9a23588f9ce525a94c31865382944",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes",
+    "branch:paudley/1394-canonical-labelling-requests-bytes",
+    "ignored:30313 files (30311 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1386-gts-file-s-content-digest-is-computed caches into /home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes plus 241 dependency units from 2 other checkouts in 16.6s; 20850 unchanged files keep their built mtimes; 21 other files take the seed time and rebuild; 103 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes/.stage/canonical-labelling-requests-bytes",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes/.stage/canonical-labelling-requests-bytes/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-19T17:13:09-0600",
+  "seed_error": ""
+}

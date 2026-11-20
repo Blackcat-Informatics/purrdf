@@ -1,0 +1,1335 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 361094c7f..13379fc61 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -8,6 +8,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ## [Unreleased]
+ 
++- **Reading a GTS file into a dataset reports language tags folded to lower case.**
++  A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
++  terms; a dataset folds the tag and holds one. `import_gts_events`,
++  `import_gts_graph`, the GTS-to-N-Quads export and the GTS-to-columnar export now record a
++  `language-tag-case-folded` loss for each affected literal, in the new
++  `RdfEnvelope::losses` field (additive on a non-exhaustive struct) and in
++  `GtsBlobExportReport` (read through the new `GtsInlineExport::read_losses`), and `convert` reports it with the other read losses. The
++  loss contract and both generated loss matrices list the new code. The dataset
++  fold is unchanged.
+ - **Breaking value change: row-set identities and fingerprints are BLAKE3 over
+   sorted row digests.** The resident snapshot identity and its compositions over
+   composite, delta, paged and segmented views, the SHACL class-membership view
+diff --git crates/cli/src/source.rs crates/cli/src/source.rs
+index 42d50afce..18e7f6b2d 100644
+--- crates/cli/src/source.rs
++++ crates/cli/src/source.rs
+@@ -41,7 +41,7 @@
+ //! mutable file: the safety is enforced by [`ImmutableInput`](crate::immutable), not
+ //! promised by a contract on the caller.
+ //!
+-//! ## GTS sources and the envelope
++//! ## GTS sources, the envelope and the tag fold
+ //!
+ //! A GTS file is folded by [`import_gts_events`] — the AUTHORITATIVE importer, which
+ //! drives the reader in per-segment mode so **per-segment blank-node scope survives**
+@@ -51,12 +51,17 @@
+ //! entry of `purrdf_core::gts_to_rdf_loss_ledger` describes a loss that **did not
+ //! happen** on this path and is never attached here.
+ //!
+-//! What a GTS read genuinely does drop is the ENVELOPE: the segment ledger, sidecar
++//! A GTS read genuinely drops two kinds of material. The first is the ENVELOPE: the segment ledger, sidecar
+ //! resources, scoped metadata, blob references, suppression directives, opaque nodes and
+ //! signature records that travel beside the hot graph and have no home in an RDF dataset.
+ //! [`gts_envelope_ledger`] records exactly those, with counts read off the bundle the
+ //! importer actually returned — never a count this module assumed.
+ //!
++//! The second is the written spelling of a language tag that is not lower case: a GTS
++//! file compares tags bytewise and a dataset holds them folded, so the importer records
++//! one `language-tag-case-folded` entry per affected literal in the envelope's loss
++//! ledger, and [`load_gts`] adds those entries to the ledger it returns.
++//!
+ //! ## Transport encoding
+ //!
+ //! Every byte-oriented read goes through [`read_bytes`], which sniffs gzip / zstd
+@@ -579,7 +584,8 @@ pub(crate) fn verified_pack_input(
+     Ok(input)
+ }
+ 
+-/// Fold a GTS source into its dataset AND the ledger of what its envelope dropped.
++/// Fold a GTS source into its dataset AND the ledger of what the read dropped: the
++/// envelope material and every language tag the dataset folded to lower case.
+ ///
+ /// This is the one GTS ingestion seam in the CLI. It calls [`import_gts_events`], the
+ /// authoritative importer that preserves per-segment blank-node scope and hard-fails on
+@@ -592,7 +598,10 @@ pub(crate) fn load_gts(
+     let bytes = read_bytes_with_transport(path, policy)?;
+     let bundle = import_gts_events(&bytes)
+         .map_err(|diagnostic| CliError::Runtime(format!("{}: {diagnostic}", display_path(path))))?;
+-    let ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
++    let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
++    for entry in bundle.envelope.losses.entries() {
++        ledger.record(entry.clone());
++    }
+     Ok((bundle.dataset, ledger))
+ }
+ 
+@@ -786,8 +795,9 @@ pub(crate) fn load_dataset(
+ 
+ /// [`load_dataset`] plus the ledger of what reading this source dropped.
+ ///
+-/// The ledger is empty for every source but GTS, whose envelope is the only input-side
+-/// material this pipeline loses on the way in (see [`gts_envelope_ledger`]).
++/// The ledger is empty for every source but GTS, whose envelope and folded language
++/// tags are the only input-side material this pipeline loses on the way in (see
++/// [`gts_envelope_ledger`] and [`load_gts`]).
+ pub(crate) fn load_dataset_reporting(
+     path: &str,
+     format: SourceFormat,
+diff --git crates/cli/tests/ingest_cli.rs crates/cli/tests/ingest_cli.rs
+index 348765320..5da4a0771 100644
+--- crates/cli/tests/ingest_cli.rs
++++ crates/cli/tests/ingest_cli.rs
+@@ -236,6 +236,44 @@ fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
+     );
+ }
+ 
++/// A GTS file that holds `"x"@EN-us` and `"x"@en-us` is two terms; the dataset holds one,
++/// so `convert` reports the fold in the loss ledger, and a file whose tags are already
++/// lower case reports none.
++#[test]
++fn gts_language_tag_case_fold_is_surfaced_in_the_loss_ledger() {
++    let file = |tags: &[&str]| {
++        let mut writer = Writer::new("purrdf.gts");
++        let mut terms = vec![
++            Term::iri("http://example.org/s"),
++            Term::iri("http://example.org/p"),
++        ];
++        terms.extend(tags.iter().map(|tag| Term::lang_literal("x", *tag)));
++        writer.add_terms(&terms);
++        let quads: Vec<_> = (0..tags.len()).map(|i| (0, 1, 2 + i, None)).collect();
++        writer.add_quads(&quads);
++        writer.into_bytes()
++    };
++    let ledger_of = |name: &str, tags: &[&str]| {
++        let dir = purrdf_testkit::temp_dir!().expect("tempdir");
++        let dir = dir.path();
++        let gts = write_bytes(dir, name, &file(tags));
++        let out = path(dir, "out.nq");
++        let ledger_path = path(dir, "ledger.json");
++        let ledger_flag = format!("--loss-ledger={ledger_path}");
++        let o = run(&["convert", &ledger_flag, &gts, &out]);
++        assert!(o.status.success(), "gts convert failed: {}", stderr(&o));
++        std::fs::read_to_string(&ledger_path).expect("read ledger")
++    };
++    let variant = ledger_of("variant.gts", &["EN-us", "en-us"]);
++    assert!(variant.contains("language-tag-case-folded"), "{variant}");
++    assert!(
++        variant.contains("EN-us"),
++        "the written tag is named: {variant}"
++    );
++    let lower = ledger_of("lower.gts", &["en-us", "fr"]);
++    assert!(!lower.contains("language-tag-case-folded"), "{lower}");
++}
++
+ /// GTS is an INPUT container: named as a `--to` target it is refused BY NAME, with the
+ /// reason, rather than accepted and written as something else.
+ #[test]
+diff --git crates/purrdf/src/gts_columnar.rs crates/purrdf/src/gts_columnar.rs
+index 9fc5ae584..b9fccca71 100644
+--- crates/purrdf/src/gts_columnar.rs
++++ crates/purrdf/src/gts_columnar.rs
+@@ -110,15 +110,17 @@ impl GtsColumnarSource {
+ 
+ /// Admit inline blobs with caller policy; never performs a discovery fold.
+ ///
+-/// This preserves the strict event import's RDF behavior. That native bundle
+-/// currently has no loss ledger; its diagnostics are hard errors. Only actual
+-/// blob omissions and actual downstream writer losses enter this report.
++/// This preserves the strict event import's RDF behavior: its diagnostics are
++/// hard errors. The report holds the losses of reading the file into the
++/// dataset (a language tag folded to lower case), actual blob omissions and
++/// actual downstream writer losses.
+ pub fn prepare_gts_columnar(
+     bytes: &[u8],
+     limits: GtsBlobLimits,
+ ) -> Result<GtsColumnarSource, GtsColumnarError> {
+-    let (dataset, imported, omissions, usage) =
+-        purrdf_rdf::import_gts_inline_for_export(bytes, limits)?.into_parts();
++    let mut export = purrdf_rdf::import_gts_inline_for_export(bytes, limits)?;
++    let read_losses = export.take_read_losses();
++    let (dataset, imported, omissions, usage) = export.into_parts();
+     let mut resident = Resident;
+     let mut memory = Memory::new(&mut resident);
+     let mut blobs = ContentStore::new();
+@@ -127,7 +129,7 @@ pub fn prepare_gts_columnar(
+         // This interim eager API still owns the admitted payload set.
+         blobs.insert(memory.collect(blob.bytes.iter().copied())?);
+     }
+-    let report = blob_report(omissions, usage)?;
++    let report = blob_report(read_losses, omissions, usage)?;
+     Ok(GtsColumnarSource {
+         dataset,
+         blobs,
+@@ -152,17 +154,19 @@ pub fn prepare_gts_columnar_to(
+     limits: GtsBlobLimits,
+     sink: &mut dyn purrdf_rdf::GtsBlobStager,
+ ) -> Result<GtsStagedColumnarSource, GtsColumnarError> {
+-    let (dataset, mut blobs, omissions, usage) =
+-        purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?.into_parts();
++    let mut export = purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?;
++    let read_losses = export.take_read_losses();
++    let (dataset, mut blobs, omissions, usage) = export.into_parts();
+     blobs.sort_unstable_by_key(|blob| blob.bytes.sha256);
+     Ok(GtsStagedColumnarSource {
+         dataset,
+         blobs,
+-        report: blob_report(omissions, usage)?,
++        report: blob_report(read_losses, omissions, usage)?,
+     })
+ }
+ 
+ fn blob_report(
++    read_losses: LossLedger,
+     omissions: Vec<GtsBlobOmission>,
+     usage: GtsBlobUsage,
+ ) -> Result<GtsBlobExportReport, GtsColumnarError> {
+@@ -170,6 +174,7 @@ fn blob_report(
+     let mut memory = Memory::new(&mut resident);
+     let profile = purrdf_rdf::loss::gts_to_columnar_loss_ledger();
+     let mut losses = LossLedger::default();
++    losses.append_with_memory(read_losses, &mut memory)?;
+     for omission in &omissions {
+         let mut entry = profile
+             .entries()
+diff --git crates/purrdf/tests/gts_columnar_report.rs crates/purrdf/tests/gts_columnar_report.rs
+index bd1a5ca3f..2d6d776b9 100644
+--- crates/purrdf/tests/gts_columnar_report.rs
++++ crates/purrdf/tests/gts_columnar_report.rs
+@@ -40,3 +40,31 @@ fn both_columnar_outputs_preserve_located_losses_and_owned_causes() {
+     assert_eq!(clean.losses().entries(), []);
+     assert!(clean.omissions().is_empty());
+ }
++
++/// Reading a file with a language tag that is not lower case into the dataset folds
++/// the tag, and the columnar report names that loss; a lower-case file reports none.
++#[test]
++fn columnar_report_carries_the_language_tag_fold_of_the_read() {
++    let file = |tag: &str| {
++        let mut writer = purrdf_gts::writer::Writer::new("generic");
++        writer.add_terms(&[
++            purrdf_gts::model::Term::iri("http://example.org/s"),
++            purrdf_gts::model::Term::iri("http://example.org/p"),
++            purrdf_gts::model::Term::lang_literal("x", tag),
++        ]);
++        writer.add_quads(&[(0, 1, 2, None)]);
++        writer.into_bytes()
++    };
++    let (_, report) = prepare_gts_columnar(&file("EN-us"), GtsBlobLimits::UNBOUNDED)
++        .unwrap()
++        .project()
++        .unwrap();
++    let losses = report.losses().entries();
++    assert_eq!(losses.len(), 1);
++    assert_eq!(losses[0].code, "language-tag-case-folded");
++    let (_, clean) = prepare_gts_columnar(&file("en-us"), GtsBlobLimits::UNBOUNDED)
++        .unwrap()
++        .project()
++        .unwrap();
++    assert!(clean.losses().is_empty());
++}
+diff --git crates/rdf-capi/include/purrdf.h crates/rdf-capi/include/purrdf.h
+index 45812b3c2..5ae5fb762 100644
+--- crates/rdf-capi/include/purrdf.h
++++ crates/rdf-capi/include/purrdf.h
+@@ -2761,10 +2761,11 @@ void purrdf_graph_free(PurrdfGraph *graph);
+  * Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
+  * caller-owned handle (free with `purrdf_dataset_free`).
+  *
+- * **Lossless**, including the RDF-1.2 statement layer: a reifier-bound quoted
++ * Keeps the RDF-1.2 statement layer: a reifier-bound quoted
+  * triple written by `to_gts` is read back intact via the canonical fold-back
+  * (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
+- * gap was closed by the native text-codec work.
++ * gap was closed by the native text-codec work. A language tag that is not lower
++ * case is read folded to lower case, and the envelope is not returned.
+  *
+  * # Safety
+  * `bytes` must be valid for `len` bytes; the out-params must be writable.
+diff --git crates/rdf-capi/src/gts.rs crates/rdf-capi/src/gts.rs
+index dd8d0c7c2..6a82bd252 100644
+--- crates/rdf-capi/src/gts.rs
++++ crates/rdf-capi/src/gts.rs
+@@ -1,15 +1,17 @@
+ // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+ // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+ 
+-//! `purrdf_from_gts` / `purrdf_to_gts`: lossless GTS container read/write.
++//! `purrdf_from_gts` / `purrdf_to_gts`: GTS container read/write.
+ //!
+ //! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
+ //! `gts_write` / `import_gts_events` core), so a language shim
+ //! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
+ //! "one shared library, not two" clause.
+ //!
+-//! GTS is a lossless container: both the plain-graph data AND the full RDF-1.2
+-//! statement layer (quoted triples + reifier bindings) survive the round-trip.
++//! Both the plain-graph data AND the full RDF-1.2 statement layer (quoted
++//! triples + reifier bindings) survive the round-trip. A language tag that is not
++//! lower case is read folded to lower case, and this entry point returns no loss
++//! report.
+ //! The earlier `gts-missing-reifier-binding` gap was closed by the native
+ //! text-codec work; see [`purrdf_from_gts`].
+ 
+@@ -30,10 +32,11 @@ use crate::status::PurrdfStatus;
+ /// Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
+ /// caller-owned handle (free with `purrdf_dataset_free`).
+ ///
+-/// **Lossless**, including the RDF-1.2 statement layer: a reifier-bound quoted
++/// Keeps the RDF-1.2 statement layer: a reifier-bound quoted
+ /// triple written by `to_gts` is read back intact via the canonical fold-back
+ /// (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
+-/// gap was closed by the native text-codec work.
++/// gap was closed by the native text-codec work. A language tag that is not lower
++/// case is read folded to lower case, and the envelope is not returned.
+ ///
+ /// # Safety
+ /// `bytes` must be valid for `len` bytes; the out-params must be writable.
+diff --git crates/rdf-core/src/ir/bundle.rs crates/rdf-core/src/ir/bundle.rs
+index 7032193bb..865e8b1d5 100644
+--- crates/rdf-core/src/ir/bundle.rs
++++ crates/rdf-core/src/ir/bundle.rs
+@@ -53,12 +53,25 @@ pub struct RdfEnvelope {
+     /// suppressions, opaque nodes, signatures), reusing the crate's existing
+     /// [`RdfLookaside`].
+     pub lookaside: RdfLookaside,
++    /// The losses the read incurred that no RDF dataset can represent, such as
++    /// the written spelling of a language tag the dataset folds to lower case.
++    pub losses: crate::loss::LossLedger,
+ }
+ 
+ impl RdfEnvelope {
+     /// Build an envelope from a lookaside.
+     pub fn new(lookaside: RdfLookaside) -> Self {
+-        Self { lookaside }
++        Self {
++            lookaside,
++            losses: crate::loss::LossLedger::new(),
++        }
++    }
++
++    /// This envelope carrying the losses of the read.
++    #[must_use]
++    pub fn with_losses(mut self, losses: crate::loss::LossLedger) -> Self {
++        self.losses = losses;
++        self
+     }
+ }
+ 
+diff --git crates/rdf-core/src/loss.rs crates/rdf-core/src/loss.rs
+index 380a3903d..a4e8c448e 100644
+--- crates/rdf-core/src/loss.rs
++++ crates/rdf-core/src/loss.rs
+@@ -315,12 +315,20 @@ pub fn gts_to_columnar_loss_ledger() -> LossLedger {
+     )
+ }
+ 
+-const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[(
+-    "bnode-scope-flatten",
+-    "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
+-     per-segment blank-node scope; the distinct scopes are recovered only via the \
+-     streaming-event importer.",
+-)];
++const GTS_TO_RDF_PROFILE: &[(&str, &str)] = &[
++    (
++        "bnode-scope-flatten",
++        "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing \
++         per-segment blank-node scope; the distinct scopes are recovered only via the \
++         streaming-event importer.",
++    ),
++    (
++        "language-tag-case-folded",
++        "A GTS file compares a language tag bytewise; a dataset holds the tag folded to \
++         ASCII lower case, so a tag that is not already lower case loses its written \
++         spelling and two terms that differ only in tag case become one.",
++    ),
++];
+ 
+ const RDF_TO_OKF_PROFILE: &[(&str, &str)] = &[
+     (
+@@ -2520,7 +2528,11 @@ mod tests {
+     /// `direction-dropped` was retired once `Term.direction` round-tripped
+     /// losslessly, and `multi-reifier-collapsed` once reifier-id-keyed
+     /// `Graph.reifiers` did the same; neither is an accepted loss any more.
+-    const EXPECTED_CODES: [&str; 2] = ["blob-bytes-absent", "bnode-scope-flatten"];
++    const EXPECTED_CODES: [&str; 3] = [
++        "blob-bytes-absent",
++        "bnode-scope-flatten",
++        "language-tag-case-folded",
++    ];
+ 
+     fn matrix_codes() -> Vec<String> {
+         let mut codes: Vec<String> = Vec::new();
+diff --git crates/rdf/src/gts.rs crates/rdf/src/gts.rs
+index b93c6ed77..1fcf2cf58 100644
+--- crates/rdf/src/gts.rs
++++ crates/rdf/src/gts.rs
+@@ -109,7 +109,8 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
+ 
+ /// Load a real `purrdf_gts::model::Graph` (read from a GTS bundle) into a frozen
+ /// [`RdfDataset`](crate::RdfDataset), **preserving** every named graph on its base
+-/// quads. This is the lossless container→dataset bridge for the release fold:
++/// quads. This is the container→dataset bridge for the release fold, which holds a language
++/// tag folded to lower case and returns no loss report (use [`crate::import_gts_events`] for one). The fold runs
+ /// `purrdf_gts::model::Graph` → `gts_to_ser` → the native statement-layer fold
+ /// (`dataset_from_ser_graph`),
+ /// which re-binds the `rdf:reifies` reifier/annotation side-tables and keeps each base
+diff --git crates/rdf/src/gts_import_blobs/export.rs crates/rdf/src/gts_import_blobs/export.rs
+index 93894d5b2..7a0d497c0 100644
+--- crates/rdf/src/gts_import_blobs/export.rs
++++ crates/rdf/src/gts_import_blobs/export.rs
+@@ -116,9 +116,25 @@ pub struct GtsInlineExport<Payload = Arc<[u8]>> {
+     omissions: Vec<GtsBlobOmission>,
+     /// Logical charges and peaks during admission, not total process memory.
+     usage: GtsBlobUsage,
++    /// Losses of reading the file into the dataset, such as a language tag
++    /// folded to lower case.
++    losses: purrdf_core::LossLedger,
+ }
+ 
+ impl<Payload> GtsInlineExport<Payload> {
++    /// Move the losses of reading the file into the dataset out of the export,
++    /// leaving it with none; call before [`Self::into_parts`].
++    pub fn take_read_losses(&mut self) -> purrdf_core::LossLedger {
++        std::mem::take(&mut self.losses)
++    }
++
++    /// The losses of reading the file into the dataset, read before
++    /// [`Self::into_parts`] consumes the export.
++    #[must_use]
++    pub const fn read_losses(&self) -> &purrdf_core::LossLedger {
++        &self.losses
++    }
++
+     /// Consume the eager admission result without copying its payload owners.
+     pub fn into_parts(
+         self,
+@@ -150,7 +166,11 @@ pub fn import_gts_inline_for_export(
+             "inline export collector is missing",
+         )
+     })?;
+-    collector.finish_export(bundle.dataset, CollectedPayload::resident)
++    collector.finish_export(
++        bundle.dataset,
++        bundle.envelope.losses,
++        CollectedPayload::resident,
++    )
+ }
+ 
+ /// Stage admitted inline blobs through bounded decoded chunks.
+@@ -174,7 +194,11 @@ pub fn import_gts_inline_to(
+             "streaming export collector is missing",
+         )
+     })?;
+-    collector.finish_export(bundle.dataset, CollectedPayload::staged)
++    collector.finish_export(
++        bundle.dataset,
++        bundle.envelope.losses,
++        CollectedPayload::staged,
++    )
+ }
+ 
+ impl BlobCollector<'_> {
+@@ -255,6 +279,7 @@ impl BlobCollector<'_> {
+     fn finish_export<Payload>(
+         mut self,
+         dataset: Arc<crate::RdfDataset>,
++        losses: purrdf_core::LossLedger,
+         convert: impl FnMut(CollectedPayload) -> Result<Payload, RdfDiagnostic>,
+     ) -> Result<GtsInlineExport<Payload>, RdfDiagnostic> {
+         let mut omissions = self.export.take().ok_or_else(|| {
+@@ -345,6 +370,7 @@ impl BlobCollector<'_> {
+             blobs,
+             omissions,
+             usage: self.usage,
++            losses,
+         })
+     }
+ 
+diff --git crates/rdf/src/gts_import_graph.rs crates/rdf/src/gts_import_graph.rs
+index 3749bfd69..7a4a66486 100644
+--- crates/rdf/src/gts_import_graph.rs
++++ crates/rdf/src/gts_import_graph.rs
+@@ -51,6 +51,8 @@ struct GraphInterner {
+     /// GTS term id → interned [`TermId`]. A term interns at most once.
+     remap: crate::FastMap<usize, Option<TermId>>,
+     remap_bytes: usize,
++    /// Losses of the read that the dataset cannot represent.
++    losses: purrdf_core::LossLedger,
+ }
+ 
+ #[derive(Clone, Copy)]
+@@ -127,7 +129,7 @@ impl GraphInterner {
+                         let resolved = match self.terms[id].kind {
+                             TermKind::Iri => self.intern_iri(id)?,
+                             TermKind::Bnode => self.intern_blank(id)?,
+-                            TermKind::Literal => self.intern_literal(id)?,
++                            TermKind::Literal => self.intern_literal(id, memory)?,
+                             TermKind::Triple => self.intern_triple(id)?,
+                         };
+                         self.remap.insert(id, Some(resolved));
+@@ -165,7 +167,11 @@ impl GraphInterner {
+         Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
+     }
+ 
+-    fn intern_literal(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
++    fn intern_literal(
++        &mut self,
++        gts_id: usize,
++        memory: &mut Memory<'_, Resident>,
++    ) -> Result<TermId, RdfDiagnostic> {
+         // The datatype is a term id; resolve (and intern) it first, then read its
+         // interned IRI string. This applies the SAME datatype-must-be-IRI rule the
+         // shared resolver enforces.
+@@ -176,6 +182,19 @@ impl GraphInterner {
+         // MOVE the lexical form and language tag out.
+         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
+         let language = std::mem::take(&mut self.terms[gts_id].lang);
++        if let Some(tag) = language.as_deref() {
++            crate::gts_language_fold::record_language_fold_loss(
++                &mut self.losses,
++                &lexical_form,
++                tag,
++                crate::gts_language_fold::FoldSite {
++                    logical: "gts:graph",
++                    segment: None,
++                    term: gts_id as u64,
++                },
++                memory,
++            )?;
++        }
+         let direction = crate::gts_resolve::parse_gts_direction(
+             self.terms[gts_id].direction.as_deref(),
+             language.as_deref(),
+@@ -322,6 +341,7 @@ fn import_graph_with_memory(
+         reifier_bindings,
+         remap: crate::FastMap::default(),
+         remap_bytes: 0,
++        losses: purrdf_core::LossLedger::new(),
+     };
+ 
+     // Intern every term up front (idempotent through the remap), so leaf strings are
+@@ -375,12 +395,16 @@ fn import_graph_with_memory(
+         builder,
+         remap,
+         remap_bytes,
++        losses,
+         ..
+     } = interner;
+     drop(remap);
+     memory.release_bytes(remap_bytes)?;
+     let dataset = builder.freeze()?;
+-    Ok(GtsBundle::new(dataset, RdfEnvelope::new(lookaside)))
++    Ok(GtsBundle::new(
++        dataset,
++        RdfEnvelope::new(lookaside).with_losses(losses),
++    ))
+ }
+ 
+ #[cfg(test)]
+diff --git crates/rdf/src/gts_import_sink.rs crates/rdf/src/gts_import_sink.rs
+index 994621678..1f0d68738 100644
+--- crates/rdf/src/gts_import_sink.rs
++++ crates/rdf/src/gts_import_sink.rs
+@@ -66,6 +66,8 @@ struct SinkImporter<'a> {
+     /// Out-of-band material accumulated from blob / signature / suppression /
+     /// segment-head / opaque events.
+     lookaside: RdfLookaside,
++    /// Losses of the read that the dataset cannot represent.
++    losses: purrdf_core::LossLedger,
+ }
+ 
+ impl SinkImporter<'_> {
+@@ -97,13 +99,27 @@ impl SinkImporter<'_> {
+         let direction = crate::gts_resolve::parse_gts_direction(direction, lang)?;
+         let mut resident = purrdf_lex::allocation::Resident;
+         let bytes = self.builder.native_buffer_bytes()?;
++        let mut memory = purrdf_lex::allocation::Memory::resume(&mut resident, bytes);
++        if let Some(tag) = lang {
++            crate::gts_language_fold::record_language_fold_loss(
++                &mut self.losses,
++                lexical,
++                tag,
++                crate::gts_language_fold::FoldSite {
++                    logical: "gts:sink",
++                    segment: Some(segment_index),
++                    term: gts_id as u64,
++                },
++                &mut memory,
++            )?;
++        }
+         Ok(self.builder.intern_literal_parts_bound_with_memory(
+             lexical,
+             datatype.as_deref(),
+             lang,
+             direction,
+             BlankBinding::Ambient(segment_scope(segment_index)?),
+-            &mut purrdf_lex::allocation::Memory::resume(&mut resident, bytes),
++            &mut memory,
+         )?)
+     }
+ 
+@@ -112,6 +128,7 @@ impl SinkImporter<'_> {
+             blobs: None,
+             builder: RdfDatasetBuilder::new(),
+             lookaside: RdfLookaside::default(),
++            losses: purrdf_core::LossLedger::new(),
+         }
+     }
+ }
+@@ -675,9 +692,10 @@ fn finish_importer(
+     importer: SinkImporter<'_>,
+ ) -> Result<(GtsBundle, Option<BlobCollector<'_>>), RdfDiagnostic> {
+     let lookaside = importer.lookaside;
++    let losses = importer.losses;
+     let dataset = importer.builder.freeze()?;
+     Ok((
+-        GtsBundle::new(dataset, RdfEnvelope::new(lookaside)),
++        GtsBundle::new(dataset, RdfEnvelope::new(lookaside).with_losses(losses)),
+         importer.blobs,
+     ))
+ }
+diff --git crates/rdf/src/gts_import_sink/export.rs crates/rdf/src/gts_import_sink/export.rs
+index 661863e37..b88dc9021 100644
+--- crates/rdf/src/gts_import_sink/export.rs
++++ crates/rdf/src/gts_import_sink/export.rs
+@@ -89,6 +89,20 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
+         language: Option<&str>,
+         direction: Option<&str>,
+     ) -> Result<TermKey, RdfDiagnostic> {
++        // Once per term, as the importer's resolver callback is.
++        if let Some(tag) = language {
++            crate::gts_language_fold::record_language_fold_loss(
++                &mut self.metadata.losses,
++                lexical,
++                tag,
++                crate::gts_language_fold::FoldSite {
++                    logical: "gts:sink",
++                    segment: Some(key.segment),
++                    term: key.term as u64,
++                },
++                self.memory,
++            )?;
++        }
+         let datatype = datatype.map(|key| self.term(key)).transpose()?;
+         if datatype
+             .as_deref()
+@@ -505,6 +519,8 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
+ /// A diagnostic constructed by the exporter retains its charge in `memory`;
+ /// keep that account alive and release the retained delta after destroying it.
+ /// Host errors whose diagnostics own independent accounts add no such charge.
++/// On success the function refunds every byte it charged to `memory`, including
++/// those of the returned loss entries, which the caller then owns uncharged.
+ pub fn export_gts_rdf_nquads_with_dictionary<D, A: Admission + ?Sized>(
+     bytes: &[u8],
+     dictionary: &mut dyn TermStorage,
+@@ -558,7 +574,8 @@ where
+             let output = emitter.output.finish().map_err(dictionary_import_failure)?;
+             Ok(GtsTextExport {
+                 written: output.written,
+-                envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside),
++                envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside)
++                    .with_losses(emitter.metadata.losses),
+                 read,
+             })
+         })();
+diff --git crates/rdf/src/gts_language_fold.rs crates/rdf/src/gts_language_fold.rs
+new file mode 100644
+index 000000000..2eaaa1044
+--- /dev/null
++++ crates/rdf/src/gts_language_fold.rs
+@@ -0,0 +1,178 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! The loss a GTS read incurs when a language tag is folded.
++//!
++//! The GTS format compares a language text whole and bytewise, so `"x"@EN-us`
++//! and `"x"@en-us` are two terms of one file. A dataset folds a tag to ASCII
++//! lower case in its term interner and holds one term. The importers record
++//! each affected literal as `language-tag-case-folded` in the envelope's loss
++//! ledger.
++
++use std::fmt;
++
++use purrdf_core::{LossEntry, LossLedger, RdfLocation};
++use purrdf_iri::langtag::is_identity_folded;
++use purrdf_lex::allocation::{Admission, Memory, StorageError};
++
++/// A tag as the dataset holds it, written without building the folded copy.
++struct Folded<'a>(&'a str);
++
++impl fmt::Debug for Folded<'_> {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.write_str("\"")?;
++        for c in self.0.chars() {
++            write!(f, "{}", c.to_ascii_lowercase().escape_debug())?;
++        }
++        f.write_str("\"")
++    }
++}
++
++/// Where a GTS literal sits: the logical label of the reader, the segment when
++/// the reader is per segment, and the GTS term id.
++#[derive(Clone, Copy)]
++pub(crate) struct FoldSite {
++    pub(crate) logical: &'static str,
++    pub(crate) segment: Option<u64>,
++    pub(crate) term: u64,
++}
++
++/// Record the loss for a language-tagged literal whose written tag is not
++/// already lower case into `losses`. A tag the dataset holds as written returns
++/// before anything is built or allocated.
++///
++/// Otherwise the note text, the location's label text and the boxed location
++/// are admitted through `memory`, and the ledger slot through
++/// `record_with_memory`. The numeric location fields and the entry's static
++/// code and pair names hold no allocation. The note names the literal, the
++/// written tag and the tag the dataset holds, so the term the fold merges with
++/// its case variant is identified.
++///
++/// # Errors
++/// The storage refusal of `memory`; the ledger is unchanged.
++pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
++    losses: &mut LossLedger,
++    lexical: &str,
++    tag: &str,
++    site: FoldSite,
++    memory: &mut Memory<'_, S>,
++) -> Result<(), StorageError> {
++    if is_identity_folded(tag) {
++        return Ok(());
++    }
++    let note = memory.format(&format_args!(
++        "the literal {lexical:?} with written language tag {tag:?} is held as {:?}; \
++         a term of this file that differs only in tag case is the same dataset term",
++        Folded(tag)
++    ))?;
++    let logical = memory.string(site.logical)?;
++    let location = memory.boxed(RdfLocation {
++        logical: Some(logical),
++        gts_segment_index: site.segment,
++        gts_term_id: Some(site.term),
++        ..RdfLocation::default()
++    })?;
++    losses.record_with_memory(
++        LossEntry {
++            code: "language-tag-case-folded".into(),
++            from: "gts".into(),
++            to: "rdf-1.2-dataset".into(),
++            note: note.into(),
++            location: Some(location),
++        },
++        memory,
++    )
++}
++
++#[cfg(test)]
++mod tests {
++    use purrdf_core::LossLedger;
++    use purrdf_gts::model::{Graph, Term};
++    use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
++
++    use super::{FoldSite, record_language_fold_loss};
++
++    fn graph_with(tags: &[&str]) -> Graph {
++        let mut graph = Graph::default();
++        graph.terms.push(Term::iri("http://example.org/s"));
++        graph.terms.push(Term::iri("http://example.org/p"));
++        for (i, tag) in tags.iter().enumerate() {
++            graph.terms.push(Term::lang_literal("x", *tag));
++            graph.quads.push((0, 1, 2 + i, None));
++        }
++        graph
++    }
++
++    /// Reading a case-variant file into a dataset reports the written tag in the
++    /// loss ledger instead of merging silently; an all-lower-case file reports
++    /// nothing.
++    #[test]
++    fn reading_a_case_variant_file_into_a_dataset_reports_the_fold() {
++        let bytes = |tags: &[&str]| {
++            purrdf_gts::writer::Writer::deterministic(&graph_with(tags), "purrdf-test")
++                .expect("writer")
++                .to_bytes()
++        };
++        let variant = bytes(&["EN-us", "en-us"]);
++        let bundle = crate::import_gts_events(&variant).expect("import");
++        let losses = bundle.envelope.losses.entries();
++        assert_eq!(losses.len(), 1);
++        assert_eq!(losses[0].code, "language-tag-case-folded");
++        assert!(losses[0].note.contains("\"EN-us\"") && losses[0].note.contains("\"en-us\""));
++        assert!(
++            purrdf_core::check_ledger_sound(&bundle.envelope.losses, "gts", "rdf-1.2-dataset")
++                .is_ok()
++        );
++
++        let lower = crate::import_gts_events(&bytes(&["en-us", "fr"])).expect("import");
++        assert!(lower.envelope.losses.is_empty());
++        let graph = crate::import_gts_graph(crate::gts::read_graph(&variant, true).expect("read"))
++            .expect("graph import");
++        assert_eq!(graph.envelope.losses.entries().len(), 1);
++    }
++
++    /// The note, the location's label text, the boxed location and the ledger
++    /// slot are admitted through the caller's memory. A budget that fits the note
++    /// and a short label but not a long label is the typed storage refusal and
++    /// leaves the ledger empty; the same budget admits the short label; a tag
++    /// the dataset holds as written needs no budget at all.
++    #[test]
++    fn the_loss_entry_is_admitted_through_the_callers_memory() {
++        let long: &'static str = Box::leak("g".repeat(4096).into_boxed_str());
++        let site = |logical| FoldSite {
++            logical,
++            segment: Some(0),
++            term: 3,
++        };
++        let record = |tag: &str, logical, budget: usize| {
++            let mut losses = LossLedger::new();
++            let mut ceiling = Ceiling(budget);
++            let result = record_language_fold_loss(
++                &mut losses,
++                "x",
++                tag,
++                site(logical),
++                &mut Memory::new(&mut ceiling),
++            );
++            (result, losses.entries().len())
++        };
++        let (refused, held) = record("EN-us", "gts:sink", 8);
++        assert!(
++            matches!(refused, Err(StorageError::AdmissionFailed)),
++            "{refused:?}"
++        );
++        assert_eq!(held, 0);
++        let (admitted, held) = record("EN-us", "gts:sink", 1024);
++        assert!(admitted.is_ok(), "{admitted:?}");
++        assert_eq!(held, 1);
++        let (refused, held) = record("EN-us", long, 1024);
++        assert!(
++            matches!(refused, Err(StorageError::AdmissionFailed)),
++            "the label text is charged: {refused:?}"
++        );
++        assert_eq!(held, 0);
++        let (folded, held) = record("en-us", long, 0);
++        assert!(folded.is_ok());
++        assert_eq!(held, 0);
++    }
++}
+diff --git crates/rdf/src/lib.rs crates/rdf/src/lib.rs
+index d74d2feac..a64cbad36 100644
+--- crates/rdf/src/lib.rs
++++ crates/rdf/src/lib.rs
+@@ -49,6 +49,7 @@ mod gts_core;
+ mod gts_import_blobs;
+ mod gts_import_graph;
+ mod gts_import_sink;
++mod gts_language_fold;
+ mod gts_resolve;
+ // Full content-chain verification: COSE signatures + expected-head replay +
+ // digest inclusion, re-exported through the `gts` adapter surface below.
+diff --git crates/rdf/tests/gts_dictionary.rs crates/rdf/tests/gts_dictionary.rs
+index 079c7336e..4144c741f 100644
+--- crates/rdf/tests/gts_dictionary.rs
++++ crates/rdf/tests/gts_dictionary.rs
+@@ -718,6 +718,49 @@ fn native_eviction_reopening_and_actual_import_export_preserve_complete_rdf() {
+     );
+ }
+ 
++/// The textual export folds a language tag exactly as the importer does, so its
++/// envelope carries the same fold loss: a case-variant file records the written tag
++/// on both routes, and a lower-case neighbour records none on either.
++#[test]
++fn export_envelope_equals_import_envelope_for_language_tag_case() {
++    let directory = purrdf_testkit::temp_dir!().expect("export fold directory");
++    let root = directory.path();
++    for (name, tags, expected) in [
++        ("variant", ["EN-us", "en-us"], 1),
++        ("lower", ["en-us", "fr"], 0),
++    ] {
++        let mut writer = Writer::new("purrdf.gts");
++        let mut terms = vec![
++            Term::iri("http://example.org/s"),
++            Term::iri("http://example.org/p"),
++        ];
++        terms.extend(tags.iter().map(|tag| Term::lang_literal("x", *tag)));
++        writer.add_terms(&terms);
++        // The first literal is the object of two rows: the fold is recorded once per
++        // term on both routes, not once per row naming it.
++        writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None), (1, 1, 2, None)]);
++        let bytes = writer.into_bytes();
++        let resident = import_gts_events(&bytes).expect("resident import");
++        assert_eq!(resident.envelope.losses.entries().len(), expected, "{name}");
++
++        let mut raw = storage::Files::new(&root.join(format!("raw-{name}")));
++        let replay = raw.replay();
++        let mut resolution = storage::Resolution::new(&root.join(format!("res-{name}")));
++        let mut output = WriterDrain(Vec::new());
++        let mut ceiling = Ceiling(128 * 1024);
++        let result = export_gts_rdf_nquads_with_dictionary(
++            &bytes,
++            &mut raw,
++            &mut resolution,
++            replay,
++            &mut output,
++            &mut Memory::new(&mut ceiling),
++        )
++        .expect("textual export");
++        assert_eq!(result.envelope, resident.envelope, "{name}");
++    }
++}
++
+ fn has_original_refusal(error: &(dyn std::error::Error + 'static)) -> bool {
+     source_chain_has(error, |error| {
+         error
+diff --git docs/MIGRATION-5.0.md docs/MIGRATION-5.0.md
+index 7744d1493..8c97f9695 100644
+--- docs/MIGRATION-5.0.md
++++ docs/MIGRATION-5.0.md
+@@ -65,6 +65,21 @@ label and scope are equal. A term is an IRI, a literal (lexical form, datatype,
+ optional language, optional direction), a blank node or a triple term. The
+ default graph is the absent graph option.
+ 
++### Language tags
++
++RDF 1.2 compares language tags without regard to case, so a dataset holds each
++tag folded to ASCII lower case and the labelling encodes the tag as the dataset
++holds it. A format that compares a language text whole and bytewise, as GTS
++does, keeps `"x"@EN-us` and `"x"@en-us` as two terms. The canonical RDF digest
++of a dataset folds tags; a digest over terms as written does not. The two
++identities are equal exactly when every language tag is already lower case.
++
++Reading a GTS file that holds a tag that is not lower case into a dataset
++records one `language-tag-case-folded` entry per affected literal in the
++envelope's loss ledger (`RdfEnvelope::losses`), naming the literal, the written
++tag and the tag the dataset holds; the `convert` command reports it with the
++other read losses. A dataset written to GTS writes the tag it holds.
++
+ ### Composite literals
+ 
+ A blank-node label written inside a `cdt:List` or `cdt:Map` literal names a
+diff --git docs/design/purrdf-canonical-labelling.md docs/design/purrdf-canonical-labelling.md
+index 53f65a489..7ad8a4a6a 100644
+--- docs/design/purrdf-canonical-labelling.md
++++ docs/design/purrdf-canonical-labelling.md
+@@ -159,6 +159,12 @@ definition; `view.rs` and the migration guide state PurRDF's own rule. A composi
+ literal that names a blank node is lowered to a composite node with one `record`
+ line, so the blank nodes it names take part in the labelling.
+ 
++The labelling encodes a language tag as the bytes its input gives, so the fold
++belongs to the input. A dataset view supplies the tag folded to lower case; a
++format that compares tags as bytes does not fold. The canonical RDF digest of a
++dataset and a digest over terms as written are two identities, equal exactly
++when every tag is already lower case.
++
+ ### 3.2 Components and refinement
+ 
+ The incidence graph has the blank nodes on one side and the lines that hold a blank
+diff --git generated/rdf-loss-matrix.json generated/rdf-loss-matrix.json
+index d3bddc914..bd1d2237a 100644
+--- generated/rdf-loss-matrix.json
++++ generated/rdf-loss-matrix.json
+@@ -12,5 +12,12 @@
+     "to": "rdf-1.2-dataset",
+     "intentional": true,
+     "note": "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing per-segment blank-node scope; the distinct scopes are recovered only via the streaming-event importer."
++  },
++  {
++    "code": "language-tag-case-folded",
++    "from": "gts",
++    "to": "rdf-1.2-dataset",
++    "intentional": true,
++    "note": "A GTS file compares a language tag bytewise; a dataset holds the tag folded to ASCII lower case, so a tag that is not already lower case loses its written spelling and two terms that differ only in tag case become one."
+   }
+ ]
+diff --git generated/transcode-loss-matrix.json generated/transcode-loss-matrix.json
+index 4beb9b986..3600c017b 100644
+--- generated/transcode-loss-matrix.json
++++ generated/transcode-loss-matrix.json
+@@ -447,6 +447,13 @@
+     "intentional": true,
+     "note": "`purrdf_gts::reader::read()` folds all segments into one term table, collapsing per-segment blank-node scope; the distinct scopes are recovered only via the streaming-event importer."
+   },
++  {
++    "code": "language-tag-case-folded",
++    "from": "gts",
++    "to": "rdf-1.2-dataset",
++    "intentional": true,
++    "note": "A GTS file compares a language tag bytewise; a dataset holds the tag folded to ASCII lower case, so a tag that is not already lower case loses its written spelling and two terms that differ only in tag case become one."
++  },
+   {
+     "code": "named-graph-dropped",
+     "from": "gts",
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 8e6738ee3..e4e5dc899 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3407,7 +3407,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3423,7 +3423,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3439,7 +3439,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3455,7 +3455,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3471,7 +3471,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3488,7 +3488,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3505,7 +3505,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3521,7 +3521,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3537,7 +3537,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3553,7 +3553,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3569,7 +3569,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3586,7 +3586,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3603,7 +3603,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3620,7 +3620,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3637,7 +3637,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3654,7 +3654,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3671,7 +3671,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3688,7 +3688,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3705,7 +3705,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3722,7 +3722,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3735,7 +3735,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3748,7 +3748,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3765,7 +3765,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3782,7 +3782,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3799,7 +3799,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3816,7 +3816,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3834,7 +3834,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3852,7 +3852,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3866,7 +3866,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:eedeecf1469d8070",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3883,7 +3883,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3900,7 +3900,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3917,7 +3917,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3934,7 +3934,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3953,7 +3953,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3972,7 +3972,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3991,7 +3991,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4010,7 +4010,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "encode_prepared_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4027,7 +4027,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4044,7 +4044,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4061,7 +4061,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:8f50b7f63fd19b7c"
++constructors = "source:ef8b04782b365dd2"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]

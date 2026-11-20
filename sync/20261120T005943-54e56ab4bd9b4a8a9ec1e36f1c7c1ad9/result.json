@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes",
+  "branch": "paudley/1394-canonical-labelling-requests-bytes",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "76c4e48ca7b513de074d9eb5851695ec1318f817",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes/.stage/canonical-labelling-requests-bytes/sync/20261120T005943-54e56ab4bd9b4a8a9ec1e36f1c7c1ad9",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "d2be07c47375a6eac51013b54dffa87c302ca78a",
+  "merge_bases": [
+    "3d74f50b40a9a23588f9ce525a94c31865382944"
+  ],
+  "merge_index": "61b7a65e9b05135c9c12b23846e3f250815d064d8894b2458a89f21dd50a4b7f",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "38af7334c8bcafaa36c615dc572cfe1900c822ec",
+  "candidate_patch": "candidate-e92907c17f1e452a8f6549e12ba0c953.patch",
+  "stdout_log": "commit-e92907c17f1e452a8f6549e12ba0c953.stdout.log",
+  "stderr_log": "commit-e92907c17f1e452a8f6549e12ba0c953.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 74.79742500999419,
+  "commit": "2c4ab2d775b0c806d278273a48778ed186c00596",
+  "tree": "38af7334c8bcafaa36c615dc572cfe1900c822ec",
+  "exit_code": 0
+}

@@ -1,0 +1,8 @@
+{"time": "2026-11-20T07:45:05.397063+00:00", "status": "started"}
+{"time": "2026-11-20T07:45:11.085727+00:00", "status": "merging"}
+{"time": "2026-11-20T07:45:13.370026+00:00", "status": "conflicted"}
+{"time": "2026-11-20T07:45:13.420355+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n"}
+{"time": "2026-11-20T07:55:47.709289+00:00", "status": "continuation_failed", "reason": "unexpected unstaged source changes: ['crates/rdf-core/tests/canonical_labelling_allocation.rs']"}
+{"time": "2026-11-20T07:55:52.283721+00:00", "status": "committing", "candidate_tree": "e226e17990c98ef12741dbe4c36536b94404cade", "candidate_patch": "candidate-ca0a9524cb11480aa0db263fbcf5afe8.patch", "stdout_log": "commit-ca0a9524cb11480aa0db263fbcf5afe8.stdout.log", "stderr_log": "commit-ca0a9524cb11480aa0db263fbcf5afe8.stderr.log", "validation_records": []}
+{"time": "2026-11-20T07:56:17.284184+00:00", "status": "commit_returned", "exit_code": 0, "commit_duration_seconds": 24.997857833994203, "stdout_log": "commit-ca0a9524cb11480aa0db263fbcf5afe8.stdout.log", "stderr_log": "commit-ca0a9524cb11480aa0db263fbcf5afe8.stderr.log"}
+{"time": "2026-11-20T07:56:17.733838+00:00", "status": "completed", "commit": "8298101e439db4be6bec3556c0a752f5b4d7c1fa", "tree": "e226e17990c98ef12741dbe4c36536b94404cade", "exit_code": 0, "stdout_log": "commit-ca0a9524cb11480aa0db263fbcf5afe8.stdout.log", "stderr_log": "commit-ca0a9524cb11480aa0db263fbcf5afe8.stderr.log"}
