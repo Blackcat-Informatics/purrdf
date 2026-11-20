@@ -89,6 +89,20 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         language: Option<&str>,
         direction: Option<&str>,
     ) -> Result<TermKey, RdfDiagnostic> {
+        // Once per term, as the importer's resolver callback is.
+        if let Some(tag) = language {
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.metadata.losses,
+                lexical,
+                tag,
+                crate::gts_language_fold::FoldSite {
+                    logical: "gts:sink",
+                    segment: Some(key.segment),
+                    term: key.term as u64,
+                },
+                self.memory,
+            )?;
+        }
         let datatype = datatype.map(|key| self.term(key)).transpose()?;
         if datatype
             .as_deref()
@@ -505,6 +519,8 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
 /// A diagnostic constructed by the exporter retains its charge in `memory`;
 /// keep that account alive and release the retained delta after destroying it.
 /// Host errors whose diagnostics own independent accounts add no such charge.
+/// On success the function refunds every byte it charged to `memory`, including
+/// those of the returned loss entries, which the caller then owns uncharged.
 pub fn export_gts_rdf_nquads_with_dictionary<D, A: Admission + ?Sized>(
     bytes: &[u8],
     dictionary: &mut dyn TermStorage,
@@ -558,7 +574,8 @@ where
             let output = emitter.output.finish().map_err(dictionary_import_failure)?;
             Ok(GtsTextExport {
                 written: output.written,
-                envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside),
+                envelope: crate::RdfEnvelope::new(emitter.metadata.lookaside)
+                    .with_losses(emitter.metadata.losses),
                 read,
             })
         })();

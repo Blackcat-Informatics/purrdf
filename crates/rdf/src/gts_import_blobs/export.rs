@@ -116,9 +116,25 @@ pub struct GtsInlineExport<Payload = Arc<[u8]>> {
     omissions: Vec<GtsBlobOmission>,
     /// Logical charges and peaks during admission, not total process memory.
     usage: GtsBlobUsage,
+    /// Losses of reading the file into the dataset, such as a language tag
+    /// folded to lower case.
+    losses: purrdf_core::LossLedger,
 }
 
 impl<Payload> GtsInlineExport<Payload> {
+    /// Move the losses of reading the file into the dataset out of the export,
+    /// leaving it with none; call before [`Self::into_parts`].
+    pub fn take_read_losses(&mut self) -> purrdf_core::LossLedger {
+        std::mem::take(&mut self.losses)
+    }
+
+    /// The losses of reading the file into the dataset, read before
+    /// [`Self::into_parts`] consumes the export.
+    #[must_use]
+    pub const fn read_losses(&self) -> &purrdf_core::LossLedger {
+        &self.losses
+    }
+
     /// Consume the eager admission result without copying its payload owners.
     pub fn into_parts(
         self,
@@ -150,7 +166,11 @@ pub fn import_gts_inline_for_export(
             "inline export collector is missing",
         )
     })?;
-    collector.finish_export(bundle.dataset, CollectedPayload::resident)
+    collector.finish_export(
+        bundle.dataset,
+        bundle.envelope.losses,
+        CollectedPayload::resident,
+    )
 }
 
 /// Stage admitted inline blobs through bounded decoded chunks.
@@ -174,7 +194,11 @@ pub fn import_gts_inline_to(
             "streaming export collector is missing",
         )
     })?;
-    collector.finish_export(bundle.dataset, CollectedPayload::staged)
+    collector.finish_export(
+        bundle.dataset,
+        bundle.envelope.losses,
+        CollectedPayload::staged,
+    )
 }
 
 impl BlobCollector<'_> {
@@ -255,6 +279,7 @@ impl BlobCollector<'_> {
     fn finish_export<Payload>(
         mut self,
         dataset: Arc<crate::RdfDataset>,
+        losses: purrdf_core::LossLedger,
         convert: impl FnMut(CollectedPayload) -> Result<Payload, RdfDiagnostic>,
     ) -> Result<GtsInlineExport<Payload>, RdfDiagnostic> {
         let mut omissions = self.export.take().ok_or_else(|| {
@@ -345,6 +370,7 @@ impl BlobCollector<'_> {
             blobs,
             omissions,
             usage: self.usage,
+            losses,
         })
     }
 
