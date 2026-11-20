@@ -1,0 +1,30 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABo7_i_Q": {
+    "resolution": "acknowledged",
+    "reason": "Path-check evidence comment, not a finding. The one MISSING line (entailment/) is the W3C sparql11 group name the README table cites, not a repository path; triaged in .stage/1407/path-check.log. Every other named path and make target resolves.",
+    "commit": "d57b5975897580dd8d2297857308dd7d1c863c38",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T14:36:00Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "75d619663b08eef3939ccbff1daef831055ce3448383f0d1326451544bf6fa05"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABo7_7qg": {
+    "resolution": "acknowledged",
+    "reason": "CodeRabbit walkthrough summary; it states no actionable comments and raises no finding.",
+    "commit": "d57b5975897580dd8d2297857308dd7d1c863c38",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T14:39:34Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "35917ac87b7edae9116fd5689dbe4227947739bf3060464fe8117906bc1a6538"
+    }
+  }
+}
