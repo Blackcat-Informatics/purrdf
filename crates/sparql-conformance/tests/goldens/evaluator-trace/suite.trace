@@ -28817,23 +28817,23 @@ fuel 4..=64 x61 complete rows=0 digest=2e2192fdfde6d35e | fuel=4
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#construct-3> Reified triples - CONSTRUCT - about every triple
 graph quads=8
 | _:0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/s> <http://example/p> <http://example/o> )>> .
-| _:1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> )>> .
-| _:2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:3 <http://example/q> <http://example/z> )>> .
-| _:4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
+| _:1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> )>> .
+| _:3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:4 <http://example/q> <http://example/z> )>> .
+| _:5 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
 | _:0 <http://example/source> <http://example/ABC> .
 | _:1 <http://example/source> <http://example/ABC> .
-| _:2 <http://example/source> <http://example/ABC> .
-| _:4 <http://example/source> <http://example/ABC> .
+| _:3 <http://example/source> <http://example/ABC> .
+| _:5 <http://example/source> <http://example/ABC> .
 metered complete fuel=9 answer-rows=8 intermediate-cells=12 scratch-bytes=136
 explain fuel=9 answer-rows=8 intermediate-cells=12 scratch-bytes=136
 node 0 depth=0 Bgp rows=4 cells=12 algebra-node-entry=1 committed-output-row=4 bgp-candidate-quad=4
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=1
 fuel 1..=4 x4 tripped fuel-exhausted consumed=5 certain prefix=true rows=0 digest=a26b23d9c163eb30 | fuel=5
-fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=0 digest=db8c8266e6b19106 | fuel=6
-fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=db8c8266e6b19106 | fuel=7
-fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=0 digest=db8c8266e6b19106 | fuel=8
-fuel 8 tripped fuel-exhausted consumed=9 certain prefix=true rows=0 digest=db8c8266e6b19106 | fuel=9
-fuel 9..=64 x56 complete rows=0 digest=db8c8266e6b19106 | fuel=9
+fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=0 digest=b37079264ee69ba8 | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=b37079264ee69ba8 | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=0 digest=b37079264ee69ba8 | fuel=8
+fuel 8 tripped fuel-exhausted consumed=9 certain prefix=true rows=0 digest=b37079264ee69ba8 | fuel=9
+fuel 9..=64 x56 complete rows=0 digest=b37079264ee69ba8 | fuel=9
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#construct-4> Reified triples - CONSTRUCT with annotation syntax
 graph quads=3
 | <http://example/a> <http://example/b> <http://example/c> .
@@ -28864,14 +28864,14 @@ fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=1 digest=a45a4
 fuel 7..=64 x58 complete rows=1 digest=a45a4e8dc107b5f4 | fuel=7
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#expr-1> Reified triples - Embedded triple - BIND - CONSTRUCT
 graph quads=8
-| <http://example/g> <http://example/graphContains> <<( _:2 <http://example/q1> <http://example/z1> )>> .
-| <http://example/g> <http://example/graphContains> <<( _:2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/s> <http://example/p> <http://example/o1> )>> )>> .
-| <http://example/g> <http://example/graphContains> <<( _:3 <http://example/q2> <http://example/z2> )>> .
-| <http://example/g> <http://example/graphContains> <<( _:3 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/s> <http://example/p> <http://example/o2> )>> )>> .
-| <http://example/g1> <http://example/graphContains> <<( _:1 <http://example/r> <http://example/o3> )>> .
-| <http://example/g1> <http://example/graphContains> <<( _:1 <http://example/r> <http://example/o4> )>> .
-| <http://example/g2> <http://example/graphContains> <<( _:0 <http://example/pb> "abc" )>> .
-| <http://example/g2> <http://example/graphContains> <<( _:0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:1 <http://example/r> <http://example/o3> )>> )>> .
+| <http://example/g> <http://example/graphContains> <<( _:4 <http://example/q2> <http://example/z2> )>> .
+| <http://example/g> <http://example/graphContains> <<( _:4 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/s> <http://example/p> <http://example/o2> )>> )>> .
+| <http://example/g> <http://example/graphContains> <<( _:6 <http://example/q1> <http://example/z1> )>> .
+| <http://example/g> <http://example/graphContains> <<( _:6 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example/s> <http://example/p> <http://example/o1> )>> )>> .
+| <http://example/g1> <http://example/graphContains> <<( _:2 <http://example/r> <http://example/o3> )>> .
+| <http://example/g1> <http://example/graphContains> <<( _:2 <http://example/r> <http://example/o4> )>> .
+| <http://example/g2> <http://example/graphContains> <<( _:1 <http://example/pb> "abc" )>> .
+| <http://example/g2> <http://example/graphContains> <<( _:1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:2 <http://example/r> <http://example/o3> )>> )>> .
 metered complete fuel=47 answer-rows=8 intermediate-cells=40 scratch-bytes=1807
 explain fuel=47 answer-rows=8 intermediate-cells=40 scratch-bytes=1807
 node 0 depth=0 Graph rows=8 cells=40 algebra-node-entry=1 committed-output-row=8
@@ -28902,24 +28902,24 @@ fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=2 digest=6e2
 fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=2 digest=6e25a0b48b13e5ef | fuel=27
 fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=2 digest=6e25a0b48b13e5ef | fuel=28
 fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=2 digest=6e25a0b48b13e5ef | fuel=29
-fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=30
-fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=31
-fuel 31..=32 x2 tripped fuel-exhausted consumed=33 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=33
-fuel 33 tripped fuel-exhausted consumed=34 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=34
-fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=35
-fuel 35 tripped fuel-exhausted consumed=36 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=36
-fuel 36 tripped fuel-exhausted consumed=37 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=37
-fuel 37 tripped fuel-exhausted consumed=38 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=38
-fuel 38 tripped fuel-exhausted consumed=39 certain prefix=true rows=6 digest=7a15a7c256f2c410 | fuel=39
-fuel 39 tripped fuel-exhausted consumed=40 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=40
-fuel 40 tripped fuel-exhausted consumed=41 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=41
-fuel 41 tripped fuel-exhausted consumed=42 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=42
-fuel 42 tripped fuel-exhausted consumed=43 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=43
-fuel 43 tripped fuel-exhausted consumed=44 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=44
-fuel 44 tripped fuel-exhausted consumed=45 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=45
-fuel 45 tripped fuel-exhausted consumed=46 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=46
-fuel 46 tripped fuel-exhausted consumed=47 certain prefix=true rows=8 digest=124b1473cb221de5 | fuel=47
-fuel 47..=64 x18 complete rows=8 digest=124b1473cb221de5 | fuel=47
+fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=30
+fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=31
+fuel 31..=32 x2 tripped fuel-exhausted consumed=33 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=33
+fuel 33 tripped fuel-exhausted consumed=34 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=34
+fuel 34 tripped fuel-exhausted consumed=35 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=35
+fuel 35 tripped fuel-exhausted consumed=36 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=36
+fuel 36 tripped fuel-exhausted consumed=37 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=37
+fuel 37 tripped fuel-exhausted consumed=38 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=38
+fuel 38 tripped fuel-exhausted consumed=39 certain prefix=true rows=6 digest=52ac68dc12945772 | fuel=39
+fuel 39 tripped fuel-exhausted consumed=40 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=40
+fuel 40 tripped fuel-exhausted consumed=41 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=41
+fuel 41 tripped fuel-exhausted consumed=42 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=42
+fuel 42 tripped fuel-exhausted consumed=43 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=43
+fuel 43 tripped fuel-exhausted consumed=44 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=44
+fuel 44 tripped fuel-exhausted consumed=45 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=45
+fuel 45 tripped fuel-exhausted consumed=46 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=46
+fuel 46 tripped fuel-exhausted consumed=47 certain prefix=true rows=8 digest=4d18f62c0671bab4 | fuel=47
+fuel 47..=64 x18 complete rows=8 digest=4d18f62c0671bab4 | fuel=47
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#expr-2> Reified triples - Embedded triple - Functions
 solutions vars=["t"] rows=1 ordered=false
 | _:0 <urn:purrdf:conformance:var:t> <<( <http://example/s> <http://example/p> <http://example/o> )>> .
@@ -29139,15 +29139,15 @@ fuel 50 tripped fuel-exhausted consumed=51 certain prefix=true rows=4 digest=dad
 fuel 51..=64 x14 complete rows=4 digest=dad4458b5e56d9c9 | fuel=51
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#op-2> Reified triples - Embedded triple - value-equality
 solutions vars=["x", "left", "right"] rows=3 ordered=false
-| _:0 <urn:purrdf:conformance:var:x> <http://example/x3> .
-| _:0 <urn:purrdf:conformance:var:left> <<( <http://example/a> <http://example/q> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
-| _:0 <urn:purrdf:conformance:var:right> <<( <http://example/a> <http://example/q> <<( <http://example/a> <http://example/b> "123.0"^^<http://www.w3.org/2001/XMLSchema#decimal> )>> )>> .
-| _:2 <urn:purrdf:conformance:var:x> <http://example/x6> .
-| _:2 <urn:purrdf:conformance:var:left> <<( _:1 <http://example/b> "123e0"^^<http://www.w3.org/2001/XMLSchema#double> )>> .
-| _:2 <urn:purrdf:conformance:var:right> <<( _:1 <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:3 <urn:purrdf:conformance:var:x> <http://example/x1> .
-| _:3 <urn:purrdf:conformance:var:left> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:3 <urn:purrdf:conformance:var:right> <<( <http://example/a> <http://example/b> "123.0"^^<http://www.w3.org/2001/XMLSchema#decimal> )>> .
+| _:1 <urn:purrdf:conformance:var:x> <http://example/x6> .
+| _:1 <urn:purrdf:conformance:var:left> <<( _:0 <http://example/b> "123e0"^^<http://www.w3.org/2001/XMLSchema#double> )>> .
+| _:1 <urn:purrdf:conformance:var:right> <<( _:0 <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:2 <urn:purrdf:conformance:var:x> <http://example/x1> .
+| _:2 <urn:purrdf:conformance:var:left> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:2 <urn:purrdf:conformance:var:right> <<( <http://example/a> <http://example/b> "123.0"^^<http://www.w3.org/2001/XMLSchema#decimal> )>> .
+| _:5 <urn:purrdf:conformance:var:x> <http://example/x3> .
+| _:5 <urn:purrdf:conformance:var:left> <<( <http://example/a> <http://example/q> <<( <http://example/a> <http://example/b> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
+| _:5 <urn:purrdf:conformance:var:right> <<( <http://example/a> <http://example/q> <<( <http://example/a> <http://example/b> "123.0"^^<http://www.w3.org/2001/XMLSchema#decimal> )>> )>> .
 metered complete fuel=62 answer-rows=3 intermediate-cells=30 scratch-bytes=153
 explain fuel=62 answer-rows=3 intermediate-cells=30 scratch-bytes=153
 node 0 depth=0 Project rows=3 cells=9 algebra-node-entry=1 committed-output-row=3
@@ -29197,17 +29197,17 @@ fuel 48 tripped fuel-exhausted consumed=49 certain prefix=true rows=0 digest=b63
 fuel 49 tripped fuel-exhausted consumed=50 certain prefix=true rows=0 digest=b63b9f47c9143540 | fuel=50
 fuel 50 tripped fuel-exhausted consumed=51 certain prefix=true rows=0 digest=b63b9f47c9143540 | fuel=51
 fuel 51 tripped fuel-exhausted consumed=52 certain prefix=true rows=1 digest=cd8585571faf3318 | fuel=52
-fuel 52 tripped fuel-exhausted consumed=53 certain prefix=true rows=2 digest=32aefdefa0e71aaf | fuel=53
-fuel 53 tripped fuel-exhausted consumed=54 certain prefix=true rows=2 digest=32aefdefa0e71aaf | fuel=54
-fuel 54 tripped fuel-exhausted consumed=55 certain prefix=true rows=3 digest=16d908037f27355f | fuel=55
-fuel 55 tripped fuel-exhausted consumed=56 certain prefix=true rows=3 digest=16d908037f27355f | fuel=56
-fuel 56 tripped fuel-exhausted consumed=57 certain prefix=true rows=3 digest=16d908037f27355f | fuel=57
-fuel 57 tripped fuel-exhausted consumed=58 certain prefix=true rows=3 digest=16d908037f27355f | fuel=58
-fuel 58 tripped fuel-exhausted consumed=59 certain prefix=true rows=3 digest=16d908037f27355f | fuel=59
-fuel 59 tripped fuel-exhausted consumed=60 certain prefix=true rows=3 digest=16d908037f27355f | fuel=60
-fuel 60 tripped fuel-exhausted consumed=61 certain prefix=true rows=3 digest=16d908037f27355f | fuel=61
-fuel 61 tripped fuel-exhausted consumed=62 certain prefix=true rows=3 digest=16d908037f27355f | fuel=62
-fuel 62..=64 x3 complete rows=3 digest=16d908037f27355f | fuel=62
+fuel 52 tripped fuel-exhausted consumed=53 certain prefix=true rows=2 digest=09151667d8a20165 | fuel=53
+fuel 53 tripped fuel-exhausted consumed=54 certain prefix=true rows=2 digest=09151667d8a20165 | fuel=54
+fuel 54 tripped fuel-exhausted consumed=55 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=55
+fuel 55 tripped fuel-exhausted consumed=56 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=56
+fuel 56 tripped fuel-exhausted consumed=57 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=57
+fuel 57 tripped fuel-exhausted consumed=58 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=58
+fuel 58 tripped fuel-exhausted consumed=59 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=59
+fuel 59 tripped fuel-exhausted consumed=60 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=60
+fuel 60 tripped fuel-exhausted consumed=61 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=61
+fuel 61 tripped fuel-exhausted consumed=62 certain prefix=true rows=3 digest=4bd5efcff7a1b83a | fuel=62
+fuel 62..=64 x3 complete rows=3 digest=4bd5efcff7a1b83a | fuel=62
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#order-1> Reified triples - Embedded triple - ORDER BY
 solutions vars=["v", "index"] rows=4 ordered=false
 | _:0 <urn:purrdf:conformance:var:v> <<( <http://example/s> <http://example/p> <http://example/o> )>> .
@@ -29709,22 +29709,22 @@ fuel 442 complete rows=4 digest=bd3d04033192a6dd | fuel=442
 solutions vars=["v", "index"] rows=9 ordered=false
 | _:0 <urn:purrdf:conformance:var:v> <<( <http://example.com/s> <http://example.com/p> <<( <http://example.com/x> <http://example.com/y> <http://example.com/z> )>> )>> .
 | _:0 <urn:purrdf:conformance:var:index> "B-6" .
-| _:1 <urn:purrdf:conformance:var:v> <<( <http://example.com/s> <http://example.com/p> "-456"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:1 <urn:purrdf:conformance:var:index> "C-4" .
-| _:2 <urn:purrdf:conformance:var:v> <<( <http://example.com/s> <http://example.com/p> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:2 <urn:purrdf:conformance:var:index> "B-5" .
-| _:3 <urn:purrdf:conformance:var:v> <<( <http://example.com/s2> <http://example.com/p> "900"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:3 <urn:purrdf:conformance:var:index> "A-9" .
-| _:4 <urn:purrdf:conformance:var:v> _:5 .
-| _:4 <urn:purrdf:conformance:var:index> "B-1" .
-| _:6 <urn:purrdf:conformance:var:v> <http://host/entity> .
-| _:6 <urn:purrdf:conformance:var:index> "B-2" .
-| _:7 <urn:purrdf:conformance:var:v> <<( <http://example.com/s1> <http://example.com/a> "999"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:7 <urn:purrdf:conformance:var:index> "C-7" .
-| _:8 <urn:purrdf:conformance:var:v> <<( <http://example.com/s1> <http://example.com/p> "999"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
-| _:8 <urn:purrdf:conformance:var:index> "C-8" .
-| _:9 <urn:purrdf:conformance:var:v> "string" .
-| _:9 <urn:purrdf:conformance:var:index> "A-3" .
+| _:2 <urn:purrdf:conformance:var:v> <<( <http://example.com/s> <http://example.com/p> "-456"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:2 <urn:purrdf:conformance:var:index> "C-4" .
+| _:3 <urn:purrdf:conformance:var:v> <<( <http://example.com/s> <http://example.com/p> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:3 <urn:purrdf:conformance:var:index> "B-5" .
+| _:4 <urn:purrdf:conformance:var:v> <<( <http://example.com/s2> <http://example.com/p> "900"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:4 <urn:purrdf:conformance:var:index> "A-9" .
+| _:5 <urn:purrdf:conformance:var:v> _:6 .
+| _:5 <urn:purrdf:conformance:var:index> "B-1" .
+| _:7 <urn:purrdf:conformance:var:v> <http://host/entity> .
+| _:7 <urn:purrdf:conformance:var:index> "B-2" .
+| _:8 <urn:purrdf:conformance:var:v> <<( <http://example.com/s1> <http://example.com/a> "999"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:8 <urn:purrdf:conformance:var:index> "C-7" .
+| _:9 <urn:purrdf:conformance:var:v> <<( <http://example.com/s1> <http://example.com/p> "999"^^<http://www.w3.org/2001/XMLSchema#integer> )>> .
+| _:9 <urn:purrdf:conformance:var:index> "C-8" .
+| _:10 <urn:purrdf:conformance:var:v> "string" .
+| _:10 <urn:purrdf:conformance:var:index> "A-3" .
 metered complete fuel=867 answer-rows=9 intermediate-cells=27 scratch-bytes=666
 explain fuel=867 answer-rows=9 intermediate-cells=27 scratch-bytes=666
 node 0 depth=0 Project rows=9 cells=18 algebra-node-entry=1 committed-output-row=9
@@ -30046,11 +30046,11 @@ fuel 261 tripped fuel-exhausted consumed=262 certain prefix=false rows=5 digest=
 fuel 262 tripped fuel-exhausted consumed=263 certain prefix=false rows=5 digest=34f973873fdd3a3d | fuel=263
 fuel 263 tripped fuel-exhausted consumed=264 certain prefix=false rows=5 digest=34f973873fdd3a3d | fuel=264
 fuel 264 tripped fuel-exhausted consumed=265 certain prefix=false rows=5 digest=34f973873fdd3a3d | fuel=265
-fuel 265 tripped fuel-exhausted consumed=266 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=266
-fuel 266 tripped fuel-exhausted consumed=267 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=267
-fuel 267 tripped fuel-exhausted consumed=268 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=268
-fuel 268 tripped fuel-exhausted consumed=269 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=269
-fuel 269 tripped fuel-exhausted consumed=270 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=270
+fuel 265 tripped fuel-exhausted consumed=266 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=266
+fuel 266 tripped fuel-exhausted consumed=267 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=267
+fuel 267 tripped fuel-exhausted consumed=268 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=268
+fuel 268 tripped fuel-exhausted consumed=269 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=269
+fuel 269 tripped fuel-exhausted consumed=270 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=270
 fuel 270 tripped fuel-exhausted consumed=271 unknown barrier=Slice | fuel=271
 fuel 271..=279 x9 tripped fuel-exhausted consumed=280 unknown barrier=Slice | fuel=280
 fuel 280 tripped fuel-exhausted consumed=281 unknown barrier=Slice | fuel=281
@@ -30062,31 +30062,31 @@ fuel 285 tripped fuel-exhausted consumed=286 unknown barrier=Slice | fuel=286
 fuel 286 tripped fuel-exhausted consumed=287 unknown barrier=Slice | fuel=287
 fuel 287 tripped fuel-exhausted consumed=288 unknown barrier=Slice | fuel=288
 fuel 288 tripped fuel-exhausted consumed=289 unknown barrier=Slice | fuel=289
-fuel 289 tripped fuel-exhausted consumed=290 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=290
-fuel 290 tripped fuel-exhausted consumed=291 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=291
-fuel 291 tripped fuel-exhausted consumed=292 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=292
-fuel 292 tripped fuel-exhausted consumed=293 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=293
-fuel 293 tripped fuel-exhausted consumed=294 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=294
-fuel 294 tripped fuel-exhausted consumed=295 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=295
-fuel 295 tripped fuel-exhausted consumed=296 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=296
-fuel 296 tripped fuel-exhausted consumed=297 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=297
-fuel 297 tripped fuel-exhausted consumed=298 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=298
-fuel 298 tripped fuel-exhausted consumed=299 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=299
-fuel 299 tripped fuel-exhausted consumed=300 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=300
-fuel 300 tripped fuel-exhausted consumed=301 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=301
-fuel 301 tripped fuel-exhausted consumed=302 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=302
-fuel 302 tripped fuel-exhausted consumed=303 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=303
-fuel 303 tripped fuel-exhausted consumed=304 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=304
-fuel 304 tripped fuel-exhausted consumed=305 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=305
-fuel 305 tripped fuel-exhausted consumed=306 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=306
-fuel 306 tripped fuel-exhausted consumed=307 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=307
-fuel 307 tripped fuel-exhausted consumed=308 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=308
-fuel 308 tripped fuel-exhausted consumed=309 certain prefix=false rows=6 digest=e7e3803ca0d24db8 | fuel=309
-fuel 309 tripped fuel-exhausted consumed=310 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=310
-fuel 310 tripped fuel-exhausted consumed=311 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=311
-fuel 311 tripped fuel-exhausted consumed=312 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=312
-fuel 312 tripped fuel-exhausted consumed=313 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=313
-fuel 313 tripped fuel-exhausted consumed=314 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=314
+fuel 289 tripped fuel-exhausted consumed=290 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=290
+fuel 290 tripped fuel-exhausted consumed=291 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=291
+fuel 291 tripped fuel-exhausted consumed=292 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=292
+fuel 292 tripped fuel-exhausted consumed=293 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=293
+fuel 293 tripped fuel-exhausted consumed=294 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=294
+fuel 294 tripped fuel-exhausted consumed=295 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=295
+fuel 295 tripped fuel-exhausted consumed=296 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=296
+fuel 296 tripped fuel-exhausted consumed=297 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=297
+fuel 297 tripped fuel-exhausted consumed=298 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=298
+fuel 298 tripped fuel-exhausted consumed=299 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=299
+fuel 299 tripped fuel-exhausted consumed=300 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=300
+fuel 300 tripped fuel-exhausted consumed=301 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=301
+fuel 301 tripped fuel-exhausted consumed=302 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=302
+fuel 302 tripped fuel-exhausted consumed=303 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=303
+fuel 303 tripped fuel-exhausted consumed=304 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=304
+fuel 304 tripped fuel-exhausted consumed=305 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=305
+fuel 305 tripped fuel-exhausted consumed=306 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=306
+fuel 306 tripped fuel-exhausted consumed=307 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=307
+fuel 307 tripped fuel-exhausted consumed=308 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=308
+fuel 308 tripped fuel-exhausted consumed=309 certain prefix=false rows=6 digest=0cb3f56228afcad7 | fuel=309
+fuel 309 tripped fuel-exhausted consumed=310 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=310
+fuel 310 tripped fuel-exhausted consumed=311 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=311
+fuel 311 tripped fuel-exhausted consumed=312 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=312
+fuel 312 tripped fuel-exhausted consumed=313 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=313
+fuel 313 tripped fuel-exhausted consumed=314 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=314
 fuel 314 tripped fuel-exhausted consumed=315 unknown barrier=Slice | fuel=315
 fuel 315..=323 x9 tripped fuel-exhausted consumed=324 unknown barrier=Slice | fuel=324
 fuel 324 tripped fuel-exhausted consumed=325 unknown barrier=Slice | fuel=325
@@ -30098,31 +30098,31 @@ fuel 329 tripped fuel-exhausted consumed=330 unknown barrier=Slice | fuel=330
 fuel 330 tripped fuel-exhausted consumed=331 unknown barrier=Slice | fuel=331
 fuel 331 tripped fuel-exhausted consumed=332 unknown barrier=Slice | fuel=332
 fuel 332 tripped fuel-exhausted consumed=333 unknown barrier=Slice | fuel=333
-fuel 333 tripped fuel-exhausted consumed=334 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=334
-fuel 334 tripped fuel-exhausted consumed=335 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=335
-fuel 335 tripped fuel-exhausted consumed=336 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=336
-fuel 336 tripped fuel-exhausted consumed=337 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=337
-fuel 337 tripped fuel-exhausted consumed=338 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=338
-fuel 338 tripped fuel-exhausted consumed=339 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=339
-fuel 339 tripped fuel-exhausted consumed=340 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=340
-fuel 340 tripped fuel-exhausted consumed=341 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=341
-fuel 341 tripped fuel-exhausted consumed=342 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=342
-fuel 342 tripped fuel-exhausted consumed=343 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=343
-fuel 343 tripped fuel-exhausted consumed=344 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=344
-fuel 344 tripped fuel-exhausted consumed=345 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=345
-fuel 345 tripped fuel-exhausted consumed=346 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=346
-fuel 346 tripped fuel-exhausted consumed=347 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=347
-fuel 347 tripped fuel-exhausted consumed=348 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=348
-fuel 348 tripped fuel-exhausted consumed=349 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=349
-fuel 349 tripped fuel-exhausted consumed=350 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=350
-fuel 350 tripped fuel-exhausted consumed=351 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=351
-fuel 351 tripped fuel-exhausted consumed=352 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=352
-fuel 352 tripped fuel-exhausted consumed=353 certain prefix=false rows=7 digest=38ced89009e2fdb8 | fuel=353
-fuel 353 tripped fuel-exhausted consumed=354 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=354
-fuel 354 tripped fuel-exhausted consumed=355 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=355
-fuel 355 tripped fuel-exhausted consumed=356 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=356
-fuel 356 tripped fuel-exhausted consumed=357 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=357
-fuel 357 tripped fuel-exhausted consumed=358 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=358
+fuel 333 tripped fuel-exhausted consumed=334 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=334
+fuel 334 tripped fuel-exhausted consumed=335 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=335
+fuel 335 tripped fuel-exhausted consumed=336 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=336
+fuel 336 tripped fuel-exhausted consumed=337 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=337
+fuel 337 tripped fuel-exhausted consumed=338 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=338
+fuel 338 tripped fuel-exhausted consumed=339 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=339
+fuel 339 tripped fuel-exhausted consumed=340 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=340
+fuel 340 tripped fuel-exhausted consumed=341 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=341
+fuel 341 tripped fuel-exhausted consumed=342 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=342
+fuel 342 tripped fuel-exhausted consumed=343 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=343
+fuel 343 tripped fuel-exhausted consumed=344 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=344
+fuel 344 tripped fuel-exhausted consumed=345 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=345
+fuel 345 tripped fuel-exhausted consumed=346 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=346
+fuel 346 tripped fuel-exhausted consumed=347 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=347
+fuel 347 tripped fuel-exhausted consumed=348 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=348
+fuel 348 tripped fuel-exhausted consumed=349 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=349
+fuel 349 tripped fuel-exhausted consumed=350 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=350
+fuel 350 tripped fuel-exhausted consumed=351 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=351
+fuel 351 tripped fuel-exhausted consumed=352 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=352
+fuel 352 tripped fuel-exhausted consumed=353 certain prefix=false rows=7 digest=5467d643d6fa3e39 | fuel=353
+fuel 353 tripped fuel-exhausted consumed=354 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=354
+fuel 354 tripped fuel-exhausted consumed=355 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=355
+fuel 355 tripped fuel-exhausted consumed=356 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=356
+fuel 356 tripped fuel-exhausted consumed=357 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=357
+fuel 357 tripped fuel-exhausted consumed=358 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=358
 fuel 358 tripped fuel-exhausted consumed=359 unknown barrier=Slice | fuel=359
 fuel 359..=367 x9 tripped fuel-exhausted consumed=368 unknown barrier=Slice | fuel=368
 fuel 368 tripped fuel-exhausted consumed=369 unknown barrier=Slice | fuel=369
@@ -30134,31 +30134,31 @@ fuel 373 tripped fuel-exhausted consumed=374 unknown barrier=Slice | fuel=374
 fuel 374 tripped fuel-exhausted consumed=375 unknown barrier=Slice | fuel=375
 fuel 375 tripped fuel-exhausted consumed=376 unknown barrier=Slice | fuel=376
 fuel 376 tripped fuel-exhausted consumed=377 unknown barrier=Slice | fuel=377
-fuel 377 tripped fuel-exhausted consumed=378 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=378
-fuel 378 tripped fuel-exhausted consumed=379 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=379
-fuel 379 tripped fuel-exhausted consumed=380 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=380
-fuel 380 tripped fuel-exhausted consumed=381 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=381
-fuel 381 tripped fuel-exhausted consumed=382 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=382
-fuel 382 tripped fuel-exhausted consumed=383 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=383
-fuel 383 tripped fuel-exhausted consumed=384 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=384
-fuel 384 tripped fuel-exhausted consumed=385 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=385
-fuel 385 tripped fuel-exhausted consumed=386 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=386
-fuel 386 tripped fuel-exhausted consumed=387 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=387
-fuel 387 tripped fuel-exhausted consumed=388 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=388
-fuel 388 tripped fuel-exhausted consumed=389 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=389
-fuel 389 tripped fuel-exhausted consumed=390 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=390
-fuel 390 tripped fuel-exhausted consumed=391 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=391
-fuel 391 tripped fuel-exhausted consumed=392 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=392
-fuel 392 tripped fuel-exhausted consumed=393 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=393
-fuel 393 tripped fuel-exhausted consumed=394 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=394
-fuel 394 tripped fuel-exhausted consumed=395 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=395
-fuel 395 tripped fuel-exhausted consumed=396 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=396
-fuel 396 tripped fuel-exhausted consumed=397 certain prefix=false rows=8 digest=0a82a8f783b80780 | fuel=397
-fuel 397 tripped fuel-exhausted consumed=398 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=398
-fuel 398 tripped fuel-exhausted consumed=399 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=399
-fuel 399 tripped fuel-exhausted consumed=400 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=400
-fuel 400 tripped fuel-exhausted consumed=401 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=401
-fuel 401 tripped fuel-exhausted consumed=402 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=402
+fuel 377 tripped fuel-exhausted consumed=378 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=378
+fuel 378 tripped fuel-exhausted consumed=379 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=379
+fuel 379 tripped fuel-exhausted consumed=380 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=380
+fuel 380 tripped fuel-exhausted consumed=381 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=381
+fuel 381 tripped fuel-exhausted consumed=382 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=382
+fuel 382 tripped fuel-exhausted consumed=383 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=383
+fuel 383 tripped fuel-exhausted consumed=384 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=384
+fuel 384 tripped fuel-exhausted consumed=385 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=385
+fuel 385 tripped fuel-exhausted consumed=386 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=386
+fuel 386 tripped fuel-exhausted consumed=387 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=387
+fuel 387 tripped fuel-exhausted consumed=388 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=388
+fuel 388 tripped fuel-exhausted consumed=389 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=389
+fuel 389 tripped fuel-exhausted consumed=390 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=390
+fuel 390 tripped fuel-exhausted consumed=391 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=391
+fuel 391 tripped fuel-exhausted consumed=392 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=392
+fuel 392 tripped fuel-exhausted consumed=393 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=393
+fuel 393 tripped fuel-exhausted consumed=394 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=394
+fuel 394 tripped fuel-exhausted consumed=395 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=395
+fuel 395 tripped fuel-exhausted consumed=396 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=396
+fuel 396 tripped fuel-exhausted consumed=397 certain prefix=false rows=8 digest=d5c8f342c4d01b53 | fuel=397
+fuel 397 tripped fuel-exhausted consumed=398 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=398
+fuel 398 tripped fuel-exhausted consumed=399 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=399
+fuel 399 tripped fuel-exhausted consumed=400 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=400
+fuel 400 tripped fuel-exhausted consumed=401 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=401
+fuel 401 tripped fuel-exhausted consumed=402 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=402
 fuel 402 tripped fuel-exhausted consumed=403 unknown barrier=Slice | fuel=403
 fuel 403..=411 x9 tripped fuel-exhausted consumed=412 unknown barrier=Slice | fuel=412
 fuel 412 tripped fuel-exhausted consumed=413 unknown barrier=Slice | fuel=413
@@ -30170,28 +30170,28 @@ fuel 417 tripped fuel-exhausted consumed=418 unknown barrier=Slice | fuel=418
 fuel 418 tripped fuel-exhausted consumed=419 unknown barrier=Slice | fuel=419
 fuel 419 tripped fuel-exhausted consumed=420 unknown barrier=Slice | fuel=420
 fuel 420 tripped fuel-exhausted consumed=421 unknown barrier=Slice | fuel=421
-fuel 421 tripped fuel-exhausted consumed=422 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=422
-fuel 422 tripped fuel-exhausted consumed=423 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=423
-fuel 423 tripped fuel-exhausted consumed=424 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=424
-fuel 424 tripped fuel-exhausted consumed=425 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=425
-fuel 425 tripped fuel-exhausted consumed=426 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=426
-fuel 426 tripped fuel-exhausted consumed=427 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=427
-fuel 427 tripped fuel-exhausted consumed=428 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=428
-fuel 428 tripped fuel-exhausted consumed=429 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=429
-fuel 429 tripped fuel-exhausted consumed=430 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=430
-fuel 430 tripped fuel-exhausted consumed=431 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=431
-fuel 431 tripped fuel-exhausted consumed=432 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=432
-fuel 432 tripped fuel-exhausted consumed=433 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=433
-fuel 433 tripped fuel-exhausted consumed=434 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=434
-fuel 434 tripped fuel-exhausted consumed=435 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=435
-fuel 435 tripped fuel-exhausted consumed=436 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=436
-fuel 436 tripped fuel-exhausted consumed=437 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=437
-fuel 437 tripped fuel-exhausted consumed=438 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=438
-fuel 438 tripped fuel-exhausted consumed=439 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=439
-fuel 439 tripped fuel-exhausted consumed=440 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=440
-fuel 440 tripped fuel-exhausted consumed=441 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=441
-fuel 441 tripped fuel-exhausted consumed=442 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=442
-fuel 442 tripped fuel-exhausted consumed=443 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=443
+fuel 421 tripped fuel-exhausted consumed=422 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=422
+fuel 422 tripped fuel-exhausted consumed=423 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=423
+fuel 423 tripped fuel-exhausted consumed=424 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=424
+fuel 424 tripped fuel-exhausted consumed=425 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=425
+fuel 425 tripped fuel-exhausted consumed=426 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=426
+fuel 426 tripped fuel-exhausted consumed=427 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=427
+fuel 427 tripped fuel-exhausted consumed=428 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=428
+fuel 428 tripped fuel-exhausted consumed=429 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=429
+fuel 429 tripped fuel-exhausted consumed=430 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=430
+fuel 430 tripped fuel-exhausted consumed=431 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=431
+fuel 431 tripped fuel-exhausted consumed=432 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=432
+fuel 432 tripped fuel-exhausted consumed=433 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=433
+fuel 433 tripped fuel-exhausted consumed=434 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=434
+fuel 434 tripped fuel-exhausted consumed=435 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=435
+fuel 435 tripped fuel-exhausted consumed=436 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=436
+fuel 436 tripped fuel-exhausted consumed=437 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=437
+fuel 437 tripped fuel-exhausted consumed=438 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=438
+fuel 438 tripped fuel-exhausted consumed=439 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=439
+fuel 439 tripped fuel-exhausted consumed=440 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=440
+fuel 440 tripped fuel-exhausted consumed=441 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=441
+fuel 441 tripped fuel-exhausted consumed=442 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=442
+fuel 442 tripped fuel-exhausted consumed=443 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=443
 fuel 443 tripped fuel-exhausted consumed=444 unknown barrier=Slice | fuel=444
 fuel 444..=452 x9 tripped fuel-exhausted consumed=453 unknown barrier=Slice | fuel=453
 fuel 453 tripped fuel-exhausted consumed=454 unknown barrier=Slice | fuel=454
@@ -30203,28 +30203,28 @@ fuel 458 tripped fuel-exhausted consumed=459 unknown barrier=Slice | fuel=459
 fuel 459 tripped fuel-exhausted consumed=460 unknown barrier=Slice | fuel=460
 fuel 460 tripped fuel-exhausted consumed=461 unknown barrier=Slice | fuel=461
 fuel 461 tripped fuel-exhausted consumed=462 unknown barrier=Slice | fuel=462
-fuel 462 tripped fuel-exhausted consumed=463 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=463
-fuel 463 tripped fuel-exhausted consumed=464 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=464
-fuel 464 tripped fuel-exhausted consumed=465 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=465
-fuel 465 tripped fuel-exhausted consumed=466 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=466
-fuel 466 tripped fuel-exhausted consumed=467 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=467
-fuel 467 tripped fuel-exhausted consumed=468 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=468
-fuel 468 tripped fuel-exhausted consumed=469 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=469
-fuel 469 tripped fuel-exhausted consumed=470 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=470
-fuel 470 tripped fuel-exhausted consumed=471 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=471
-fuel 471 tripped fuel-exhausted consumed=472 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=472
-fuel 472 tripped fuel-exhausted consumed=473 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=473
-fuel 473 tripped fuel-exhausted consumed=474 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=474
-fuel 474 tripped fuel-exhausted consumed=475 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=475
-fuel 475 tripped fuel-exhausted consumed=476 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=476
-fuel 476 tripped fuel-exhausted consumed=477 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=477
-fuel 477 tripped fuel-exhausted consumed=478 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=478
-fuel 478 tripped fuel-exhausted consumed=479 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=479
-fuel 479 tripped fuel-exhausted consumed=480 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=480
-fuel 480 tripped fuel-exhausted consumed=481 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=481
-fuel 481 tripped fuel-exhausted consumed=482 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=482
-fuel 482 tripped fuel-exhausted consumed=483 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=483
-fuel 483 tripped fuel-exhausted consumed=484 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=484
+fuel 462 tripped fuel-exhausted consumed=463 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=463
+fuel 463 tripped fuel-exhausted consumed=464 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=464
+fuel 464 tripped fuel-exhausted consumed=465 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=465
+fuel 465 tripped fuel-exhausted consumed=466 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=466
+fuel 466 tripped fuel-exhausted consumed=467 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=467
+fuel 467 tripped fuel-exhausted consumed=468 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=468
+fuel 468 tripped fuel-exhausted consumed=469 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=469
+fuel 469 tripped fuel-exhausted consumed=470 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=470
+fuel 470 tripped fuel-exhausted consumed=471 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=471
+fuel 471 tripped fuel-exhausted consumed=472 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=472
+fuel 472 tripped fuel-exhausted consumed=473 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=473
+fuel 473 tripped fuel-exhausted consumed=474 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=474
+fuel 474 tripped fuel-exhausted consumed=475 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=475
+fuel 475 tripped fuel-exhausted consumed=476 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=476
+fuel 476 tripped fuel-exhausted consumed=477 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=477
+fuel 477 tripped fuel-exhausted consumed=478 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=478
+fuel 478 tripped fuel-exhausted consumed=479 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=479
+fuel 479 tripped fuel-exhausted consumed=480 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=480
+fuel 480 tripped fuel-exhausted consumed=481 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=481
+fuel 481 tripped fuel-exhausted consumed=482 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=482
+fuel 482 tripped fuel-exhausted consumed=483 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=483
+fuel 483 tripped fuel-exhausted consumed=484 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=484
 fuel 484 tripped fuel-exhausted consumed=485 unknown barrier=Slice | fuel=485
 fuel 485..=493 x9 tripped fuel-exhausted consumed=494 unknown barrier=Slice | fuel=494
 fuel 494 tripped fuel-exhausted consumed=495 unknown barrier=Slice | fuel=495
@@ -30236,28 +30236,28 @@ fuel 499 tripped fuel-exhausted consumed=500 unknown barrier=Slice | fuel=500
 fuel 500 tripped fuel-exhausted consumed=501 unknown barrier=Slice | fuel=501
 fuel 501 tripped fuel-exhausted consumed=502 unknown barrier=Slice | fuel=502
 fuel 502 tripped fuel-exhausted consumed=503 unknown barrier=Slice | fuel=503
-fuel 503 tripped fuel-exhausted consumed=504 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=504
-fuel 504 tripped fuel-exhausted consumed=505 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=505
-fuel 505 tripped fuel-exhausted consumed=506 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=506
-fuel 506 tripped fuel-exhausted consumed=507 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=507
-fuel 507 tripped fuel-exhausted consumed=508 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=508
-fuel 508 tripped fuel-exhausted consumed=509 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=509
-fuel 509 tripped fuel-exhausted consumed=510 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=510
-fuel 510 tripped fuel-exhausted consumed=511 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=511
-fuel 511 tripped fuel-exhausted consumed=512 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=512
-fuel 512 tripped fuel-exhausted consumed=513 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=513
-fuel 513 tripped fuel-exhausted consumed=514 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=514
-fuel 514 tripped fuel-exhausted consumed=515 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=515
-fuel 515 tripped fuel-exhausted consumed=516 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=516
-fuel 516 tripped fuel-exhausted consumed=517 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=517
-fuel 517 tripped fuel-exhausted consumed=518 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=518
-fuel 518 tripped fuel-exhausted consumed=519 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=519
-fuel 519 tripped fuel-exhausted consumed=520 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=520
-fuel 520 tripped fuel-exhausted consumed=521 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=521
-fuel 521 tripped fuel-exhausted consumed=522 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=522
-fuel 522 tripped fuel-exhausted consumed=523 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=523
-fuel 523 tripped fuel-exhausted consumed=524 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=524
-fuel 524 tripped fuel-exhausted consumed=525 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=525
+fuel 503 tripped fuel-exhausted consumed=504 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=504
+fuel 504 tripped fuel-exhausted consumed=505 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=505
+fuel 505 tripped fuel-exhausted consumed=506 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=506
+fuel 506 tripped fuel-exhausted consumed=507 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=507
+fuel 507 tripped fuel-exhausted consumed=508 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=508
+fuel 508 tripped fuel-exhausted consumed=509 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=509
+fuel 509 tripped fuel-exhausted consumed=510 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=510
+fuel 510 tripped fuel-exhausted consumed=511 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=511
+fuel 511 tripped fuel-exhausted consumed=512 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=512
+fuel 512 tripped fuel-exhausted consumed=513 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=513
+fuel 513 tripped fuel-exhausted consumed=514 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=514
+fuel 514 tripped fuel-exhausted consumed=515 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=515
+fuel 515 tripped fuel-exhausted consumed=516 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=516
+fuel 516 tripped fuel-exhausted consumed=517 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=517
+fuel 517 tripped fuel-exhausted consumed=518 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=518
+fuel 518 tripped fuel-exhausted consumed=519 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=519
+fuel 519 tripped fuel-exhausted consumed=520 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=520
+fuel 520 tripped fuel-exhausted consumed=521 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=521
+fuel 521 tripped fuel-exhausted consumed=522 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=522
+fuel 522 tripped fuel-exhausted consumed=523 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=523
+fuel 523 tripped fuel-exhausted consumed=524 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=524
+fuel 524 tripped fuel-exhausted consumed=525 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=525
 fuel 525 tripped fuel-exhausted consumed=526 unknown barrier=Slice | fuel=526
 fuel 526..=534 x9 tripped fuel-exhausted consumed=535 unknown barrier=Slice | fuel=535
 fuel 535 tripped fuel-exhausted consumed=536 unknown barrier=Slice | fuel=536
@@ -30269,28 +30269,28 @@ fuel 540 tripped fuel-exhausted consumed=541 unknown barrier=Slice | fuel=541
 fuel 541 tripped fuel-exhausted consumed=542 unknown barrier=Slice | fuel=542
 fuel 542 tripped fuel-exhausted consumed=543 unknown barrier=Slice | fuel=543
 fuel 543 tripped fuel-exhausted consumed=544 unknown barrier=Slice | fuel=544
-fuel 544 tripped fuel-exhausted consumed=545 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=545
-fuel 545 tripped fuel-exhausted consumed=546 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=546
-fuel 546 tripped fuel-exhausted consumed=547 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=547
-fuel 547 tripped fuel-exhausted consumed=548 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=548
-fuel 548 tripped fuel-exhausted consumed=549 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=549
-fuel 549 tripped fuel-exhausted consumed=550 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=550
-fuel 550 tripped fuel-exhausted consumed=551 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=551
-fuel 551 tripped fuel-exhausted consumed=552 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=552
-fuel 552 tripped fuel-exhausted consumed=553 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=553
-fuel 553 tripped fuel-exhausted consumed=554 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=554
-fuel 554 tripped fuel-exhausted consumed=555 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=555
-fuel 555 tripped fuel-exhausted consumed=556 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=556
-fuel 556 tripped fuel-exhausted consumed=557 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=557
-fuel 557 tripped fuel-exhausted consumed=558 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=558
-fuel 558 tripped fuel-exhausted consumed=559 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=559
-fuel 559 tripped fuel-exhausted consumed=560 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=560
-fuel 560 tripped fuel-exhausted consumed=561 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=561
-fuel 561 tripped fuel-exhausted consumed=562 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=562
-fuel 562 tripped fuel-exhausted consumed=563 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=563
-fuel 563 tripped fuel-exhausted consumed=564 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=564
-fuel 564 tripped fuel-exhausted consumed=565 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=565
-fuel 565 tripped fuel-exhausted consumed=566 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=566
+fuel 544 tripped fuel-exhausted consumed=545 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=545
+fuel 545 tripped fuel-exhausted consumed=546 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=546
+fuel 546 tripped fuel-exhausted consumed=547 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=547
+fuel 547 tripped fuel-exhausted consumed=548 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=548
+fuel 548 tripped fuel-exhausted consumed=549 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=549
+fuel 549 tripped fuel-exhausted consumed=550 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=550
+fuel 550 tripped fuel-exhausted consumed=551 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=551
+fuel 551 tripped fuel-exhausted consumed=552 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=552
+fuel 552 tripped fuel-exhausted consumed=553 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=553
+fuel 553 tripped fuel-exhausted consumed=554 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=554
+fuel 554 tripped fuel-exhausted consumed=555 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=555
+fuel 555 tripped fuel-exhausted consumed=556 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=556
+fuel 556 tripped fuel-exhausted consumed=557 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=557
+fuel 557 tripped fuel-exhausted consumed=558 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=558
+fuel 558 tripped fuel-exhausted consumed=559 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=559
+fuel 559 tripped fuel-exhausted consumed=560 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=560
+fuel 560 tripped fuel-exhausted consumed=561 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=561
+fuel 561 tripped fuel-exhausted consumed=562 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=562
+fuel 562 tripped fuel-exhausted consumed=563 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=563
+fuel 563 tripped fuel-exhausted consumed=564 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=564
+fuel 564 tripped fuel-exhausted consumed=565 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=565
+fuel 565 tripped fuel-exhausted consumed=566 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=566
 fuel 566 tripped fuel-exhausted consumed=567 unknown barrier=Slice | fuel=567
 fuel 567..=575 x9 tripped fuel-exhausted consumed=576 unknown barrier=Slice | fuel=576
 fuel 576 tripped fuel-exhausted consumed=577 unknown barrier=Slice | fuel=577
@@ -30302,28 +30302,28 @@ fuel 581 tripped fuel-exhausted consumed=582 unknown barrier=Slice | fuel=582
 fuel 582 tripped fuel-exhausted consumed=583 unknown barrier=Slice | fuel=583
 fuel 583 tripped fuel-exhausted consumed=584 unknown barrier=Slice | fuel=584
 fuel 584 tripped fuel-exhausted consumed=585 unknown barrier=Slice | fuel=585
-fuel 585 tripped fuel-exhausted consumed=586 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=586
-fuel 586 tripped fuel-exhausted consumed=587 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=587
-fuel 587 tripped fuel-exhausted consumed=588 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=588
-fuel 588 tripped fuel-exhausted consumed=589 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=589
-fuel 589 tripped fuel-exhausted consumed=590 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=590
-fuel 590 tripped fuel-exhausted consumed=591 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=591
-fuel 591 tripped fuel-exhausted consumed=592 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=592
-fuel 592 tripped fuel-exhausted consumed=593 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=593
-fuel 593 tripped fuel-exhausted consumed=594 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=594
-fuel 594 tripped fuel-exhausted consumed=595 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=595
-fuel 595 tripped fuel-exhausted consumed=596 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=596
-fuel 596 tripped fuel-exhausted consumed=597 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=597
-fuel 597 tripped fuel-exhausted consumed=598 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=598
-fuel 598 tripped fuel-exhausted consumed=599 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=599
-fuel 599 tripped fuel-exhausted consumed=600 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=600
-fuel 600 tripped fuel-exhausted consumed=601 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=601
-fuel 601 tripped fuel-exhausted consumed=602 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=602
-fuel 602 tripped fuel-exhausted consumed=603 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=603
-fuel 603 tripped fuel-exhausted consumed=604 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=604
-fuel 604 tripped fuel-exhausted consumed=605 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=605
-fuel 605 tripped fuel-exhausted consumed=606 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=606
-fuel 606 tripped fuel-exhausted consumed=607 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=607
+fuel 585 tripped fuel-exhausted consumed=586 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=586
+fuel 586 tripped fuel-exhausted consumed=587 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=587
+fuel 587 tripped fuel-exhausted consumed=588 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=588
+fuel 588 tripped fuel-exhausted consumed=589 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=589
+fuel 589 tripped fuel-exhausted consumed=590 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=590
+fuel 590 tripped fuel-exhausted consumed=591 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=591
+fuel 591 tripped fuel-exhausted consumed=592 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=592
+fuel 592 tripped fuel-exhausted consumed=593 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=593
+fuel 593 tripped fuel-exhausted consumed=594 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=594
+fuel 594 tripped fuel-exhausted consumed=595 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=595
+fuel 595 tripped fuel-exhausted consumed=596 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=596
+fuel 596 tripped fuel-exhausted consumed=597 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=597
+fuel 597 tripped fuel-exhausted consumed=598 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=598
+fuel 598 tripped fuel-exhausted consumed=599 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=599
+fuel 599 tripped fuel-exhausted consumed=600 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=600
+fuel 600 tripped fuel-exhausted consumed=601 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=601
+fuel 601 tripped fuel-exhausted consumed=602 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=602
+fuel 602 tripped fuel-exhausted consumed=603 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=603
+fuel 603 tripped fuel-exhausted consumed=604 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=604
+fuel 604 tripped fuel-exhausted consumed=605 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=605
+fuel 605 tripped fuel-exhausted consumed=606 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=606
+fuel 606 tripped fuel-exhausted consumed=607 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=607
 fuel 607 tripped fuel-exhausted consumed=608 unknown barrier=Slice | fuel=608
 fuel 608..=616 x9 tripped fuel-exhausted consumed=617 unknown barrier=Slice | fuel=617
 fuel 617 tripped fuel-exhausted consumed=618 unknown barrier=Slice | fuel=618
@@ -30335,28 +30335,28 @@ fuel 622 tripped fuel-exhausted consumed=623 unknown barrier=Slice | fuel=623
 fuel 623 tripped fuel-exhausted consumed=624 unknown barrier=Slice | fuel=624
 fuel 624 tripped fuel-exhausted consumed=625 unknown barrier=Slice | fuel=625
 fuel 625 tripped fuel-exhausted consumed=626 unknown barrier=Slice | fuel=626
-fuel 626 tripped fuel-exhausted consumed=627 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=627
-fuel 627 tripped fuel-exhausted consumed=628 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=628
-fuel 628 tripped fuel-exhausted consumed=629 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=629
-fuel 629 tripped fuel-exhausted consumed=630 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=630
-fuel 630 tripped fuel-exhausted consumed=631 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=631
-fuel 631 tripped fuel-exhausted consumed=632 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=632
-fuel 632 tripped fuel-exhausted consumed=633 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=633
-fuel 633 tripped fuel-exhausted consumed=634 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=634
-fuel 634 tripped fuel-exhausted consumed=635 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=635
-fuel 635 tripped fuel-exhausted consumed=636 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=636
-fuel 636 tripped fuel-exhausted consumed=637 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=637
-fuel 637 tripped fuel-exhausted consumed=638 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=638
-fuel 638 tripped fuel-exhausted consumed=639 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=639
-fuel 639 tripped fuel-exhausted consumed=640 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=640
-fuel 640 tripped fuel-exhausted consumed=641 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=641
-fuel 641 tripped fuel-exhausted consumed=642 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=642
-fuel 642 tripped fuel-exhausted consumed=643 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=643
-fuel 643 tripped fuel-exhausted consumed=644 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=644
-fuel 644 tripped fuel-exhausted consumed=645 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=645
-fuel 645 tripped fuel-exhausted consumed=646 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=646
-fuel 646 tripped fuel-exhausted consumed=647 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=647
-fuel 647 tripped fuel-exhausted consumed=648 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=648
+fuel 626 tripped fuel-exhausted consumed=627 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=627
+fuel 627 tripped fuel-exhausted consumed=628 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=628
+fuel 628 tripped fuel-exhausted consumed=629 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=629
+fuel 629 tripped fuel-exhausted consumed=630 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=630
+fuel 630 tripped fuel-exhausted consumed=631 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=631
+fuel 631 tripped fuel-exhausted consumed=632 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=632
+fuel 632 tripped fuel-exhausted consumed=633 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=633
+fuel 633 tripped fuel-exhausted consumed=634 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=634
+fuel 634 tripped fuel-exhausted consumed=635 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=635
+fuel 635 tripped fuel-exhausted consumed=636 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=636
+fuel 636 tripped fuel-exhausted consumed=637 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=637
+fuel 637 tripped fuel-exhausted consumed=638 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=638
+fuel 638 tripped fuel-exhausted consumed=639 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=639
+fuel 639 tripped fuel-exhausted consumed=640 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=640
+fuel 640 tripped fuel-exhausted consumed=641 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=641
+fuel 641 tripped fuel-exhausted consumed=642 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=642
+fuel 642 tripped fuel-exhausted consumed=643 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=643
+fuel 643 tripped fuel-exhausted consumed=644 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=644
+fuel 644 tripped fuel-exhausted consumed=645 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=645
+fuel 645 tripped fuel-exhausted consumed=646 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=646
+fuel 646 tripped fuel-exhausted consumed=647 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=647
+fuel 647 tripped fuel-exhausted consumed=648 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=648
 fuel 648 tripped fuel-exhausted consumed=649 unknown barrier=Slice | fuel=649
 fuel 649..=657 x9 tripped fuel-exhausted consumed=658 unknown barrier=Slice | fuel=658
 fuel 658 tripped fuel-exhausted consumed=659 unknown barrier=Slice | fuel=659
@@ -30368,28 +30368,28 @@ fuel 663 tripped fuel-exhausted consumed=664 unknown barrier=Slice | fuel=664
 fuel 664 tripped fuel-exhausted consumed=665 unknown barrier=Slice | fuel=665
 fuel 665 tripped fuel-exhausted consumed=666 unknown barrier=Slice | fuel=666
 fuel 666 tripped fuel-exhausted consumed=667 unknown barrier=Slice | fuel=667
-fuel 667 tripped fuel-exhausted consumed=668 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=668
-fuel 668 tripped fuel-exhausted consumed=669 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=669
-fuel 669 tripped fuel-exhausted consumed=670 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=670
-fuel 670 tripped fuel-exhausted consumed=671 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=671
-fuel 671 tripped fuel-exhausted consumed=672 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=672
-fuel 672 tripped fuel-exhausted consumed=673 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=673
-fuel 673 tripped fuel-exhausted consumed=674 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=674
-fuel 674 tripped fuel-exhausted consumed=675 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=675
-fuel 675 tripped fuel-exhausted consumed=676 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=676
-fuel 676 tripped fuel-exhausted consumed=677 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=677
-fuel 677 tripped fuel-exhausted consumed=678 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=678
-fuel 678 tripped fuel-exhausted consumed=679 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=679
-fuel 679 tripped fuel-exhausted consumed=680 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=680
-fuel 680 tripped fuel-exhausted consumed=681 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=681
-fuel 681 tripped fuel-exhausted consumed=682 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=682
-fuel 682 tripped fuel-exhausted consumed=683 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=683
-fuel 683 tripped fuel-exhausted consumed=684 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=684
-fuel 684 tripped fuel-exhausted consumed=685 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=685
-fuel 685 tripped fuel-exhausted consumed=686 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=686
-fuel 686 tripped fuel-exhausted consumed=687 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=687
-fuel 687 tripped fuel-exhausted consumed=688 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=688
-fuel 688 tripped fuel-exhausted consumed=689 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=689
+fuel 667 tripped fuel-exhausted consumed=668 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=668
+fuel 668 tripped fuel-exhausted consumed=669 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=669
+fuel 669 tripped fuel-exhausted consumed=670 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=670
+fuel 670 tripped fuel-exhausted consumed=671 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=671
+fuel 671 tripped fuel-exhausted consumed=672 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=672
+fuel 672 tripped fuel-exhausted consumed=673 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=673
+fuel 673 tripped fuel-exhausted consumed=674 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=674
+fuel 674 tripped fuel-exhausted consumed=675 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=675
+fuel 675 tripped fuel-exhausted consumed=676 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=676
+fuel 676 tripped fuel-exhausted consumed=677 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=677
+fuel 677 tripped fuel-exhausted consumed=678 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=678
+fuel 678 tripped fuel-exhausted consumed=679 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=679
+fuel 679 tripped fuel-exhausted consumed=680 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=680
+fuel 680 tripped fuel-exhausted consumed=681 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=681
+fuel 681 tripped fuel-exhausted consumed=682 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=682
+fuel 682 tripped fuel-exhausted consumed=683 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=683
+fuel 683 tripped fuel-exhausted consumed=684 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=684
+fuel 684 tripped fuel-exhausted consumed=685 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=685
+fuel 685 tripped fuel-exhausted consumed=686 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=686
+fuel 686 tripped fuel-exhausted consumed=687 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=687
+fuel 687 tripped fuel-exhausted consumed=688 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=688
+fuel 688 tripped fuel-exhausted consumed=689 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=689
 fuel 689 tripped fuel-exhausted consumed=690 unknown barrier=Slice | fuel=690
 fuel 690..=698 x9 tripped fuel-exhausted consumed=699 unknown barrier=Slice | fuel=699
 fuel 699 tripped fuel-exhausted consumed=700 unknown barrier=Slice | fuel=700
@@ -30401,28 +30401,28 @@ fuel 704 tripped fuel-exhausted consumed=705 unknown barrier=Slice | fuel=705
 fuel 705 tripped fuel-exhausted consumed=706 unknown barrier=Slice | fuel=706
 fuel 706 tripped fuel-exhausted consumed=707 unknown barrier=Slice | fuel=707
 fuel 707 tripped fuel-exhausted consumed=708 unknown barrier=Slice | fuel=708
-fuel 708 tripped fuel-exhausted consumed=709 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=709
-fuel 709 tripped fuel-exhausted consumed=710 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=710
-fuel 710 tripped fuel-exhausted consumed=711 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=711
-fuel 711 tripped fuel-exhausted consumed=712 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=712
-fuel 712 tripped fuel-exhausted consumed=713 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=713
-fuel 713 tripped fuel-exhausted consumed=714 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=714
-fuel 714 tripped fuel-exhausted consumed=715 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=715
-fuel 715 tripped fuel-exhausted consumed=716 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=716
-fuel 716 tripped fuel-exhausted consumed=717 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=717
-fuel 717 tripped fuel-exhausted consumed=718 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=718
-fuel 718 tripped fuel-exhausted consumed=719 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=719
-fuel 719 tripped fuel-exhausted consumed=720 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=720
-fuel 720 tripped fuel-exhausted consumed=721 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=721
-fuel 721 tripped fuel-exhausted consumed=722 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=722
-fuel 722 tripped fuel-exhausted consumed=723 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=723
-fuel 723 tripped fuel-exhausted consumed=724 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=724
-fuel 724 tripped fuel-exhausted consumed=725 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=725
-fuel 725 tripped fuel-exhausted consumed=726 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=726
-fuel 726 tripped fuel-exhausted consumed=727 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=727
-fuel 727 tripped fuel-exhausted consumed=728 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=728
-fuel 728 tripped fuel-exhausted consumed=729 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=729
-fuel 729 tripped fuel-exhausted consumed=730 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=730
+fuel 708 tripped fuel-exhausted consumed=709 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=709
+fuel 709 tripped fuel-exhausted consumed=710 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=710
+fuel 710 tripped fuel-exhausted consumed=711 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=711
+fuel 711 tripped fuel-exhausted consumed=712 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=712
+fuel 712 tripped fuel-exhausted consumed=713 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=713
+fuel 713 tripped fuel-exhausted consumed=714 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=714
+fuel 714 tripped fuel-exhausted consumed=715 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=715
+fuel 715 tripped fuel-exhausted consumed=716 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=716
+fuel 716 tripped fuel-exhausted consumed=717 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=717
+fuel 717 tripped fuel-exhausted consumed=718 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=718
+fuel 718 tripped fuel-exhausted consumed=719 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=719
+fuel 719 tripped fuel-exhausted consumed=720 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=720
+fuel 720 tripped fuel-exhausted consumed=721 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=721
+fuel 721 tripped fuel-exhausted consumed=722 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=722
+fuel 722 tripped fuel-exhausted consumed=723 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=723
+fuel 723 tripped fuel-exhausted consumed=724 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=724
+fuel 724 tripped fuel-exhausted consumed=725 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=725
+fuel 725 tripped fuel-exhausted consumed=726 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=726
+fuel 726 tripped fuel-exhausted consumed=727 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=727
+fuel 727 tripped fuel-exhausted consumed=728 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=728
+fuel 728 tripped fuel-exhausted consumed=729 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=729
+fuel 729 tripped fuel-exhausted consumed=730 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=730
 fuel 730 tripped fuel-exhausted consumed=731 unknown barrier=Slice | fuel=731
 fuel 731..=739 x9 tripped fuel-exhausted consumed=740 unknown barrier=Slice | fuel=740
 fuel 740 tripped fuel-exhausted consumed=741 unknown barrier=Slice | fuel=741
@@ -30434,28 +30434,28 @@ fuel 745 tripped fuel-exhausted consumed=746 unknown barrier=Slice | fuel=746
 fuel 746 tripped fuel-exhausted consumed=747 unknown barrier=Slice | fuel=747
 fuel 747 tripped fuel-exhausted consumed=748 unknown barrier=Slice | fuel=748
 fuel 748 tripped fuel-exhausted consumed=749 unknown barrier=Slice | fuel=749
-fuel 749 tripped fuel-exhausted consumed=750 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=750
-fuel 750 tripped fuel-exhausted consumed=751 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=751
-fuel 751 tripped fuel-exhausted consumed=752 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=752
-fuel 752 tripped fuel-exhausted consumed=753 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=753
-fuel 753 tripped fuel-exhausted consumed=754 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=754
-fuel 754 tripped fuel-exhausted consumed=755 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=755
-fuel 755 tripped fuel-exhausted consumed=756 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=756
-fuel 756 tripped fuel-exhausted consumed=757 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=757
-fuel 757 tripped fuel-exhausted consumed=758 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=758
-fuel 758 tripped fuel-exhausted consumed=759 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=759
-fuel 759 tripped fuel-exhausted consumed=760 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=760
-fuel 760 tripped fuel-exhausted consumed=761 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=761
-fuel 761 tripped fuel-exhausted consumed=762 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=762
-fuel 762 tripped fuel-exhausted consumed=763 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=763
-fuel 763 tripped fuel-exhausted consumed=764 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=764
-fuel 764 tripped fuel-exhausted consumed=765 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=765
-fuel 765 tripped fuel-exhausted consumed=766 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=766
-fuel 766 tripped fuel-exhausted consumed=767 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=767
-fuel 767 tripped fuel-exhausted consumed=768 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=768
-fuel 768 tripped fuel-exhausted consumed=769 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=769
-fuel 769 tripped fuel-exhausted consumed=770 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=770
-fuel 770 tripped fuel-exhausted consumed=771 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=771
+fuel 749 tripped fuel-exhausted consumed=750 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=750
+fuel 750 tripped fuel-exhausted consumed=751 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=751
+fuel 751 tripped fuel-exhausted consumed=752 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=752
+fuel 752 tripped fuel-exhausted consumed=753 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=753
+fuel 753 tripped fuel-exhausted consumed=754 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=754
+fuel 754 tripped fuel-exhausted consumed=755 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=755
+fuel 755 tripped fuel-exhausted consumed=756 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=756
+fuel 756 tripped fuel-exhausted consumed=757 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=757
+fuel 757 tripped fuel-exhausted consumed=758 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=758
+fuel 758 tripped fuel-exhausted consumed=759 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=759
+fuel 759 tripped fuel-exhausted consumed=760 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=760
+fuel 760 tripped fuel-exhausted consumed=761 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=761
+fuel 761 tripped fuel-exhausted consumed=762 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=762
+fuel 762 tripped fuel-exhausted consumed=763 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=763
+fuel 763 tripped fuel-exhausted consumed=764 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=764
+fuel 764 tripped fuel-exhausted consumed=765 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=765
+fuel 765 tripped fuel-exhausted consumed=766 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=766
+fuel 766 tripped fuel-exhausted consumed=767 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=767
+fuel 767 tripped fuel-exhausted consumed=768 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=768
+fuel 768 tripped fuel-exhausted consumed=769 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=769
+fuel 769 tripped fuel-exhausted consumed=770 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=770
+fuel 770 tripped fuel-exhausted consumed=771 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=771
 fuel 771 tripped fuel-exhausted consumed=772 unknown barrier=Slice | fuel=772
 fuel 772..=780 x9 tripped fuel-exhausted consumed=781 unknown barrier=Slice | fuel=781
 fuel 781 tripped fuel-exhausted consumed=782 unknown barrier=Slice | fuel=782
@@ -30467,28 +30467,28 @@ fuel 786 tripped fuel-exhausted consumed=787 unknown barrier=Slice | fuel=787
 fuel 787 tripped fuel-exhausted consumed=788 unknown barrier=Slice | fuel=788
 fuel 788 tripped fuel-exhausted consumed=789 unknown barrier=Slice | fuel=789
 fuel 789 tripped fuel-exhausted consumed=790 unknown barrier=Slice | fuel=790
-fuel 790 tripped fuel-exhausted consumed=791 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=791
-fuel 791 tripped fuel-exhausted consumed=792 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=792
-fuel 792 tripped fuel-exhausted consumed=793 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=793
-fuel 793 tripped fuel-exhausted consumed=794 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=794
-fuel 794 tripped fuel-exhausted consumed=795 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=795
-fuel 795 tripped fuel-exhausted consumed=796 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=796
-fuel 796 tripped fuel-exhausted consumed=797 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=797
-fuel 797 tripped fuel-exhausted consumed=798 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=798
-fuel 798 tripped fuel-exhausted consumed=799 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=799
-fuel 799 tripped fuel-exhausted consumed=800 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=800
-fuel 800 tripped fuel-exhausted consumed=801 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=801
-fuel 801 tripped fuel-exhausted consumed=802 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=802
-fuel 802 tripped fuel-exhausted consumed=803 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=803
-fuel 803 tripped fuel-exhausted consumed=804 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=804
-fuel 804 tripped fuel-exhausted consumed=805 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=805
-fuel 805 tripped fuel-exhausted consumed=806 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=806
-fuel 806 tripped fuel-exhausted consumed=807 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=807
-fuel 807 tripped fuel-exhausted consumed=808 certain prefix=false rows=9 digest=758666e0fd03e469 | fuel=808
-fuel 808 tripped fuel-exhausted consumed=809 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=809
-fuel 809 tripped fuel-exhausted consumed=810 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=810
-fuel 810 tripped fuel-exhausted consumed=811 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=811
-fuel 811 tripped fuel-exhausted consumed=812 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=812
+fuel 790 tripped fuel-exhausted consumed=791 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=791
+fuel 791 tripped fuel-exhausted consumed=792 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=792
+fuel 792 tripped fuel-exhausted consumed=793 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=793
+fuel 793 tripped fuel-exhausted consumed=794 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=794
+fuel 794 tripped fuel-exhausted consumed=795 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=795
+fuel 795 tripped fuel-exhausted consumed=796 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=796
+fuel 796 tripped fuel-exhausted consumed=797 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=797
+fuel 797 tripped fuel-exhausted consumed=798 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=798
+fuel 798 tripped fuel-exhausted consumed=799 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=799
+fuel 799 tripped fuel-exhausted consumed=800 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=800
+fuel 800 tripped fuel-exhausted consumed=801 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=801
+fuel 801 tripped fuel-exhausted consumed=802 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=802
+fuel 802 tripped fuel-exhausted consumed=803 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=803
+fuel 803 tripped fuel-exhausted consumed=804 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=804
+fuel 804 tripped fuel-exhausted consumed=805 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=805
+fuel 805 tripped fuel-exhausted consumed=806 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=806
+fuel 806 tripped fuel-exhausted consumed=807 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=807
+fuel 807 tripped fuel-exhausted consumed=808 certain prefix=false rows=9 digest=fbb4b56e6a1059da | fuel=808
+fuel 808 tripped fuel-exhausted consumed=809 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=809
+fuel 809 tripped fuel-exhausted consumed=810 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=810
+fuel 810 tripped fuel-exhausted consumed=811 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=811
+fuel 811 tripped fuel-exhausted consumed=812 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=812
 fuel 812 tripped fuel-exhausted consumed=813 unknown barrier=Slice | fuel=813
 fuel 813..=821 x9 tripped fuel-exhausted consumed=822 unknown barrier=Slice | fuel=822
 fuel 822 tripped fuel-exhausted consumed=823 unknown barrier=Slice | fuel=823
@@ -30500,43 +30500,43 @@ fuel 827 tripped fuel-exhausted consumed=828 unknown barrier=Slice | fuel=828
 fuel 828 tripped fuel-exhausted consumed=829 unknown barrier=Slice | fuel=829
 fuel 829 tripped fuel-exhausted consumed=830 unknown barrier=Slice | fuel=830
 fuel 830 tripped fuel-exhausted consumed=831 unknown barrier=Slice | fuel=831
-fuel 831 tripped fuel-exhausted consumed=832 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=832
-fuel 832 tripped fuel-exhausted consumed=833 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=833
-fuel 833 tripped fuel-exhausted consumed=834 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=834
-fuel 834 tripped fuel-exhausted consumed=835 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=835
-fuel 835 tripped fuel-exhausted consumed=836 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=836
-fuel 836 tripped fuel-exhausted consumed=837 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=837
-fuel 837 tripped fuel-exhausted consumed=838 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=838
-fuel 838 tripped fuel-exhausted consumed=839 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=839
-fuel 839 tripped fuel-exhausted consumed=840 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=840
-fuel 840 tripped fuel-exhausted consumed=841 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=841
-fuel 841 tripped fuel-exhausted consumed=842 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=842
-fuel 842 tripped fuel-exhausted consumed=843 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=843
-fuel 843 tripped fuel-exhausted consumed=844 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=844
-fuel 844 tripped fuel-exhausted consumed=845 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=845
-fuel 845 tripped fuel-exhausted consumed=846 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=846
-fuel 846 tripped fuel-exhausted consumed=847 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=847
-fuel 847 tripped fuel-exhausted consumed=848 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=848
-fuel 848 tripped fuel-exhausted consumed=849 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=849
-fuel 849 tripped fuel-exhausted consumed=850 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=850
-fuel 850 tripped fuel-exhausted consumed=851 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=851
-fuel 851 tripped fuel-exhausted consumed=852 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=852
-fuel 852 tripped fuel-exhausted consumed=853 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=853
-fuel 853 tripped fuel-exhausted consumed=854 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=854
-fuel 854 tripped fuel-exhausted consumed=855 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=855
-fuel 855 tripped fuel-exhausted consumed=856 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=856
-fuel 856 tripped fuel-exhausted consumed=857 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=857
-fuel 857 tripped fuel-exhausted consumed=858 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=858
-fuel 858 tripped fuel-exhausted consumed=859 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=859
-fuel 859 tripped fuel-exhausted consumed=860 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=860
-fuel 860 tripped fuel-exhausted consumed=861 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=861
-fuel 861 tripped fuel-exhausted consumed=862 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=862
-fuel 862 tripped fuel-exhausted consumed=863 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=863
-fuel 863 tripped fuel-exhausted consumed=864 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=864
-fuel 864 tripped fuel-exhausted consumed=865 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=865
-fuel 865 tripped fuel-exhausted consumed=866 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=866
-fuel 866 tripped fuel-exhausted consumed=867 certain prefix=true rows=9 digest=758666e0fd03e469 | fuel=867
-fuel 867 complete rows=9 digest=758666e0fd03e469 | fuel=867
+fuel 831 tripped fuel-exhausted consumed=832 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=832
+fuel 832 tripped fuel-exhausted consumed=833 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=833
+fuel 833 tripped fuel-exhausted consumed=834 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=834
+fuel 834 tripped fuel-exhausted consumed=835 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=835
+fuel 835 tripped fuel-exhausted consumed=836 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=836
+fuel 836 tripped fuel-exhausted consumed=837 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=837
+fuel 837 tripped fuel-exhausted consumed=838 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=838
+fuel 838 tripped fuel-exhausted consumed=839 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=839
+fuel 839 tripped fuel-exhausted consumed=840 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=840
+fuel 840 tripped fuel-exhausted consumed=841 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=841
+fuel 841 tripped fuel-exhausted consumed=842 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=842
+fuel 842 tripped fuel-exhausted consumed=843 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=843
+fuel 843 tripped fuel-exhausted consumed=844 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=844
+fuel 844 tripped fuel-exhausted consumed=845 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=845
+fuel 845 tripped fuel-exhausted consumed=846 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=846
+fuel 846 tripped fuel-exhausted consumed=847 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=847
+fuel 847 tripped fuel-exhausted consumed=848 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=848
+fuel 848 tripped fuel-exhausted consumed=849 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=849
+fuel 849 tripped fuel-exhausted consumed=850 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=850
+fuel 850 tripped fuel-exhausted consumed=851 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=851
+fuel 851 tripped fuel-exhausted consumed=852 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=852
+fuel 852 tripped fuel-exhausted consumed=853 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=853
+fuel 853 tripped fuel-exhausted consumed=854 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=854
+fuel 854 tripped fuel-exhausted consumed=855 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=855
+fuel 855 tripped fuel-exhausted consumed=856 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=856
+fuel 856 tripped fuel-exhausted consumed=857 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=857
+fuel 857 tripped fuel-exhausted consumed=858 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=858
+fuel 858 tripped fuel-exhausted consumed=859 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=859
+fuel 859 tripped fuel-exhausted consumed=860 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=860
+fuel 860 tripped fuel-exhausted consumed=861 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=861
+fuel 861 tripped fuel-exhausted consumed=862 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=862
+fuel 862 tripped fuel-exhausted consumed=863 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=863
+fuel 863 tripped fuel-exhausted consumed=864 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=864
+fuel 864 tripped fuel-exhausted consumed=865 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=865
+fuel 865 tripped fuel-exhausted consumed=866 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=866
+fuel 866 tripped fuel-exhausted consumed=867 certain prefix=true rows=9 digest=fbb4b56e6a1059da | fuel=867
+fuel 867 complete rows=9 digest=fbb4b56e6a1059da | fuel=867
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#pattern-1> Reified triples - Asserted and reified triple
 solutions vars=["o", "q", "z"] rows=7 ordered=false
 | _:0 <urn:purrdf:conformance:var:o> <http://example/o> .
@@ -31081,12 +31081,12 @@ fuel 49 tripped fuel-exhausted consumed=50 certain prefix=true rows=16 digest=08
 fuel 50..=64 x15 complete rows=16 digest=08f115032181b1ef | fuel=50
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#results-tripleterms-1j> Triple terms - all graph triples (JSON results)
 solutions vars=["s", "p", "o"] rows=2 ordered=false
-| _:0 <urn:purrdf:conformance:var:o> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-| _:0 <urn:purrdf:conformance:var:p> <http://example/q> .
-| _:0 <urn:purrdf:conformance:var:s> <http://example/a> .
-| _:1 <urn:purrdf:conformance:var:o> <<( <http://example/s> <http://example/p> <<( <http://example/x2> <http://example/y3> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
-| _:1 <urn:purrdf:conformance:var:p> <http://example/g> .
-| _:1 <urn:purrdf:conformance:var:s> <http://example/f> .
+| _:0 <urn:purrdf:conformance:var:o> <<( <http://example/s> <http://example/p> <<( <http://example/x2> <http://example/y3> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
+| _:0 <urn:purrdf:conformance:var:p> <http://example/g> .
+| _:0 <urn:purrdf:conformance:var:s> <http://example/f> .
+| _:2 <urn:purrdf:conformance:var:o> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
+| _:2 <urn:purrdf:conformance:var:p> <http://example/q> .
+| _:2 <urn:purrdf:conformance:var:s> <http://example/a> .
 metered complete fuel=8 answer-rows=2 intermediate-cells=6
 explain fuel=8 answer-rows=2 intermediate-cells=6
 node 0 depth=0 Project rows=2 cells=6 algebra-node-entry=1 committed-output-row=2
@@ -31094,19 +31094,19 @@ node 1 depth=1 Bgp rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 bg
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=8005d3fa2aaf7183 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=8005d3fa2aaf7183 | fuel=2
 fuel 2..=3 x2 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=8005d3fa2aaf7183 | fuel=4
-fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=5
-fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=6
-fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=7
-fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=8
-fuel 8..=64 x57 complete rows=2 digest=3f6e691145539e73 | fuel=8
+fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=8
+fuel 8..=64 x57 complete rows=2 digest=651cc233371bf170 | fuel=8
 == w3c-sparql12/eval-triple-terms <https://w3c.github.io/rdf-tests/sparql/sparql12/eval-triple-terms/manifest#results-tripleterms-1x> Triple terms - all graph triples (XML results)
 solutions vars=["s", "p", "o"] rows=2 ordered=false
-| _:0 <urn:purrdf:conformance:var:o> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-| _:0 <urn:purrdf:conformance:var:p> <http://example/q> .
-| _:0 <urn:purrdf:conformance:var:s> <http://example/a> .
-| _:1 <urn:purrdf:conformance:var:o> <<( <http://example/s> <http://example/p> <<( <http://example/x2> <http://example/y3> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
-| _:1 <urn:purrdf:conformance:var:p> <http://example/g> .
-| _:1 <urn:purrdf:conformance:var:s> <http://example/f> .
+| _:0 <urn:purrdf:conformance:var:o> <<( <http://example/s> <http://example/p> <<( <http://example/x2> <http://example/y3> "123"^^<http://www.w3.org/2001/XMLSchema#integer> )>> )>> .
+| _:0 <urn:purrdf:conformance:var:p> <http://example/g> .
+| _:0 <urn:purrdf:conformance:var:s> <http://example/f> .
+| _:2 <urn:purrdf:conformance:var:o> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
+| _:2 <urn:purrdf:conformance:var:p> <http://example/q> .
+| _:2 <urn:purrdf:conformance:var:s> <http://example/a> .
 metered complete fuel=8 answer-rows=2 intermediate-cells=6
 explain fuel=8 answer-rows=2 intermediate-cells=6
 node 0 depth=0 Project rows=2 cells=6 algebra-node-entry=1 committed-output-row=2
@@ -31114,11 +31114,11 @@ node 1 depth=1 Bgp rows=2 cells=6 algebra-node-entry=1 committed-output-row=2 bg
 fuel 0 tripped fuel-exhausted consumed=1 certain prefix=true rows=0 digest=8005d3fa2aaf7183 | fuel=1
 fuel 1 tripped fuel-exhausted consumed=2 certain prefix=true rows=0 digest=8005d3fa2aaf7183 | fuel=2
 fuel 2..=3 x2 tripped fuel-exhausted consumed=4 certain prefix=true rows=0 digest=8005d3fa2aaf7183 | fuel=4
-fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=5
-fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=6
-fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=7
-fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=2 digest=3f6e691145539e73 | fuel=8
-fuel 8..=64 x57 complete rows=2 digest=3f6e691145539e73 | fuel=8
+fuel 4 tripped fuel-exhausted consumed=5 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=5
+fuel 5 tripped fuel-exhausted consumed=6 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=6
+fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=7
+fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=2 digest=651cc233371bf170 | fuel=8
+fuel 8..=64 x57 complete rows=2 digest=651cc233371bf170 | fuel=8
 == w3c-sparql12/expression <https://w3c.github.io/rdf-tests/sparql/sparql12/expression/manifest#not-not> not-not
 solutions vars=["v", "ebv"] rows=10 ordered=false
 | _:0 <urn:purrdf:conformance:var:v> "false"^^<http://www.w3.org/2001/XMLSchema#boolean> .
@@ -31361,27 +31361,27 @@ solutions vars=["subject", "predicate", "object", "triple"] rows=7 ordered=false
 | _:0 <urn:purrdf:conformance:var:object> <http://example/c> .
 | _:0 <urn:purrdf:conformance:var:subject> <http://example/a> .
 | _:0 <urn:purrdf:conformance:var:predicate> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> .
-| _:1 <urn:purrdf:conformance:var:object> <http://example/c> .
-| _:1 <urn:purrdf:conformance:var:subject> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> .
-| _:1 <urn:purrdf:conformance:var:predicate> <http://example/b> .
 | _:2 <urn:purrdf:conformance:var:object> <<( <http://example/x> <http://example/y> <http://example/z> )>> .
 | _:2 <urn:purrdf:conformance:var:triple> <<( <http://example/a> <http://example/b> <<( <http://example/x> <http://example/y> <http://example/z> )>> )>> .
 | _:2 <urn:purrdf:conformance:var:subject> <http://example/a> .
 | _:2 <urn:purrdf:conformance:var:predicate> <http://example/b> .
 | _:3 <urn:purrdf:conformance:var:object> <http://example/c> .
-| _:3 <urn:purrdf:conformance:var:subject> <<( <http://example/x> <http://example/y> <http://example/z> )>> .
+| _:3 <urn:purrdf:conformance:var:subject> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> .
 | _:3 <urn:purrdf:conformance:var:predicate> <http://example/b> .
-| _:4 <urn:purrdf:conformance:var:object> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> .
-| _:4 <urn:purrdf:conformance:var:triple> <<( <http://example/a> <http://example/b> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> )>> .
-| _:4 <urn:purrdf:conformance:var:subject> <http://example/a> .
-| _:4 <urn:purrdf:conformance:var:predicate> <http://example/b> .
-| _:5 <urn:purrdf:conformance:var:object> <http://example/c> .
+| _:5 <urn:purrdf:conformance:var:object> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> .
+| _:5 <urn:purrdf:conformance:var:triple> <<( <http://example/a> <http://example/b> <<( <http://example/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example/z> )>> )>> .
 | _:5 <urn:purrdf:conformance:var:subject> <http://example/a> .
-| _:5 <urn:purrdf:conformance:var:predicate> <<( <http://example/x> <http://example/y> <http://example/z> )>> .
+| _:5 <urn:purrdf:conformance:var:predicate> <http://example/b> .
 | _:6 <urn:purrdf:conformance:var:object> <http://example/c> .
-| _:6 <urn:purrdf:conformance:var:triple> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
-| _:6 <urn:purrdf:conformance:var:subject> <http://example/a> .
+| _:6 <urn:purrdf:conformance:var:subject> <<( <http://example/x> <http://example/y> <http://example/z> )>> .
 | _:6 <urn:purrdf:conformance:var:predicate> <http://example/b> .
+| _:7 <urn:purrdf:conformance:var:object> <http://example/c> .
+| _:7 <urn:purrdf:conformance:var:subject> <http://example/a> .
+| _:7 <urn:purrdf:conformance:var:predicate> <<( <http://example/x> <http://example/y> <http://example/z> )>> .
+| _:8 <urn:purrdf:conformance:var:object> <http://example/c> .
+| _:8 <urn:purrdf:conformance:var:triple> <<( <http://example/a> <http://example/b> <http://example/c> )>> .
+| _:8 <urn:purrdf:conformance:var:subject> <http://example/a> .
+| _:8 <urn:purrdf:conformance:var:predicate> <http://example/b> .
 metered complete fuel=31 answer-rows=7 intermediate-cells=28 scratch-bytes=1342
 explain fuel=31 answer-rows=7 intermediate-cells=28 scratch-bytes=1342
 node 0 depth=0 Project rows=7 cells=28 algebra-node-entry=1 committed-output-row=7
@@ -31401,24 +31401,24 @@ fuel 10 tripped fuel-exhausted consumed=11 certain prefix=true rows=0 digest=733
 fuel 11 tripped fuel-exhausted consumed=12 certain prefix=true rows=1 digest=f8925ddefaeb96cf | fuel=12
 fuel 12 tripped fuel-exhausted consumed=13 certain prefix=true rows=2 digest=c62642d575ff9d47 | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=3 digest=82903aa070a4c2f9 | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=4 digest=6b023f06440afcf3 | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=5 digest=d1060276095b6daf | fuel=16
-fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=6 digest=9c5448842f35304b | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=18
-fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=19
-fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=20
-fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=22
-fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=23
-fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=24
-fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=26
-fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=27
-fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=28
-fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=29
-fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=30
-fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=7 digest=33a90749e4dc5080 | fuel=31
-fuel 31..=64 x34 complete rows=7 digest=33a90749e4dc5080 | fuel=31
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=4 digest=716d6c7be70566c7 | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=5 digest=7079674eeeab11c3 | fuel=16
+fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=6 digest=6d3d534638a1e5b3 | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=27
+fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=28
+fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=29
+fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=30
+fuel 30 tripped fuel-exhausted consumed=31 certain prefix=true rows=7 digest=b739d9e89a9c2d57 | fuel=31
+fuel 31..=64 x34 complete rows=7 digest=b739d9e89a9c2d57 | fuel=31
 == w3c-sparql12/expression <https://w3c.github.io/rdf-tests/sparql/sparql12/expression/manifest#triple-on-undefs> triple on undefs
 solutions vars=["subject", "predicate", "object", "triple"] rows=4 ordered=false
 | _:0 <urn:purrdf:conformance:var:object> <http://example/c> .
