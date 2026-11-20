@@ -75,7 +75,7 @@ impl Count {
             Self::Small => (1, i128::from(SMALL_COUNT_THRESHOLD) - 1),
             Self::Withheld => (i128::from(SMALL_COUNT_THRESHOLD), INF),
             Self::AtLeast(n) => (i128::from(n), INF),
-            Self::Omitted => (0, INF),
+            Self::Omitted => (1, INF),
         }
     }
 }
@@ -133,8 +133,17 @@ fn linearize(sums: &[Sum], ties: &[Linear]) -> Vec<Linear> {
     all
 }
 
-/// The interval each variable is confined to by every printed form and every tie.
-fn derive(vars: &[(Count, u64)], constraints: &[Linear]) -> Vec<(i128, i128)> {
+/// The interval each variable is confined to by every printed form and every tie, and whether
+/// propagation reached its fixpoint within `passes`.
+///
+/// Each pass scans every tie once: it totals the least the whole sum can be and reads each
+/// term's room from that total. A pass costs the number of terms over all ties, so the whole
+/// costs at most `passes` times that.
+fn derive(
+    vars: &[(Count, u64)],
+    constraints: &[Linear],
+    passes: usize,
+) -> (Vec<(i128, i128)>, bool) {
     let mut low: Vec<i128> = Vec::with_capacity(vars.len());
     let mut high: Vec<i128> = Vec::with_capacity(vars.len());
     for var in vars {
@@ -142,32 +151,40 @@ fn derive(vars: &[(Count, u64)], constraints: &[Linear]) -> Vec<(i128, i128)> {
         low.push(l);
         high.push(h);
     }
-    for _ in 0..8 * (vars.len() + 1) {
+    let mut converged = false;
+    for _ in 0..passes {
         let mut changed = false;
         for constraint in constraints {
-            for (position, &(coefficient, variable)) in constraint.terms.iter().enumerate() {
+            // The least each term can contribute: a positive term at its lower bound and a
+            // negative one at its upper bound, which is unbounded when that bound is open.
+            let mut finite = 0_i128;
+            let mut open = 0_usize;
+            for &(a, v) in &constraint.terms {
+                if a > 0 {
+                    finite += a * low[v];
+                } else if a < 0 {
+                    if high[v] >= INF {
+                        open += 1;
+                    } else {
+                        finite += a * high[v];
+                    }
+                }
+            }
+            for &(coefficient, variable) in &constraint.terms {
                 if coefficient == 0 {
                     continue;
                 }
-                let mut rest_minimum = 0_i128;
-                let mut unbounded = false;
-                for (other, &(a, v)) in constraint.terms.iter().enumerate() {
-                    if other == position {
-                        continue;
-                    }
-                    if a > 0 {
-                        rest_minimum += a * low[v];
-                    } else if high[v] >= INF {
-                        unbounded = true;
-                        break;
-                    } else {
-                        rest_minimum += a * high[v];
-                    }
-                }
-                if unbounded {
+                let (own_finite, own_open) = if coefficient > 0 {
+                    (coefficient * low[variable], 0)
+                } else if high[variable] >= INF {
+                    (0, 1)
+                } else {
+                    (coefficient * high[variable], 0)
+                };
+                if open - own_open > 0 {
                     continue;
                 }
-                let bound = constraint.limit - rest_minimum;
+                let bound = constraint.limit - (finite - own_finite);
                 if coefficient > 0 {
                     let new_high = bound.div_euclid(coefficient);
                     if new_high < high[variable] {
@@ -184,10 +201,17 @@ fn derive(vars: &[(Count, u64)], constraints: &[Linear]) -> Vec<(i128, i128)> {
             }
         }
         if !changed {
+            converged = true;
             break;
         }
     }
-    low.into_iter().zip(high).collect()
+    (low.into_iter().zip(high).collect(), converged)
+}
+
+/// The most passes propagation may take: a bound moves by at least one value per pass that
+/// changes anything, and each of the `n` variables has at most a few useful moves.
+fn pass_cap(variables: usize) -> usize {
+    8 * (variables + 1)
 }
 
 /// Whether the figures pin `count` to fewer values than its printed form should leave.
@@ -230,6 +254,20 @@ pub(crate) fn suppress(
     fixed: &[usize],
     candidates: Option<&[usize]>,
 ) -> bool {
+    suppress_within(vars, sums, ties, fixed, candidates, pass_cap(vars.len()))
+}
+
+/// [`suppress`] with propagation limited to `passes` per search step. A step whose propagation
+/// does not reach its fixpoint is unsafe, since the intervals it gives are looser than a
+/// reader's, so it leaves a hidden count out instead of trusting them.
+fn suppress_within(
+    vars: &mut [(Count, u64)],
+    sums: &[Sum],
+    ties: &[Linear],
+    fixed: &[usize],
+    candidates: Option<&[usize]>,
+    passes: usize,
+) -> bool {
     let mut settled: Vec<usize> = fixed.to_vec();
     for sum in sums.iter().rev() {
         if settled.contains(&sum.total) {
@@ -258,9 +296,15 @@ pub(crate) fn suppress(
     }
     let constraints = linearize(sums, ties);
     for _ in 0..=2 * vars.len() {
-        let bounds = derive(vars, &constraints);
-        let Some(violation) = (0..vars.len()).find(|&i| pinned(vars[i].0, bounds[i])) else {
-            return true;
+        let (bounds, converged) = derive(vars, &constraints, passes);
+        let violation = if converged {
+            (0..vars.len()).find(|&i| pinned(vars[i].0, bounds[i]))
+        } else {
+            // Not at a fixpoint: no interval can be trusted, so leave a hidden count out.
+            (0..vars.len()).find(|&i| !matches!(vars[i].0, Count::Exact(_) | Count::Omitted))
+        };
+        let Some(violation) = violation else {
+            return converged;
         };
         let hideable = |c: usize| {
             candidates.is_none_or(|only| only.contains(&c))
@@ -293,19 +337,47 @@ pub(crate) fn suppress(
         };
         hide(vars, cell);
     }
-    let bounds = derive(vars, &constraints);
-    !(0..vars.len()).any(|i| pinned(vars[i].0, bounds[i]))
+    let (bounds, converged) = derive(vars, &constraints, passes);
+    converged && !(0..vars.len()).any(|i| pinned(vars[i].0, bounds[i]))
 }
 
-/// The interval each variable is confined to by every printed form and every tie.
+/// Choose how every variable prints, whatever the ties: [`suppress`], and if that cannot reach a
+/// state with nothing pinned (propagation never settles), leave out every count that is not
+/// zero, which no tie can pin.
+pub(crate) fn suppress_everywhere(vars: &mut [(Count, u64)], sums: &[Sum], ties: &[Linear]) {
+    suppress_everywhere_within(vars, sums, ties, pass_cap(vars.len()));
+}
+
+/// [`suppress_everywhere`] with propagation limited to `passes`.
+fn suppress_everywhere_within(
+    vars: &mut [(Count, u64)],
+    sums: &[Sum],
+    ties: &[Linear],
+    passes: usize,
+) {
+    if !suppress_within(vars, sums, ties, &[], None, passes) {
+        for var in vars.iter_mut() {
+            if !matches!(var.0, Count::Exact(0)) {
+                var.0 = Count::Omitted;
+            }
+        }
+    }
+}
+
+/// The interval each variable is confined to by everything printed, where propagation reached
+/// its fixpoint; none otherwise.
 pub(crate) fn confined(
     vars: &[(Count, u64)],
     sums: &[Sum],
     ties: &[Linear],
 ) -> Vec<(Option<u64>, Option<u64>)> {
-    derive(vars, &linearize(sums, ties))
+    let (bounds, converged) = derive(vars, &linearize(sums, ties), pass_cap(vars.len()));
+    bounds
         .into_iter()
         .map(|(low, high)| {
+            if !converged {
+                return (None, None);
+            }
             (
                 u64::try_from(low).ok(),
                 (high < INF).then(|| u64::try_from(high).ok()).flatten(),
@@ -314,9 +386,31 @@ pub(crate) fn confined(
         .collect()
 }
 
+impl Linear {
+    /// This tie with its limit replaced.
+    #[cfg(test)]
+    fn with_limit(mut self, limit: i128) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    /// Whether the tie holds for `values` (the true count of each variable).
+    #[cfg(test)]
+    pub(crate) fn holds(&self, values: &[u64]) -> bool {
+        self.terms
+            .iter()
+            .map(|&(coefficient, variable)| coefficient * i128::from(values[variable]))
+            .sum::<i128>()
+            <= self.limit
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Count, Linear, Sum, derive, pinned, suppress};
+    use super::{
+        Count, Linear, Sum, derive, pinned, suppress, suppress_everywhere,
+        suppress_everywhere_within, suppress_within,
+    };
 
     /// Two breakdowns of ten literals leave neither the hidden length bin nor the withheld
     /// integer count recoverable, and a literal count bounded by the statements that hold
@@ -345,10 +439,40 @@ mod tests {
         let ties = [Linear::at_most(&[(1, 0)], 0, &[(1, 1)])];
         assert!(suppress(&mut vars, &sums, &ties, &[], None));
         let constraints = super::linearize(&sums, &ties);
-        let bounds = derive(&vars, &constraints);
+        let (bounds, _) = derive(&vars, &constraints, super::pass_cap(vars.len()));
         for (index, var) in vars.iter().enumerate() {
             assert!(!pinned(var.0, bounds[index]), "{index}");
         }
         assert_eq!(vars[2].0, Count::Small);
+    }
+
+    /// Propagation that has not settled is not trusted: with too few passes the hidden counts
+    /// are left out and the search reports failure, `suppress_everywhere` then leaves every
+    /// non-zero count out, and with enough passes the same system keeps its withheld count.
+    #[test]
+    fn unsettled_propagation_leaves_counts_out_and_settled_propagation_keeps_them() {
+        let system = || {
+            vec![
+                (Count::Withheld, 7),
+                (Count::Small, 3),
+                (Count::Exact(0), 0),
+            ]
+        };
+        // x <= 10, so propagation changes a bound and needs a second pass to see it settle
+        let ties = [Linear::at_most(&[(1, 0)], 0, &[]).with_limit(10)];
+        let mut hurried = system();
+        assert!(!suppress_within(&mut hurried, &[], &ties, &[], None, 1));
+        assert_eq!(hurried[0].0, Count::Omitted);
+        assert_eq!(hurried[1].0, Count::Omitted);
+        let mut everywhere = system();
+        suppress_everywhere_within(&mut everywhere, &[], &ties, 1);
+        assert_eq!(everywhere[0].0, Count::Omitted);
+        assert_eq!(everywhere[2].0, Count::Exact(0));
+        let mut settled = system();
+        assert!(suppress(&mut settled, &[], &ties, &[], None));
+        assert_eq!(settled[0].0, Count::Withheld);
+        let mut full = system();
+        suppress_everywhere(&mut full, &[], &ties);
+        assert_eq!(full[0].0, Count::Withheld);
     }
 }

@@ -1421,9 +1421,13 @@ parents are the sum of the sibling histogram. They are also inequalities that ho
   bin count; the largest like group lies within the highest bin that has a parent, and the
   group plus one is at most the blank nodes;
 - a triple term nests as deep as its depth, so the maximum depth is at most the triple terms;
-- blank nodes occupy at most two positions per quad, annotation and triple term, plus one per
-  reifier and one per named graph, and IRIs at most three per quad, annotation and triple term,
-  plus one per reifier and one per named graph.
+- blank nodes occupy at most two positions per quad and per triple term, one per reifier,
+  one per named graph, and one per annotation (its object), and IRIs at most three per quad and
+  per triple term, one per reifier and per named graph, and two per annotation (its predicate
+  and object). An annotation's subject is a reifier that has a row of its own and is counted
+  under the reifiers; the verb takes that bound only when it holds for the dataset, and
+  counts the subject position per annotation (two blank and three IRI positions) when some
+  annotation is about a term no reifier row binds.
 
 The verb puts every figure and every tie into one system and derives by bound propagation the
 interval each hidden count is confined to by everything printed. It hides further counts (as
@@ -1433,7 +1437,12 @@ its upper bound of four and at least three possible values, and a withheld or lo
 count keeps at least two. A total prints exactly only when every cell of every breakdown of it
 is exact; otherwise it prints as `">=N"` with `N` the sum of its exact cells. So a statement
 count that would give the literal count exactly is itself withheld. The guarantee covers the
-ties listed here; a relation the data model implies and this list lacks would not be covered.
+ties listed here; a relation the data model implies and this list lacks would not be covered. The
+search costs at most `8(n+1)` propagation passes per step, each scanning every tie once, and at
+most `2n+1` steps, where `n` (under two hundred) is the number of printed counts and does not
+grow with the statements. A step whose propagation does not settle within its passes is not
+trusted: the hidden counts are left out instead, and so on until every count that is not
+zero is left out, which no tie can pin.
 
 When no form of hiding meets the criterion for a count, the count is left out: its place
 prints `{"status":"omitted","reason":"small-counts-would-be-exposed"}`. Once every non-zero

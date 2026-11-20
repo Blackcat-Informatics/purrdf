@@ -589,7 +589,7 @@ fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
     let mut names: Vec<String> = Vec::new();
     let mut bounds: Vec<(i128, i128)> = Vec::new();
     let mut add = |name: &str, value: &purrdf_lex::json::Value| -> Option<usize> {
-        let found = interval(value).or_else(|| value["status"].as_str().map(|_| (0, OPEN)))?;
+        let found = interval(value).or_else(|| value["status"].as_str().map(|_| (1, OPEN)))?;
         names.push(name.to_owned());
         bounds.push(found);
         Some(bounds.len() - 1)
@@ -667,7 +667,7 @@ fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
     let one = |v: usize| (1_i128, v);
     let kinds: [Position; 5] = [
         (quads, 2, 3, true),
-        (annotations, 2, 3, true),
+        (annotations, 1, 2, true),
         (triples, 2, 3, true),
         (reifiers, 1, 1, false),
         (graphs, 1, 1, false),
@@ -1297,5 +1297,54 @@ fn sibling_histograms_and_statement_counts_do_not_pin_small_counts() {
             let quads_exact = exact(&document, &["counts", "quads"]).is_some();
             assert_eq!(quads_exact, expect_exact, "{label}: {printed}");
         }
+    }
+}
+
+/// RDF 1.2 Turtle: `rows` annotated triple terms, each `<< _:x{i} p _:y{i} ~ _:r{i} >> q _:o{i}`.
+fn annotated_triples(rows: usize) -> String {
+    let mut out = String::new();
+    for index in 0..rows {
+        push(
+            &mut out,
+            &format!(
+                "<< _:x{index} <http://example.org/p> _:y{index} ~ _:r{index} >> <http://example.org/q> _:o{index} .\n"
+            ),
+        );
+    }
+    out
+}
+
+/// Protects: the blank nodes of annotated triple terms do not pin the triple-term or reifier
+/// count. Three reifiers over four triple terms, with five annotation rows (one on a reifier that
+/// has a row of its own), print sixteen blank nodes; each annotation adds only its object, so the
+/// triple terms and reifiers stay confined to a range. The neighbour has every count at or above
+/// the threshold and prints them exactly.
+#[test]
+fn annotations_do_not_pin_the_triple_term_count() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let mut small = String::new();
+    for (index, reifier) in [1, 1, 2, 3].into_iter().enumerate() {
+        push(
+            &mut small,
+            &format!(
+                "<< _:x{n} <http://example.org/p> _:y{n} ~ _:r{reifier} >> <http://example.org/q> _:o{n} .\n",
+                n = index + 1
+            ),
+        );
+    }
+    small.push_str("_:r3 <http://example.org/q> _:o5 .\n");
+    let small = write_file(dir.path(), "ann16.ttl", &small);
+    let neighbour = write_file(dir.path(), "ann20.ttl", &annotated_triples(5));
+    for (input, exact_counts) in [(&small, false), (&neighbour, true)] {
+        let out = shape(&["--no-labelling", input]);
+        assert_eq!(code(&out), 0, "{}", stderr(&out));
+        let printed = stdout(&out);
+        let document = purrdf_lex::json::read(&printed).expect("one JSON document");
+        assert!(nothing_recoverable(&document), "{printed}");
+        assert_eq!(
+            exact(&document, &["counts", "triple_terms"]).is_some(),
+            exact_counts,
+            "{printed}"
+        );
     }
 }

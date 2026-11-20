@@ -52,12 +52,15 @@
 //! number of quads. A literal is the object of a quad, an annotation or a triple term, and
 //! nowhere else, so the distinct literals are at most those three counts together; the
 //! datatype classes and the tagged literals are disjoint classes of literals, and a tag is used
-//! by a tagged literal. A blank node occupies a subject or object position of a quad, an
-//! annotation or a triple term, a reifier, or a graph name (one per named graph), so the blank
-//! nodes are at most twice the quads, annotations and triple terms plus the reifiers and the
-//! named graphs. An IRI occupies a subject, predicate or object position of those, a reifier, or
-//! a graph name, so the IRIs are at most three per quad, annotation and triple term plus one
-//! per reifier and per named graph. A parent is a blank node with a quad of its own. Each parent
+//! by a tagged literal. A blank node occupies a subject or object position of a quad or a triple
+//! term, a reifier, an annotation's object, or a graph name (one per named graph), so the blank
+//! nodes are at most twice the quads and triple terms plus the annotations, reifiers and named
+//! graphs. An IRI occupies a subject, predicate or object position of a quad or a triple term, a
+//! reifier, an annotation's predicate or object, or a graph name, so the IRIs are at most three
+//! per quad and triple term, two per annotation, and one per reifier and per named graph. An
+//! annotation's own subject is a reifier already counted under the reifiers when the dataset
+//! binds it, which [`measure`] checks and the builder does not enforce; when some annotation is
+//! about an unbound term the subject position is counted per annotation as well. A parent is a blank node with a quad of its own. Each parent
 //! of a histogram bin has at least the bin's minimum of like blank children and a quad to each,
 //! so the quads are at least the sum of minimum times count over the bins; the largest like
 //! group lies within the highest bin that has a parent, and needs that many blank nodes besides
@@ -96,7 +99,9 @@ use purrdf_rdf::SourceFormat;
 
 use crate::cli::CliRdfFormat;
 use crate::error::CliError;
-use crate::shape_suppress::{Count, Linear, SMALL_COUNT_THRESHOLD, Sum, confined, suppress};
+use crate::shape_suppress::{
+    Count, Linear, SMALL_COUNT_THRESHOLD, Sum, confined, suppress, suppress_everywhere,
+};
 use crate::source::{InputView, ViewOp};
 use crate::{format, source};
 
@@ -213,7 +218,7 @@ pub(crate) fn run(
             _ => read_failure(),
         })?
     }?;
-    let document = measured.render()?;
+    let document = measured.render();
     canonical.before_output()?;
     use std::io::Write as _;
     let mut out = std::io::stdout().lock();
@@ -371,6 +376,8 @@ struct Figures {
     triple_terms: u64,
     reifiers: u64,
     annotations: u64,
+    /// Whether every annotation is about a reifier that has a row of its own.
+    annotations_bound: bool,
     max_triple_depth: u64,
     sibling_parents: u64,
     sibling_largest: Pow2,
@@ -432,8 +439,13 @@ fn measure<D: InputView>(
         }
     }
     let mut annotations = 0_u64;
+    // Every annotation of a dataset read from a syntax is about a reifier that has a row of its
+    // own, and that reifier is already counted once under the reifiers. The builder does not
+    // enforce it, so the figure is taken only when it holds.
+    let mut annotations_bound = true;
     for quad in view.annotation_quads() {
         annotations += 1;
+        annotations_bound &= reifiers.contains(&quad.s);
         census.reach(view, quad.s);
         census.reach(view, quad.p);
         census.reach(view, quad.o);
@@ -462,6 +474,7 @@ fn measure<D: InputView>(
         triple_terms: count_class(Class::Triple),
         reifiers: reifiers.len() as u64,
         annotations,
+        annotations_bound,
         max_triple_depth,
         sibling_parents,
         sibling_largest,
@@ -825,6 +838,13 @@ impl Figures {
             },
         ];
         let one = |v: usize| (1, v);
+        // An annotation adds its object and predicate, and its subject too unless that is a
+        // reifier already counted under the reifiers.
+        let (annotation_blanks, annotation_iris) = if self.annotations_bound {
+            (1, 2)
+        } else {
+            (2, 3)
+        };
         let mut ties = vec![
             // every literal is the object of a statement, an annotation or a triple term
             Linear::at_most(
@@ -847,7 +867,7 @@ impl Figures {
                 0,
                 &[
                     (2, quads),
-                    (2, annotations),
+                    (annotation_blanks, annotations),
                     (2, triples),
                     one(reifiers),
                     one(graphs),
@@ -858,7 +878,7 @@ impl Figures {
                 0,
                 &[
                     (3, quads),
-                    (3, annotations),
+                    (annotation_iris, annotations),
                     (3, triples),
                     one(reifiers),
                     one(graphs),
@@ -917,15 +937,11 @@ impl Figures {
     }
 
     /// The one JSON document, newline terminated.
-    fn render(&self) -> Result<String, CliError> {
+    fn render(&self) -> String {
         // Choose every printed count together. A count that cannot be hidden by any other
         // form is left out, so the search ends with nothing pinned.
         let mut plan = self.plan();
-        if !suppress(&mut plan.vars, &plan.sums, &plan.ties, &[], None) {
-            return Err(CliError::Runtime(
-                "shape: a small count could not be suppressed; no figures are printed".to_owned(),
-            ));
-        }
+        suppress_everywhere(&mut plan.vars, &plan.sums, &plan.ties);
         // A maximum that the printed histogram bounds already confine to one value gives
         // nothing away, so it prints as that value.
         let bounds = confined(&plan.vars, &plan.sums, &plan.ties);
@@ -1086,6 +1102,89 @@ impl Figures {
             }
         }
         out.push_str("}\n");
-        Ok(out)
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, TermId};
+
+    use super::{CaseForms, LabellingRequest, measure};
+
+    /// Protects: every sum and every tie of the suppression system holds for the true counts of
+    /// a dataset, whatever its shape, so no tie claims a bound the data can break. The datasets
+    /// are small random mixes of quads, triple terms, reifier rows and annotations, some of
+    /// them annotating a term that no reifier row binds.
+    #[test]
+    fn the_ties_hold_for_the_true_counts_of_small_random_datasets() {
+        let mut state = 1_u64;
+        let mut next = |bound: usize| {
+            usize::try_from(purrdf_hash::mix::splitmix64_next(&mut state) % bound as u64)
+                .expect("a small index")
+        };
+        let mut checked = 0;
+        for _ in 0..400 {
+            let mut builder = RdfDatasetBuilder::new();
+            let mut terms: Vec<TermId> = Vec::new();
+            for index in 0..3 {
+                terms.push(
+                    builder
+                        .intern_iri(&format!("http://example.org/i{index}"))
+                        .expect("an IRI"),
+                );
+            }
+            for index in 0..5 {
+                terms.push(
+                    builder
+                        .intern_blank(&format!("b{index}"), BlankScope::DEFAULT)
+                        .expect("a blank node"),
+                );
+            }
+            let predicate = terms[0];
+            for _ in 0..next(15) {
+                let (s, o) = (terms[next(terms.len())], terms[next(terms.len())]);
+                match next(4) {
+                    0 => builder.push_quad(s, predicate, o, None).expect("a quad"),
+                    1 => {
+                        let triple = builder.intern_triple(s, predicate, o).expect("a triple");
+                        let reifier = terms[next(terms.len())];
+                        builder.push_reifier(reifier, triple).expect("a reifier");
+                    }
+                    2 => builder
+                        .push_annotation(terms[next(terms.len())], predicate, o)
+                        .expect("an annotation"),
+                    _ => {
+                        let triple = builder.intern_triple(s, predicate, o).expect("a triple");
+                        let outer = builder
+                            .intern_triple(terms[next(terms.len())], predicate, triple)
+                            .expect("a nested triple");
+                        builder
+                            .push_quad(s, predicate, outer, None)
+                            .expect("a quad");
+                    }
+                }
+            }
+            let Ok(dataset) = builder.freeze() else {
+                continue;
+            };
+            let figures = measure(
+                &*dataset,
+                LabellingRequest::Disabled,
+                CaseForms::Omitted("none"),
+            )
+            .expect("figures");
+            let plan = figures.plan();
+            let truth: Vec<u64> = plan.vars.iter().map(|var| var.1).collect();
+            for sum in &plan.sums {
+                let cells: u64 = sum.cells.iter().map(|&cell| truth[cell]).sum();
+                assert_eq!(truth[sum.total], cells, "a total is the sum of its cells");
+            }
+            for (index, tie) in plan.ties.iter().enumerate() {
+                assert!(tie.holds(&truth), "tie {index} fails for {truth:?}");
+            }
+            checked += 1;
+        }
+        assert!(checked > 100, "enough datasets were built: {checked}");
     }
 }
