@@ -1,0 +1,25 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## What is wanted\n\nOne specification of the GTS format. `AGENTS.md` here states that the GTS wire format is governed in `gmeow-gts`, but this repository carries its own copy of the specification, at an older version, under the same DOI.\n\n## What the documents say now\n\n- `docs/GTS-SPEC.md` here: document version 0.9-draft; \"This version\" points at a `purrdf-gts` repository; the text says the specification is maintained in that repository.\n- `gmeow-gts/docs/GTS-SPEC.md`: document version 1.0-rc1, the same DOI.\n- `docs/GTS-CONFORMANCE.md` and the implementer guide exist in both repositories in differing versions.\n\nA reader of this repository cannot tell which text an implementation must follow, or whether `purrdf-gts` is meant to conform to the draft here or to the release candidate there.\n\n## Acceptance\n\n- This repository holds no second copy of the specification, the conformance statement or the implementer guide; each is replaced by a link to `gmeow-gts`.\n- The README states which version of the specification `purrdf-gts` implements and where its conformance result against the `gmeow-gts` corpus is recorded.\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-17T17:16:02Z",
+  "labels": [],
+  "milestone": {
+    "number": 6,
+    "title": "v5.0",
+    "description": "Track PurRDF 5.0 release requirements and the smallest complete changes to published contracts. The release checklist and canonical freeze are in #1383.",
+    "dueOn": null
+  },
+  "number": 1369,
+  "state": "OPEN",
+  "title": "docs/GTS-SPEC.md duplicates the specification that gmeow-gts governs",
+  "updatedAt": "2026-11-20T14:48:36Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1369"
+}

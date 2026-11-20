@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1369,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1369-docs-gts-spec-md-duplicates-the",
+  "branch": "paudley/1369-docs-gts-spec-md-duplicates-the",
+  "slug": "docs-gts-spec-md-duplicates-the",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1369-docs-gts-spec-md-duplicates-the/.stage/docs-gts-spec-md-duplicates-the",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "3c2f20cbbe0071d1daee9ed840611487ff8221a9",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1369-docs-gts-spec-md-duplicates-the",
+    "branch:paudley/1369-docs-gts-spec-md-duplicates-the",
+    "ignored:30314 files (30312 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/measure-1406-buffered caches into /home/paudley/Active/purrdf/.worktrees/1369-docs-gts-spec-md-duplicates-the plus 180 dependency units from 2 other checkouts in 16.1s; 20818 unchanged files keep their built mtimes; 61 other files take the seed time and rebuild; 1 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1369-docs-gts-spec-md-duplicates-the/.stage/docs-gts-spec-md-duplicates-the",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1369-docs-gts-spec-md-duplicates-the/.stage/docs-gts-spec-md-duplicates-the/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-20T14:37:21-0600",
+  "seed_error": ""
+}
