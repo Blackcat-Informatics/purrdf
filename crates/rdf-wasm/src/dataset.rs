@@ -300,6 +300,18 @@ impl VisualOptions {
     }
 }
 
+/// The JS error for a dataset that refused to produce its content identity, with the
+/// storage refusal retained as the native cause. `contentIdentity()` and
+/// `bindExecutionReceipt` throw this one error. A storage error classifies the
+/// diagnostic itself, so the code passed here is not emitted.
+fn identity_refusal(cause: purrdf_lex::allocation::StorageError) -> JsValue {
+    diag_to_err(&purrdf_validate::native_error::diagnostic(
+        "rdf-storage-refused",
+        cause,
+        Some(cause),
+    ))
+}
+
 /// Map an engine diagnostic to a JS error.
 pub(crate) fn diag_to_err(diag: &RdfDiagnostic) -> JsValue {
     if diag.storage_error().is_some() {
@@ -863,8 +875,8 @@ impl Dataset {
     #[wasm_bindgen(js_name = contentIdentity)]
     pub fn content_identity(&self) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
-        let identity = purrdf_core::ContentIdentified::content_identity(&*frozen)
-            .map_err(|e| diag_to_err(&e.into()))?;
+        let identity =
+            purrdf_core::ContentIdentified::content_identity(&*frozen).map_err(identity_refusal)?;
         Ok(identity.to_string())
     }
 
@@ -893,13 +905,7 @@ impl Dataset {
                 ReceiptBindError::Refused(_) => crate::operation::RECEIPT_CODE,
                 // The view's own refusal is not a bad option: it is reported exactly
                 // as `contentIdentity()` reports one.
-                ReceiptBindError::Identity(cause) => {
-                    return diag_to_err(&purrdf_validate::native_error::diagnostic(
-                        "content-identity-refused",
-                        cause,
-                        Some(cause),
-                    ));
-                }
+                ReceiptBindError::Identity(cause) => return identity_refusal(cause),
                 _ => crate::operation::OPTIONS_CODE,
             };
             crate::operation::coded_error(&error.to_string(), code)

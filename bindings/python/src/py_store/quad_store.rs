@@ -980,7 +980,7 @@ impl PyQuadStore {
                     // The store's own storage refusal keeps its native cause fields.
                     let message = format!("content identity refused: {cause}");
                     let diagnostic = purrdf_validate::native_error::diagnostic(
-                        "content-identity-refused",
+                        "rdf-storage-refused",
                         cause,
                         Some(cause),
                     );
