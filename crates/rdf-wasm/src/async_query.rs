@@ -156,9 +156,10 @@
 //! protocol itself (none at all, bindings for a `LOAD`, an abandonment the job's signal
 //! did not cause) latches the job's fault.
 //!
-//! The packaged resolver of the Cloudflare adapter reports a browser's opaque redirect as a
-//! transport failure, because no shipped host produces the opaque outcome of the native
-//! exchange today.
+//! The delivery protocol has no way to deliver an opaque redirect, so this lane never
+//! produces the opaque outcome of the native exchange. The package's runner reports an
+//! opaque `Response` from a `resolveLoad` handler, and the packaged Cloudflare resolver
+//! reports a browser's opaque redirect, each as a transport failure.
 //!
 //! [`LoadError::Denied`]: purrdf_sparql_eval::LoadError::Denied
 //! [`LoadError::Transport`]: purrdf_sparql_eval::LoadError::Transport

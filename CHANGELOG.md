@@ -22,9 +22,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   WebAssembly asynchronous lane runs both operations through the exchange with
   its JavaScript interface unchanged; a `LOAD` document delivered without a
   base is parsed against the effect's IRI. The migration guide gives the
-  mapping from the 4.x request. The packaged Cloudflare resolver reports a browser's
-  opaque redirect as a transport failure, because no shipped host produces the opaque
-  outcome today.
+  mapping from the 4.x request. The delivery protocol of the WebAssembly lane has no
+  way to deliver an opaque redirect, so the package's runner reports an opaque `Response`
+  from a `resolveLoad` handler, and the packaged Cloudflare resolver reports a browser's
+  opaque redirect, each as a transport failure.
 - **Reading a GTS file into a dataset reports language tags folded to lower case.**
   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
   terms; a dataset folds the tag and holds one. `import_gts_events`,

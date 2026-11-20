@@ -822,10 +822,14 @@ fn a_stop_fired_during_a_hop_prevents_the_next_redirect_hop() {
     assert_eq!(hops.lock().expect("lock").len(), 2);
     hops.lock().expect("lock").clear();
     let stopped = HttpGraphResolver::new(chain(true), decode as Decoder, "text/plain");
-    assert!(matches!(
-        stopped.resolve(request("https://open.example/start")),
-        Err(LoadError::Governed(_))
-    ));
+    assert_eq!(
+        stopped
+            .resolve(request("https://open.example/start"))
+            .map(|_| ()),
+        Err(LoadError::Governed(TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled
+        }))
+    );
     assert_eq!(
         hops.lock().expect("lock").len(),
         1,
