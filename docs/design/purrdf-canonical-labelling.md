@@ -374,6 +374,9 @@ GTS format, section "Nested terms, lowering and term nodes":
   `label_view_with_capacity` judges the size, then the weight against what the read
   has left, then the collision of two nested terms' digests (`LoweringRefusal`),
   then the definition's own refusals, the first that applies being the one returned.
+  One definition refusal is judged before the size: a triple term in the subject or
+  the predicate of a triple term is refused as an input with the slot it occupies
+  while the record is read, because no lowered set exists to measure for that shape.
   A weight once admitted stays in the total; after a refusal by weight every later
   input of the read is refused by weight. The view is read once: size and weight
   are counted while the view is lowered, from term identifiers, and are judged

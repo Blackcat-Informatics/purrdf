@@ -1617,7 +1617,10 @@ pub fn label_view<D: DatasetView>(
 /// The refusals are judged in one order, and the first that applies is the
 /// one returned: [`LoweringRefusal::Size`], [`LoweringRefusal::Weight`],
 /// [`LoweringRefusal::TermNode`], then the refusals of the definition by
-/// their code.
+/// their code. One definition refusal is judged first: a triple term in the
+/// subject or the predicate of a triple term is refused with
+/// [`Refusal::Input`] while the record is read, because no lowered set exists
+/// to measure for that shape.
 ///
 /// # Errors
 /// As [`label_view`], and [`ViewError::Lowering`] with the size or weight
