@@ -158,7 +158,7 @@ impl Multiset256 {
     ///
     /// This is additive accounting over the population and the wrapping sum,
     /// not the identity of a row set: a party choosing the members can build
-    /// two different multisets with one check. [`sorted_fingerprint`] is the
+    /// two different multisets with the same check value. [`sorted_fingerprint`] is the
     /// row-set identity.
     #[must_use]
     pub fn accounting_check(&self, domain: Domain) -> [u8; 32] {
