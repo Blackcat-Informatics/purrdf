@@ -8,7 +8,10 @@
 //! the walk units stay linear.
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
-use purrdf_core::canonical_labelling::{Line, Term, label};
+use purrdf_core::canonical_labelling::{Limit, Line, Scope, Term, label, label_view};
+
+#[path = "support/nested_chain.rs"]
+mod nested_chain;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -54,4 +57,26 @@ fn requested_bytes_grow_linearly_with_the_size_of_the_input() {
             "{name}: 500 requested {small} bytes, 2000 requested {large}"
         );
     }
+}
+
+/// A chain of nested triple terms lowers to term nodes joined in a path, so its
+/// labelling splits one large cell step by step like the blank-node path does:
+/// quadrupling the chain at most about quadruples the requested bytes.
+#[test]
+fn requested_bytes_grow_linearly_along_a_chain_of_nested_triple_terms() {
+    let measured = |n: usize| {
+        let view = nested_chain::chain(n);
+        let window = CurrentThreadWindow::open();
+        let labelling = label_view(view.as_ref(), &[], Scope::Dataset, Limit::ENGINE, None)
+            .expect("the chain is labelled");
+        let measured = window.close();
+        drop(labelling);
+        measured.requested_bytes
+    };
+    let small = measured(500);
+    let large = measured(2_000);
+    assert!(
+        large < 6 * small,
+        "chain: 500 requested {small} bytes, 2000 requested {large}"
+    );
 }

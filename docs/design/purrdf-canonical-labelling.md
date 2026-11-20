@@ -157,7 +157,9 @@ those tokens and of what each blank leaf is replaced by, so nothing is spelled a
 text and nothing is parsed back. Lowering a dataset view to lines is outside the
 definition; `view.rs` and the migration guide state PurRDF's own rule. A composite
 literal that names a blank node is lowered to a composite node with one `record`
-line, so the blank nodes it names take part in the labelling.
+line, so the blank nodes it names take part in the labelling. A triple term that is
+a component of another triple term is lowered to a term node (section 3.6), so every
+triple term the definition receives from a view has depth one.
 
 The labelling encodes a language tag as the bytes its input gives, so the fold
 belongs to the input. A dataset view supplies the tag folded to lower case; a
@@ -291,6 +293,154 @@ definition that has none, and the tests compare the two engines, their results a
 the totals of their walks, on a corpus under three relabellings, on the
 enumeration spaces and on every row of the walk.
 
+### 3.6 Nested triple terms and term nodes
+
+The definition admits a triple term inside a triple term and writes it whole into
+every line that holds it, so a chain of `n` statements whose objects each name the
+triple term of the one before gives lines whose bytes grow as `n` squared. The
+lowering of a dataset view (`view.rs`, `nested.rs`) follows the second-generation
+GTS format, section "Nested terms, lowering and term nodes":
+
+* A NESTED TERM is a triple term that stands as a component of another triple term
+  of a line or of a record's term list. Two nested terms equal as values are one.
+  Each distinct nested term becomes one TERM NODE, a blank node of the lines that is
+  no blank node of the view, and one `record` line `record(P, [node, N(s), N(p),
+  N(o)])`, `P` the eleven bytes `E([5, [[1], [1], [1], [1]]])` and `N(x)` the term
+  node of `x` when `x` is a triple term and `x` otherwise. A triple term that stands
+  in a slot of a line or directly in a record's list keeps that place, with its own
+  components lowered.
+* The lowering reads triple terms by the identifiers of their components and
+  interns each nested term once, components first, over a heap work list: no
+  triple term holding another is ever expanded. What is linear in the distinct
+  terms is the representation: the tokens and records the lowered set retains, one
+  record of bounded size for each nested term. The bytes of the leaves are not
+  bounded that way: the source `K` of each leaf component is copied and hashed once
+  for each distinct nested term it stands in, so a chain whose terms share one long
+  interned predicate processes that predicate's bytes once per term, and the leaf
+  bytes processed per occurrence enter the work bound. A record's own term values
+  are walked in the same way, every occurrence of them.
+* The source identifier of a term node is `E([d(x)])` with
+  `d(x) = H(gts2 nested term, E([K(s), K(p), K(o)]))`, BLAKE3 in key-derivation
+  mode. `K` of a blank node is `E([0, h(b)])`, `h(b)` the digest under the same
+  context of its source identifier `E([ordinal, label])`; of a triple term
+  `E([d])`; of an IRI or a literal the byte string of `E([1, text])` or
+  `E([2, lexical, form, x])`, the texts whole as the view holds them. A composite
+  node stands for its literal and takes the literal's `K`. The digests only order
+  nodes: they enter no line, payload or digest.
+* SOURCE ORDER. The source form is decided per input: the statements of the view
+  that the scope selects together with the caller's records, which is what the
+  lowering reads. When that input holds a nested term, every blank node of it takes
+  the source identifier `E([ordinal, label])`, the scope ordinal as an unsigned
+  integer and the label as a byte string, the bytes the format gives a blank node of
+  a fold. Term nodes (first byte `0x81`) then precede every blank node of the
+  input (`0x82`), and the order of twins and of copies of a top component, the only things
+  source identifiers decide, is the format's. When the input holds no nested term,
+  its blank nodes keep the source identifier of four big-endian bytes of the scope
+  ordinal and the label, which orders labels bytewise; the format's form would
+  order a shorter label first and so move the positions of twins in inputs the
+  lowering does not change. A nested term only in a graph the scope leaves out does
+  not change the form, and a nested term only in a record changes it even when the
+  view holds none. Both forms are injective, so either names each blank node once.
+* THE DATASET PATH AND A GTS READER. The canonical map of the dataset path is not
+  the positions a GTS reader reports or stores. Source identifiers decide only the
+  order of twin blank nodes and of copies of equal top components, and the reader's
+  source identifiers come from its own folds; for those nodes the two maps can differ
+  by an automorphism of the lowered set. When the dataset path is given the same
+  lines and records as the reader's labelled set, the canonical line sequence, its
+  bytes and its digest are the same. A GTS fold adds a `record` line for each
+  binding, suppression entry, blob entry and pair of VALUES (one for each typed
+  value); the dataset path adds none unless the caller passes them as records, so without them its sequence and digest differ. The
+  dataset folds the case of a language tag to lower case, and the format keeps the
+  text as written, so a literal whose tag has capitals gives different line bytes
+  unless the view presents the tag as written. A canonical file written from the
+  dataset path's positions holds the canonical bytes of its own set, and the order
+  of delivery a reader reports for it comes from that reader's own run, not from
+  the positions it was written from.
+* RDF 1.2 nests a triple term only in the object of another, and a dataset refuses
+  any other nesting when it is frozen. The lowering applies the same rule to every
+  view and every record: a triple term that is the subject or the predicate of a
+  triple term is refused (`input`, a slot holding a variant it does not admit)
+  before anything of it is lowered. Each triple term then holds at most one nested
+  component, so the spelling of a line is one chain, never longer than the
+  input's own written form; a shape whose spelling doubles with each record, such
+  as `t(k + 1) = <<( t(k) p t(k) )>>`, reaches the labelling through no entry.
+* SIZE AND WEIGHT. The size of an input is its lines before the nested-term records
+  plus its nested candidates: for each distinct triple term reached (and each triple
+  term of a record's values, per occurrence), its components that are triple terms.
+  The weight is the length of the encoding of every line and every nested-term
+  record with each blank leaf written `fixed` (nine bytes), computed from the tokens
+  of the lowered lines and the lengths of the constants. `LabellingCapacity` holds a
+  read's capacity in lines, its capacity in bytes and the total weight admitted;
+  `label_view_with_capacity` judges the size, then the weight against what the read
+  has left, then the collision of two nested terms' digests (`LoweringRefusal`),
+  then the definition's own refusals, the first that applies being the one returned.
+  One definition refusal is judged before the size: a triple term in the subject or
+  the predicate of a triple term is refused as an input with the slot it occupies
+  while the record is read, because no lowered set exists to measure for that shape.
+  A weight once admitted stays in the total; after a refusal by weight every later
+  input of the read is refused by weight. The view is read once: size and weight
+  are counted while the view is lowered, from term identifiers, and are judged
+  before any digest is formed, any nested-term record is built or the engine runs.
+* THE THREE CASES. An input with no triple term and an input whose triple terms
+  all have depth one lower to the lines they always gave, with the same source
+  identifiers, positions, identities and digests. An input with a nested term is
+  labelled as its lowered set, whose canonical line sequence, digest and positions
+  differ from those of the unlowered lines.
+* POLLS. The lowering polls the caller's stop signal at each step of the nested
+  walks. After the walk, an input with a nested term polls at each blank node of
+  the text-form pass, once before the digests, once for each nested term in the
+  digest pass, once for each nested term in the term-node source pass and once for
+  each nested term as its record is built, so a stop set during a deep nested term
+  is observed there. An input with no nested term makes none of these polls. When
+  a capacity is given, the signal is read once before the size is judged and, for
+  an input whose size is admitted, once more before its weight is admitted, so an
+  observed stop is the outcome and not a capacity refusal of the input it
+  interrupted. A document with a
+  nested term also has one more line for each nested term than the lines it
+  spells, and the document loops poll once per line of the sequence in each of
+  their two passes.
+* COST OF A CHAIN. The lowered set of a chain is linear. The walk units, the
+  allocations and the retained and peak bytes of the labelling are linear, and the
+  bytes it requests from the allocator and its instructions are quadratic. For a
+  chain of `n` statements, `t(1) = <<( a a a )>>` and `t(k + 1) = <<( a a t(k)
+  )>>`, each with the quad `a a t(k)`, measured on one AMD Ryzen AI MAX+ 395 host
+  with rustc 1.102.0-nightly (5df8c02af 2026-11-16), each size alone under a 16
+  GiB memory scope. The allocation, byte and walk columns of the rows of 1,000 and
+  10,000 are those of the `chain` report lines of the bench profile, and equal the
+  test profile's (`opt-level = 3` with debug assertions and overflow checks),
+  where the row of 100,000 was measured with a current-thread window. The
+  instruction column is the bench profile's (fat LTO, no debug assertions), from
+  the counting row:
+
+  | `n` | lowered lines | lowering: requested bytes / allocations / retained bytes | `label_view`: requested bytes / allocations / retained bytes / peak working bytes | walk units | `label_view` instructions |
+  |---|---|---|---|---|---|
+  | 1,000 | 1,999 | 2,003,229 / 23,268 / 324,117 | 22,689,938 / 111,404 / 1,513,433 / 3,369,981 | 76,916 | 1.18e8 |
+  | 10,000 | 19,999 | 19,979,565 / 231,798 / 3,536,397 | 1,306,523,706 / 1,111,994 / 15,426,713 / 34,021,253 | 769,916 | 6.58e9 |
+  | 100,000 | 199,999 | 182,359,453 / 2,316,825 / 33,791,421 | 121,106,177,690 / 11,117,073 / 152,691,737 / 351,609,557 | 7,699,916 | 6.06e11 |
+
+  The lowering, the lowered lines, the walk units, the allocations and the
+  retained and peak bytes of `label_view` grow tenfold with `n`. The bytes
+  `label_view` requests from the allocator and the instructions it executes grow
+  about a hundredfold: they are quadratic in `n`. That cost lies in the labelling
+  engine over the lowered set, not in the lowering. The rows of 1,000 and 10,000
+  are regenerated by `cargo bench -p purrdf-core --bench canonical_labelling`,
+  whose report has one `chain` line for each size, and their instruction counts by
+  `PURRDF_LABELLING_COUNT_SAMPLES=1 PURRDF_LABELLING_COUNT_NODES=10000 cargo bench
+  -p purrdf-core --bench canonical_labelling -- --counts chain` (1,000 is the
+  default size). The same counting command at
+  `PURRDF_LABELLING_COUNT_NODES=100000` regenerates only the instructions, the
+  `label_view` allocations (11,117,073) and requested bytes (121,106,177,690) of
+  the 100,000 row. It also prints a whole-process peak of 356,691,181 bytes, which
+  includes building the chain, so the table's peak and retained bytes, the
+  lowering columns, the lowered lines and the walk units of that row are from an
+  earlier test-profile run with a current-thread window and are not regenerated by
+  any checked-in command. The counting row labels the prepared chain, so its
+  instructions exclude building it, and each is one sample.
+* The canonical document spells a term node as the triple term it stands for, read
+  from the components of its record, and writes no nested-term record. Term nodes
+  take positions, so the labels of a view's blank nodes in a document need not be
+  consecutive.
+
 ## 4. Published work consulted
 
 **RDFC-1.0** [1] is the baseline whose cost motivates the work and the RDF
@@ -382,6 +532,13 @@ Traces, bliss, saucy, dejavu or blabel is copied into this repository.
   thirteen inputs of the specification's row `walk` and on the shared comparison
   inputs, and equal outcomes and fields on its rows `limit-rows` and
   `limit-relabel` (`walk_tests.rs`).
+* The lowering of nested triple terms (section 3.6): the lowered sets of the
+  format's worked example and its lowering cases, labelled through a view, agree
+  with the same sets written by hand and labelled by the definition alone, in lines,
+  sources, positions, digests, structural record and walk totals; refusals by size,
+  weight and digest collision beside their neighbouring admitted inputs; linear
+  allocation over chains of nested terms (`nested_tests.rs`,
+  `tests/canonical_labelling_lowering_alloc.rs`).
 
 **Open:**
 
@@ -436,6 +593,21 @@ states why each consequence follows from the design.
   come from the order of components and the structure of calls, not from RDFC-1.0's
   hash order, and the digest is BLAKE3 over the typed line sequence, not SHA-256
   over N-Quads text. The digest also moves for datasets with no blank node.
+* **An input with a triple term nested inside a triple term is labelled as its
+  lowered set** (section 3.6): the input is the statements the scope selects
+  together with the caller's records, its canonical line sequence, digest and
+  positions are those of the set with one term node and one record per nested term,
+  and the positions of its blank nodes need not be consecutive. An input whose
+  triple terms all have depth one, and one with no triple term, are labelled as
+  before.
+* **The dataset path's canonical map is not a GTS reader's.** For twin blank
+  nodes and for copies of equal top components, the positions `label_view` gives
+  and those a GTS reader reports or stores can differ by an automorphism. The
+  canonical bytes and the digest are equal only when the dataset path is given
+  the same lines and records as the reader's labelled set, including the records
+  of bindings, suppression and blob entries and pairs of VALUES (one for each
+  typed value), and language tags as the format writes them (the dataset folds their case). A
+  reader's order of delivery comes from the reader's own run.
 * **Labels are output only.** A consumer reads the typed placement, not the decimal
   label. Position order differs from the byte order of labels (`10` precedes `2`),
   so a document read back by its labels is not promised the identity map.
