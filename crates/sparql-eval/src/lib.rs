@@ -348,7 +348,10 @@ pub use remote::{
     RetainedServiceFailure, ServiceBuildError, ServiceRequest, ServiceResolutionError,
     ServiceResolver, ServiceWorkspaceCertificate,
 };
-pub use remote_http::{AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport};
+pub use remote_http::{
+    AdmittedHttpBody, DocumentDecoder, HttpExchange, HttpExchangeRequest, HttpFailure,
+    HttpGraphResolver, HttpMethod, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus,
+};
 // The per-service policy surface: what a resolver may do for one endpoint, what it
 // sends, and the two resolvers that consume it. Re-exported so a host configures
 // federation without naming the module path.

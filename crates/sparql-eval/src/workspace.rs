@@ -5054,7 +5054,9 @@ pub(crate) mod owned_row_regressions {
         use crate::remote::{
             RemoteError, ResolvedBindings, ServiceRequest, ServiceResolutionError, ServiceResolver,
         };
-        use crate::remote_http::{HttpRequest, HttpTransport};
+        use crate::remote_http::{
+            HttpExchange, HttpExchangeRequest, HttpFailure, HttpMethod, HttpOutcome,
+        };
         struct Opaque(AtomicUsize);
         impl ServiceResolver for Opaque {
             fn resolve(&self, _: ServiceRequest<'_>) -> Result<ResolvedBindings, RemoteError> {
@@ -5066,10 +5068,12 @@ pub(crate) mod owned_row_regressions {
                 })
             }
         }
-        impl HttpTransport for Opaque {
-            fn post(&self, _: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
+        impl HttpExchange for Opaque {
+            fn exchange(&self, _: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
                 self.0.fetch_add(1, Ordering::Relaxed);
-                Ok(Vec::new())
+                Err(HttpFailure::Fault(
+                    "an unpriced exchange must not run".to_owned(),
+                ))
             }
         }
         let (workspace, ledger, base) = account(65_536);
@@ -5085,21 +5089,20 @@ pub(crate) mod owned_row_regressions {
             ))
         ));
         assert!(matches!(
-            source.post_admitted(
-                HttpRequest {
-                    endpoint: "http://example.org/service",
-                    query_text: "SELECT * {}",
-                    user_agent: "fixture",
+            source.exchange_admitted(
+                HttpExchangeRequest {
+                    method: HttpMethod::Post,
+                    target: "http://example.org/service",
+                    fixed_headers: &[("user-agent", "fixture")],
+                    profile_headers: &[],
+                    body: b"SELECT * {}",
                     timeout: std::time::Duration::from_secs(1),
-                    content_type: "application/sparql-query",
-                    accept: "application/sparql-results+json",
-                    headers: &[],
                     stop: None
                 },
                 capability
             ),
             Err(ServiceResolutionError::Operational(
-                EvalError::WorkspaceUnpriced("opaque HTTP transport")
+                EvalError::WorkspaceUnpriced("opaque HTTP exchange")
             ))
         ));
         assert_eq!(source.0.load(Ordering::Relaxed), 0);
@@ -5110,19 +5113,20 @@ pub(crate) mod owned_row_regressions {
     fn native_in_process_service_and_http_decode_preserve_bags_under_original_grants() {
         use crate::remote::{ServiceRequest, ServiceResolver};
         use crate::remote_http::{
-            AdmittedHttpBody, HttpRemoteQuerySource, HttpRequest, HttpTransport,
+            AdmittedHttpBody, HttpExchange, HttpExchangeRequest, HttpFailure, HttpOutcome,
+            HttpRemoteQuerySource,
         };
         use std::sync::atomic::AtomicBool;
         struct Native {
             decoder_ready: Option<Arc<AtomicBool>>,
         }
-        impl HttpTransport for Native {
-            fn post(&self, _: HttpRequest<'_>) -> Result<Vec<u8>, crate::remote::RemoteError> {
-                panic!("bounded production must use the native transport body")
+        impl HttpExchange for Native {
+            fn exchange(&self, _: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
+                panic!("bounded production must use the native exchange body")
             }
-            fn post_admitted(
+            fn exchange_admitted(
                 &self,
-                _: HttpRequest<'_>,
+                _: HttpExchangeRequest<'_>,
                 workspace: super::WorkspaceCapability,
             ) -> Result<AdmittedHttpBody, crate::remote::ServiceResolutionError> {
                 let body = AdmittedHttpBody::try_build(&workspace, |memory| {

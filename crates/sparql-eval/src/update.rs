@@ -310,6 +310,12 @@ pub enum LoadError {
     Fault(String),
     /// This request's stop signal fired while the host held the request.
     Governed(TrippedGovernor),
+    /// The fetch of the named IRI was redirected and the host could not see the
+    /// redirect's status or `Location`: a browser's opaque-redirect response
+    /// ([`HttpOutcome::OpaqueRedirect`](crate::remote_http::HttpOutcome::OpaqueRedirect)).
+    /// `LOAD` follows a redirect only to a location it can authorize, so it refuses one it
+    /// cannot see. Reported under the transport code `native-sparql-load-failed`.
+    OpaqueRedirect(String),
 }
 
 impl LoadError {
@@ -317,7 +323,7 @@ impl LoadError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::Transport(_) => "native-sparql-load-failed",
+            Self::Transport(_) | Self::OpaqueRedirect(_) => "native-sparql-load-failed",
             Self::Decode(_) => "native-sparql-load-decode",
             Self::Denied(_) => "native-sparql-load-denied",
             Self::HostDenied(_) => "native-sparql-load-host-denied",
@@ -331,7 +337,7 @@ impl LoadError {
     const fn silenced_kind(&self) -> Option<purrdf_core::SilencedKind> {
         use purrdf_core::SilencedKind;
         match self {
-            Self::Transport(_) => Some(SilencedKind::Transport),
+            Self::Transport(_) | Self::OpaqueRedirect(_) => Some(SilencedKind::Transport),
             Self::Decode(_) => Some(SilencedKind::Decode),
             Self::Denied(_) => Some(SilencedKind::Denied),
             Self::HostDenied(_) => Some(SilencedKind::HostDenied),
@@ -350,6 +356,11 @@ impl core::fmt::Display for LoadError {
             Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::HostDenied(message) => write!(f, "the host denied the request: {message}"),
             Self::Governed(governor) => write!(f, "{governor}"),
+            Self::OpaqueRedirect(iri) => write!(
+                f,
+                "<{iri}>: refused an opaque redirect; the host could not see its status or \
+                 Location"
+            ),
         }
     }
 }

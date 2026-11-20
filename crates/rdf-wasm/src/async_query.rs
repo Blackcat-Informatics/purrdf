@@ -138,17 +138,30 @@
 //! because a fault is not an answer at all. `silent` is handed to the host for
 //! information only; an empty answer is not the host's to invent.
 //!
-//! A `LOAD` source is authorized against the job's catalog before any effect is issued
-//! (see [`JspiGraphResolver`]): a refusal is the catalog's [`LoadError::Denied`]
-//! (`native-sparql-load-denied`). A `LOAD` effect answered with a transport failure
-//! becomes [`LoadError::Transport`] (`native-sparql-load-failed`), a document that does
-//! not parse [`LoadError::Decode`] (`native-sparql-load-decode`), and a denial the host
-//! delivers [`LoadError::HostDenied`] (`native-sparql-load-host-denied`), whose message
-//! reads "the host denied the request: …". A redirect is followed here: its location is
-//! re-authorized and fetched as a fresh effect, up to [`MAX_LOAD_REDIRECTS`] hops. Each
-//! failure fails the request, and `LOAD SILENT` succeeds over it with nothing loaded,
-//! recorded on [`AsyncEvidence::silenced`]. A host fault is latched and fails the job,
-//! `SILENT` or not.
+//! A `LOAD` runs through the native [`HttpGraphResolver`] over [`JspiLoadExchange`], so
+//! the catalog policy, the redirect rule and the document's base are the native ones. A
+//! `LOAD` source is authorized against the job's catalog before any effect is issued: a
+//! refusal is the catalog's [`LoadError::Denied`] (`native-sparql-load-denied`). A `LOAD`
+//! effect answered with a transport failure becomes [`LoadError::Transport`]
+//! (`native-sparql-load-failed`), a document that does not parse [`LoadError::Decode`]
+//! (`native-sparql-load-decode`), a denial the host delivers [`LoadError::HostDenied`]
+//! (`native-sparql-load-host-denied`), whose message reads "the host denied the request:
+//! …", and a fault the host's handler delivers [`LoadError::Fault`]
+//! (`native-sparql-load-fault`). A delivered document is parsed against the base the host
+//! names, or against the IRI of the effect that fetched it. A redirect is followed by the
+//! resolver: its location is re-authorized and fetched as a fresh effect, up to
+//! [`MAX_LOAD_REDIRECTS`] hops. Each failure fails the request, and `LOAD SILENT` succeeds
+//! over it with nothing loaded, recorded on [`AsyncEvidence::silenced`]. No job fault is
+//! latched for a handler's answer, fault or not; only a delivery that breaks the effect
+//! protocol itself (none at all, bindings for a `LOAD`, an abandonment the job's signal
+//! did not cause) latches the job's fault.
+//!
+//! [`LoadError::Denied`]: purrdf_sparql_eval::LoadError::Denied
+//! [`LoadError::Transport`]: purrdf_sparql_eval::LoadError::Transport
+//! [`LoadError::Decode`]: purrdf_sparql_eval::LoadError::Decode
+//! [`LoadError::HostDenied`]: purrdf_sparql_eval::LoadError::HostDenied
+//! [`LoadError::Fault`]: purrdf_sparql_eval::LoadError::Fault
+//! [`MAX_LOAD_REDIRECTS`]: purrdf_sparql_eval::remote_http::MAX_LOAD_REDIRECTS
 //!
 //! # Shared `SERVICE` exchanges and the per-job memo
 //!
@@ -236,13 +249,12 @@ use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_lex::json::record::{DecodeError, FromJson, Record};
 use purrdf_lex::json::{self, Value};
 use purrdf_sparql_eval::protocol::FailureCode;
-use purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT;
 use purrdf_sparql_eval::{
-    CancellationFlag, GovernorState, GraphResolveRequest, GraphResolver, HttpRemoteQuerySource,
-    HttpRequest, HttpTransport, InProcessServiceResolver, LoadError, QueryGovernors, RemoteError,
-    ResolvedBindings, ServiceCapabilities, ServiceCapability,
-    ServiceCatalog as NativeServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest,
-    ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
+    CancellationFlag, GovernorState, GraphResolver, HttpExchange, HttpExchangeRequest, HttpFailure,
+    HttpGraphResolver, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus,
+    InProcessServiceResolver, QueryGovernors, RemoteError, ResolvedBindings, ServiceCapabilities,
+    ServiceCapability, ServiceCatalog as NativeServiceCatalog, ServiceCredential, ServiceProfile,
+    ServiceRequest, ServiceResolver, StopCause, StopSignal, TrippedGovernor, WallDeadline,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
 use wasm_bindgen::convert::TryFromJsValue;
@@ -284,11 +296,6 @@ const CLOCK_EVERY_POLLS: u64 = 1_024;
 /// suspension and when the run returns; a frame that ran past the base overwrote it.
 /// ASCII `PurD`, little-endian.
 const STACK_CANARY: u32 = 0x4472_7550;
-
-/// The most redirect hops one `LOAD` follows: generous enough for a real document
-/// mirror, small enough that a redirect loop fails fast. A redirect past it fails the
-/// `LOAD` as a transport failure.
-pub(crate) const MAX_LOAD_REDIRECTS: u32 = 5;
 
 // ---------------------------------------------------------------------------
 // The protocol's statuses
@@ -595,7 +602,15 @@ impl FailureKind {
 enum Delivered {
     /// SPARQL Results JSON bytes for a `SERVICE` effect (or a wait on its exchange).
     Bindings(Arc<[u8]>),
-    /// A parsed document for a `LOAD` effect.
+    /// A document for a `LOAD` effect, as the host received it: its bytes, its media
+    /// type (or a format name), and the base the host names for it. Parsed by the
+    /// resolver when the job resumes.
+    Document {
+        bytes: Vec<u8>,
+        media_type: String,
+        base: Option<String>,
+    },
+    /// A dataset the host already holds, for a `LOAD` effect.
     Graph(Arc<RdfDataset>),
     /// A redirect for a `LOAD` effect: the `Location` the host was told to go to.
     Redirect(String),
@@ -613,17 +628,20 @@ impl Delivered {
             (
                 Self::Bindings(_),
                 EffectKind::Service | EffectKind::AwaitExchange
-            ) | (Self::Graph(_) | Self::Redirect(_), EffectKind::Load)
-                | (
-                    Self::Failure { .. } | Self::Governed,
-                    EffectKind::Service | EffectKind::Load | EffectKind::AwaitExchange
-                )
+            ) | (
+                Self::Document { .. } | Self::Graph(_) | Self::Redirect(_),
+                EffectKind::Load
+            ) | (
+                Self::Failure { .. } | Self::Governed,
+                EffectKind::Service | EffectKind::Load | EffectKind::AwaitExchange
+            )
         )
     }
 
     const fn label(&self) -> &'static str {
         match self {
             Self::Bindings(_) => "bindings",
+            Self::Document { .. } => "a document",
             Self::Graph(_) => "a graph",
             Self::Redirect(_) => "a redirect",
             Self::Failure { .. } => "a failure",
@@ -1610,15 +1628,15 @@ fn service_answer(
     fired: Option<StopCause>,
     delivered: Option<Delivered>,
     slots: &JobSlots,
-) -> Result<Arc<[u8]>, RemoteError> {
+) -> Result<Arc<[u8]>, HttpFailure> {
     if let Some(cause) = fired {
         let trip = TrippedGovernor::Stopped { cause };
         return Err(match delivered {
-            Some(Delivered::Bindings(_)) => RemoteError::GovernedAfterCompletion(trip),
-            _ => RemoteError::Governed(trip),
+            Some(Delivered::Bindings(_)) => HttpFailure::GovernedAfterCompletion(trip),
+            _ => HttpFailure::Governed(trip),
         });
     }
-    let cancelled = RemoteError::Governed(TrippedGovernor::Stopped {
+    let cancelled = HttpFailure::Governed(TrippedGovernor::Stopped {
         cause: StopCause::Cancelled,
     });
     match (status, delivered) {
@@ -1631,7 +1649,7 @@ fn service_answer(
                 kind: FailureKind::Transport | FailureKind::Decode,
                 message,
             }),
-        ) => Err(RemoteError::Transport(message)),
+        ) => Err(HttpFailure::Transport(message)),
         // The host's handler failed to answer this effect: the invocation's failure, with
         // the host — not the endpoint — as its cause.
         (
@@ -1640,26 +1658,20 @@ fn service_answer(
                 kind: FailureKind::Fault,
                 message,
             }),
-        ) => Err(RemoteError::HostFault {
-            endpoint: endpoint.to_owned(),
-            message,
-        }),
+        ) => Err(HttpFailure::Fault(message)),
         // A host resolver's own policy refusal, reached only when no native catalog
         // already denied the request — see `HttpRemoteQuerySource::resolve`, which
         // applies an installed `ServiceCatalog` (and returns `RemoteError::Denied`, a real
-        // withheld capability) before this transport is ever reached. Whatever the host
+        // withheld capability) before this exchange is ever reached. Whatever the host
         // reports here is therefore its own decision, not a capability this engine's
-        // catalog withheld — see `RemoteError::HostDenied`.
+        // catalog withheld: the source reports it as `RemoteError::HostDenied`.
         (
             SuspendStatus::Answered,
             Some(Delivered::Failure {
                 kind: FailureKind::Denied,
                 message,
             }),
-        ) => Err(RemoteError::HostDenied {
-            endpoint: endpoint.to_owned(),
-            message,
-        }),
+        ) => Err(HttpFailure::Denied(message)),
         (SuspendStatus::Abandoned, _) | (SuspendStatus::Answered, Some(Delivered::Governed)) => {
             slots.latch_fault(format!(
                 "the host abandoned the SERVICE <{endpoint}> effect, but the job's stop signal \
@@ -1667,7 +1679,12 @@ fn service_answer(
             ));
             Err(cancelled)
         }
-        (SuspendStatus::Answered, Some(other @ (Delivered::Graph(_) | Delivered::Redirect(_)))) => {
+        (
+            SuspendStatus::Answered,
+            Some(
+                other @ (Delivered::Document { .. } | Delivered::Graph(_) | Delivered::Redirect(_)),
+            ),
+        ) => {
             slots.latch_fault(format!(
                 "{} was delivered for SERVICE <{endpoint}>",
                 other.label()
@@ -1683,35 +1700,47 @@ fn service_answer(
     }
 }
 
-/// One hop of a `LOAD`, as its delivery decided it.
-#[derive(Debug)]
-enum LoadStep {
-    /// The document.
-    Graph(Arc<RdfDataset>),
-    /// The host was redirected to this `Location`.
-    Redirect(String),
-}
-
-/// Map what a host delivered for one hop of a `LOAD` onto the `LOAD` seam.
+/// Map what a host delivered for one `LOAD` effect onto the exchange.
 ///
-/// A fired signal is the job's own stop, [`LoadError::Governed`]: the evaluator reports
-/// the trip, `SILENT` or not.
+/// A document is the `200` response it stands for, carrying its media type as the
+/// `Content-Type` and the base the host named as the final URL; a redirect is a `302`
+/// carrying the `Location` the host was told to go to (the host's delivery names no
+/// status, and the resolver treats every redirect status alike); a held dataset is the
+/// dataset outcome. A fired signal is the job's own stop: the resolver reports it as
+/// [`LoadError::Governed`](purrdf_sparql_eval::LoadError::Governed), `SILENT` or not.
 fn load_answer(
     iri: &str,
     status: SuspendStatus,
     fired: Option<StopCause>,
     delivered: Option<Delivered>,
     slots: &JobSlots,
-) -> Result<LoadStep, LoadError> {
+) -> Result<HttpOutcome, HttpFailure> {
     if let Some(cause) = fired {
-        return Err(LoadError::Governed(TrippedGovernor::Stopped { cause }));
+        return Err(HttpFailure::Governed(TrippedGovernor::Stopped { cause }));
     }
     let message = match (status, delivered) {
+        (
+            SuspendStatus::Answered,
+            Some(Delivered::Document {
+                bytes,
+                media_type,
+                base,
+            }),
+        ) => {
+            let response =
+                HttpResponse::new(HttpStatus::OK, bytes).with_header("content-type", media_type);
+            return Ok(HttpOutcome::Response(match base {
+                Some(base) => response.with_final_url(base),
+                None => response,
+            }));
+        }
         (SuspendStatus::Answered, Some(Delivered::Graph(dataset))) => {
-            return Ok(LoadStep::Graph(dataset));
+            return Ok(HttpOutcome::Dataset(dataset));
         }
         (SuspendStatus::Answered, Some(Delivered::Redirect(location))) => {
-            return Ok(LoadStep::Redirect(location));
+            return Ok(HttpOutcome::Response(
+                HttpResponse::new(HttpStatus::FOUND, Vec::new()).with_header("location", location),
+            ));
         }
         (
             SuspendStatus::Answered,
@@ -1719,23 +1748,23 @@ fn load_answer(
                 kind: FailureKind::Transport,
                 message,
             }),
-        ) => return Err(LoadError::Transport(message)),
+        ) => return Err(HttpFailure::Transport(message)),
         (
             SuspendStatus::Answered,
             Some(Delivered::Failure {
                 kind: FailureKind::Decode,
                 message,
             }),
-        ) => return Err(LoadError::Decode(message)),
-        // The catalog's own refusal never reaches the host (see `JspiGraphResolver`), so
-        // a denial delivered here is the host's own decision.
+        ) => return Err(HttpFailure::Decode(message)),
+        // The catalog's own refusal never reaches the host (the resolver applies it before
+        // the exchange), so a denial delivered here is the host's own decision.
         (
             SuspendStatus::Answered,
             Some(Delivered::Failure {
                 kind: FailureKind::Denied,
                 message,
             }),
-        ) => return Err(LoadError::HostDenied(message)),
+        ) => return Err(HttpFailure::Denied(message)),
         // The host's handler failed to answer this fetch: the fetch's failure, not the
         // job's fault.
         (
@@ -1744,10 +1773,10 @@ fn load_answer(
                 kind: FailureKind::Fault,
                 message,
             }),
-        ) => return Err(LoadError::Fault(message)),
+        ) => return Err(HttpFailure::Fault(message)),
         // The fault already latched names the cause.
         (SuspendStatus::Fault, _) => {
-            return Err(LoadError::Fault(slots.fault().map_or_else(
+            return Err(HttpFailure::Fault(slots.fault().map_or_else(
                 || "the host latched a fault".to_owned(),
                 str::to_owned,
             )));
@@ -1766,14 +1795,14 @@ fn load_answer(
         }
     };
     slots.latch_fault(message.clone());
-    Err(LoadError::Fault(message))
+    Err(HttpFailure::Fault(message))
 }
 
 /// The header names whose presence makes a request user-specific: a shared cache must
 /// never answer one, because the answer is the credential holder's.
 const CREDENTIAL_HEADERS: [&str; 3] = ["authorization", "cookie", "proxy-authorization"];
 
-/// The [`HttpTransport`] that suspends the job on a `SERVICE` effect.
+/// The [`HttpExchange`] that suspends the job on a `SERVICE` effect.
 ///
 /// Wrapped in an [`HttpRemoteQuerySource`], so the catalog policy, the request shape and
 /// the bounded SPARQL Results JSON decode are all the native ones; this type moves the
@@ -1796,13 +1825,13 @@ struct JspiTransport {
 
 impl JspiTransport {
     /// Whether a shared cache may answer `request` or keep its answer.
-    fn cacheable(&self, request: &HttpRequest<'_>) -> bool {
+    fn cacheable(&self, request: &HttpExchangeRequest<'_>) -> bool {
         let credentialed_profile = self.catalog.as_ref().is_some_and(|catalog| {
             catalog
-                .profile_for(request.endpoint)
+                .profile_for(request.target)
                 .is_some_and(|profile| profile.credential().is_some())
         });
-        let credential_header = request.headers.iter().any(|(name, _)| {
+        let credential_header = request.profile_headers.iter().any(|(name, _)| {
             CREDENTIAL_HEADERS
                 .iter()
                 .any(|credential| name.eq_ignore_ascii_case(credential))
@@ -1811,18 +1840,30 @@ impl JspiTransport {
     }
 }
 
-impl HttpTransport for JspiTransport {
-    fn post(&self, request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
+/// A `200` response carrying SPARQL Results JSON bytes.
+fn bindings_response(bytes: &[u8]) -> HttpOutcome {
+    HttpOutcome::Response(HttpResponse::new(HttpStatus::OK, bytes.to_vec()))
+}
+
+impl HttpExchange for JspiTransport {
+    fn exchange(&self, request: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
         let slots = &self.watch.slots;
         let context = slots.take_service_context();
+        let fixed = |name: &str| request.fixed_header(name).unwrap_or_default().to_owned();
+        let query_text = std::str::from_utf8(request.body).map_err(|error| {
+            HttpFailure::Fault(format!(
+                "the SERVICE <{}> query text is not UTF-8: {error}",
+                request.target
+            ))
+        })?;
         let effect = ServiceEffect {
-            endpoint: request.endpoint.to_owned(),
-            query_text: request.query_text.to_owned(),
-            user_agent: request.user_agent.to_owned(),
+            endpoint: request.target.to_owned(),
+            query_text: query_text.to_owned(),
+            user_agent: fixed("user-agent"),
             timeout_ms: request.timeout.as_secs_f64() * 1000.0,
-            content_type: request.content_type.to_owned(),
-            accept: request.accept.to_owned(),
-            headers: request.headers.to_vec(),
+            content_type: fixed("content-type"),
+            accept: fixed("accept"),
+            headers: request.profile_headers.to_vec(),
             silent: context.is_some_and(|context| context.silent),
             max_intermediate_cells: context.and_then(|context| context.max_intermediate_cells),
             remaining_deadline_ms: self.watch.remaining_deadline_ms(),
@@ -1830,14 +1871,14 @@ impl HttpTransport for JspiTransport {
         };
         let key = ExchangeKey::new(self.handler, &effect);
         if let Some(bytes) = lock(&self.memo).get(&key) {
-            return Ok(bytes.to_vec());
+            return Ok(bindings_response(bytes));
         }
         let deadline_at_ms = self.watch.deadline_at_ms;
         let abandon = self.watch.abandonment(effect.timeout_ms);
         let joined = find_exchange(&key, deadline_at_ms);
         let exchange = match joined {
             Some(exchange) => exchange,
-            None => next_exchange_id()?,
+            None => next_exchange_id().map_err(|_| HttpFailure::ExchangeIdExhausted)?,
         };
         let payload = match joined {
             Some(_) => EffectPayload::AwaitExchange { exchange },
@@ -1849,8 +1890,8 @@ impl HttpTransport for JspiTransport {
         let kind = payload.kind();
         let Some(seq) = slots.issue(payload, Some(abandon)) else {
             let fired = self.watch.observe_now();
-            return service_answer(request.endpoint, SuspendStatus::Fault, fired, None, slots)
-                .map(|bytes| bytes.to_vec());
+            return service_answer(request.target, SuspendStatus::Fault, fired, None, slots)
+                .map(|bytes| bindings_response(&bytes));
         };
         let waiter = (Arc::clone(slots), seq);
         match joined {
@@ -1863,9 +1904,9 @@ impl HttpTransport for JspiTransport {
         // `request.stop` is this same watch; observing it directly avoids a second poll
         // that could slice into a yield before the answer is even mapped.
         let fired = self.watch.observe_now();
-        let bytes = service_answer(request.endpoint, status, fired, delivered, slots)?;
+        let bytes = service_answer(request.target, status, fired, delivered, slots)?;
         lock(&self.memo).insert(key, Arc::clone(&bytes));
-        Ok(bytes.to_vec())
+        Ok(bindings_response(&bytes))
     }
 }
 
@@ -1985,99 +2026,77 @@ fn load_accept() -> String {
         .join(", ")
 }
 
-/// The `LOAD` source that suspends the job on a `Load` effect.
-///
-/// With a catalog installed, every hop's IRI — the source and every location a redirect
-/// names — is authorized against it before the host is asked: a `LOAD` needs the
-/// `network` capability (and `credentials` for a credential), exactly the policy a
-/// `SERVICE` meets, and a refusal is the catalog's [`LoadError::Denied`] with nothing
-/// fetched. The authorized profile supplies the hop's headers, credential, user agent and
-/// timeout, so a redirect to another origin carries only what that origin's own profile
-/// grants. A redirect is followed here, never by the host: its location is resolved
-/// against the hop's IRI and fetched as a fresh effect, up to [`MAX_LOAD_REDIRECTS`] hops.
-#[derive(Debug)]
-struct JspiGraphResolver {
-    watch: Arc<JspiStopWatch>,
-    catalog: Option<NativeServiceCatalog>,
+/// The `LOAD` effect that carries out `request`: one hop, as the native resolver built
+/// it.
+fn load_effect(request: &HttpExchangeRequest<'_>) -> LoadEffect {
+    LoadEffect {
+        iri: request.target.to_owned(),
+        accept: request
+            .fixed_header("accept")
+            .unwrap_or_default()
+            .to_owned(),
+        user_agent: request.fixed_header("user-agent").map(str::to_owned),
+        headers: request.profile_headers.to_vec(),
+        timeout_ms: request.timeout.as_secs_f64() * 1000.0,
+    }
 }
 
-impl JspiGraphResolver {
-    /// The effect that fetches `iri`, or the catalog's refusal.
-    fn authorize(&self, iri: &str) -> Result<LoadEffect, LoadError> {
-        let default_timeout_ms = DEFAULT_TIMEOUT.as_secs_f64() * 1000.0;
-        let Some(catalog) = &self.catalog else {
-            return Ok(LoadEffect {
-                iri: iri.to_owned(),
-                accept: load_accept(),
-                user_agent: None,
-                headers: Vec::new(),
-                timeout_ms: default_timeout_ms,
+/// The [`HttpExchange`] that suspends the job on a `Load` effect, one hop at a time.
+///
+/// Wrapped in an [`HttpGraphResolver`] ([`load_resolver`]), so the catalog policy, the
+/// request shape, the redirect rule and the document's base are all the native ones; this
+/// type moves each hop to the host and its answer back. A redirect is delivered back
+/// ([`AsyncJob::deliver_redirect`]) and the resolver issues its target as a fresh effect.
+#[derive(Debug)]
+struct JspiLoadExchange {
+    watch: Arc<JspiStopWatch>,
+}
+
+impl HttpExchange for JspiLoadExchange {
+    fn exchange(&self, request: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
+        let slots = &self.watch.slots;
+        let effect = load_effect(&request);
+        let abandon = self.watch.abandonment(effect.timeout_ms);
+        let Some(seq) = slots.issue(EffectPayload::Load(Box::new(effect)), Some(abandon)) else {
+            // Issuing refused, with the job's fault latched: the stop that fault fires is
+            // what the evaluator reports.
+            return Err(match self.watch.observe_now() {
+                Some(cause) => HttpFailure::Governed(TrippedGovernor::Stopped { cause }),
+                None => HttpFailure::Fault(format!(
+                    "the LOAD <{}> effect was not issued",
+                    request.target
+                )),
             });
         };
-        let profile = catalog
-            .authorize(
-                iri,
-                ServiceCapabilities::granting([ServiceCapability::Network]),
-            )
-            .map_err(LoadError::Denied)?;
-        Ok(LoadEffect {
-            iri: iri.to_owned(),
-            accept: load_accept(),
-            user_agent: profile.user_agent().map(str::to_owned),
-            headers: profile.request_headers(),
-            timeout_ms: profile
-                .timeout()
-                .map_or(default_timeout_ms, |timeout| timeout.as_secs_f64() * 1000.0),
-        })
+        let status = self.watch.suspend_on(seq, EffectKind::Load);
+        let delivered = slots.resume(seq);
+        let fired = self.watch.observe_now();
+        load_answer(request.target, status, fired, delivered, slots)
     }
 }
 
-impl GraphResolver for JspiGraphResolver {
-    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
-        let slots = &self.watch.slots;
-        let mut iri = request.iri.to_owned();
-        let mut hops = 0_u32;
-        loop {
-            let effect = self.authorize(&iri)?;
-            let abandon = self.watch.abandonment(effect.timeout_ms);
-            let Some(seq) = slots.issue(EffectPayload::Load(Box::new(effect)), Some(abandon))
-            else {
-                // Issuing refused, with the job's fault latched: the stop that fault
-                // fires is what the evaluator reports.
-                return Err(match self.watch.observe_now() {
-                    Some(cause) => LoadError::Governed(TrippedGovernor::Stopped { cause }),
-                    None => LoadError::Fault(format!("the LOAD <{iri}> effect was not issued")),
-                });
-            };
-            let status = self.watch.suspend_on(seq, EffectKind::Load);
-            let delivered = slots.resume(seq);
-            let fired = self.watch.observe_now();
-            match load_answer(&iri, status, fired, delivered, slots)? {
-                LoadStep::Graph(dataset) => return Ok(dataset),
-                LoadStep::Redirect(location) => {
-                    hops += 1;
-                    if hops > MAX_LOAD_REDIRECTS {
-                        return Err(LoadError::Transport(format!(
-                            "exceeded {MAX_LOAD_REDIRECTS} redirect hops; the last, from <{iri}>, \
-                             named {location:?}"
-                        )));
-                    }
-                    iri = redirect_target(&iri, &location).map_err(LoadError::Transport)?;
-                }
-            }
-        }
-    }
-}
+/// The decoder a job's `LOAD` documents are parsed with: by media type, or by any format
+/// name `Dataset.parse` accepts.
+type LoadDecoder = fn(&[u8], &str, &str) -> Result<Arc<RdfDataset>, String>;
 
-/// The IRI a redirect from `from` to `location` names: the location resolved against
-/// the IRI it redirected (RFC 3986 §5.2).
-fn redirect_target(from: &str, location: &str) -> Result<String, String> {
-    purrdf::iri::parse(from)
-        .and_then(|base| base.resolve(location))
-        .map(|target| target.as_str().to_owned())
-        .map_err(|error| {
-            format!("<{from}> redirected to {location:?}, which is not a resolvable IRI: {error}")
-        })
+/// The `LOAD` source a job with a host `LOAD` handler installs: the native resolver over
+/// [`JspiLoadExchange`], asking for every parseable RDF syntax, and gated by `catalog`
+/// when the job has one.
+fn load_resolver(
+    watch: &Arc<JspiStopWatch>,
+    catalog: Option<&NativeServiceCatalog>,
+) -> HttpGraphResolver<JspiLoadExchange, LoadDecoder> {
+    let resolver = HttpGraphResolver::new(
+        JspiLoadExchange {
+            watch: Arc::clone(watch),
+        },
+        parse_load_document as LoadDecoder,
+        load_accept(),
+    );
+    match catalog {
+        Some(catalog) => resolver.with_catalog(catalog.clone()),
+        None => resolver,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2631,10 +2650,8 @@ impl JobInner {
                 Arc::new(JobServiceSource { local, host }) as Arc<dyn ServiceResolver + Send + Sync>
             });
         let load = self.load_handler.then(|| {
-            Arc::new(JspiGraphResolver {
-                watch: Arc::clone(&self.watch),
-                catalog: self.catalog.clone(),
-            }) as Arc<dyn GraphResolver + Send + Sync>
+            Arc::new(load_resolver(&self.watch, self.catalog.as_ref()))
+                as Arc<dyn GraphResolver + Send + Sync>
         });
         let stop: Arc<dyn StopSignal> = Arc::clone(&self.watch) as Arc<dyn StopSignal>;
         JobRun {
@@ -2950,11 +2967,12 @@ impl AsyncJob {
         )
     }
 
-    /// Answer `LOAD` effect `seq` with a document. It is parsed here, by media type (or
-    /// any format name `Dataset.parse` accepts); a document that cannot be parsed is the
-    /// `LOAD`'s decode failure, never a fault.
+    /// Answer `LOAD` effect `seq` with a document. The job parses it when it resumes, by
+    /// media type (or any format name `Dataset.parse` accepts), against `base` when the
+    /// host names one (the URL it finally fetched) and otherwise against the effect's
+    /// IRI; a document that cannot be parsed is the `LOAD`'s decode failure, never a
+    /// fault.
     #[wasm_bindgen(js_name = deliverGraph)]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn deliver_graph(
         &self,
         seq: u32,
@@ -2962,14 +2980,14 @@ impl AsyncJob {
         media_type: &str,
         base: Option<String>,
     ) -> DeliveryStatus {
-        let delivered = match parse_document(bytes, media_type, base.as_deref()) {
-            Ok(dataset) => Delivered::Graph(dataset),
-            Err(message) => Delivered::Failure {
-                kind: FailureKind::Decode,
-                message,
+        self.inner.watch.slots.deliver(
+            seq,
+            Delivered::Document {
+                bytes: bytes.to_vec(),
+                media_type: media_type.to_owned(),
+                base,
             },
-        };
-        self.inner.watch.slots.deliver(seq, delivered)
+        )
     }
 
     /// Answer `LOAD` effect `seq` with a snapshot of an existing dataset.
@@ -3457,14 +3475,14 @@ fn unknown_failure_kind(kind: &str, target: &str) -> String {
     )
 }
 
-/// Parse a `LOAD` document delivered by the host.
-fn parse_document(
+/// Parse a `LOAD` document delivered by the host, against `base`.
+fn parse_load_document(
     bytes: &[u8],
     media_type: &str,
-    base: Option<&str>,
+    base: &str,
 ) -> Result<Arc<RdfDataset>, String> {
     let media_type = resolve_media_type(media_type)?;
-    parse_dataset(bytes, media_type, base).map_err(|diagnostic| diagnostic.to_string())
+    parse_dataset(bytes, media_type, Some(base)).map_err(|diagnostic| diagnostic.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -4846,6 +4864,8 @@ mod tests {
     use crate::query::{UPDATE_REFUSES_MAX_ANSWERS, sparql_request};
     use crate::shacl::requests;
     use crate::shacl::tests::{TOOLS_DATA, TOOLS_SHAPES};
+    use purrdf_sparql_eval::LoadError;
+    use purrdf_sparql_eval::remote_http::MAX_LOAD_REDIRECTS;
 
     const SEED_NT: &str = concat!(
         "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
@@ -5540,13 +5560,29 @@ mod tests {
         Delivered::Bindings(Arc::from(SRJ))
     }
 
+    /// What the evaluator receives when the host delivered `delivered` for a `SERVICE`
+    /// effect: the delivery mapped onto the exchange, then by the native source onto the
+    /// `SERVICE` seam (the row count of the decoded answer, or its error).
     fn service(
         status: SuspendStatus,
         fired: Option<StopCause>,
         delivered: Option<Delivered>,
         slots: &JobSlots,
-    ) -> Result<Vec<u8>, RemoteError> {
-        service_answer(ENDPOINT, status, fired, delivered, slots).map(|bytes| bytes.to_vec())
+    ) -> Result<usize, RemoteError> {
+        let delivered = Mutex::new(delivered);
+        let source = HttpRemoteQuerySource::new(|request: HttpExchangeRequest<'_>| {
+            service_answer(
+                request.target,
+                status,
+                fired,
+                lock(&delivered).take(),
+                slots,
+            )
+            .map(|bytes| bindings_response(&bytes))
+        });
+        source
+            .resolve(ServiceRequest::new(ENDPOINT, "SELECT * WHERE { ?s ?p ?o }"))
+            .map(|bindings| bindings.rows.len())
     }
 
     #[test]
@@ -5599,10 +5635,7 @@ mod tests {
     #[test]
     fn deliveries_map_onto_the_remote_seam() {
         let slots = slots();
-        assert_eq!(
-            service(ANSWERED, None, Some(bindings()), &slots),
-            Ok(SRJ.to_vec())
-        );
+        assert_eq!(service(ANSWERED, None, Some(bindings()), &slots), Ok(1));
         assert_eq!(
             service(
                 ANSWERED,
@@ -5666,60 +5699,97 @@ mod tests {
         slots
     }
 
-    fn load(
-        status: SuspendStatus,
-        delivered: Option<Delivered>,
+    /// What the evaluator receives for `LOAD <iri>` when the host answers each hop with
+    /// the next of `deliveries`: each delivery mapped onto the exchange by
+    /// [`load_answer`], then by the native resolver ([`HttpGraphResolver`], gated by
+    /// `catalog` when given) onto the `LOAD` seam. Returns that result and the effect each
+    /// hop would have issued, in order.
+    fn load_through(
+        iri: &str,
+        catalog: Option<&NativeServiceCatalog>,
+        deliveries: Vec<Option<Delivered>>,
         slots: &JobSlots,
-    ) -> Result<LoadStep, LoadError> {
-        load_answer("http://example.org/doc", status, None, delivered, slots)
+    ) -> (Result<Arc<RdfDataset>, LoadError>, Vec<LoadEffect>) {
+        let deliveries = Mutex::new(deliveries.into_iter());
+        let effects = Mutex::new(Vec::new());
+        let exchange = |request: HttpExchangeRequest<'_>| {
+            lock(&effects).push(load_effect(&request));
+            let delivered = lock(&deliveries).next().flatten();
+            load_answer(request.target, ANSWERED, None, delivered, slots)
+        };
+        let resolver =
+            HttpGraphResolver::new(exchange, parse_load_document as LoadDecoder, load_accept());
+        let resolver = match catalog {
+            Some(catalog) => resolver.with_catalog(catalog.clone()),
+            None => resolver,
+        };
+        let result = resolver.resolve(purrdf_sparql_eval::GraphResolveRequest { iri, stop: None });
+        drop(resolver);
+        (result, effects.into_inner().expect("effects"))
     }
+
+    fn document(bytes: &str, media_type: &str, base: Option<&str>) -> Option<Delivered> {
+        Some(Delivered::Document {
+            bytes: bytes.as_bytes().to_vec(),
+            media_type: media_type.to_owned(),
+            base: base.map(str::to_owned),
+        })
+    }
+
+    fn failure(kind: FailureKind, message: &str) -> Option<Delivered> {
+        Some(Delivered::Failure {
+            kind,
+            message: message.to_owned(),
+        })
+    }
+
+    const DOC: &str = "http://example.org/doc";
 
     #[test]
     fn load_deliveries_map_onto_the_load_seam() {
         let slots = slots();
-        let graph = parse_document(REMOTE_NT.as_bytes(), "text/turtle", None).expect("parses");
-        assert!(matches!(
-            load(ANSWERED, Some(Delivered::Graph(graph)), &slots),
-            Ok(LoadStep::Graph(_))
-        ));
-        assert!(matches!(
-            load(
-                ANSWERED,
-                Some(Delivered::Redirect("/moved".to_owned())),
-                &slots
-            ),
-            Ok(LoadStep::Redirect(location)) if location == "/moved"
-        ));
-        let failed = load(
-            ANSWERED,
-            Some(Delivered::Failure {
-                kind: FailureKind::Transport,
-                message: "HTTP 404".to_owned(),
-            }),
+        let held = parse_load_document(REMOTE_NT.as_bytes(), "text/turtle", DOC).expect("parses");
+        let (result, _) = load_through(DOC, None, vec![Some(Delivered::Graph(held))], &slots);
+        assert_eq!(
+            result
+                .expect("a held dataset is the document")
+                .quads()
+                .count(),
+            1
+        );
+        let (result, _) = load_through(
+            DOC,
+            None,
+            vec![document(REMOTE_NT, "text/turtle", None)],
             &slots,
-        )
-        .expect_err("a failure");
+        );
+        assert_eq!(result.expect("a document parses").quads().count(), 1);
+        let (failed, _) = load_through(
+            DOC,
+            None,
+            vec![failure(FailureKind::Transport, "HTTP 404")],
+            &slots,
+        );
+        let failed = failed.expect_err("a failure");
         assert_eq!(failed, LoadError::Transport("HTTP 404".to_owned()));
         assert_eq!(failed.code(), "native-sparql-load-failed");
-        let undecodable = load(
-            ANSWERED,
-            Some(Delivered::Failure {
-                kind: FailureKind::Decode,
-                message: "not Turtle".to_owned(),
-            }),
+        let (undecodable, _) = load_through(
+            DOC,
+            None,
+            vec![failure(FailureKind::Decode, "not Turtle")],
             &slots,
-        )
-        .expect_err("a decode failure");
-        assert_eq!(undecodable.code(), "native-sparql-load-decode");
-        let denied = load(
-            ANSWERED,
-            Some(Delivered::Failure {
-                kind: FailureKind::Denied,
-                message: "policy".to_owned(),
-            }),
+        );
+        assert_eq!(
+            undecodable.expect_err("a decode failure").code(),
+            "native-sparql-load-decode"
+        );
+        let (denied, _) = load_through(
+            DOC,
+            None,
+            vec![failure(FailureKind::Denied, "policy")],
             &slots,
-        )
-        .expect_err("a denial");
+        );
+        let denied = denied.expect_err("a denial");
         assert_eq!(denied.code(), "native-sparql-load-host-denied");
         assert_eq!(
             denied,
@@ -5727,10 +5797,122 @@ mod tests {
             "a LOAD denial the host delivers is the host's own decision"
         );
         assert_eq!(denied.to_string(), "the host denied the request: policy");
+        let (faulted, _) = load_through(
+            DOC,
+            None,
+            vec![failure(FailureKind::Fault, "handler threw")],
+            &slots,
+        );
+        assert_eq!(
+            faulted.expect_err("a handler fault"),
+            LoadError::Fault("handler threw".to_owned())
+        );
         assert!(slots.fault().is_none(), "failures are answers, not faults");
-        let missing = load(ANSWERED, None, &slots).expect_err("no delivery");
-        assert_eq!(missing.code(), "native-sparql-load-fault");
+        let (missing, _) = load_through(DOC, None, vec![None], &slots);
+        assert_eq!(
+            missing.expect_err("no delivery").code(),
+            "native-sparql-load-fault"
+        );
         assert!(slots.fault().is_some(), "a missing delivery is a fault");
+    }
+
+    /// A delivered document is parsed against the base the host names — the URL it
+    /// finally fetched — and, when it names none, against the IRI of the effect that
+    /// fetched it, so a relative IRI in the document resolves either way.
+    #[test]
+    fn a_load_document_is_parsed_against_the_named_base_or_the_effect_iri() {
+        let slots = slots();
+        let relative = "<a> <http://example.org/q> <b> .";
+        let named = |base: Option<&str>| {
+            let (result, _) = load_through(
+                DOC,
+                None,
+                vec![document(relative, "text/turtle", base)],
+                &slots,
+            );
+            let dataset = result.expect("a relative document parses against a base");
+            dataset
+                .term_id_by_value(&purrdf_core::TermValue::Iri(
+                    "https://mirror.example/a".to_owned(),
+                ))
+                .is_some()
+        };
+        assert!(named(Some("https://mirror.example/doc")), "the named base");
+        let (result, _) = load_through(
+            DOC,
+            None,
+            vec![document(relative, "text/turtle", None)],
+            &slots,
+        );
+        let dataset = result.expect("the effect IRI is the base");
+        assert!(
+            dataset
+                .term_id_by_value(&purrdf_core::TermValue::Iri(
+                    "http://example.org/a".to_owned()
+                ))
+                .is_some()
+        );
+        // A document the media type does not name is the decode failure; its neighbour
+        // with the right media type parses.
+        let (result, _) = load_through(
+            DOC,
+            None,
+            vec![document(REMOTE_NT, "text/x-unknown", None)],
+            &slots,
+        );
+        assert!(matches!(result, Err(LoadError::Decode(_))), "{result:?}");
+    }
+
+    /// A redirect the host delivers is followed by the native resolver: its location is
+    /// resolved against the hop's IRI and fetched as a fresh effect, up to
+    /// [`MAX_LOAD_REDIRECTS`] hops; a location that is not an IRI is a transport failure.
+    #[test]
+    fn a_delivered_redirect_is_resolved_and_fetched_as_a_fresh_effect() {
+        let slots = slots();
+        let moved = |location: &str| Some(Delivered::Redirect(location.to_owned()));
+        for (location, target) in [
+            ("/moved", "http://example.org/moved"),
+            ("next", "http://example.org/a/next"),
+            ("https://example.org/x", "https://example.org/x"),
+        ] {
+            let (result, effects) = load_through(
+                "http://example.org/a/doc",
+                None,
+                vec![moved(location), document(REMOTE_NT, "text/turtle", None)],
+                &slots,
+            );
+            assert!(result.is_ok(), "{location}: {result:?}");
+            let iris: Vec<&str> = effects.iter().map(|effect| effect.iri.as_str()).collect();
+            assert_eq!(iris, ["http://example.org/a/doc", target], "{location}");
+        }
+        let (result, effects) = load_through(
+            "http://example.org/a/doc",
+            None,
+            vec![moved("http://exa mple.org/")],
+            &slots,
+        );
+        assert!(
+            matches!(&result, Err(LoadError::Transport(message)) if message.contains("not a resolvable IRI")),
+            "{result:?}"
+        );
+        assert_eq!(
+            effects.len(),
+            1,
+            "an unresolvable location issues no effect"
+        );
+        let hops = usize::try_from(MAX_LOAD_REDIRECTS).expect("a small limit");
+        let mut chain: Vec<Option<Delivered>> = (0..hops).map(|_| moved("/again")).collect();
+        chain.push(document(REMOTE_NT, "text/turtle", None));
+        let (result, _) = load_through(DOC, None, chain, &slots);
+        assert!(result.is_ok(), "the limit itself is followed: {result:?}");
+        let chain: Vec<Option<Delivered>> = (0..=hops).map(|_| moved("/again")).collect();
+        let (result, effects) = load_through(DOC, None, chain, &slots);
+        assert!(
+            matches!(&result, Err(LoadError::Transport(message)) if message.starts_with("exceeded 5 redirect hops")),
+            "{result:?}"
+        );
+        assert_eq!(effects.len(), hops + 1);
+        assert!(slots.fault().is_none());
     }
 
     /// With a catalog, a `LOAD` source the catalog does not grant `network` is the
@@ -5748,65 +5930,65 @@ mod tests {
                 r#"{"capabilities":["query"]}"#,
             ),
         ]);
-        let resolver = JspiGraphResolver {
-            watch: Arc::new(JspiStopWatch::new(Arc::new(slots()), None, u32::MAX)),
-            catalog: Some(catalog.inner),
+        let slots = slots();
+        let granted = vec![document(REMOTE_NT, "text/turtle", None)];
+        let (result, effects) = load_through(DOC, Some(&catalog.inner), granted.clone(), &slots);
+        assert!(result.is_ok(), "{result:?}");
+        let [allowed] = effects.as_slice() else {
+            panic!("one effect: {effects:?}");
         };
-        let allowed = resolver
-            .authorize("http://example.org/doc")
-            .expect("granted network");
         assert_eq!(allowed.headers, [("X-A".to_owned(), "1".to_owned())]);
         assert_eq!(allowed.user_agent.as_deref(), Some("w/1"));
         assert!((allowed.timeout_ms - 250.0).abs() < f64::EPSILON);
         assert!(allowed.accept.contains("text/turtle"));
-        let withheld = resolver
-            .authorize("http://example.org/query-only")
-            .expect_err("no network");
+        let (withheld, effects) = load_through(
+            "http://example.org/query-only",
+            Some(&catalog.inner),
+            granted.clone(),
+            &slots,
+        );
+        let withheld = withheld.expect_err("no network");
         assert_eq!(withheld.code(), "native-sparql-load-denied");
         assert!(withheld.to_string().contains("network"), "{withheld}");
-        assert!(matches!(
-            resolver.authorize("http://example.org/unlisted"),
-            Err(LoadError::Denied(_))
-        ));
-        assert!(
-            resolver.watch.slots.take_effect().is_none(),
-            "a denial issues no effect"
+        assert!(effects.is_empty(), "a denial issues no effect");
+        let (unlisted, effects) = load_through(
+            "http://example.org/unlisted",
+            Some(&catalog.inner),
+            granted.clone(),
+            &slots,
         );
-        // Without a catalog, every source is fetched, with the default timeout.
-        let open = JspiGraphResolver {
-            watch: Arc::clone(&resolver.watch),
-            catalog: None,
+        assert!(matches!(unlisted, Err(LoadError::Denied(_))));
+        assert!(effects.is_empty(), "a denial issues no effect");
+        // A redirect from a granted source into a refused one is refused at the hop.
+        let (escaped, effects) = load_through(
+            DOC,
+            Some(&catalog.inner),
+            vec![Some(Delivered::Redirect("/query-only".to_owned()))],
+            &slots,
+        );
+        assert!(matches!(escaped, Err(LoadError::Denied(_))), "{escaped:?}");
+        assert_eq!(effects.len(), 1);
+        // Without a catalog, every source is fetched, with the default timeout and no
+        // User-Agent of the job's own.
+        let (result, effects) = load_through("http://example.org/unlisted", None, granted, &slots);
+        assert!(result.is_ok(), "{result:?}");
+        let [open] = effects.as_slice() else {
+            panic!("one effect: {effects:?}");
         };
-        let effect = open
-            .authorize("http://example.org/unlisted")
-            .expect("no catalog, no gate");
-        assert_eq!(effect.headers, Vec::<(String, String)>::new());
+        assert_eq!(open.headers, Vec::<(String, String)>::new());
+        assert_eq!(open.user_agent, None);
         assert_eq!(
-            effect.timeout_ms.to_bits(),
-            (DEFAULT_TIMEOUT.as_secs_f64() * 1000.0).to_bits()
+            open.timeout_ms.to_bits(),
+            (purrdf_sparql_eval::remote_http::DEFAULT_TIMEOUT.as_secs_f64() * 1000.0).to_bits()
         );
     }
 
-    #[test]
-    fn a_redirect_resolves_against_the_iri_it_redirected() {
-        assert_eq!(
-            redirect_target("http://example.org/a/doc", "/moved").as_deref(),
-            Ok("http://example.org/moved")
-        );
-        assert_eq!(
-            redirect_target("http://example.org/a/doc", "next").as_deref(),
-            Ok("http://example.org/a/next")
-        );
-        assert_eq!(
-            redirect_target("http://example.org/a/doc", "https://example.org/x").as_deref(),
-            Ok("https://example.org/x")
-        );
-        assert!(
-            redirect_target("http://example.org/a/doc", "http://exa mple.org/")
-                .expect_err("not an IRI")
-                .contains("not a resolvable IRI")
-        );
-    }
+    /// The fixed headers the native `SERVICE` source sends, with the test User-Agent.
+    const SERVICE_FIXED_HEADERS: [(&str, &str); 3] = [
+        ("content-type", "application/sparql-query"),
+        ("accept", "application/sparql-results+json"),
+        ("user-agent", "test"),
+    ];
 
     // ── The ticket exchange ─────────────────────────────────────────────────────────
 
@@ -6056,17 +6238,14 @@ mod tests {
                 DeliveryStatus::Accepted
             );
             assert!(slots.fault().is_none(), "{media_type}");
-            match (slots.resume(seq), parses) {
-                (Some(Delivered::Graph(graph)), true) => assert_eq!(graph.quads().count(), 1),
-                (
-                    Some(Delivered::Failure {
-                        kind: FailureKind::Decode,
-                        ..
-                    }),
-                    false,
-                ) => {}
+            let delivered = slots.resume(seq);
+            let (result, _) = load_through(DOC, None, vec![delivered], slots);
+            match (result, parses) {
+                (Ok(graph), true) => assert_eq!(graph.quads().count(), 1),
+                (Err(LoadError::Decode(_)), false) => {}
                 (other, _) => panic!("{media_type}: unexpected {other:?}"),
             }
+            assert!(slots.fault().is_none(), "{media_type}");
             job.finish();
         }
     }
@@ -6394,15 +6573,16 @@ mod tests {
             handler: 1,
             memo: Mutex::new(BTreeMap::new()),
         };
-        let request = |endpoint: &'static str, headers: &'static [(String, String)]| HttpRequest {
-            endpoint,
-            query_text: "SELECT * WHERE { ?s ?p ?o }",
-            user_agent: "test",
-            timeout: Duration::from_secs(1),
-            content_type: "application/sparql-query",
-            accept: "application/sparql-results+json",
-            headers,
-            stop: None,
+        let request = |target: &'static str, profile_headers: &'static [(String, String)]| {
+            HttpExchangeRequest {
+                method: purrdf_sparql_eval::HttpMethod::Post,
+                target,
+                fixed_headers: &SERVICE_FIXED_HEADERS,
+                profile_headers,
+                body: b"SELECT * WHERE { ?s ?p ?o }",
+                timeout: Duration::from_secs(1),
+                stop: None,
+            }
         };
         assert!(!transport.cacheable(&request("http://example.org/secret", &[])));
         let cookie: &'static [(String, String)] =
@@ -6425,14 +6605,13 @@ mod tests {
             handler: 1,
             memo: Mutex::new(BTreeMap::new()),
         };
-        let request = HttpRequest {
-            endpoint: ENDPOINT,
-            query_text: "SELECT * WHERE { ?s ?p ?o }",
-            user_agent: "test",
+        let request = HttpExchangeRequest {
+            method: purrdf_sparql_eval::HttpMethod::Post,
+            target: ENDPOINT,
+            fixed_headers: &SERVICE_FIXED_HEADERS,
+            profile_headers: &[],
+            body: b"SELECT * WHERE { ?s ?p ?o }",
             timeout: Duration::from_millis(1),
-            content_type: "application/sparql-query",
-            accept: "application/sparql-results+json",
-            headers: &[],
             stop: None,
         };
         let mut effect = service_effect();
@@ -6441,7 +6620,10 @@ mod tests {
         effect.max_intermediate_cells = None;
         effect.cacheable = true;
         lock(&transport.memo).insert(ExchangeKey::new(1, &effect), Arc::from(SRJ));
-        assert_eq!(transport.post(request), Ok(SRJ.to_vec()));
+        assert!(matches!(
+            transport.exchange(request),
+            Ok(HttpOutcome::Response(response)) if response.body == SRJ
+        ));
         assert!(
             transport.watch.slots.take_effect().is_none(),
             "a memo hit issues no effect"
@@ -7409,9 +7591,9 @@ mod tests {
         let frozen = seed().view().freeze().expect("freeze");
         SHARED
             .with(|shared| *shared.borrow_mut() = Some((Rc::clone(&engine), Arc::clone(&frozen))));
-        let source = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
+        let source = HttpRemoteQuerySource::new(|_request: HttpExchangeRequest<'_>| {
             reenter();
-            Ok(SRJ.to_vec())
+            Ok(bindings_response(SRJ))
         });
         let signal = Arc::new(ReentrantSignal::default());
         let governors =

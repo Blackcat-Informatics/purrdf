@@ -149,10 +149,10 @@ use purrdf_core::{
 };
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
-    CancellationFlag, ChargePoint, CustomAggregate, EvalError, GovernedOutcome,
-    HttpRemoteQuerySource, HttpRequest, HttpTransport, NativeSparqlEngine, PartialAnswers, PfArgs,
-    PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
-    QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
+    CancellationFlag, ChargePoint, CustomAggregate, EvalError, GovernedOutcome, HttpExchange,
+    HttpExchangeRequest, HttpFailure, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus,
+    NativeSparqlEngine, PartialAnswers, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction,
+    PropertyFunctionRegistry, QueryGovernors, QueryOptions, StopSignal, Volatility, WallDeadline,
 };
 use purrdf_testkit::golden::regenerating;
 use purrdf_testkit::paths::workspace_root;
@@ -481,7 +481,8 @@ fn case_named<'a>(cases: &'a [Case], name: &str) -> &'a Case {
 /// must be asked to perform.
 #[derive(Debug, Clone, Copy)]
 struct TransportSpec {
-    /// Whether the transport polls [`HttpRequest::stop`] and abandons on a fired signal.
+    /// Whether the transport polls [`HttpExchangeRequest::stop`] and abandons on a fired
+    /// signal.
     honours_stop: bool,
     /// Whether the transport cancels the caller's flag during its first exchange.
     cancel_on_first_post: bool,
@@ -805,15 +806,15 @@ struct FixtureTransport<'a> {
     responses: &'a BTreeMap<String, Vec<u8>>,
     /// Exchanges performed so far.
     posts: &'a AtomicUsize,
-    /// Whether this transport reads [`HttpRequest::stop`] at all.
+    /// Whether this transport reads [`HttpExchangeRequest::stop`] at all.
     honours_stop: bool,
     /// A flag this transport cancels during its first exchange, standing in for a host
     /// that cancels while the evaluator is blocked here and can poll nothing.
     cancel_on_first_post: Option<&'a CancellationFlag>,
 }
 
-impl HttpTransport for FixtureTransport<'_> {
-    fn post(&self, request: HttpRequest<'_>) -> Result<Vec<u8>, RemoteError> {
+impl HttpExchange for FixtureTransport<'_> {
+    fn exchange(&self, request: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
         let previous = self.posts.fetch_add(1, Ordering::Relaxed);
         if previous == 0
             && let Some(flag) = self.cancel_on_first_post
@@ -826,17 +827,18 @@ impl HttpTransport for FixtureTransport<'_> {
         if self.honours_stop
             && let Some(cause) = request.stop.and_then(StopSignal::poll)
         {
-            return Err(RemoteError::Governed(TrippedGovernor::Stopped { cause }));
+            return Err(HttpFailure::Governed(TrippedGovernor::Stopped { cause }));
         }
         let key = request
-            .endpoint
+            .target
             .rsplit('/')
             .next()
             .expect("an endpoint IRI has at least one segment");
         self.responses
             .get(key)
             .cloned()
-            .ok_or_else(|| RemoteError::Transport(format!("no pinned response for {key:?}")))
+            .map(|body| HttpOutcome::Response(HttpResponse::new(HttpStatus::OK, body)))
+            .ok_or_else(|| HttpFailure::Transport(format!("no pinned response for {key:?}")))
     }
 }
 
@@ -2345,7 +2347,7 @@ fn the_rdf12_statement_layer_is_governed() {
 /// A transport that cannot abandon an in-flight exchange still degrades to a known,
 /// bounded amount of overshoot rather than to a silent one.
 ///
-/// [`HttpRequest::stop`] can only be honoured by a transport capable of abandoning a call
+/// [`HttpExchangeRequest::stop`] can only be honoured by a transport capable of abandoning a call
 /// it is already inside, and nothing forces a host to write one. What this pins is the
 /// consequence: the two governors that act OUTSIDE the exchange — the remote-request
 /// ceiling and the source's pre-dispatch poll — still bound the query at **per-request**

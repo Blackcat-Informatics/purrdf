@@ -170,15 +170,25 @@ Design pillars:
   `explain_query` introspection API), SPARQL UPDATE, the SEP-0009 composite
   datatypes (`FOLD`/`UNFOLD` and the `cdt:` function library), and
   host-injectable `SERVICE` and `LOAD` sources so federation stays
-  wasm-portable (no HTTP client ships; the host supplies the `HttpTransport`
+  wasm-portable (no HTTP client ships; the host supplies the `HttpExchange`
   and the resolvers). A caller hands a request its sources through
   `QueryOptions` — `remote` answers `SERVICE` in a query and in an UPDATE's
   `WHERE` alike, and `load` answers `LOAD`, taking precedence over a resolver
   installed on the engine — so every entry, governed or not, federates the
-  same way. The seam has two consumers: a Rust host that implements
-  `HttpTransport`, and the wasm package's asynchronous lane, whose resolvers
-  suspend the evaluation through JSPI while a JavaScript host answers each
-  `SERVICE` and `LOAD`.
+  same way. One exchange, `HttpExchange`, carries both operations: the
+  method, target, ordered headers and body go in, and a response (status,
+  headers, body and the final URL), an opaque redirect, a dataset the host
+  holds, or a typed `HttpFailure` comes out. `HttpRemoteQuerySource` sends
+  `SERVICE` over it and `HttpGraphResolver` sends `LOAD`, re-authorizing
+  every redirect hop against the catalog and parsing the document against the
+  final URL, or the requested IRI when the host reports none. An opaque
+  redirect, whose status and `Location` the host cannot see, is refused:
+  `SERVICE` reports `RemoteError::OpaqueRedirect` and `LOAD` reports
+  `LoadError::OpaqueRedirect`, and the `SILENT` forms absorb either as a
+  transport failure. The exchange has two kinds of host: a Rust host that
+  implements `HttpExchange`, and the wasm package's asynchronous lane, whose
+  exchanges suspend the evaluation through JSPI while a JavaScript host
+  answers each `SERVICE` and `LOAD`.
 - **SPARQL 1.1 Protocol** — the `protocol` module reads an HTTP request's
   method, `Content-Type`, query string and body into a query or update
   operation, applies the dataset parameters (`default-graph-uri`,

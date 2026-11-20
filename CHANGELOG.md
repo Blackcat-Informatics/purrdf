@@ -8,6 +8,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
+  `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
+  request carries the method, target, ordered headers, body, timeout and stop
+  signal; the outcome is a response (status, headers, body and the final URL),
+  an explicit opaque redirect, or a dataset the host holds, and a host failure
+  is a typed `HttpFailure` rather than a status. `HttpGraphResolver` serves
+  `LOAD` over the same exchange with a caller-supplied `DocumentDecoder`,
+  re-authorizing every redirect hop and parsing against the final URL, or the
+  requested IRI when the host reports none. An opaque redirect is refused by
+  `SERVICE` as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
+  `LoadError::OpaqueRedirect` (additive variants on non-exhaustive enums). The
+  WebAssembly asynchronous lane runs both operations through the exchange with
+  its JavaScript interface unchanged; a `LOAD` document delivered without a
+  base is parsed against the effect's IRI. The migration guide gives the
+  mapping from the 4.x request.
 - **Reading a GTS file into a dataset reports language tags folded to lower case.**
   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
   terms; a dataset folds the tag and holds one. `import_gts_events`,

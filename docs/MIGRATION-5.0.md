@@ -38,6 +38,9 @@ digests before opening a 4.x artifact.
   digests, not an additive sum. Content identities, execution receipts, source
   version fingerprints and text index generations recorded by 4.x stop
   matching (see "Row-set identities").
+- `SERVICE` and `LOAD` share one caller-supplied HTTP exchange,
+  `HttpExchange`, which replaces the POST-only `HttpTransport` (see "The HTTP
+  exchange").
 
 ## The canonical line sequence
 
@@ -423,3 +426,75 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **Python, WebAssembly, C and the CLI.** Each routes to the default family.
   Their canonical documents, digests and labels change as above, and a refusal
   under a finite bound is the `limit` refusal.
+
+## The HTTP exchange
+
+`purrdf_sparql_eval::HttpTransport` and its request type `HttpRequest` are
+removed. A host implements `HttpExchange` instead, and the same value serves
+`SERVICE` through `HttpRemoteQuerySource` and `LOAD` through the new
+`HttpGraphResolver`.
+
+`HttpExchange::exchange` takes an `HttpExchangeRequest` and returns
+`Result<HttpOutcome, HttpFailure>`. The request carries the method, the
+target, the ordered headers, the body, the timeout and the stop signal. The
+4.x request fields map onto it as follows:
+
+| 4.x `HttpRequest` | 5.0 `HttpExchangeRequest` |
+|---|---|
+| `endpoint` | `target` |
+| `query_text` | `body` (UTF-8 bytes of the query text); `method` is `HttpMethod::Post` |
+| `content_type`, `accept`, `user_agent` | `fixed_headers`, in that order, named `content-type`, `accept` and `user-agent`; read one with `fixed_header` |
+| `headers` | `profile_headers`, sent after the fixed headers; `headers()` yields both runs in order |
+| `timeout`, `stop` | `timeout`, `stop`, unchanged |
+
+The outcome is one of three values:
+
+- `HttpOutcome::Response(HttpResponse)`: the status (`HttpStatus`, 100
+  through 599), the response headers, the body, and `final_url`, the URL the
+  host finally fetched when it followed redirects itself.
+- `HttpOutcome::OpaqueRedirect`: a redirect whose status and `Location` the
+  host cannot see, as a browser reports for a request it was told not to
+  redirect. `SERVICE` refuses it as `RemoteError::OpaqueRedirect` and `LOAD` as
+  `LoadError::OpaqueRedirect`, under the code `native-sparql-load-failed`. Both
+  are failures of the invocation, so `SERVICE SILENT` and `LOAD SILENT` absorb
+  them as transport failures.
+- `HttpOutcome::Dataset`: a dataset the host already holds, for `LOAD`.
+
+A host failure is an `HttpFailure`, never an HTTP status. A 4.x host that
+returned a `RemoteError` returns the matching failure:
+
+| 4.x `post` returned | 5.0 `exchange` returns |
+|---|---|
+| `Ok(body)` | `Ok(HttpOutcome::Response(HttpResponse::new(HttpStatus::OK, body)))` |
+| `Err(RemoteError::Transport(m))` | `Err(HttpFailure::Transport(m))` |
+| `Err(RemoteError::HostDenied { message, .. })` | `Err(HttpFailure::Denied(message))` |
+| `Err(RemoteError::HostFault { message, .. })` | `Err(HttpFailure::Fault(message))` |
+| `Err(RemoteError::Decode(m))` | `Err(HttpFailure::Decode(m))` |
+| `Err(RemoteError::Governed(g))` | `Err(HttpFailure::Governed(g))` |
+| `Err(RemoteError::GovernedAfterCompletion(g))` | `Err(HttpFailure::GovernedAfterCompletion(g))` |
+| `Err(RemoteError::ExchangeIdExhausted)` | `Err(HttpFailure::ExchangeIdExhausted)` |
+
+`SERVICE` and `LOAD` report each failure as the variant they reported in 4.x.
+A `SERVICE` response whose status is not a success is
+`RemoteError::Transport`, so a 4.x host that mapped an error status to
+`RemoteError::Transport` may return the response as it is.
+
+`post_admitted` is renamed `exchange_admitted`, and `workspace_certificate`
+takes the `HttpExchangeRequest`. A closure
+`Fn(HttpExchangeRequest) -> Result<HttpOutcome, HttpFailure>` is an exchange,
+as a closure over the 4.x request was a transport. The field of
+`HttpRemoteQuerySource` holding the exchange is private, as before.
+
+`LOAD` over the exchange is `HttpGraphResolver::new(exchange, decoder, accept)`,
+where `decoder` is a `DocumentDecoder` (or a closure over body, media type and
+base) that parses a fetched document; `purrdf-sparql-eval` carries no RDF
+parser. It authorizes every hop against an optional `ServiceCatalog`, follows
+up to `MAX_LOAD_REDIRECTS` (five) redirects itself, and parses a document
+against the response's `final_url`; when the host reports none, the base is the
+IRI that was requested for that hop.
+
+The WebAssembly package keeps its JavaScript interface: the effects and the
+`deliver*` methods are unchanged. A document delivered with `deliverGraph` and
+no base is now parsed against the IRI of the `LOAD` effect that fetched it,
+where 4.x parsed it with no base, so a document with relative IRIs that 4.x
+refused now loads.
