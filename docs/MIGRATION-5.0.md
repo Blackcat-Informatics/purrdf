@@ -43,6 +43,11 @@ digests before opening a 4.x artifact.
   exchange").
 - `GeoIndex::source_fingerprint` is a 32-byte digest, not a `u64` (see "Geo index
   source identity").
+- A content identity is computed only on request, through `ContentIdentified`
+  (see "Content identity on request").
+- An unreadable stack floor refuses instead of disabling the guard (see "Stack
+  floor"), and `Iri::normalize` keeps an encoded dot segment (see "IRI normal
+  form").
 
 ## The canonical line sequence
 
@@ -335,6 +340,45 @@ or its 64-digit hex form (`Digest32::to_hex`, `Digest32::from_hex`). Code that
 only compares or displays the digests of `IndexBindingError::Source` still
 compiles, and its `Display` output becomes 64 hex digits.
 
+## Content identity on request
+
+No freeze, view construction or query computes a dataset's content identity. A
+caller asks for it through `purrdf_core::ContentIdentified::content_identity`,
+which returns `Result<Digest32, Self::IdentityError>` and computes on the first
+request. The values follow the law in "Row-set identities".
+
+| 4.x | 5.0 |
+|---|---|
+| `DatasetView::snapshot_identity()`, returning `Result<Option<Digest32>, ReadError>` | `ContentIdentified::content_identity()`. A view that cannot certify its content returns an `Err`, not `Ok(None)`, and a view that never can does not implement the trait |
+| `SuppliedQueryCoordinates::snapshot_identity` and `execution_identity` | `run_identity` for the run, and `execution_identity(&ExecutionSources::new(view.content_identity()?))` for the execution, under the `execution-coordinates/v2` law |
+| `RuleCoordinates::execution_identity` over a snapshot identity | `RuleCoordinates::execution_identity(&RuleSources)` under `rule-execution/v2`, refusing with `RuleReceiptError` |
+| A host receipt carrying `executionIdentity` and `snapshotIdentity` | A receipt carrying `runIdentity` and `readsFocusGraph`; a rule receipt keeps `snapshotIdentity`, `shapesIdentity` and `executionIdentity`. Ask for the identities through `bind_execution_receipt`, `purrdf_execution_receipt_bind`, `Dataset#bindExecutionReceipt`, `QuadStore.bind_execution_receipt` or the CLI `query --content-identity` |
+
+`ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
+which implements `StructuredError`. Stored execution identities change value
+under the version 2 law.
+
+## Stack floor
+
+`purrdf_stack::remaining` used to treat a thread whose stack bounds the operating
+system would not report as having a floor of address 0, which made every later
+check report enough stack. While the floor is unknown, `remaining` is `0`,
+`is_low` is `true`, `reserve` keeps nothing and `widen` returns `false`, so a
+guard refuses with its own typed stack error. `try_remaining` returns
+`Result<usize, FloorError>` for a caller that must tell "too deep" from "cannot
+measure". No code change is needed; a thread on a target or under a condition
+that cannot report its bounds now refuses where 4.x silently continued. A thread
+started by `on_stack` is measured from the size it requested, so it does not
+depend on the system call.
+
+## IRI normal form
+
+`Iri::normalize` keeps a path segment that decodes to `.` or `..` without being
+spelled so percent-encoded (`%2E`, `%2E%2E`) in every path, and lower-cases a host
+letter that percent-decoding exposes. `http://h/a/%2e/b` was `http://h/a/b` and is
+`http://h/a/%2E/b`; `http://%41/` was `http://A/` and is `http://a/`. A caller that
+stored normal forms of such IRIs recomputes them.
+
 ## Items that left the crate root
 
 These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
@@ -526,6 +570,10 @@ lost or retyped a public field, and none of these enums lost a variant.
   document. The identifier `flat-assertion`, version `1`, now names only the 4.x
   flat form reached through `rdfc12`; the default flat document reports
   `line-sequence`, version `1`.
+- **Python GTS fold view.** `GtsFoldViewNative.from_bytes` and
+  `gts_relational_rows_from_bytes` raise `ValueError` (carrying the native `code`
+  and `diagnostic_json`) when the fold reports any diagnostic, where 4.x returned
+  an empty or partial view. Catch the error where a damaged file is possible.
 - **Python, WebAssembly, C and the CLI.** Each routes to the default family.
   Their canonical documents, digests and labels change as above, and a refusal
   under a finite bound is the `limit` refusal.
