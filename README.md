@@ -274,7 +274,7 @@ returns its explanation with final storage evidence. Its options and stop-signal
 variants share the query admission rule; a storage failure discards the entire
 explanation, and a stop alone appears in the explanation's governor evidence.
 
-**Graph transport with its payloads.** [GTS](./docs/GTS-SPEC.md) is a
+**Graph transport with its payloads.** [GTS](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md) is a
 content-addressed, append-only container with deterministic fold, binary
 payloads, chained CBOR segments, COSE signing/encryption and pure-Rust crypto.
 Its container API reaches Rust, Python and C, and the CLI reads it as an input
@@ -533,7 +533,7 @@ contracts and the implemented surfaces above are the basis for that growth.
 - [Browser playground](https://blackcat-informatics.github.io/purrdf/playground/):
   parse, query, validate, serialize and compare graphs locally in the browser.
 - [Migration to 5.0](./docs/MIGRATION-5.0.md), [migration to 4.0](./docs/MIGRATION-4.0.md), [migration to 3.0](./docs/MIGRATION-3.0.md) and [changelog](./CHANGELOG.md).
-- [GTS](./docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
+- [GTS](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md), [PURREMB](./docs/PURREMB.md),
   [RDF 1.2 canonicalization](./docs/RDF12-CANON-PROFILE.md),
   [canonical labelling of blank nodes](./docs/design/purrdf-canonical-labelling.md),
   [storage contracts](./crates/rdf-core/STORAGE.md) and

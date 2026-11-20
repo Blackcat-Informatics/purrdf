@@ -196,13 +196,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so a rule that derives a protected predicate is refused as
   `SrlError::Execution`, and a rule deriving another predicate still runs.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
-  `verify_sig` and `verify_sig_with_key` report a COSE_Sign1 whose declared
-  `alg` this engine does not implement as `SigStatus::Unverified` instead of
-  `Invalid`, and the file verifiers (`verify_signatures`,
+  `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
+  COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2
+  returned `Invalid`; the file verifiers (`verify_signatures`,
   `verify_signatures_with_resolver` and the C, WebAssembly and Python surfaces
-  over them) record it as `unverified`: the engine could not check it. `Invalid` remains for a signature
-  that was checked and failed and for a malformed structure. Callers that
-  require `Valid` still refuse an unverified signature.
+  over them) record it as `unverified`: the engine could not check it. `Invalid`
+  remains for a signature that was checked and failed and for a malformed
+  structure. The enum is unchanged. A caller that treated `Invalid` as the only
+  failure outcome now sees `Unverified` for this case, and a caller that
+  treated `Unverified` as "key not resolved, unchecked" now also receives it for
+  an unsupported algorithm. A caller that requires a verified signature accepts
+  only `SigStatus::Valid`. The certify callers (`gts_certify`, in the authorship
+  and the packaging checks) refuse an unsupported algorithm at parse, before
+  any status exists; `Unverified` is what a direct verification with
+  `verify_sig` or `verify_sig_with_key` returns.
 - **Breaking: canonical output is the nested-refinement labelling.** The
   default canonicalization family in Rust, Python, WebAssembly, C and the CLI
   routes to `(nested-refinement-labelling, 1)`. The canonical document is the

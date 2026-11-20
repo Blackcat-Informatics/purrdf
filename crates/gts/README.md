@@ -123,9 +123,31 @@ entropy and clears its own seeds, randomizers and exported private bytes.
 The primitive adds no transport envelope or hybrid-recipient policy.
 
 Both this engine and its sibling implementations are gated against the same
-frozen, language-neutral conformance vectors, byte-exact. The format is
-specified in
-[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md).
+frozen, language-neutral conformance vectors, byte-exact.
+
+## Specification and conformance
+
+The GTS wire format is governed in
+[`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts); PurRDF holds
+no copy of it. The authoritative documents are:
+
+- [`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md),
+  the specification (document version 1.0-rc1, wire-format major version 1);
+- [`docs/GTS-CONFORMANCE.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-CONFORMANCE.md),
+  the conformance tiers, vector subsets and claim format;
+- [`docs/GTS-THIRD-PARTY-IMPLEMENTER-GUIDE.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-THIRD-PARTY-IMPLEMENTER-GUIDE.md),
+  the implementer guide.
+
+`purrdf-gts` implements wire-format major version 1. The corpus carried in
+`vectors/` is a subset of the current `gmeow-gts` corpus and lacks vectors
+that the 1.0-rc1 corpus adds, so a result against the 1.0-rc1 corpus is not
+recorded. The recorded result is against the carried corpus: 38 of 39 frozen
+vectors fold byte-exactly into their shipped `<id>.expected.json`, and the
+one ledgered divergence is `12-conflicting-reifier`. The result is in the
+GTS transport rows of
+[`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
+produced by `crates/rdf/tests/gts_corpus_expected_fold.rs` and reported by
+`make conformance`.
 
 `cose::composite` supports the ML-DSA-65 + Ed25519 pairing pinned to
 `draft-ietf-lamps-pq-composite-sigs-19` and
