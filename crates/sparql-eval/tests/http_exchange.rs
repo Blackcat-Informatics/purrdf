@@ -10,8 +10,10 @@
 //! answer was refused". Each refusal is executed beside a neighbouring request that must
 //! still succeed.
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use purrdf_core::ResourceDimension;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SilencedKind, SilencedTarget, SparqlRequest,
     StopCause, TermValue, TrippedGovernor,
@@ -835,4 +837,183 @@ fn a_stop_fired_during_a_hop_prevents_the_next_redirect_hop() {
         1,
         "the second hop is never fetched"
     );
+}
+
+/// A relative `Location` is resolved against the URL the host reports for the hop it
+/// already followed, and against the hop's IRI when it reports none. The catalog still
+/// authorizes the resulting target: only the host-reported base is granted here, so the
+/// hop's own base would be refused.
+#[test]
+fn a_relative_location_resolves_against_the_hosts_final_url() {
+    let targets = Mutex::new(Vec::<String>::new());
+    let exchange = |report_final: bool| {
+        let targets = &targets;
+        move |request: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
+            targets
+                .lock()
+                .expect("lock")
+                .push(request.target.to_owned());
+            if request.target.ends_with("/start") {
+                let mut response =
+                    HttpResponse::new(HttpStatus::FOUND, Vec::new()).with_header("Location", "end");
+                if report_final {
+                    response = response.with_final_url("https://moved.example/y/mid");
+                }
+                return Ok(HttpOutcome::Response(response));
+            }
+            Ok(HttpOutcome::Response(
+                HttpResponse::new(HttpStatus::OK, b"end".to_vec())
+                    .with_header("Content-Type", "text/plain"),
+            ))
+        }
+    };
+    let grant = |endpoint: &str| {
+        ServiceCatalog::default().with_service(
+            endpoint,
+            ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Network])),
+        )
+    };
+    let catalog = grant("https://open.example/x/start")
+        .with_service(
+            "https://moved.example/y/end",
+            ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Network])),
+        )
+        .with_service(
+            "https://open.example/x/end",
+            ServiceProfile::new(ServiceCapabilities::granting([ServiceCapability::Network])),
+        );
+
+    let reported = HttpGraphResolver::new(exchange(true), decode as Decoder, "text/plain")
+        .with_catalog(catalog.clone());
+    let dataset = load(&reported, "https://open.example/x/start").expect("the final URL base");
+    assert_document(&dataset, "https://moved.example/y/end", "end");
+    assert_eq!(
+        *targets.lock().expect("lock"),
+        [
+            "https://open.example/x/start",
+            "https://moved.example/y/end"
+        ]
+    );
+
+    targets.lock().expect("lock").clear();
+    let unreported = HttpGraphResolver::new(exchange(false), decode as Decoder, "text/plain")
+        .with_catalog(catalog);
+    let dataset = load(&unreported, "https://open.example/x/start").expect("the hop base");
+    assert_document(&dataset, "https://open.example/x/end", "end");
+
+    // Authorization applies to the resolved target: with only the hop's own base granted,
+    // the host-reported destination is refused before it is fetched.
+    targets.lock().expect("lock").clear();
+    let narrow = HttpGraphResolver::new(exchange(true), decode as Decoder, "text/plain")
+        .with_catalog(grant("https://open.example/x/start"));
+    assert!(matches!(
+        load(&narrow, "https://open.example/x/start"),
+        Err(LoadError::Denied(_))
+    ));
+    assert_eq!(targets.lock().expect("lock").len(), 1);
+}
+
+/// A stop that fires during the final `200` hop is the governor's stop, and the body is
+/// never decoded. The same hop with no stop is decoded.
+#[test]
+fn a_stop_fired_during_the_final_hop_is_never_decoded() {
+    let flag = CancellationFlag::new();
+    let signal: Arc<dyn StopSignal> = Arc::new(flag.clone());
+    let decoded = AtomicUsize::new(0);
+    let decoder = |body: &[u8], media_type: &str, base: &str| {
+        decoded.fetch_add(1, Ordering::SeqCst);
+        decode(body, media_type, base)
+    };
+    let exchange = |cancel: bool| {
+        let flag = flag.clone();
+        move |_request: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
+            if cancel {
+                flag.cancel();
+            }
+            Ok(HttpOutcome::Response(
+                HttpResponse::new(HttpStatus::OK, b"doc".to_vec())
+                    .with_header("Content-Type", "text/plain"),
+            ))
+        }
+    };
+    let request = GraphResolveRequest {
+        iri: "https://open.example/doc",
+        stop: Some(&*signal),
+    };
+    let quiet = HttpGraphResolver::new(exchange(false), &decoder, "text/plain");
+    assert!(quiet.resolve(request).is_ok());
+    assert_eq!(decoded.load(Ordering::SeqCst), 1);
+
+    let stopped = HttpGraphResolver::new(exchange(true), &decoder, "text/plain");
+    assert_eq!(
+        stopped.resolve(request).map(|_| ()),
+        Err(LoadError::Governed(TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled
+        }))
+    );
+    assert_eq!(
+        decoded.load(Ordering::SeqCst),
+        1,
+        "the cancelled body is not decoded"
+    );
+}
+
+/// `max_remote_requests` bounds host fetches: with a ceiling of 1 a `LOAD` whose first
+/// response is a redirect is refused before the second fetch is dispatched, and with a
+/// ceiling of 2 the same chain loads.
+#[test]
+fn the_remote_request_ceiling_bounds_each_redirect_hop() {
+    let run = |ceiling: u64| {
+        let fetches = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&fetches);
+        let exchange = move |request: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
+            counter.fetch_add(1, Ordering::SeqCst);
+            if request.target.ends_with("/start") {
+                return Ok(HttpOutcome::Response(
+                    HttpResponse::new(HttpStatus::FOUND, Vec::new())
+                        .with_header("Location", "/end"),
+                ));
+            }
+            Ok(HttpOutcome::Response(
+                HttpResponse::new(HttpStatus::OK, b"end".to_vec())
+                    .with_header("Content-Type", "text/plain"),
+            ))
+        };
+        let resolver = HttpGraphResolver::new(exchange, decode as Decoder, "text/plain");
+        let engine = NativeSparqlEngine::new().with_resolver(Arc::new(resolver));
+        let mut dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
+        let outcome = engine
+            .update_governed(
+                &mut dataset,
+                SparqlRequest {
+                    query: "LOAD <https://open.example/start>",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &QueryOptions::EMPTY,
+                &QueryGovernors::UNBOUNDED.with_max_remote_requests(ceiling),
+            )
+            .expect("a tripped governor is an outcome");
+        (outcome.tripped(), fetches.load(Ordering::SeqCst), dataset)
+    };
+
+    let (tripped, fetches, dataset) = run(1);
+    assert_eq!(
+        tripped,
+        Some(TrippedGovernor::Budget {
+            dimension: ResourceDimension::RemoteRequests,
+            limit: 1,
+            consumed: 2,
+        })
+    );
+    assert_eq!(
+        fetches, 1,
+        "the redirect hop is refused before it is fetched"
+    );
+    assert_eq!(dataset.quad_count(), 0);
+
+    let (tripped, fetches, dataset) = run(2);
+    assert_eq!(tripped, None);
+    assert_eq!(fetches, 2);
+    assert_eq!(dataset.quad_count(), 1);
 }

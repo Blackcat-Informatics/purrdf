@@ -1360,6 +1360,7 @@ impl From<&LoadError> for FailureCode {
             LoadError::HostDenied(_) => Self::LoadHostDenied,
             LoadError::Fault(_) => Self::LoadFault,
             LoadError::Governed(_) => Self::LoadStopped,
+            LoadError::Storage(_) => Self::Evaluation,
         }
     }
 }

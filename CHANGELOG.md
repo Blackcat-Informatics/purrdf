@@ -15,8 +15,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   an explicit opaque redirect, or a dataset the host holds, and a host failure
   is a typed `HttpFailure` rather than a status. `HttpGraphResolver` serves
   `LOAD` over the same exchange with a caller-supplied `DocumentDecoder`,
-  re-authorizing every redirect hop and parsing against the final URL, or the
-  requested IRI when the host reports none. An opaque redirect is refused by
+  re-authorizing every redirect hop it follows, admitting each hop against the
+  `RemoteRequests` ceiling, and parsing against the final URL, or the requested
+  IRI when the host reports none. A host must return each redirect to the
+  resolver for every destination to pass catalog authorization; a redirect the
+  host follows itself is not seen. A relative `Location` resolves against the
+  hop's final URL, falling back to its requested IRI. `GraphResolver` gains the
+  provided `resolve_admitted` method and `LoadError` the additive `Storage`
+  variant, a request-header allocation refusal that `LOAD SILENT` does not
+  absorb. An opaque redirect is refused by
   `SERVICE` as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
   `LoadError::OpaqueRedirect` (additive variants on non-exhaustive enums). The
   WebAssembly asynchronous lane runs both operations through the exchange with

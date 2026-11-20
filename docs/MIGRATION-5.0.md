@@ -572,10 +572,16 @@ as a closure over the 4.x request was a transport. The field of
 `LOAD` over the exchange is `HttpGraphResolver::new(exchange, decoder, accept)`,
 where `decoder` is a `DocumentDecoder` (or a closure over body, media type and
 base) that parses a fetched document; `purrdf-sparql-eval` carries no RDF
-parser. It authorizes every hop against an optional `ServiceCatalog`, follows
-up to `MAX_LOAD_REDIRECTS` (five) redirects itself, and parses a document
+parser. It authorizes every hop it follows against an optional `ServiceCatalog`,
+follows up to `MAX_LOAD_REDIRECTS` (five) redirects itself, and parses a document
 against the response's `final_url`; when the host reports none, the base is the
-IRI that was requested for that hop.
+IRI that was requested for that hop. A relative `Location` resolves against the
+same base. A host must return each redirect to the resolver for every
+destination to pass catalog authorization: a redirect the host follows
+internally is never shown to the resolver. Each hop after the first is a host
+fetch charged against the `RemoteRequests` ceiling through
+`GraphResolver::resolve_admitted`, and the stop signal is polled after every
+completed hop.
 
 The WebAssembly package keeps its JavaScript interface: the effects and the
 `deliver*` methods are unchanged. A document delivered with `deliverGraph` and

@@ -363,7 +363,7 @@ pub use service::{
 pub use solution::{
     RetainedRow, RowBag, RowBagIntoIter, SharedSchema, Solution, SolutionSeq, VarSchema, compatible,
 };
-pub use update::{GraphResolveRequest, GraphResolver, LoadError};
+pub use update::{FetchAdmission, GraphResolveRequest, GraphResolver, LoadError};
 pub use user_fn::{
     AdmittedExprFnBody, AdmittedNativeFnBody, Arity, BoundFunctionRegistry, ExprFnBody, ExprFnCall,
     ExprFunction, MeteredNativeFnBody, NativeFnBody, NativeFnCall, NativeFnContext, NativeFunction,

@@ -51,7 +51,7 @@ use purrdf_sparql_algebra::Variable;
 use crate::governor::StopSignal;
 use crate::remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 use crate::service::{ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceProfile};
-use crate::update::{GraphResolveRequest, GraphResolver, LoadError};
+use crate::update::{FetchAdmission, GraphResolveRequest, GraphResolver, LoadError};
 
 /// The default per-request timeout for a federated `SERVICE` call, and for a `LOAD`
 /// fetch whose catalog profile names none.
@@ -420,24 +420,33 @@ impl HttpFailure {
     }
 }
 
-/// The SPARQL Results body a `SERVICE` exchange produced, or the error it is.
+/// Why a `SERVICE` exchange produced no body.
+enum ServiceBodyFailure {
+    /// The classified error, whose text is already built.
+    Error(RemoteError),
+    /// A non-success status; its message is built through the admitted allocation path.
+    Status(HttpStatus),
+}
+
+/// The SPARQL Results body a `SERVICE` exchange produced, or the failure it is.
 fn service_body(
     endpoint: &str,
     result: Result<HttpOutcome, HttpFailure>,
-) -> Result<Vec<u8>, RemoteError> {
-    match result.map_err(|failure| failure.into_service_error(endpoint))? {
+) -> Result<Vec<u8>, ServiceBodyFailure> {
+    let outcome = result
+        .map_err(|failure| ServiceBodyFailure::Error(failure.into_service_error(endpoint)))?;
+    match outcome {
         HttpOutcome::Response(response) if response.status.is_success() => Ok(response.body),
-        HttpOutcome::Response(response) => Err(RemoteError::Transport(format!(
-            "<{endpoint}> answered {}",
-            response.status
-        ))),
-        HttpOutcome::OpaqueRedirect => Err(RemoteError::OpaqueRedirect {
-            endpoint: endpoint.to_owned(),
-        }),
-        HttpOutcome::Dataset(_) => Err(RemoteError::HostFault {
+        HttpOutcome::Response(response) => Err(ServiceBodyFailure::Status(response.status)),
+        HttpOutcome::OpaqueRedirect => {
+            Err(ServiceBodyFailure::Error(RemoteError::OpaqueRedirect {
+                endpoint: endpoint.to_owned(),
+            }))
+        }
+        HttpOutcome::Dataset(_) => Err(ServiceBodyFailure::Error(RemoteError::HostFault {
             endpoint: endpoint.to_owned(),
             message: "the host answered a SERVICE request with a dataset".to_owned(),
-        }),
+        })),
     }
 }
 
@@ -498,13 +507,25 @@ pub trait HttpExchange {
                     None => HttpStorage::Native(crate::workspace::LexicalFrame::new(&workspace)),
                 },
             }),
-            Err(error) => Err(ServiceResolutionError::Invocation(match grant {
-                Some(grant) => AdmittedRemoteError::certified(error, grant, &workspace)?,
-                None => AdmittedRemoteError::native(
-                    error,
-                    crate::workspace::LexicalFrame::new(&workspace),
-                )?,
-            })),
+            Err(ServiceBodyFailure::Status(status)) => {
+                drop(grant);
+                Err(ServiceResolutionError::Invocation(
+                    AdmittedRemoteError::message(
+                        purrdf_core::SilencedKind::Transport,
+                        format_args!("<{}> answered {status}", request.target),
+                        &workspace,
+                    )?,
+                ))
+            }
+            Err(ServiceBodyFailure::Error(error)) => {
+                Err(ServiceResolutionError::Invocation(match grant {
+                    Some(grant) => AdmittedRemoteError::certified(error, grant, &workspace)?,
+                    None => AdmittedRemoteError::native(
+                        error,
+                        crate::workspace::LexicalFrame::new(&workspace),
+                    )?,
+                }))
+            }
         }
     }
 }
@@ -547,8 +568,11 @@ where
 ///
 /// # Policy comes before every hop
 ///
-/// With a [`ServiceCatalog`] installed, every hop's IRI — the source and every location a
-/// redirect names — is authorized against it before the exchange is asked: a `LOAD`
+/// With a [`ServiceCatalog`] installed, every hop the resolver follows — the source and
+/// every location a redirect names — is authorized against it before the exchange is
+/// asked. A host that follows redirects itself shows the resolver only the first hop, so a
+/// host must return each redirect to the resolver for every destination to pass catalog
+/// authorization: a `LOAD`
 /// needs [`ServiceCapability::Network`] (and [`ServiceCapability::Credentials`] for a
 /// credential), exactly the policy a `SERVICE` meets, and a refusal is the catalog's
 /// [`LoadError::Denied`] with nothing fetched. The authorized profile supplies the hop's
@@ -559,8 +583,12 @@ where
 ///
 /// A response with a redirect status ([`HttpStatus::is_redirect`]) and a `Location` is
 /// followed by this resolver, not by the host: the location is resolved against the
-/// hop's IRI (RFC 3986 §5.2), re-authorized, and fetched as a fresh exchange, up to
-/// [`MAX_LOAD_REDIRECTS`] hops. A redirect without a `Location`, a location that does not
+/// response's [`HttpResponse::final_url`], or the hop's IRI when the host reports none
+/// (RFC 3986 §5.2), re-authorized, and fetched as a fresh exchange, up to
+/// [`MAX_LOAD_REDIRECTS`] hops. Each further hop is a host fetch admitted against the
+/// request's `RemoteRequests` ceiling through [`GraphResolver::resolve_admitted`] before it
+/// is dispatched, and the request's stop signal is polled after every completed hop,
+/// before its response is classified. A redirect without a `Location`, a location that does not
 /// resolve, and a hop past the limit are each [`LoadError::Transport`]; an
 /// [`HttpOutcome::OpaqueRedirect`] is [`LoadError::OpaqueRedirect`].
 ///
@@ -634,6 +662,7 @@ impl<E: HttpExchange, D: DocumentDecoder> HttpGraphResolver<E, D> {
         &self,
         iri: &str,
         stop: Option<&dyn StopSignal>,
+        admission: Option<&dyn FetchAdmission>,
     ) -> Result<Result<HttpResponse, Arc<RdfDataset>>, LoadError> {
         let profile = match &self.catalog {
             Some(catalog) => Some(
@@ -646,7 +675,14 @@ impl<E: HttpExchange, D: DocumentDecoder> HttpGraphResolver<E, D> {
             ),
             None => None,
         };
-        let profile_headers = profile.map_or_else(Vec::new, ServiceProfile::request_headers);
+        let profile_headers = match profile {
+            Some(profile) => profile
+                .request_headers_with_memory(&mut purrdf_lex::allocation::Memory::new(
+                    &mut purrdf_lex::allocation::Resident,
+                ))
+                .map_err(LoadError::Storage)?,
+            None => Vec::new(),
+        };
         let user_agent = profile
             .and_then(ServiceProfile::user_agent)
             .or(self.user_agent.as_deref());
@@ -659,6 +695,9 @@ impl<E: HttpExchange, D: DocumentDecoder> HttpGraphResolver<E, D> {
             }
             None => &accept,
         };
+        if let Some(admission) = admission {
+            admission.admit().map_err(LoadError::Governed)?;
+        }
         let outcome = self
             .exchange
             .exchange(HttpExchangeRequest {
@@ -683,10 +722,24 @@ impl<E: HttpExchange, D: DocumentDecoder> HttpGraphResolver<E, D> {
 
 impl<E: HttpExchange, D: DocumentDecoder> GraphResolver for HttpGraphResolver<E, D> {
     fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
+        self.resolve_admitted(request, &|| Ok(()))
+    }
+
+    fn resolve_admitted(
+        &self,
+        request: GraphResolveRequest<'_>,
+        admission: &dyn FetchAdmission,
+    ) -> Result<Arc<RdfDataset>, LoadError> {
         let mut iri = request.iri.to_owned();
         let mut hops = 0_u32;
         loop {
-            let response = match self.fetch(&iri, request.stop)? {
+            // The evaluator charged the first fetch; every redirect hop is admitted here.
+            let hop_admission = (hops > 0).then_some(admission);
+            let fetched = self.fetch(&iri, request.stop, hop_admission)?;
+            if let Some(cause) = request.stop.and_then(StopSignal::poll) {
+                return Err(LoadError::Governed(TrippedGovernor::Stopped { cause }));
+            }
+            let response = match fetched {
                 Ok(response) => response,
                 Err(dataset) => return Ok(dataset),
             };
@@ -698,16 +751,14 @@ impl<E: HttpExchange, D: DocumentDecoder> GraphResolver for HttpGraphResolver<E,
                     )));
                 };
                 hops += 1;
-                if let Some(cause) = request.stop.and_then(StopSignal::poll) {
-                    return Err(LoadError::Governed(TrippedGovernor::Stopped { cause }));
-                }
                 if hops > MAX_LOAD_REDIRECTS {
                     return Err(LoadError::Transport(format!(
                         "exceeded {MAX_LOAD_REDIRECTS} redirect hops; the last, from <{iri}>, \
                          named {location:?}"
                     )));
                 }
-                iri = redirect_target(&iri, location).map_err(LoadError::Transport)?;
+                let base = response.final_url.as_deref().unwrap_or(&iri);
+                iri = redirect_target(base, location).map_err(LoadError::Transport)?;
                 continue;
             }
             if !response.status.is_success() {
@@ -732,7 +783,7 @@ impl<E: HttpExchange, D: DocumentDecoder> GraphResolver for HttpGraphResolver<E,
 }
 
 /// The IRI a redirect from `from` to `location` names: the location resolved against
-/// the IRI it redirected (RFC 3986 §5.2).
+/// the URL the response came from (RFC 3986 §5.2).
 fn redirect_target(from: &str, location: &str) -> Result<String, String> {
     purrdf_iri::parse(from)
         .and_then(|base| base.resolve(location))

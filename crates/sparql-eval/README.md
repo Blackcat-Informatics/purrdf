@@ -180,8 +180,10 @@ Design pillars:
   headers, body and the final URL), an opaque redirect, a dataset the host
   holds, or a typed `HttpFailure` comes out. `HttpRemoteQuerySource` sends
   `SERVICE` over it and `HttpGraphResolver` sends `LOAD`, re-authorizing
-  every redirect hop against the catalog and parsing the document against the
-  final URL, or the requested IRI when the host reports none. An opaque
+  every redirect hop it follows against the catalog, charging each hop against
+  the remote-request ceiling, and parsing the document against the final URL,
+  or the requested IRI when the host reports none. A host must return each
+  redirect to the resolver for every destination to pass catalog authorization. An opaque
   redirect, whose status and `Location` the host cannot see, is refused:
   `SERVICE` reports `RemoteError::OpaqueRedirect` and `LOAD` reports
   `LoadError::OpaqueRedirect`, and the `SILENT` forms absorb either as a

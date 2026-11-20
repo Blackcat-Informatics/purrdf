@@ -229,7 +229,8 @@ fn check_stop(governors: Option<&Arc<GovernorState>>) -> Result<(), UpdateAbort>
     ))
 }
 
-/// Charge the one request a `LOAD` issues to the host, before it is issued.
+/// Charge the first request a `LOAD` issues to the host, before it is issued. Each further
+/// fetch of a redirect chain is charged the same way by the resolver that issues it.
 ///
 /// The same pair the `SERVICE` federation seam charges — the fuel charge point and the
 /// [`ResourceDimension::RemoteRequests`] dimension — because it is the same event: the
@@ -247,10 +248,18 @@ fn charge_host_fetch(governors: Option<&Arc<GovernorState>>) -> Result<(), Updat
         return Ok(());
     };
     check_stop(governors)?;
+    admit_host_fetch(state).map_err(UpdateAbort::Tripped)
+}
+
+/// The fuel charge point and the `RemoteRequests` unit of one host fetch.
+///
+/// A resolver that follows redirects admits each further hop through this same pair
+/// ([`GraphResolver::resolve_admitted`]), so `max_remote_requests` bounds host fetches,
+/// not `LOAD` operations.
+fn admit_host_fetch(state: &GovernorState) -> Result<(), TrippedGovernor> {
     state
         .charge_point_if_engaged(ChargePoint::RemoteRequestIssued)
         .and_then(|()| state.charge_if_engaged(ResourceDimension::RemoteRequests, 1))
-        .map_err(UpdateAbort::Tripped)
 }
 
 /// Charge `quads` mutated quads against the request's fuel.
@@ -290,10 +299,11 @@ fn charge_mutations(
 
 /// Why a [`GraphResolver`] produced no document.
 ///
-/// Every variant but [`Self::Governed`] is the `LOAD` failing: an error without `SILENT`,
-/// and under `LOAD SILENT` a success with nothing loaded, recorded on the request's
-/// evidence. [`Self::Governed`] is this request's own stop signal and is reported as the
-/// governor trip it is, `SILENT` or not.
+/// Every variant but [`Self::Governed`] and [`Self::Storage`] is the `LOAD` failing: an
+/// error without `SILENT`, and under `LOAD SILENT` a success with nothing loaded, recorded
+/// on the request's evidence. [`Self::Governed`] is this request's own stop signal or
+/// ceiling and is reported as the governor trip it is, `SILENT` or not. [`Self::Storage`]
+/// is an operational failure and fails the request, `SILENT` or not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LoadError {
@@ -310,6 +320,10 @@ pub enum LoadError {
     Fault(String),
     /// This request's stop signal fired while the host held the request.
     Governed(TrippedGovernor),
+    /// A physical storage refusal while the resolver prepared a fetch, such as the
+    /// request headers. It is not an HTTP or transport failure, and `LOAD SILENT` does not
+    /// absorb it. Reported under the evaluation code `native-sparql-evaluation`.
+    Storage(purrdf_lex::allocation::StorageError),
     /// The fetch of the named IRI was redirected and the host could not see the
     /// redirect's status or `Location`: a browser's opaque-redirect response
     /// ([`HttpOutcome::OpaqueRedirect`](crate::remote_http::HttpOutcome::OpaqueRedirect)).
@@ -329,11 +343,12 @@ impl LoadError {
             Self::HostDenied(_) => "native-sparql-load-host-denied",
             Self::Fault(_) => "native-sparql-load-fault",
             Self::Governed(_) => "native-sparql-load-stopped",
+            Self::Storage(_) => "native-sparql-evaluation",
         }
     }
 
     /// The silenced-invocation kind this failure is recorded as under `LOAD SILENT`, or
-    /// `None` for [`Self::Governed`], which is never silenced.
+    /// `None` for [`Self::Governed`] and [`Self::Storage`], which are never silenced.
     const fn silenced_kind(&self) -> Option<purrdf_core::SilencedKind> {
         use purrdf_core::SilencedKind;
         match self {
@@ -342,7 +357,7 @@ impl LoadError {
             Self::Denied(_) => Some(SilencedKind::Denied),
             Self::HostDenied(_) => Some(SilencedKind::HostDenied),
             Self::Fault(_) => Some(SilencedKind::Fault),
-            Self::Governed(_) => None,
+            Self::Governed(_) | Self::Storage(_) => None,
         }
     }
 }
@@ -356,6 +371,7 @@ impl core::fmt::Display for LoadError {
             Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::HostDenied(message) => write!(f, "the host denied the request: {message}"),
             Self::Governed(governor) => write!(f, "{governor}"),
+            Self::Storage(error) => write!(f, "storage refused while preparing the fetch: {error}"),
             Self::OpaqueRedirect(iri) => write!(
                 f,
                 "<{iri}>: refused an opaque redirect; the host could not see its status or \
@@ -410,6 +426,47 @@ pub trait GraphResolver {
     ///
     /// The [`LoadError`] that explains why no document was produced.
     fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError>;
+
+    /// Resolve `request.iri`, admitting every host fetch after the first through
+    /// `admission`.
+    ///
+    /// The evaluator charges the first fetch of a `LOAD` itself. A resolver that issues
+    /// further fetches for the same operation, such as the hops of a redirect chain, calls
+    /// [`FetchAdmission::admit`] before dispatching each one and returns the trip as
+    /// [`LoadError::Governed`], so the request's `RemoteRequests` ceiling bounds host
+    /// fetches. The default ignores `admission` and delegates to [`Self::resolve`], which
+    /// is right for a resolver that issues exactly one fetch.
+    ///
+    /// # Errors
+    ///
+    /// The [`LoadError`] that explains why no document was produced.
+    fn resolve_admitted(
+        &self,
+        request: GraphResolveRequest<'_>,
+        admission: &dyn FetchAdmission,
+    ) -> Result<Arc<RdfDataset>, LoadError> {
+        let _ = admission;
+        self.resolve(request)
+    }
+}
+
+/// Admits one further host fetch of a `LOAD` against the request's ceilings.
+pub trait FetchAdmission {
+    /// Charge one host fetch, before it is dispatched.
+    ///
+    /// # Errors
+    ///
+    /// The governor trip that refused it.
+    fn admit(&self) -> Result<(), TrippedGovernor>;
+}
+
+impl<F> FetchAdmission for F
+where
+    F: Fn() -> Result<(), TrippedGovernor>,
+{
+    fn admit(&self) -> Result<(), TrippedGovernor> {
+        self()
+    }
 }
 
 /// Apply a parsed [`Update`] to `m` in request order.
@@ -1111,7 +1168,8 @@ fn load(
     check_stop(governors)?;
     charge_host_fetch(governors)?;
     let stop = governors.and_then(|state| state.stop_signal().map(Arc::as_ref));
-    let resolved = resolver.resolve(GraphResolveRequest { iri: source, stop });
+    let admission = || governors.map_or(Ok(()), |state| admit_host_fetch(state));
+    let resolved = resolver.resolve_admitted(GraphResolveRequest { iri: source, stop }, &admission);
     let post_return_trip = check_stop(governors).err();
     let loaded = match resolved {
         Ok(ds) => {
