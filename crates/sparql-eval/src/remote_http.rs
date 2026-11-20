@@ -283,6 +283,11 @@ pub struct HttpResponse {
     /// `LOAD` parses the body against this URL, so relative IRIs in a redirected document
     /// resolve against the document's real location; when the host reports none, the
     /// base is the IRI of the hop that was requested.
+    ///
+    /// Redirect hops a host follows itself are not checked against the service
+    /// catalog: only the IRIs this crate asks the host to fetch are authorized. A host
+    /// that must keep every hop under the catalog's policy returns each redirect as a
+    /// response and lets [`HttpGraphResolver`] follow it.
     pub final_url: Option<String>,
 }
 
@@ -693,6 +698,9 @@ impl<E: HttpExchange, D: DocumentDecoder> GraphResolver for HttpGraphResolver<E,
                     )));
                 };
                 hops += 1;
+                if let Some(cause) = request.stop.and_then(StopSignal::poll) {
+                    return Err(LoadError::Governed(TrippedGovernor::Stopped { cause }));
+                }
                 if hops > MAX_LOAD_REDIRECTS {
                     return Err(LoadError::Transport(format!(
                         "exceeded {MAX_LOAD_REDIRECTS} redirect hops; the last, from <{iri}>, \

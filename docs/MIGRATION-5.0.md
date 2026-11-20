@@ -455,7 +455,9 @@ The outcome is one of three values:
 - `HttpOutcome::OpaqueRedirect`: a redirect whose status and `Location` the
   host cannot see, as a browser reports for a request it was told not to
   redirect. `SERVICE` refuses it as `RemoteError::OpaqueRedirect` and `LOAD` as
-  `LoadError::OpaqueRedirect`, under the code `native-sparql-load-failed`. Both
+  `LoadError::OpaqueRedirect`. `LoadError::OpaqueRedirect` reports under the code
+  `native-sparql-load-failed`, which only `LOAD` uses; the `SERVICE` refusal reports
+  under `native-sparql-service-failed`. Both
   are failures of the invocation, so `SERVICE SILENT` and `LOAD SILENT` absorb
   them as transport failures.
 - `HttpOutcome::Dataset`: a dataset the host already holds, for `LOAD`.

@@ -17,10 +17,11 @@ use purrdf_core::{
     StopCause, TermValue, TrippedGovernor,
 };
 use purrdf_sparql_eval::{
-    GraphResolveRequest, GraphResolver, HttpExchange, HttpExchangeRequest, HttpFailure,
-    HttpGraphResolver, HttpMethod, HttpOutcome, HttpRemoteQuerySource, HttpResponse, HttpStatus,
-    LoadError, NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError, ServiceCapabilities,
-    ServiceCapability, ServiceCatalog, ServiceProfile, ServiceRequest, ServiceResolver,
+    CancellationFlag, GraphResolveRequest, GraphResolver, HttpExchange, HttpExchangeRequest,
+    HttpFailure, HttpGraphResolver, HttpMethod, HttpOutcome, HttpRemoteQuerySource, HttpResponse,
+    HttpStatus, LoadError, NativeSparqlEngine, QueryGovernors, QueryOptions, RemoteError,
+    ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceProfile, ServiceRequest,
+    ServiceResolver, StopSignal,
 };
 
 const PREDICATE: &str = "http://example.org/body";
@@ -783,4 +784,51 @@ fn a_status_outside_the_three_digit_range_is_refused() {
     assert_eq!(HttpStatus::new(99), None);
     assert_eq!(HttpStatus::new(100).map(HttpStatus::code), Some(100));
     assert_eq!(HttpStatus::new(599).map(HttpStatus::code), Some(599));
+}
+
+/// A stop signal that fires while the host holds one hop prevents the next hop: the
+/// redirect is not followed, and the `LOAD` is the governor's stop, not a transport
+/// failure. The same chain with no stop fired is followed to its document.
+#[test]
+fn a_stop_fired_during_a_hop_prevents_the_next_redirect_hop() {
+    let flag = CancellationFlag::new();
+    let signal: Arc<dyn StopSignal> = Arc::new(flag.clone());
+    let hops = Mutex::new(Vec::<String>::new());
+    let chain = |cancel: bool| {
+        let flag = flag.clone();
+        let hops = &hops;
+        move |request: HttpExchangeRequest<'_>| -> Result<HttpOutcome, HttpFailure> {
+            hops.lock().expect("lock").push(request.target.to_owned());
+            if request.target.ends_with("/start") {
+                if cancel {
+                    flag.cancel();
+                }
+                let response = HttpResponse::new(HttpStatus::FOUND, Vec::new())
+                    .with_header("Location", "/end");
+                return Ok(HttpOutcome::Response(response));
+            }
+            Ok(HttpOutcome::Response(
+                HttpResponse::new(HttpStatus::OK, b"end".to_vec())
+                    .with_header("Content-Type", "text/plain"),
+            ))
+        }
+    };
+    let request = |iri| GraphResolveRequest {
+        iri,
+        stop: Some(&*signal),
+    };
+    let quiet = HttpGraphResolver::new(chain(false), decode as Decoder, "text/plain");
+    assert!(quiet.resolve(request("https://open.example/start")).is_ok());
+    assert_eq!(hops.lock().expect("lock").len(), 2);
+    hops.lock().expect("lock").clear();
+    let stopped = HttpGraphResolver::new(chain(true), decode as Decoder, "text/plain");
+    assert!(matches!(
+        stopped.resolve(request("https://open.example/start")),
+        Err(LoadError::Governed(_))
+    ));
+    assert_eq!(
+        hops.lock().expect("lock").len(),
+        1,
+        "the second hop is never fetched"
+    );
 }
