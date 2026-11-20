@@ -1,0 +1,324 @@
+{
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDLvpQ": {
+    "resolution": "addressed",
+    "reason": "A nested subject or predicate is refused for every view and record, as a dataset refuses it when frozen, so a shape whose expansion doubles with each record reaches the labelling through no entry; tests run the refusal at the view, the record top and the inner record walk, each beside a valid neighbour.",
+    "commit": "91437015548bdc47f85a915bb93200346efb5e6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:10Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/document.rs",
+      "line": 316,
+      "body_sha256": "1daba2870608ed87812122d991bac2926aa936a65969905ba56a7f27a45cd1da"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDLvuQ": {
+    "resolution": "addressed",
+    "reason": "A weight refusal of a spent read now says the read is spent instead of that the input exceeds capacity.",
+    "commit": "91437015548bdc47f85a915bb93200346efb5e6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T21:43:09Z",
+      "state": null,
+      "commit": "561d990372d609cd3e563d8122bad2d3dff8d62d",
+      "path": "crates/rdf-core/src/canonical_labelling/view.rs",
+      "line": null,
+      "body_sha256": "cf1b99445e479c303840bcf0d36ad8304b9268fc96ea11381924d1e3f1b6d84a"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDLvxQ": {
+    "resolution": "addressed",
+    "reason": "The lowering polls the stop signal at each step of the nested walks and in the passes after them, and reads it before judging a capacity, so a stop is not turned into a size or weight refusal.",
+    "commit": "91437015548bdc47f85a915bb93200346efb5e6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:12Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/view.rs",
+      "line": 763,
+      "body_sha256": "fabf84f027738cdcccfe29f42c4fa11f51db9367f27d194886b992602711d511"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDLv0Q": {
+    "resolution": "addressed",
+    "reason": "Chain figures at three sizes are in the design document and a bench row regenerates them; the bot confirmed it as addressed",
+    "commit": "6018008aa2aa7a193f5309e8e4cc371bea497f28",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:06:10Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/tests/canonical_labelling_lowering_alloc.rs",
+      "line": 44,
+      "body_sha256": "4b9eaf80d6001a7ff903dd9d6f9879f4b3c4d2358480f52ab7294b39cc5ea99a"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDLv3g": {
+    "resolution": "addressed",
+    "reason": "The design document, changelog and migration notes limit the linear claim to the retained representation and state that requested bytes and instructions of the labelling are quadratic.",
+    "commit": "91437015548bdc47f85a915bb93200346efb5e6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T21:43:07Z",
+      "state": null,
+      "commit": "561d990372d609cd3e563d8122bad2d3dff8d62d",
+      "path": "docs/design/purrdf-canonical-labelling.md",
+      "line": null,
+      "body_sha256": "5b7021c591b80e0b074892a65209002c079129dc29efc80987f1e527ea024b55"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFDLv6Q": {
+    "resolution": "addressed",
+    "reason": "The introductory source-form rule in the migration notes is stated per labelling input, the statements the scope selects together with the caller's records, matching the nested-term section.",
+    "commit": "91437015548bdc47f85a915bb93200346efb5e6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T21:43:11Z",
+      "state": null,
+      "commit": "561d990372d609cd3e563d8122bad2d3dff8d62d",
+      "path": "docs/MIGRATION-5.0.md",
+      "line": null,
+      "body_sha256": "c8edc89eb62989328616215c0acc68ecd95ff8db5765031f21fef7a4b1ca1573"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZInlgQ": {
+    "resolution": "acknowledged",
+    "reason": "Review or summary body; each inline finding it carries is recorded under its own item.",
+    "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T19:20:21Z",
+      "state": "COMMENTED",
+      "commit": "99876b0a58a04003f7f9a0f8a42189f99ca8ecc4",
+      "path": null,
+      "line": null,
+      "body_sha256": "bb4c7236f1b41b654a85ee76ec87d9c4755e127e404b298c2a5dad5add25d70f"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABomMXEg": {
+    "resolution": "acknowledged",
+    "reason": "Automated summary; the change is the bot's review-paused notice",
+    "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T04:51:02Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "6048e2f8ad482f6148b3eba20cd96b9c5c8c91ab9fa368ed74b6e021390a479a"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZKyGsA": {
+    "resolution": "addressed",
+    "reason": "The design document and the capacity entry's documentation state that a nested subject or predicate is refused as an input while the record is read, so it is judged before size and weight.",
+    "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-19T21:52:24Z",
+      "state": "COMMENTED",
+      "commit": "91437015548bdc47f85a915bb93200346efb5e6d",
+      "path": null,
+      "line": null,
+      "body_sha256": "ffc8e75a210277febadac787463df3858cc03aa7ba606adb6823add2ce203de2"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFGZzyQ": {
+    "resolution": "acknowledged",
+    "reason": "My reply to the review thread, which states the fix.",
+    "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:05Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/document.rs",
+      "line": 316,
+      "body_sha256": "67f2b9c166d90353b9df0b7b6f1503104173cf4b9d9965e459e80e2b6a4b3e6e"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFGZ1aw": {
+    "resolution": "acknowledged",
+    "reason": "My reply to the review thread, which states the fix.",
+    "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:08Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/view.rs",
+      "line": 763,
+      "body_sha256": "7d81123227b7d2e98e262c7a8b01077a192805e7767dc28ceac0bec7b2876975"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFGZ2-A": {
+    "resolution": "acknowledged",
+    "reason": "My reply to the review thread, which states the fix.",
+    "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:11Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/tests/canonical_labelling_lowering_alloc.rs",
+      "line": 44,
+      "body_sha256": "5c19e3f62d561e7b24944c18b4ec06d2f91f587b9a1c019ec3e5e425375c5ed4"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFGajDQ": {
+    "resolution": "declined",
+    "reason": "Only objects nest, so a spelled line is linear in the depth of one input term; the document total is admitted by reserve_text before it is built; the per-line scratch is unchanged from main",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/1395#discussion_r4638221208",
+    "revision": {
+      "updated_at": "2026-11-20T01:06:30Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/document.rs",
+      "line": 316,
+      "body_sha256": "2c03bb9de428d43c297c0f9e492d559b3bdb1a380eeafae2fc85b6094e08d924"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFGae-Q": {
+    "resolution": "addressed",
+    "reason": "The stop signal is read before the weight is admitted and polled in the digest and term-node passes; c2c8dfcfb tests the poll between size and weight",
+    "commit": "18d18dab94b6a3f4c7cda04cb2fb402b79576818",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:06:22Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/view.rs",
+      "line": 763,
+      "body_sha256": "bfb16f46ad7fbe182754165925da3275030b083fb1606e2897f35890adda68a4"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZMq4ng": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the author's own thread replies",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:05Z",
+      "state": "COMMENTED",
+      "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZMq6oA": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the author's own thread replies",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:08Z",
+      "state": "COMMENTED",
+      "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZMq9Eg": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the author's own thread replies",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:05:11Z",
+      "state": "COMMENTED",
+      "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZMrxwA": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the bot's thread replies, each disposed on its own thread",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:06:22Z",
+      "state": "COMMENTED",
+      "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZMr32w": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the bot's thread replies, each disposed on its own thread",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T01:06:30Z",
+      "state": "COMMENTED",
+      "commit": "db2e16c0aeada7c3b861f0f0b9bda1bb0d7f218e",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFHXE0A": {
+    "resolution": "acknowledged",
+    "reason": "The bot withdrew the finding as not specific to this change and resolved the thread",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T03:46:15Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/document.rs",
+      "line": 316,
+      "body_sha256": "0239cbfece27de241c53ae6e327446a535936aef487626c1912f107c948e0bfc"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFHWjmA": {
+    "resolution": "acknowledged",
+    "reason": "The author's own reply giving the reason for declining the writer finding",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T03:44:57Z",
+      "state": null,
+      "commit": "5f9fbce6c4c8a7c43159529c464d9906cde675e6",
+      "path": "crates/rdf-core/src/canonical_labelling/document.rs",
+      "line": 316,
+      "body_sha256": "879f783db8989b4e9433c28be40ea1be984310fd77c1e43948be31dce8fe98d7"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZN0Bug": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the author's thread reply",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T03:44:57Z",
+      "state": "COMMENTED",
+      "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZN0wzA": {
+    "resolution": "acknowledged",
+    "reason": "Empty review container for the bot's thread reply, disposed on its thread",
+    "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T03:46:15Z",
+      "state": "COMMENTED",
+      "commit": "318d87d52605ee29ebb734adaf20c2887fa429da",
+      "path": null,
+      "line": null,
+      "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  }
+}

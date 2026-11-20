@@ -1,0 +1,20 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-05ad9e2166ee4b3bb0478f2e914c6e92/0.bin"
+  },
+  {
+    "path": "docs/MIGRATION-5.0.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-05ad9e2166ee4b3bb0478f2e914c6e92/1.bin"
+  },
+  {
+    "path": "helpers-ledger.toml",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-05ad9e2166ee4b3bb0478f2e914c6e92/2.bin"
+  }
+]

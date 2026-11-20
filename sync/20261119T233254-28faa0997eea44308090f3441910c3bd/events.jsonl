@@ -1,0 +1,7 @@
+{"time": "2026-11-19T23:32:54.567787+00:00", "status": "started"}
+{"time": "2026-11-19T23:32:59.456864+00:00", "status": "merging"}
+{"time": "2026-11-19T23:33:03.877409+00:00", "status": "conflicted"}
+{"time": "2026-11-19T23:33:04.491113+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'docs/MIGRATION-5.0.md'\nRecorded preimage for 'helpers-ledger.toml'\n"}
+{"time": "2026-11-19T23:41:30.584818+00:00", "status": "committing", "candidate_tree": "b04af497f70e35586d55f21f97f3370a35cd2932", "candidate_patch": "candidate-05ad9e2166ee4b3bb0478f2e914c6e92.patch", "stdout_log": "commit-05ad9e2166ee4b3bb0478f2e914c6e92.stdout.log", "stderr_log": "commit-05ad9e2166ee4b3bb0478f2e914c6e92.stderr.log", "validation_records": []}
+{"time": "2026-11-19T23:42:00.269483+00:00", "status": "commit_returned", "exit_code": 0, "commit_duration_seconds": 29.681846469000448, "stdout_log": "commit-05ad9e2166ee4b3bb0478f2e914c6e92.stdout.log", "stderr_log": "commit-05ad9e2166ee4b3bb0478f2e914c6e92.stderr.log"}
+{"time": "2026-11-19T23:42:00.417434+00:00", "status": "completed", "commit": "726ae611d5fc4512ab593d1703d4d7216edb1a79", "tree": "b04af497f70e35586d55f21f97f3370a35cd2932", "exit_code": 0, "stdout_log": "commit-05ad9e2166ee4b3bb0478f2e914c6e92.stdout.log", "stderr_log": "commit-05ad9e2166ee4b3bb0478f2e914c6e92.stderr.log"}

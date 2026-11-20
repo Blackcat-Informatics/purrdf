@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested",
+  "branch": "paudley/1393-canonical-labelling-lowers-nested",
+  "base_ref": "refs/remotes/origin/paudley/1339-canonical-labelling-is-factorial-in",
+  "head": "03c1e079e5dfb2ae9bbb94feaa65994e04a2b884",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested/.stage/canonical-labelling-lowers-nested/sync/20261119T185816-f6b5a74d5c704adc8e08188c6890fae5",
+  "conflicts": [],
+  "status": "failed",
+  "reason": "refs/heads/paudley/1339-canonical-labelling-is-factorial-in missing on a required remote (origin (github)=missing)"
+}

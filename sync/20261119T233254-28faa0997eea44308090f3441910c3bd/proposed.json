@@ -1,0 +1,20 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "proposed/0.bin"
+  },
+  {
+    "path": "docs/MIGRATION-5.0.md",
+    "kind": "file",
+    "executable": false,
+    "content": "proposed/1.bin"
+  },
+  {
+    "path": "helpers-ledger.toml",
+    "kind": "file",
+    "executable": false,
+    "content": "proposed/2.bin"
+  }
+]

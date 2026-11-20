@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested",
+  "branch": "paudley/1393-canonical-labelling-lowers-nested",
+  "base_ref": "main",
+  "head": "03c1e079e5dfb2ae9bbb94feaa65994e04a2b884",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested/.stage/canonical-labelling-lowers-nested/sync/20261119T185828-7ec219d3194f49e7844db7bd331085d6",
+  "conflicts": [
+    "crates/rdf-core/src/canonical_labelling/view.rs",
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "3d74f50b40a9a23588f9ce525a94c31865382944",
+  "merge_bases": [
+    "d76a82402a6cf9f42d109f7d884a76def488817e"
+  ],
+  "merge_index": "0d4c04e0e5d89e7c617661755c157561b92acf81a1e583e2f3fec8aa93b84075",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'crates/rdf-core/src/canonical_labelling/view.rs'\nRecorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "b57f5960e6eb0e73736da0ce406dbeff20bef5ba",
+  "candidate_patch": "candidate-3e5a3a00dfc043a58fb9648e5bafa644.patch",
+  "stdout_log": "commit-3e5a3a00dfc043a58fb9648e5bafa644.stdout.log",
+  "stderr_log": "commit-3e5a3a00dfc043a58fb9648e5bafa644.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 41.10433676699904,
+  "commit": "99876b0a58a04003f7f9a0f8a42189f99ca8ecc4",
+  "tree": "b57f5960e6eb0e73736da0ce406dbeff20bef5ba",
+  "exit_code": 0
+}

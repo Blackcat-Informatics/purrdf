@@ -1,0 +1,14 @@
+[
+  {
+    "path": "crates/rdf-core/src/canonical_labelling/view.rs",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-3e5a3a00dfc043a58fb9648e5bafa644/0.bin"
+  },
+  {
+    "path": "helpers-ledger.toml",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-3e5a3a00dfc043a58fb9648e5bafa644/1.bin"
+  }
+]

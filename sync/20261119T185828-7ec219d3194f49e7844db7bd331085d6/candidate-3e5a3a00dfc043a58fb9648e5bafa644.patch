@@ -1,0 +1,1136 @@
+diff --git crates/rdf-core/benches/canonical_labelling.rs crates/rdf-core/benches/canonical_labelling.rs
+index 5e7faed20..2293dc408 100644
+--- crates/rdf-core/benches/canonical_labelling.rs
++++ crates/rdf-core/benches/canonical_labelling.rs
+@@ -196,7 +196,13 @@ fn claims() -> Vec<Line> {
+ 
+ fn prepare(row: &str, size: usize) -> CountWork {
+     let lines = match row {
+-        "path" => path(size),
++        "path" => {
++            assert!(
++                size >= 1,
++                "PURRDF_LABELLING_COUNT_NODES must be at least 1, got {size}"
++            );
++            path(size)
++        }
+         "quadratic_residue_13" => quadratic_residue_13(),
+         "cube" => cube(),
+         "z4_z4" => z4_z4(),
+diff --git crates/rdf-core/src/canonical_labelling/optimised.rs crates/rdf-core/src/canonical_labelling/optimised.rs
+index 7de10a3a0..4d16cd3e4 100644
+--- crates/rdf-core/src/canonical_labelling/optimised.rs
++++ crates/rdf-core/src/canonical_labelling/optimised.rs
+@@ -33,8 +33,7 @@ use super::reference::{
+     prepare,
+ };
+ use super::walk::{
+-    Kind, Map, Relation, Walk, WalkTotals, Witnesses, carries, nodes_below, tied_exchanges,
+-    twin_tests,
++    Kind, Map, Relation, Walk, Witnesses, carries, nodes_below, tied_exchanges, twin_tests,
+ };
+ use super::{Component, ComponentRecord, FailureDiagnostic, Halt, Labelled, Refusal, Units};
+ use crate::StopSignal;
+@@ -430,13 +429,12 @@ struct Engine<'a> {
+     twin: TwinTest,
+     /// Whether the calls run are the walk's, or the search-free run's.
+     walking: bool,
+-    /// The walk while this component's step 2 runs.
++    /// The walk while this component's step 2 runs. Before it, the walk of
++    /// the search-free run, which has no bound: when that run labels the
++    /// component its charges, kind by kind, are those the walk makes there
++    /// (one child at each branching call with the same twin tests, Lemma W
++    /// (4)(d)).
+     walk: Walk,
+-    /// The charges the walk makes on this component when the search-free run
+-    /// labels it: there the walk runs the calls of the search-free run, one
+-    /// child at each branching call with the same twin tests (Lemma W
+-    /// (4)(d)), so its charges, kind by kind, are those of the run.
+-    free_totals: WalkTotals,
+     /// `TW`: the twin classes of the tests of the walk.
+     tw: Classes,
+     /// Engine figure: units over the calls explored.
+@@ -474,7 +472,6 @@ impl<'a> Engine<'a> {
+             twin: TwinTest::new(set, comp, start),
+             walking: false,
+             walk: Walk::default(),
+-            free_totals: WalkTotals::default(),
+             tw: Classes::new(n),
+             explored: Units::default(),
+             twin_units: 0,
+@@ -491,26 +488,14 @@ impl<'a> Engine<'a> {
+         self.set.source(self.comp.nodes[v])
+     }
+ 
+-    /// A charge of the walk. The search-free run charges no walk; it records
+-    /// the charge the walk would make on a component it labels.
++    /// A charge of the walk; the walk of the search-free run has no bound.
+     fn charge(&mut self, kind: Kind, units: u64) -> Result<(), Stop> {
+-        if self.walking {
+-            self.walk.charge(kind, units)
+-        } else {
+-            self.free_totals.add(kind, units);
+-            Ok(())
+-        }
++        self.walk.charge(kind, units)
+     }
+ 
+     /// The one charge of a fixing that is not stopped: its FIX-SUM and SPLIT.
+     fn charge_fixing(&mut self, fix_sum: u64, split: u64) -> Result<(), Stop> {
+-        if self.walking {
+-            self.walk.charge_fixing(fix_sum, split)
+-        } else {
+-            self.free_totals.add(Kind::FixSum, fix_sum);
+-            self.free_totals.add(Kind::Split, split);
+-            Ok(())
+-        }
++        self.walk.charge_fixing(fix_sum, split)
+     }
+ 
+     /// The fresh start of the top component, refined.
+@@ -593,7 +578,7 @@ impl<'a> Engine<'a> {
+                 }
+                 let (passed, units) = self.twin.test(self.set, self.comp, u, w);
+                 self.twin_units = self.twin_units.saturating_add(units);
+-                self.free_totals.add(Kind::Twin, units);
++                self.charge(Kind::Twin, units)?;
+                 if passed {
+                     self.twin.join(ru, rw);
+                 } else {
+@@ -1125,7 +1110,7 @@ impl<'a> Engine<'a> {
+ 
+     /// The branching call is complete: its tree, the chosen child being the
+     /// best, with the maps it owns. Every member of the target cell attains in
+-    /// the search-free run (F2); in a walk the attaining members are those
++    /// the search-free run, being one twin class; in a walk the attaining members are those
+     /// whose class of `~` holds a completed child equal to the best.
+     fn finish_branch(&self, mut b: Branch) -> Result<Event, Stop> {
+         let Some(child) = b.best.take() else {
+@@ -1261,7 +1246,7 @@ impl ComponentRun for Run<'_> {
+         if !label {
+             // The search-free run labelled the component: the walk's charges
+             // here are its own, made at once unless the walk ends among them.
+-            let mut totals = self.engine.free_totals;
++            let mut totals = std::mem::take(&mut self.engine.walk).totals();
+             totals.add(Kind::Start, self.record.units.start);
+             totals.add(Kind::Refine, self.fresh_units);
+             if walk.absorb(&totals) {
+diff --git crates/rdf-core/src/canonical_labelling/reference.rs crates/rdf-core/src/canonical_labelling/reference.rs
+index 46391e50f..580ad872d 100644
+--- crates/rdf-core/src/canonical_labelling/reference.rs
++++ crates/rdf-core/src/canonical_labelling/reference.rs
+@@ -875,7 +875,7 @@ impl<'a> Engine<'a> {
+                 }
+                 let (child, steps) = self.explore_child(pair, lines, p, constants, u, mode)?;
+                 self.consider(&mut best, child, u, steps, at);
+-                // Every member of one twin class attains (F2).
++                // Every member of one twin class attains.
+                 best.attaining = target.len() as u64;
+                 Vec::new()
+             }
+@@ -1047,15 +1047,23 @@ pub(crate) struct TwinTest {
+ /// A union-find over `0..n` with path halving.
+ pub(crate) struct Classes {
+     parent: Vec<usize>,
++    /// The joins made so far: the version of the partition.
++    unions: u64,
+ }
+ 
+ impl Classes {
+     pub(crate) fn new(n: usize) -> Self {
+         Self {
+             parent: (0..n).collect(),
++            unions: 0,
+         }
+     }
+ 
++    /// The number of joins made, which changes exactly when the partition does.
++    pub(crate) const fn unions(&self) -> u64 {
++        self.unions
++    }
++
+     /// The representative of `x`'s class, halving the path on the way up.
+     pub(crate) fn find(&mut self, mut x: usize) -> usize {
+         while self.parent[x] != x {
+@@ -1068,6 +1076,7 @@ impl Classes {
+     /// Join the class of representative `other` into that of `into`.
+     pub(crate) fn join(&mut self, into: usize, other: usize) {
+         self.parent[other] = into;
++        self.unions += 1;
+     }
+ }
+ 
+@@ -1852,7 +1861,7 @@ pub(crate) fn drive<R: ComponentRun>(
+     order.sort_by(|&a, &b| runs[a].source().cmp(runs[b].source()));
+     for i in order {
+         let run = &mut runs[i];
+-        walk.enter(run.source(), run.blank_nodes());
++        walk.enter(run.blank_nodes());
+         let label = force_search || !run.is_labelled();
+         let (back, outcome) = run.walk(walk, label);
+         walk = back;
+@@ -1862,9 +1871,10 @@ pub(crate) fn drive<R: ComponentRun>(
+             // A walked branching call always completes its first child, so no
+             // call of the walk fails; a stop of the walk is its limit.
+             Err(Stop::Limit | Stop::Failed) => {
+-                return Err(Halt::Refused(
+-                    walk.refusal(failures.iter().map(|f| f.record).collect()),
+-                ));
++                return Err(Halt::Refused(walk.refusal(
++                    runs[i].source(),
++                    failures.iter().map(|f| f.record).collect(),
++                )));
+             }
+         }
+     }
+diff --git crates/rdf-core/src/canonical_labelling/tests.rs crates/rdf-core/src/canonical_labelling/tests.rs
+index d5007380e..8e102ecb9 100644
+--- crates/rdf-core/src/canonical_labelling/tests.rs
++++ crates/rdf-core/src/canonical_labelling/tests.rs
+@@ -764,7 +764,7 @@ fn bipartite_both_directions() -> Vec<Line> {
+     both_directions(&edges)
+ }
+ 
+-fn directed_cycle(n: usize) -> Vec<Line> {
++pub(super) fn directed_cycle(n: usize) -> Vec<Line> {
+     (0..n)
+         .map(|i| quad(&named("n", i), "<p>", &named("n", (i + 1) % n)))
+         .collect()
+diff --git crates/rdf-core/src/canonical_labelling/view.rs crates/rdf-core/src/canonical_labelling/view.rs
+index 1e3b3ad45..9452b7353 100644
+--- crates/rdf-core/src/canonical_labelling/view.rs
++++ crates/rdf-core/src/canonical_labelling/view.rs
+@@ -1206,7 +1206,7 @@ pub fn compare_view<D: DatasetView>(
+         .admission
+         .into_result()
+         .map_err(ViewError::Refused)?;
+-    let labelled = label_lines(&lines, limit, stop)?;
++    let (labelled, _) = label_lines(&lines, limit, stop)?;
+     Ok(Comparison {
+         present: outcome,
+         lines,
+@@ -1215,16 +1215,19 @@ pub fn compare_view<D: DatasetView>(
+     })
+ }
+ 
+-/// Label admitted lines with the optimised engine.
++/// Label admitted lines with the optimised engine, with the units the walk of
++/// 8.3 charged.
+ fn label_lines<E>(
+     lines: &LineSet,
+     limit: Limit,
+     stop: Option<&dyn StopSignal>,
+-) -> Result<Labelled, ViewError<E>> {
+-    optimised::label_set(lines, limit.get(), false, stop).map_err(|halt| match halt {
+-        super::Halt::Refused(refusal) => ViewError::Refused(refusal),
+-        super::Halt::Stopped => ViewError::Stopped,
+-    })
++) -> Result<(Labelled, u64), ViewError<E>> {
++    optimised::label_walked(lines, limit.get(), false, stop)
++        .map(|(labelled, walk)| (labelled, walk.totals().total()))
++        .map_err(|halt| match halt {
++            super::Halt::Refused(refusal) => ViewError::Refused(refusal),
++            super::Halt::Stopped => ViewError::Stopped,
++        })
+ }
+ 
+ /// The admitted lines of `view` and `records`, each constant and blank node
+@@ -1372,7 +1375,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
+     let (admitted, charged) = lowered_in(view, Scope::Dataset, records, stop, memory)?;
+     let (lines, bytes) = grant(admitted.lines, charged, memory)?;
+     match label_lines(&lines, limit, stop) {
+-        Ok(labelled) => Ok(Comparison {
++        Ok((labelled, _)) => Ok(Comparison {
+             present: outcome,
+             lines,
+             labelled,
+@@ -1395,6 +1398,7 @@ pub fn compare_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
+ pub struct Labelling<Id> {
+     lines: LineSet,
+     labelled: Labelled,
++    walked: u64,
+     blanks: Vec<Option<Id>>,
+     /// Whether the lines hold term nodes, and so every blank node of the view
+     /// has the text form of its source identifier.
+@@ -1417,6 +1421,15 @@ impl<Id: Copy> Labelling<Id> {
+         &self.labelled
+     }
+ 
++    /// The limited units the walk of 8.3 charged, the figure a refusal of
++    /// `limit` reports as its units: START, REFINE, FIX-SUM, SPLIT and TWIN.
++    /// [`Labelled::explored`] is a separate engine figure that has no twin
++    /// units.
++    #[must_use]
++    pub const fn walked_units(&self) -> u64 {
++        self.walked
++    }
++
+     /// The view's identifier of the blank node with index `node` in
+     /// [`Self::lines`] (index `i` of [`Labelled::placements`]). `None` for a
+     /// blank node that only a [`Record`] mentions, for a composite node and
+@@ -1504,7 +1517,7 @@ fn labelling_of<D: DatasetView>(
+         size,
+         weight,
+     } = admitted;
+-    let labelled = label_lines(&lines, limit, stop)?;
++    let (labelled, walked) = label_lines(&lines, limit, stop)?;
+     let text_form = term_nodes > 0;
+     let mut blanks = Vec::with_capacity(lines.blank_nodes());
+     for node in 0..lines.blank_nodes() {
+@@ -1525,6 +1538,7 @@ fn labelling_of<D: DatasetView>(
+     Ok(Labelling {
+         lines,
+         labelled,
++        walked,
+         blanks,
+         term_nodes: text_form,
+         size,
+diff --git crates/rdf-core/src/canonical_labelling/walk.rs crates/rdf-core/src/canonical_labelling/walk.rs
+index f78784f17..32edfe617 100644
+--- crates/rdf-core/src/canonical_labelling/walk.rs
++++ crates/rdf-core/src/canonical_labelling/walk.rs
+@@ -95,19 +95,29 @@ impl WalkTotals {
+ 
+ /// The running total of a walk and its limit test (8.3, steps 1 and 6). The
+ /// default walk has no bound and trips on nothing.
+-#[derive(Default)]
+ pub(crate) struct Walk {
+     /// `R`, saturating at `2^64 - 1` (7.11).
+     total: u64,
+-    /// `max(L, A)`, or nothing when `A` is saturated and the walk never trips.
+-    bound: Option<u64>,
++    /// `max(L, A)`; `2^64 - 1` when `A` is saturated, which a saturated `R`
++    /// does not exceed, so the walk never trips.
++    bound: u64,
+     totals: WalkTotals,
+-    /// The smallest source identifier and the node count of the top component
+-    /// whose step 2 is running: the fields of a refusal.
+-    source: Box<[u8]>,
++    /// The node count of the top component whose step 2 is running: a field
++    /// of a refusal.
+     nodes: u64,
+ }
+ 
++impl Default for Walk {
++    fn default() -> Self {
++        Self {
++            total: 0,
++            bound: u64::MAX,
++            totals: WalkTotals::default(),
++            nodes: 0,
++        }
++    }
++}
++
+ impl Walk {
+     /// A walk under the limit `limit` of an input of allowance `allowance`,
+     /// with the charge of step 1, the split of the input, made. That charge
+@@ -116,19 +126,20 @@ impl Walk {
+     pub(crate) fn new(limit: u64, allowance: u64, split: u64) -> Self {
+         let mut walk = Self {
+             total: 0,
+-            bound: (allowance != u64::MAX).then_some(limit.max(allowance)),
++            bound: if allowance == u64::MAX {
++                u64::MAX
++            } else {
++                limit.max(allowance)
++            },
+             totals: WalkTotals::default(),
+-            source: Box::default(),
+             nodes: 0,
+         };
+         walk.add(&[(Kind::Split, split)]);
+         walk
+     }
+ 
+-    /// Step 2 begins on the top component of smallest source identifier
+-    /// `source` and `nodes` nodes.
+-    pub(crate) fn enter(&mut self, source: &[u8], nodes: u64) {
+-        self.source = source.into();
++    /// Step 2 begins on a top component of `nodes` nodes.
++    pub(crate) const fn enter(&mut self, nodes: u64) {
+         self.nodes = nodes;
+     }
+ 
+@@ -157,9 +168,7 @@ impl Walk {
+     /// was added, and the walk ends inside them, so the step is walked charge
+     /// by charge to find where.
+     pub(crate) fn absorb(&mut self, totals: &WalkTotals) -> bool {
+-        let fits = self
+-            .bound
+-            .is_none_or(|bound| self.total.saturating_add(totals.total()) <= bound);
++        let fits = self.total.saturating_add(totals.total()) <= self.bound;
+         if fits {
+             for (kind, units) in [
+                 (Kind::Start, totals.start),
+@@ -190,18 +199,20 @@ impl Walk {
+ 
+     /// Step 6: the walk ends when `R` exceeds `max(L, A)`.
+     fn test(&self) -> Result<(), Stop> {
+-        match self.bound {
+-            Some(bound) if self.total > bound => Err(Stop::Limit),
+-            _ => Ok(()),
++        if self.total > self.bound {
++            Err(Stop::Limit)
++        } else {
++            Ok(())
+         }
+     }
+ 
+-    /// The refusal of a walk that ended at its last charge, with the first
++    /// The refusal of a walk that ended at its last charge, in the top
++    /// component whose smallest source identifier is `source`, with the first
+     /// failures of the search-free run.
+-    pub(crate) fn refusal(&self, broken_by: Vec<FailureRecord>) -> Refusal {
++    pub(crate) fn refusal(&self, source: &[u8], broken_by: Vec<FailureRecord>) -> Refusal {
+         Refusal::Limit {
+             broken_by,
+-            source: self.source.clone(),
++            source: source.into(),
+             nodes: self.nodes,
+             units: self.total,
+         }
+@@ -254,39 +265,89 @@ pub(crate) fn twin_tests(
+ pub(crate) struct Relation {
+     classes: Classes,
+     len: usize,
++    /// For the representative of each class, its least member: a member is
++    /// related to an earlier one exactly when its class has a smaller member.
++    least: Vec<usize>,
++    /// The version of `TW` at the last pass of (K1): the pass is repeated only
++    /// when a join of `TW`, by this call or a nested one, has changed it.
++    twin_version: Option<u64>,
++    /// The passes of (K1) made.
++    #[cfg(test)]
++    pub(crate) passes: u64,
++    /// The members the passes of (K1) read and the class lookups the relation
++    /// made, for the bound on the work of a walk.
++    #[cfg(test)]
++    pub(crate) reads: u64,
+ }
+ 
+ impl Relation {
+     pub(crate) fn new(len: usize) -> Self {
+         Self {
+             classes: Classes::new(len),
++            least: (0..len).collect(),
+             len,
++            twin_version: None,
++            #[cfg(test)]
++            passes: 0,
++            #[cfg(test)]
++            reads: 0,
+         }
+     }
+ 
++    /// The representative of the class of member `i`.
++    fn find(&mut self, i: usize) -> usize {
++        #[cfg(test)]
++        {
++            self.reads += 1;
++        }
++        self.classes.find(i)
++    }
++
+     /// Relate the members of indices `i` and `j`.
+     pub(crate) fn relate(&mut self, i: usize, j: usize) {
+-        let (ri, rj) = (self.classes.find(i), self.classes.find(j));
++        let (ri, rj) = (self.find(i), self.find(j));
+         if ri != rj {
+             self.classes.join(ri, rj);
++            self.least[ri] = self.least[ri].min(self.least[rj]);
+         }
+     }
+ 
+     /// (K1): every two members of `target` in one class of `TW` are related.
++    ///
++    /// One pass groups the members by their root in `TW` and relates each
++    /// member to the first of its group. The relation only grows, so a pass
++    /// is needed only after a join of `TW`.
+     pub(crate) fn twins(&mut self, target: &[usize], tw: &mut Classes) {
+-        let roots: Vec<usize> = target.iter().map(|&v| tw.find(v)).collect();
+-        for i in 1..self.len {
+-            if let Some(j) = (0..i).find(|&j| roots[j] == roots[i]) {
+-                self.relate(i, j);
++        if self.twin_version == Some(tw.unions()) {
++            return;
++        }
++        self.twin_version = Some(tw.unions());
++        #[cfg(test)]
++        {
++            self.passes += 1;
++            self.reads += target.len() as u64;
++        }
++        let mut keyed: Vec<(usize, usize)> = target
++            .iter()
++            .take(self.len)
++            .enumerate()
++            .map(|(i, &v)| (tw.find(v), i))
++            .collect();
++        keyed.sort_unstable();
++        let mut first = None;
++        for (root, i) in keyed {
++            match first {
++                Some((group, head)) if group == root => self.relate(i, head),
++                _ => first = Some((root, i)),
+             }
+         }
+     }
+ 
+     /// Step 3(b)(i): whether the member of index `i` is related to an earlier
+-    /// one, so that its child is skipped.
++    /// one, so that its child is skipped: its class has a smaller member.
+     pub(crate) fn skipped(&mut self, i: usize) -> bool {
+-        let root = self.classes.find(i);
+-        (0..i).any(|j| self.classes.find(j) == root)
++        let root = self.find(i);
++        self.least[root] < i
+     }
+ 
+     /// The number of members whose class holds one of `members`. With the
+@@ -294,11 +355,11 @@ impl Relation {
+     /// first member of a class is visited, every member of a class has the
+     /// certificate of the others, and a stopped member's exceeds the best's.
+     pub(crate) fn related_to(&mut self, members: &[usize]) -> u64 {
+-        let mut roots: Vec<usize> = members.iter().map(|&i| self.classes.find(i)).collect();
++        let mut roots: Vec<usize> = members.iter().map(|&i| self.find(i)).collect();
+         roots.sort_unstable();
+         roots.dedup();
+         (0..self.len)
+-            .filter(|&i| roots.binary_search(&self.classes.find(i)).is_ok())
++            .filter(|&i| roots.binary_search(&self.find(i)).is_ok())
+             .count() as u64
+     }
+ }
+diff --git crates/rdf-core/src/canonical_labelling/walk_tests.rs crates/rdf-core/src/canonical_labelling/walk_tests.rs
+index c64075fdb..0f17425a7 100644
+--- crates/rdf-core/src/canonical_labelling/walk_tests.rs
++++ crates/rdf-core/src/canonical_labelling/walk_tests.rs
+@@ -9,11 +9,12 @@
+ //! here is computed by both engines and must be the same from each.
+ 
+ use super::optimised_tests::{complement_of_cycles, cub8, fifteen, k4_pair};
++use super::reference::Classes;
+ use super::tests::{
+-    complete_bipartite_one_direction, cube_both_directions, cycle_with_records, failure_record,
+-    hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
++    complete_bipartite_one_direction, cube_both_directions, cycle_with_records, directed_cycle,
++    failure_record, hub, quad, quadratic_residue_13, relabel, rename_lines, term, two_cycles,
+ };
+-use super::walk::{Kind, Walk};
++use super::walk::{Kind, Relation, Walk};
+ use super::{FailureRecord, Labelled, Limit, Line, Refusal, Term, admit};
+ use super::{optimised, reference};
+ use purrdf_hash::hex;
+@@ -610,7 +611,7 @@ fn the_walk_trips_exactly_above_its_bound_and_saturates() {
+     );
+     assert_eq!(walk.total(), u64::MAX);
+     assert_eq!(walk.totals().twin, u64::MAX);
+-    match walk.refusal(Vec::new()) {
++    match walk.refusal(b"s", Vec::new()) {
+         Refusal::Limit { units, .. } => assert_eq!(units, u64::MAX),
+         other => panic!("expected a limit refusal, got {other:?}"),
+     }
+@@ -764,3 +765,120 @@ fn the_shared_inputs_with_reifiers_walk_to_their_figures() {
+         }
+     }
+ }
++
++/// The walk does bounded work on a large target cell. A call that visits every
++/// member, as a directed cycle of 2,000 blank nodes makes, needs the relation
++/// at each visit; the twin classes change only when a twin test passes, so the
++/// walk reads them once until a join (by the call or a nested one) changes
++/// them, and a visit never rescans the earlier members. The skip decisions
++/// are those of the earlier members' rule, and the cycle labels in the
++/// optimised engine with the neighbouring 12-node cycle labelling the same in
++/// both engines.
++#[test]
++fn the_twin_relation_is_read_in_passes_not_per_member_scans() {
++    const N: usize = 2_000;
++    let target: Vec<usize> = (0..N).collect();
++    let mut tw = Classes::new(N);
++    let mut relation = Relation::new(N);
++    for visit in 0..N {
++        relation.twins(&target, &mut tw);
++        assert!(!relation.skipped(visit), "no twins yet");
++    }
++    assert_eq!(relation.passes, 1, "no join of TW, one pass");
++
++    // Members 0, 5 and 7 become one class, 3 and 4 another.
++    let (a, b) = (tw.find(0), tw.find(5));
++    tw.join(a, b);
++    let (a, b) = (tw.find(0), tw.find(7));
++    tw.join(a, b);
++    let (a, b) = (tw.find(3), tw.find(4));
++    tw.join(a, b);
++    for _ in 0..N {
++        relation.twins(&target, &mut tw);
++    }
++    assert_eq!(relation.passes, 2, "joins of TW, one more pass");
++    let skipped: Vec<usize> = (0..N).filter(|&i| relation.skipped(i)).collect();
++    assert_eq!(
++        skipped,
++        [4, 5, 7],
++        "each later member of a class is skipped"
++    );
++
++    // A neighbouring input labels the same in both engines, and the 2,000-node
++    // cycle labels in the optimised engine (the reference engine is the oracle
++    // for small inputs).
++    walked(&directed_cycle(12), Limit::ENGINE.get()).expect("the neighbour labels");
++    let set = admit(&directed_cycle(N)).expect("well formed");
++    optimised::label_walked(&set, Limit::ENGINE.get(), false, None)
++        .map_err(super::Halt::expect_refusal)
++        .expect("a directed cycle of 2,000 nodes labels");
++}
++
++/// The skip rule is "related to an earlier member", whatever the order of the
++/// relations and the visits: the least member of the class decides it, and
++/// the work of a visit does not grow with the target cell. A model that
++/// scans the earlier members decides every query alike, and 100,000 visits
++/// read a bounded number of members.
++mod skip {
++    use super::{Classes, Relation};
++    use purrdf_testkit::prop::prelude::*;
++
++    /// The members related to an earlier one, by the scan the walk replaced.
++    fn scan(labels: &[usize], i: usize) -> bool {
++        (0..i).any(|j| labels[j] == labels[i])
++    }
++
++    prop_test! {
++        #![prop_config(Config::with_cases(256))]
++
++        /// A skip query agrees with the scan of the earlier members after any
++        /// sequence of relations between members and skip queries, over 24
++        /// members.
++        #[test]
++        fn a_skip_agrees_with_the_scan_of_earlier_members(
++            steps in prop::collection::vec((0usize..24, 0usize..24, any::<bool>()), 0..60)
++        ) {
++            const N: usize = 24;
++            let mut relation = Relation::new(N);
++            let mut labels: Vec<usize> = (0..N).collect();
++            for (i, j, query) in steps {
++                if query {
++                    prop_assert_eq!(relation.skipped(i), scan(&labels, i), "member {}", i);
++                } else {
++                    relation.relate(i, j);
++                    let (from, to) = (labels[j], labels[i]);
++                    for label in &mut labels {
++                        if *label == from {
++                            *label = to;
++                        }
++                    }
++                }
++            }
++            for i in 0..N {
++                prop_assert_eq!(relation.skipped(i), scan(&labels, i), "member {}", i);
++            }
++        }
++    }
++
++    #[test]
++    fn a_visit_of_a_large_target_cell_does_bounded_work() {
++        const N: usize = 100_000;
++        let target: Vec<usize> = (0..N).collect();
++        let mut tw = Classes::new(N);
++        let mut relation = Relation::new(N);
++        for visit in 0..N {
++            relation.twins(&target, &mut tw);
++            // Every tenth member is related to the one before it.
++            if visit % 10 == 9 {
++                relation.relate(visit, visit - 1);
++            }
++            let skipped = relation.skipped(visit);
++            assert_eq!(skipped, visit % 10 == 9, "visit {visit}");
++        }
++        assert!(
++            relation.reads <= 8 * N as u64,
++            "{} reads for {N} visits",
++            relation.reads
++        );
++    }
++}
+diff --git crates/rdf-core/src/ir/canon/control.rs crates/rdf-core/src/ir/canon/control.rs
+index 55367141a..8926fd775 100644
+--- crates/rdf-core/src/ir/canon/control.rs
++++ crates/rdf-core/src/ir/canon/control.rs
+@@ -137,7 +137,9 @@ pub enum SearchEvent {
+     /// Dataset-state explicit automorphism test.
+     StateAutomorphism,
+     /// One limited unit of the nested-refinement labelling (8.1 of its
+-    /// definition), as the engine counted them.
++    /// definition), as the running total of the walk of 8.3: its total when the
++    /// labelling completes, and on a refusal with `limit` its value after the
++    /// charge that passed the limit, the refusal's `units`.
+     LabellingUnit,
+ }
+ 
+diff --git crates/rdf-core/src/ir/canon/labelled.rs crates/rdf-core/src/ir/canon/labelled.rs
+index 1553627b4..6fd08cf7c 100644
+--- crates/rdf-core/src/ir/canon/labelled.rs
++++ crates/rdf-core/src/ir/canon/labelled.rs
+@@ -126,7 +126,7 @@ fn labelled<D: DatasetView, T>(
+                     }
+                     lift(error)
+                 })?;
+-        run.record_units(labelling.labelled().explored.total());
++        run.record_units(labelling.walked_units());
+         run.phase(CanonPhase::Output);
+         let out = finish(&labelling)?;
+         // The lines the grant covers are destroyed before it is refunded.
+@@ -563,6 +563,7 @@ pub fn canonical_relabel_with_mapping(
+ #[cfg(test)]
+ mod tests {
+     use super::*;
++    use crate::canonical_labelling::label_view;
+     use crate::{BlankScope, CanonPhase, RdfDatasetBuilder, SearchEvent};
+ 
+     /// Two interchangeable blank nodes: the labelling must search to tell them
+@@ -578,6 +579,23 @@ mod tests {
+         b.freeze().unwrap()
+     }
+ 
++    /// A directed cycle of blank nodes: its one branching call makes twin
++    /// tests, which the walk charges and the engine's explored units omit.
++    fn blank_cycle(n: usize) -> std::sync::Arc<RdfDataset> {
++        let mut b = RdfDatasetBuilder::new();
++        let p = b.intern_iri("http://example.org/p").unwrap();
++        let nodes: Vec<_> = (0..n)
++            .map(|i| {
++                b.intern_blank(&format!("n{i}"), BlankScope::DEFAULT)
++                    .unwrap()
++            })
++            .collect();
++        for i in 0..n {
++            b.push_quad(nodes[i], p, nodes[(i + 1) % n], None).unwrap();
++        }
++        b.freeze().unwrap()
++    }
++
+     /// The identity a consumer records beside a digest is the name and version
+     /// of the labelling and the line-sequence presentation, and every receipt of
+     /// a run names the same pair.
+@@ -607,4 +625,27 @@ mod tests {
+         assert!(receipt.work.count(SearchEvent::LabellingUnit) > 0);
+         assert_eq!(receipt.work.count(SearchEvent::RdfcFrame), 0);
+     }
++
++    /// A completed run records the units of the walk, the figure a refusal of
++    /// the same limit reports, and not the engine's explored units.
++    #[test]
++    fn a_completed_run_records_the_units_of_the_walk() {
++        let dataset = blank_cycle(6);
++        let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
++        try_canonicalize(&dataset, &mut control).unwrap();
++        let [receipt] = control.receipts() else {
++            panic!("one run, one receipt");
++        };
++        let labelling =
++            label_view(&*dataset, &[], Scope::Dataset, Limit::new(1_000_000), None).unwrap();
++        assert_eq!(
++            receipt.work.count(SearchEvent::LabellingUnit),
++            labelling.walked_units()
++        );
++        assert_ne!(
++            labelling.walked_units(),
++            labelling.labelled().explored.total(),
++            "the walk charges twin units the explored figure leaves out"
++        );
++    }
+ }
+diff --git docs/MIGRATION-5.0.md docs/MIGRATION-5.0.md
+index 558873fc9..a40114f18 100644
+--- docs/MIGRATION-5.0.md
++++ docs/MIGRATION-5.0.md
+@@ -334,7 +334,7 @@ compiling until it handles the new variant. The enums themselves keep their
+ |---|---|---|
+ | `CanonOutput` | `LinesDigest`, `DocumentLinesDigest` | Add arms for both. They are the digest of the canonical line sequence, alone and together with the document and label table; the 4.x arms keep their meaning |
+ | `SearchConfiguration` | `Labelling { version, selection, output }` | Add an arm. It names the labelling run, where `Rdfc { .. }` names an RDFC-1.0 run; a caller that only inspects 4.x runs can bind it with a wildcard |
+-| `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)` |
++| `SearchEvent` | `LabellingUnit` | Add an arm. It counts the limited units of the labelling, read through `SearchWork::count(SearchEvent::LabellingUnit)`; the running total of the walk of 8.3: its total when the labelling completes, and on a refusal with `limit` its value after the charge that passed the limit, the refusal's `units` |
+ 
+ A variant payload that changed. `CanonError` is `#[non_exhaustive]`, but a
+ payload is matched by shape:
+diff --git docs/design/purrdf-canonical-labelling.md docs/design/purrdf-canonical-labelling.md
+index 8a9056254..52a3171f2 100644
+--- docs/design/purrdf-canonical-labelling.md
++++ docs/design/purrdf-canonical-labelling.md
+@@ -263,7 +263,11 @@ walk, so they refuse the same inputs with the same fields. No label, digest,
+ position, identity, record or map depends on the walk or on `L`.
+ `label_with_walk` labels under a given limit and returns, besides the result, the
+ walk's totals by kind (`WalkTotals`), the figures the specification's row `walk`
+-prints.
++prints. The default canonical form records the running total of the walk as its
++`SearchEvent::LabellingUnit` count: the walk's total when the labelling completes,
++and on a refusal with `limit` its value after the charge that passed the limit,
++the refusal's `units`. `Labelled::explored` is a separate engine figure that
++holds no twin units.
+ 
+ ### 3.5 The optimised engine
+ 
+diff --git helpers-ledger.toml helpers-ledger.toml
+index a4b816aeb..7ce33fa4a 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3407,7 +3407,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3423,7 +3423,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3439,7 +3439,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3455,7 +3455,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3471,7 +3471,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3488,7 +3488,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3505,7 +3505,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3521,7 +3521,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3537,7 +3537,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3553,7 +3553,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3569,7 +3569,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3586,7 +3586,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3603,7 +3603,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:7d557c5286976598",
+     "crates/purrdf/src/embedding/writer.rs=source:90aebfe6d5b3af88",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3620,7 +3620,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3637,7 +3637,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3654,7 +3654,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3671,7 +3671,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3688,7 +3688,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3705,7 +3705,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3722,7 +3722,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3735,7 +3735,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3748,7 +3748,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3765,7 +3765,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3782,7 +3782,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:9c490dea3cbb9aeb",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3799,7 +3799,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3816,7 +3816,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3834,7 +3834,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3852,7 +3852,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3866,7 +3866,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:eedeecf1469d8070",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3883,7 +3883,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3900,7 +3900,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3917,7 +3917,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3934,7 +3934,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:cfca6f6c499c62ad",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3953,7 +3953,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3972,7 +3972,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3991,7 +3991,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4010,7 +4010,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f7f048945fd74d6e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "encode_prepared_dataset enumerates its concrete frozen input. seal uses the bounded builder; pack migration checks input count against the same validated limits before encoding. The interval, input constructor closure and consuming module are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4027,7 +4027,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4044,7 +4044,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4061,7 +4061,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:e1c1b0a90781a1ac"
++constructors = "source:01b76bc866197717"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]

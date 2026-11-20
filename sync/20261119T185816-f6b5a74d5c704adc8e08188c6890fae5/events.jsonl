@@ -1,0 +1,2 @@
+{"time": "2026-11-19T18:58:16.871335+00:00", "status": "started"}
+{"time": "2026-11-19T18:58:17.941113+00:00", "status": "failed", "reason": "refs/heads/paudley/1339-canonical-labelling-is-factorial-in missing on a required remote (origin (github)=missing)"}

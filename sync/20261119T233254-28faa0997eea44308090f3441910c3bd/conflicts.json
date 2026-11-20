@@ -1,0 +1,62 @@
+{
+  "CHANGELOG.md": [
+    {
+      "mode": "100644",
+      "oid": "361094c7f04dbcc27ab08a10a9af6f2ee5a2580b",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "bec76c2e1d0b92fd8702b44e0f9f3dd9296a845d",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "13379fc61f651da2096b186cddafb9b70ce01b22",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "docs/MIGRATION-5.0.md": [
+    {
+      "mode": "100644",
+      "oid": "7744d14934bcf0a17a2da1f8e20e7adb2d18a04a",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "d6d5db17eb59245f2efbf091b8706b4f94247abc",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "8c97f96957fc24a44d25d1fe6ff23bd4d0e2d506",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ],
+  "helpers-ledger.toml": [
+    {
+      "mode": "100644",
+      "oid": "f1574ed7d7ffdda69ec41afd84fc4d5da67249e9",
+      "stage": 1,
+      "content": "inputs/2-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "3dabb6d772607d707eaff2513c3bc7a71abab777",
+      "stage": 2,
+      "content": "inputs/2-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "16d3c0916345f249d95a8354f40c50d863a36935",
+      "stage": 3,
+      "content": "inputs/2-3.bin"
+    }
+  ]
+}

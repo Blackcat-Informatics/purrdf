@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1393,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested",
+  "branch": "paudley/1393-canonical-labelling-lowers-nested",
+  "slug": "canonical-labelling-lowers-nested",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested/.stage/canonical-labelling-lowers-nested",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/paudley/1339-canonical-labelling-is-factorial-in",
+  "base_oid": "7f59379736a83b7c0009f30a0357dbe75b2dc254",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested",
+    "branch:paudley/1393-canonical-labelling-lowers-nested",
+    "ignored:30313 files (30311 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1339-canonical-labelling-is-factorial-in caches into /home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested plus 173 dependency units from 2 other checkouts in 30.0s; 20868 unchanged files keep their built mtimes; 4 other files take the seed time and rebuild; 31 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested/.stage/canonical-labelling-lowers-nested",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1393-canonical-labelling-lowers-nested/.stage/canonical-labelling-lowers-nested/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-19T03:57:59-0600",
+  "seed_error": ""
+}
