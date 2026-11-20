@@ -1,0 +1,14 @@
+[
+  {
+    "path": "CHANGELOG.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-d00aa54ec986416a84ece1f7b0380a61/0.bin"
+  },
+  {
+    "path": "docs/MIGRATION-5.0.md",
+    "kind": "file",
+    "executable": false,
+    "content": "accepted-d00aa54ec986416a84ece1f7b0380a61/1.bin"
+  }
+]

@@ -1,0 +1,29 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to",
+  "branch": "paudley/1397-v5-0-migrate-sparql-service-and-load-to",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "63243974bcd788f9ae68606cd402b0a2850c7d08",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to/.stage/v5-0-migrate-sparql-service-and-load-to/sync/20261120T075524-cd96e4ad4ff2412d863b9018c789b93f",
+  "conflicts": [
+    "CHANGELOG.md",
+    "docs/MIGRATION-5.0.md"
+  ],
+  "status": "completed",
+  "base": "3cff1050714f566465c599f0a49f4595fd479e3c",
+  "merge_bases": [
+    "f15b4f68621edbe40d13aa4f8673b5daf9a84d9f"
+  ],
+  "merge_index": "28b26cbb70d26995420dad8ee41e924e77b171677126cff2cff8e0b54d12fe24",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\nRecorded preimage for 'docs/MIGRATION-5.0.md'\n",
+  "candidate_tree": "bd84e325d337dd56dce928c6317c122e590d0663",
+  "candidate_patch": "candidate-d00aa54ec986416a84ece1f7b0380a61.patch",
+  "stdout_log": "commit-d00aa54ec986416a84ece1f7b0380a61.stdout.log",
+  "stderr_log": "commit-d00aa54ec986416a84ece1f7b0380a61.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 32.866885034003644,
+  "commit": "cf6f79b6339036dfe7eb34ad16bef00e9d164ac4",
+  "tree": "bd84e325d337dd56dce928c6317c122e590d0663",
+  "exit_code": 0
+}

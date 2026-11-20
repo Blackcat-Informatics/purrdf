@@ -1,0 +1,42 @@
+{
+  "CHANGELOG.md": [
+    {
+      "mode": "100644",
+      "oid": "b6672f4334cc1b983df0b18c1415b4dc0fb41ff7",
+      "stage": 1,
+      "content": "inputs/0-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "1a6002322bf851f459c36b2453d5895dc375b7a7",
+      "stage": 2,
+      "content": "inputs/0-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "30b403f47e437822463532626930eb6cf36f98dd",
+      "stage": 3,
+      "content": "inputs/0-3.bin"
+    }
+  ],
+  "docs/MIGRATION-5.0.md": [
+    {
+      "mode": "100644",
+      "oid": "a480b9b8f6d590ab2f181dc5f412646e3d7a1759",
+      "stage": 1,
+      "content": "inputs/1-1.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "29e17d4a28a67399613a84eb731f216cc8f0117c",
+      "stage": 2,
+      "content": "inputs/1-2.bin"
+    },
+    {
+      "mode": "100644",
+      "oid": "b6031701cdd03657f222bb270203eed559bd08ad",
+      "stage": 3,
+      "content": "inputs/1-3.bin"
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "issue": 1397,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to",
+  "branch": "paudley/1397-v5-0-migrate-sparql-service-and-load-to",
+  "slug": "v5-0-migrate-sparql-service-and-load-to",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to/.stage/v5-0-migrate-sparql-service-and-load-to",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "d2be07c47375a6eac51013b54dffa87c302ca78a",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to",
+    "branch:paudley/1397-v5-0-migrate-sparql-service-and-load-to",
+    "ignored:30314 files (30312 reflinked, 0 written)",
+    "rust-caches:skipping busy source /opt/.cargo/a8/adfe4302152bd6: /opt/.cargo/a8/adfe4302152bd6/debug/.cargo-build-lock; skipping busy source /opt/.cargo/fa/e70d93a84d6da0: /opt/.cargo/fa/e70d93a84d6da0/debug/.cargo-build-lock; reflinked /home/paudley/Active/purrdf/.worktrees/1394-canonical-labelling-requests-bytes caches into /home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to plus 134 dependency units from 2 other checkouts in 168.2s; 20870 unchanged files keep their built mtimes; 2 other files take the seed time and rebuild; 10 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to/.stage/v5-0-migrate-sparql-service-and-load-to",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1397-v5-0-migrate-sparql-service-and-load-to/.stage/v5-0-migrate-sparql-service-and-load-to/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-19T20:24:47-0600",
+  "seed_error": ""
+}

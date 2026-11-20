@@ -1,0 +1,226 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABoyZlYw": {
+    "resolution": "acknowledged",
+    "reason": "Review-paused notice with no finding; the last reviewed commit is the current head.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T09:58:06Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "2c28d52be60f77355bcabbf9f2bd60787322a593919c0c27d7f2f282316b25ab"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZPELpA": {
+    "resolution": "addressed",
+    "reason": "All seven round-one findings verified and fixed: final-URL Location base, stop poll after every hop, fallible LOAD header allocation, admitted SERVICE status message, per-hop RemoteRequests admission, and resolver-followed-hop wording in README, CHANGELOG and MIGRATION.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T06:33:24Z",
+      "state": "COMMENTED",
+      "commit": "ba50972c111c157ac925f3df344253010dcad123",
+      "path": null,
+      "line": null,
+      "body_sha256": "f8b76f04b88906056c53cfbe78698eab77cd316fea2a3f80419c3d8cdd90e1e1"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZQCIsQ": {
+    "resolution": "addressed",
+    "reason": "Ceiling descriptions in the CHANGELOG, Python, C, wasm and sparql-eval docs now state that each fetch of a LOAD counts one, first fetch and each hop, and that a host-followed redirect is part of its fetch.",
+    "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T08:18:34Z",
+      "state": "COMMENTED",
+      "commit": "5501a93ba2dd971caca622a739b17a1ebfb92ea2",
+      "path": null,
+      "line": null,
+      "body_sha256": "400701c691eccaf7dd4f2972bf5fdbd76bd2b710e335928334ee791c88e7573f"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1nQ": {
+    "resolution": "addressed",
+    "reason": "README, CHANGELOG and MIGRATION say every hop the resolver follows, and that a host must return each redirect for catalog authorization.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:33:47Z",
+      "state": null,
+      "commit": "ba50972c111c157ac925f3df344253010dcad123",
+      "path": "crates/sparql-eval/README.md",
+      "line": null,
+      "body_sha256": "d7410538aabb02ed7619fed420fc27dcd8cf21341716a18cc7ed050a95106d87"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1og": {
+    "resolution": "addressed",
+    "reason": "SERVICE non-success text is built through AdmittedRemoteError::message.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:33:48Z",
+      "state": null,
+      "commit": "ba50972c111c157ac925f3df344253010dcad123",
+      "path": "crates/sparql-eval/src/remote_http.rs",
+      "line": null,
+      "body_sha256": "9a3f8669e22d311cf81cf693f99c3885fa57b28e1895020c40c491bca6baa737"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1qA": {
+    "resolution": "addressed",
+    "reason": "fetch uses request_headers_with_memory and returns the typed LoadError::Storage, which LOAD SILENT does not absorb.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:33:50Z",
+      "state": null,
+      "commit": "ba50972c111c157ac925f3df344253010dcad123",
+      "path": "crates/sparql-eval/src/remote_http.rs",
+      "line": null,
+      "body_sha256": "e649a897731a294046046d5fdde844943c7f353bb08e8515c6296727995ffd9b"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1rQ": {
+    "resolution": "addressed",
+    "reason": "The stop poll runs after every completed hop before classification; test a_stop_fired_during_the_final_hop_is_never_decoded.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:33:53Z",
+      "state": null,
+      "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+      "path": "crates/sparql-eval/src/remote_http.rs",
+      "line": 746,
+      "body_sha256": "49e2141c73610e796e3efb8ba17ca176edbde84b5dd054a9ece957bedaf2bb46"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1sw": {
+    "resolution": "addressed",
+    "reason": "Location resolves against final_url with the hop IRI as fallback; test a_relative_location_resolves_against_the_hosts_final_url.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:33:54Z",
+      "state": null,
+      "commit": "ba50972c111c157ac925f3df344253010dcad123",
+      "path": "crates/sparql-eval/src/remote_http.rs",
+      "line": null,
+      "body_sha256": "e8bb137ec97a2651ae62ac61a0a3478630725440da7fe412da26e6f0b4b9cdca"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1ug": {
+    "resolution": "addressed",
+    "reason": "Each redirect hop is admitted against RemoteRequests through resolve_admitted; test the_remote_request_ceiling_bounds_each_redirect_hop.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:33:56Z",
+      "state": null,
+      "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+      "path": "crates/sparql-eval/src/remote_http.rs",
+      "line": 762,
+      "body_sha256": "8c36f9c5df54c77604c9436a11b85fc76ebc20f0eb923971eec785e5fa2b444b"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFIV1vA": {
+    "resolution": "addressed",
+    "reason": "MIGRATION-5.0 says every hop the resolver follows and states the host-return requirement.",
+    "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T07:34:00Z",
+      "state": null,
+      "commit": "ba50972c111c157ac925f3df344253010dcad123",
+      "path": "docs/MIGRATION-5.0.md",
+      "line": null,
+      "body_sha256": "58fe96c852ae64e69e0f83c22fc333a1768b50225ffe85c7833e32a92cbfb9e4"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFI1Maw": {
+    "resolution": "addressed",
+    "reason": "Verified at 92905acd3: update.rs:387 is error_sources!(LoadError, Storage), so source returns the StorageError.",
+    "commit": "5501a93ba2dd971caca622a739b17a1ebfb92ea2",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T09:58:40Z",
+      "state": null,
+      "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+      "path": "crates/sparql-eval/src/update.rs",
+      "line": 329,
+      "body_sha256": "c335185c433af401e6ccd4a37d02ac167f1d554c97081779c68e97044e2d59b0"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFJHHqw": {
+    "resolution": "addressed",
+    "reason": "Verified at 92905acd3: the CHANGELOG and the Rust, Python and C descriptions state that a host-followed redirect is part of its one fetch, so the ceiling counts exchange dispatches and resolver-followed hops.",
+    "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T09:59:52Z",
+      "state": null,
+      "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+      "path": "CHANGELOG.md",
+      "line": 19,
+      "body_sha256": "2d6e1a37de9c5f19f167dbcfa3a57bd10b32c72a1da95aa443b2d4cb836b4010"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABZPrLGA": {
+    "resolution": "declined",
+    "reason": "LOAD diagnostics are owned String messages for every failure kind, with no admitted-allocation channel at the UpdateAbort layer; the Storage cause stays typed through Error::source and is never silenced.",
+    "commit": null,
+    "reply_url": "https://github.com/Blackcat-Informatics/purrdf/pull/1405#issuecomment-7036577943",
+    "revision": {
+      "updated_at": "2026-11-20T07:40:58Z",
+      "state": "COMMENTED",
+      "commit": "1432aec86d3c89fffd371086aed40ce412a57c6d",
+      "path": null,
+      "line": null,
+      "body_sha256": "a84fd6ede9db5ea3ef65ed9aec4e8c8a15fce6a688d76116b169405c0c74210e"
+    }
+  },
+  "github:comment:IC_kwDOTKq-Ms8AAAABo2molw": {
+    "resolution": "acknowledged",
+    "reason": "The reply that records the declined round-two diagnostic finding; no further action.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T09:56:59Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "3b4a41a89015cf4b51b24532ab7075db4e3c788f4bb3b4181b4fd9f3139fb007"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFKB0Hw": {
+    "resolution": "acknowledged",
+    "reason": "Reply on the resolved source thread; no further action.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T09:57:20Z",
+      "state": null,
+      "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+      "path": "crates/sparql-eval/src/update.rs",
+      "line": 329,
+      "body_sha256": "6d21755cc66eaa78b7988eee5757f9a68d6f316a2d0d74a43260d0a95085e96c"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABFKB11g": {
+    "resolution": "acknowledged",
+    "reason": "Reply on the resolved ceiling thread; no further action.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-20T09:57:23Z",
+      "state": null,
+      "commit": "92905acd3e7ea18f0ebf9ad8139e1d2623fb1870",
+      "path": "CHANGELOG.md",
+      "line": 19,
+      "body_sha256": "d983ee977a1568fb6a061cfd834b6324bb17bc7316c55c26928cd9b79799a0f8"
+    }
+  }
+}

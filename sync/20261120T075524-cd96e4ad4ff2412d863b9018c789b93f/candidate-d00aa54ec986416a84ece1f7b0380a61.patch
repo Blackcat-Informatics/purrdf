@@ -1,0 +1,392 @@
+diff --git CHANGELOG.md CHANGELOG.md
+index 1a6002322..04a1c6aa4 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -22,10 +22,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   host follows itself is not seen. A relative `Location` resolves against the
+   hop's final URL, falling back to its requested IRI. `GraphResolver` gains the
+   provided `resolve_admitted` method, taking the new `FetchAdmission` trait (a
+-  wrapping resolver forwards it so the inner hops are admitted), and `LoadError` the additive `Storage`
+-  variant, a request-header allocation refusal that `LOAD SILENT` does not
+-  absorb. An opaque redirect is refused by
+-  `SERVICE` as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
++  wrapping resolver forwards it so the inner hops are admitted), and
++  `LoadError` the additive `Storage` variant, a request-header allocation refusal
++  that `LOAD SILENT` does not absorb. An opaque redirect is refused by `SERVICE` as the new `RemoteError::OpaqueRedirect` and by `LOAD` as the new
+   `LoadError::OpaqueRedirect` (additive variants on non-exhaustive enums). The
+   WebAssembly asynchronous lane runs both operations through the exchange with
+   its JavaScript interface unchanged; a `LOAD` document delivered without a
+@@ -34,6 +33,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+   way to deliver an opaque redirect, so the package's runner reports an opaque `Response`
+   from a `resolveLoad` handler, and the packaged Cloudflare resolver reports a browser's
+   opaque redirect, each as a transport failure.
++- **Breaking: the GeoIndex source identity is a 32-byte BLAKE3 digest.**
++  `GeoIndex::source_fingerprint` returns `purrdf_hash::hex::Digest32`, not a
++  64-bit `u64`, and `IndexBindingError::Source` carries two `Digest32` values.
++  The digest is domain-separated (`purrdf-geo/index-source/v2`) over the same
++  deterministic projection, with the same scope, geometry precision and
++  admission, and `verify_binding` compares it. No stored value in the library
++  needs conversion; a caller that persisted `source_fingerprint()` recomputes
++  it from its source, and the old 64-bit value does not compile against the
++  new type.
+ - **Canonical blank labels of a result that holds nested triple terms are
+   renumbered.** A triple term that is a component of another now lowers to one
+   term node and one record, so the lowered set of a chain of nested terms is
+diff --git crates/geo-kernel/src/error/index_config.rs crates/geo-kernel/src/error/index_config.rs
+index c5e75f781..d8d72309c 100644
+--- crates/geo-kernel/src/error/index_config.rs
++++ crates/geo-kernel/src/error/index_config.rs
+@@ -140,9 +140,9 @@ pub enum IndexBindingError {
+     /// The complete rebuilt projection has another source fingerprint.
+     Source {
+         /// Original index source fingerprint.
+-        expected: u64,
++        expected: purrdf_hash::hex::Digest32,
+         /// Original supplied source fingerprint.
+-        actual: u64,
++        actual: purrdf_hash::hex::Digest32,
+     },
+     /// A view supplied an identifier that does not resolve in that view.
+     ForeignTermId,
+@@ -151,7 +151,7 @@ pub enum IndexBindingError {
+ impl purrdf_hash::error::StructuredError for IndexBindingError {
+     purrdf_hash::error_visit! {
+         Configuration { expected, actual } => "geo-index-binding-configuration" { "expected" => Record(expected), "actual" => Record(actual) },
+-        Source { expected, actual } => "geo-index-binding-source" { "expected" => Unsigned(u128::from(*expected)), "actual" => Unsigned(u128::from(*actual)) },
++        Source { expected, actual } => "geo-index-binding-source" { "expected" => Record(expected), "actual" => Record(actual) },
+         ForeignTermId => "geo-index-foreign-term-id" {},
+     }
+ }
+@@ -182,7 +182,7 @@ impl core::fmt::Display for IndexBindingError {
+     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+         match self {
+             Self::Configuration { expected: _, actual: _ } => f.write_str("the configuration supplied to verify_binding is not the one this index was built under; the two would project different rows, so the comparison would answer a different question than the one asked"),
+-            Self::Source { expected, actual } => write!(f, "this GeoSPARQL index was built over a different dataset: its source digest is {expected:#018x} and the supplied dataset digests to {actual:#018x}. Rebuild the index from the dataset the query runs against, or pair the query with the dataset the index was built from — an index joined to the wrong dataset returns no rows and reports nothing"),
++            Self::Source { expected, actual } => write!(f, "this GeoSPARQL index was built over a different dataset: its source digest is {expected} and the supplied dataset digests to {actual}. Rebuild the index from the dataset the query runs against, or pair the query with the dataset the index was built from — an index joined to the wrong dataset returns no rows and reports nothing"),
+             Self::ForeignTermId => f.write_str("the dataset view is inconsistent: a term id does not name a term"),
+         }
+     }
+diff --git crates/geo-kernel/src/index.rs crates/geo-kernel/src/index.rs
+index 8a1fa3948..aa00fdcab 100644
+--- crates/geo-kernel/src/index.rs
++++ crates/geo-kernel/src/index.rs
+@@ -9,14 +9,17 @@ pub use geographic::{GeographicGeoIndex, GeographicRelationReceipt};
+ use projection::ProjectionWork;
+ 
+ use purrdf_core::FastMap;
+-use purrdf_hash::{Domain, fnv};
++use purrdf_hash::Domain;
++use purrdf_hash::blake3::Hasher;
++use purrdf_hash::frame::frame_le_into;
++use purrdf_hash::hex::Digest32;
+ 
+ use crate::topology::relate;
+ use crate::{GeoError, GeoTerm, GeoVocab, GeometryLiteral, SpatialRelation};
+ use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermValue};
+ 
+-/// The domain-separation prefix of the index source digest.
+-const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v1");
++/// The BLAKE3 key-derivation context of the index source digest.
++const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v2");
+ 
+ /// Digest tag for [`GraphSelector::Any`].
+ const SELECTOR_ANY: u8 = 0x01;
+@@ -38,36 +41,34 @@ const ABSENT: u8 = 0x20;
+ /// Digest presence byte for a present optional field.
+ const PRESENT: u8 = 0x21;
+ 
+-/// An FNV-1a accumulator over [`purrdf_hash::fnv`].
++/// A BLAKE3 accumulator over the deterministic index projection, in key
++/// derivation mode under [`DIGEST_DOMAIN`].
+ ///
+-/// FNV-1a rather than std's default SipHash hasher or the workspace's `FixedHasher`
+-/// because a fingerprint is compared against one computed by a *different run* of
+-/// this code: std's default hasher is explicitly unspecified across releases, and `FixedHasher` computes a different function on a build whose
+-/// target enables AES than on one that does not. Either would make
+-/// [`verify_binding`] answer "different dataset" for a dataset that is in fact
+-/// identical, the moment a toolchain moved. FNV-1a is fully specified integer
+-/// arithmetic, pinned by its reference test values, so the fingerprint is a pure
+-/// function of the bytes fed to it on every target and every release.
++/// BLAKE3 is fully specified and collision resistant, so the digest is a pure
++/// function of the bytes fed to it on every target and release, and two distinct
++/// projections do not share an identity.
+ ///
+-/// Every variable-length field is written **length-prefixed**, so no two distinct
+-/// field sequences can produce the same byte stream by concatenation.
+-#[derive(Clone, Copy, Debug)]
++/// Every variable-length field is written through the shared
++/// `purrdf_hash::frame` framing (an eight-byte little-endian length, then the
++/// bytes), so no two distinct field sequences can produce the same byte stream
++/// by concatenation. A count is a fixed eight-byte little-endian integer.
++#[derive(Clone)]
+ struct Digest {
+-    /// The running FNV-1a state.
+-    state: u64,
++    /// The running BLAKE3 state.
++    state: Hasher,
+ }
+ 
+ impl Digest {
+     /// A fresh accumulator, domain-separated.
+     fn new() -> Self {
+-        let mut digest = Self { state: fnv::BASIS };
+-        digest.field(DIGEST_DOMAIN.as_str());
+-        digest
++        Self {
++            state: Hasher::new_derive_key(DIGEST_DOMAIN.as_str()),
++        }
+     }
+ 
+     /// Absorb raw bytes.
+     fn bytes(&mut self, bytes: &[u8]) {
+-        self.state = fnv::fold(self.state, bytes);
++        self.state.update(bytes);
+     }
+ 
+     /// Absorb a one-byte tag.
+@@ -75,22 +76,14 @@ impl Digest {
+         self.bytes(&[tag]);
+     }
+ 
+-    /// Absorb a `usize` count as eight big-endian bytes.
++    /// Absorb a `usize` count as a fixed eight-byte little-endian integer.
+     fn count(&mut self, count: usize) {
+-        self.bytes(&(count as u64).to_be_bytes());
++        self.bytes(&(count as u64).to_le_bytes());
+     }
+ 
+-    /// Absorb a length-prefixed string: its length as eight **big-endian** bytes,
+-    /// then its bytes.
+-    ///
+-    /// Not `purrdf_hash::frame::frame_le`'s little-endian framing, and never to
+-    /// become it: the source fingerprint this digest computes is a published
+-    /// identity — `verify_binding` compares it against a fingerprint recorded by
+-    /// an earlier run, and the geo determinism goldens pin it — so its byte order
+-    /// is frozen with it.
++    /// Absorb a length-prefixed string through the shared framing home.
+     fn field(&mut self, text: &str) {
+-        self.bytes(&(text.len() as u64).to_be_bytes());
+-        self.bytes(text.as_bytes());
++        frame_le_into(&mut self.state, text.as_bytes());
+     }
+ 
+     /// Absorb an optional length-prefixed string, presence byte first.
+@@ -153,12 +146,12 @@ impl Digest {
+ 
+     /// Absorb a blank node's scope ordinal.
+     fn scope(&mut self, scope: BlankScope) {
+-        self.bytes(&scope.ordinal().to_be_bytes());
++        self.bytes(&scope.ordinal().to_le_bytes());
+     }
+ 
+     /// The accumulated digest.
+-    const fn finish(self) -> u64 {
+-        self.state
++    fn finish(self) -> Digest32 {
++        Digest32::new(*self.state.finalize().as_bytes())
+     }
+ }
+ 
+@@ -386,7 +379,7 @@ struct GeoIndexData {
+     /// in [`SpatialRelation::ALL`], each vector sorted and deduplicated.
+     asserted: Vec<Vec<(TermValue, TermValue)>>,
+     /// The digest of the source data this index was built from.
+-    source_fingerprint: u64,
++    source_fingerprint: Digest32,
+ }
+ 
+ impl GeoIndex {
+@@ -681,14 +674,13 @@ impl GeoIndex {
+ 
+     /// A digest of the source data this index was built from.
+     ///
+-    /// FNV-1a ([`purrdf_hash::fnv`]) over the configuration, the sorted entries (each
+-    /// subject and each of its geometries in canonical WKT), and the sorted
+-    /// asserted pairs. FNV-1a rather than a hasher whose output is a function of
+-    /// its own version, because the value is compared against one computed by a
+-    /// different run of this code; see [`verify_binding`] for what the comparison
+-    /// is for.
++    /// Domain-separated BLAKE3 (`purrdf-geo/index-source/v2`) over the
++    /// configuration, the sorted entries (each subject and each of its geometries
++    /// in canonical WKT), and the sorted asserted pairs. It is collision resistant,
++    /// so equal identities mean equal projections; see [`verify_binding`] for what
++    /// the comparison is for.
+     #[must_use]
+-    pub fn source_fingerprint(&self) -> u64 {
++    pub fn source_fingerprint(&self) -> Digest32 {
+         self.data.source_fingerprint
+     }
+ 
+@@ -1439,7 +1431,7 @@ fn fingerprint(
+     entries: &[GeoEntry],
+     asserted: &[Vec<(TermValue, TermValue)>],
+     work: &mut ProjectionWork<'_, '_>,
+-) -> Result<u64, GeoError> {
++) -> Result<Digest32, GeoError> {
+     let mut digest = Digest::new();
+     config.absorb(&mut digest, work)?;
+     digest.count(entries.len());
+diff --git crates/geo-kernel/src/index/projection/tests.rs crates/geo-kernel/src/index/projection/tests.rs
+index 8c7e224c5..b86f7555a 100644
+--- crates/geo-kernel/src/index/projection/tests.rs
++++ crates/geo-kernel/src/index/projection/tests.rs
+@@ -214,25 +214,15 @@ fn binding_refusals_retain_both_original_configurations_and_source_fingerprints(
+     assert_eq!(&**cause, &IndexBindingError::Source { expected, actual });
+     let fields = Capture::read(&last).child("cause");
+     assert!(
+-        matches!(fields.field("expected"), ErrorValue::Unsigned(value) if value == u128::from(expected))
++        matches!(fields.child("expected").field("bytes"), ErrorValue::Bytes(value) if value == expected.as_bytes())
+     );
+     assert!(
+-        matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == u128::from(actual))
++        matches!(fields.child("actual").field("bytes"), ErrorValue::Bytes(value) if value == actual.as_bytes())
+     );
++    assert_ne!(expected, actual);
+     assert!(!last.is_expression_error());
+     let fields = Capture::read(&error).child("cause");
+     assert_eq!(fields.child("expected").code, "geo-index-config");
+-
+-    let wide = GeoError::resident_failure(
+-        IndexBindingError::Source {
+-            expected: u64::MAX,
+-            actual: 0,
+-        },
+-        GeoError::IndexBinding,
+-    );
+-    assert!(
+-        matches!(Capture::read(&wide).child("cause").field("expected"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
+-    );
+ }
+ 
+ #[test]
+diff --git crates/hash/README.md crates/hash/README.md
+index 87bca0525..afed9ff4b 100644
+--- crates/hash/README.md
++++ crates/hash/README.md
+@@ -671,7 +671,7 @@ source on every run.
+ | `b"purrdf-geo/geographic-index-law/v1"` | `LAW` | `crates/geo-kernel/src/index/geographic.rs` |
+ | `b"purrdf-geo/geographic-index-source/v1"` | `CONTENT` | `crates/geo-kernel/src/index/geographic.rs` |
+ | `b"purrdf-geo/geographic-index/v1"` | `INDEX` | `crates/geo-kernel/src/index/geographic.rs` |
+-| `b"purrdf-geo/index-source/v1"` | `DIGEST_DOMAIN` | `crates/geo-kernel/src/index.rs` |
++| `b"purrdf-geo/index-source/v2"` | `DIGEST_DOMAIN` | `crates/geo-kernel/src/index.rs` |
+ | `b"purrdf-hnsw/space-generation-v1"` | `SPACE_GENERATION_DOMAIN` | `crates/hnsw/src/relation.rs` |
+ | `b"purrdf-json-document-v1"` | `DOCUMENT_DOMAIN` | `crates/json/src/profile.rs` |
+ | `b"purrdf-json-profile-v1"` | `PROFILE_DOMAIN` | `crates/json/src/profile.rs` |
+diff --git crates/sparql-eval/src/geo/relation.rs crates/sparql-eval/src/geo/relation.rs
+index 502b1d13e..1c0bc743f 100644
+--- crates/sparql-eval/src/geo/relation.rs
++++ crates/sparql-eval/src/geo/relation.rs
+@@ -936,8 +936,8 @@ mod tests {
+     fn the_source_fingerprint_is_frozen() {
+         let index = index_of(&four_branch_rows());
+         assert_eq!(
+-            format!("{:#018x}", index.source_fingerprint()),
+-            "0x21e852458fc234f7"
++            index.source_fingerprint().to_hex(),
++            "58ea2f08afb0273789e64bb9fea2f3be6f1f02459efcf7e744c4951b4532a00d"
+         );
+     }
+ 
+@@ -1460,7 +1460,7 @@ mod tests {
+         assert!(index.is_empty());
+         assert_ne!(
+             index.source_fingerprint(),
+-            0,
++            purrdf_hash::hex::Digest32::default(),
+             "an empty index still attests a generation"
+         );
+         for relation in SpatialRelation::ALL {
+diff --git crates/sparql-eval/src/update.rs crates/sparql-eval/src/update.rs
+index 4f74bbcf0..776173f49 100644
+--- crates/sparql-eval/src/update.rs
++++ crates/sparql-eval/src/update.rs
+@@ -384,14 +384,7 @@ impl core::fmt::Display for LoadError {
+     }
+ }
+ 
+-impl std::error::Error for LoadError {
+-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+-        match self {
+-            Self::Storage(error) => Some(error),
+-            _ => None,
+-        }
+-    }
+-}
++purrdf_hash::error_sources!(LoadError, Storage);
+ 
+ /// One governed request handed to a SPARQL `LOAD` host resolver.
+ #[derive(Clone, Copy)]
+diff --git docs/MIGRATION-5.0.md docs/MIGRATION-5.0.md
+index 29e17d4a2..0d23b02a5 100644
+--- docs/MIGRATION-5.0.md
++++ docs/MIGRATION-5.0.md
+@@ -41,6 +41,8 @@ digests before opening a 4.x artifact.
+ - `SERVICE` and `LOAD` share one caller-supplied HTTP exchange,
+   `HttpExchange`, which replaces the POST-only `HttpTransport` (see "The HTTP
+   exchange").
++- `GeoIndex::source_fingerprint` is a 32-byte digest, not a `u64` (see "Geo index
++  source identity").
+ 
+ ## The canonical line sequence
+ 
+@@ -319,6 +321,20 @@ supplementary subclass edges of a class-membership view, taken from a shapes
+ graph or ontology another party supplies, no longer admit an edge set that
+ collides with another.
+ 
++## Geo index source identity
++
++`GeoIndex::source_fingerprint` returns a 32-byte `purrdf_hash::hex::Digest32`
++instead of a 64-bit `u64`, and `IndexBindingError::Source` carries two of them.
++The value is a BLAKE3 digest, key-derived under `purrdf-geo/index-source/v2`
++and framed through `purrdf_hash::frame`, over the same deterministic index
++projection: the same scope, full geometry precision and admission, with input
++order leaving it unchanged. No index form stores it, so nothing in the library
++needs conversion. Code that holds, compares or hex-formats the value as a `u64`
++no longer compiles; recompute the digest from the source and store its 32 bytes
++or its 64-digit hex form (`Digest32::to_hex`, `Digest32::from_hex`). Code that
++only compares or displays the digests of `IndexBindingError::Source` still
++compiles, and its `Display` output becomes 64 hex digits.
++
+ ## Items that left the crate root
+ 
+ These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
+@@ -371,7 +387,8 @@ compute.
+ 
+ ## Public types that changed shape
+ 
+-The canonicalization and compaction-certificate types below changed shape
++The canonicalization and compaction-certificate types below, and the geo index
++identity, changed shape
+ between `rust-v4.0.2` and 5.0. Enums marked `#[non_exhaustive]` already require
+ a wildcard arm in a `match`, so an added variant there compiles unchanged; those
+ are listed last.
+@@ -404,6 +421,10 @@ needed where a wildcard arm exists): `CanonError::Refused`,
+ `CanonError::Lowering` and `CanonError::SourceInconsistent`; `purrdf_rdf::gts_certify::CertifyError::CanonMismatch`;
+ `purrdf_rdf::gts_certify::CertificateCborError::UnknownCanon` and `UnexpectedCanon`.
+ 
++Retyped geo index identity: `GeoIndex::source_fingerprint` returns `Digest32`
++instead of `u64`, and the payload of `IndexBindingError::Source` is two
++`Digest32` values instead of two `u64` values (see "Geo index source identity").
++
+ No canonicalization or compaction-certificate struct with public fields gained,
+ lost or retyped a public field, and none of these enums lost a variant.
+ 
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 622657c4a..384b556ce 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -906,14 +906,6 @@ constants = []
+ fingerprints = ["rule:length-prefix-frame"]
+ names = []
+ 
+-[[job.variant]]
+-symbol = "purrdf_geo_kernel::index::Digest::field"
+-file = "crates/geo-kernel/src/index.rs"
+-detector = "forbidden"
+-criterion = "a"
+-anchor = "purrdf_geo_kernel::index::Digest::field"
+-reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen. This is the original sanctioned field moved from the evaluator-facing geo relation into the shared kernel index."
+-
+ [[job.variant]]
+ symbol = "purrdf_datalog::resolve_fol::frame"
+ file = "crates/datalog/src/resolve_fol.rs"
