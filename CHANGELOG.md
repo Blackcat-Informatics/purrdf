@@ -180,16 +180,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `term_syntax::write_literal` do so for every caller, where 4.0.2 wrote both
   raw. Other literal characters keep their 4.0.2 spelling, among them U+1FFFE,
   U+FDD0 and U+0085. The canonical IRI writer escapes what `IRIREF` forbids; an
-  IRI holding U+00A0 is spelled as in 4.0.2, and an IRI holding U+007F, U+0080
-  or U+009F is refused in both versions. The
-  carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
+  IRI holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
+  `write_term_value` and the retained `purrdf_core::rdfc12` functions write
+  U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2 wrote them as `\u007F`
+  and `\u0080` to `\u009F`. The library's own IRI parser refuses these
+  characters in both versions, so the difference reaches only an IRI that did
+  not pass through it: a caller's own `DatasetView`, a dataset built with
+  `intern_iri`, a GTS file read by the import functions, and a columnar file.
+  The carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
   Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
   (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
   `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
   the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
-  literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
-  because it was taken over a non-conforming spelling; every other stored digest
-  recomputes unchanged. The readers affected are the PACK version 1
+  literal, or U+007F or U+0080 to U+009F in an IRI, no longer recomputes with the
+  retained `purrdf_core::rdfc12` functions, because it was taken over the
+  4.0.2 spelling; every other stored digest recomputes unchanged. The readers affected are the PACK version 1
   `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
   source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
   over binary lines and does not move; the 5.0 document spells those characters

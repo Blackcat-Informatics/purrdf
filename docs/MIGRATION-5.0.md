@@ -24,9 +24,9 @@ digests before opening a 4.x artifact.
 - RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
   algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
   read-side recompute of stored 4.x digests (profile version 4). A stored 4.x
-  digest of a dataset holding U+FFFE or U+FFFF in a literal no longer recomputes,
-  because it was computed over a spelling that does not conform to the canonical
-  form of RDF 1.2 N-Quads; every other stored digest recomputes unchanged. No
+  digest of a dataset holding U+FFFE or U+FFFF in a literal, or U+007F or U+0080
+  to U+009F in an IRI, no longer recomputes (see "Stored digests"); every other
+  stored digest recomputes unchanged. No
   writer records a 4.x digest in a new artifact. A GTS compaction certificate names the function that recorded its
   refold digests (see "Containers").
 - The search bound is a limit on the walk of the specification (section 8.3), a
@@ -233,11 +233,17 @@ U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
 XML 1.1 `Char` production; 4.0.2 wrote both raw. Every other literal character
 keeps its 4.0.2 spelling, among them U+1FFFE, U+FDD0 and U+0085. An IRI is
 escaped where the `IRIREF` production forbids a scalar. An IRI holding U+00A0 is
-spelled as in 4.0.2, and an IRI holding U+007F, U+0080 or U+009F is refused, as in
-4.0.2. The digest is over the binary line encodings and does not depend on these
+spelled as in 4.0.2. `term_syntax::write_iri`, `write_term_value` and the retained
+`rdfc12` functions write U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2
+wrote `\u007F` and `\u0080` to `\u009F`. The library's own IRI parser refuses
+those characters in both versions, so the difference reaches only an IRI that did
+not pass through it: a caller's own `DatasetView`, a dataset built with
+`intern_iri`, a GTS file read by the import functions, and a columnar file. The
+digest is over the binary line encodings and does not depend on these
 spellings. The retained 4.x `purrdf-rdfc12` output spells U+FFFE and U+FFFF the
 same way (profile version 4), so a stored 4.x digest of a dataset holding either
-in a literal no longer recomputes; see "Stored digests".
+in a literal no longer recomputes, and the raw spelling of U+007F and U+0080 to
+U+009F in an IRI has the same effect; see "Stored digests".
 
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
@@ -254,8 +260,12 @@ A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
 overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
 dataset. To check one, recompute it with the 4.x function. A digest of a dataset
 holding U+FFFE or U+FFFF in a literal does not recompute, because it was taken
-over the raw spelling that profile version 3 wrote; every other stored 4.x digest
-recomputes unchanged:
+over the raw spelling that profile version 3 wrote. A digest of a dataset holding
+U+007F or U+0080 to U+009F in an IRI does not recompute either, because profile
+version 3 wrote those characters as escapes and the retained functions now write
+them raw; such an IRI exists only where it skipped the library's IRI parser (see
+"Spelling as N-Quads 1.2"). Every other stored 4.x digest recomputes
+unchanged:
 
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
