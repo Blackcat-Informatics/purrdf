@@ -612,7 +612,7 @@ called only when a caller asks for it.
 | Retention scope, admission ceilings, accounting | `purrdf-core`, `ir::view_accounting` |
 | Canonicalization entry points over views | `purrdf-core`, `ir::canon` |
 | Checkpoints, ingestion, rollback, poison | `purrdf-rdf`, `gts_compose` |
-| The frozen wire frame itself | `purrdf-gts`, and `docs/GTS-SPEC.md` |
+| The frozen wire frame itself | `purrdf-gts`, and the `gmeow-gts` specification |
 
 The carrier types, the ledger family and the canonicalization entry points are
 re-exported from the `purrdf_core` and `purrdf_rdf` crate roots; the ingestion

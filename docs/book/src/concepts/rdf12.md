@@ -74,6 +74,6 @@ conformance matrix in
 | Base-direction literals | literal kind | round-trips | matched/produced | value nodes | `directionalLiteral` | carried |
 
 The GTS mapping of triple terms and `rdf:reifies` is formalized in the
-[GTS specification](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md),
+[GTS specification](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md),
 which pins its RDF 1.2 substrate to the 07 April 2026 W3C Candidate
 Recommendation Snapshot.

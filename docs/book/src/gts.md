@@ -11,8 +11,8 @@ binary payloads. PurRDF hosts the reference Rust engine,
 [`purrdf-gts`](https://docs.rs/purrdf-gts) (re-exported as `purrdf::gts`).
 
 This chapter is a user-level tour. **The wire format itself is specified in
-[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md)**
-— consult the spec for framing, fold semantics, registries, and conformance
+[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md)
+in `gmeow-gts`** — consult the spec for framing, fold semantics, registries, and conformance
 classes; nothing here supersedes it.
 
 ## The container model, at a high level
@@ -252,8 +252,8 @@ round-trip; `crates/rdf-capi/tests/abi.rs`'s
 
 ## Related
 
-- [`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md)
-  — the normative wire format (version 0.9-draft, wire-format major 1).
+- [`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md)
+  in `gmeow-gts` — the normative wire format (version 1.0-rc1, wire-format major 1).
 - [Slices, Mappings & Provenance](slices.md) — the RDF↔GTS loss ledger.
 - [Getting Started: Python](getting-started/python.md#gts-relational-rows)
   — reading a container back as relational rows.

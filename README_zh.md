@@ -165,7 +165,7 @@ Rust 的 `explain_query_fallible_view` 直接度量操作性视图，并连同�
 解释。它的选项与停止信号变体共用查询准入规则；存储故障会丢弃整个解释，而仅发生停止时，
 停止会出现在解释的 governor 证据中。
 
-**图连同其载荷一起传输。**[GTS](./docs/GTS-SPEC.md) 是一种内容寻址、仅追加的容器，
+**图连同其载荷一起传输。**[GTS](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md) 是一种内容寻址、仅追加的容器，
 具备确定性折叠、二进制载荷、链式 CBOR 段、COSE 签名/加密与纯 Rust 密码学。其容器 API
 覆盖 Rust、Python 与 C，CLI 把它作为输入格式读取。npm / JavaScript 包不暴露它。冻结的
 传输向量与[权威的 GTS 项目](https://github.com/Blackcat-Informatics/gmeow-gts)共享。
@@ -386,7 +386,7 @@ PurRDF 正在成长为一个基础，供在各种部署规模下结合图推理�
 - [浏览器演练场](https://blackcat-informatics.github.io/purrdf/playground/)：
   在浏览器中本地解析、查询、验证、序列化与比较图。
 - [迁移到 4.0](./docs/MIGRATION-4.0.md)、[迁移到 3.0](./docs/MIGRATION-3.0.md)与[变更日志](./CHANGELOG.md)。
-- [GTS](./docs/GTS-SPEC.md)、[PURREMB](./docs/PURREMB.md)、
+- [GTS](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md)、[PURREMB](./docs/PURREMB.md)、
   [RDF 1.2 规范化](./docs/RDF12-CANON-PROFILE.md)、
   [存储契约](./crates/rdf-core/STORAGE.md)与
   [发布流程](./docs/RELEASE.md)。
