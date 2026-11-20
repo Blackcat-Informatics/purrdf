@@ -603,6 +603,45 @@ mod tests {
         ));
     }
 
+    /// A receipt requested from a view that cannot certify its content is the
+    /// typed `Identity` refusal and carries no identity, while the same receipt
+    /// bound to a view that has the capability succeeds.
+    #[test]
+    fn a_receipt_from_a_view_that_cannot_certify_its_content_is_a_typed_refusal() {
+        use purrdf_lex::allocation::StorageError;
+        let dataset = purrdf_core::RdfDatasetBuilder::new().freeze().unwrap();
+        let engine = purrdf_sparql_eval::NativeSparqlEngine::new();
+        let capture = super::ExecutionReceiptCapture::default();
+        engine
+            .query_with_options_view(
+                &dataset,
+                purrdf_core::SparqlRequest {
+                    query: "SELECT (1 AS ?one) WHERE {}",
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &purrdf_sparql_eval::QueryOptions::new().with_coordinate_observer(&capture),
+            )
+            .unwrap();
+        let receipt = super::execution_receipt_json(&capture.into_coordinates().unwrap());
+
+        let refused =
+            super::bind_execution_receipt(&receipt, || Err(StorageError::AllocationFailed));
+        assert!(matches!(
+            refused,
+            Err(super::ReceiptBindError::Identity(
+                StorageError::AllocationFailed
+            ))
+        ));
+
+        let bound = super::bind_execution_receipt(&receipt, || {
+            purrdf_core::ContentIdentified::content_identity(&dataset)
+        })
+        .unwrap();
+        assert!(bound.contains("\"contentIdentity\""));
+        assert!(bound.contains("\"executionIdentity\""));
+    }
+
     /// Replacing a prior request must not retain its time or seed by accident.
     #[test]
     fn coordinate_inputs_replace_prior_selections_without_resetting_other_options() {
