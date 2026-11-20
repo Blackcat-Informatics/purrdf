@@ -9,14 +9,17 @@ pub use geographic::{GeographicGeoIndex, GeographicRelationReceipt};
 use projection::ProjectionWork;
 
 use purrdf_core::FastMap;
-use purrdf_hash::{Domain, fnv};
+use purrdf_hash::Domain;
+use purrdf_hash::blake3::Hasher;
+use purrdf_hash::frame::frame_le_into;
+use purrdf_hash::hex::Digest32;
 
 use crate::topology::relate;
 use crate::{GeoError, GeoTerm, GeoVocab, GeometryLiteral, SpatialRelation};
 use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermValue};
 
-/// The domain-separation prefix of the index source digest.
-const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v1");
+/// The BLAKE3 key-derivation context of the index source digest.
+const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v2");
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -38,36 +41,34 @@ const ABSENT: u8 = 0x20;
 /// Digest presence byte for a present optional field.
 const PRESENT: u8 = 0x21;
 
-/// An FNV-1a accumulator over [`purrdf_hash::fnv`].
+/// A BLAKE3 accumulator over the deterministic index projection, in key
+/// derivation mode under [`DIGEST_DOMAIN`].
 ///
-/// FNV-1a rather than std's default SipHash hasher or the workspace's `FixedHasher`
-/// because a fingerprint is compared against one computed by a *different run* of
-/// this code: std's default hasher is explicitly unspecified across releases, and `FixedHasher` computes a different function on a build whose
-/// target enables AES than on one that does not. Either would make
-/// [`verify_binding`] answer "different dataset" for a dataset that is in fact
-/// identical, the moment a toolchain moved. FNV-1a is fully specified integer
-/// arithmetic, pinned by its reference test values, so the fingerprint is a pure
-/// function of the bytes fed to it on every target and every release.
+/// BLAKE3 is fully specified and collision resistant, so the digest is a pure
+/// function of the bytes fed to it on every target and release, and two distinct
+/// projections do not share an identity.
 ///
-/// Every variable-length field is written **length-prefixed**, so no two distinct
-/// field sequences can produce the same byte stream by concatenation.
-#[derive(Clone, Copy, Debug)]
+/// Every variable-length field is written through the shared
+/// `purrdf_hash::frame` framing (an eight-byte little-endian length, then the
+/// bytes), so no two distinct field sequences can produce the same byte stream
+/// by concatenation. A count is a fixed eight-byte little-endian integer.
+#[derive(Clone)]
 struct Digest {
-    /// The running FNV-1a state.
-    state: u64,
+    /// The running BLAKE3 state.
+    state: Hasher,
 }
 
 impl Digest {
     /// A fresh accumulator, domain-separated.
     fn new() -> Self {
-        let mut digest = Self { state: fnv::BASIS };
-        digest.field(DIGEST_DOMAIN.as_str());
-        digest
+        Self {
+            state: Hasher::new_derive_key(DIGEST_DOMAIN.as_str()),
+        }
     }
 
     /// Absorb raw bytes.
     fn bytes(&mut self, bytes: &[u8]) {
-        self.state = fnv::fold(self.state, bytes);
+        self.state.update(bytes);
     }
 
     /// Absorb a one-byte tag.
@@ -75,22 +76,14 @@ impl Digest {
         self.bytes(&[tag]);
     }
 
-    /// Absorb a `usize` count as eight big-endian bytes.
+    /// Absorb a `usize` count as a fixed eight-byte little-endian integer.
     fn count(&mut self, count: usize) {
-        self.bytes(&(count as u64).to_be_bytes());
+        self.bytes(&(count as u64).to_le_bytes());
     }
 
-    /// Absorb a length-prefixed string: its length as eight **big-endian** bytes,
-    /// then its bytes.
-    ///
-    /// Not `purrdf_hash::frame::frame_le`'s little-endian framing, and never to
-    /// become it: the source fingerprint this digest computes is a published
-    /// identity — `verify_binding` compares it against a fingerprint recorded by
-    /// an earlier run, and the geo determinism goldens pin it — so its byte order
-    /// is frozen with it.
+    /// Absorb a length-prefixed string through the shared framing home.
     fn field(&mut self, text: &str) {
-        self.bytes(&(text.len() as u64).to_be_bytes());
-        self.bytes(text.as_bytes());
+        frame_le_into(&mut self.state, text.as_bytes());
     }
 
     /// Absorb an optional length-prefixed string, presence byte first.
@@ -153,12 +146,12 @@ impl Digest {
 
     /// Absorb a blank node's scope ordinal.
     fn scope(&mut self, scope: BlankScope) {
-        self.bytes(&scope.ordinal().to_be_bytes());
+        self.bytes(&scope.ordinal().to_le_bytes());
     }
 
     /// The accumulated digest.
-    const fn finish(self) -> u64 {
-        self.state
+    fn finish(self) -> Digest32 {
+        Digest32::new(*self.state.finalize().as_bytes())
     }
 }
 
@@ -386,7 +379,7 @@ struct GeoIndexData {
     /// in [`SpatialRelation::ALL`], each vector sorted and deduplicated.
     asserted: Vec<Vec<(TermValue, TermValue)>>,
     /// The digest of the source data this index was built from.
-    source_fingerprint: u64,
+    source_fingerprint: Digest32,
 }
 
 impl GeoIndex {
@@ -681,14 +674,13 @@ impl GeoIndex {
 
     /// A digest of the source data this index was built from.
     ///
-    /// FNV-1a ([`purrdf_hash::fnv`]) over the configuration, the sorted entries (each
-    /// subject and each of its geometries in canonical WKT), and the sorted
-    /// asserted pairs. FNV-1a rather than a hasher whose output is a function of
-    /// its own version, because the value is compared against one computed by a
-    /// different run of this code; see [`verify_binding`] for what the comparison
-    /// is for.
+    /// Domain-separated BLAKE3 (`purrdf-geo/index-source/v2`) over the
+    /// configuration, the sorted entries (each subject and each of its geometries
+    /// in canonical WKT), and the sorted asserted pairs. It is collision resistant,
+    /// so equal identities mean equal projections; see [`verify_binding`] for what
+    /// the comparison is for.
     #[must_use]
-    pub fn source_fingerprint(&self) -> u64 {
+    pub fn source_fingerprint(&self) -> Digest32 {
         self.data.source_fingerprint
     }
 
@@ -1439,7 +1431,7 @@ fn fingerprint(
     entries: &[GeoEntry],
     asserted: &[Vec<(TermValue, TermValue)>],
     work: &mut ProjectionWork<'_, '_>,
-) -> Result<u64, GeoError> {
+) -> Result<Digest32, GeoError> {
     let mut digest = Digest::new();
     config.absorb(&mut digest, work)?;
     digest.count(entries.len());

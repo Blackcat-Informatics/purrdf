@@ -907,14 +907,6 @@ fingerprints = ["rule:length-prefix-frame"]
 names = []
 
 [[job.variant]]
-symbol = "purrdf_geo_kernel::index::Digest::field"
-file = "crates/geo-kernel/src/index.rs"
-detector = "forbidden"
-criterion = "a"
-anchor = "purrdf_geo_kernel::index::Digest::field"
-reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen. This is the original sanctioned field moved from the evaluator-facing geo relation into the shared kernel index."
-
-[[job.variant]]
 symbol = "purrdf_datalog::resolve_fol::frame"
 file = "crates/datalog/src/resolve_fol.rs"
 detector = "forbidden"
