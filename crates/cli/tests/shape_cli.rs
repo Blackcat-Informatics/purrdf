@@ -272,7 +272,7 @@ fn the_figures_of_a_known_dataset_are_exact() {
             "{\"min\":8,\"max\":15,\"count\":12}],",
             "\"datatypes\":{\"named_xsd\":{\"integer\":5,\"string\":7},\"other\":0},",
             "\"language_tags\":{\"tagged_literals\":5,\"distinct_tags\":\"<5\",",
-            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"reader-folds-before-figure\"}},",
+            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}},",
             "\"canonical_labelling\":{\"status\":\"omitted\",\"reason\":\"disabled\"}}\n"
         )
     );
@@ -297,14 +297,35 @@ fn the_labelling_figure_is_taken_and_a_limit_spares_a_guaranteed_input() {
     assert_eq!(stdout(&limited), stdout(&out));
 }
 
-/// The document with its `case_forms` object removed: only a reader that sees the tag as
-/// written can report it, so that one figure differs by syntax and the rest must not.
-fn without_case_forms(document: &str) -> String {
+/// The `case_forms` object of a document.
+fn case_forms(document: &str) -> &str {
     let start = document
         .find("\"case_forms\":")
         .expect("a case_forms figure");
     let end = start + document[start..].find('}').expect("its closing brace") + 1;
-    format!("{}{}", &document[..start], &document[end..])
+    &document[start..end]
+}
+
+/// Assert that `document` equals the text-syntax `reference` in every figure but
+/// `case_forms`, and that `case_forms` is what its reader gives: a reported figure for GTS and
+/// the typed omission for a text syntax.
+fn assert_same_but_case_forms(document: &str, reference: &str, is_gts: bool) {
+    const OMITTED: &str =
+        "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}";
+    assert_eq!(case_forms(reference), OMITTED, "{reference}");
+    if is_gts {
+        assert!(
+            case_forms(document).starts_with("\"case_forms\":{\"status\":\"reported\","),
+            "{document}"
+        );
+    } else {
+        assert_eq!(case_forms(document), OMITTED, "{document}");
+    }
+    assert_eq!(
+        document.replace(case_forms(document), ""),
+        reference.replace(OMITTED, ""),
+        "every other figure is equal"
+    );
 }
 
 /// Protects: the figures belong to the dataset, not to the syntax it arrived in. A pack is
@@ -327,13 +348,10 @@ fn one_dataset_gives_one_document_from_turtle_nquads_gts_and_pack() {
     assert_eq!(code(&out), 0, "{}", stderr(&out));
     let from_nquads = shape(&[&nq]);
     assert_eq!(code(&from_nquads), 0, "{}", stderr(&from_nquads));
-    for other in [&ttl, &gts] {
+    for (other, is_gts) in [(&ttl, false), (&gts, true)] {
         let out = shape(&[other]);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
-        assert_eq!(
-            without_case_forms(&stdout(&out)),
-            without_case_forms(&stdout(&from_nquads))
-        );
+        assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), is_gts);
     }
     let shape_receipts = support::path(dir.path(), "shape.json");
     let out = shape(&[
@@ -439,13 +457,10 @@ fn a_named_graph_gives_one_document_from_trig_nquads_and_gts() {
     let from_nquads = shape(&[&nq]);
     assert_eq!(code(&from_nquads), 0, "{}", stderr(&from_nquads));
     assert!(stdout(&from_nquads).contains("\"named_graphs\":\"<5\""));
-    for other in [&trig, &gts] {
+    for (other, is_gts) in [(&trig, false), (&gts, true)] {
         let out = shape(&[other]);
         assert_eq!(code(&out), 0, "{}", stderr(&out));
-        assert_eq!(
-            without_case_forms(&stdout(&out)),
-            without_case_forms(&stdout(&from_nquads))
-        );
+        assert_same_but_case_forms(&stdout(&out), &stdout(&from_nquads), is_gts);
     }
 }
 
@@ -810,9 +825,11 @@ fn language_tag_case_forms_are_reported_from_gts_and_omitted_elsewhere() {
     let nq = write_file(dir.path(), "tags.nq", &text);
     let out = shape(&["--no-labelling", &nq]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
-    assert!(stdout(&out).contains(
-        "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"reader-folds-before-figure\"}"
-    ));
+    assert!(
+        stdout(&out).contains(
+            "\"case_forms\":{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}"
+        )
+    );
 }
 
 /// A GTS file of `terms` language-tagged literals, one segment per slice of `segments`.

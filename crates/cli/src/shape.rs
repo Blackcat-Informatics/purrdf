@@ -45,8 +45,9 @@
 //!
 //! The data model lowercases a language tag when the term is interned, so only a reader that
 //! sees the tag as written can report its case form. A GTS read does, through the envelope's
-//! `language_tag_forms`; the text and pack readers fold first, and the document states that as
-//! a typed omission.
+//! `language_tag_forms`. The text and pack readers do not hand on the distinct-literal count,
+//! which needs the dataset builder, and the document states that as a typed omission. Equality
+//! across syntaxes holds for every figure except this one.
 //!
 //! # Memory
 //!
@@ -789,7 +790,7 @@ impl Figures {
                 ),
             ),
             None => {
-                out.push_str("{\"status\":\"omitted\",\"reason\":\"reader-folds-before-figure\"}");
+                out.push_str("{\"status\":\"omitted\",\"reason\":\"needs-dataset-builder\"}");
             }
         }
         out.push_str("},\"canonical_labelling\":");

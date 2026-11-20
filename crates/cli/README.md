@@ -1378,8 +1378,9 @@ upper and mixed that any variant has, so the three counts sum to the language-ta
 literals. A dataset holds a tag folded to lower case, so only a reader that sees the tag as
 written can report the figure. A GTS read does, and prints
 `{"status":"reported","lower":…,"upper":…,"mixed":…}`. The text and pack readers do not
-report it, so for them it is `{"status":"omitted","reason":"reader-folds-before-figure"}`.
-Every other figure is the same for one dataset whatever its syntax.
+report it, so for them it is `{"status":"omitted","reason":"needs-dataset-builder"}`: the
+distinct-literal count needs the dataset builder, which knows when case variants merge, and
+those readers do not hand it on.
 
 A histogram bin has fixed bounds that do not depend on the data: bin `0` holds `0`,
 and every other bin holds `min` through `max` with `min` a power of two and `max` one
@@ -1411,9 +1412,11 @@ statements and named graphs, so the labelling figure is omitted with the reason
 `derived-count-suppressed` unless each of those prints exactly, and with `below-threshold`
 when it has fewer than five lines.
 
-The figures belong to the dataset and not to the syntax it arrived in, with the
-`case_forms` exception above: Turtle, N-Quads, TriG and GTS holding the same dataset
-print the same document otherwise.
+The figures belong to the dataset and not to the syntax it arrived in. Equality across
+syntaxes holds for every figure except `case_forms`, which is a figure for a GTS read and a
+typed omission for the text syntaxes, because the distinct-literal count needs the dataset
+builder: Turtle, N-Quads, TriG and GTS holding the same dataset print the same document
+otherwise.
 
 The verb streams nothing: every figure needs the whole dataset (distinct sets, sibling
 grouping, the labelling). The source is read whole into the dataset model before any
