@@ -11,7 +11,7 @@ use projection::ProjectionWork;
 use purrdf_core::FastMap;
 use purrdf_hash::Domain;
 use purrdf_hash::blake3::Hasher;
-use purrdf_hash::frame::{frame_le_into, frame_length_into};
+use purrdf_hash::frame::frame_le_into;
 use purrdf_hash::hex::Digest32;
 
 use crate::topology::relate;
@@ -51,7 +51,7 @@ const PRESENT: u8 = 0x21;
 /// Every variable-length field is written through the shared
 /// `purrdf_hash::frame` framing (an eight-byte little-endian length, then the
 /// bytes), so no two distinct field sequences can produce the same byte stream
-/// by concatenation. Counts use the same length prefix.
+/// by concatenation. A count is a fixed eight-byte little-endian integer.
 #[derive(Clone)]
 struct Digest {
     /// The running BLAKE3 state.
@@ -76,9 +76,9 @@ impl Digest {
         self.bytes(&[tag]);
     }
 
-    /// Absorb a `usize` count as one eight-byte little-endian length prefix.
+    /// Absorb a `usize` count as a fixed eight-byte little-endian integer.
     fn count(&mut self, count: usize) {
-        frame_length_into(&mut self.state, count);
+        self.bytes(&(count as u64).to_le_bytes());
     }
 
     /// Absorb a length-prefixed string through the shared framing home.
