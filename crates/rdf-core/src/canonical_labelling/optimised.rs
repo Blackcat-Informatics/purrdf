@@ -277,11 +277,11 @@ fn split_cell(
         }
         touched.push((y, from, at));
     }
-    let ids: Vec<usize> = touched.iter().map(|t| t.0).collect();
+    let mut at_positions: Vec<usize> = touched.iter().map(|t| t.0).collect();
     let key = |t: &(usize, usize, usize)| run[t.1..t.2].iter().map(|r| &occ_nums[r.2..r.2 + r.3]);
     touched.sort_by(|a, b| key(a).cmp(key(b)));
     let size = side.size[cy];
-    let untouched = size - ids.len();
+    let untouched = size - at_positions.len();
     let mut groups = 1;
     for pair in touched.windows(2) {
         if key(&pair[0]).cmp(key(&pair[1])) != Ordering::Equal {
@@ -294,8 +294,11 @@ fn split_cell(
     // The members before the first touched one keep their place, so the new
     // order is built from there: the untouched members after it in their
     // order, then the touched groups.
-    let mut at_positions: Vec<usize> = ids.iter().map(|&y| side.pos[y]).collect();
+    for y in &mut at_positions {
+        *y = side.pos[*y];
+    }
     at_positions.sort_unstable();
+    // INVARIANT: the one caller passes a run of at least one touched member.
     let first = at_positions[0];
     order.clear();
     let mut from = first;
