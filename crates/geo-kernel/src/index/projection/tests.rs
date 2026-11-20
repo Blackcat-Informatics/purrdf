@@ -214,25 +214,15 @@ fn binding_refusals_retain_both_original_configurations_and_source_fingerprints(
     assert_eq!(&**cause, &IndexBindingError::Source { expected, actual });
     let fields = Capture::read(&last).child("cause");
     assert!(
-        matches!(fields.field("expected"), ErrorValue::Unsigned(value) if value == u128::from(expected))
+        matches!(fields.child("expected").field("bytes"), ErrorValue::Bytes(value) if value == expected.as_bytes())
     );
     assert!(
-        matches!(fields.field("actual"), ErrorValue::Unsigned(value) if value == u128::from(actual))
+        matches!(fields.child("actual").field("bytes"), ErrorValue::Bytes(value) if value == actual.as_bytes())
     );
+    assert_ne!(expected, actual);
     assert!(!last.is_expression_error());
     let fields = Capture::read(&error).child("cause");
     assert_eq!(fields.child("expected").code, "geo-index-config");
-
-    let wide = GeoError::resident_failure(
-        IndexBindingError::Source {
-            expected: u64::MAX,
-            actual: 0,
-        },
-        GeoError::IndexBinding,
-    );
-    assert!(
-        matches!(Capture::read(&wide).child("cause").field("expected"), ErrorValue::Unsigned(value) if value == u128::from(u64::MAX))
-    );
 }
 
 #[test]

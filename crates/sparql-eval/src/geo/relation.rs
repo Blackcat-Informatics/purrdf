@@ -936,8 +936,8 @@ mod tests {
     fn the_source_fingerprint_is_frozen() {
         let index = index_of(&four_branch_rows());
         assert_eq!(
-            format!("{:#018x}", index.source_fingerprint()),
-            "0x21e852458fc234f7"
+            index.source_fingerprint().to_hex(),
+            "5853f6c1e3138556fa4cb344bfac9681bbdc3a1b0e05404122dad17d62dceffc"
         );
     }
 
@@ -1460,7 +1460,7 @@ mod tests {
         assert!(index.is_empty());
         assert_ne!(
             index.source_fingerprint(),
-            0,
+            purrdf_hash::hex::Digest32::default(),
             "an empty index still attests a generation"
         );
         for relation in SpatialRelation::ALL {
