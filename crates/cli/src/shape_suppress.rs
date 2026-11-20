@@ -38,6 +38,8 @@ pub(crate) enum Count {
     /// An exact count of at least the threshold, hidden so that the counts printed beside it
     /// do not pin a hidden one.
     Withheld,
+    /// A count left out altogether, because no other form leaves a hidden count unpinned.
+    Omitted,
 }
 
 impl Count {
@@ -60,6 +62,9 @@ impl Count {
             Self::Small => format!("\"<{SMALL_COUNT_THRESHOLD}\""),
             Self::AtLeast(n) => format!("\">={n}\""),
             Self::Withheld => "\"withheld\"".to_owned(),
+            Self::Omitted => {
+                "{\"status\":\"omitted\",\"reason\":\"small-counts-would-be-exposed\"}".to_owned()
+            }
         }
     }
 
@@ -70,6 +75,7 @@ impl Count {
             Self::Small => (1, i128::from(SMALL_COUNT_THRESHOLD) - 1),
             Self::Withheld => (i128::from(SMALL_COUNT_THRESHOLD), INF),
             Self::AtLeast(n) => (i128::from(n), INF),
+            Self::Omitted => (0, INF),
         }
     }
 }
@@ -188,7 +194,7 @@ fn derive(vars: &[(Count, u64)], constraints: &[Linear]) -> Vec<(i128, i128)> {
 fn pinned(count: Count, bound: (i128, i128)) -> bool {
     let values = bound.1.saturating_sub(bound.0).saturating_add(1);
     match count {
-        Count::Exact(_) => false,
+        Count::Exact(_) | Count::Omitted => false,
         Count::Small => bound.1 < i128::from(SMALL_COUNT_THRESHOLD) - 1 || values < SMALL_KEEPS,
         Count::Withheld | Count::AtLeast(_) => values < LARGE_KEEPS,
     }
@@ -211,8 +217,11 @@ fn hide(vars: &mut [(Count, u64)], variable: usize) {
 /// first and nearest the pinned count first, until no hidden count is pinned. Only the
 /// variables in `candidates` may be hidden when it is given.
 ///
-/// Returns whether it ended with no hidden count pinned. A caller that gets `false` must not
-/// print the figures as they stand.
+/// A count that cannot be hidden by any other form is left out (`Count::Omitted`), which
+/// confines it to nothing; once every non-zero count is hidden or left out no tie can pin one, so
+/// the search ends with nothing pinned whenever every variable may change. It returns `false`
+/// only when a restriction (`fixed`, `candidates`) leaves a pinned count that cannot be changed,
+/// and a caller that gets `false` must not print the figures as they stand.
 #[must_use]
 pub(crate) fn suppress(
     vars: &mut [(Count, u64)],
@@ -248,7 +257,7 @@ pub(crate) fn suppress(
         };
     }
     let constraints = linearize(sums, ties);
-    for _ in 0..=vars.len() {
+    for _ in 0..=2 * vars.len() {
         let bounds = derive(vars, &constraints);
         let Some(violation) = (0..vars.len()).find(|&i| pinned(vars[i].0, bounds[i])) else {
             return true;
@@ -273,12 +282,36 @@ pub(crate) fn suppress(
                 .filter(|&c| hideable(c))
                 .min_by_key(|&c| vars[c].1)
         }) else {
-            return false;
+            // Nothing exact is left to hide: leave the pinned count itself out.
+            if fixed.contains(&violation)
+                || !candidates.is_none_or(|only| only.contains(&violation))
+            {
+                return false;
+            }
+            vars[violation].0 = Count::Omitted;
+            continue;
         };
         hide(vars, cell);
     }
     let bounds = derive(vars, &constraints);
     !(0..vars.len()).any(|i| pinned(vars[i].0, bounds[i]))
+}
+
+/// The interval each variable is confined to by every printed form and every tie.
+pub(crate) fn confined(
+    vars: &[(Count, u64)],
+    sums: &[Sum],
+    ties: &[Linear],
+) -> Vec<(Option<u64>, Option<u64>)> {
+    derive(vars, &linearize(sums, ties))
+        .into_iter()
+        .map(|(low, high)| {
+            (
+                u64::try_from(low).ok(),
+                (high < INF).then(|| u64::try_from(high).ok()).flatten(),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

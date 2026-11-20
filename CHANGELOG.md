@@ -13,8 +13,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   figures and the canonical labelling's line weight, with no term, label, tag, datatype text,
   file name or parser message on either stream. A count of one to four prints as `"<5"`, and the
   printed counts are chosen together with the sums and structural bounds that tie them, so
-  that a reader who knows those ties cannot narrow a hidden count; a figure group that cannot
-  be printed without that is left out with a typed reason. A GTS read reports the written case
+  that a hidden `"<5"` count keeps its upper bound of four and at least three possible values
+  and a withheld count at least two; a count that cannot be printed under that criterion is left
+  out with a typed reason. A GTS read reports the written case
   form of its language tags (omitted when printing them would pin a hidden count) through the
   new `RdfEnvelope::language_tag_forms` field and the new `LanguageTagForms` type (additive on
   a non-exhaustive struct).

@@ -567,6 +567,10 @@ fn interval(value: &purrdf_lex::json::Value) -> Option<(i128, i128)> {
     })
 }
 
+/// A kind of statement and where a term can sit in it: the variable, its blank positions, its
+/// IRI positions and whether it has a literal object position.
+type Position = (usize, i128, i128, bool);
+
 /// A tie between printed counts: the sum of `lesser` plus `constant` is at most the sum of
 /// `greater`, each a list of `(coefficient, variable)`.
 type Tie = (Vec<(i128, usize)>, i128, Vec<(i128, usize)>);
@@ -585,7 +589,7 @@ fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
     let mut names: Vec<String> = Vec::new();
     let mut bounds: Vec<(i128, i128)> = Vec::new();
     let mut add = |name: &str, value: &purrdf_lex::json::Value| -> Option<usize> {
-        let found = interval(value).or_else(|| value["status"].as_str().map(|_| (0, 0)))?;
+        let found = interval(value).or_else(|| value["status"].as_str().map(|_| (0, OPEN)))?;
         names.push(name.to_owned());
         bounds.push(found);
         Some(bounds.len() - 1)
@@ -631,11 +635,20 @@ fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
         sums.push((literals, by_datatype));
     }
     let mut by_group = Vec::new();
+    let mut group_minimums: Vec<(i128, usize)> = Vec::new();
+    let mut highest_bin: Option<(i128, i128)> = None;
     for bin in siblings["largest_like_group_histogram"]
         .as_array()
         .map_or(&[][..], |bins| &bins[..])
     {
-        by_group.push(add("group bin", &bin["count"]).expect("bin"));
+        let index = add("group bin", &bin["count"]).expect("bin");
+        by_group.push(index);
+        let minimum = i128::from(bin["min"].as_u64().expect("bin minimum"));
+        group_minimums.push((minimum, index));
+        highest_bin = Some((
+            minimum,
+            i128::from(bin["max"].as_u64().expect("bin maximum")),
+        ));
     }
     if !by_group.is_empty() {
         sums.push((parents, by_group));
@@ -648,43 +661,52 @@ fn nothing_recoverable(document: &purrdf_lex::json::Value) -> bool {
             .collect();
         sums.push((tagged, by_form));
     }
+    // The ties come from where a term can sit, per kind of statement: (variable, blank
+    // positions, IRI positions, whether it has a literal object position).
     let mut ties: Vec<Tie> = Vec::new();
     let one = |v: usize| (1_i128, v);
-    ties.push((
-        vec![one(literals)],
-        0,
-        vec![one(quads), one(annotations), one(triples)],
-    ));
+    let kinds: [Position; 5] = [
+        (quads, 2, 3, true),
+        (annotations, 2, 3, true),
+        (triples, 2, 3, true),
+        (reifiers, 1, 1, false),
+        (graphs, 1, 1, false),
+    ];
+    let capacity = |pick: &dyn Fn(&Position) -> i128| -> Vec<(i128, usize)> {
+        kinds
+            .iter()
+            .filter(|kind| pick(kind) > 0)
+            .map(|kind| (pick(kind), kind.0))
+            .collect()
+    };
+    ties.push((vec![one(blanks)], 0, capacity(&|kind| kind.1)));
+    ties.push((vec![one(iris)], 0, capacity(&|kind| kind.2)));
+    ties.push((vec![one(literals)], 0, capacity(&|kind| i128::from(kind.3))));
+    ties.push((vec![one(other), one(tagged)], 0, vec![one(literals)]));
     ties.push((vec![one(tagged)], 0, vec![one(literals)]));
     ties.push((vec![one(tags)], 0, vec![one(tagged)]));
     ties.push((vec![one(parents)], 0, vec![one(blanks)]));
     ties.push((vec![one(parents)], 0, vec![one(quads)]));
     ties.push((vec![one(depth)], 0, vec![one(triples)]));
-    ties.push((
-        vec![one(blanks)],
-        0,
-        vec![
-            (3, quads),
-            (2, annotations),
-            (3, triples),
-            one(reifiers),
-            one(graphs),
-        ],
-    ));
-    ties.push((
-        vec![one(iris)],
-        0,
-        vec![
-            (4, quads),
-            (3, annotations),
-            (3, triples),
-            (2, reifiers),
-            one(graphs),
-        ],
-    ));
-    if bounds[group].0 > 0 {
+    if !group_minimums.is_empty() {
+        // each parent of a bin has its minimum of like children, each with a quad of its own
+        ties.push((group_minimums.clone(), 0, vec![one(quads)]));
+        if let Some((low, high)) = highest_bin {
+            ties.push((vec![], low, vec![one(group)]));
+            ties.push((vec![one(group)], -high, vec![]));
+        }
         ties.push((vec![one(group)], 1, vec![one(blanks)]));
         ties.push((vec![one(group)], 0, vec![one(quads)]));
+    }
+    // a bin that is printed has a member, whatever its count prints as
+    let members: Vec<usize> = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| matches!(name.as_str(), "length" | "group bin" | "integer" | "string"))
+        .map(|(index, _)| index)
+        .collect();
+    for index in members {
+        ties.push((vec![], 1, vec![one(index)]));
     }
     for (total, cells) in &sums {
         let cells: Vec<(i128, usize)> = cells.iter().map(|c| (1, *c)).collect();
@@ -1220,4 +1242,60 @@ fn upper_and_mixed_case_gts_matches_its_text_twin_but_for_case_forms() {
     assert!(forms.contains("\"lower\":\"withheld\""), "{forms}");
     assert!(forms.contains("\"upper\":\"<5\""), "{forms}");
     assert!(forms.contains("\"mixed\":\"<5\""), "{forms}");
+}
+
+/// Blank-node quads: `parents` parents, each with `children` like blank children of its own.
+fn blank_tree(parents: usize, children: usize) -> String {
+    let mut out = String::new();
+    for parent in 0..parents {
+        for child in 0..children {
+            push(
+                &mut out,
+                &format!("_:p{parent} <http://example.org/p> _:c{parent}x{child} .\n"),
+            );
+        }
+    }
+    out
+}
+
+/// Blank-node quads: `count` independent edges `_:a{i} p _:b{i}`.
+fn blank_edges(count: usize) -> String {
+    let mut out = String::new();
+    for index in 0..count {
+        push(
+            &mut out,
+            &format!("_:a{index} <http://example.org/p> _:b{index} .\n"),
+        );
+    }
+    out
+}
+
+/// Protects: ties between the statement count, the blank-node count and the sibling histogram
+/// do not pin a small count. One parent with four like children (the group needs four
+/// statements), three parents with four children (twelve statements bound the parents), three
+/// independent edges (a statement has two blank positions) and four (a lone bin pins the
+/// maximum) each leave nothing recoverable; the neighbour of each, with every count at or above
+/// the threshold, prints them exactly.
+#[test]
+fn sibling_histograms_and_statement_counts_do_not_pin_small_counts() {
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let cases: [(&str, String, &str, String); 4] = [
+        ("g1", blank_tree(1, 4), "g1-neighbour", blank_tree(5, 5)),
+        ("g3", blank_tree(3, 4), "g3-neighbour", blank_tree(5, 4)),
+        ("q3", blank_edges(3), "q3-neighbour", blank_edges(5)),
+        ("q4", blank_edges(4), "q4-neighbour", blank_edges(6)),
+    ];
+    for (name, small, neighbour_name, neighbour) in cases {
+        for (label, text, expect_exact) in [(name, small, false), (neighbour_name, neighbour, true)]
+        {
+            let input = write_file(dir.path(), &format!("{label}.nq"), &text);
+            let out = shape(&["--no-labelling", &input]);
+            assert_eq!(code(&out), 0, "{label}: {}", stderr(&out));
+            let printed = stdout(&out);
+            let document = purrdf_lex::json::read(&printed).expect("one JSON document");
+            assert!(nothing_recoverable(&document), "{label}: {printed}");
+            let quads_exact = exact(&document, &["counts", "quads"]).is_some();
+            assert_eq!(quads_exact, expect_exact, "{label}: {printed}");
+        }
+    }
 }

@@ -30,18 +30,41 @@
 //! print exactly. Five is the threshold ([`SMALL_COUNT_THRESHOLD`]): a figure that holds for
 //! at most four items describes a handful of particular items (the one literal of an unusual
 //! datatype, the one language tag in use) and so can single content out, while a figure
-//! shared by five or more cannot be traced to one of them. A zero names no item. Maxima and
-//! nesting depths are single extremes of a distribution rather than counts of items and print
-//! exactly.
+//! shared by five or more cannot be traced to one of them. A zero names no item. The two maxima
+//! (the largest like group and the triple-term depth) print exactly unless they would pin a hidden
+//! count, in which case one under five prints as `"<5"` or the maximum is left out.
 //!
 //! # Suppression
 //!
 //! Printed counts are tied to one another by sums and by structural bounds of an RDF 1.2
 //! dataset, and a reader who knows the ties can combine them. [`Figures::plan`] puts every count
 //! and every tie into one system, and [`suppress`] treats each printed form as an interval,
-//! propagates the ties, and withholds further counts until no hidden count is pinned. When that
-//! cannot be done, [`Figures::render`] leaves figure groups out as typed omissions, never the
-//! document.
+//! propagates the ties, and withholds further counts until no hidden count is pinned. A hidden
+//! `"<5"` count is pinned when its upper bound falls below four or fewer than three values remain
+//! possible for it; a withheld or lower-bounded count when fewer than two remain. That is the
+//! guarantee: a small count stays a bucket, never an exact value, for a reader who knows the
+//! ties below. A count that no other form can leave unpinned is left out as a typed omission;
+//! once every non-zero count is hidden or left out no tie can pin one, since a left-out count
+//! is confined to nothing and a zero is a constant, so the search always ends with the
+//! document printed.
+//!
+//! The ties come from the data model and from what [`measure`] counts. A statement count is the
+//! number of quads. A literal is the object of a quad, an annotation or a triple term, and
+//! nowhere else, so the distinct literals are at most those three counts together; the
+//! datatype classes and the tagged literals are disjoint classes of literals, and a tag is used
+//! by a tagged literal. A blank node occupies a subject or object position of a quad, an
+//! annotation or a triple term, a reifier, or a graph name (one per named graph), so the blank
+//! nodes are at most twice the quads, annotations and triple terms plus the reifiers and the
+//! named graphs. An IRI occupies a subject, predicate or object position of those, a reifier, or
+//! a graph name, so the IRIs are at most three per quad, annotation and triple term plus one
+//! per reifier and per named graph. A parent is a blank node with a quad of its own. Each parent
+//! of a histogram bin has at least the bin's minimum of like blank children and a quad to each,
+//! so the quads are at least the sum of minimum times count over the bins; the largest like
+//! group lies within the highest bin that has a parent, and needs that many blank nodes besides
+//! its parent. A triple term nests as deep as its depth. The distinct literals, and the
+//! parents, are the sums of their breakdowns. Every printed figure is a count of the dataset, a
+//! maximum of it, or a bucket of one of them, and each relation among them that follows from the
+//! data model is one of these.
 //!
 //! # Language-tag case
 //!
@@ -73,7 +96,7 @@ use purrdf_rdf::SourceFormat;
 
 use crate::cli::CliRdfFormat;
 use crate::error::CliError;
-use crate::shape_suppress::{Count, Linear, SMALL_COUNT_THRESHOLD, Sum, suppress};
+use crate::shape_suppress::{Count, Linear, SMALL_COUNT_THRESHOLD, Sum, confined, suppress};
 use crate::source::{InputView, ViewOp};
 use crate::{format, source};
 
@@ -722,41 +745,6 @@ struct At {
     siblings: usize,
 }
 
-/// A figure group the document leaves out when its counts cannot be printed without pinning a
-/// hidden one.
-///
-/// The groups are left out in order, each level including the ones before it: the maxima, the
-/// length histogram, the sibling histogram, the datatype breakdown.
-#[derive(Clone, Copy)]
-struct Omit(u8);
-
-impl Omit {
-    const fn maxima(self) -> bool {
-        self.0 >= 1
-    }
-    const fn lengths(self) -> bool {
-        self.0 >= 2
-    }
-    const fn siblings(self) -> bool {
-        self.0 >= 3
-    }
-    const fn datatypes(self) -> bool {
-        self.0 >= 4
-    }
-}
-
-/// A maximum as JSON: its count, or the typed omission when it is left out.
-fn maximum_text(omitted: bool, count: Count) -> String {
-    if omitted {
-        format!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}")
-    } else {
-        count.text()
-    }
-}
-
-/// The reason a figure group is left out.
-const GROUP_OMISSION: &str = "small-counts-would-be-exposed";
-
 impl Figures {
     /// Every printed count and every tie between them, for the groups that are kept.
     ///
@@ -766,7 +754,7 @@ impl Figures {
     /// blank node with a statement of its own, and a group of like children needs that many
     /// blank nodes besides its parent; a triple term nests as deep as it has terms; an
     /// identifier occupies at most the positions of the statements that name it.
-    fn plan(&self, omit: Omit) -> Plan {
+    fn plan(&self) -> Plan {
         let mut vars: Vec<(Count, u64)> = Vec::new();
         let push = |vars: &mut Vec<(Count, u64)>, printed: Count, truth: u64| {
             vars.push((printed, truth));
@@ -781,12 +769,10 @@ impl Figures {
         let triples = push(&mut vars, counted(self.triple_terms), self.triple_terms);
         let reifiers = push(&mut vars, counted(self.reifiers), self.reifiers);
         let annotations = push(&mut vars, counted(self.annotations), self.annotations);
-        // A left-out maximum stays in the plan as a constant that no tie mentions.
-        let maximum = |value: u64| if omit.maxima() { 0 } else { value };
         let depth = push(
             &mut vars,
-            Count::Exact(maximum(self.max_triple_depth)),
-            maximum(self.max_triple_depth),
+            Count::Exact(self.max_triple_depth),
+            self.max_triple_depth,
         );
         let parents = push(
             &mut vars,
@@ -795,15 +781,13 @@ impl Figures {
         );
         let group = push(
             &mut vars,
-            Count::Exact(maximum(self.sibling_largest.largest)),
-            maximum(self.sibling_largest.largest),
+            Count::Exact(self.sibling_largest.largest),
+            self.sibling_largest.largest,
         );
         let tags = push(&mut vars, counted(self.distinct_tags), self.distinct_tags);
         let lengths = vars.len();
-        if !omit.lengths() {
-            for cell in self.literal_lengths.cells() {
-                push(&mut vars, counted(cell.2), cell.2);
-            }
+        for cell in self.literal_lengths.cells() {
+            push(&mut vars, counted(cell.2), cell.2);
         }
         let datatypes = vars.len();
         for (_, count) in &self.named_datatypes {
@@ -820,32 +804,26 @@ impl Figures {
             self.tagged_literals,
         );
         let siblings = vars.len();
-        if !omit.siblings() {
-            for cell in self.sibling_largest.cells() {
-                push(&mut vars, counted(cell.2), cell.2);
-            }
+        let sibling_cells = self.sibling_largest.cells();
+        for cell in &sibling_cells {
+            push(&mut vars, counted(cell.2), cell.2);
         }
         let end = vars.len();
 
-        let mut sums = Vec::new();
-        if !omit.lengths() {
-            sums.push(Sum {
+        let sums = vec![
+            Sum {
                 total: literals,
                 cells: (lengths..datatypes).collect(),
-            });
-        }
-        if !omit.datatypes() {
-            sums.push(Sum {
+            },
+            Sum {
                 total: literals,
                 cells: (datatypes..siblings).collect(),
-            });
-        }
-        if !omit.siblings() {
-            sums.push(Sum {
+            },
+            Sum {
                 total: parents,
                 cells: (siblings..end).collect(),
-            });
-        }
+            },
+        ];
         let one = |v: usize| (1, v);
         let mut ties = vec![
             // every literal is the object of a statement, an annotation or a triple term
@@ -854,20 +832,23 @@ impl Figures {
                 0,
                 &[one(quads), one(annotations), one(triples)],
             ),
-            // tagged literals are literals, and a tag is used by a tagged literal
-            Linear::at_most(&[one(tagged)], 0, &[one(literals)]),
+            // the datatype classes and the tagged literals are disjoint classes of literals,
+            // and a tag is used by a tagged literal
+            Linear::at_most(&[one(other), one(tagged)], 0, &[one(literals)]),
             Linear::at_most(&[one(tags)], 0, &[one(tagged)]),
             // a parent is a blank node with a statement of its own
             Linear::at_most(&[one(parents)], 0, &[one(blanks)]),
             Linear::at_most(&[one(parents)], 0, &[one(quads)]),
+            // a triple term is nested as deep as its depth
+            Linear::at_most(&[one(depth)], 0, &[one(triples)]),
             // blank nodes and identifiers occupy at most the positions that name them
             Linear::at_most(
                 &[one(blanks)],
                 0,
                 &[
-                    (3, quads),
+                    (2, quads),
                     (2, annotations),
-                    (3, triples),
+                    (2, triples),
                     one(reifiers),
                     one(graphs),
                 ],
@@ -876,21 +857,36 @@ impl Figures {
                 &[one(iris)],
                 0,
                 &[
-                    (4, quads),
+                    (3, quads),
                     (3, annotations),
                     (3, triples),
-                    (2, reifiers),
+                    one(reifiers),
                     one(graphs),
                 ],
             ),
         ];
-        if !omit.maxima() {
-            // a triple term is nested as deep as its depth
-            ties.push(Linear::at_most(&[one(depth)], 0, &[one(triples)]));
+        // a bin or a datatype that is printed has a member, whatever its count prints as
+        for index in (lengths..datatypes)
+            .chain(datatypes..other)
+            .chain(siblings..end)
+        {
+            ties.push(Linear::at_most(&[], 1, &[one(index)]));
         }
-        if !omit.maxima() && self.sibling_largest.largest > 0 {
-            // a group of like children needs that many blank nodes beside its parent, and a
-            // statement from the parent to each
+        if !sibling_cells.is_empty() {
+            // each parent of a bin has at least the bin's minimum of like children and a
+            // statement to each
+            let weighted: Vec<(i128, usize)> = sibling_cells
+                .iter()
+                .enumerate()
+                .map(|(index, cell)| (i128::from(cell.0), siblings + index))
+                .collect();
+            ties.push(Linear::at_most(&weighted, 0, &[one(quads)]));
+            // the largest group lies within the highest bin that has a parent, and needs that
+            // many blank nodes besides its parent
+            if let Some(highest) = sibling_cells.last() {
+                ties.push(Linear::at_most(&[], i128::from(highest.0), &[one(group)]));
+                ties.push(Linear::at_most(&[one(group)], -i128::from(highest.1), &[]));
+            }
             ties.push(Linear::at_most(&[one(group)], 1, &[one(blanks)]));
             ties.push(Linear::at_most(&[one(group)], 0, &[one(quads)]));
         }
@@ -922,22 +918,24 @@ impl Figures {
 
     /// The one JSON document, newline terminated.
     fn render(&self) -> Result<String, CliError> {
-        // Choose every printed count together. When the counts of a group cannot be printed
-        // without pinning a hidden one, the group is left out, never the document.
-        let attempts = [Omit(0), Omit(1), Omit(2), Omit(3), Omit(4)];
-        let mut chosen = None;
-        for omit in attempts {
-            let mut plan = self.plan(omit);
-            if suppress(&mut plan.vars, &plan.sums, &plan.ties, &[], None) {
-                chosen = Some((omit, plan));
-                break;
-            }
-        }
-        let Some((omit, plan)) = chosen else {
+        // Choose every printed count together. A count that cannot be hidden by any other
+        // form is left out, so the search ends with nothing pinned.
+        let mut plan = self.plan();
+        if !suppress(&mut plan.vars, &plan.sums, &plan.ties, &[], None) {
             return Err(CliError::Runtime(
                 "shape: a small count could not be suppressed; no figures are printed".to_owned(),
             ));
-        };
+        }
+        // A maximum that the printed histogram bounds already confine to one value gives
+        // nothing away, so it prints as that value.
+        let bounds = confined(&plan.vars, &plan.sums, &plan.ties);
+        for index in [plan.at.depth, plan.at.group] {
+            if let (Some(low), Some(high)) = bounds[index]
+                && low == high
+            {
+                plan.vars[index].0 = Count::Exact(low);
+            }
+        }
         let at = &plan.at;
         let vars = &plan.vars;
         let printed = |index: usize| vars[index].0;
@@ -1011,7 +1009,7 @@ impl Figures {
                 printed(at.triples).text(),
                 reifiers.text(),
                 annotations.text(),
-                maximum_text(omit.maxima(), printed(at.depth)),
+                printed(at.depth).text(),
             ),
         );
         put(
@@ -1019,42 +1017,20 @@ impl Figures {
             format_args!(
                 "\"blank_siblings\":{{\"parents\":{},\"max_largest_like_group\":{},\"largest_like_group_histogram\":",
                 parents.text(),
-                maximum_text(omit.maxima(), printed(at.group)),
+                printed(at.group).text(),
             ),
         );
-        if omit.siblings() {
-            put(
-                &mut out,
-                format_args!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}"),
-            );
-        } else {
-            render_cells(&sibling_cells, &mut out);
-        }
+        render_cells(&sibling_cells, &mut out);
         out.push_str("},\"literal_length_bytes_histogram\":");
-        if omit.lengths() {
-            put(
-                &mut out,
-                format_args!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}"),
-            );
-        } else {
-            render_cells(&length_cells, &mut out);
-        }
-        out.push_str(",\"datatypes\":{\"named_xsd\":");
-        if omit.datatypes() {
-            put(
-                &mut out,
-                format_args!("{{\"status\":\"omitted\",\"reason\":\"{GROUP_OMISSION}\"}}"),
-            );
-        } else {
-            out.push('{');
-            for (index, (name, count)) in named.iter().enumerate() {
-                if index != 0 {
-                    out.push(',');
-                }
-                put(&mut out, format_args!("\"{name}\":{}", count.text()));
+        render_cells(&length_cells, &mut out);
+        out.push_str(",\"datatypes\":{\"named_xsd\":{");
+        for (index, (name, count)) in named.iter().enumerate() {
+            if index != 0 {
+                out.push(',');
             }
-            out.push('}');
+            put(&mut out, format_args!("\"{name}\":{}", count.text()));
         }
+        out.push('}');
         put(
             &mut out,
             format_args!(
