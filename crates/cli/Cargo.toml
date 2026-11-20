@@ -133,3 +133,7 @@ test = false
 [[example]]
 name = "rules_alloc"
 test = false
+
+[[example]]
+name = "shape_cost"
+test = false

@@ -409,6 +409,13 @@ pub(crate) enum Command {
     },
     /// Present a full BLAKE3 identity with native emoji, spoken labels and randomart.
     Fingerprint(FingerprintArgs),
+    /// Print aggregate, non-identifying figures of a dataset as one JSON document.
+    ///
+    /// Counts, power-of-two histograms and a schema version, and nothing that identifies
+    /// content: no IRI, literal, language tag, blank-node label, datatype text, file name or
+    /// parser message reaches stdout or stderr, and a count of one to four prints as `"<5"`.
+    /// Nothing is written but stdout.
+    Shape(ShapeArgs),
     /// Execute an RDF-authored plan and emit its description and membership provenance.
     GlobRdf(GlobRdfArgs),
     /// Return every matching index from an ordered compiled pattern set.
@@ -777,6 +784,28 @@ pub(crate) struct FingerprintArgs {
     /// Inclusive native parse, scan and output-copy work allowance.
     #[arg(long)]
     pub max_work: u64,
+}
+
+// The arguments of the `Shape` subcommand, kept out of the enum so the
+// derive-generated builder functions stay small in an unoptimized build.
+#[derive(clap::Args, Debug)]
+pub(crate) struct ShapeArgs {
+    /// Input format override; inferred from the input extension when omitted.
+    #[arg(long, value_enum)]
+    pub from: Option<CliRdfFormat>,
+    /// Base IRI that relative references in the input resolve against.
+    #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+    pub base: Option<String>,
+    /// Omit the canonical labelling figure.
+    #[arg(long, conflicts_with = "labelling_limit")]
+    pub no_labelling: bool,
+    /// Limited units the canonical labelling may spend before it reports a typed refusal;
+    /// the engine's own limit when omitted.
+    #[arg(long, value_name = "UNITS")]
+    pub labelling_limit: Option<u64>,
+    /// Input path, or `-` for stdin (which requires `--from`).
+    #[arg(value_name = "IN", default_value = "-")]
+    pub input: String,
 }
 
 // The arguments of the `GlobSet` subcommand, kept out of the enum so the
@@ -3546,6 +3575,9 @@ impl Cli {
                 paths.push(PathBuf::from(&args.input));
             }
             Command::GlobSet(GlobSetArgs { .. }) | Command::Fingerprint(FingerprintArgs { .. }) => {
+            }
+            Command::Shape(ShapeArgs { input, .. }) => {
+                paths.push(PathBuf::from(input));
             }
             Command::WordId { command } => command.paths(&mut paths),
         }

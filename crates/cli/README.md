@@ -1321,6 +1321,77 @@ purrdf --canonical-search unlimited --canonicalization-receipts canonicalization
 purrdf --loss-ledger describe --iri http://example.org/alice --to rdfxml star.ttl
 ```
 
+## `shape`
+
+```text
+purrdf shape [--from <F>] [--base <IRI>] [--no-labelling | --labelling-limit <UNITS>] [IN]
+```
+
+Print aggregate figures of a dataset as one JSON document on stdout, and nothing
+that identifies content. The owner of a private graph runs it on their own machine
+and shares only the figures, which are enough to size a reader or a container
+format against a real graph. The source is anything the other verbs read: a native
+syntax, a GTS file or a pack, with gzip or zstd transport detected.
+
+No IRI, literal, language tag, blank-node label, datatype IRI, file name or parser
+message is printed on either stream. A source that cannot be read, or whose format
+cannot be inferred, is refused with a fixed sentence that quotes neither its text
+nor its name (exit `1` for an unreadable source, `2` for an unknown format). Nothing is
+written but stdout, and `--loss-ledger`, `--jsonld-options`, `--canonical-search` and
+`--canonicalization-receipts` are refused.
+
+The document carries `schema_version` (currently `1`), `small_count_threshold`
+and these figures:
+
+| Key | Content |
+| --- | --- |
+| `counts` | `quads`, `distinct_iris`, `distinct_literals`, `blank_nodes`, `named_graphs`, `triple_terms`, `reifiers`, `annotations` |
+| `max_triple_term_depth` | Nesting depth of the deepest triple term; one for a triple term that holds none |
+| `blank_siblings` | For each blank node with blank children, the size of its largest group of children that share a first-degree description: `parents`, `max_largest_like_group` and `largest_like_group_histogram` |
+| `literal_length_bytes_histogram` | Lexical-form length in bytes, one entry per distinct literal |
+| `datatypes` | `named_xsd`, a count per named XSD datatype by local name, and `other`, one count for every other datatype; language-tagged literals are not counted here |
+| `language_tags` | `tagged_literals` and `distinct_tags`; `case_forms` is omitted with the reason `language-tag-case-not-retained`, because the data model lowercases a tag when it is read |
+| `canonical_labelling` | Line weight of the canonical labelling: `lines`, `line_bytes_total` and `line_bytes_mean_thousandths`; otherwise `status` `refused` with the refusal name and code, or `omitted` with a `reason` (`disabled`, `unavailable` or `below-threshold`) |
+
+Two blank children share a first-degree description when the statements that touch
+each of them agree in direction, predicate, graph and far end, taking the parent as
+one marked end and every other blank node as one anonymous end. Only quads are read;
+the statement layer is not.
+
+A histogram bin has fixed bounds that do not depend on the data: bin `0` holds `0`,
+and every other bin holds `min` through `max` with `min` a power of two and `max` one
+less than twice `min` (`1`, `2` to `3`, `4` to `7`, and so on). Only non-empty bins
+are printed, each as `{"min":…,"max":…,"count":…}`, so two documents compare bin for
+bin.
+
+A count of one to four prints as the string `"<5"`. Zero and any count of five or
+more print exactly. Five is the threshold because a figure that holds for four or
+fewer items describes a handful of particular items, such as the single literal of an
+unusual datatype or the one language tag in use, and so can single content out; a
+figure shared by five or more items cannot be traced to one of them. A zero names no
+item. A maximum or a depth is the extreme of a distribution and not a count of items,
+so it prints exactly. When the canonical labelling has fewer than five lines its
+weight is omitted with the reason `below-threshold`.
+
+The figures belong to the dataset and not to the syntax it arrived in: Turtle,
+N-Quads and GTS holding the same dataset print the same document.
+
+The source is read whole into the dataset model before any figure is taken (a
+line-oriented syntax is parsed as a stream, but its dataset is resident all the same).
+On top of it the verb holds one small record per distinct term, one record per
+blank-node incidence, and the lines of the canonical labelling. `--no-labelling` drops
+the last. The labelling stops at the engine's limit on an input whose search is not
+guaranteed to be bounded; `--labelling-limit` states a different limit in limited units,
+and a guaranteed input is never refused.
+
+```sh
+# The shape of a dataset, labelling included.
+purrdf shape data.nq
+
+# A syntax chosen explicitly, from stdin, without the labelling figure.
+purrdf shape --from turtle --no-labelling < data.ttl
+```
+
 ## `project`
 
 ```text

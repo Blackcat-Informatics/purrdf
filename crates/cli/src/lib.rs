@@ -20,6 +20,7 @@
 //!   emitting the ShapeMap specification's result shape map;
 //! * `describe` — extract the Symmetric Concise Bounded Description of one or more
 //!   resources;
+//! * `shape` — print aggregate, non-identifying figures of a dataset as one JSON document;
 //! * `project` — materialize a deterministic graph/tabular carrier archive;
 //! * `lift` — reconstruct RDF from a strict bidirectional carrier;
 //! * `pack` — operate on the binary pack container directly; its `verify` verb runs
@@ -116,6 +117,7 @@ mod rdf_imports;
 mod reason;
 mod report;
 mod shacl;
+mod shape;
 mod shapes_source;
 mod shapes_tools;
 mod shex;
@@ -144,7 +146,8 @@ use crate::cli::{
     Cli, CliRdfFormat, Command, ConsistencyArgs, ConvertArgs, DescribeArgs, DocumentCompactArgs,
     DocumentExpandArgs, DocumentFlattenArgs, DocumentFrameArgs, FingerprintArgs, GeoArgs, GlobArgs,
     GlobSetArgs, LiftArgs, NodeExprArgs, PackCommand, ProjectArgs, QueryArgs, ReasonArgs,
-    ReportTarget, RulesArgs, ShaclCommand, ShapesCommand, ShexArgs, UpdateArgs, ValidateArgs,
+    ReportTarget, RulesArgs, ShaclCommand, ShapeArgs, ShapesCommand, ShexArgs, UpdateArgs,
+    ValidateArgs,
 };
 use crate::error::{CliError, CliOutcome};
 use crate::governors::GovernorFlags;
@@ -208,6 +211,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 | Command::DocumentFrame(DocumentFrameArgs { .. })
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
+                | Command::Shape(ShapeArgs { .. })
                 | Command::Glob(GlobArgs { .. })
                 | Command::GlobSet(GlobSetArgs { .. })
                 | Command::Geo(GeoArgs { .. })
@@ -362,6 +366,28 @@ fn dispatch_with_request(
                 "fingerprint presents a digest and accepts no JSON-LD options",
             )?;
             fingerprint::run(digest, *symbols, *max_bytes, *max_work)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::Shape(ShapeArgs {
+            from,
+            base,
+            no_labelling,
+            labelling_limit,
+            input,
+        }) => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "shape reads a dataset and has no RDF loss ledger",
+                "shape accepts no JSON-LD options",
+            )?;
+            shape::run(&shape::ShapeOptions {
+                from: *from,
+                base: base.as_deref(),
+                no_labelling: *no_labelling,
+                labelling_limit: *labelling_limit,
+                input,
+            })?;
             Ok(CliOutcome::Complete)
         }
         Command::GlobRdf(args) => {
