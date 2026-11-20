@@ -40,3 +40,31 @@ fn both_columnar_outputs_preserve_located_losses_and_owned_causes() {
     assert_eq!(clean.losses().entries(), []);
     assert!(clean.omissions().is_empty());
 }
+
+/// Reading a file with a language tag that is not lower case into the dataset folds
+/// the tag, and the columnar report names that loss; a lower-case file reports none.
+#[test]
+fn columnar_report_carries_the_language_tag_fold_of_the_read() {
+    let file = |tag: &str| {
+        let mut writer = purrdf_gts::writer::Writer::new("generic");
+        writer.add_terms(&[
+            purrdf_gts::model::Term::iri("http://example.org/s"),
+            purrdf_gts::model::Term::iri("http://example.org/p"),
+            purrdf_gts::model::Term::lang_literal("x", tag),
+        ]);
+        writer.add_quads(&[(0, 1, 2, None)]);
+        writer.into_bytes()
+    };
+    let (_, report) = prepare_gts_columnar(&file("EN-us"), GtsBlobLimits::UNBOUNDED)
+        .unwrap()
+        .project()
+        .unwrap();
+    let losses = report.losses().entries();
+    assert_eq!(losses.len(), 1);
+    assert_eq!(losses[0].code, "language-tag-case-folded");
+    let (_, clean) = prepare_gts_columnar(&file("en-us"), GtsBlobLimits::UNBOUNDED)
+        .unwrap()
+        .project()
+        .unwrap();
+    assert!(clean.losses().is_empty());
+}

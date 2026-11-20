@@ -718,6 +718,49 @@ fn native_eviction_reopening_and_actual_import_export_preserve_complete_rdf() {
     );
 }
 
+/// The textual export folds a language tag exactly as the importer does, so its
+/// envelope carries the same fold loss: a case-variant file records the written tag
+/// on both routes, and a lower-case neighbour records none on either.
+#[test]
+fn export_envelope_equals_import_envelope_for_language_tag_case() {
+    let directory = purrdf_testkit::temp_dir!().expect("export fold directory");
+    let root = directory.path();
+    for (name, tags, expected) in [
+        ("variant", ["EN-us", "en-us"], 1),
+        ("lower", ["en-us", "fr"], 0),
+    ] {
+        let mut writer = Writer::new("purrdf.gts");
+        let mut terms = vec![
+            Term::iri("http://example.org/s"),
+            Term::iri("http://example.org/p"),
+        ];
+        terms.extend(tags.iter().map(|tag| Term::lang_literal("x", *tag)));
+        writer.add_terms(&terms);
+        // The first literal is the object of two rows: the fold is recorded once per
+        // term on both routes, not once per row naming it.
+        writer.add_quads(&[(0, 1, 2, None), (0, 1, 3, None), (1, 1, 2, None)]);
+        let bytes = writer.into_bytes();
+        let resident = import_gts_events(&bytes).expect("resident import");
+        assert_eq!(resident.envelope.losses.entries().len(), expected, "{name}");
+
+        let mut raw = storage::Files::new(&root.join(format!("raw-{name}")));
+        let replay = raw.replay();
+        let mut resolution = storage::Resolution::new(&root.join(format!("res-{name}")));
+        let mut output = WriterDrain(Vec::new());
+        let mut ceiling = Ceiling(128 * 1024);
+        let result = export_gts_rdf_nquads_with_dictionary(
+            &bytes,
+            &mut raw,
+            &mut resolution,
+            replay,
+            &mut output,
+            &mut Memory::new(&mut ceiling),
+        )
+        .expect("textual export");
+        assert_eq!(result.envelope, resident.envelope, "{name}");
+    }
+}
+
 fn has_original_refusal(error: &(dyn std::error::Error + 'static)) -> bool {
     source_chain_has(error, |error| {
         error

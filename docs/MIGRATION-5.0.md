@@ -65,6 +65,21 @@ label and scope are equal. A term is an IRI, a literal (lexical form, datatype,
 optional language, optional direction), a blank node or a triple term. The
 default graph is the absent graph option.
 
+### Language tags
+
+RDF 1.2 compares language tags without regard to case, so a dataset holds each
+tag folded to ASCII lower case and the labelling encodes the tag as the dataset
+holds it. A format that compares a language text whole and bytewise, as GTS
+does, keeps `"x"@EN-us` and `"x"@en-us` as two terms. The canonical RDF digest
+of a dataset folds tags; a digest over terms as written does not. The two
+identities are equal exactly when every language tag is already lower case.
+
+Reading a GTS file that holds a tag that is not lower case into a dataset
+records one `language-tag-case-folded` entry per affected literal in the
+envelope's loss ledger (`RdfEnvelope::losses`), naming the literal, the written
+tag and the tag the dataset holds; the `convert` command reports it with the
+other read losses. A dataset written to GTS writes the tag it holds.
+
 ### Composite literals
 
 A blank-node label written inside a `cdt:List` or `cdt:Map` literal names a

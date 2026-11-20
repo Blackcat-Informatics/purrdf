@@ -2761,10 +2761,11 @@ void purrdf_graph_free(PurrdfGraph *graph);
  * Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
  * caller-owned handle (free with `purrdf_dataset_free`).
  *
- * **Lossless**, including the RDF-1.2 statement layer: a reifier-bound quoted
+ * Keeps the RDF-1.2 statement layer: a reifier-bound quoted
  * triple written by `to_gts` is read back intact via the canonical fold-back
  * (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
- * gap was closed by the native text-codec work.
+ * gap was closed by the native text-codec work. A language tag that is not lower
+ * case is read folded to lower case, and the envelope is not returned.
  *
  * # Safety
  * `bytes` must be valid for `len` bytes; the out-params must be writable.
