@@ -34,15 +34,25 @@
 //! nesting depths are single extremes of a distribution rather than counts of items and print
 //! exactly.
 //!
+//! # Subtraction
+//!
+//! A total that is the sum of the cells of a partition would give a suppressed cell by
+//! subtraction. [`Count::total`] prints such a total exactly only when no cell of any
+//! partition of it is hidden, and otherwise as a lower bound the printed cells already
+//! give. [`withhold_in_each`] makes every partition of the distinct literals hide a cell once
+//! any of them does, since partitions of one total determine each other.
+//!
 //! # Language-tag case
 //!
-//! The data model lowercases a language tag when the term is interned, so the case form of
-//! an authored tag does not survive reading, and a figure about it would differ with the
-//! reader rather than with the data. The document states that as a typed omission.
+//! The data model lowercases a language tag when the term is interned, so only a reader that
+//! sees the tag as written can report its case form. A GTS read does, through the envelope's
+//! `language_tag_forms`; the text and pack readers fold first, and the document states that as
+//! a typed omission.
 //!
 //! # Memory
 //!
-//! A source is read whole into the dataset model before any figure is taken (a line-oriented
+//! The verb streams nothing: every figure needs the whole dataset. A source is read whole into
+//! the dataset model before any figure is taken (a line-oriented
 //! text source is parsed as a stream, but its dataset is resident all the same). On top of
 //! the dataset the verb holds one small record per distinct term it reaches, one record per
 //! blank-node incidence and the canonical labelling's lines when that figure is requested;
@@ -52,7 +62,8 @@ use std::convert::Infallible;
 
 use purrdf::xsd::XsdDatatype;
 use purrdf_core::canonical_labelling::{Limit, Refusal, Scope, ViewError, label_view};
-use purrdf_core::{DatasetView, FastMap, FastSet, TermRef};
+use purrdf_core::{DatasetView, FastMap, FastSet, LanguageTagForms, TermRef};
+use purrdf_rdf::SourceFormat;
 
 use crate::cli::CliRdfFormat;
 use crate::error::CliError;
@@ -81,11 +92,20 @@ pub(crate) struct ShapeOptions<'a> {
 
 /// Run the `shape` subcommand.
 ///
+/// A pack is verified before it is read, which canonicalizes it, so a pack input takes the
+/// caller's `--canonical-search` and `--canonicalization-receipts` exactly as the other verbs
+/// do. Any other input performs no canonicalization and the flags are refused for it.
+///
 /// # Errors
 ///
-/// Every failure to resolve the format or to read the source is reported by a fixed sentence
-/// that quotes nothing from the input, its name, or the parser's message.
-pub(crate) fn run(options: &ShapeOptions<'_>) -> Result<(), CliError> {
+/// Every failure is reported by a fixed sentence that quotes nothing from the input, its
+/// name, or the parser's message. The sentence names the class of the failure: a format that
+/// cannot be inferred, an unreadable input, a pack read without canonical control, a pack
+/// under a transport wrapper, a source that is not well formed, a labelling failure.
+pub(crate) fn run(
+    options: &ShapeOptions<'_>,
+    canonical: &mut crate::canonical::Request,
+) -> Result<(), CliError> {
     let source_format = format::resolve(options.from, options.input).map_err(|_| {
         CliError::Usage(
             "shape: the input format cannot be inferred; pass --from (no detail is printed, \
@@ -94,26 +114,66 @@ pub(crate) fn run(options: &ShapeOptions<'_>) -> Result<(), CliError> {
         )
     })?;
     let token = source_format.token();
+    let is_pack = matches!(source_format, SourceFormat::Pack);
+    if canonical.is_configured() && !is_pack {
+        return Err(CliError::Usage(
+            "shape: only a pack input canonicalizes; remove --canonical-search and \
+             --canonicalization-receipts"
+                .to_owned(),
+        ));
+    }
+    if options.input != "-" && std::fs::File::open(options.input).is_err() {
+        return Err(CliError::Runtime(
+            "shape: the input cannot be opened (no detail is printed, because it could quote \
+             the input's name)"
+                .to_owned(),
+        ));
+    }
+    if is_pack {
+        // Name the missing control before the read, so it is not reported as a bad pack.
+        canonical.control().map_err(|_| {
+            CliError::Usage(
+                "shape: a pack input is verified by canonicalizing it; supply --canonical-search \
+                 unlimited or a canonical decimal u64 and --canonicalization-receipts DEST"
+                    .to_owned(),
+            )
+        })?;
+    }
     let labelling = if options.no_labelling {
         LabellingRequest::Disabled
     } else {
         LabellingRequest::Limit(options.labelling_limit.map_or(Limit::ENGINE, Limit::new))
     };
-    let mut canonical = crate::canonical::Request::new(None, None)?;
-    let document = source::run_over_input(
-        options.input,
-        source_format,
-        options.base,
-        None,
-        ShapeOp { labelling },
-        &mut canonical,
-    )
-    .map_err(|_| {
+    let read_failure = || {
         CliError::Runtime(format!(
             "shape: the input could not be read as {token}; no detail is printed, because it \
              could quote the input"
         ))
-    })?;
+    };
+    let measured = if matches!(source_format, SourceFormat::Gts) {
+        let (dataset, _ledger, forms) =
+            source::load_gts_with_forms(options.input, source::TransportPolicy::Detect)
+                .map_err(|_| read_failure())?;
+        measure(&*dataset, labelling, Some(forms))
+    } else {
+        source::run_over_input(
+            options.input,
+            source_format,
+            options.base,
+            None,
+            ShapeOp { labelling },
+            canonical,
+        )
+        .map_err(|error| match error {
+            CliError::Usage(_) if is_pack => CliError::Usage(
+                "shape: the pack cannot be read through a transport wrapper; decompress it first"
+                    .to_owned(),
+            ),
+            _ => read_failure(),
+        })?
+    }?;
+    let document = measured.render();
+    canonical.before_output()?;
     use std::io::Write as _;
     let mut out = std::io::stdout().lock();
     out.write_all(document.as_bytes())
@@ -136,14 +196,15 @@ struct ShapeOp {
 }
 
 impl ViewOp for ShapeOp {
-    type Output = String;
+    /// The inner result is the measurement's own: a source failure is the outer one.
+    type Output = Result<Figures, CliError>;
 
     fn run<D: InputView>(
         self,
         view: &D,
         _canonical: &mut crate::canonical::Request,
-    ) -> Result<String, CliError> {
-        Ok(measure(view, self.labelling).render())
+    ) -> Result<Self::Output, CliError> {
+        Ok(measure(view, self.labelling, None))
     }
 }
 
@@ -188,30 +249,33 @@ impl Pow2 {
         self.largest = self.largest.max(value);
     }
 
-    fn render(&self, out: &mut String) {
-        out.push('[');
-        let mut first = true;
-        for (bin, &count) in self
-            .bins
+    /// The non-empty bins, as `(min, max, count)` in ascending order.
+    fn cells(&self) -> Vec<(u64, u64, Count)> {
+        self.bins
             .iter()
             .enumerate()
             .filter(|(_, count)| **count != 0)
-        {
-            if !first {
-                out.push(',');
-            }
-            first = false;
-            let (min, max) = bin_bounds(bin);
-            put(
-                out,
-                format_args!(
-                    "{{\"min\":{min},\"max\":{max},\"count\":{}}}",
-                    count_text(count)
-                ),
-            );
-        }
-        out.push(']');
+            .map(|(bin, &count)| {
+                let (min, max) = bin_bounds(bin);
+                (min, max, Count::of(count))
+            })
+            .collect()
     }
+}
+
+/// The histogram cells as a JSON array.
+fn render_cells(cells: &[(u64, u64, Count)], out: &mut String) {
+    out.push('[');
+    for (index, (min, max, count)) in cells.iter().enumerate() {
+        if index != 0 {
+            out.push(',');
+        }
+        put(
+            out,
+            format_args!("{{\"min\":{min},\"max\":{max},\"count\":{}}}", count.text()),
+        );
+    }
+    out.push(']');
 }
 
 /// The inclusive bounds of histogram bin `bin`.
@@ -232,20 +296,100 @@ fn put(out: &mut String, text: std::fmt::Arguments<'_>) {
     }
 }
 
-/// A count as JSON: exact, or the string `"<5"` when it is one to four.
-fn count_text(count: u64) -> String {
-    if (1..SMALL_COUNT_THRESHOLD).contains(&count) {
-        format!("\"<{SMALL_COUNT_THRESHOLD}\"")
-    } else {
-        count.to_string()
+/// A printed count: exact, suppressed for being small, or a lower bound.
+///
+/// The rule for what prints exactly is the module documentation's. A count of one to four is
+/// [`Count::Small`]. A total that equals the sum of the cells of a partition is exact only
+/// when every cell of the partition is exact; otherwise it is the sum of the exact cells as a
+/// lower bound, so no printed figure determines a suppressed cell by subtraction.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Count {
+    Exact(u64),
+    Small,
+    AtLeast(u64),
+    /// An exact cell of at least the threshold, hidden so that its partition's cells do not
+    /// determine a suppressed cell of another partition of the same total.
+    Withheld,
+}
+
+impl Count {
+    /// `count` as itself, or suppressed when it is one to four.
+    const fn of(count: u64) -> Self {
+        if count >= 1 && count < SMALL_COUNT_THRESHOLD {
+            Self::Small
+        } else {
+            Self::Exact(count)
+        }
     }
+
+    const fn is_exact(self) -> bool {
+        matches!(self, Self::Exact(_))
+    }
+
+    /// The count of a total that is the sum of the cells of each of `partitions`.
+    fn total(total: u64, partitions: &[&[Self]]) -> Self {
+        if (1..SMALL_COUNT_THRESHOLD).contains(&total) {
+            return Self::Small;
+        }
+        let mut exact = true;
+        let mut bound = 0_u64;
+        for cells in partitions {
+            let mut sum = 0_u64;
+            for cell in *cells {
+                match cell {
+                    Self::Exact(n) => sum = sum.saturating_add(*n),
+                    _ => exact = false,
+                }
+            }
+            bound = bound.max(sum);
+        }
+        if exact {
+            Self::of(total)
+        } else {
+            Self::AtLeast(bound)
+        }
+    }
+
+    fn text(self) -> String {
+        match self {
+            Self::Exact(n) => n.to_string(),
+            Self::Small => format!("\"<{SMALL_COUNT_THRESHOLD}\""),
+            Self::AtLeast(n) => format!("\">={n}\""),
+            Self::Withheld => "\"withheld\"".to_owned(),
+        }
+    }
+}
+
+/// Make every partition of one total hide a cell once any of them hides one.
+///
+/// Partitions of one total determine each other: a partition whose cells are all exact gives
+/// the total, and the total then gives the sum of a suppressed partition's hidden cells. So
+/// when any partition holds a hidden cell, each partition that holds none withholds its
+/// smallest non-zero cell. Returns whether any cell is hidden.
+fn withhold_in_each(partitions: &mut [Vec<&mut Count>]) -> bool {
+    let hidden = |cells: &[&mut Count]| cells.iter().any(|cell| !cell.is_exact());
+    if !partitions.iter().any(|cells| hidden(cells)) {
+        return false;
+    }
+    for cells in partitions.iter_mut().filter(|cells| !hidden(cells)) {
+        let smallest = cells
+            .iter_mut()
+            .filter_map(|cell| match **cell {
+                Count::Exact(n) if n > 0 => Some((n, cell)),
+                _ => None,
+            })
+            .min_by_key(|(n, _)| *n);
+        if let Some((_, cell)) = smallest {
+            **cell = Count::Withheld;
+        }
+    }
+    true
 }
 
 /// The canonical labelling figure.
 enum Labelling {
     Disabled,
     Refused { name: &'static str, code: u8 },
-    Unavailable,
     Labelled { lines: u64, bytes: u64 },
 }
 
@@ -267,6 +411,8 @@ struct Figures {
     other_datatypes: u64,
     tagged_literals: u64,
     distinct_tags: u64,
+    /// The written case forms of the language tags, where the reader saw them written.
+    forms: Option<LanguageTagForms>,
     labelling: Labelling,
 }
 
@@ -292,7 +438,11 @@ fn infallible<T>(result: Result<T, Infallible>) -> T {
 }
 
 /// Take every figure of `view`.
-fn measure<D: InputView>(view: &D, labelling: LabellingRequest) -> Figures {
+fn measure<D: InputView>(
+    view: &D,
+    labelling: LabellingRequest,
+    forms: Option<LanguageTagForms>,
+) -> Result<Figures, CliError> {
     let mut census = Census::default();
     let mut quads = 0_u64;
     for quad in view.quads() {
@@ -335,7 +485,7 @@ fn measure<D: InputView>(view: &D, labelling: LabellingRequest) -> Figures {
         |class: Class| census.classes.values().filter(|&&c| c == class).count() as u64;
     let mut named: Vec<(&'static str, u64)> = census.named_datatypes.into_iter().collect();
     named.sort_unstable();
-    Figures {
+    Ok(Figures {
         quads,
         iris: count_class(Class::Iri),
         literals: count_class(Class::Literal),
@@ -352,8 +502,9 @@ fn measure<D: InputView>(view: &D, labelling: LabellingRequest) -> Figures {
         other_datatypes: census.other_datatypes,
         tagged_literals: census.tagged_literals,
         distinct_tags: census.tags.len() as u64,
-        labelling: label(view, labelling),
-    }
+        forms,
+        labelling: label(view, labelling)?,
+    })
 }
 
 /// The terms reached so far and what was read off each.
@@ -435,9 +586,7 @@ impl<Id: purrdf_core::ViewTermId> Census<Id> {
     ) -> Datatype {
         *self.datatypes.entry(id).or_insert_with(|| {
             infallible(view.with_term(id, |term| match term {
-                TermRef::Iri(iri) => XsdDatatype::from_iri(iri).map_or(Datatype::Other, |named| {
-                    Datatype::Named(xsd_local(named.iri()))
-                }),
+                TermRef::Iri(iri) => named_xsd(iri).map_or(Datatype::Other, Datatype::Named),
                 _ => Datatype::Other,
             }))
         })
@@ -477,9 +626,22 @@ impl<Id: purrdf_core::ViewTermId> Census<Id> {
     }
 }
 
-/// The local name of an XSD datatype IRI, which is a W3C term and so safe to print.
-fn xsd_local(iri: &'static str) -> &'static str {
-    iri.rsplit_once('#').map_or(iri, |(_, local)| local)
+/// The local name of a named XSD datatype, or none for any other IRI.
+///
+/// The names are a closed list of W3C terms, so a printed name never carries data: the
+/// value-space datatypes `purrdf_xsd` models, and the four further XSD datatypes RDF 1.1
+/// Concepts lists as RDF-compatible (`language`, `Name`, `NCName`, `NMTOKEN`), which its
+/// value space does not model.
+fn named_xsd(iri: &str) -> Option<&'static str> {
+    use purrdf::xsd::datatype::{XSD_LANGUAGE, XSD_NAME, XSD_NCNAME, XSD_NMTOKEN, XSD_NS};
+    let known = XsdDatatype::from_iri(iri)
+        .map(XsdDatatype::iri)
+        .or_else(|| {
+            [XSD_LANGUAGE, XSD_NAME, XSD_NCNAME, XSD_NMTOKEN]
+                .into_iter()
+                .find(|candidate| *candidate == iri)
+        })?;
+    known.strip_prefix(XSD_NS)
 }
 
 /// For each blank node with blank children, the size of its largest group of children that
@@ -546,20 +708,30 @@ fn like_siblings<D: DatasetView<ReadError = Infallible>>(
     (parents, histogram)
 }
 
-/// The line weight of the canonical labelling, or the typed reason there is none.
-fn label<D: DatasetView>(view: &D, request: LabellingRequest) -> Labelling {
+/// The line weight of the canonical labelling, a typed refusal of the definition, or a
+/// failure that is reported as one.
+fn label<D: DatasetView<ReadError = Infallible>>(
+    view: &D,
+    request: LabellingRequest,
+) -> Result<Labelling, CliError> {
     let LabellingRequest::Limit(limit) = request else {
-        return Labelling::Disabled;
+        return Ok(Labelling::Disabled);
+    };
+    let failed = |what: &str| {
+        CliError::Runtime(format!(
+            "shape: the canonical labelling failed: {what}; no detail is printed, because it \
+             could quote the input"
+        ))
     };
     match label_view(view, &[], Scope::Dataset, limit, None) {
         Ok(labelling) => {
             let lines = &labelling.labelled().lines;
-            Labelling::Labelled {
+            Ok(Labelling::Labelled {
                 lines: lines.len() as u64,
                 bytes: lines.iter().map(|line| line.len() as u64).sum(),
-            }
+            })
         }
-        Err(ViewError::Refused(refusal)) => Labelling::Refused {
+        Err(ViewError::Refused(refusal)) => Ok(Labelling::Refused {
             name: match refusal {
                 Refusal::Input { .. } => "input",
                 Refusal::Graph { .. } => "graph",
@@ -567,27 +739,90 @@ fn label<D: DatasetView>(view: &D, request: LabellingRequest) -> Labelling {
                 Refusal::Limit { .. } => "limit",
             },
             code: refusal.code(),
-        },
-        Err(_) => Labelling::Unavailable,
+        }),
+        Err(ViewError::ForeignId) => Err(failed("a row names a term the view does not hold")),
+        Err(ViewError::Storage(_)) => Err(failed("its working storage was refused")),
+        Err(ViewError::Stopped) => Err(failed("it was stopped")),
+        Err(ViewError::Read(never)) => match never {},
+        Err(_) => Err(failed("an unclassified failure")),
     }
 }
 
 impl Figures {
     /// The one JSON document, newline terminated.
     fn render(&self) -> String {
+        let mut length_cells = self.literal_lengths.cells();
+        let sibling_cells = self.sibling_largest.cells();
+        let sibling_counts: Vec<Count> = sibling_cells.iter().map(|cell| cell.2).collect();
+        let case_cells = self
+            .forms
+            .map(|forms| [forms.lower, forms.upper, forms.mixed].map(Count::of));
+        let mut tagged = case_cells.as_ref().map_or_else(
+            || Count::of(self.tagged_literals),
+            |cells| Count::total(self.tagged_literals, &[cells]),
+        );
+        let mut named: Vec<(&str, Count)> = self
+            .named_datatypes
+            .iter()
+            .map(|(name, count)| (*name, Count::of(*count)))
+            .collect();
+        let mut other = Count::of(self.other_datatypes);
+
+        // The distinct literals are partitioned by length and by datatype.
+        let hidden = {
+            let by_length: Vec<&mut Count> =
+                length_cells.iter_mut().map(|cell| &mut cell.2).collect();
+            let by_datatype: Vec<&mut Count> = named
+                .iter_mut()
+                .map(|(_, count)| count)
+                .chain([&mut other, &mut tagged])
+                .collect();
+            withhold_in_each(&mut [by_length, by_datatype])
+        };
+        let length_counts: Vec<Count> = length_cells.iter().map(|cell| cell.2).collect();
+        let datatype_counts: Vec<Count> = named
+            .iter()
+            .map(|(_, count)| *count)
+            .chain([other, tagged])
+            .collect();
+        let literals = if hidden {
+            let bound = [&length_counts, &datatype_counts]
+                .iter()
+                .map(|cells| {
+                    cells
+                        .iter()
+                        .map(|cell| if let Count::Exact(n) = cell { *n } else { 0 })
+                        .sum::<u64>()
+                })
+                .max()
+                .unwrap_or(0);
+            if (1..SMALL_COUNT_THRESHOLD).contains(&self.literals) {
+                Count::Small
+            } else {
+                Count::AtLeast(bound)
+            }
+        } else {
+            Count::of(self.literals)
+        };
+        let parents = Count::total(self.sibling_parents, &[&sibling_counts]);
+        let quads = Count::of(self.quads);
+        let reifiers = Count::of(self.reifiers);
+        let annotations = Count::of(self.annotations);
+        let named_graphs = Count::of(self.named_graphs);
+
         let mut out = String::new();
         put(
             &mut out,
             format_args!(
                 "{{\"schema_version\":{SCHEMA_VERSION},\"small_count_threshold\":{SMALL_COUNT_THRESHOLD},\"counts\":{{\"quads\":{},\"distinct_iris\":{},\"distinct_literals\":{},\"blank_nodes\":{},\"named_graphs\":{},\"triple_terms\":{},\"reifiers\":{},\"annotations\":{}}},\"max_triple_term_depth\":{},",
-                count_text(self.quads),
-                count_text(self.iris),
-                count_text(self.literals),
-                count_text(self.blank_nodes),
-                count_text(self.named_graphs),
-                count_text(self.triple_terms),
-                count_text(self.reifiers),
-                count_text(self.annotations),
+                quads.text(),
+                Count::of(self.iris).text(),
+                literals.text(),
+                Count::of(self.blank_nodes).text(),
+                named_graphs.text(),
+                Count::of(self.triple_terms).text(),
+                reifiers.text(),
+                annotations.text(),
                 self.max_triple_depth,
             ),
         );
@@ -595,58 +830,71 @@ impl Figures {
             &mut out,
             format_args!(
                 "\"blank_siblings\":{{\"parents\":{},\"max_largest_like_group\":{},\"largest_like_group_histogram\":",
-                count_text(self.sibling_parents),
+                parents.text(),
                 self.sibling_largest.largest,
             ),
         );
-        self.sibling_largest.render(&mut out);
+        render_cells(&sibling_cells, &mut out);
         out.push_str("},\"literal_length_bytes_histogram\":");
-        self.literal_lengths.render(&mut out);
+        render_cells(&length_cells, &mut out);
         out.push_str(",\"datatypes\":{\"named_xsd\":{");
-        for (index, (name, count)) in self.named_datatypes.iter().enumerate() {
+        for (index, (name, count)) in named.iter().enumerate() {
             if index != 0 {
                 out.push(',');
             }
-            put(&mut out, format_args!("\"{name}\":{}", count_text(*count)));
+            put(&mut out, format_args!("\"{name}\":{}", count.text()));
         }
         put(
             &mut out,
             format_args!(
-                "}},\"other\":{}}},\"language_tags\":{{\"tagged_literals\":{},\"distinct_tags\":{},\"case_forms\":{{\"status\":\"omitted\",\"reason\":\"language-tag-case-not-retained\"}}}},\"canonical_labelling\":",
-                count_text(self.other_datatypes),
-                count_text(self.tagged_literals),
-                count_text(self.distinct_tags),
+                "}},\"other\":{}}},\"language_tags\":{{\"tagged_literals\":{},\"distinct_tags\":{},\"case_forms\":",
+                other.text(),
+                tagged.text(),
+                Count::of(self.distinct_tags).text(),
             ),
         );
+        match case_cells {
+            Some([lower, upper, mixed]) => put(
+                &mut out,
+                format_args!(
+                    "{{\"status\":\"reported\",\"lower\":{},\"upper\":{},\"mixed\":{}}}",
+                    lower.text(),
+                    upper.text(),
+                    mixed.text()
+                ),
+            ),
+            None => {
+                out.push_str("{\"status\":\"omitted\",\"reason\":\"reader-folds-before-figure\"}");
+            }
+        }
+        out.push_str("},\"canonical_labelling\":");
+        // The line count is the sum of these statements, so it prints exactly only when each
+        // of them does.
+        let lines_derivable = [quads, reifiers, annotations, named_graphs]
+            .iter()
+            .all(|count| count.is_exact());
         match &self.labelling {
             Labelling::Disabled => {
                 out.push_str("{\"status\":\"omitted\",\"reason\":\"disabled\"}");
-            }
-            Labelling::Unavailable => {
-                out.push_str("{\"status\":\"omitted\",\"reason\":\"unavailable\"}");
             }
             Labelling::Refused { name, code } => put(
                 &mut out,
                 format_args!("{{\"status\":\"refused\",\"refusal\":\"{name}\",\"code\":{code}}}"),
             ),
+            Labelling::Labelled { lines, .. } if *lines < SMALL_COUNT_THRESHOLD => {
+                out.push_str("{\"status\":\"omitted\",\"reason\":\"below-threshold\"}");
+            }
+            Labelling::Labelled { .. } if !lines_derivable => {
+                out.push_str("{\"status\":\"omitted\",\"reason\":\"derived-count-suppressed\"}");
+            }
             Labelling::Labelled { lines, bytes } => {
-                if *lines < SMALL_COUNT_THRESHOLD {
-                    put(
-                        &mut out,
-                        format_args!(
-                            "{{\"status\":\"omitted\",\"reason\":\"below-threshold\",\"lines\":{}}}",
-                            count_text(*lines)
-                        ),
-                    );
-                } else {
-                    let mean_thousandths = u128::from(*bytes) * 1000 / u128::from(*lines);
-                    put(
-                        &mut out,
-                        format_args!(
-                            "{{\"status\":\"labelled\",\"lines\":{lines},\"line_bytes_total\":{bytes},\"line_bytes_mean_thousandths\":{mean_thousandths}}}"
-                        ),
-                    );
-                }
+                let mean_thousandths = u128::from(*bytes) * 1000 / u128::from(*lines);
+                put(
+                    &mut out,
+                    format_args!(
+                        "{{\"status\":\"labelled\",\"lines\":{lines},\"line_bytes_total\":{bytes},\"line_bytes_mean_thousandths\":{mean_thousandths}}}"
+                    ),
+                );
             }
         }
         out.push_str("}\n");

@@ -211,7 +211,6 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 | Command::DocumentFrame(DocumentFrameArgs { .. })
                 | Command::YamlSource { .. }
                 | Command::WordId { .. }
-                | Command::Shape(ShapeArgs { .. })
                 | Command::Glob(GlobArgs { .. })
                 | Command::GlobSet(GlobSetArgs { .. })
                 | Command::Geo(GeoArgs { .. })
@@ -381,13 +380,16 @@ fn dispatch_with_request(
                 "shape reads a dataset and has no RDF loss ledger",
                 "shape accepts no JSON-LD options",
             )?;
-            shape::run(&shape::ShapeOptions {
-                from: *from,
-                base: base.as_deref(),
-                no_labelling: *no_labelling,
-                labelling_limit: *labelling_limit,
-                input,
-            })?;
+            shape::run(
+                &shape::ShapeOptions {
+                    from: *from,
+                    base: base.as_deref(),
+                    no_labelling: *no_labelling,
+                    labelling_limit: *labelling_limit,
+                    input,
+                },
+                canonical,
+            )?;
             Ok(CliOutcome::Complete)
         }
         Command::GlobRdf(args) => {

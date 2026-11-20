@@ -40,6 +40,37 @@ impl GtsBundle {
     }
 }
 
+/// How many language-tagged literals a read saw, by the case form of the tag as written.
+///
+/// A dataset holds a tag folded to ASCII lower case, so the written case of a tag is
+/// gone once the read has interned it. A reader that sees the written tag records its
+/// form here. A tag with no upper-case letter is `lower`, one with upper-case and no
+/// lower-case letters is `upper`, and one with both is `mixed`.
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LanguageTagForms {
+    /// Literals whose written tag has no upper-case letter.
+    pub lower: u64,
+    /// Literals whose written tag has upper-case and no lower-case letters.
+    pub upper: u64,
+    /// Literals whose written tag has both upper-case and lower-case letters.
+    pub mixed: u64,
+}
+
+impl LanguageTagForms {
+    /// Count one literal whose written tag is `tag`.
+    pub fn record(&mut self, tag: &str) {
+        let upper = tag.bytes().any(|b| b.is_ascii_uppercase());
+        let lower = tag.bytes().any(|b| b.is_ascii_lowercase());
+        let count = match (upper, lower) {
+            (false, _) => &mut self.lower,
+            (true, false) => &mut self.upper,
+            (true, true) => &mut self.mixed,
+        };
+        *count = count.saturating_add(1);
+    }
+}
+
 /// Out-of-band material that travels with an [`RdfDataset`] but is not part of the
 /// hot graph (C0.6).
 ///
@@ -56,6 +87,8 @@ pub struct RdfEnvelope {
     /// The losses the read incurred that no RDF dataset can represent, such as
     /// the written spelling of a language tag the dataset folds to lower case.
     pub losses: crate::loss::LossLedger,
+    /// The written case forms of the language tags the read folded.
+    pub language_tag_forms: LanguageTagForms,
 }
 
 impl RdfEnvelope {
@@ -64,6 +97,7 @@ impl RdfEnvelope {
         Self {
             lookaside,
             losses: crate::loss::LossLedger::new(),
+            language_tag_forms: LanguageTagForms::default(),
         }
     }
 
@@ -71,6 +105,13 @@ impl RdfEnvelope {
     #[must_use]
     pub fn with_losses(mut self, losses: crate::loss::LossLedger) -> Self {
         self.losses = losses;
+        self
+    }
+
+    /// This envelope carrying the written case forms of the language tags of the read.
+    #[must_use]
+    pub const fn with_language_tag_forms(mut self, forms: LanguageTagForms) -> Self {
+        self.language_tag_forms = forms;
         self
     }
 }

@@ -52,11 +52,13 @@ pub(crate) struct FoldSite {
 /// The storage refusal of `memory`; the ledger is unchanged.
 pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
     losses: &mut LossLedger,
+    forms: &mut purrdf_core::LanguageTagForms,
     lexical: &str,
     tag: &str,
     site: FoldSite,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), StorageError> {
+    forms.record(tag);
     if is_identity_folded(tag) {
         return Ok(());
     }
@@ -124,8 +126,15 @@ mod tests {
                 .is_ok()
         );
 
+        let forms = bundle.envelope.language_tag_forms;
+        assert_eq!((forms.lower, forms.upper, forms.mixed), (1, 0, 1));
+        let shout = crate::import_gts_events(&bytes(&["EN", "En-us"])).expect("import");
+        let forms = shout.envelope.language_tag_forms;
+        assert_eq!((forms.lower, forms.upper, forms.mixed), (0, 1, 1));
+
         let lower = crate::import_gts_events(&bytes(&["en-us", "fr"])).expect("import");
         assert!(lower.envelope.losses.is_empty());
+        assert_eq!(lower.envelope.language_tag_forms.lower, 2);
         let graph = crate::import_gts_graph(crate::gts::read_graph(&variant, true).expect("read"))
             .expect("graph import");
         assert_eq!(graph.envelope.losses.entries().len(), 1);
@@ -149,6 +158,7 @@ mod tests {
             let mut ceiling = Ceiling(budget);
             let result = record_language_fold_loss(
                 &mut losses,
+                &mut purrdf_core::LanguageTagForms::default(),
                 "x",
                 tag,
                 site(logical),

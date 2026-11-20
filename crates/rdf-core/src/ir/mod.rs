@@ -80,7 +80,7 @@ pub mod validate;
 pub use builder::{
     NativeBuildError, RdfDatasetBuilder, TripleDatasetBuilder, ValidatedRdfDatasetBuilder,
 };
-pub use bundle::{GtsBundle, RdfEnvelope};
+pub use bundle::{GtsBundle, LanguageTagForms, RdfEnvelope};
 pub use canon::labelled::{
     CANON_CORPUS_POLICY, CANON_LABELLING_NAME, CANON_LABELLING_VERSION,
     CANON_PRESENTATION_LINES_ID, CANON_PRESENTATION_LINES_VERSION, canonical_relabel,

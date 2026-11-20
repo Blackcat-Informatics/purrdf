@@ -53,6 +53,8 @@ struct GraphInterner {
     remap_bytes: usize,
     /// Losses of the read that the dataset cannot represent.
     losses: purrdf_core::LossLedger,
+    /// The written case forms of the language tags read.
+    language_tag_forms: purrdf_core::LanguageTagForms,
 }
 
 #[derive(Clone, Copy)]
@@ -185,6 +187,7 @@ impl GraphInterner {
         if let Some(tag) = language.as_deref() {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
+                &mut self.language_tag_forms,
                 &lexical_form,
                 tag,
                 crate::gts_language_fold::FoldSite {
@@ -342,6 +345,7 @@ fn import_graph_with_memory(
         remap: crate::FastMap::default(),
         remap_bytes: 0,
         losses: purrdf_core::LossLedger::new(),
+        language_tag_forms: purrdf_core::LanguageTagForms::default(),
     };
 
     // Intern every term up front (idempotent through the remap), so leaf strings are
@@ -396,6 +400,7 @@ fn import_graph_with_memory(
         remap,
         remap_bytes,
         losses,
+        language_tag_forms,
         ..
     } = interner;
     drop(remap);
@@ -403,7 +408,9 @@ fn import_graph_with_memory(
     let dataset = builder.freeze()?;
     Ok(GtsBundle::new(
         dataset,
-        RdfEnvelope::new(lookaside).with_losses(losses),
+        RdfEnvelope::new(lookaside)
+            .with_losses(losses)
+            .with_language_tag_forms(language_tag_forms),
     ))
 }
 

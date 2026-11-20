@@ -20,13 +20,8 @@ static GLOBAL: CountingAllocator = CountingAllocator;
 /// The corpus: `triples` statements, deterministic in `triples` alone.
 fn corpus(triples: u64) -> String {
     let mut out = String::new();
-    let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-    let mut next = move || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
-    };
+    let mut state = 1_u64;
+    let mut next = move || purrdf_hash::mix::splitmix64_next(&mut state);
     let mut written = 0_u64;
     let mut group = 0_u64;
     while written < triples {

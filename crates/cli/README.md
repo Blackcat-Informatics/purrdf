@@ -1331,32 +1331,51 @@ Print aggregate figures of a dataset as one JSON document on stdout, and nothing
 that identifies content. The owner of a private graph runs it on their own machine
 and shares only the figures, which are enough to size a reader or a container
 format against a real graph. The source is anything the other verbs read: a native
-syntax, a GTS file or a pack, with gzip or zstd transport detected.
+syntax, a GTS file or a pack, with gzip or zstd transport detected for every source
+but a pack. A pack is verified by canonicalizing it, so a pack input takes
+`--canonical-search` and `--canonicalization-receipts` as `describe` does, and any
+other input refuses them.
 
 No IRI, literal, language tag, blank-node label, datatype IRI, file name or parser
-message is printed on either stream. A source that cannot be read, or whose format
-cannot be inferred, is refused with a fixed sentence that quotes neither its text
-nor its name (exit `1` for an unreadable source, `2` for an unknown format). Nothing is
-written but stdout, and `--loss-ledger`, `--jsonld-options`, `--canonical-search` and
-`--canonicalization-receipts` are refused.
+message is printed on either stream. Each failure is a fixed sentence that names its
+class and quotes neither the input's text nor its name: a format that cannot be
+inferred (exit `2`), an input that cannot be opened (`1`), a pack read without its
+canonical control or with canonical flags on another input (`2`), a pack under a
+transport wrapper (`2`), a source that is not well formed (`1`), and a canonical
+labelling that failed for a reason other than a refusal (`1`). Nothing is written but
+stdout, and `--loss-ledger` and `--jsonld-options` are refused.
 
 The document carries `schema_version` (currently `1`), `small_count_threshold`
 and these figures:
 
 | Key | Content |
 | --- | --- |
-| `counts` | `quads`, `distinct_iris`, `distinct_literals`, `blank_nodes`, `named_graphs`, `triple_terms`, `reifiers`, `annotations` |
+| `counts` | `quads`, `distinct_iris`, `distinct_literals`, `blank_nodes`, `named_graphs`, `triple_terms`, `reifiers`, `annotations`; `distinct_iris` counts the IRIs in a subject, predicate, object, graph or triple-term position and not datatype IRIs |
 | `max_triple_term_depth` | Nesting depth of the deepest triple term; one for a triple term that holds none |
 | `blank_siblings` | For each blank node with blank children, the size of its largest group of children that share a first-degree description: `parents`, `max_largest_like_group` and `largest_like_group_histogram` |
 | `literal_length_bytes_histogram` | Lexical-form length in bytes, one entry per distinct literal |
 | `datatypes` | `named_xsd`, a count per named XSD datatype by local name, and `other`, one count for every other datatype; language-tagged literals are not counted here |
-| `language_tags` | `tagged_literals` and `distinct_tags`; `case_forms` is omitted with the reason `language-tag-case-not-retained`, because the data model lowercases a tag when it is read |
-| `canonical_labelling` | Line weight of the canonical labelling: `lines`, `line_bytes_total` and `line_bytes_mean_thousandths`; otherwise `status` `refused` with the refusal name and code, or `omitted` with a `reason` (`disabled`, `unavailable` or `below-threshold`) |
+| `language_tags` | `tagged_literals`, `distinct_tags` and `case_forms` |
+| `canonical_labelling` | Line weight of the canonical labelling: `lines`, `line_bytes_total` and `line_bytes_mean_thousandths`; otherwise `status` `refused` with the refusal name and code, or `omitted` with a `reason` (`disabled`, `below-threshold` or `derived-count-suppressed`) |
+
+The named XSD datatypes are the value-space datatypes `purrdf_xsd` models together with
+`language`, `Name`, `NCName` and `NMTOKEN`, the four further XSD datatypes RDF 1.1
+Concepts lists as RDF-compatible. The list is closed, so a printed name is always a W3C
+term; every other datatype IRI, including any other name in the XSD namespace, counts as
+`other`.
 
 Two blank children share a first-degree description when the statements that touch
 each of them agree in direction, predicate, graph and far end, taking the parent as
 one marked end and every other blank node as one anonymous end. Only quads are read;
 the statement layer is not.
+
+`case_forms` counts the language-tagged literals whose tag was written all lower case,
+all upper case or mixed. A dataset holds a tag folded to lower case, so only a reader
+that sees the tag as written can report the figure. A GTS read does, and prints
+`{"status":"reported","lower":…,"upper":…,"mixed":…}`. The text and pack readers fold the
+tag before the figure can be taken, so for them it is
+`{"status":"omitted","reason":"reader-folds-before-figure"}`. Every other figure is the
+same for one dataset whatever its syntax.
 
 A histogram bin has fixed bounds that do not depend on the data: bin `0` holds `0`,
 and every other bin holds `min` through `max` with `min` a power of two and `max` one
@@ -1370,19 +1389,33 @@ fewer items describes a handful of particular items, such as the single literal 
 unusual datatype or the one language tag in use, and so can single content out; a
 figure shared by five or more items cannot be traced to one of them. A zero names no
 item. A maximum or a depth is the extreme of a distribution and not a count of items,
-so it prints exactly. When the canonical labelling has fewer than five lines its
-weight is omitted with the reason `below-threshold`.
+so it prints exactly.
 
-The figures belong to the dataset and not to the syntax it arrived in: Turtle,
-N-Quads and GTS holding the same dataset print the same document.
+A total that equals the sum of the cells of a partition would give a suppressed cell by
+subtraction, so one rule governs every such total. A total prints exactly only when no
+cell of any partition of it is hidden. Otherwise it prints as `">=N"`, with `N` the sum
+of the exact cells of its best-known partition, which is derivable from the printed
+cells and so reveals nothing more. Partitions of one total also determine each other, so
+when any partition of the distinct literals (by length, or by datatype with the
+language-tagged literals) holds a hidden cell, every partition with none hides its
+smallest non-zero cell as `"withheld"`. The same rule covers `parents` against its
+histogram and `tagged_literals` against `case_forms`. The labelling's `lines` is the sum
+of the quads, reifier and annotation statements and named graphs, so the labelling
+figure is omitted with the reason `derived-count-suppressed` unless each of those prints
+exactly, and with `below-threshold` when it has fewer than five lines.
 
-The source is read whole into the dataset model before any figure is taken (a
-line-oriented syntax is parsed as a stream, but its dataset is resident all the same).
-On top of it the verb holds one small record per distinct term, one record per
-blank-node incidence, and the lines of the canonical labelling. `--no-labelling` drops
-the last. The labelling stops at the engine's limit on an input whose search is not
-guaranteed to be bounded; `--labelling-limit` states a different limit in limited units,
-and a guaranteed input is never refused.
+The figures belong to the dataset and not to the syntax it arrived in, with the
+`case_forms` exception above: Turtle, N-Quads, TriG and GTS holding the same dataset
+print the same document otherwise.
+
+The verb streams nothing: every figure needs the whole dataset (distinct sets, sibling
+grouping, the labelling). The source is read whole into the dataset model before any
+figure is taken (a line-oriented syntax is parsed as a stream, but its dataset is
+resident all the same). On top of it the verb holds one small record per distinct term,
+one record per blank-node incidence, and the lines of the canonical labelling.
+`--no-labelling` drops the last. The labelling stops at the engine's limit on an input
+whose search is not guaranteed to be bounded; `--labelling-limit` states a different
+limit in limited units, and a guaranteed input is never refused.
 
 ```sh
 # The shape of a dataset, labelling included.
@@ -1390,6 +1423,9 @@ purrdf shape data.nq
 
 # A syntax chosen explicitly, from stdin, without the labelling figure.
 purrdf shape --from turtle --no-labelling < data.ttl
+
+# A pack is verified by canonicalizing it, under the caller's budget.
+purrdf shape --canonical-search unlimited --canonicalization-receipts shape.json data.purrpck
 ```
 
 ## `project`

@@ -68,6 +68,8 @@ struct SinkImporter<'a> {
     lookaside: RdfLookaside,
     /// Losses of the read that the dataset cannot represent.
     losses: purrdf_core::LossLedger,
+    /// The written case forms of the language tags read.
+    language_tag_forms: purrdf_core::LanguageTagForms,
 }
 
 impl SinkImporter<'_> {
@@ -103,6 +105,7 @@ impl SinkImporter<'_> {
         if let Some(tag) = lang {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
+                &mut self.language_tag_forms,
                 lexical,
                 tag,
                 crate::gts_language_fold::FoldSite {
@@ -129,6 +132,7 @@ impl SinkImporter<'_> {
             builder: RdfDatasetBuilder::new(),
             lookaside: RdfLookaside::default(),
             losses: purrdf_core::LossLedger::new(),
+            language_tag_forms: purrdf_core::LanguageTagForms::default(),
         }
     }
 }
@@ -693,9 +697,15 @@ fn finish_importer(
 ) -> Result<(GtsBundle, Option<BlobCollector<'_>>), RdfDiagnostic> {
     let lookaside = importer.lookaside;
     let losses = importer.losses;
+    let forms = importer.language_tag_forms;
     let dataset = importer.builder.freeze()?;
     Ok((
-        GtsBundle::new(dataset, RdfEnvelope::new(lookaside).with_losses(losses)),
+        GtsBundle::new(
+            dataset,
+            RdfEnvelope::new(lookaside)
+                .with_losses(losses)
+                .with_language_tag_forms(forms),
+        ),
         importer.blobs,
     ))
 }

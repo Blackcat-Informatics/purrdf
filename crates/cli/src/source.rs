@@ -595,6 +595,17 @@ pub(crate) fn load_gts(
     path: &str,
     policy: TransportPolicy,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
+    load_gts_with_forms(path, policy).map(|(dataset, ledger, _)| (dataset, ledger))
+}
+
+/// [`load_gts`] and the written case forms of the language tags the read folded.
+///
+/// The forms are what only a reader that sees the tag as written can know; the dataset
+/// holds it lower case.
+pub(crate) fn load_gts_with_forms(
+    path: &str,
+    policy: TransportPolicy,
+) -> Result<(Arc<RdfDataset>, LossLedger, purrdf_core::LanguageTagForms), CliError> {
     let bytes = read_bytes_with_transport(path, policy)?;
     let bundle = import_gts_events(&bytes)
         .map_err(|diagnostic| CliError::Runtime(format!("{}: {diagnostic}", display_path(path))))?;
@@ -602,7 +613,7 @@ pub(crate) fn load_gts(
     for entry in bundle.envelope.losses.entries() {
         ledger.record(entry.clone());
     }
-    Ok((bundle.dataset, ledger))
+    Ok((bundle.dataset, ledger, bundle.envelope.language_tag_forms))
 }
 
 /// The GTS loss-ledger code family: what a GTS envelope carried and an RDF dataset

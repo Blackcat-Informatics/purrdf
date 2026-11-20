@@ -55,6 +55,11 @@ impl Request {
             "this operation canonicalizes RDF; supply --canonical-search unlimited or a canonical decimal u64 and --canonicalization-receipts DEST ('-' writes stderr)".to_owned()))
     }
 
+    /// Whether the caller supplied a canonical-search policy and receipt destination.
+    pub(crate) const fn is_configured(&self) -> bool {
+        self.destination.is_some()
+    }
+
     /// All known command inputs and outputs are protected before any scan begins.
     pub(crate) fn protect(&self, paths: &[PathBuf]) -> Result<(), CliError> {
         let Some(destination) = self
