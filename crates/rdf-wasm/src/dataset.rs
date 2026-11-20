@@ -881,14 +881,20 @@ impl Dataset {
     /// `purrdf-wasm-options` for a receipt that is not an execution receipt;
     /// `purrdf-wasm-receipt` for a run that cannot have an execution identity (it
     /// never started, or called extension code without a certified implementation
-    /// identity); a dataset whose pending changes cannot be frozen.
+    /// identity); an error without an option or receipt code when the dataset
+    /// refuses to produce its content identity, as `contentIdentity()` reports
+    /// that refusal; a dataset whose pending changes cannot be frozen.
     #[wasm_bindgen(js_name = bindExecutionReceipt)]
     pub fn bind_execution_receipt(&self, receipt_json: &str) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         purrdf_validate::query::bind_execution_receipt(receipt_json, &*frozen).map_err(|error| {
+            use purrdf_validate::query::ReceiptBindError;
             let code = match error {
-                purrdf_validate::query::ReceiptBindError::Refused(_) => {
-                    crate::operation::RECEIPT_CODE
+                ReceiptBindError::Refused(_) => crate::operation::RECEIPT_CODE,
+                // The view's own refusal is not a bad option: it is reported as
+                // `contentIdentity()` reports one, with no option code.
+                ReceiptBindError::Identity(_) => {
+                    return JsError::new(&error.to_string()).into();
                 }
                 _ => crate::operation::OPTIONS_CODE,
             };

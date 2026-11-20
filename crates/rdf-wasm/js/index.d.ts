@@ -871,7 +871,9 @@ export class Dataset implements Iterable<Quad> {
    * Bind a query's execution receipt to this dataset's current content: the receipt
    * JSON with `contentIdentity` and `executionIdentity` added, from one frozen
    * snapshot. Throws with code `purrdf-wasm-options` for a receipt that is not one,
-   * and `purrdf-wasm-receipt` for a run that cannot have an execution identity.
+   * and `purrdf-wasm-receipt` for a run that cannot have an execution identity. A
+   * refusal of the dataset's own content identity throws as `contentIdentity()`
+   * throws it, with neither code.
    */
   bindExecutionReceipt(receiptJson: string): string;
   /**
