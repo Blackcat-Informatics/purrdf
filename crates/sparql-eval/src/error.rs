@@ -443,12 +443,14 @@ pub enum EvalError {
     /// no bindings; `SERVICE SILENT` instead answers the join identity and records the
     /// failure on the execution's evidence.
     ///
-    /// `cause` is any [`RemoteError`](crate::RemoteError) except
-    /// [`Unconfigured`](crate::RemoteError::Unconfigured) and
-    /// [`NoSource`](crate::RemoteError::NoSource), which are
-    /// [`Self::ServiceUnconfigured`]. [`EvalError::remote`] chooses the variant from the
-    /// cause, so build the value through it; a literal that pairs a cause with the wrong
-    /// variant is a caller error, and [`Self::code`] follows the variant.
+    /// `cause` is one of [`Transport`](crate::RemoteError::Transport),
+    /// [`Decode`](crate::RemoteError::Decode), [`Disabled`](crate::RemoteError::Disabled),
+    /// [`OpaqueRedirect`](crate::RemoteError::OpaqueRedirect),
+    /// [`Governed`](crate::RemoteError::Governed) or
+    /// [`GovernedAfterCompletion`](crate::RemoteError::GovernedAfterCompletion); every
+    /// other cause has its own variant. [`EvalError::remote`] chooses the variant from the
+    /// cause, so build the value through it; a literal that pairs a cause with another
+    /// variant compiles, and [`Self::code`] then follows the variant.
     Remote {
         /// The service IRI that was asked.
         endpoint: String,
@@ -1214,18 +1216,44 @@ impl std::error::Error for EvalError {
 impl EvalError {
     /// A `SERVICE` step on `endpoint` failed with `cause`.
     ///
-    /// The variant follows the cause: [`RemoteError::Unconfigured`](crate::RemoteError::Unconfigured)
-    /// and [`RemoteError::NoSource`](crate::RemoteError::NoSource) give
-    /// [`Self::ServiceUnconfigured`], every other cause gives [`Self::Remote`], so the
-    /// code and the classification of the error cannot disagree with its cause.
+    /// The variant is the one the engine raises for that cause, so the code and the
+    /// classification of the error agree with the cause. [`Self::Remote`] holds
+    /// transport, decode, disabled, opaque-redirect and governor causes (the engine
+    /// answers a governor with a truncated result rather than an error, so only this
+    /// constructor builds that pairing, and it classifies as a failed `SERVICE`);
+    /// [`Self::ServiceUnconfigured`] holds
+    /// [`RemoteError::Unconfigured`](crate::RemoteError::Unconfigured) and
+    /// [`RemoteError::NoSource`](crate::RemoteError::NoSource); the denial, host-fault,
+    /// source-read, workspace, exchange-identifier and stack causes give
+    /// [`Self::ServiceDenied`], [`Self::ServiceHostDenied`], [`Self::ServiceHostFault`],
+    /// [`Self::SourceRead`], [`Self::WorkspaceStopped`], [`Self::ExchangeIdExhausted`],
+    /// [`Self::StackExhausted`] and [`Self::HostStackExhausted`].
     #[must_use]
     pub fn remote(endpoint: impl Into<String>, cause: crate::remote::RemoteError) -> Self {
+        use crate::remote::RemoteError;
         let endpoint = endpoint.into();
         match cause {
-            crate::remote::RemoteError::Unconfigured(_) | crate::remote::RemoteError::NoSource => {
+            RemoteError::Denied(denial) => Self::ServiceDenied(denial),
+            RemoteError::HostDenied { endpoint, message } => {
+                Self::ServiceHostDenied { endpoint, message }
+            }
+            RemoteError::HostFault { endpoint, message } => {
+                Self::ServiceHostFault { endpoint, message }
+            }
+            RemoteError::SourceRead(message) => Self::SourceRead(message),
+            RemoteError::WorkspaceStopped => Self::WorkspaceStopped,
+            RemoteError::ExchangeIdExhausted => Self::ExchangeIdExhausted,
+            RemoteError::StackExhausted(construct) => Self::StackExhausted { construct },
+            RemoteError::HostStackExhausted(construct) => Self::HostStackExhausted { construct },
+            cause @ (RemoteError::Unconfigured(_) | RemoteError::NoSource) => {
                 Self::ServiceUnconfigured { endpoint, cause }
             }
-            cause => Self::Remote { endpoint, cause },
+            cause @ (RemoteError::Transport(_)
+            | RemoteError::Decode(_)
+            | RemoteError::Disabled
+            | RemoteError::OpaqueRedirect { .. }
+            | RemoteError::Governed(_)
+            | RemoteError::GovernedAfterCompletion(_)) => Self::Remote { endpoint, cause },
         }
     }
 }
@@ -1237,6 +1265,81 @@ purrdf_lex::variant_from!(EvalError {
 
 #[cfg(test)]
 mod tests {
+    /// `EvalError::remote` returns the variant whose classification is the cause's, for
+    /// every cause. The match is exhaustive so a new cause forces a decision here.
+    #[test]
+    fn remote_chooses_the_variant_the_cause_classifies_as() {
+        use crate::protocol::FailureCode;
+        use crate::remote::RemoteError;
+        use crate::service::{ServiceCapability, ServiceDenial};
+        use purrdf_core::{StopCause, TrippedGovernor};
+        let stopped = TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled,
+        };
+        let causes = [
+            RemoteError::Transport("t".into()),
+            RemoteError::Decode("d".into()),
+            RemoteError::Disabled,
+            RemoteError::Unconfigured("u".into()),
+            RemoteError::NoSource,
+            RemoteError::Denied(ServiceDenial::new(
+                "https://example.org/s",
+                ServiceCapability::Credentials,
+                "policy",
+            )),
+            RemoteError::HostDenied {
+                endpoint: "https://example.org/s".into(),
+                message: "m".into(),
+            },
+            RemoteError::HostFault {
+                endpoint: "https://example.org/s".into(),
+                message: "m".into(),
+            },
+            RemoteError::Governed(stopped),
+            RemoteError::GovernedAfterCompletion(stopped),
+            RemoteError::StackExhausted("construct"),
+            RemoteError::HostStackExhausted("construct"),
+            RemoteError::SourceRead("r".into()),
+            RemoteError::WorkspaceStopped,
+            RemoteError::ExchangeIdExhausted,
+            RemoteError::OpaqueRedirect {
+                endpoint: "https://example.org/s".into(),
+            },
+        ];
+        for cause in causes {
+            let expected = FailureCode::from(&cause);
+            let error = EvalError::remote("https://example.org/s", cause.clone());
+            let governor = matches!(
+                cause,
+                RemoteError::Governed(_) | RemoteError::GovernedAfterCompletion(_)
+            );
+            match &cause {
+                RemoteError::Transport(_)
+                | RemoteError::Decode(_)
+                | RemoteError::Disabled
+                | RemoteError::Unconfigured(_)
+                | RemoteError::NoSource
+                | RemoteError::Denied(_)
+                | RemoteError::HostDenied { .. }
+                | RemoteError::HostFault { .. }
+                | RemoteError::Governed(_)
+                | RemoteError::GovernedAfterCompletion(_)
+                | RemoteError::StackExhausted(_)
+                | RemoteError::HostStackExhausted(_)
+                | RemoteError::SourceRead(_)
+                | RemoteError::WorkspaceStopped
+                | RemoteError::ExchangeIdExhausted
+                | RemoteError::OpaqueRedirect { .. } => {}
+            }
+            if governor {
+                // No error carries a governor stop; it is a failed `SERVICE` here.
+                assert!(matches!(error, EvalError::Remote { .. }), "{error:?}");
+            } else {
+                assert_eq!(FailureCode::from(&error), expected, "{cause:?}");
+            }
+        }
+    }
+
     #[test]
     fn source_message_sink_refusal_is_not_replaced_by_a_marker() {
         use super::write_source_message;

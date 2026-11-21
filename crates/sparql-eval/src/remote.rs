@@ -747,18 +747,7 @@ impl RetainedServiceFailure {
         if self.error.payload.storage.is_bounded() || self.error.payload.control.is_bounded() {
             return EvalError::RetainedServiceFailure(self);
         }
-        let endpoint = self.endpoint.as_str();
-        match self.error.error().clone() {
-            RemoteError::Denied(denial) => EvalError::ServiceDenied(denial),
-            RemoteError::HostDenied { endpoint, message } => {
-                EvalError::ServiceHostDenied { endpoint, message }
-            }
-            RemoteError::HostFault { endpoint, message } => {
-                EvalError::ServiceHostFault { endpoint, message }
-            }
-            RemoteError::SourceRead(message) => EvalError::SourceRead(message),
-            cause => EvalError::remote(endpoint, cause),
-        }
+        EvalError::remote(self.endpoint.as_str(), self.error.error().clone())
     }
     /// Borrow the original invocation error without detaching its owner.
     #[must_use]

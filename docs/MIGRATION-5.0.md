@@ -496,8 +496,8 @@ text and the diagnostic codes of both are unchanged for every existing case:
 
 | Variant | 4.x payload | 5.0 payload | A 4.x caller |
 |---|---|---|---|
-| `EvalError::Remote` | `String` | `{ endpoint: String, cause: RemoteError }` | Match `Remote { endpoint, cause }` or `Remote { .. }`, and read the failure from `cause`. `EvalError::remote` takes the endpoint and the `RemoteError`, in place of a displayable message, and chooses `Remote` or `ServiceUnconfigured` from the cause. The structured visitor reports `endpoint` as an IRI and `cause` as the nested `RemoteError` with its own fields |
-| `EvalError::ServiceUnconfigured` | `String` | `{ endpoint: String, cause: RemoteError }` | As above. `cause` is `RemoteError::Unconfigured` when a source declined the endpoint, and the new `RemoteError::NoSource` when the engine was given no source at all. Construct it with `EvalError::remote`, which gives `ServiceUnconfigured` for those two causes and `Remote` for every other |
+| `EvalError::Remote` | `String` | `{ endpoint: String, cause: RemoteError }` | Match `Remote { endpoint, cause }` or `Remote { .. }`, and read the failure from `cause`. `EvalError::remote` takes the endpoint and the `RemoteError`, in place of a displayable message, and chooses the variant from the cause. The structured visitor reports `endpoint` as an IRI and `cause` as the nested `RemoteError` with its own fields |
+| `EvalError::ServiceUnconfigured` | `String` | `{ endpoint: String, cause: RemoteError }` | As above. `cause` is `RemoteError::Unconfigured` when a source declined the endpoint, and the new `RemoteError::NoSource` when the engine was given no source at all. Construct it with `EvalError::remote`, which gives `ServiceUnconfigured` for those two causes and, for the other causes, the variant the engine raises (`Remote` for transport, decode, disabled, redirect and governor causes; `ServiceDenied`, `ServiceHostDenied`, `ServiceHostFault`, `SourceRead` and the stack refusals for theirs) |
 
 `RemoteError::NoSource` is a new variant of the already `#[non_exhaustive]`
 `RemoteError`; a host that matches the enum needs no change where a wildcard arm

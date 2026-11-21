@@ -783,12 +783,10 @@ fn model_json(
 /// The refusal for a coordinate-operation model this boundary has no `what` for;
 /// it names the model's variant.
 pub(super) fn unsupported_model(model: &OperationModel, what: &str) -> GeoError {
-    let debug = format!("{model:?}");
-    let name = debug
-        .split(|character: char| !character.is_alphanumeric())
-        .next()
-        .unwrap_or_default();
-    GeoError::unsupported(format!("coordinate-operation model {name} has no {what}"))
+    GeoError::unsupported(format!(
+        "coordinate-operation model {} has no {what}",
+        model.name()
+    ))
 }
 
 fn source_domain_json(

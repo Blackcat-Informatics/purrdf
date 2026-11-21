@@ -646,6 +646,33 @@ pub enum OperationModel {
     BilinearGridInverse(Box<BilinearGridInverse>),
 }
 
+impl OperationModel {
+    /// The stable name of this model's variant, without its parameters.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::GcjRationalHarmonicV1(_) => "GcjRationalHarmonicV1",
+            Self::GcjRationalHarmonicInverseV1(_) => "GcjRationalHarmonicInverseV1",
+            Self::Bd09LlV1 => "Bd09LlV1",
+            Self::Bd09LlInverseV1 => "Bd09LlInverseV1",
+            Self::BaiduMercatorAnalyticV1 => "BaiduMercatorAnalyticV1",
+            Self::EllipsoidalMercator { .. } => "EllipsoidalMercator",
+            Self::WebMercator { .. } => "WebMercator",
+            Self::GeographicToGeocentric { .. } => "GeographicToGeocentric",
+            Self::MercatorToGeographic { .. } => "MercatorToGeographic",
+            Self::GeocentricToGeographic { .. } => "GeocentricToGeographic",
+            Self::TransverseMercator(_) => "TransverseMercator",
+            Self::TransverseMercatorInverse(_) => "TransverseMercatorInverse",
+            Self::Helmert(_) => "Helmert",
+            Self::Similarity2d(_) => "Similarity2d",
+            Self::Polynomial2d(_) => "Polynomial2d",
+            Self::BilinearGrid(_) => "BilinearGrid",
+            Self::Polynomial2dInverse(_) => "Polynomial2dInverse",
+            Self::BilinearGridInverse(_) => "BilinearGridInverse",
+        }
+    }
+}
+
 crate::context::retained::native_detached_enum!(OperationModel {
     units: [Bd09LlV1, Bd09LlInverseV1, BaiduMercatorAnalyticV1],
     tuples: [
