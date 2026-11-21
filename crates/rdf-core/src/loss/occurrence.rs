@@ -253,21 +253,20 @@ impl LossDetail {
     }
 }
 
-impl std::fmt::Display for LossGraphName {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = String::new();
-        self.present(&mut out);
-        f.write_str(&out)
-    }
+/// `Display` for a type whose `present` writes its one-line prose form.
+macro_rules! display_by_presentation {
+    ($($type:ty),+ $(,)?) => {$(
+        impl std::fmt::Display for $type {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let mut out = String::new();
+                self.present(&mut out);
+                f.write_str(&out)
+            }
+        }
+    )+};
 }
 
-impl std::fmt::Display for LossTerm {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut out = String::new();
-        self.present(&mut out);
-        f.write_str(&out)
-    }
-}
+display_by_presentation!(LossGraphName, LossTerm);
 
 impl LossSubject {
     /// The subject spelled for a person: a pointer as `#` and its escaped
@@ -291,8 +290,7 @@ impl LossSubject {
             Self::Pointer(tokens) => {
                 let mut out = String::from("#");
                 for token in tokens {
-                    out.push('/');
-                    out.push_str(&token.replace('~', "~0").replace('/', "~1"));
+                    purrdf_lex::json_pointer::push_token(&mut out, token);
                 }
                 Some(out)
             }
@@ -607,8 +605,7 @@ impl LossSubject {
                     out.push_str("the document root");
                 }
                 for token in tokens {
-                    out.push('/');
-                    out.push_str(&token.replace('~', "~0").replace('/', "~1"));
+                    purrdf_lex::json_pointer::push_token(out, token);
                 }
             }
         }
