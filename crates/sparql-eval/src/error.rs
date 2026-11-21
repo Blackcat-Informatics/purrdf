@@ -1216,8 +1216,11 @@ impl std::error::Error for EvalError {
 impl EvalError {
     /// A `SERVICE` step on `endpoint` failed with `cause`.
     ///
-    /// The variant is the one the engine raises for that cause, so the code and the
-    /// classification of the error agree with the cause. [`Self::Remote`] holds
+    /// The code and the classification of the error agree with the cause for every
+    /// cause except the two governor causes ([`Governed`](crate::RemoteError::Governed)
+    /// and [`GovernedAfterCompletion`](crate::RemoteError::GovernedAfterCompletion)),
+    /// which give [`Self::Remote`]. The variant is the one the engine raises for that
+    /// cause. [`Self::Remote`] holds
     /// transport, decode, disabled, opaque-redirect and governor causes (the engine
     /// answers a governor with a truncated result rather than an error, so only this
     /// constructor builds that pairing, and it classifies as a failed `SERVICE`);
