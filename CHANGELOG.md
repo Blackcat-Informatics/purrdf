@@ -10,8 +10,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 - **Behaviour change: a triple term that reaches itself states no triple, and its `reifies` row is kept.**
   A term that is reachable from its own components, through `tt` or through the
-  first `reifies` row of its reifier id (its own id when it names none), is no
-  longer refused. The GTS reader folds every such row with no diagnostic, where it
+  first `reifies` row of the reifier id its `rf` names, is no longer
+  refused. A `k:3` term with neither `tt` nor `rf` states no triple, as the
+  specification's third resolution rule says; an absent `rf` is not read as the
+  term's own id. The GTS reader folds every such row with no diagnostic, where it
   reported `DamagedFrame` and dropped the row. The term keeps an identity of its
   own in the multi-segment union and the canonical writer, and the row still
   projects. `purrdf_gts::resolution::SelfReaching::of` names these terms once per
@@ -43,6 +45,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   returning exactly what it was given. A storage that returns a default value
   instead is refused by the resolver with `rdf-ir-dangling-term-ref`. No
   `ResolutionStorage` method is added. `ComponentState` is a new public type.
+- **Behaviour change: the GTS reader drops a `reifies` row whose reifier is a
+  literal or a quoted triple.** The row is diagnosed `PositionConstraint`;
+  4.0.2 kept it silently. The indirect spelling stored files hold (a
+  quoted-triple term with no `tt` whose `rf` is its own id) is an exception and
+  keeps its binding with no diagnostic. See the migration guide.
+
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop

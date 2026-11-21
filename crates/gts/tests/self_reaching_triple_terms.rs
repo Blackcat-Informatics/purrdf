@@ -27,33 +27,9 @@ use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_opt
 use purrdf_gts::resolution::SelfReaching;
 use purrdf_gts::writer::Writer;
 
-/// The legacy indirect spelling: components come from the `reifies` row bound
-/// to `reifier`.
-fn indirect_triple_term(reifier: usize) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: Some(reifier),
-        triple: None,
-    }
-}
-
-/// The IMPLICIT self-bound spelling: a `k:3` term carrying neither `tt` nor
-/// `rf`, whose binding is keyed by its own term id (§7.1).
-fn implicit_self_bound_triple_term() -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
+#[path = "support/reifier_terms.rs"]
+mod reifier_terms;
+use reifier_terms::indirect_triple_term;
 
 /// A plain second segment, so the reader takes the multi-segment union path.
 fn plain_segment() -> Vec<u8> {
@@ -75,8 +51,8 @@ fn diagnostic_codes(graph: &Graph) -> Vec<&str> {
 /// state no triple, and every term the fold reports as self-reaching is one.
 ///
 /// This walks [`Graph::resolved_triple_of`] — the accessor every consumer uses —
-/// rather than `term_triple`, which does not read the implicit self-bound
-/// spelling and so cannot see a loop written in it.
+/// rather than `term_triple`, which does not follow a self-bound term to the
+/// row keyed by its own id and so cannot see a loop written through one.
 fn assert_resolution_terminates(graph: &Graph, self_reaching: &[usize]) {
     let reaching = SelfReaching::of(graph);
     for start in 0..graph.terms.len() {
@@ -117,18 +93,18 @@ fn assert_resolution_terminates(graph: &Graph, self_reaching: &[usize]) {
 }
 
 // --------------------------------------------------------------------------- //
-// The implicit self-bound spelling.
+// The self-bound spelling: no `tt`, and `rf` naming the term's own id.
 // --------------------------------------------------------------------------- //
 
-/// A `k:3` term with no `tt` and no `rf` takes its components from the row
-/// keyed by its OWN id, so a row naming that term as its own subject makes the
+/// A `k:3` term with no `tt` whose `rf` is its own id takes its components
+/// from the row keyed by its OWN id, so a row naming that term as its own subject makes the
 /// term contain itself. The term states no triple, and the row is kept.
 #[test]
-fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_degrades_the_term() {
+fn a_row_keyed_by_a_self_bound_terms_own_id_degrades_the_term() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -146,15 +122,53 @@ fn a_row_keyed_by_an_implicit_self_bound_terms_own_id_degrades_the_term() {
     assert_resolution_terminates(&graph, &[2]);
 }
 
-/// The implicit spelling degrades only when it LOOPS: a row keyed by an
-/// implicit self-bound term's own id that names other terms is ordinary RDF
-/// 1.2 and still resolves.
+/// A `k:3` term with neither `tt` nor `rf` states no triple (§7.1, third
+/// resolution rule) and is no reifier: the `reifies` row naming it as reifier is
+/// dropped with `PositionConstraint`, while the term itself stays a distinct
+/// term in every quad that uses it as subject or object.
 #[test]
-fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
+fn a_bare_triple_term_loses_its_reifier_row_but_keeps_its_quads() {
+    let bare = Term {
+        kind: TermKind::Triple,
+        value: None,
+        datatype: None,
+        lang: None,
+        direction: None,
+        reifier: None,
+        triple: None,
+    };
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        bare,
+    ];
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    writer.add_quads(&[(2, 1, 0, None), (0, 1, 2, None)]);
+    writer.add_reifies(&[(2, (0, 1, 0), None)]);
+    let bytes = writer.into_bytes();
+
+    let graph = read(&bytes, false, None);
+    let codes: Vec<&str> = graph.diagnostics.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(codes, ["PositionConstraint"], "{:?}", graph.diagnostics);
+    assert!(
+        graph.reifiers.is_empty(),
+        "the row naming it as reifier is dropped"
+    );
+    assert_eq!(graph.quads, vec![(2, 1, 0, None), (0, 1, 2, None)]);
+    assert_eq!(graph.terms[2].kind, TermKind::Triple);
+    assert_eq!(graph.triple_of(2), None, "it states no triple");
+}
+
+/// The self-bound spelling degrades only when it LOOPS: a row keyed by a
+/// self-bound term's own id that names other terms is ordinary RDF
+/// 1.2 and still resolves.
+#[test]
+fn a_self_bound_term_binding_other_terms_still_folds() {
+    let terms = vec![
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -167,21 +181,21 @@ fn an_implicit_self_bound_term_binding_other_terms_still_folds() {
     assert_eq!(
         graph.triple_of(2),
         Some((0, 1, 0)),
-        "the implicit self-bound spelling still resolves through its own id",
+        "the self-bound spelling still resolves through its own id",
     );
     assert_resolution_terminates(&graph, &[]);
 }
 
-/// A loop that runs THROUGH an implicit self-bound term rather than closing on
-/// it directly. The search has to follow the implicit spelling, and every term
+/// A loop that runs THROUGH a self-bound term rather than closing on it
+/// directly. The search has to follow the self-bound spelling, and every term
 /// on the loop states no triple.
 #[test]
-fn a_loop_routed_through_an_implicit_self_bound_term_degrades_its_terms() {
+fn a_loop_routed_through_a_self_bound_term_degrades_its_terms() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(), // 2, bound by the row keyed on 2
-        indirect_triple_term(0),           // 3, bound by the row keyed on 0
+        indirect_triple_term(2), // 2, bound by the row keyed on 2
+        indirect_triple_term(0), // 3, bound by the row keyed on 0
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -410,7 +424,7 @@ fn a_binding_loop_inside_a_snapshot_degrades_the_term() {
     let mut graph = Graph::default();
     graph.terms.push(Term::iri("http://example.org/a")); // 0
     graph.terms.push(Term::iri("http://example.org/p")); // 1
-    graph.terms.push(implicit_self_bound_triple_term()); // 2
+    graph.terms.push(indirect_triple_term(2)); // 2
     graph.reifiers.push((2, (2, 1, 1), None));
 
     let payload = graph.snapshot_payload();
@@ -432,7 +446,7 @@ fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
@@ -463,7 +477,7 @@ fn a_self_reaching_term_survives_a_round_trip_through_the_canonical_writer() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        implicit_self_bound_triple_term(),
+        indirect_triple_term(2),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);

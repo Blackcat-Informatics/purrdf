@@ -152,7 +152,8 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
     }
 
     /// The components a triple term declares: its own, else the first binding
-    /// of its reifier id, which is its own id when it names none.
+    /// of the reifier id its `rf` names; with neither it states no triple
+    /// (§7.1).
     fn declared_components(
         &mut self,
         key: TermKey,
@@ -160,13 +161,16 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
     ) -> Result<Option<[TermKey; 3]>, RdfDiagnostic> {
         let triple = match term.triple {
             Some(triple) => Some(triple),
-            None => self
-                .dictionary
-                .first_binding(TermKey {
-                    segment: key.segment,
-                    term: term.reifier.unwrap_or(key.term),
-                })
-                .map_err(dictionary_import_failure)?,
+            None => match term.reifier {
+                Some(reifier) => self
+                    .dictionary
+                    .first_binding(TermKey {
+                        segment: key.segment,
+                        term: reifier,
+                    })
+                    .map_err(dictionary_import_failure)?,
+                None => None,
+            },
         };
         Ok(triple.map(|triple| {
             <[usize; 3]>::from(triple).map(|term| TermKey {

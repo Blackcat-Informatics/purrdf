@@ -793,10 +793,12 @@ impl Graph {
         if term.kind != TermKind::Triple {
             return None;
         }
-        // A self-bound triple term may leave `rf` implicit, in which case the
-        // binding is keyed by the term's own id (§7.1).
-        term.triple
-            .or_else(|| first(term.reifier.unwrap_or(term_id)))
+        // §7.1, resolving a triple term: "1. if the term carries "tt", it
+        // denotes exactly (tt[0], tt[1], tt[2])"; "2. otherwise, if the term
+        // carries "rf", it denotes the triple of the first reifies row bound to
+        // that reifier id in file order"; "3. otherwise the term states no
+        // triple." An absent `rf` names no reifier, not the term's own id.
+        term.triple.or_else(|| term.reifier.and_then(first))
     }
 
     /// [`Self::triple_of`] for an already-borrowed [`Term`].

@@ -847,15 +847,15 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     }
 
     /// Locate components without resolving them. Explicit components take
-    /// precedence; otherwise the first reifier binding of the term's reifier id
-    /// (its own id when it names none) is a lookup, not a term edge.
+    /// precedence; otherwise the first binding of the reifier id its `rf` names
+    /// is a lookup, not a term edge. With neither, the term states no triple.
     fn triple_components(
         &mut self,
         segment_index: u64,
         gts_id: usize,
         term: &Term,
     ) -> Result<Triple3, S::Error> {
-        match self.declared_components(segment_index, gts_id, term.triple, term.reifier)? {
+        match self.declared_components(segment_index, term.triple, term.reifier)? {
             Some(components) => Ok(components),
             None => Err(match term.reifier {
                 Some(reifier) => self.sink.err_missing_reifier(segment_index, reifier),
@@ -865,22 +865,24 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     }
 
     /// The components a triple term declares: its own, else the first binding
-    /// of its reifier id, which is its own id when it names no reifier. This is
-    /// the edge rule of `SelfReaching::of`.
+    /// of the reifier id its `rf` names; with neither it states no triple
+    /// (§7.1). This is the edge rule of `SelfReaching::of`.
     fn declared_components(
         &mut self,
         segment_index: u64,
-        gts_id: usize,
         triple: Option<Triple3>,
         reifier: Option<usize>,
     ) -> Result<Option<Triple3>, S::Error> {
         if triple.is_some() {
             return Ok(triple);
         }
+        let Some(reifier) = reifier else {
+            return Ok(None);
+        };
         self.storage
             .first_binding(TermKey {
                 segment: segment_index,
-                term: reifier.unwrap_or(gts_id),
+                term: reifier,
             })
             .map_err(self.map_storage)
     }
@@ -922,7 +924,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 .term
                 .as_deref()
                 .map_or((None, None), |term| (term.triple, term.reifier));
-            let edges = self.declared_components(segment_index, node, triple, reifier)?;
+            let edges = self.declared_components(segment_index, triple, reifier)?;
             if let Some(edges) = edges.filter(|_| state.cursor() < 3) {
                 let child = <[usize; 3]>::from(edges)[usize::from(state.cursor())];
                 held.component = state.advance();
