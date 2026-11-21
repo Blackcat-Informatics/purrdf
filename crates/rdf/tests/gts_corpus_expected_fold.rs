@@ -45,15 +45,10 @@ const VECTOR_COUNT: usize = 39;
 
 /// Vectors whose committed expectation this engine knowingly contradicts.
 ///
-/// `12-conflicting-reifier` binds one reifier id to two triples and carries no
-/// quoted-triple term. `rdf:reifies` is not a functional property, so both
-/// bindings are legitimate and this reader keeps both without complaint; the
-/// committed expectation still states the superseded single-binding reading —
-/// one N-Quad plus a `ConflictingReifier` diagnostic — which encodes the wrong
-/// premise. Correcting the expectation is an upstream act on the governed
-/// corpus. `purrdf-gts`'s `frozen_conflicting_reifier_divergence` test pins
-/// both sides in full and documents what must land upstream.
-const KNOWN_DIVERGENCES: [&str; 1] = ["12-conflicting-reifier"];
+/// Empty: every carried vector folds byte-exactly into its expectation. An entry
+/// added here is a measured disagreement and is held to the same two-way
+/// discipline as the assertions below.
+const KNOWN_DIVERGENCES: [&str; 0] = [];
 
 #[test]
 fn every_frozen_vector_matches_its_committed_expected_fold() {
