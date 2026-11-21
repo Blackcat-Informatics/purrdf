@@ -93,7 +93,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   that a segmented stack made only of image layers, with no removal or
   declaration owners and no resident head, keeps its 4.x snapshot identity and
   the receipts bound to it (see "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
-  keeps its 4.x additive value and is deprecated. The first identity request
+  is removed. The first identity request
   of a dataset frozen without eager statistics now sorts its record digests in a
   scratch buffer, a text delta hashes the whole row directory, and a standalone
   surface delta sorts every source digest (about 9% more instructions at 2048

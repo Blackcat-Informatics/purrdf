@@ -96,7 +96,7 @@ use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
 const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v6");
 /// Domain of the additive selected-source check value: the 4.x source
-/// fingerprint law, kept for [`source_fingerprint`] and the delta mismatch report.
+/// fingerprint law, kept for the delta mismatch report.
 const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v2");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`]: BLAKE3 over
 /// the sorted selected-row digests.
@@ -107,8 +107,6 @@ const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/so
 const TRIPLE_SOURCE_IDENTITY_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v3");
 
 mod source_digest;
-#[allow(deprecated, reason = "the 4.x public path stays reachable, deprecated")]
-pub use source_digest::source_fingerprint;
 use source_digest::{SourceDigest, row_directory, row_hashes, sorted_source_fingerprint};
 mod token_streams;
 use token_streams::TokenTable;

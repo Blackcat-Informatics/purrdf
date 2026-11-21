@@ -300,11 +300,11 @@ the identity from the data and record it again.
 | `SourceMatchEvidence::literal` of a match from an index-built surface, and the literal identity Han occurrences carry | The per-row source identity moved from the additive `purrdf-text/source/v2` law to the sorted `purrdf-text/source/v3` law. |
 | `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
 
-`purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
-deprecated: no 5.0 index carries that value. The value is not
-collision-resistant and must not be used as an identity; use
-`purrdf_text::source_digest` or `TextIndex::source_fingerprint` instead. The
-function is removed in the next major version. `SourceSummary::records` and
+`purrdf_text::source_fingerprint`, the free function over a `Multiset256`, is
+removed: no 5.0 index carries the additive value it computed, and that value is
+not collision-resistant, so it cannot serve as an identity. Replace a call with
+`purrdf_text::source_digest` over the dataset, or read
+`TextIndex::source_fingerprint`. `SourceSummary::records` and
 `SourceSummary::literal_rows` keep their additive `Multiset256` values, which
 combine across physical layers without visiting rows; they are accounting sums
 for drift and population checks between structures one process built, and no
