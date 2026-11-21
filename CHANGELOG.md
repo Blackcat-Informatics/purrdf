@@ -8,20 +8,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-- **Behaviour change: a triple term with neither `tt` nor `rf` projects as a
-  fresh blank node on every path.** Such a term states no triple, and the
-  specification's third resolution rule says a reader keeps it as a distinct
-  term and a projection renders it as a fresh blank node. The fold view already
-  did; `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, the
-  streaming importers (`import_gts_events` and its dictionary and blob forms) and
-  `export_gts_rdf_nquads_with_dictionary` refused the same file. They now project
-  `_:unbound_triple_{id}`, the node a term that reaches itself already becomes: one
-  id names one node in a projection and a second bare term names another.
+- **Behaviour change: a triple term that states no triple projects as a fresh
+  blank node no document label can name, on every path.** A triple term with
+  neither `tt` nor `rf`, a term whose `rf` names a reifier no `reifies` row binds
+  and a term that reaches itself state no triple, and the specification's third
+  resolution rule says a reader keeps each as a distinct term and a projection
+  renders it as a fresh blank node. `GtsFoldView`, `dataset_from_gts_graph`,
+  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
+  (`import_gts_events` and its dictionary and blob forms) and
+  `export_gts_rdf_nquads_with_dictionary` project such a term, where the bridges,
+  importers and exporter refused the first two. The node lives in a blank-node
+  scope no document label reaches (`u32::MAX`), so a document blank node labelled
+  `unbound_triple_N` is a different node; the earlier label in the document's own
+  scope was the same node. The projected identifier changes: a folded graph names
+  the node `unbound_triple_{id}` and a streamed file names it
+  `unbound_triple_{segment}_{id}`, each in that scope, and the N-Quads token of
+  the fold view and of the text exporter is the scoped escape
+  `_:purrdfesc4294967295_...`. The streaming importers keep segment scopes at most
+  `u32::MAX - 1`, so a segment index of `u32::MAX - 1` is refused with
+  `gts-scope-limit` where it was admitted. `ResolvedSink` gains the provided
+  method `intern_unbound_triple`, whose body interns the old label through
+  `intern_blank` for an implementor that does not override it; `EventEmitter`
+  gives each such term a scope of its own. The missing-reifier-binding codes and
   `native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
   `rdf-ir-unbound-triple-term` remain defined for API compatibility and no public
-  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the case,
-  and `ResolvedSink::err_unbound_triple` stays a required method that the
-  resolver no longer calls.
+  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the bare
+  case, and `ResolvedSink::err_unbound_triple` and `err_missing_reifier` stay
+  required methods that the resolver no longer calls.
 
 - **The byte-freeze guard covers the flat GTS vectors.** `check-corpus-frozen.py`
   gains a flat root, which freezes the registered files directly inside one

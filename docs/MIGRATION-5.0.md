@@ -555,7 +555,7 @@ lost or retyped a public field, and none of these enums lost a variant.
   `ForwardReference`, whether or not the term has a `tt` and whether or not a
   quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` and the
   fold view read the file and render the term as a fresh blank node (see
-  "Triple terms with neither `tt` nor `rf`"). The
+  "Triple terms that state no triple"). The
   conforming spelling names an earlier IRI or blank-node reifier in `rf` and
   keys the row by that reifier. A file whose `reifies` row is keyed by a
   quoted-triple term, whatever its `tt` or `rf`, loses that row.
@@ -683,42 +683,52 @@ lost or retyped a public field, and none of these enums lost a variant.
   misread one. Re-embedding is not needed to keep a 4.x file readable by 5.0, but
   a 5.0 file is not readable by 4.x.
 
-## Triple terms with neither `tt` nor `rf`
+## Triple terms that state no triple
 
-A `k:3` term that carries neither `tt` nor `rf` states no triple. GTS section 7.3
-says a reader keeps such a term as a distinct term, and a projection renders it
-as a fresh blank node.
+A `k:3` term states no triple when it carries neither `tt` nor `rf`, when its
+`rf` names a reifier no `reifies` row binds, or when it reaches itself. GTS
+section 7.3 says a reader keeps such a term as a distinct term, and a projection
+renders it as a fresh blank node.
 
-Every public path projects it as the blank node `_:unbound_triple_{id}`, the
-node a term that reaches itself projects as: `GtsFoldView`,
-`dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`,
-the streaming importers (`import_gts_events` and its dictionary and blob forms)
-and `export_gts_rdf_nquads_with_dictionary`. The term is accepted wherever a
+Every public path projects it as a blank node no document label can name:
+`GtsFoldView`, `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`,
+`import_gts_graph`, the streaming importers (`import_gts_events` and its
+dictionary and blob forms) and `export_gts_rdf_nquads_with_dictionary`. The node
+lives in blank-node scope `u32::MAX`, which no document blank node has: a folded
+graph interns the label `unbound_triple_{id}` there, a streamed file interns
+`unbound_triple_{segment}_{id}`, and a document blank node labelled
+`unbound_triple_N` stays a different node. In N-Quads text the node is the scoped
+escape `_:purrdfesc4294967295_unbound_00005Ftriple_00005F{id}`, which the fold
+view's `nq_token` and the text exporter write. The term is accepted wherever a
 blank node is legal: as a quad subject, as the subject of a reified triple,
 inside a `tt` component and as an annotation value. Within one projection the
-same term id names one blank node and a second bare term names another.
+same term id names one blank node and a second such term names another. A term
+whose `rf` names a reifier with a row still resolves through the first row, and a
+term with `tt` is unchanged.
+
+The streaming importers give segment scopes the ordinals 1 to `u32::MAX - 1`, so
+a segment index of `u32::MAX - 1` is refused with `gts-scope-limit`. An
+implementor of `purrdf_gts::segment_decode::ResolvedSink` overrides the provided
+method `intern_unbound_triple` to place the node outside every scope a document
+reaches; the provided body interns `unbound_triple_{id}` through `intern_blank`,
+which a document label can equal. `purrdf_gts::event_stream::EventEmitter` opens a
+scope of its own for each such term.
 
 A term whose `rf` names its own id is read as having no `rf`, because the
-reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView` and
-`dataset_from_gts_graph` then project it as a bare term. `import_gts_events` and
-its dictionary and blob forms refuse the file with `rdf-ir-gts-fold-diagnostic`,
-because they fail on any reader diagnostic.
+reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView`,
+`dataset_from_gts_graph`, `flattened_dataset_from_gts_graph` and
+`import_gts_graph` then project it as a bare term. `import_gts_events` and its
+dictionary and blob forms, and `export_gts_rdf_nquads_with_dictionary`, refuse the
+file with `rdf-ir-gts-fold-diagnostic`, because they fail on any reader
+diagnostic.
 
-`native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
-`rdf-ir-unbound-triple-term` remain defined for API compatibility. No public
-input produces them. A consumer that matched them to detect a bare term
-inspects the term instead, through `purrdf_gts::model::Term::is_bare_triple`. A
-writer that wants the term to state a triple writes `tt`.
-
-Two limits apply to the projection:
-
-- The projected node is labelled `unbound_triple_N`. A document blank node
-  with that label in the same scope denotes the same node as the projected one.
-  A term that reaches itself has the same label.
-- A term whose `rf` names a reifier with no `reifies` row is not a bare term.
-  `GtsFoldView` renders it as a blank node, while `dataset_from_gts_graph`,
-  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
-  and the exporter refuse it with a missing-reifier-binding code.
+`native-codec-unbound-triple-term`, `gts-unbound-triple-term`,
+`rdf-ir-unbound-triple-term`, `native-codec-missing-reifier-binding`,
+`rdf-ir-missing-reifier-binding` and `gts-missing-reifier-binding` remain defined
+for API compatibility. No public input produces them. A consumer that matched them
+to detect such a term inspects the term instead, through
+`purrdf_gts::model::Term::is_bare_triple` for a bare term. A writer that wants the
+term to state a triple writes `tt`.
 
 ## Hosts
 

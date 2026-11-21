@@ -1244,6 +1244,24 @@ first request for its bytes or size returns the typed codec failure, never a
 panic. A blob without a declared digest is decoded at fold, because its digest
 is computed from the decoded bytes, so this limit does not apply to it.
 
+### GTS triple terms that state no triple: one identity per term
+
+Specification section 7.3 says a triple term that states no triple stays a
+distinct term and a projection renders it as a fresh blank node. Its equality
+rules also say a term that resolves to no triple "keeps the identity it had
+before this rule (one unresolvable-triple-term identity per scope)". The two
+sentences admit a reading in which every such term of a scope is one shared
+node. PurRDF follows the first: each term is its own node, because the third
+resolution rule says "distinct term" and the blank-node rules in section 7.1 say
+each anonymous term entry is a distinct blank node within its scope. A shared
+node would also merge two statements about different terms into one.
+
+The projected node is fresh: it lives in a blank-node scope no document label
+reaches, so a document blank node with the label `unbound_triple_N` is a
+different node. This holds on every projection path, and a term whose `rf`
+names a reifier no `reifies` row binds is projected the same way instead of
+being refused.
+
 ## Comparison caveats
 
 - The SHACL harness compares the result **multiset** on

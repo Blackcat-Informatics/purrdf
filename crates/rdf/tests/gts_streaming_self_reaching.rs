@@ -25,10 +25,18 @@ fn indirect_triple(reifier: usize) -> Term {
     term
 }
 
-/// The streaming importer scopes a blank label with an escape prefix and writes
-/// `_` as `_00005F`; undo both so labels compare as the fold spells them.
+/// The streaming importer scopes a document blank label with an escape prefix and
+/// writes `_` as `_00005F`; undo both so document labels compare as the fold spells
+/// them. A triple term that states no triple lives in the one reserved scope, keeps
+/// that prefix, and names its segment: the segment `0` of a one-segment file is
+/// dropped so the label reads as the fold's, which has no segments.
 fn unescape_blank_labels(text: &str) -> String {
-    text.replace("purrdfesc1_", "").replace("_00005F", "_")
+    text.replace("purrdfesc1_", "")
+        .replace(
+            "unbound_00005Ftriple_00005F0_00005F",
+            "unbound_00005Ftriple_00005F",
+        )
+        .replace("_00005F", "_")
 }
 
 /// The sorted N-Quads and the sorted reifier rows of a dataset.
@@ -40,10 +48,10 @@ fn projection(dataset: &RdfDataset) -> (Vec<String>, Vec<String>) {
         .lines()
         .map(str::to_owned)
         .collect();
-    quads.sort();
     for line in &mut quads {
         *line = unescape_blank_labels(line);
     }
+    quads.sort();
     let mut rows: Vec<String> = dataset
         .owned_reifiers()
         .map(|r| unescape_blank_labels(&format!("{:?} {:?} {:?}", r.reifier, r.statement, r.graph)))
@@ -108,7 +116,7 @@ fn every_member_of_a_component_degrades_whichever_term_the_search_starts_from() 
             assert!(
                 quads
                     .iter()
-                    .any(|q| q.contains(&format!("_:unbound_triple_{id}"))),
+                    .any(|q| q.contains(&format!("_:purrdfesc4294967295_unbound_triple_{id}"))),
                 "term {id} degrades: {quads:?}"
             );
         }
@@ -153,7 +161,7 @@ fn a_row_naming_the_term_that_resolves_through_it_keeps_the_row() {
     let (quads, rows) = both_ways(&terms, &[(2, 1, 3, None)], &[(0, (3, 1, 2), None)]);
     assert!(
         quads.contains(
-            &"<https://example.org/Cat> <https://example.org/label> _:unbound_triple_3 ."
+            &"<https://example.org/Cat> <https://example.org/label> _:purrdfesc4294967295_unbound_triple_3 ."
                 .to_owned()
         ),
         "{quads:?}"
@@ -212,11 +220,11 @@ fn a_bare_triple_term_is_one_fresh_blank_node_on_every_path() {
     assert_eq!(
         streamed,
         [
-            "<https://example.org/s> <https://example.org/p> <<( <https://example.org/s> <https://example.org/p> _:unbound_triple_3 )>> .",
-            "<https://example.org/s> <https://example.org/p> _:unbound_triple_2 .",
-            "<https://example.org/s> <https://example.org/p> _:unbound_triple_3 .",
-            "_:unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
-            "_:unbound_triple_2 <https://example.org/p> _:unbound_triple_2 .",
+            "<https://example.org/s> <https://example.org/p> <<( <https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_3 )>> .",
+            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_2 .",
+            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_3 .",
+            "_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
+            "_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> _:purrdfesc4294967295_unbound_triple_2 .",
         ]
     );
 
@@ -225,11 +233,17 @@ fn a_bare_triple_term_is_one_fresh_blank_node_on_every_path() {
     writer.add_quads(&quads);
     let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
     let view = GtsFoldView::new(graph).expect("the fold view admits the file");
-    assert_eq!(view.nq_token(2), "_:unbound_triple_2");
-    assert_eq!(view.nq_token(3), "_:unbound_triple_3");
+    assert_eq!(
+        view.nq_token(2),
+        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F2"
+    );
+    assert_eq!(
+        view.nq_token(3),
+        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F3"
+    );
     assert_eq!(
         view.nq_token(4),
-        "<<( <https://example.org/s> <https://example.org/p> _:unbound_triple_3 )>>"
+        "<<( <https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_00005Ftriple_00005F3 )>>"
     );
 
     let mut writer = Writer::new("purrdf-test");
@@ -242,5 +256,119 @@ fn a_bare_triple_term_is_one_fresh_blank_node_on_every_path() {
         ),
         (streamed, Vec::new()),
         "the flattened bridge projects what the other paths project"
+    );
+}
+
+/// The N-Quads projection of every path that reads a folded graph or a file, each
+/// asserted equal to the streaming importer's: the streaming importer, both dataset
+/// bridges and the consuming importer. The fold view's tokens are checked by the
+/// caller, which knows its term ids.
+fn every_dataset_path(
+    terms: &[Term],
+    quads: &[purrdf_gts::model::Quad],
+    rows: &[purrdf_gts::model::ReifierRow],
+) -> Vec<String> {
+    let (streamed, _) = both_ways(terms, quads, rows);
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(terms);
+    writer.add_quads(quads);
+    writer.add_reifies(rows);
+    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    let flattened = projection(&flattened_dataset_from_gts_graph(&graph).expect("flattened"));
+    assert_eq!(flattened.0, streamed, "the flattened bridge agrees");
+    let consumed = projection(
+        &purrdf_rdf::import_gts_graph(graph)
+            .expect("consuming")
+            .dataset,
+    );
+    assert_eq!(consumed.0, streamed, "the consuming importer agrees");
+    streamed
+}
+
+/// Protects the identity of the projected node of a triple term that states no
+/// triple (§7.3, "a fresh blank node"; §7.1, a label is local to its scope). A
+/// document blank node labelled `unbound_triple_2` is a different node from the
+/// bare term `2`: both quads survive, on every dataset path. The neighbouring case
+/// with no such label, `a_bare_triple_term_is_one_fresh_blank_node_on_every_path`,
+/// still agrees across paths.
+#[test]
+fn a_document_blank_node_labelled_like_an_unbound_triple_stays_a_distinct_node() {
+    let mut bare = Term::triple_term((0, 0, 0));
+    bare.triple = None;
+    let terms = [
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        bare,                               // 2
+        Term::blank("unbound_triple_2"),    // 3: the label the old projection used
+    ];
+    let quads = [(2, 1, 0, None), (3, 1, 0, None)];
+    let streamed = every_dataset_path(&terms, &quads, &[]);
+    assert_eq!(
+        streamed,
+        [
+            "_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
+            "_:unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
+        ],
+        "two subjects, two quads"
+    );
+
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    writer.add_quads(&quads);
+    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    let view = GtsFoldView::new(graph).expect("the fold view admits the file");
+    assert_ne!(
+        view.nq_token(2),
+        view.nq_token(3),
+        "the fold view's tokens differ"
+    );
+    assert_eq!(view.nq_token(3), "_:unbound_triple_2");
+}
+
+/// Protects §7.3 step 3 for a term whose `rf` names a reifier no `reifies` row
+/// binds: it states no triple and projects as a fresh blank node on every path
+/// instead of being refused, while a term whose `rf` has a row still resolves
+/// through it.
+#[test]
+fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
+    let terms = [
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        Term::iri("https://example.org/r"), // 2: a reifier with no row
+        indirect_triple(2),                 // 3: states no triple
+        Term::iri("https://example.org/q"), // 4: a reifier with a row
+        indirect_triple(4),                 // 5: resolves through the row
+    ];
+    let quads = [(0, 1, 3, None), (0, 1, 5, None)];
+    let rows = [(4, (0, 1, 0), None)];
+    let streamed = every_dataset_path(&terms, &quads, &rows);
+    assert!(
+        streamed.contains(
+            &"<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_3 ."
+                .to_owned()
+        ),
+        "{streamed:?}"
+    );
+    assert!(
+        streamed.contains(
+            &"<https://example.org/s> <https://example.org/p> <<( <https://example.org/s> <https://example.org/p> <https://example.org/s> )>> ."
+                .to_owned()
+        ),
+        "{streamed:?}"
+    );
+
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    writer.add_quads(&quads);
+    writer.add_reifies(&rows);
+    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    let view = GtsFoldView::new(graph).expect("the fold view admits the file");
+    assert_eq!(
+        view.nq_token(3),
+        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F3"
+    );
+    assert_eq!(
+        view.nq_token(5),
+        "<<( <https://example.org/s> <https://example.org/p> <https://example.org/s> )>>"
     );
 }

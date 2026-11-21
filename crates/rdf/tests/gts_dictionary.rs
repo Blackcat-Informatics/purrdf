@@ -576,22 +576,40 @@ fn explicit_reference_preparation_keeps_unrelated_reifier_terms_out_of_raw_admis
 /// fresh blank node, so the text exporter must accept it where a blank node is
 /// legal: as a quad subject, as the subject of a reified triple, inside a `tt`
 /// component and as an annotation value. The exported text reparses to the
-/// dataset the streaming importer builds; a `tt` term over a bare subject is the
-/// neighbouring valid case.
+/// dataset the streaming importer builds; a `tt` term over a bare subject is a
+/// neighbouring valid case. A document blank node labelled `unbound_triple_2`
+/// stays a different node from the bare term `2` in the one N-Quads label space.
+/// A term whose `rf` names a reifier with no row is a blank node, and one whose
+/// `rf` has a row still resolves through it.
 #[test]
 fn the_text_exporter_projects_a_bare_triple_term_wherever_a_blank_node_is_legal() {
     let mut bare = Term::triple_term((0, 0, 0));
     bare.triple = None;
+    let indirect = |reifier: usize| {
+        let mut term = bare.clone();
+        term.reifier = Some(reifier);
+        term
+    };
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&[
-        Term::iri("https://example.org/s"), // 0
-        Term::iri("https://example.org/p"), // 1
-        bare.clone(),                       // 2
-        Term::iri("https://example.org/r"), // 3: the reifier
-        Term::triple_term((2, 1, 0)),       // 4: a `tt` whose subject is bare
-        bare,                               // 5
+        Term::iri("https://example.org/s"),  // 0
+        Term::iri("https://example.org/p"),  // 1
+        bare.clone(),                        // 2
+        Term::iri("https://example.org/r"),  // 3: the reifier
+        Term::triple_term((2, 1, 0)),        // 4: a `tt` whose subject is bare
+        bare.clone(),                        // 5
+        Term::blank("unbound_triple_2"),     // 6: a document label the old projection used
+        Term::iri("https://example.org/r6"), // 7: a reifier no row binds
+        indirect(7),                         // 8: `rf` 7, no row: states no triple
+        indirect(3),                         // 9: `rf` 3, which a row binds
     ]);
-    writer.add_quads(&[(2, 1, 0, None), (0, 1, 4, None)]);
+    writer.add_quads(&[
+        (2, 1, 0, None),
+        (0, 1, 4, None),
+        (6, 1, 0, None),
+        (0, 1, 8, None),
+        (0, 1, 9, None),
+    ]);
     writer.add_reifies(&[(3, (2, 1, 0), None)]);
     writer.add_annot(&[(3, 1, 5, None)]);
     let bytes = writer.into_bytes();
@@ -616,9 +634,52 @@ fn the_text_exporter_projects_a_bare_triple_term_wherever_a_blank_node_is_legal(
         .expect("the exported text is RDF 1.2");
     let imported = import_gts_events(&bytes).expect("the streaming importer admits the file");
     assert_eq!(render(&exported), render(&imported.dataset));
-    assert_eq!(exported.owned_quads().count(), 2, "both quads are exported");
+    // The document blank node labelled like the old projection is its own subject:
+    // the quad it states stays apart from the bare term's.
+    // Terms 4 and 9 denote one triple term, so five quads are four statements.
+    assert_eq!(
+        exported.owned_quads().count(),
+        4,
+        "every statement is exported"
+    );
     assert_eq!(exported.owned_reifiers().count(), 1);
     assert_eq!(exported.owned_annotations().count(), 1);
+}
+
+/// A term whose `rf` names its own id is diagnosed by the reader as a forward
+/// reference, and the stored exporter fails on any reader diagnostic exactly as
+/// the streaming importer does: it refuses the file rather than projecting the
+/// term. Protects the exporter's refusal of a file the reader flags.
+#[test]
+fn the_text_exporter_refuses_a_term_whose_rf_names_its_own_id() {
+    let mut term = Term::triple_term((0, 0, 0));
+    term.triple = None;
+    term.reifier = Some(2);
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        term,                               // 2: `rf` names the term itself
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    let bytes = writer.into_bytes();
+    let directory = purrdf_testkit::temp_dir!().expect("exporter directory");
+    let root = directory.path();
+    let mut raw = storage::Files::new(&root.join("raw"));
+    let replay = raw.replay();
+    let mut resolution = storage::Resolution::new(&root.join("export"));
+    let mut output = WriterDrain(Vec::new());
+    let mut ceiling = Ceiling(128 * 1024);
+    let outcome = export_gts_rdf_nquads_with_dictionary(
+        &bytes,
+        &mut raw,
+        &mut resolution,
+        replay,
+        &mut output,
+        &mut Memory::new(&mut ceiling),
+    );
+    let err = outcome.expect_err("the exporter refuses the flagged file");
+    assert_eq!(err.code, "rdf-ir-gts-fold-diagnostic", "{err:?}");
 }
 
 #[test]
@@ -1460,9 +1521,9 @@ fn the_stored_export_renders_self_reaching_triple_terms_as_the_resident_import_d
     assert_eq!(render(&parsed), render(&resident.dataset));
     let text = String::from_utf8(output.0).expect("UTF-8 projection");
     for id in [5, 6, 7] {
-        // Blank labels are written with `_` escaped.
+        // Blank labels are written with `_` escaped; the label names segment 0.
         assert!(
-            text.contains(&format!("unbound_00005Ftriple_00005F{id}")),
+            text.contains(&format!("unbound_00005Ftriple_00005F0_00005F{id}")),
             "{text}"
         );
     }
