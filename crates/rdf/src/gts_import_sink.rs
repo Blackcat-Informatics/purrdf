@@ -138,7 +138,7 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
     let index = CapacityError::slot(
         CapacitySpace::ImportBlankScopes,
         segment_index,
-        // The last scope is reserved for triple terms that state no triple.
+        // The scopes above are reserved for unbound triple terms and queries.
         u64::from(crate::gts_resolve::UNBOUND_TRIPLE_SCOPE.ordinal() - 1),
     )
     .map_err(|error| {
@@ -762,13 +762,18 @@ mod tests {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
         let mut sink = SinkImporter::new();
         let last = sink
-            .intern_blank(u64::from(u32::MAX) - 2, 0, "last")
+            .intern_blank(u64::from(u32::MAX) - 3, 0, "last")
             .unwrap();
         assert_eq!(
-            segment_scope(u64::from(u32::MAX) - 2).unwrap(),
-            BlankScope(u32::MAX - 1)
+            segment_scope(u64::from(u32::MAX) - 3).unwrap(),
+            BlankScope(u32::MAX - 2)
         );
-        for index in [u64::from(u32::MAX) - 1, u64::from(u32::MAX), u64::MAX] {
+        for index in [
+            u64::from(u32::MAX) - 2,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            u64::MAX,
+        ] {
             let error = sink.intern_blank(index, 1, "refused").unwrap_err();
             assert_eq!(error.code, "gts-scope-limit");
             assert_eq!(
@@ -776,12 +781,12 @@ mod tests {
                 Some(StorageError::Capacity(CapacityError::new(
                     CapacitySpace::ImportBlankScopes,
                     u128::from(index) + 1,
-                    u128::from(u32::MAX - 1)
+                    u128::from(u32::MAX - 2)
                 )))
             );
             assert_eq!(error.location.unwrap().gts_segment_index, Some(index));
             assert_eq!(
-                sink.intern_blank(u64::from(u32::MAX) - 2, 0, "last")
+                sink.intern_blank(u64::from(u32::MAX) - 3, 0, "last")
                     .unwrap(),
                 last
             );

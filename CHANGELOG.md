@@ -18,17 +18,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (`import_gts_events` and its dictionary and blob forms) and
   `export_gts_rdf_nquads_with_dictionary` project such a term, where the bridges,
   importers and exporter refused the first two. The node lives in a blank-node
-  scope no document label reaches (`u32::MAX`), so a document blank node labelled
+  scope no document label reaches (`u32::MAX - 1`), so a document blank node labelled
   `unbound_triple_N` is a different node; the earlier label in the document's own
   scope was the same node. The projected identifier changes: a folded graph names
   the node `unbound_triple_{id}` and a streamed file names it
   `unbound_triple_{segment}_{id}`, each in that scope, and the N-Quads token of
   the fold view and of the text exporter is the scoped escape
-  `_:purrdfesc4294967295_...` (the exporter's also names the segment). The fold
+  `_:purrdfesc4294967294_...` (the exporter's also names the segment). The fold
   view's `nq_token` writes document blank nodes through the same encoder, so a
   label that is not a valid N-Quads blank-node label or begins with `purrdfesc`
   is now written escaped instead of verbatim. The streaming importers keep segment scopes at most
-  `u32::MAX - 1`, so a segment index of `u32::MAX - 1` is refused with
+  `u32::MAX - 2`, so a segment index of `u32::MAX - 1` is refused with
   `gts-scope-limit` where it was admitted. `ResolvedSink` gains the provided
   method `intern_unbound_triple`, whose body interns the old label through
   `intern_blank` for an implementor that does not override it; `EventEmitter`

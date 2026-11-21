@@ -24,11 +24,12 @@ use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 ///
 /// A document blank node lands in [`BlankScope::DEFAULT`] (a folded graph) or in the
 /// scope of its segment (`segment index + 1`, which the streaming importer keeps
-/// at most `u32::MAX - 1`), so no document label ever names a node of this scope: the
+/// at most `u32::MAX - 2`), so no document label ever names a node of this scope: the
 /// projected node is fresh, as the specification requires, whatever labels the
 /// document uses. A label is only ever read together with its scope, so the same
 /// label spelled by the document and by the projection is two nodes.
-pub(crate) const UNBOUND_TRIPLE_SCOPE: BlankScope = BlankScope(u32::MAX);
+pub(crate) const UNBOUND_TRIPLE_SCOPE: BlankScope =
+    purrdf_core::blank_label::UNBOUND_TRIPLE_BLANK_SCOPE;
 
 /// The label of the node a triple term that states no triple projects as, inside
 /// [`UNBOUND_TRIPLE_SCOPE`]. A folded graph numbers its terms file-wide, so the term
@@ -55,7 +56,7 @@ pub(crate) fn unbound_triple_label(segment: Option<u64>, term: usize) -> impl st
 /// Proof. `encode_blank_label` is injective over `(label, scope)` for a fixed
 /// alphabet. A document blank node is encoded at a scope other than
 /// [`UNBOUND_TRIPLE_SCOPE`] (the default scope, or a segment scope at most
-/// `u32::MAX - 1`), and a projected unbound triple term is encoded at
+/// `u32::MAX - 2`), and a projected unbound triple term is encoded at
 /// [`UNBOUND_TRIPLE_SCOPE`]. Two nodes with distinct scopes are distinct pairs, so
 /// their tokens differ, whatever label the document spells.
 pub(crate) fn blank_token(label: &str, scope: BlankScope) -> std::borrow::Cow<'_, str> {

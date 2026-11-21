@@ -159,6 +159,22 @@ use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 use crate::BlankScope;
 
+/// The blank-node scope of a query's own labels: a query is a blank-node document
+/// of its own, so its `_:b` never names a node of a dataset. No dataset interns a
+/// blank node under it.
+pub const QUERY_BLANK_SCOPE: BlankScope = BlankScope(u32::MAX);
+
+/// The blank-node scope of every triple term that states no triple (GTS-SPEC 7.3).
+/// The projected node is fresh, so no document or query label may name it.
+///
+/// Scope reservations. [`BlankScope::DEFAULT`] is a parsed or folded document's
+/// scope; `1, 2, 3, ...` are the scopes a merge and the streaming GTS importer hand
+/// out, counting up and stopping at `u32::MAX - 2`. The two scopes above them are
+/// reserved and no document, segment or merge scope reaches either:
+/// [`UNBOUND_TRIPLE_BLANK_SCOPE`] (`u32::MAX - 1`) and [`QUERY_BLANK_SCOPE`]
+/// (`u32::MAX`).
+pub const UNBOUND_TRIPLE_BLANK_SCOPE: BlankScope = BlankScope(u32::MAX - 1);
+
 /// Which label grammar [`is_valid_label`] should check against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelAlphabet {

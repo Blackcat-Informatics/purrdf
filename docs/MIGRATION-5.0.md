@@ -694,13 +694,13 @@ Every public path projects it as a blank node no document label can name:
 `GtsFoldView`, `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`,
 `import_gts_graph`, the streaming importers (`import_gts_events` and its
 dictionary and blob forms) and `export_gts_rdf_nquads_with_dictionary`. The node
-lives in blank-node scope `u32::MAX`, which no document blank node has: a folded
+lives in blank-node scope `u32::MAX - 1`, which no document blank node has: a folded
 graph interns the label `unbound_triple_{id}` there, a streamed file interns
 `unbound_triple_{segment}_{id}`, and a document blank node labelled
 `unbound_triple_N` stays a different node. In N-Quads text the node is a scoped
 escape: the fold view's `nq_token` writes
-`_:purrdfesc4294967295_unbound_00005Ftriple_00005F{id}`, and the text exporter
-writes `_:purrdfesc4294967295_unbound_00005Ftriple_00005F{segment}_00005F{id}`.
+`_:purrdfesc4294967294_unbound_00005Ftriple_00005F{id}`, and the text exporter
+writes `_:purrdfesc4294967294_unbound_00005Ftriple_00005F{segment}_00005F{id}`.
 `nq_token` also writes document blank nodes through the same encoder, so a label
 that is not a valid N-Quads blank-node label, or that begins with `purrdfesc`,
 is written escaped where it was written verbatim. The term is accepted wherever a
@@ -710,8 +710,8 @@ same term id names one blank node and a second such term names another. A term
 whose `rf` names a reifier with a row still resolves through the first row, and a
 term with `tt` is unchanged.
 
-The streaming importers give segment scopes the ordinals 1 to `u32::MAX - 1`, so
-a segment index of `u32::MAX - 1` is refused with `gts-scope-limit`. An
+The streaming importers give segment scopes the ordinals 1 to `u32::MAX - 2`, so
+a segment index of `u32::MAX - 2` is refused with `gts-scope-limit`. An
 implementor of `purrdf_gts::segment_decode::ResolvedSink` overrides the provided
 method `intern_unbound_triple` to place the node outside every scope a document
 reaches; the provided body interns `unbound_triple_{id}` through `intern_blank`,

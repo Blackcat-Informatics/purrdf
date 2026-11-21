@@ -117,7 +117,7 @@ fn every_member_of_a_component_degrades_whichever_term_the_search_starts_from() 
             assert!(
                 quads
                     .iter()
-                    .any(|q| q.contains(&format!("_:purrdfesc4294967295_unbound_triple_{id}"))),
+                    .any(|q| q.contains(&format!("_:purrdfesc4294967294_unbound_triple_{id}"))),
                 "term {id} degrades: {quads:?}"
             );
         }
@@ -162,7 +162,7 @@ fn a_row_naming_the_term_that_resolves_through_it_keeps_the_row() {
     let (quads, rows) = both_ways(&terms, &[(2, 1, 3, None)], &[(0, (3, 1, 2), None)]);
     assert!(
         quads.contains(
-            &"<https://example.org/Cat> <https://example.org/label> _:purrdfesc4294967295_unbound_triple_3 ."
+            &"<https://example.org/Cat> <https://example.org/label> _:purrdfesc4294967294_unbound_triple_3 ."
                 .to_owned()
         ),
         "{quads:?}"
@@ -221,11 +221,11 @@ fn a_bare_triple_term_is_one_fresh_blank_node_on_every_path() {
     assert_eq!(
         streamed,
         [
-            "<https://example.org/s> <https://example.org/p> <<( <https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_3 )>> .",
-            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_2 .",
-            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_3 .",
-            "_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
-            "_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> _:purrdfesc4294967295_unbound_triple_2 .",
+            "<https://example.org/s> <https://example.org/p> <<( <https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_triple_3 )>> .",
+            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_triple_2 .",
+            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_triple_3 .",
+            "_:purrdfesc4294967294_unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
+            "_:purrdfesc4294967294_unbound_triple_2 <https://example.org/p> _:purrdfesc4294967294_unbound_triple_2 .",
         ]
     );
 
@@ -236,15 +236,15 @@ fn a_bare_triple_term_is_one_fresh_blank_node_on_every_path() {
     let view = GtsFoldView::new(graph).expect("the fold view admits the file");
     assert_eq!(
         view.nq_token(2),
-        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F2"
+        "_:purrdfesc4294967294_unbound_00005Ftriple_00005F2"
     );
     assert_eq!(
         view.nq_token(3),
-        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F3"
+        "_:purrdfesc4294967294_unbound_00005Ftriple_00005F3"
     );
     assert_eq!(
         view.nq_token(4),
-        "<<( <https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_00005Ftriple_00005F3 )>>"
+        "<<( <https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_00005Ftriple_00005F3 )>>"
     );
 
     let mut writer = Writer::new("purrdf-test");
@@ -302,7 +302,7 @@ fn a_document_blank_node_labelled_like_an_unbound_triple_stays_a_distinct_node()
         bare,                               // 2
         Term::blank("unbound_triple_2"),    // 3: the label the old projection used
         // 4: a label that already spells the projected node's escaped token
-        Term::blank("purrdfesc4294967295_unbound_00005Ftriple_00005F2"),
+        Term::blank("purrdfesc4294967294_unbound_00005Ftriple_00005F2"),
     ];
     let quads = [(2, 1, 0, None), (3, 1, 0, None), (4, 1, 0, None)];
     let streamed = every_dataset_path(&terms, &quads, &[]);
@@ -313,7 +313,7 @@ fn a_document_blank_node_labelled_like_an_unbound_triple_stays_a_distinct_node()
     );
     assert!(
         streamed.contains(
-            &"_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> <https://example.org/s> ."
+            &"_:purrdfesc4294967294_unbound_triple_2 <https://example.org/p> <https://example.org/s> ."
                 .to_owned()
         ),
         "{streamed:?}"
@@ -361,14 +361,14 @@ fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
     let streamed = every_dataset_path(&terms, &quads, &rows);
     assert!(
         streamed.contains(
-            &"<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_3 ."
+            &"<https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_triple_3 ."
                 .to_owned()
         ),
         "{streamed:?}"
     );
     assert!(
         streamed.contains(
-            &"<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_7 ."
+            &"<https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_triple_7 ."
                 .to_owned()
         ),
         "an `rf` naming a `tt` term binds no triple: {streamed:?}"
@@ -389,7 +389,7 @@ fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
     let view = GtsFoldView::new(graph).expect("the fold view admits the file");
     assert_eq!(
         view.nq_token(3),
-        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F3"
+        "_:purrdfesc4294967294_unbound_00005Ftriple_00005F3"
     );
     assert_eq!(
         view.nq_token(5),
@@ -397,6 +397,6 @@ fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
     );
     assert_eq!(
         view.nq_token(7),
-        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F7"
+        "_:purrdfesc4294967294_unbound_00005Ftriple_00005F7"
     );
 }

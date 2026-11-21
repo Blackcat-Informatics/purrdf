@@ -663,7 +663,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("N-Quads are UTF-8"),
             "<http://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
-             <<( <http://example.org/p> <http://example.org/p> _:purrdfesc4294967295_unbound_00005Ftriple_00005F2 )>> .\n"
+             <<( <http://example.org/p> <http://example.org/p> _:purrdfesc4294967294_unbound_00005Ftriple_00005F2 )>> .\n"
         );
     }
 

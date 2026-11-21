@@ -128,7 +128,7 @@ fn every_door_degrades(build: impl Fn() -> Graph, degraded: &[usize], what: &str
     for &tid in degraded {
         assert_eq!(
             view.nq_token(tid),
-            format!("_:purrdfesc4294967295_unbound_00005Ftriple_00005F{tid}"),
+            format!("_:purrdfesc4294967294_unbound_00005Ftriple_00005F{tid}"),
             "term {tid} of {what} states no triple"
         );
     }
@@ -157,7 +157,7 @@ fn a_triple_term_that_names_itself_states_no_triple() {
     assert_eq!(
         nquads(&build()),
         [
-            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_00005Ftriple_00005F2 ."
+            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_00005Ftriple_00005F2 ."
         ]
     );
 }
@@ -180,7 +180,7 @@ fn two_triple_terms_that_name_each_other_both_state_no_triple() {
     let view = GtsFoldView::new(build()).expect("the loop degrades");
     assert_eq!(
         view.nq_token(3),
-        "<<( _:purrdfesc4294967295_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> )>>",
+        "<<( _:purrdfesc4294967294_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> )>>",
         "a term that contains a self-reaching term keeps its own components"
     );
 }
@@ -232,7 +232,7 @@ fn a_reifier_binding_that_reaches_its_own_triple_term_keeps_its_row() {
         nquads(&build()),
         [
             "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
-          <<( _:purrdfesc4294967295_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> )>> ."
+          <<( _:purrdfesc4294967294_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> )>> ."
         ]
     );
 }
@@ -257,13 +257,13 @@ fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
         };
         every_door_degrades(build, &[1], "a bare triple term keying a row");
         let mut expected = vec![
-            "_:purrdfesc4294967295_unbound_00005Ftriple_00005F1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
-             <<( _:purrdfesc4294967295_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> )>> ."
+            "_:purrdfesc4294967294_unbound_00005Ftriple_00005F1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( _:purrdfesc4294967294_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> )>> ."
                 .to_owned(),
         ];
         if used_by_a_quad {
             expected.push(
-                "_:purrdfesc4294967295_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> .".to_owned(),
+                "_:purrdfesc4294967294_unbound_00005Ftriple_00005F1 <https://example.org/p> <https://example.org/p> .".to_owned(),
             );
         }
         expected.sort();
@@ -301,11 +301,11 @@ fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
     assert_eq!(
         nquads(&graph),
         [
-            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_00005Ftriple_00005F2 ."
+            "<https://example.org/s> <https://example.org/p> _:purrdfesc4294967294_unbound_00005Ftriple_00005F2 ."
         ]
     );
     let bare = "<https://example.org/s> <https://example.org/p> \
-                _:purrdfesc4294967295_unbound_00005Ftriple_00005F2 .\n";
+                _:purrdfesc4294967294_unbound_00005Ftriple_00005F2 .\n";
     let flattened = flattened_dataset_from_gts_graph(&graph).expect("the flattened bridge");
     let flattened = serialize_dataset(&flattened, "application/n-quads", SerializeGraph::Dataset)
         .expect("the dataset serializes");
@@ -327,7 +327,7 @@ fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
     let view = GtsFoldView::new(graph).expect("the fold view admits the graph");
     assert_eq!(
         view.nq_token(2),
-        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F2"
+        "_:purrdfesc4294967294_unbound_00005Ftriple_00005F2"
     );
 }
 

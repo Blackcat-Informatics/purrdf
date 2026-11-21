@@ -62,7 +62,7 @@ def test_a_self_reaching_term_renders_as_an_unbound_triple_and_keeps_its_row(
 ) -> None:
     view = purrdf.GtsFoldViewNative.from_parts(terms, [], reifiers, [])
     for tid in unbound:
-        assert view.nq_token(tid) == f"_:purrdfesc4294967295_unbound_00005Ftriple_00005F{tid}"
+        assert view.nq_token(tid) == f"_:purrdfesc4294967294_unbound_00005Ftriple_00005F{tid}"
     assert len(view.reifiers()) == len(reifiers)
 
 
