@@ -439,7 +439,21 @@ mod tests {
 
     #[test]
     fn cyclic_triple_terms_hit_nesting_limit() {
+        let iri = |value: &str| Term {
+            kind: TermKind::Iri,
+            value: Some(value.to_owned()),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: None,
+        };
         let mut graph = Graph::default();
+        graph.terms.push(iri("https://example.org/r")); // 0
+        graph.terms.push(iri("https://example.org/p")); // 1
+        graph.terms.push(iri("https://example.org/o")); // 2
+        // Triple term 3 names the earlier reifier 0, whose row names term 3 as
+        // its own object.
         graph.terms.push(Term {
             kind: TermKind::Triple,
             value: None,
@@ -448,28 +462,10 @@ mod tests {
             direction: None,
             reifier: Some(0),
             triple: None,
-        });
-        graph.terms.push(Term {
-            kind: TermKind::Iri,
-            value: Some("https://example.org/p".to_owned()),
-            datatype: None,
-            lang: None,
-            direction: None,
-            reifier: None,
-            triple: None,
-        });
-        graph.terms.push(Term {
-            kind: TermKind::Iri,
-            value: Some("https://example.org/o".to_owned()),
-            datatype: None,
-            lang: None,
-            direction: None,
-            reifier: None,
-            triple: None,
-        });
-        graph.reifiers.push((0, (0, 1, 2), None));
+        }); // 3
+        graph.reifiers.push((0, (2, 1, 3), None));
 
-        let err = term_from_id(&graph, 0, RdfLocation::logical("test"))
+        let err = term_from_id(&graph, 3, RdfLocation::logical("test"))
             .expect_err("cyclic triple term should hit nesting limit");
         assert_eq!(err.code, "gts-term-nesting-limit");
     }

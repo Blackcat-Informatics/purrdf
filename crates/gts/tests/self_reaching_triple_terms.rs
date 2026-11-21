@@ -24,10 +24,12 @@
 //! Every case below is built through the real [`Writer`] and read back, so
 //! these are claims about the wire and not about hand-assembled structures.
 
-use purrdf_gts::model::{Graph, ReifierRow, Term, TermKind};
+use purrdf_gts::model::{DiagnosticCause, Graph, ReifierRow, Term, TermKind};
 use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
 use purrdf_gts::resolution::SelfReaching;
 use purrdf_gts::writer::Writer;
+use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_testkit::error_capture::Capture;
 
 #[path = "support/reifier_terms.rs"]
 mod reifier_terms;
@@ -163,6 +165,56 @@ fn a_term_whose_rf_names_itself_is_a_forward_reference_and_its_row_drops() {
     );
     assert_eq!(earlier_reifier.reifiers, vec![(2, (0, 1, 0), None)]);
     assert_eq!(earlier_reifier.triple_of(3), Some((0, 1, 0)));
+}
+
+/// A consumer can act on both diagnostics a self-naming `rf` produces: the
+/// forward reference names the term and the `rf` it carried, and the dropped row
+/// names the frame, the reifier and the row's triple.
+#[test]
+fn the_diagnostics_of_a_self_naming_rf_carry_typed_payloads() {
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("http://example.org/a"),
+        Term::iri("http://example.org/p"),
+        Term::iri("http://example.org/r"),
+        indirect_triple_term(3),
+    ]);
+    writer.add_quads(&[(0, 1, 3, None)]);
+    writer.add_reifies(&[(3, (0, 1, 0), None)]);
+    let graph = read(&writer.into_bytes(), false, None);
+    let payload = |code: &str| {
+        let diagnostic = graph
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("{code} is reported: {:?}", graph.diagnostics));
+        let Some(DiagnosticCause::Native(cause)) = diagnostic.cause.as_ref() else {
+            panic!("{code} keeps its typed cause: {diagnostic:?}");
+        };
+        let error: &dyn StructuredError = &***cause;
+        (diagnostic.frame_index, Capture::read(error))
+    };
+
+    let (frame, forward) = payload("ForwardReference");
+    assert_eq!(forward.code, "gts-forward-reference");
+    assert!(
+        matches!(forward.field("term"), ErrorValue::Signed(3)),
+        "term"
+    );
+    assert!(
+        matches!(forward.field("reifier"), ErrorValue::Signed(3)),
+        "reifier"
+    );
+    assert!(
+        matches!(forward.field("datatype"), ErrorValue::Absent),
+        "datatype"
+    );
+    assert_eq!(frame, Some(1), "the terms frame");
+
+    let (frame, row) = payload("PositionConstraint");
+    assert_eq!(row.code, "gts-reifier-kind");
+    assert!(matches!(row.field("id"), ErrorValue::Unsigned(3)), "id");
+    assert_eq!(frame, Some(3), "the reifies frame");
 }
 
 /// A `k:3` term with neither `tt` nor `rf` states no triple (§7.1, third

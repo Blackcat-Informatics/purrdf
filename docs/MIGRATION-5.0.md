@@ -484,17 +484,28 @@ lost or retyped a public field, and none of these enums lost a variant.
   4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
   `quads` subject and as the object of a `reifies` or `annot` row. One
   quoted-triple term whose `rf` names its own id or a later id breaks the
-  specification's rule that `rf` names a strictly earlier term. The reader
-  diagnoses it `ForwardReference` and reads its `rf` as absent. The term then
-  resolves by its `tt` when that is valid and states no triple otherwise, and a
-  `reifies` row keyed by it is dropped with `PositionConstraint`. The row
-  diagnostic carries the frame index, the reifier id and the row's triple. The
-  conforming spelling names an earlier IRI or blank-node reifier in `rf` and
-  keys the row by that reifier. A file whose `reifies` row is keyed by a
-  quoted-triple term, whatever its `tt` or `rf`, loses that row.
-  A count of 56 distinct stored `.gts` files found none holding the former
-  spelling. The count has limits: writer versions are not recorded in the
+  specification's rule that `rf` names a strictly earlier term. 4.0.2 kept such
+  an `rf` without a diagnostic. The reader now diagnoses it `ForwardReference`
+  and reads its `rf` as absent. The term then resolves by its `tt` when that is
+  valid and states no triple otherwise, and a `reifies` row keyed by it is
+  dropped with `PositionConstraint`. The row diagnostic carries the frame index,
+  the reifier id and the row's triple.
+  A file holding the spelling with no `tt`, whose term a quad uses, imported in
+  4.0.2. It no longer imports: `dataset_from_gts_graph` refuses it with
+  `native-codec-unbound-triple-term`, and the event importer refuses it with
+  `rdf-ir-gts-fold-diagnostic` carrying the `ForwardReference`, as it refuses
+  every file whose fold reports an error. Only the fold view reads the file, and
+  it renders the term as a fresh blank node. The conforming spelling names an
+  earlier IRI or blank-node reifier in `rf` and keys the row by that reifier. A
+  file whose `reifies` row is keyed by a quoted-triple term, whatever its `tt`
+  or `rf`, loses that row.
+  A read-only count through the 4.0.2 reader over the fourteen stored
+  first-generation files found no term with an `rf`, no triple-kind term, no
+  self-bound term and no reader diagnostic, and their `reifies` rows involve no
+  such term. The count has limits: writer versions are not recorded in the
   files' headers, and older archived versions of the live files were not read.
+  The conformance vectors, 39 carried and 52 external, are a separate count and
+  contain no writer output; none holds the spelling.
 - **Damaged blob payload in GTS.** A blob frame that declares its digest and
   whose transformed payload cannot be a stream of its codec folds as an opaque
   node with a `DamagedFrame` diagnostic, and the blob is not in the blob table;

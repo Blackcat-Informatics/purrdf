@@ -280,7 +280,8 @@ fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
     ]);
     writer.add_quads(&[(0, 1, 2, None)]);
     writer.add_reifies(&[(2, (0, 1, 0), None)]);
-    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    let bytes = writer.into_bytes();
+    let graph = purrdf_gts::reader::read(&bytes, false, None);
     let codes: Vec<&str> = graph.diagnostics.iter().map(|d| d.code.as_str()).collect();
     assert_eq!(codes, ["ForwardReference", "PositionConstraint"]);
     assert!(
@@ -290,6 +291,11 @@ fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
 
     let err = dataset_from_gts_graph(&graph).expect_err("no row binds the term");
     assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+    let Err(err) = purrdf_rdf::import_gts_events(&bytes) else {
+        panic!("the event importer refuses the file");
+    };
+    assert_eq!(err.code, "rdf-ir-gts-fold-diagnostic", "{err:?}");
+    assert!(err.message.contains("ForwardReference"), "{err:?}");
     let view = GtsFoldView::new(graph).expect("the fold view admits the graph");
     assert_eq!(view.nq_token(2), "_:unbound_triple_2");
 }
