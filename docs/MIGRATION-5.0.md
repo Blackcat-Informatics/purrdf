@@ -442,7 +442,29 @@ lost or retyped a public field, and none of these enums lost a variant.
   leads back to itself. A caller that walks `Graph::triple_of` recursively reads
   the components the term declares, and one that must terminate on a caller-built
   graph takes `purrdf_gts::resolution::SelfReaching::of(&graph)` once and reads
-  components through `Graph::resolved_triple_of`. Valid files are unchanged.
+  components through `Graph::resolved_triple_of`. The streaming importers and
+  the N-Quads export decide the same set. Valid files are unchanged.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced.
+- **`PendingResolution` is `#[non_exhaustive]`.** The streaming resolver keeps
+  the search that finds self-reaching triple terms in the pending record, in the
+  new field `component: ComponentState`. An external `PendingResolution { .. }`
+  literal no longer compiles. A `ResolutionStorage` implementer changes only
+  where it builds a record:
+
+  ```rust
+  // 4.x
+  PendingResolution { term, parent: None, next: 0, active: false }
+  // 5.0
+  PendingResolution::new(term)
+  ```
+
+  A storage that persists records outside memory writes
+  `pending.component.to_words()` (five `u64` words) beside `parent`, `next` and
+  `active`, and reads them back with `ComponentState::from_words`, which returns
+  `None` for words no state encodes. It must return the value it was given: a
+  record read back with the default state is refused with
+  `rdf-ir-dangling-term-ref`. No `ResolutionStorage` method is added.
 - **Unsupported signing algorithm.** `verify_sig` and `verify_sig_with_key`
   return `SigStatus::Unverified` for a COSE_Sign1 whose declared `alg` this
   engine does not implement, where 4.0.2 returned `Invalid`; the file verifiers

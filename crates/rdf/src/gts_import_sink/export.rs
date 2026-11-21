@@ -144,8 +144,106 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
             TermKind::Iri => Kind::Iri,
             TermKind::Bnode => Kind::Blank,
             TermKind::Literal => Kind::Literal,
+            // A triple term that reaches itself is the blank node an unbound
+            // triple term is.
+            TermKind::Triple if self.reaches_itself(key)? => Kind::Blank,
             TermKind::Triple => Kind::Triple,
         })
+    }
+
+    /// The components a triple term declares: its own, else the first binding
+    /// of its reifier id, which is its own id when it names none.
+    fn declared_components(
+        &mut self,
+        key: TermKey,
+        term: &purrdf_gts::model::Term,
+    ) -> Result<Option<[TermKey; 3]>, RdfDiagnostic> {
+        let triple = match term.triple {
+            Some(triple) => Some(triple),
+            None => self
+                .dictionary
+                .first_binding(TermKey {
+                    segment: key.segment,
+                    term: term.reifier.unwrap_or(key.term),
+                })
+                .map_err(dictionary_import_failure)?,
+        };
+        Ok(triple.map(|triple| {
+            <[usize; 3]>::from(triple).map(|term| TermKey {
+                segment: key.segment,
+                term,
+            })
+        }))
+    }
+
+    /// Whether the triple term `start` is reachable from its own components
+    /// (GTS-SPEC 7.3): a search over triple terms that holds its visited set
+    /// and work list in the admitted account and releases both before return.
+    fn reaches_itself(&mut self, start: TermKey) -> Result<bool, RdfDiagnostic> {
+        const VISITED_ENTRY_BYTES: usize = 3 * size_of::<TermKey>();
+        let mut work = WorkList::<TermKey, 16>::new();
+        let mut visited = crate::FastSet::<TermKey>::default();
+        let result: Result<bool, RdfDiagnostic> = (|| {
+            let term = self.term(start)?;
+            let Some(edges) = self.declared_components(start, &term)? else {
+                return Ok(false);
+            };
+            drop(term);
+            for edge in edges {
+                work.try_push_admitted(edge, self.memory)?;
+            }
+            while let Some(key) = work.pop() {
+                self.memory.admission_mut().checkpoint(1)?;
+                if key == start {
+                    return Ok(true);
+                }
+                if !visited.insert(key) {
+                    continue;
+                }
+                self.memory.add_bytes(VISITED_ENTRY_BYTES)?;
+                let term = self.term(key)?;
+                if term.kind != TermKind::Triple {
+                    continue;
+                }
+                if let Some(edges) = self.declared_components(key, &term)? {
+                    for edge in edges {
+                        work.try_push_admitted(edge, self.memory)?;
+                    }
+                }
+            }
+            Ok(false)
+        })();
+        let released = work
+            .release_admitted(self.memory)
+            .map_err(RdfDiagnostic::from);
+        let held = visited.len() * VISITED_ENTRY_BYTES;
+        drop(visited);
+        let refunded = self.memory.release_bytes(held).map_err(RdfDiagnostic::from);
+        let reaches = result?;
+        released?;
+        refunded?;
+        Ok(reaches)
+    }
+
+    /// Write the blank node a triple term that reaches itself stands for.
+    fn write_unbound_triple(&mut self, key: TermKey) -> Result<(), RdfDiagnostic> {
+        let baseline = self.memory.admitted_bytes();
+        let label = self
+            .memory
+            .format_with_progress(&format_args!("unbound_triple_{}", key.term))?;
+        let encoded = purrdf_core::blank_label::encode_blank_label_with_memory(
+            &label,
+            super::segment_scope(key.segment)?,
+            purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
+            self.memory,
+        )?;
+        self.output.push_str("_:");
+        self.output.push_str(&encoded);
+        drop(encoded);
+        drop(label);
+        self.memory
+            .release_bytes(self.memory.admitted_bytes() - baseline)?;
+        Ok(())
     }
 
     fn term(&mut self, key: TermKey) -> Result<TermLease, RdfDiagnostic> {
@@ -262,19 +360,14 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             .release_bytes(self.memory.admitted_bytes() - baseline)?;
                     }
                     TermKind::Triple => {
-                        let triple = match term.triple {
-                            Some(triple) => triple,
-                            None => self
-                                .dictionary
-                                .first_binding(TermKey {
-                                    segment: key.segment,
-                                    term: term.reifier.unwrap_or(key.term),
-                                })
-                                .map_err(dictionary_import_failure)?
-                                .ok_or_else(|| {
-                                    self.metadata.err_unbound_triple(key.segment, key.term)
-                                })?,
+                        if self.reaches_itself(key)? {
+                            self.write_unbound_triple(key)?;
+                            continue;
+                        }
+                        let Some([s, p, o]) = self.declared_components(key, &term)? else {
+                            return Err(self.metadata.err_unbound_triple(key.segment, key.term));
                         };
+                        let triple = (s.term, p.term, o.term);
                         self.output.push_str(term_syntax::TRIPLE_TERM_OPEN);
                         work.try_push_admitted(
                             Task::Text(term_syntax::TRIPLE_TERM_CLOSE),

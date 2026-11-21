@@ -118,9 +118,10 @@ fn nquads(graph: &Graph) -> Vec<String> {
     lines
 }
 
-/// Assert that every public door admits `build()`, that the fold view renders each
-/// term of `degraded` as the blank node of an unbound triple term, and that the
-/// flattened bridge folds it as the dataset bridge does.
+/// Assert that every public door admits `build()` and that the fold view renders
+/// each term of `degraded` as the blank node of an unbound triple term. The two
+/// dataset bridges are only required to admit the graph here; the tests that
+/// follow assert what the dataset bridge renders.
 fn every_door_degrades(build: impl Fn() -> Graph, degraded: &[usize], what: &str) {
     let view = GtsFoldView::new(build())
         .unwrap_or_else(|error| panic!("GtsFoldView::new must admit {what}: {error:?}"));

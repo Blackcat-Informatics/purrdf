@@ -117,7 +117,7 @@ fn assert_resolution_terminates(graph: &Graph, self_reaching: &[usize]) {
 }
 
 // --------------------------------------------------------------------------- //
-// The implicit self-bound spelling — the one the refusal used to miss.
+// The implicit self-bound spelling.
 // --------------------------------------------------------------------------- //
 
 /// A `k:3` term with no `tt` and no `rf` takes its components from the row
@@ -400,7 +400,7 @@ fn an_rf_naming_a_later_term_is_dropped_as_a_forward_reference() {
 }
 
 // --------------------------------------------------------------------------- //
-// The same refusals on the other ways a fold is reached.
+// The same degradation on the other ways a fold is reached.
 // --------------------------------------------------------------------------- //
 
 /// A snapshot frame shifts its local ids into the outer space and
@@ -444,12 +444,7 @@ fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
     let graph = read(&data, true, None);
     assert_eq!(graph.segment_heads.len(), 2, "both segments folded");
     assert_eq!(graph.reifiers.len(), 1, "the row survives the union");
-    let reaching = SelfReaching::of(&graph);
-    let degraded: Vec<usize> = (0..graph.terms.len())
-        .filter(|&tid| reaching.contains(tid))
-        .collect();
-    assert_eq!(degraded.len(), 1, "one term still reaches itself");
-    assert_resolution_terminates(&graph, &degraded);
+    assert_resolution_terminates(&graph, &[2]);
     assert_eq!(graph.quads.len(), 2, "both segments' quads survive");
     assert!(
         graph
@@ -485,10 +480,61 @@ fn a_self_reaching_term_survives_a_round_trip_through_the_canonical_writer() {
         1,
         "the row survives the round trip"
     );
-    let reaching = SelfReaching::of(&refolded);
-    let degraded: Vec<usize> = (0..refolded.terms.len())
-        .filter(|&tid| reaching.contains(tid))
+    assert_resolution_terminates(&refolded, &[2]);
+}
+
+/// A self-reaching term that carries its own `tt`, which names a deeper triple
+/// term that is not on the loop: the canonical writer must order the deeper
+/// term before it, so the re-authored file reads back with no diagnostics and
+/// the same `tt`.
+#[test]
+fn a_self_reaching_term_with_tt_survives_a_round_trip_through_the_canonical_writer() {
+    let terms = vec![
+        Term::iri("http://example.org/a"), // 0
+        Term::iri("http://example.org/p"), // 1
+        Term::iri("http://example.org/b"), // 2
+        Term::iri("http://example.org/R"), // 3
+        Term::triple_term((0, 1, 2)),      // 4: the deepest term
+        Term::triple_term((0, 1, 4)),      // 5: off the loop
+        indirect_triple_term(3),           // 6: bound by the row keyed on 3
+        Term::triple_term((5, 1, 6)),      // 7: reaches 5 and 6
+    ];
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    writer.add_quads(&[(0, 1, 7, None)]);
+    // 6 = <<( 7 p p )>>, so 6 -> 7 -> 6.
+    writer.add_reifies(&[(3, (7, 1, 1), None)]);
+    let folded = read(&writer.into_bytes(), false, None);
+    assert!(folded.diagnostics.is_empty(), "{:?}", folded.diagnostics);
+    assert_resolution_terminates(&folded, &[6, 7]);
+
+    let rewritten = Writer::deterministic(&folded, "purrdf-test")
+        .expect("re-author")
+        .into_bytes();
+    let refolded = read(&rewritten, false, None);
+    assert!(
+        refolded.diagnostics.is_empty(),
+        "{:?}",
+        refolded.diagnostics
+    );
+    assert_eq!(refolded.reifiers.len(), 1, "the row survives");
+    assert_eq!(
+        refolded
+            .terms
+            .iter()
+            .filter(|term| term.kind == TermKind::Triple && term.triple.is_some())
+            .count(),
+        3,
+        "every tt survives the re-authoring",
+    );
+    let mut degraded: Vec<usize> = (0..refolded.terms.len())
+        .filter(|&tid| refolded.terms[tid].kind == TermKind::Triple)
+        .filter(|&tid| {
+            refolded
+                .resolved_triple_of(tid, &SelfReaching::of(&refolded))
+                .is_none()
+        })
         .collect();
-    assert_eq!(degraded.len(), 1);
-    assert_resolution_terminates(&refolded, &degraded);
+    degraded.sort_unstable();
+    assert_eq!(degraded.len(), 2, "the two loop members state no triple");
 }

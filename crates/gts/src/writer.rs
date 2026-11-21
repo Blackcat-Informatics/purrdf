@@ -1848,8 +1848,9 @@ fn remap_with_identity_work(graph: &Graph) -> (TermRemap, IdentityWork) {
         work.peak_identity_bytes +=
             compared_pairs.capacity() * (size_of::<((usize, usize), Ordering)>() + 1);
     } else {
-        // A cyclic term's identity contains a path-relative ["cycle", id]
-        // marker. Preserve that established malformed-input law exactly.
+        // A term table whose own `tt` components close a loop has no depth
+        // order, and its identity contains a path-relative ["cycle", id]
+        // marker.
         let keys: Vec<(usize, Vec<u8>)> = old_by_new
             .iter()
             .map(|&tid| {
@@ -1892,7 +1893,15 @@ fn acyclic_term_depths(
             continue;
         }
         depths[tid] = 1;
-        if let Some(components) = resolved_term_triple(graph, tid, term, reaching) {
+        // A self-reaching term states no triple through a `reifies` row, but
+        // the `tt` it carries is written with it, and the components named
+        // there must precede it.
+        let components = if reaching.contains(tid) {
+            term.triple
+        } else {
+            resolved_term_triple(graph, tid, term, reaching)
+        };
+        if let Some(components) = components {
             for child in <[usize; 3]>::from(components) {
                 if child < count {
                     work.source_edges += 1;

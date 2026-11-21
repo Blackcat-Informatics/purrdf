@@ -23,6 +23,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   code remains for a literal whose datatype chain leads back to itself. A valid
   file, whose `tt` names strictly smaller term ids and whose rows name no term
   that reaches itself, folds, writes and projects as before.
+  The streaming importers (`import_gts_events` and its dictionary and blob
+  forms) and `export_gts_rdf_nquads_with_dictionary` decide the same set and
+  render the same blank node, and the canonical writer keeps the `tt` a
+  self-reaching term carries and orders its components before it.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced: the traversal it bounded no longer exists.
+- **Breaking: `PendingResolution` is `#[non_exhaustive]` and carries the
+  resolver's search state.** `segment_decode::PendingResolution` gains the public
+  field `component: ComponentState` and the constructor
+  `PendingResolution::new(term)`; an external `PendingResolution { .. }`
+  struct literal no longer compiles, which is deliberate: a literal could not set
+  the new field and a storage that forgot it would resolve a self-reaching
+  term wrongly. A `ResolutionStorage` implementation changes only where it builds
+  or rebuilds a record. Before, `PendingResolution { term, parent: None, next: 0,
+  active: false }`; now `PendingResolution::new(term)`, and an implementation that
+  persists a record outside memory stores `component.to_words()` (five `u64`
+  words) with the other fields and restores it with `ComponentState::from_words`,
+  returning exactly what it was given. A storage that returns a default value
+  instead is refused by the resolver with `rdf-ir-dangling-term-ref`. No
+  `ResolutionStorage` method is added. `ComponentState` is a new public type.
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop
