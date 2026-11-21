@@ -43,21 +43,37 @@ use crate::native_codecs::ser_model::{SerGraph, SerReifierRow, SerTerm, SerTermK
 /// `SerGraph::reifier` returns the first row for an id and `tt` takes precedence over
 /// the reifier indirection, exactly as `Graph::triple_of` orders them.
 ///
+/// # Self-reaching terms
+///
+/// Everything downstream of this bridge — the IR fold's `SerInterner`, the
+/// N-Triples/TriG writers, the RDF/XML and JSON-LD serializers — walks a quoted
+/// triple's components recursively with no depth bound. A triple term that reaches
+/// itself (GTS-SPEC §7.3) therefore states no triple here: it becomes the blank node
+/// `unbound_triple_{id}`, and every `reifies` row naming it still projects.
+///
 /// # Errors
 ///
-/// Returns `gts-self-reaching-term` when the graph's term table lets a term resolve
-/// through itself. Everything downstream of this bridge — the IR fold's `SerInterner`,
-/// the N-Triples/TriG writers, the RDF/XML and JSON-LD serializers — walks a quoted
-/// triple's components recursively with no depth bound, so an unchecked graph here is
-/// a stack overflow, which aborts the process. A graph off the wire cannot contain such
-/// a term; a caller-built one reaching the public `dataset_from_gts_graph` /
-/// `flattened_dataset_from_gts_graph` can, and is refused here.
+/// Returns `gts-self-reaching-term` when a literal datatype chain resolves through
+/// itself, which no walk of the term table could finish.
 pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDiagnostic> {
-    ensure_terms_terminate(g)?;
+    let reaching = ensure_terms_terminate(g)?;
 
     let mut self_bound: Vec<SerReifierRow> = Vec::new();
     let mut terms = Vec::with_capacity(g.terms.len());
     for (id, t) in g.terms.iter().enumerate() {
+        if reaching.contains(id) {
+            // A triple term that reaches itself states no triple (§7.3): it is
+            // the fresh blank node an unbound triple term projects as.
+            terms.push(SerTerm {
+                kind: SerTermKind::Bnode,
+                value: Some(format!("unbound_triple_{id}")),
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+            });
+            continue;
+        }
         let reifier = if t.kind != purrdf_gts::model::TermKind::Triple {
             t.reifier
         } else if let Some(triple) = t.triple {
@@ -68,13 +84,10 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
             // The legacy indirection already resolves through the statement layer;
             // leave the spelling alone so a genuine `rdf:reifies` row still emits.
             t.reifier
-        } else if g.reifier(id).is_some() {
-            // §7.1: a self-bound triple term may leave `rf` implicit, and the binding
-            // is then keyed by the term's OWN id. The row is already in the statement
-            // layer under that id, so naming it is the whole translation.
-            Some(id)
         } else {
-            // Genuinely unbound; the fold and the serializers report it as such.
+            // States no triple (§7.3, third resolution rule): an `rf` with no row,
+            // or neither `tt` nor `rf`. An absent `rf` names no reifier, not the
+            // term's own id. The fold and the serializers report it as unbound.
             t.reifier
         };
         terms.push(SerTerm {

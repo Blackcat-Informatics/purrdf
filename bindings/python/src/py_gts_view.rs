@@ -396,14 +396,14 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
 /// Build the Rust-owned view, turning the fold's refusal into a `ValueError`.
 ///
-/// The view REFUSES a term table in which a term resolves through itself: every
-/// accessor that renders a quoted triple (`nq_token`, `python_value`, the public-text
-/// family) walks its components to the leaves, and an unbounded walk overflows the
-/// stack — which in Rust aborts the process, killing the interpreter outright rather
-/// than raising anything Python could catch. `from_parts` accepts a term table
-/// straight from the caller, so this is the boundary where that is stopped: term ids
-/// are range-checked in [`validate_terms`], and the shape they describe is checked for
-/// termination here.
+/// A triple term that reaches itself states no triple, so every accessor that renders
+/// a quoted triple (`nq_token`, `python_value`, the public-text family) terminates;
+/// a literal datatype chain that reaches itself is refused, because an unbounded walk
+/// overflows the stack — which in Rust aborts the process, killing the interpreter
+/// outright rather than raising anything Python could catch. `from_parts` accepts a
+/// term table straight from the caller, so this is the boundary where that is
+/// stopped: term ids are range-checked in [`validate_terms`], and the shape they
+/// describe is checked for termination here.
 fn fold_view(graph: Graph, curie_prefixes: Vec<(String, String)>) -> PyResult<GtsFoldView> {
     let config = GtsFoldViewConfig {
         language_vocab: None,

@@ -6,6 +6,7 @@ use purrdf_lex::cbor::{DecodeError, Value, ValueRef};
 use crate::dictionary::DictionaryError;
 use crate::model::{AnnotationRow, ReifierRow, TermKind, Triple3};
 use crate::reader::as_i128;
+use crate::reader::term_decode::TermReferences;
 use crate::term_table::{TermMetadata, TermsRef};
 
 mod error;
@@ -76,6 +77,17 @@ fn required_kind(
     }
 }
 
+/// The `tt`/`rf` references of a term whose kind is already known to exist.
+fn required_references(
+    terms: impl TermMetadata,
+    id: usize,
+    failure: &mut Option<DictionaryError>,
+) -> Result<Option<TermReferences>, ()> {
+    terms.references(id).map_err(|error| {
+        failure.get_or_insert(error);
+    })
+}
+
 pub(crate) fn take_storage_failure(failure: &mut Option<DictionaryError>) -> DictionaryError {
     // Both decoder entry points and position checks signal Storage only after
     // retaining a failure here, or on finding an already retained first cause.
@@ -133,6 +145,31 @@ pub(crate) fn decode_reifier_row(
             RowCheckError::Position(detail) => RowDecode::Position(detail),
             RowCheckError::Storage => RowDecode::Storage,
         };
+    }
+    // §7.4: the reifier of a `reifies` row is an IRI or blank node, never a
+    // literal or a quoted triple. The row is dropped; the term is untouched.
+    // One quoted-triple spelling is an exception to that rule: a `k:3` term
+    // with no `tt` whose `rf` names the term's own id, keyed by a row on that
+    // id. Stored files hold it, so that binding is kept and states the term's
+    // own triple.
+    let Some(reifier_kind) = required_kind(terms, rid, failure) else {
+        return RowDecode::Storage;
+    };
+    let rejected = match reifier_kind {
+        TermKind::Literal => true,
+        TermKind::Triple => {
+            let Ok(references) = required_references(terms, rid, failure) else {
+                return RowDecode::Storage;
+            };
+            !references.is_some_and(|r| r.triple.is_none() && r.reifier == Some(rid))
+        }
+        TermKind::Iri | TermKind::Bnode => false,
+    };
+    if rejected {
+        return RowDecode::Position(Box::new(RowError::ReifierKind {
+            id: rid,
+            actual: reifier_kind,
+        }));
     }
     RowDecode::Row((rid, triple, graph_slot))
 }

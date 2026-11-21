@@ -16,17 +16,9 @@ use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::read;
 use purrdf_gts::writer::Writer;
 
-fn triple_term(s: usize, p: usize, o: usize) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: Some((s, p, o)),
-    }
-}
+#[path = "support/reifier_terms.rs"]
+mod reifier_terms;
+use reifier_terms::triple_term;
 
 /// Terms `0..=4`: `a`, `related`, `b`, `c`, `r1`.
 fn base_terms() -> Vec<Term> {

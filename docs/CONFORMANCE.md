@@ -75,7 +75,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 4289 | 4 | 4 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 4288 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The RDFLib row states the required scoreboard under native XSD string-subtype
@@ -149,7 +149,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | GeoSPARQL 1.1 determinism corpus | first-party, `purrdf_geo::determinism::CORPUS` | **20 / 20** geometries · 0 ledgered. Counts corpus geometries, not test functions. Their WKT/GeoJSON bytes, DE-9IM matrices, exact planar measures and IEEE encodings fold into the single `GOLDEN_DIGEST` in `crates/geo/tests/determinism.rs`; the conformance matrix compares the printed digest with that frozen source value. The polygon/mixed-collection length correction includes polygon boundaries and selects the greatest dimension-total; its deliberate byte change is documented beside the golden. This row grades deterministic planar output, not independent OGC semantic conformance or the geographic numerical corpus. No OGC GeoSPARQL conformance suite is vendored or claimed. The twelve first-party SHACL cases mirror the published validator using caller-selected `example.org` vocabulary; nine query-rewrite, nine scalar-function and four layout cases run separately in `make check`. The explicit carrier-only scalar adapter registers twelve construction/serialization refusals and checks representative named errors rather than plausible default answers. The standard geographic adapter additionally implements `transform`, `buffer` and `metricBuffer` through its selected operation/profile law; nine construction/serialization functions remain named hard errors. The neutral geographic kernel's numerical, geometry, cover, ownership and host cases are separate acceptance, not additional entries in this twenty-geometry row. Native digest execution, release WASM compilation and actual portable/SIMD geographic transcript execution are distinct checks (`make check`, `make wasm`, `make geo-determinism`). |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
-| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4289** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
+| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4288** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
 | GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
 
 ## Native YAML-LD Basic
@@ -1215,6 +1215,30 @@ The node-expression kinds split into two tiers:
   entries cover the RDF 1.2 triple term rdflib has no counterpart for,
   registered custom SPARQL functions, `SERVICE` federation, and parse-time
   string-datatype collapse. See the two ledgers above for the per-test reasons.
+
+### GTS blob payloads: structure at fold, content on first request
+
+A blob frame that declares its digest folds without decoding its payload: the
+reader keeps the wire bytes and decodes them when the bytes or their size are
+first requested. At fold it checks the payload's structure against the first
+transform that would decode it, and a payload that fails becomes an opaque node
+with a `DamagedFrame` diagnostic, as specification section 7.5 requires of an
+undecodable payload. The check costs a walk of frame and block headers, never a
+decode:
+
+* `zstd` and `zstd-rsyncable`: every frame header is readable, every frame's
+  block headers reach a last block inside the payload, a declared content
+  checksum is present, and a dictionary id named by a frame header is the id of
+  the catalog's dictionary for that transform.
+* `gzip`: the payload begins with the gzip magic and is long enough for a header
+  and trailer.
+* Every other transform has no cheap structural check and stays lazy.
+
+A payload whose structure is sound but whose content is not, such as a corrupt
+block body, a wrong checksum or a wrong gzip length, still folds as a blob. The
+first request for its bytes or size returns the typed codec failure, never a
+panic. A blob without a declared digest is decoded at fold, because its digest
+is computed from the decoded bytes, so this limit does not apply to it.
 
 ## Comparison caveats
 

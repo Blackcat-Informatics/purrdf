@@ -430,6 +430,41 @@ lost or retyped a public field, and none of these enums lost a variant.
 
 ## Containers
 
+- **Triple terms that reach themselves.** A `k:3` term that is reachable from its
+  own components, through `tt` or through the first `reifies` row of its `rf`, states
+  no triple. The reader keeps the `reifies` row
+  and reports no diagnostic, where 4.x reported `DamagedFrame` and dropped the row;
+  the term keeps a distinct identity in the multi-segment union and the canonical
+  writer, and projections render it as the blank node `_:unbound_triple_{id}`.
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView::new` accept such a graph instead of refusing it with
+  `gts-self-reaching-term`, which now names only a literal datatype chain that
+  leads back to itself. A caller that walks `Graph::triple_of` recursively reads
+  the components the term declares, and one that must terminate on a caller-built
+  graph takes `purrdf_gts::resolution::SelfReaching::of(&graph)` once and reads
+  components through `Graph::resolved_triple_of`. The streaming importers and
+  the N-Quads export decide the same set. Valid files are unchanged.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced.
+- **`PendingResolution` is `#[non_exhaustive]`.** The streaming resolver keeps
+  the search that finds self-reaching triple terms in the pending record, in the
+  new field `component: ComponentState`. An external `PendingResolution { .. }`
+  literal no longer compiles. A `ResolutionStorage` implementer changes only
+  where it builds a record:
+
+  ```rust
+  // 4.x
+  PendingResolution { term, parent: None, next: 0, active: false }
+  // 5.0
+  PendingResolution::new(term)
+  ```
+
+  A storage that persists records outside memory writes
+  `pending.component.to_words()` (five `u64` words) beside `parent`, `next` and
+  `active`, and reads them back with `ComponentState::from_words`, which returns
+  `None` for words no state encodes. It must return the value it was given: a
+  record read back with the default state is refused with
+  `rdf-ir-dangling-term-ref`. No `ResolutionStorage` method is added.
 - **Unsupported signing algorithm.** `verify_sig` and `verify_sig_with_key`
   return `SigStatus::Unverified` for a COSE_Sign1 whose declared `alg` this
   engine does not implement, where 4.0.2 returned `Invalid`; the file verifiers
@@ -444,6 +479,25 @@ lost or retyped a public field, and none of these enums lost a variant.
   (`gts_certify`, in the authorship and the packaging checks) refuse an
   unsupported algorithm at parse, before any status exists; `Unverified` is
   what a direct verification with `verify_sig` or `verify_sig_with_key` returns.
+- **Reifier position in GTS.** The reader drops a `reifies` row whose reifier is
+  a literal or a quoted-triple term, and diagnoses it `PositionConstraint`;
+  4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
+  `quads` subject and as the object of a `reifies` or `annot` row. One
+  quoted-triple reifier is an exception to the specification's rule, because
+  stored files hold it: a quoted-triple term with no `tt` whose `rf` is its own
+  id, keyed by a row on that id, keeps its binding with no diagnostic. A file
+  whose `reifies` row is keyed by a quoted-triple term that carries `tt`, by one
+  whose `rf` names another term, or by one with neither `tt` nor `rf` loses
+  that row.
+- **Damaged blob payload in GTS.** A blob frame that declares its digest and
+  whose transformed payload cannot be a stream of its codec folds as an opaque
+  node with a `DamagedFrame` diagnostic, and the blob is not in the blob table;
+  4.0.2 admitted it and failed only when its bytes or size were requested. The
+  fold checks the structure of `zstd`, `zstd-rsyncable` and `gzip` payloads (frame
+  and block headers, a named dictionary, the gzip magic and trailer) without
+  decoding them. A payload whose structure is sound but whose content is corrupt
+  still folds as a blob and returns the codec failure on first request, as in
+  4.0.2. A valid blob folds as before.
 - **COSE_Sign1 protected header.** The protected header is read as the
   deterministic encoding the specification requires of every signed byte string
   (section 4, RFC 8949 section 4.2): shortest-form integers and lengths,

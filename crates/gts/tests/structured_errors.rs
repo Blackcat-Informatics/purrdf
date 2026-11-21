@@ -2767,10 +2767,28 @@ fn nested_discovery_keeps_original_limits_and_child_failures() {
         }
     }
 
-    let (mut items, torn) = wire::iter_items(&bytes);
+    // A gzip-transformed child whose deflate body is corrupt keeps a sound
+    // gzip structure, so it folds and fails only when nested discovery decodes
+    // it; a payload that is not a gzip stream at all is refused at fold instead.
+    let mut writer = Writer::new("generic");
+    writer
+        .add_blob_transformed(
+            child.clone(),
+            Some(GTS_MEDIA_TYPE),
+            None,
+            &["gzip".to_string()],
+            None,
+        )
+        .unwrap();
+    let transformed = writer.into_bytes();
+    let (mut items, torn) = wire::iter_items(&transformed);
     assert_eq!(torn, None);
     let frame = items.last_mut().unwrap().1.as_map_mut().unwrap();
-    assoc::insert(frame, Value::from("x"), Value::Array(vec![Value::from(1)]));
+    let Some(Value::Bytes(payload)) = assoc::get_mut(frame, &Value::from("d")) else {
+        panic!("the blob frame carries its payload bytes")
+    };
+    let middle = payload.len() / 2;
+    payload[middle] ^= 0xff;
     let id = wire::content_id(frame);
     assoc::insert(frame, Value::from("id"), Value::Bytes(id));
     let corrupted: Vec<u8> = items

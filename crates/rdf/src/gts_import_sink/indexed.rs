@@ -102,12 +102,9 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
         for diagnostic in selected.diagnostics {
             fold_diagnostic_failure(&diagnostic)?;
         }
-        Ok(Some(PendingResolution {
-            term: Some(ResolutionTerm::Stored(selected.term)),
-            parent: None,
-            next: 0,
-            active: false,
-        }))
+        Ok(Some(PendingResolution::new(Some(ResolutionTerm::Stored(
+            selected.term,
+        )))))
     }
     fn set_pending(&mut self, key: TermKey, value: PendingResolution) -> Result<(), Self::Error> {
         let additional = usize::from(
