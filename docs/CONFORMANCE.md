@@ -1216,6 +1216,30 @@ The node-expression kinds split into two tiers:
   registered custom SPARQL functions, `SERVICE` federation, and parse-time
   string-datatype collapse. See the two ledgers above for the per-test reasons.
 
+### GTS blob payloads: structure at fold, content on first request
+
+A blob frame that declares its digest folds without decoding its payload: the
+reader keeps the wire bytes and decodes them when the bytes or their size are
+first requested. At fold it checks the payload's structure against the first
+transform that would decode it, and a payload that fails becomes an opaque node
+with a `DamagedFrame` diagnostic, as specification section 7.5 requires of an
+undecodable payload. The check costs a walk of frame and block headers, never a
+decode:
+
+* `zstd` and `zstd-rsyncable`: every frame header is readable, every frame's
+  block headers reach a last block inside the payload, a declared content
+  checksum is present, and a dictionary id named by a frame header is the id of
+  the catalog's dictionary for that transform.
+* `gzip`: the payload begins with the gzip magic and is long enough for a header
+  and trailer.
+* Every other transform has no cheap structural check and stays lazy.
+
+A payload whose structure is sound but whose content is not, such as a corrupt
+block body, a wrong checksum or a wrong gzip length, still folds as a blob. The
+first request for its bytes or size returns the typed codec failure, never a
+panic. A blob without a declared digest is decoded at fold, because its digest
+is computed from the decoded bytes, so this limit does not apply to it.
+
 ## Comparison caveats
 
 - The SHACL harness compares the result **multiset** on

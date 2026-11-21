@@ -489,6 +489,15 @@ lost or retyped a public field, and none of these enums lost a variant.
   whose `reifies` row is keyed by a quoted-triple term that carries `tt`, by one
   whose `rf` names another term, or by one with neither `tt` nor `rf` loses
   that row.
+- **Damaged blob payload in GTS.** A blob frame that declares its digest and
+  whose transformed payload cannot be a stream of its codec folds as an opaque
+  node with a `DamagedFrame` diagnostic, and the blob is not in the blob table;
+  4.0.2 admitted it and failed only when its bytes or size were requested. The
+  fold checks the structure of `zstd`, `zstd-rsyncable` and `gzip` payloads (frame
+  and block headers, a named dictionary, the gzip magic and trailer) without
+  decoding them. A payload whose structure is sound but whose content is corrupt
+  still folds as a blob and returns the codec failure on first request, as in
+  4.0.2. A valid blob folds as before.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function

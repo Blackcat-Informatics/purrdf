@@ -50,6 +50,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   4.0.2 kept it silently. The indirect spelling stored files hold (a
   quoted-triple term with no `tt` whose `rf` is its own id) is an exception and
   keeps its binding with no diagnostic. See the migration guide.
+- **Behaviour change: a GTS blob whose payload cannot be a stream of its codec
+  is an opaque node.** A blob frame that declares its digest and whose `zstd`,
+  `zstd-rsyncable` or `gzip` payload fails a structural check at fold (frame
+  and block headers, a named dictionary, the gzip magic and trailer) folds as an
+  opaque node with `DamagedFrame` and stays out of the blob table; 4.0.2
+  admitted it and failed only when its bytes were requested. The check decodes
+  nothing. A payload with sound structure and corrupt content still folds and
+  fails on first request; `docs/CONFORMANCE.md` states that limit.
+  `codec::check_chain_structure` is a new public function.
 
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
