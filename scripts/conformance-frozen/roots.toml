@@ -14,6 +14,7 @@
 "vectors/shexTest" = "scripts/conformance-frozen/vectors-shexTest.sha256"
 "vectors/sparql-cdt" = "scripts/conformance-frozen/vectors-sparql-cdt.sha256"
 "vectors/wycheproof" = "scripts/conformance-frozen/vectors-wycheproof.sha256"
+"vectors/signed" = "scripts/conformance-frozen/vectors-signed.sha256"
 "vectors/JSONTestSuite" = "scripts/conformance-frozen/vectors-JSONTestSuite.sha256"
 "vectors/xmlconf" = "scripts/conformance-frozen/vectors-xmlconf.sha256"
 "vectors/yaml-test-suite" = "scripts/conformance-frozen/vectors-yaml-test-suite.sha256"
