@@ -13,20 +13,23 @@
 //!
 //! A triple term reaches itself through any of its spellings:
 //!
-//! 1. `tt` names strictly earlier terms, `dt` and `rf` too (`rf` may also name
-//!    the term itself), so none of those closes a loop on its own.
-//! 2. A `reifies` row may name ANY term, so it is the one field that can close
-//!    a loop. A triple term with no `tt` reaches that row through the `rf` it
-//!    names, its own id included; a triple term with neither states no triple
-//!    and reaches nothing.
+//! 1. `tt`, `dt` and `rf` name strictly earlier terms (§7.2), so none of those
+//!    closes a loop on its own. An `rf` naming the term itself is a forward
+//!    reference: it is diagnosed and treated as absent.
+//! 2. A `reifies` row may name ANY term in its triple, so it is the one field
+//!    that can close a loop. A triple term with no `tt` reaches that row through
+//!    the earlier reifier its `rf` names; a triple term with neither states no
+//!    triple and reaches nothing.
 //!
 //! Every case below is built through the real [`Writer`] and read back, so
 //! these are claims about the wire and not about hand-assembled structures.
 
-use purrdf_gts::model::{Graph, ReifierRow, Term, TermKind};
+use purrdf_gts::model::{DiagnosticCause, Graph, ReifierRow, Term, TermKind};
 use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
 use purrdf_gts::resolution::SelfReaching;
 use purrdf_gts::writer::Writer;
+use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_testkit::error_capture::Capture;
 
 #[path = "support/reifier_terms.rs"]
 mod reifier_terms;
@@ -94,33 +97,124 @@ fn assert_resolution_terminates(graph: &Graph, self_reaching: &[usize]) {
 }
 
 // --------------------------------------------------------------------------- //
-// The self-bound spelling: no `tt`, and `rf` naming the term's own id.
+// An `rf` naming the term's own id, which the text does not allow.
 // --------------------------------------------------------------------------- //
 
-/// A `k:3` term with no `tt` whose `rf` is its own id takes its components
-/// from the row keyed by its OWN id, so a row naming that term as its own subject makes the
-/// term contain itself. The term states no triple, and the row is kept.
+/// A `k:3` term with no `tt` whose `rf` names its own id, and a row keyed by that
+/// id: what such a file yields. §7.2 requires `rf` to name a term-id strictly
+/// less than the term's own id, so the `rf` is a `ForwardReference` and is
+/// treated as absent; the term then states no triple (§7.3, third resolution
+/// rule). The row's reifier is a quoted triple, which §7.4 does not allow, so it
+/// is dropped with `PositionConstraint`. The quad using the term is kept, and
+/// the fold terminates on one segment and through the union. The neighbouring
+/// file spells the same binding with an earlier IRI reifier and folds with no
+/// diagnostic.
 #[test]
-fn a_row_keyed_by_a_self_bound_terms_own_id_degrades_the_term() {
-    let terms = vec![
+fn a_term_whose_rf_names_itself_is_a_forward_reference_and_its_row_drops() {
+    // Terms a, p and r, then the triple term T at 3 and a quad using it. `rf` is
+    // T's reifier and `reifier` keys the row binding <<( a p a )>>.
+    let file = |rf: usize, reifier: usize| {
+        let mut writer = Writer::new("purrdf-test");
+        writer.add_terms(&[
+            Term::iri("http://example.org/a"),
+            Term::iri("http://example.org/p"),
+            Term::iri("http://example.org/r"),
+            indirect_triple_term(rf),
+        ]);
+        writer.add_quads(&[(0, 1, 3, None)]);
+        writer.add_reifies(&[(reifier, (0, 1, 0), None)]);
+        writer.into_bytes()
+    };
+
+    let self_named = file(3, 3);
+    let mut two_segments = self_named.clone();
+    two_segments.extend_from_slice(&plain_segment());
+    for graph in [
+        read(&self_named, false, None),
+        read(&two_segments, true, None),
+    ] {
+        assert_eq!(
+            diagnostic_codes(&graph),
+            ["ForwardReference", "PositionConstraint"],
+            "{:?}",
+            graph.diagnostics,
+        );
+        assert!(graph.reifiers.is_empty(), "the row keyed by the term drops");
+        let term = graph
+            .terms
+            .iter()
+            .position(|t| t.kind == TermKind::Triple)
+            .expect("the term is kept");
+        assert_eq!(
+            graph.terms[term].reifier, None,
+            "its rf is treated as absent"
+        );
+        assert_eq!(graph.triple_of(term), None, "it states no triple");
+        assert!(
+            graph.quads.iter().any(|&(_, _, o, _)| o == term),
+            "its quad is kept"
+        );
+        assert_resolution_terminates(&graph, &[]);
+    }
+
+    let earlier_reifier = read(&file(2, 2), false, None);
+    assert!(
+        earlier_reifier.diagnostics.is_empty(),
+        "{:?}",
+        earlier_reifier.diagnostics
+    );
+    assert_eq!(earlier_reifier.reifiers, vec![(2, (0, 1, 0), None)]);
+    assert_eq!(earlier_reifier.triple_of(3), Some((0, 1, 0)));
+}
+
+/// A consumer can act on both diagnostics a self-naming `rf` produces: the
+/// forward reference names the term and the `rf` it carried, and the dropped row
+/// names the frame, the reifier and the row's triple.
+#[test]
+fn the_diagnostics_of_a_self_naming_rf_carry_typed_payloads() {
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&[
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        indirect_triple_term(2),
-    ];
-    let mut writer = Writer::new("purrdf-test");
-    writer.add_terms(&terms);
-    writer.add_quads(&[(0, 1, 2, None)]);
-    writer.add_reifies(&[(2, (2, 1, 1), None)]);
-    let bytes = writer.into_bytes();
+        Term::iri("http://example.org/r"),
+        indirect_triple_term(3),
+    ]);
+    writer.add_quads(&[(0, 1, 3, None)]);
+    writer.add_reifies(&[(3, (0, 1, 0), None)]);
+    let graph = read(&writer.into_bytes(), false, None);
+    let payload = |code: &str| {
+        let diagnostic = graph
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code)
+            .unwrap_or_else(|| panic!("{code} is reported: {:?}", graph.diagnostics));
+        let Some(DiagnosticCause::Native(cause)) = diagnostic.cause.as_ref() else {
+            panic!("{code} keeps its typed cause: {diagnostic:?}");
+        };
+        let error: &dyn StructuredError = &***cause;
+        (diagnostic.frame_index, Capture::read(error))
+    };
 
-    let graph = read(&bytes, false, None);
-    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
-    assert_eq!(
-        graph.reifiers,
-        vec![(2, (2, 1, 1), None)],
-        "the row is retained: it is the term that degrades, not the statement",
+    let (frame, forward) = payload("ForwardReference");
+    assert_eq!(forward.code, "gts-forward-reference");
+    assert!(
+        matches!(forward.field("term"), ErrorValue::Signed(3)),
+        "term"
     );
-    assert_resolution_terminates(&graph, &[2]);
+    assert!(
+        matches!(forward.field("reifier"), ErrorValue::Signed(3)),
+        "reifier"
+    );
+    assert!(
+        matches!(forward.field("datatype"), ErrorValue::Absent),
+        "datatype"
+    );
+    assert_eq!(frame, Some(1), "the terms frame");
+
+    let (frame, row) = payload("PositionConstraint");
+    assert_eq!(row.code, "gts-reifier-kind");
+    assert!(matches!(row.field("id"), ErrorValue::Unsigned(3)), "id");
+    assert_eq!(frame, Some(3), "the reifies frame");
 }
 
 /// A `k:3` term with neither `tt` nor `rf` states no triple (§7.1, third
@@ -159,61 +253,6 @@ fn a_bare_triple_term_loses_its_reifier_row_but_keeps_its_quads() {
     assert_eq!(graph.quads, vec![(2, 1, 0, None), (0, 1, 2, None)]);
     assert_eq!(graph.terms[2].kind, TermKind::Triple);
     assert_eq!(graph.triple_of(2), None, "it states no triple");
-}
-
-/// The self-bound spelling degrades only when it LOOPS: a row keyed by a
-/// self-bound term's own id that names other terms is ordinary RDF
-/// 1.2 and still resolves.
-#[test]
-fn a_self_bound_term_binding_other_terms_still_folds() {
-    let terms = vec![
-        Term::iri("http://example.org/a"),
-        Term::iri("http://example.org/p"),
-        indirect_triple_term(2),
-    ];
-    let mut writer = Writer::new("purrdf-test");
-    writer.add_terms(&terms);
-    writer.add_reifies(&[(2, (0, 1, 0), None)]);
-    let bytes = writer.into_bytes();
-
-    let graph = read(&bytes, false, None);
-    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
-    assert_eq!(graph.reifiers, vec![(2, (0, 1, 0), None)]);
-    assert_eq!(
-        graph.triple_of(2),
-        Some((0, 1, 0)),
-        "the self-bound spelling still resolves through its own id",
-    );
-    assert_resolution_terminates(&graph, &[]);
-}
-
-/// A loop that runs THROUGH a self-bound term rather than closing on it
-/// directly. The search has to follow the self-bound spelling, and every term
-/// on the loop states no triple.
-#[test]
-fn a_loop_routed_through_a_self_bound_term_degrades_its_terms() {
-    let terms = vec![
-        Term::iri("http://example.org/a"),
-        Term::iri("http://example.org/p"),
-        indirect_triple_term(2), // 2, bound by the row keyed on 2
-        indirect_triple_term(0), // 3, bound by the row keyed on 0
-    ];
-    let mut writer = Writer::new("purrdf-test");
-    writer.add_terms(&terms);
-    // Innocent on its own: term 2 = <<( 3 p p )>>, and term 3 is unbound.
-    writer.add_reifies(&[(2, (3, 1, 1), None)]);
-    // Closes it: term 3 = <<( 2 p p )>>, so 3 -> 2 -> 3.
-    writer.add_reifies(&[(0, (2, 1, 1), None)]);
-    let bytes = writer.into_bytes();
-
-    let graph = read(&bytes, false, None);
-    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
-    assert_eq!(
-        graph.reifiers,
-        vec![(2, (3, 1, 1), None), (0, (2, 1, 1), None)],
-        "both rows are retained",
-    );
-    assert_resolution_terminates(&graph, &[2, 3]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -315,8 +354,8 @@ fn the_streaming_reader_streams_the_rows_the_materializing_reader_keeps() {
     writer.add_reifies(&[(0, (1, 1, 1), None)]); // innocent: term 2 = <<( p p p )>>
     writer.add_terms(&[indirect_triple_term(0)]); // 3, sharing reifier 0
     writer.add_reifies(&[(0, (3, 1, 1), None)]); // a second row for reifier 0
-    writer.add_terms(&[indirect_triple_term(4)]); // 4, naming itself as reifier
-    writer.add_reifies(&[(4, (4, 1, 1), None)]); // 4 contains itself
+    writer.add_terms(&[indirect_triple_term(1)]); // 4, reading reifier 1
+    writer.add_reifies(&[(1, (4, 1, 1), None)]); // 4 contains itself
     let bytes = writer.into_bytes();
 
     let mut rows = Rows::default();
@@ -336,30 +375,10 @@ fn the_streaming_reader_streams_the_rows_the_materializing_reader_keeps() {
         vec![
             (0, (1, 1, 1), None),
             (0, (3, 1, 1), None),
-            (4, (4, 1, 1), None)
+            (1, (4, 1, 1), None)
         ],
         "every binding is streamed, the loop-closing one included",
     );
-}
-
-/// An explicitly self-bound term (`rf == its own id`) is the same hazard
-/// spelled a third way, and degrades the same way.
-#[test]
-fn an_explicitly_self_bound_term_naming_itself_degrades() {
-    let terms = vec![
-        Term::iri("http://example.org/a"),
-        Term::iri("http://example.org/p"),
-        indirect_triple_term(2), // rf == this term's own id, which §7.1 allows
-    ];
-    let mut writer = Writer::new("purrdf-test");
-    writer.add_terms(&terms);
-    writer.add_reifies(&[(2, (2, 1, 1), None)]);
-    let bytes = writer.into_bytes();
-
-    let graph = read(&bytes, false, None);
-    assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
-    assert_eq!(graph.reifiers, vec![(2, (2, 1, 1), None)]);
-    assert_resolution_terminates(&graph, &[2]);
 }
 
 // --------------------------------------------------------------------------- //
@@ -394,7 +413,7 @@ fn a_tt_naming_its_own_term_is_dropped_as_a_forward_reference() {
 }
 
 /// An `rf` naming a term after itself is dropped the same way, so a reifier
-/// chain can only ever run downwards (or self-bind, handled above).
+/// chain can only ever run downwards.
 #[test]
 fn an_rf_naming_a_later_term_is_dropped_as_a_forward_reference() {
     let terms = vec![
@@ -425,8 +444,8 @@ fn a_binding_loop_inside_a_snapshot_degrades_the_term() {
     let mut graph = Graph::default();
     graph.terms.push(Term::iri("http://example.org/a")); // 0
     graph.terms.push(Term::iri("http://example.org/p")); // 1
-    graph.terms.push(indirect_triple_term(2)); // 2
-    graph.reifiers.push((2, (2, 1, 1), None));
+    graph.terms.push(indirect_triple_term(0)); // 2
+    graph.reifiers.push((0, (2, 1, 1), None));
 
     let payload = graph.snapshot_payload();
     let mut writer = Writer::new("purrdf-test");
@@ -435,7 +454,7 @@ fn a_binding_loop_inside_a_snapshot_degrades_the_term() {
 
     let folded = read(&bytes, false, None);
     assert!(folded.diagnostics.is_empty(), "{:?}", folded.diagnostics);
-    assert_eq!(folded.reifiers, vec![(2, (2, 1, 1), None)]);
+    assert_eq!(folded.reifiers, vec![(0, (2, 1, 1), None)]);
     assert_resolution_terminates(&folded, &[2]);
 }
 
@@ -447,11 +466,11 @@ fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        indirect_triple_term(2),
+        indirect_triple_term(0),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
-    writer.add_reifies(&[(2, (2, 1, 1), None)]);
+    writer.add_reifies(&[(0, (2, 1, 1), None)]);
     writer.add_quads(&[(0, 1, 2, None)]);
     let mut data = writer.into_bytes();
     data.extend_from_slice(&plain_segment());
@@ -459,7 +478,15 @@ fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
     let graph = read(&data, true, None);
     assert_eq!(graph.segment_heads.len(), 2, "both segments folded");
     assert_eq!(graph.reifiers.len(), 1, "the row survives the union");
-    assert_resolution_terminates(&graph, &[2]);
+    // The union maps a self-reaching term without walking its reifier, so in
+    // the union it states no triple directly rather than through a loop.
+    let term = graph
+        .terms
+        .iter()
+        .position(|t| t.kind == TermKind::Triple)
+        .expect("the term survives the union");
+    assert_eq!(graph.terms[term].reifier, None);
+    assert_resolution_terminates(&graph, &[]);
     assert_eq!(graph.quads.len(), 2, "both segments' quads survive");
     assert!(
         graph
@@ -470,24 +497,26 @@ fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
     );
 }
 
-/// A self-bound term `R` and a term `T` whose `tt` is `(a, p, o)` and whose `rf`
-/// names `R`, with `R`'s row binding `<<( T p o )>>`, in a file of two segments
-/// (`R` first when `rf_loops`, else `R`'s row binds `<<( a p o )>>`).
+/// A triple term `R` bound through the IRI reifier `r`, and a term `T` whose `tt`
+/// is `(a, p, o)` and whose `rf` names `R`, with `r`'s row binding
+/// `<<( T p o )>>`, in a file of two segments (`r`'s row binds `<<( a p o )>>`
+/// instead unless `rf_loops`).
 fn reifier_of_a_term_bound_through_its_own_reifier(rf_loops: bool) -> Vec<u8> {
     let mut tagged = Term::triple_term((0, 1, 2));
-    tagged.reifier = Some(3);
+    tagged.reifier = Some(4);
     let terms = vec![
         Term::iri("http://example.org/a"), // 0
         Term::iri("http://example.org/p"), // 1
         Term::iri("http://example.org/o"), // 2
-        indirect_triple_term(3),           // 3: R, self-bound
-        tagged,                            // 4: T, `tt` and `rf` naming R
+        Term::iri("http://example.org/r"), // 3: r
+        indirect_triple_term(3),           // 4: R, bound through r
+        tagged,                            // 5: T, `tt` and `rf` naming R
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
-    let subject = if rf_loops { 4 } else { 0 };
+    let subject = if rf_loops { 5 } else { 0 };
     writer.add_reifies(&[(3, (subject, 1, 2), None)]);
-    writer.add_quads(&[(4, 1, 2, None)]);
+    writer.add_quads(&[(5, 1, 2, None)]);
     let mut data = writer.into_bytes();
     data.extend_from_slice(&plain_segment());
     data
@@ -498,7 +527,7 @@ fn reifier_of_a_term_bound_through_its_own_reifier(rf_loops: bool) -> Vec<u8> {
 /// descriptive), yet the union maps it, and here it closes a loop the
 /// components do not: `T`'s `rf` is `R`, and `R`'s binding has `T` as subject.
 /// Neither term is reachable from its own components, so neither degrades: the
-/// union terminates, `T` keeps its `tt` and its `rf`, and `R` keeps its row.
+/// union terminates, `T` keeps its `tt` and its `rf`, and `r` keeps its row.
 /// The neighbouring file, whose row does not name `T`, unions as before, with
 /// `R` mapped ahead of the term that names it.
 #[test]
@@ -529,13 +558,10 @@ fn the_multi_segment_union_terminates_on_a_loop_through_a_reifier() {
             .position(|t| t.triple == Some((a, p, o)))
             .expect("T keeps its tt");
         let reifier = graph.terms[tagged].reifier.expect("T keeps its rf");
-        assert_eq!(
-            graph.terms[reifier].reifier,
-            Some(reifier),
-            "R stays self-bound"
-        );
+        let r = id("http://example.org/r");
+        assert_eq!(graph.terms[reifier].reifier, Some(r), "R reads r");
         let subject = if rf_loops { tagged } else { a };
-        assert_eq!(graph.reifiers, vec![(reifier, (subject, p, o), None)]);
+        assert_eq!(graph.reifiers, vec![(r, (subject, p, o), None)]);
         assert_eq!(graph.triple_of(reifier), Some((subject, p, o)));
         assert!(graph.quads.contains(&(tagged, p, o, None)));
         assert_eq!(graph.quads.len(), 2, "both segments' quads survive");
@@ -554,12 +580,12 @@ fn a_self_reaching_term_survives_a_round_trip_through_the_canonical_writer() {
     let terms = vec![
         Term::iri("http://example.org/a"),
         Term::iri("http://example.org/p"),
-        indirect_triple_term(2),
+        indirect_triple_term(0),
     ];
     let mut writer = Writer::new("purrdf-test");
     writer.add_terms(&terms);
     writer.add_quads(&[(0, 1, 2, None)]);
-    writer.add_reifies(&[(2, (2, 1, 1), None)]);
+    writer.add_reifies(&[(0, (2, 1, 1), None)]);
     let folded = read(&writer.into_bytes(), false, None);
 
     let rewritten = Writer::deterministic(&folded, "purrdf-test")

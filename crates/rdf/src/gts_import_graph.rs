@@ -625,7 +625,10 @@ mod tests {
     #[test]
     fn a_self_reaching_triple_term_imports_as_a_blank_node_and_keeps_its_row() {
         let mut graph = Graph::default();
-        // Triple term 0 bound to reifier 0, whose object is term 0 itself.
+        graph.terms.push(iri_term("http://example.org/r")); // 0
+        graph.terms.push(iri_term("http://example.org/p")); // 1
+        // Triple term 2 names the earlier reifier 0, whose row names term 2 as
+        // its own object.
         graph.terms.push(GtsTerm {
             kind: GtsKind::Triple,
             value: None,
@@ -634,9 +637,8 @@ mod tests {
             direction: None,
             reifier: Some(0),
             triple: None,
-        }); // 0
-        graph.terms.push(iri_term("http://example.org/p")); // 1
-        graph.reifiers.push((0, (1, 1, 0), None));
+        }); // 2
+        graph.reifiers.push((0, (1, 1, 2), None));
         let bundle = import_gts_graph(graph).expect("a self-reaching term degrades");
         let bytes = crate::serialize_dataset(
             &bundle.dataset,
@@ -646,8 +648,8 @@ mod tests {
         .expect("the dataset serializes");
         assert_eq!(
             String::from_utf8(bytes).expect("N-Quads are UTF-8"),
-            "_:unbound_triple_0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
-             <<( <http://example.org/p> <http://example.org/p> _:unbound_triple_0 )>> .\n"
+            "<http://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <http://example.org/p> <http://example.org/p> _:unbound_triple_2 )>> .\n"
         );
     }
 
