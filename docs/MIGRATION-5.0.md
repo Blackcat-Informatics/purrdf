@@ -482,23 +482,27 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **Reifier position in GTS.** The reader drops a `reifies` row whose reifier is
   a literal or a quoted-triple term, and diagnoses it `PositionConstraint`;
   4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
-  `quads` subject and as the object of a `reifies` or `annot` row. One
-  quoted-triple term whose `rf` names its own id or a later id breaks the
-  specification's rule that `rf` names a strictly earlier term. 4.0.2 kept such
-  an `rf` without a diagnostic. The reader now diagnoses it `ForwardReference`
-  and reads its `rf` as absent. The term then resolves by its `tt` when that is
-  valid and states no triple otherwise, and a `reifies` row keyed by it is
-  dropped with `PositionConstraint`. The row diagnostic carries the frame index,
-  the reifier id and the row's triple.
-  A file holding the spelling with no `tt`, whose term a quad uses, imported in
-  4.0.2. It no longer imports: `dataset_from_gts_graph` refuses it with
-  `native-codec-unbound-triple-term`, and the event importer refuses it with
-  `rdf-ir-gts-fold-diagnostic` carrying the `ForwardReference`, as it refuses
-  every file whose fold reports an error. Only the fold view reads the file, and
-  it renders the term as a fresh blank node. The conforming spelling names an
-  earlier IRI or blank-node reifier in `rf` and keys the row by that reifier. A
-  file whose `reifies` row is keyed by a quoted-triple term, whatever its `tt`
-  or `rf`, loses that row.
+  `quads` subject and as the object of a `reifies` or `annot` row.
+  A quoted-triple term whose `rf` names its own id breaks the specification's
+  rule that `rf` names a strictly earlier term. 4.0.2 kept such an `rf` without
+  a diagnostic, and already diagnosed an `rf` naming a later id as
+  `ForwardReference`. The reader now diagnoses an `rf` naming its own id as
+  `ForwardReference` too, and reads it as absent. The term then resolves by its
+  `tt` when that is valid and states no triple otherwise, and a `reifies` row
+  keyed by it is dropped with `PositionConstraint`. The row diagnostic carries
+  the frame index, the reifier id and the row's triple.
+  The import outcome follows from the new diagnostic. The event importer
+  (`import_gts_events` and its dictionary and blob forms) fails the import on
+  any reader diagnostic other than a blob-budget refusal, so it now refuses
+  every file holding the spelling with `rdf-ir-gts-fold-diagnostic` carrying the
+  `ForwardReference`, whether or not the term has a `tt` and whether or not a
+  quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` refuses
+  only a file whose term has no `tt` and is used by a quad, with
+  `native-codec-unbound-triple-term`; 4.0.2 imported that file too. Only the
+  fold view reads the file, and it renders the term as a fresh blank node. The
+  conforming spelling names an earlier IRI or blank-node reifier in `rf` and
+  keys the row by that reifier. A file whose `reifies` row is keyed by a
+  quoted-triple term, whatever its `tt` or `rf`, loses that row.
   A read-only count through the 4.0.2 reader over the fourteen stored
   first-generation files found no term with an `rf`, no triple-kind term, no
   self-bound term and no reader diagnostic, and their `reifies` rows involve no
