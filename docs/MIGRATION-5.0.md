@@ -444,6 +444,43 @@ lost or retyped a public field, and none of these enums lost a variant.
   (`gts_certify`, in the authorship and the packaging checks) refuse an
   unsupported algorithm at parse, before any status exists; `Unverified` is
   what a direct verification with `verify_sig` or `verify_sig_with_key` returns.
+- **COSE_Sign1 protected header.** The protected header is read as the
+  deterministic encoding the specification requires of every signed byte string
+  (section 4, RFC 8949 section 4.2): shortest-form integers and lengths,
+  definite-length items and map keys in bytewise order. Header integers are not
+  bounded beyond what CBOR encodes, as in 4.0.2. Each case moves between the
+  three outcomes as follows, for a caller that treats `Unverified` as
+  "unchecked" and `Invalid` as "failed":
+  - A header that is not deterministically encoded was `Valid` with a resolved
+    key and `Unverified` without one in 4.0.2; it is `Invalid` in both cases.
+    This moves a result away from `Valid`: a stored signature whose protected
+    header is not deterministically encoded stops verifying. No writer in the
+    GTS repository, in any released version, emits such a header, so only a
+    caller-supplied signature (`FrameOptions::signature`) can hold one. Verify
+    stored signed material with the 5.0 verifier before moving a pin.
+    `Sign1Error::NonCanonicalProtectedHeader` and, in a file verification,
+    `VerificationError::NonCanonicalProtectedHeader` name this cause, so it is
+    told from a signature that fails to verify. `cose::signature_refusal` reads
+    the cause of a retained envelope. The status stays `invalid`, and
+    `Sign1Error` gains a variant and becomes `#[non_exhaustive]`: an exhaustive
+    `match` on it no longer compiles and needs the new arm and a wildcard.
+    `VerificationError` was already `#[non_exhaustive]` and gains a variant, so a
+    `match` with a wildcard arm compiles unchanged.
+  - Compaction and the certify callers parse each retained envelope with the
+    same rules. A file whose signature has a header that is not deterministically
+    encoded is refused by compaction
+    (`CompactRefusedError::FrameCose`, or `DetachedCose` for a carried detached
+    signature) and by the certify checks at parse, where 4.0.2 compacted it and
+    carried the signature. Verify stored signed material before compacting it.
+  - A header declaring its algorithm as a text string (RFC 9052 section 3.1)
+    was malformed and `Invalid` with no `kid`; it is `Unverified` with its `kid`,
+    as an integer algorithm this engine does not implement is.
+  - The `kid` of an envelope that declares an unsupported algorithm is
+    reported, where 4.0.2 reported none.
+    The status is unchanged.
+  A COSE_Sign1 with no `kid` is unchanged: `kid` stays optional (RFC 9052
+  section 3.1) at every entry point. A short EdDSA signature stays `Invalid`
+  before key resolution.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function

@@ -193,6 +193,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
   `SrlError::Execution`, and a rule deriving another predicate still runs.
+- **Breaking: a protected header that is not deterministically encoded is
+  `Invalid`, and `Sign1Error` gains a variant.** A COSE_Sign1 whose protected
+  header is not the deterministic encoding the specification requires (section 4:
+  shortest-form integers and lengths, definite lengths, map keys in bytewise
+  order) was `Valid` with a resolved key; it is `Invalid`, with the cause
+  `Sign1Error::NonCanonicalProtectedHeader` (and
+  `VerificationError::NonCanonicalProtectedHeader` in a file verification),
+  readable through `cose::signature_refusal`. Header integers are not bounded
+  beyond what CBOR encodes, as in 4.0.2. A text-string `alg` is `Unverified`,
+  and the `kid` of an unsupported-algorithm envelope is reported. `Sign1Error` was an exhaustive enum and is now
+  `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles and
+  needs a wildcard arm; `VerificationError` was already `#[non_exhaustive]`.
+  Compaction and the certify callers read the envelope through the same parse,
+  so a file that holds such a signature is refused there
+  (`CompactRefusedError::FrameCose` or `DetachedCose`) where 4.0.2 carried the
+  signature. The migration guide gives the bucket each case moves between.
+  `vectors/signed` carries the upstream signed corpus and `signed_corpus` grades
+  it, with nine named differences.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2

@@ -431,6 +431,19 @@ fn verify_against_keyring<K: SignatureKeyring + ?Sized>(
     if invalid > 0 {
         errors.push(VerificationError::Invalid { count: invalid });
     }
+    let non_canonical = graph
+        .signatures
+        .iter()
+        .filter(|sig| {
+            sig.cose.as_deref().and_then(crate::cose::signature_refusal)
+                == Some(crate::cose::Sign1Error::NonCanonicalProtectedHeader)
+        })
+        .count();
+    if non_canonical > 0 {
+        errors.push(VerificationError::NonCanonicalProtectedHeader {
+            count: non_canonical,
+        });
+    }
     if unverified > 0 {
         errors.push(VerificationError::Unverified { count: unverified });
     }
