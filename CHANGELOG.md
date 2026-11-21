@@ -8,6 +8,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-20
+
 - **Breaking: loss entries record typed occurrences, and the runtime ledger is
   schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
   with three typed members: `site` (`LossSite`: unspecified, a document position,
@@ -147,8 +149,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   The method hashes the population and the additive sum, so it is an accounting
   check and never identified a row set. The signature and the output bytes are
   unchanged, and the old name is removed with no alias. Replace each call with
-  `accounting_check`; `purrdf_hash::multiset::sorted_fingerprint` remains the
-  row-set identity.
+  `accounting_check`. The row-set identity is the new
+  `purrdf_hash::multiset::sorted_fingerprint`.
 - **Reading a GTS file into a dataset reports language tags folded to lower case.**
   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
   terms; a dataset folds the tag and holds one. `import_gts_events`,
@@ -166,7 +168,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   additive `Multiset256` sum, which a party choosing rows can make collide for
   different row sets. Each row family is now hashed in ascending digest order
   under its own versioned domain, through the new
-  `purrdf_hash::multiset::sorted_fingerprint`. Every signature stays. Values
+  `purrdf_hash::multiset::sorted_fingerprint`. The signatures of these functions
+  stay, except that the resident snapshot identity is now read through
+  `ContentIdentified::content_identity` (see the content-identity entry). Values
   move: content identities, execution receipts (`contentIdentity`,
   `executionIdentity`) and text generations recorded by 4.x stop matching, except
   that a segmented stack made only of image layers, with no removal or
@@ -249,20 +253,28 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   caller that stored such normal forms holds the old spelling. A host letter
   that percent-decoding exposes is now lower-cased as well (`http://%41/` was
   `http://A/` and is `http://a/`), so the normal form is a fixed point.
-- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
-  IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
-  N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
-  `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
-  for every caller; the C1 controls stay raw. The canonical IRI writer escapes
-  exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
-  carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
+- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines.** The
+  canonical form of RDF 1.2 N-Quads (section 3) writes a character outside the
+  XML 1.1 `Char` production as `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and
+  `term_syntax::write_literal` do so for every caller, where 4.0.2 wrote both
+  raw. Other literal characters keep their 4.0.2 spelling, among them U+1FFFE,
+  U+FDD0 and U+0085. The canonical IRI writer escapes what `IRIREF` forbids; an
+  IRI holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
+  `write_term_value` and the retained `purrdf_core::rdfc12` functions write
+  U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2 wrote them as `\u007F`
+  and `\u0080` to `\u009F`. The library's own IRI parser refuses these
+  characters in both versions: `freeze` after `intern_iri`, the GTS import
+  functions and the pack dictionary reader each refuse them with
+  `iri-disallowed-char`. The difference reaches only an IRI that a caller's own
+  `DatasetView` supplies.
+  The carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
   Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
   (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
   `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
   the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
-  literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
-  because it was taken over a non-conforming spelling; every other stored digest
-  recomputes unchanged. The readers affected are the PACK version 1
+  literal, or U+007F or U+0080 to U+009F in an IRI, no longer recomputes with the
+  retained `purrdf_core::rdfc12` functions, because it was taken over the
+  4.0.2 spelling; every other stored digest recomputes unchanged. The readers affected are the PACK version 1
   `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
   source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
   over binary lines and does not move; the 5.0 document spells those characters
@@ -288,8 +300,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so a file that holds such a signature is refused there
   (`CompactRefusedError::FrameCose` or `DetachedCose`) where 4.0.2 carried the
   signature. The migration guide gives the bucket each case moves between.
-  `vectors/signed` carries the upstream signed corpus and `signed_corpus` grades
-  it, with nine named differences.
+  `vectors/signed` carries the upstream signed corpus. Its 68 `sigalg-*`
+  vectors state a protected-header grammar that version 1 of the GTS
+  specification does not contain, so they are outside the conformance
+  statement; `signed_corpus` lists the nine where the engine departs from them,
+  and `basic.json` agrees.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2
@@ -367,7 +382,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `execution_identity(&ExecutionSources)` under the new
   `execution-coordinates/v2` law, and refuses with the typed `ReceiptError`.
   Rule coordinates follow (`RuleCoordinates::execution_identity(&RuleSources)`,
-  `rule-execution/v2`, `RuleReceiptError`). Host receipts carry `runIdentity`
+  `rule-execution/v2`, `RuleReceiptError`); `RuleCoordinates::snapshot_identity`
+  and `RuleCoordinates::shapes_identity` are removed, and `execution_identity`
+  takes `&RuleSources` and returns `Result<Digest32, RuleReceiptError>` instead
+  of `Option<&Digest32>`. Host receipts carry `runIdentity`
   and `readsFocusGraph` and no longer carry `executionIdentity` or
   `snapshotIdentity` (rule receipts: `snapshotIdentity`, `shapesIdentity`,
   `executionIdentity`). The explicit request: the CLI's
@@ -378,10 +396,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   bind_execution_receipt, rule_execution_receipt_value_with_sources}` in
   Rust, where `bind_execution_receipt(receipt, &view)` takes a view that
   implements `ContentIdentified`, so a view without that capability cannot be
-  passed. Migration: pass the view the query read to `bind_execution_receipt`
-  (the hex-text entry point and `ReceiptBindError::ContentIdentity` are gone;
-  `ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
-  which must implement `StructuredError`); replace
+  passed. To bind a receipt, pass the view the query read to the new
+  `bind_execution_receipt`; its error `ReceiptBindError<E>::Identity` carries
+  the view's own typed `IdentityError`, which must implement `StructuredError`.
+  Migration: replace
   `DatasetView::snapshot_identity` with `ContentIdentified::content_identity`
   (an `Err`, not `Ok(None)`, where a view cannot certify its content, and no
   method at all on a view that never can); replace
