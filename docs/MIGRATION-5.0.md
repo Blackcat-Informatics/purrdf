@@ -497,7 +497,7 @@ lost or retyped a public field, and none of these enums lost a variant.
   every file holding the spelling with `rdf-ir-gts-fold-diagnostic` carrying the
   `ForwardReference`, whether or not the term has a `tt` and whether or not a
   quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` refuses
-  only a file whose term has no `tt` and is used by a quad, with
+  a file whose term has no `tt` and is named by a quad or a row, with
   `native-codec-unbound-triple-term`; 4.0.2 imported that file too. Only the
   fold view reads the file, and it renders the term as a fresh blank node. The
   conforming spelling names an earlier IRI or blank-node reifier in `rf` and
