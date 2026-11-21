@@ -249,9 +249,9 @@ holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
 `write_term_value` and the retained `rdfc12` functions write U+007F and U+0080 to
 U+009F in an IRI raw, where 4.0.2 wrote `\u007F` and `\u0080` to `\u009F`. The
 library's own IRI parser refuses those characters in both versions: `freeze`
-after `intern_iri`, the GTS import functions and the pack dictionary reader each
+after `intern_iri`, the GTS import functions, the pack dictionary reader and the columnar reader (through `freeze`) each
 refuse them with `iri-disallowed-char`. The difference reaches only an IRI that a
-caller's own `DatasetView` supplies. The digest is over the binary line
+caller's own implementation of the open `DatasetView` trait supplies. The digest is over the binary line
 encodings and does not depend on these spellings. The retained 4.x
 `purrdf-rdfc12` output keeps the spelling it had, U+FFFE and U+FFFF raw (profile
 version 3), so a stored 4.x digest of a dataset holding either in a literal

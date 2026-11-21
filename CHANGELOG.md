@@ -287,9 +287,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2 wrote them as `\u007F`
   and `\u0080` to `\u009F`. The library's own IRI parser refuses these
   characters in both versions: `freeze` after `intern_iri`, the GTS import
-  functions and the pack dictionary reader each refuse them with
+  functions, the pack dictionary reader and the columnar reader (through `freeze`) each refuse them with
   `iri-disallowed-char`. The difference reaches only an IRI that a caller's own
-  `DatasetView` supplies. The carrier-aware `iri_escape::*_for` functions name the
+  implementation of the open `DatasetView` trait supplies. The carrier-aware `iri_escape::*_for` functions name the
   wider XML set, which the
   Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
   (for the last, to keep the bytes of a SARIF `logicalLocation` stable). The one
