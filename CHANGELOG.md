@@ -23,6 +23,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `ResolvedSink::err_unbound_triple` stays a required method that the
   resolver no longer calls.
 
+- **The byte-freeze guard covers the flat GTS vectors.** `check-corpus-frozen.py`
+  gains a flat root, which freezes the registered files directly inside one
+  directory and none of its subdirectories, and `vectors/` registers one: the 68
+  files of the 34 upstream vectors carried at its top level. The five vectors
+  this project generates (`25b`, `30` to `33`) are named in the registry and are
+  not frozen. A changed, missing or unregistered file among the frozen ones now
+  fails the guard.
 - **Breaking: loss entries record typed occurrences, and the runtime ledger is
   schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
   with three typed members: `site` (`LossSite`: unspecified, a document position,

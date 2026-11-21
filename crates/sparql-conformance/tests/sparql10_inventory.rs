@@ -89,6 +89,97 @@ fn a_missing_or_malformed_freeze_registry_is_refused() {
     }
 }
 
+/// Run the production guard inside a fixture tree laid out like the repository.
+fn guard(fixture: &Path, argument: Option<&str>) -> Output {
+    let mut command = Command::new("python3");
+    command.arg(fixture.join("scripts/check-corpus-frozen.py"));
+    command.args(argument);
+    command.output().expect("run the production freeze guard")
+}
+
+/// A flat root freezes the registered files directly inside its directory and
+/// nothing else: an edited or added payload file is refused, while an excluded
+/// vector, an unregistered file kind and a subdirectory are not the root's.
+#[test]
+fn a_flat_root_refuses_an_edited_or_added_payload_file_and_only_that() {
+    let workspace = purrdf_testkit::paths::workspace_root!();
+    let fixture = purrdf_testkit::temp_dir!("flat-freeze-root-").expect("fixture");
+    let tree = fixture.path();
+    fs::create_dir_all(tree.join("scripts/conformance-frozen")).expect("registry directory");
+    fs::copy(
+        workspace.join("scripts/check-corpus-frozen.py"),
+        tree.join("scripts/check-corpus-frozen.py"),
+    )
+    .expect("copy guard");
+    fs::write(
+        tree.join("scripts/conformance-frozen/roots.toml"),
+        "[roots]\n\"corpus\" = \"scripts/conformance-frozen/corpus.sha256\"\n\n\
+         [flat_roots.\"flat\"]\nreceipt = \"scripts/conformance-frozen/flat.sha256\"\n\
+         suffixes = [\".gts\"]\nexclude = [\"generated.gts\"]\n",
+    )
+    .expect("registry");
+    fs::create_dir_all(tree.join("corpus")).expect("corpus");
+    fs::write(tree.join("corpus/a.txt"), "a").expect("corpus file");
+    fs::create_dir_all(tree.join("flat/nested")).expect("flat root");
+    for name in ["one.gts", "generated.gts", "notes.txt", "nested/deep.gts"] {
+        fs::write(tree.join("flat").join(name), "original").expect("flat file");
+    }
+    assert!(guard(tree, Some("--update")).status.success());
+    let receipt = fs::read_to_string(tree.join("scripts/conformance-frozen/flat.sha256"))
+        .expect("flat receipt");
+    assert_eq!(
+        receipt.lines().count(),
+        1,
+        "only one.gts is payload: {receipt}"
+    );
+    assert!(receipt.ends_with("  one.gts\n"));
+    assert!(guard(tree, None).status.success(), "the clean tree passes");
+
+    // The neighbours that are not the root's payload may change freely.
+    for name in ["generated.gts", "notes.txt", "nested/deep.gts"] {
+        fs::write(tree.join("flat").join(name), "changed").expect("neighbour");
+    }
+    assert!(guard(tree, None).status.success());
+
+    fs::write(tree.join("flat/one.gts"), "edited").expect("edit");
+    let edited = guard(tree, None);
+    assert!(!edited.status.success());
+    assert!(String::from_utf8_lossy(&edited.stderr).contains("content changed: one.gts"));
+    fs::write(tree.join("flat/one.gts"), "original").expect("restore");
+    assert!(guard(tree, None).status.success());
+
+    fs::write(tree.join("flat/two.gts"), "added").expect("add");
+    let added = guard(tree, None);
+    assert!(!added.status.success());
+    assert!(
+        String::from_utf8_lossy(&added.stderr).contains("new (on disk, not in manifest): two.gts")
+    );
+}
+
+/// The upstream GTS vectors at the top of `vectors/` stay guarded: dropping the
+/// registration would leave the guard passing over an unfrozen corpus.
+#[test]
+fn the_upstream_gts_vectors_are_registered_as_a_flat_root_with_their_receipt() {
+    let workspace = purrdf_testkit::paths::workspace_root!();
+    let registry = fs::read_to_string(workspace.join("scripts/conformance-frozen/roots.toml"))
+        .expect("freeze registry");
+    assert!(registry.contains("[flat_roots.\"vectors\"]"));
+    assert!(registry.contains("receipt = \"scripts/conformance-frozen/vectors-flat.sha256\""));
+    let receipt =
+        fs::read_to_string(workspace.join("scripts/conformance-frozen/vectors-flat.sha256"))
+            .expect("flat receipt");
+    let frozen: BTreeSet<_> = receipt
+        .lines()
+        .map(|line| line.split_once("  ").expect("SHA-256 receipt record").1)
+        .collect();
+    assert_eq!(frozen.len(), 68, "34 upstream vectors, two files each");
+    assert!(frozen.contains("12-conflicting-reifier.expected.json"));
+    assert!(
+        !frozen.contains("25b-streamable-compacted.gts"),
+        "generated vectors are not frozen"
+    );
+}
+
 #[test]
 fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
     use purrdf_sparql_conformance::manifest;
