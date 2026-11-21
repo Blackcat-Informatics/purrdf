@@ -28,7 +28,9 @@
 //!
 //! There are no knobs. A writer that needs a different spelling is writing a
 //! different syntax (a CURIE-compacting Turtle writer, an XML carrier), and
-//! composes these pieces with its own rather than asking for a variant.
+//! composes these pieces with its own rather than asking for a variant. The
+//! one other literal spelling is [`write_literal_rdfc12_v3`], the bytes the
+//! retained canonicalization profile `purrdf-rdfc12` recorded its digests over.
 
 use crate::literal_escape::{self, Carrier};
 use crate::text_out::TextOut;
@@ -149,12 +151,65 @@ pub fn write_literal_for<W: TextOut + ?Sized>(
     dir: Option<&str>,
     out: &mut W,
 ) {
+    write_literal_with(
+        lexical_form,
+        |body, out| literal_escape::write(body, Carrier::Canonical, out),
+        datatype,
+        datatype_carrier,
+        lang,
+        dir,
+        out,
+    );
+}
+
+/// Append a literal as profile `purrdf-rdfc12` version 3 spells it: the
+/// [`write_literal`] form with the lexical form through
+/// [`literal_escape::write_rdfc12_v3`], so U+FFFE and U+FFFF ride raw. That
+/// profile is the retained canonicalization whose recorded digests recompute
+/// only from these bytes; every other writer calls [`write_literal`].
+///
+/// ```
+/// use purrdf_lex::term_syntax::write_literal_rdfc12_v3;
+///
+/// let mut out = String::new();
+/// write_literal_rdfc12_v3("a\u{fffe}\t", "urn:ex:dt", None, None, &mut out);
+/// assert_eq!(out, "\"a\u{fffe}\\t\"^^<urn:ex:dt>");
+/// ```
+pub fn write_literal_rdfc12_v3<W: TextOut + ?Sized>(
+    lexical_form: &str,
+    datatype: &str,
+    lang: Option<&str>,
+    dir: Option<&str>,
+    out: &mut W,
+) {
+    write_literal_with(
+        lexical_form,
+        literal_escape::write_rdfc12_v3,
+        datatype,
+        crate::iri_escape::Carrier::Canonical,
+        lang,
+        dir,
+        out,
+    );
+}
+
+/// The one literal frame: `"`, the lexical form through `body`, `"`, then the
+/// tag or the datatype.
+fn write_literal_with<W: TextOut + ?Sized>(
+    lexical_form: &str,
+    body: impl FnOnce(&str, &mut W),
+    datatype: &str,
+    datatype_carrier: crate::iri_escape::Carrier,
+    lang: Option<&str>,
+    dir: Option<&str>,
+    out: &mut W,
+) {
     debug_assert!(
         dir.is_none() || lang.is_some(),
         "a base direction exists only on a language-tagged literal"
     );
     out.push('"');
-    literal_escape::write(lexical_form, Carrier::Canonical, out);
+    body(lexical_form, out);
     out.push('"');
     if let Some(lang) = lang {
         out.push('@');
