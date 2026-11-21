@@ -1047,19 +1047,6 @@ impl Folder<'_, '_, '_> {
         if matches!(self.reifier_index.first_binding(rid), Some(existing) if existing != triple) {
             self.rebound_reifiers.push((rid, index));
         }
-        if self
-            .reifier_index
-            .binding_is_recursive(self.terms(), rid, triple)?
-        {
-            self.diag(
-                FoldError::RecursiveReifier {
-                    reifier: rid,
-                    triple,
-                },
-                index,
-            );
-            return Ok(());
-        }
         self.reifier_index
             .record(self.g, (rid, triple, gslot), self.materialize);
         if let Some(terms) = self.stored_terms {
@@ -1236,25 +1223,48 @@ impl Folder<'_, '_, '_> {
         }
 
         if let Some(digest) = declared_digest {
+            // A declared digest stores the wire bytes undecoded, so a payload
+            // that cannot be a stream of its codec is refused here, by its
+            // structure, instead of folding as sound and failing on first use.
+            let wire: Option<Cow<'_, [u8]>> = d.map(|raw| {
+                raw.contiguous().map_or_else(
+                    || Cow::Owned(raw.flatten().copied().collect()),
+                    Cow::Borrowed,
+                )
+            });
+            if let Some(wire) = wire.as_deref()
+                && let Err(error) = crate::codec::check_chain_structure(&chain, wire)
+            {
+                let error = PayloadError::from(error);
+                let detail = error.diagnostic_detail();
+                self.opaque(frame, "blob", error.opaque_reason());
+                self.diag_native(
+                    error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                    error,
+                    detail,
+                    index,
+                );
+                return;
+            }
             if let Some(meta) = pub_meta {
                 self.blob_meta_index
                     .set(&mut self.g.blob_meta, digest.clone(), meta);
             }
             self.emit_blob(&digest, false, d, &chain, declared_metadata, encoded_len);
-            if let Some(raw) = d
+            if let Some(wire) = wire
                 && self.materialize
             {
                 if chain.is_empty() {
                     self.blob_index.set(
                         &mut self.g.blobs,
                         digest.clone(),
-                        BlobEntry::bytes(raw.flatten().copied().collect()),
+                        BlobEntry::bytes(wire.into_owned()),
                     );
                 } else {
                     self.blob_index.set(
                         &mut self.g.blobs,
                         digest.clone(),
-                        BlobEntry::lazy(raw.flatten().copied().collect(), chain),
+                        BlobEntry::lazy(wire.into_owned(), chain),
                     );
                 }
             }

@@ -50,15 +50,14 @@ impl TermReferences {
             triple: term.triple,
         }
     }
-    pub(super) fn anchor(self, term_id: usize) -> Option<usize> {
+    /// The reifier id this term's components may come from: the `rf` of a
+    /// triple term. A triple term with no `rf` names no reifier, its own id
+    /// included (§7.3).
+    pub(super) fn anchor(self) -> Option<usize> {
         if self.kind != TermKind::Triple {
             return None;
         }
-        match (self.reifier, self.triple) {
-            (Some(reifier), _) => Some(reifier),
-            (None, None) => Some(term_id),
-            (None, Some(_)) => None,
-        }
+        self.reifier
     }
 }
 

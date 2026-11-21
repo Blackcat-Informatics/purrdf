@@ -96,6 +96,7 @@ mod reader_layout;
 mod reader_rows;
 mod reader_union;
 pub mod replication;
+pub mod resolution;
 mod rfc3339;
 pub mod segment_decode;
 pub mod stream;

@@ -141,9 +141,9 @@ no copy of it. The authoritative documents are:
 `purrdf-gts` implements wire-format major version 1. The corpus carried in
 `vectors/` is a subset of the current `gmeow-gts` corpus and lacks vectors
 that the 1.0-rc1 corpus adds, so a result against the 1.0-rc1 corpus is not
-recorded. The recorded result is against the carried corpus: 38 of 39 frozen
-vectors fold byte-exactly into their shipped `<id>.expected.json`, and the
-one ledgered divergence is `12-conflicting-reifier`. The result is in the
+recorded. The recorded result is against the carried corpus: all 39 frozen
+vectors fold byte-exactly into their shipped `<id>.expected.json`, with no
+ledgered divergence. The result is in the
 GTS transport rows of
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md),
 produced by `crates/rdf/tests/gts_corpus_expected_fold.rs` and reported by

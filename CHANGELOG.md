@@ -35,6 +35,58 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `kind` `detail`), and the C and WebAssembly surfaces carry the same members
   in the ledger JSON. `RdfLocation` and `RdfDiagnostic` are unchanged. The
   migration guide gives the mapping.
+- **Behaviour change: a triple term that reaches itself states no triple, and its `reifies` row is kept.**
+  A term that is reachable from its own components, through `tt` or through the
+  first `reifies` row of the reifier id its `rf` names, is no longer
+  refused. A `k:3` term with neither `tt` nor `rf` states no triple, as the
+  specification's third resolution rule says; an absent `rf` is not read as the
+  term's own id. The GTS reader folds every such row with no diagnostic, where it
+  reported `DamagedFrame` and dropped the row. The term keeps an identity of its
+  own in the multi-segment union and the canonical writer, and the row still
+  projects. `purrdf_gts::resolution::SelfReaching::of` names these terms once per
+  graph and `Graph::resolved_triple_of` answers `None` for each; `Graph::triple_of`
+  keeps returning the declared components. Projections render the term as the
+  fresh blank node of an unbound triple term (`_:unbound_triple_{id}`), so
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView` accept a graph they refused with `gts-self-reaching-term`. That
+  code remains for a literal whose datatype chain leads back to itself. A valid
+  file, whose `tt` names strictly smaller term ids and whose rows name no term
+  that reaches itself, folds, writes and projects as before.
+  The streaming importers (`import_gts_events` and its dictionary and blob
+  forms) and `export_gts_rdf_nquads_with_dictionary` decide the same set and
+  render the same blank node, and the canonical writer keeps the `tt` a
+  self-reaching term carries and orders its components before it.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced: the traversal it bounded no longer exists.
+- **Breaking: `PendingResolution` is `#[non_exhaustive]` and carries the
+  resolver's search state.** `segment_decode::PendingResolution` gains the public
+  field `component: ComponentState` and the constructor
+  `PendingResolution::new(term)`; an external `PendingResolution { .. }`
+  struct literal no longer compiles, which is deliberate: a literal could not set
+  the new field and a storage that forgot it would resolve a self-reaching
+  term wrongly. A `ResolutionStorage` implementation changes only where it builds
+  or rebuilds a record. Before, `PendingResolution { term, parent: None, next: 0,
+  active: false }`; now `PendingResolution::new(term)`, and an implementation that
+  persists a record outside memory stores `component.to_words()` (five `u64`
+  words) with the other fields and restores it with `ComponentState::from_words`,
+  returning exactly what it was given. A storage that returns a default value
+  instead is refused by the resolver with `rdf-ir-dangling-term-ref`. No
+  `ResolutionStorage` method is added. `ComponentState` is a new public type.
+- **Behaviour change: the GTS reader drops a `reifies` row whose reifier is a
+  literal or a quoted triple.** The row is diagnosed `PositionConstraint`;
+  4.0.2 kept it silently. The indirect spelling stored files hold (a
+  quoted-triple term with no `tt` whose `rf` is its own id) is an exception and
+  keeps its binding with no diagnostic. See the migration guide.
+- **Behaviour change: a GTS blob whose payload cannot be a stream of its codec
+  is an opaque node.** A blob frame that declares its digest and whose `zstd`,
+  `zstd-rsyncable` or `gzip` payload fails a structural check at fold (frame
+  and block headers, a named dictionary, the gzip magic and trailer) folds as an
+  opaque node with `DamagedFrame` and stays out of the blob table; 4.0.2
+  admitted it and failed only when its bytes were requested. The check decodes
+  nothing. A payload with sound structure and corrupt content still folds and
+  fails on first request; `docs/CONFORMANCE.md` states that limit.
+  `codec::check_chain_structure` is a new public function.
+
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop
