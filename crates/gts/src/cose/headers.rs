@@ -29,7 +29,10 @@ pub(super) fn header_labels(headers: &[(Value, Value)]) -> Option<BTreeSet<Heade
         }
         // RFC 9052 common-header value types, even for ignored metadata.
         match label.as_integer().map(Integer::get) {
-            Some(1) if value.as_integer().is_none() => return None,
+            // RFC 9052 section 3.1: `alg` is an integer or a text string.
+            Some(1) if value.as_integer().is_none() && !matches!(value, Value::Text(_)) => {
+                return None;
+            }
             Some(2) if value.as_array().is_none_or(Vec::is_empty) => {
                 return None;
             }
