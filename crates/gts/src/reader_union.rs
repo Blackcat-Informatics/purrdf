@@ -8,7 +8,7 @@ use purrdf_lex::cbor::Value;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind, Triple3};
 use crate::reader::{as_idx, text_or};
 use crate::reader_index::DigestIndex;
-use crate::resolution::SelfReaching;
+use crate::resolution::{SelfReaching, Successors, on_cycles};
 use crate::wire::map_get;
 
 // --------------------------------------------------------------------------- //
@@ -26,6 +26,14 @@ use crate::wire::map_get;
 // no triple: each keeps an identity of its own (`InternKey::SelfReaching`), and
 // neither its components nor its reifier are walked. Every other walk of
 // components therefore runs over an acyclic term graph.
+//
+// A term's datatype and reifier are not part of its identity, yet the walk maps
+// them too, and they can close a loop the components do not: a triple term whose
+// `rf` names a self-bound triple term whose binding has the first term as a
+// component. Such a pair is not self-reaching, and both keep their triples. The
+// terms on a loop of the whole walk (`Unioner::settle_later`, found once per
+// segment) therefore have their datatype and reifier mapped only after the term
+// itself is pushed (`Unioner::unsettled`), which breaks every such loop.
 // --------------------------------------------------------------------------- //
 
 #[derive(Clone, PartialEq, Eq, Hash)]
@@ -52,6 +60,12 @@ struct Unioner {
     mapped: FastMap<(usize, usize), usize>,
     /// The triple terms of the segment being mapped that reach themselves.
     reaching: SelfReaching,
+    /// The terms of the segment being mapped that lie on a loop of the walk
+    /// through a datatype or a reifier, or empty when none does.
+    settle_later: Vec<bool>,
+    /// Union terms whose datatype and reifier are still to be mapped: the union
+    /// id and the segment term id it was mapped from.
+    unsettled: Vec<(usize, usize)>,
 }
 
 /// Where a term being mapped by [`Unioner::map_term`] stands: each stage waits for the
@@ -129,6 +143,66 @@ impl Unioner {
         }
     }
 
+    /// The terms of `seg` that lie on a loop of [`Self::map_term_walk`]. The walk
+    /// follows exactly these edges: a triple term's key components unless it
+    /// reaches itself, a datatype, a reifier unless the term is self-bound or
+    /// reaches itself, and the components of a `tt`.
+    fn walk_loops(seg: &Graph, reaching: &SelfReaching) -> Vec<bool> {
+        let mut first: FastMap<usize, Triple3> = FastMap::default();
+        for &(reifier, triple, _) in &seg.reifiers {
+            first.entry(reifier).or_insert(triple);
+        }
+        on_cycles(seg.terms.len(), |tid| {
+            let t = &seg.terms[tid];
+            let degraded = reaching.contains(tid);
+            let mut successors = Successors::default();
+            if !degraded
+                && let Some(triple) =
+                    seg.declared_triple_with(tid, |reifier| first.get(&reifier).copied())
+            {
+                successors.extend(<[usize; 3]>::from(triple));
+            }
+            successors.extend(t.datatype);
+            let self_bound = t.kind == TermKind::Triple && t.reifier == Some(tid);
+            if !degraded && !self_bound {
+                successors.extend(t.reifier);
+            }
+            if let Some(triple) = t.triple {
+                successors.extend(<[usize; 3]>::from(triple));
+            }
+            successors
+        })
+        .unwrap_or_default()
+    }
+
+    /// Whether segment term `tid` has its datatype and reifier mapped after it.
+    fn settles_later(&self, tid: usize) -> bool {
+        self.settle_later.get(tid).copied().unwrap_or(false)
+    }
+
+    /// Map segment term `tid` into the union, returning its union id, and then
+    /// the datatype and reifier of every term [`Self::map_term_walk`] left
+    /// unsettled.
+    fn map_term(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
+        let mapped = self.map_term_walk(seg, seg_idx, tid);
+        while let Some((union_id, source)) = self.unsettled.pop() {
+            let t = &seg.terms[source];
+            if let Some(datatype) = t.datatype {
+                let datatype = self.map_term_walk(seg, seg_idx, datatype);
+                self.out.terms[union_id].datatype = Some(datatype);
+            }
+            let self_bound = t.kind == TermKind::Triple && t.reifier == Some(source);
+            if !self_bound
+                && !self.reaching.contains(source)
+                && let Some(reifier) = t.reifier
+            {
+                let reifier = self.map_term_walk(seg, seg_idx, reifier);
+                self.out.terms[union_id].reifier = Some(reifier);
+            }
+        }
+        mapped
+    }
+
     /// Map segment term `tid` into the union, returning its union id.
     ///
     /// A term's key is found first. A quoted triple keys on its interned SPO
@@ -148,7 +222,9 @@ impl Unioner {
     /// for why. A triple term that reaches itself (`self.reaching`, found once per
     /// segment by [`SelfReaching::of`]) states no triple, so neither its components
     /// nor its reifier are walked and every other chain of components is acyclic.
-    fn map_term(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
+    /// A term on a loop through a datatype or a reifier (`self.settle_later`) is
+    /// pushed without them and queued on `self.unsettled` for [`Self::map_term`].
+    fn map_term_walk(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
         let mut frames = vec![MapFrame::new(tid)];
         loop {
             let frame = frames.last_mut().expect("a term is being mapped");
@@ -202,14 +278,19 @@ impl Unioner {
                     if let Some(&got) = self.intern.get(key) {
                         got
                     } else {
-                        frame.calls.extend(t.datatype);
+                        if !self.settles_later(frame.tid) {
+                            frame.calls.extend(t.datatype);
+                        }
                         frame.stage = MapStage::Datatype;
                         continue;
                     }
                 }
                 MapStage::Datatype => {
                     frame.datatype = frame.results.pop();
-                    if !self_bound && !self.reaching.contains(frame.tid) {
+                    if !self_bound
+                        && !self.reaching.contains(frame.tid)
+                        && !self.settles_later(frame.tid)
+                    {
                         frame.calls.extend(t.reifier);
                     }
                     frame.stage = MapStage::Reifier;
@@ -261,6 +342,9 @@ impl Unioner {
                     });
                     let key = frame.key.take().expect("the key is found first");
                     self.intern.insert(key, new_id);
+                    if self.settles_later(frame.tid) {
+                        self.unsettled.push((new_id, frame.tid));
+                    }
                     new_id
                 }
             };
@@ -344,6 +428,7 @@ pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
     let mut seen_reifiers: FastSet<ReifierRow> = FastSet::default();
     for (seg_idx, seg) in segments.iter().enumerate() {
         u.reaching = SelfReaching::of(seg);
+        u.settle_later = Unioner::walk_loops(seg, &u.reaching);
         for &(s, p, o, gq) in &seg.quads {
             let q: Quad = (
                 u.map_term(seg, seg_idx, s),

@@ -45,9 +45,9 @@ fn indirect_triple_term(reifier: usize) -> Term {
     }
 }
 
-/// A quoted triple that names NO reifier: §7.1 lets a self-bound triple term leave
-/// `rf` implicit, and `Graph::triple_of` then keys the binding by the term's own id.
-fn implicit_rf_triple_term() -> Term {
+/// A quoted triple with neither `tt` nor `rf`. It states no triple (§7.3, third
+/// resolution rule): an absent `rf` names no reifier, not the term's own id.
+fn bare_triple_term() -> Term {
     Term {
         kind: TermKind::Triple,
         value: Some(String::new()),
@@ -235,22 +235,33 @@ fn a_reifier_binding_that_reaches_its_own_triple_term_keeps_its_row() {
     );
 }
 
-/// §7.1's implicit `rf`: the term names no reifier, so its binding is keyed by its
-/// OWN id — and that binding names the term. A check that only followed the explicit
-/// `rf` and `tt` spellings would admit this one as an ordinary triple term.
+/// A term with neither `tt` nor `rf` states no triple, so a row keyed by its own
+/// id does not bind it. The fold view renders the term as the blank node of an
+/// unbound triple term, and the dataset bridges refuse it at once as unbound,
+/// whether it is the row's reifier alone or a quad also uses it. Reading that row
+/// as the term's binding made the term contain itself, and the bridge then walked
+/// it until storage ran out.
 #[test]
-fn an_implicit_self_binding_that_reaches_its_own_term_states_no_triple() {
-    every_door_degrades(
-        || {
+fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
+    for used_by_a_quad in [false, true] {
+        let build = || {
             let mut graph = Graph::default();
             graph.terms.push(Term::iri("https://example.org/p")); // 0
-            graph.terms.push(implicit_rf_triple_term()); // 1
-            graph.reifiers.push((1, (1, 0, 1), None));
+            graph.terms.push(bare_triple_term()); // 1
+            graph.reifiers.push((1, (1, 0, 0), None));
+            if used_by_a_quad {
+                graph.quads.push((1, 0, 0, None));
+            }
             graph
-        },
-        &[1],
-        "an implicit self-binding naming its own term",
-    );
+        };
+        let view = GtsFoldView::new(build()).expect("the fold view admits the graph");
+        assert_eq!(view.nq_token(1), "_:unbound_triple_1");
+        let graph = build();
+        let err = dataset_from_gts_graph(&graph).expect_err("no row binds the bare term");
+        assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+        let err = flattened_dataset_from_gts_graph(&graph).expect_err("no row binds the bare term");
+        assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+    }
 }
 
 /// `tt` takes precedence over the reifier indirection, so a graph whose `tt` closes a

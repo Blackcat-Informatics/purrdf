@@ -19,9 +19,8 @@ use crate::{FastMap, FastSet};
 /// Full row membership is retained only when constructing a graph.
 #[derive(Default)]
 pub(super) struct ReifierIndex {
-    /// Reifier id → the triple terms whose components that id supplies, in
-    /// term-id order: every triple term naming it through `rf`, and the
-    /// implicit self-bound triple term (no `rf`, no `tt`) whose own id it is.
+    /// Reifier id → the triple terms naming it through `rf`, in term-id order.
+    /// A triple term with no `rf` is anchored on nothing.
     anchors: FastMap<usize, Vec<usize>>,
     anchor_entries: usize,
     /// Reifier id → its FIRST recorded binding, as [`Graph::reifier`] answers.
@@ -46,7 +45,7 @@ impl ReifierIndex {
     }
 
     pub(super) fn observe_references(&mut self, term_id: usize, references: TermReferences) {
-        let Some(anchored_on) = references.anchor(term_id) else {
+        let Some(anchored_on) = references.anchor() else {
             return;
         };
         self.anchors.entry(anchored_on).or_default().push(term_id);

@@ -84,13 +84,10 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
             // The legacy indirection already resolves through the statement layer;
             // leave the spelling alone so a genuine `rdf:reifies` row still emits.
             t.reifier
-        } else if g.reifier(id).is_some() {
-            // §7.1: a self-bound triple term may leave `rf` implicit, and the binding
-            // is then keyed by the term's OWN id. The row is already in the statement
-            // layer under that id, so naming it is the whole translation.
-            Some(id)
         } else {
-            // Genuinely unbound; the fold and the serializers report it as such.
+            // States no triple (§7.3, third resolution rule): an `rf` with no row,
+            // or neither `tt` nor `rf`. An absent `rf` names no reifier, not the
+            // term's own id. The fold and the serializers report it as unbound.
             t.reifier
         };
         terms.push(SerTerm {

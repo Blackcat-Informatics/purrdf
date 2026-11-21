@@ -1363,18 +1363,21 @@ fn growing_irregular_terms_keep_text_workspace_bounded_outside_reported_metadata
 fn the_stored_export_renders_self_reaching_triple_terms_as_the_resident_import_does() {
     let directory = purrdf_testkit::temp_dir!().expect("self-reaching export directory");
     let root = directory.path();
-    let implicit = || {
+    // Self-bound: no `tt`, and `rf` naming the term's own id, so the row keyed
+    // by that id supplies its components.
+    let self_bound = |id: usize| {
         let mut term = Term::triple_term((0, 0, 0));
         term.triple = None;
+        term.reifier = Some(id);
         term
     };
     let mut writer = Writer::new("rdf12");
     writer.add_terms(&[
         Term::iri("https://example.org/s"), // 0
         Term::iri("https://example.org/p"), // 1
-        implicit(),                         // 2: 2 -> 4, 2 -> 3
-        implicit(),                         // 3: 3 -> 4
-        implicit(),                         // 4: 4 -> 2
+        self_bound(2),                      // 2: 2 -> 4, 2 -> 3
+        self_bound(3),                      // 3: 3 -> 4
+        self_bound(4),                      // 4: 4 -> 2
         Term::triple_term((0, 1, 4)),       // 5: contains a member, reaches no loop
     ]);
     writer.add_quads(&[(0, 1, 2, None), (0, 1, 5, None)]);

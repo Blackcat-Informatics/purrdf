@@ -10,30 +10,18 @@
 //! case below is read both ways and compared. The distinguishing shapes are
 //! the components that close through terms the search has already finished.
 
-use purrdf_gts::model::{Term, TermKind};
+use purrdf_gts::model::Term;
 use purrdf_gts::writer::Writer;
 use purrdf_rdf::gts::dataset_from_gts_graph;
 use purrdf_rdf::{RdfDataset, SerializeGraph, import_gts_events, serialize_dataset};
 
-/// A `k:3` term that names neither `tt` nor `rf`: its components come from the
-/// row keyed by its own id.
-fn implicit_triple() -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: None,
-    }
-}
-
+/// A `k:3` term with no `tt` that takes its components from the first row
+/// bound to `reifier`. Naming its own id makes it self-bound.
 fn indirect_triple(reifier: usize) -> Term {
-    Term {
-        reifier: Some(reifier),
-        ..implicit_triple()
-    }
+    let mut term = Term::triple_term((0, 0, 0));
+    term.triple = None;
+    term.reifier = Some(reifier);
+    term
 }
 
 /// The streaming importer scopes a blank label with an escape prefix and writes
@@ -99,7 +87,8 @@ fn every_member_of_a_component_degrades_whichever_term_the_search_starts_from() 
             Term::iri("https://example.org/s"),
             Term::iri("https://example.org/p"),
         ];
-        terms.extend([implicit_triple(), implicit_triple(), implicit_triple()]);
+        // Each member is self-bound, so the row keyed by its own id binds it.
+        terms.extend((2..5).map(indirect_triple));
         let rows = [
             (a, (c, 1, b), None),
             (b, (0, 1, c), None),

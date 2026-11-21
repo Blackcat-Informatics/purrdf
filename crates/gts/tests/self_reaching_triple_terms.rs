@@ -16,8 +16,9 @@
 //! 1. `tt` names strictly earlier terms, `dt` and `rf` too (`rf` may also name
 //!    the term itself), so none of those closes a loop on its own.
 //! 2. A `reifies` row may name ANY term, so it is the one field that can close
-//!    a loop. A triple term reaches that row either through the `rf` it names
-//!    or, when it names none, through its OWN id; both spellings degrade.
+//!    a loop. A triple term with no `tt` reaches that row through the `rf` it
+//!    names, its own id included; a triple term with neither states no triple
+//!    and reaches nothing.
 //!
 //! Every case below is built through the real [`Writer`] and read back, so
 //! these are claims about the wire and not about hand-assembled structures.
@@ -50,9 +51,9 @@ fn diagnostic_codes(graph: &Graph) -> Vec<&str> {
 /// No term may resolve, transitively, back to itself once self-reaching terms
 /// state no triple, and every term the fold reports as self-reaching is one.
 ///
-/// This walks [`Graph::resolved_triple_of`] — the accessor every consumer uses —
-/// rather than `term_triple`, which does not follow a self-bound term to the
-/// row keyed by its own id and so cannot see a loop written through one.
+/// This walks [`Graph::resolved_triple_of`], the accessor every consumer uses,
+/// which answers `None` for a self-reaching term where `triple_of` would follow
+/// the loop.
 fn assert_resolution_terminates(graph: &Graph, self_reaching: &[usize]) {
     let reaching = SelfReaching::of(graph);
     for start in 0..graph.terms.len() {
@@ -467,6 +468,82 @@ fn the_multi_segment_fold_of_a_self_reaching_term_terminates() {
             .any(|t| t.value.as_deref() == Some("http://example.org/b")),
         "the second segment's terms survive the union",
     );
+}
+
+/// A self-bound term `R` and a term `T` whose `tt` is `(a, p, o)` and whose `rf`
+/// names `R`, with `R`'s row binding `<<( T p o )>>`, in a file of two segments
+/// (`R` first when `rf_loops`, else `R`'s row binds `<<( a p o )>>`).
+fn reifier_of_a_term_bound_through_its_own_reifier(rf_loops: bool) -> Vec<u8> {
+    let mut tagged = Term::triple_term((0, 1, 2));
+    tagged.reifier = Some(3);
+    let terms = vec![
+        Term::iri("http://example.org/a"), // 0
+        Term::iri("http://example.org/p"), // 1
+        Term::iri("http://example.org/o"), // 2
+        indirect_triple_term(3),           // 3: R, self-bound
+        tagged,                            // 4: T, `tt` and `rf` naming R
+    ];
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    let subject = if rf_loops { 4 } else { 0 };
+    writer.add_reifies(&[(3, (subject, 1, 2), None)]);
+    writer.add_quads(&[(4, 1, 2, None)]);
+    let mut data = writer.into_bytes();
+    data.extend_from_slice(&plain_segment());
+    data
+}
+
+/// §7.3 makes termination bind every walk, the segment union included. A term's
+/// `rf` is not part of its identity (§7.1: `tt` is authoritative and `rf` only
+/// descriptive), yet the union maps it, and here it closes a loop the
+/// components do not: `T`'s `rf` is `R`, and `R`'s binding has `T` as subject.
+/// Neither term is reachable from its own components, so neither degrades: the
+/// union terminates, `T` keeps its `tt` and its `rf`, and `R` keeps its row.
+/// The neighbouring file, whose row does not name `T`, unions as before, with
+/// `R` mapped ahead of the term that names it.
+#[test]
+fn the_multi_segment_union_terminates_on_a_loop_through_a_reifier() {
+    for rf_loops in [true, false] {
+        let graph = read(
+            &reifier_of_a_term_bound_through_its_own_reifier(rf_loops),
+            true,
+            None,
+        );
+        assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+        assert_eq!(graph.segment_heads.len(), 2, "both segments folded");
+        let id = |iri: &str| {
+            graph
+                .terms
+                .iter()
+                .position(|t| t.value.as_deref() == Some(iri))
+                .unwrap_or_else(|| panic!("{iri} is in the union"))
+        };
+        let (a, p, o) = (
+            id("http://example.org/a"),
+            id("http://example.org/p"),
+            id("http://example.org/o"),
+        );
+        let tagged = graph
+            .terms
+            .iter()
+            .position(|t| t.triple == Some((a, p, o)))
+            .expect("T keeps its tt");
+        let reifier = graph.terms[tagged].reifier.expect("T keeps its rf");
+        assert_eq!(
+            graph.terms[reifier].reifier,
+            Some(reifier),
+            "R stays self-bound"
+        );
+        let subject = if rf_loops { tagged } else { a };
+        assert_eq!(graph.reifiers, vec![(reifier, (subject, p, o), None)]);
+        assert_eq!(graph.triple_of(reifier), Some((subject, p, o)));
+        assert!(graph.quads.contains(&(tagged, p, o, None)));
+        assert_eq!(graph.quads.len(), 2, "both segments' quads survive");
+        assert_resolution_terminates(&graph, &[]);
+        if !rf_loops {
+            assert!(reifier < tagged, "R is mapped ahead of the term naming it");
+        }
+    }
 }
 
 /// Re-authoring a file with a self-reaching term through the canonical writer

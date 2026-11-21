@@ -591,7 +591,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                     self.storage.checkpoint(1)?;
                     self.source.check_current()?;
                     let term_id = terms + offset;
-                    let anchor_entries = references.anchor(term_id).map_or(0usize, |rid| {
+                    let anchor_entries = references.anchor().map_or(0usize, |rid| {
                         1usize.saturating_add(usize::from(reifiers.anchors(rid).is_empty()))
                     });
                     let legacy = (references.kind == TermKind::Triple
