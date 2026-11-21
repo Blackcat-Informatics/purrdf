@@ -180,7 +180,7 @@ use crate::dataset_view::{
     ViewTermId, checkpointed_drain,
 };
 use purrdf_lex::term_syntax::{
-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal_rdfc12_v3,
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri_rdfc12_v3, write_literal_rdfc12_v3,
 };
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
@@ -275,7 +275,9 @@ pub const CANON_CORPUS_DIGEST: &str =
 /// ([`write_literal_rdfc12_v3`]), although the canonical form of RDF 1.2 N-Quads
 /// (section 3) writes them as `UCHAR`: the digests this profile recorded were
 /// taken over the raw bytes, and recomputing them is what the profile is kept
-/// for. The default canonical document follows section 3.
+/// for. It likewise writes DEL and the C1 controls in an IRI escaped
+/// ([`write_iri_rdfc12_v3`]), where the canonical form writes them raw. The
+/// default canonical document follows section 3.
 pub const CANON_PROFILE_VERSION: u32 = 3;
 
 /// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
@@ -4091,7 +4093,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             order::REIFIES => RDF_REIFIES,
             _ => SENTINEL_ANNOTATION_GRAPH,
         };
-        memory.append_text(out, |out| write_iri(sentinel, out))?;
+        memory.append_text(out, |out| write_iri_rdfc12_v3(sentinel, out))?;
         memory.push_char(out, ' ')?;
         Ok(())
     }
@@ -4431,7 +4433,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         match guard.term() {
             TermRef::Iri(iri) => {
                 let before = out.len();
-                memory.append_text(out, |out| write_iri(iri, out))?;
+                memory.append_text(out, |out| write_iri_rdfc12_v3(iri, out))?;
                 // Every escape lengthens the text, so exactly `<` and `>` around
                 // the unchanged IRI means nothing was escaped.
                 let clean = out.len() - before == iri.len() + 2;
@@ -4623,7 +4625,7 @@ impl<D: DatasetView> Atoms<D> for TextAtoms<'_, '_, D> {
         iri: &'static str,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        memory.append_text(self.out, |out| write_iri(iri, out))?;
+        memory.append_text(self.out, |out| write_iri_rdfc12_v3(iri, out))?;
         Ok(())
     }
 
