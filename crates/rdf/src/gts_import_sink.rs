@@ -139,7 +139,7 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
         CapacitySpace::ImportBlankScopes,
         segment_index,
         // The scopes above are reserved for unbound triple terms and queries.
-        u64::from(crate::gts_resolve::UNBOUND_TRIPLE_SCOPE.ordinal() - 1),
+        u64::from(purrdf_core::blank_label::MAX_ALLOCATED_SCOPE),
     )
     .map_err(|error| {
         let mut diagnostic = RdfDiagnostic::from(StorageError::Capacity(error));

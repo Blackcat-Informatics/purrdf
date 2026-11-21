@@ -699,7 +699,10 @@ whose `rf` names a reifier with a row still resolves through the first row, and 
 term with `tt` is unchanged.
 
 The streaming importers give segment scopes the ordinals 1 to `u32::MAX - 2`, so
-a segment index of `u32::MAX - 2` is refused with `gts-scope-limit`. An
+a segment index of `u32::MAX - 2` is refused with `gts-scope-limit`. The import
+merge, the builder's merge scopes, the per-source scopes of a quad-source freeze
+and the event sink stop at the same ordinal, and the import merge numbers
+documents above the highest scope that is not reserved. An
 implementor of `purrdf_gts::segment_decode::ResolvedSink` overrides the provided
 method `intern_unbound_triple` to place the node outside every scope a document
 reaches; the provided body interns `unbound_triple_{id}` through `intern_blank`,
