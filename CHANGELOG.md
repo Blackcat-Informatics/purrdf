@@ -8,6 +8,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Behaviour change: a triple term with neither `tt` nor `rf` projects as a
+  fresh blank node on every path.** Such a term states no triple, and the
+  specification's third resolution rule says a reader keeps it as a distinct
+  term and a projection renders it as a fresh blank node. The fold view already
+  did; `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, the
+  streaming importers (`import_gts_events` and its dictionary and blob forms) and
+  `export_gts_rdf_nquads_with_dictionary` refused the same file. They now project
+  `_:unbound_triple_{id}`, the node a term that reaches itself already becomes: one
+  id names one node in a projection and a second bare term names another.
+  `native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
+  `rdf-ir-unbound-triple-term` remain defined for API compatibility and no public
+  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the case,
+  and `ResolvedSink::err_unbound_triple` stays a required method that the
+  resolver no longer calls.
+
 - **The byte-freeze guard covers the flat GTS vectors.** `check-corpus-frozen.py`
   gains a flat root, which freezes the registered files directly inside one
   directory and none of its subdirectories, and `vectors/` registers one: the 68

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The streaming importer decides which triple terms reach themselves exactly
+//! The streaming importer decides which triple terms state no triple exactly
 //! as the materializing fold does (GTS-SPEC §7.3).
 //!
 //! `import_gts_events` resolves a segment one term at a time against bounded
@@ -12,7 +12,8 @@
 
 use purrdf_gts::model::Term;
 use purrdf_gts::writer::Writer;
-use purrdf_rdf::gts::dataset_from_gts_graph;
+use purrdf_rdf::gts::{dataset_from_gts_graph, flattened_dataset_from_gts_graph};
+use purrdf_rdf::gts_view::GtsFoldView;
 use purrdf_rdf::{RdfDataset, SerializeGraph, import_gts_events, serialize_dataset};
 
 /// A `k:3` term with no `tt` that takes its components from the first row
@@ -176,5 +177,70 @@ fn a_valid_nested_triple_term_resolves_in_full() {
     assert!(
         quads.iter().all(|q| !q.contains("unbound_triple")),
         "{quads:?}"
+    );
+}
+
+/// A `k:3` term with neither `tt` nor `rf` states no triple (§7.3, third
+/// resolution rule). A reader keeps it as a distinct term and a projection
+/// renders it as a fresh blank node, so the fold view, both dataset bridges and
+/// the streaming importer must all admit the file and project the same blank
+/// node for it: the one id used in every position names one node, and a second
+/// bare term names another. The neighbouring valid case, a term with `tt`, is
+/// unchanged.
+#[test]
+fn a_bare_triple_term_is_one_fresh_blank_node_on_every_path() {
+    let bare = || {
+        let mut term = Term::triple_term((0, 0, 0));
+        term.triple = None;
+        term
+    };
+    let terms = [
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        bare(),                             // 2
+        bare(),                             // 3
+        Term::triple_term((0, 1, 3)),       // 4: states a triple whose object is bare
+    ];
+    let quads = [
+        (2, 1, 0, None),
+        (0, 1, 2, None),
+        (2, 1, 2, None),
+        (0, 1, 3, None),
+        (0, 1, 4, None),
+    ];
+    let (streamed, _) = both_ways(&terms, &quads, &[]);
+    assert_eq!(
+        streamed,
+        [
+            "<https://example.org/s> <https://example.org/p> <<( <https://example.org/s> <https://example.org/p> _:unbound_triple_3 )>> .",
+            "<https://example.org/s> <https://example.org/p> _:unbound_triple_2 .",
+            "<https://example.org/s> <https://example.org/p> _:unbound_triple_3 .",
+            "_:unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
+            "_:unbound_triple_2 <https://example.org/p> _:unbound_triple_2 .",
+        ]
+    );
+
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    writer.add_quads(&quads);
+    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    let view = GtsFoldView::new(graph).expect("the fold view admits the file");
+    assert_eq!(view.nq_token(2), "_:unbound_triple_2");
+    assert_eq!(view.nq_token(3), "_:unbound_triple_3");
+    assert_eq!(
+        view.nq_token(4),
+        "<<( <https://example.org/s> <https://example.org/p> _:unbound_triple_3 )>>"
+    );
+
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&terms);
+    writer.add_quads(&quads);
+    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    assert_eq!(
+        projection(
+            &flattened_dataset_from_gts_graph(&graph).expect("the flattened bridge admits it")
+        ),
+        (streamed, Vec::new()),
+        "the flattened bridge projects what the other paths project"
     );
 }

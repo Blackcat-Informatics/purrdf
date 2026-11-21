@@ -236,11 +236,10 @@ fn a_reifier_binding_that_reaches_its_own_triple_term_keeps_its_row() {
 }
 
 /// A term with neither `tt` nor `rf` states no triple, so a row keyed by its own
-/// id does not bind it. The fold view renders the term as the blank node of an
-/// unbound triple term, and the dataset bridges refuse it at once as unbound,
-/// whether it is the row's reifier alone or a quad also uses it. Reading that row
-/// as the term's binding made the term contain itself, and the bridge then walked
-/// it until storage ran out.
+/// id does not bind it. Every door renders the term as the blank node of an
+/// unbound triple term, whether it is the row's reifier alone or a quad also uses
+/// it, and the row still projects. Reading that row as the term's binding made the
+/// term contain itself, and the bridge then walked it until storage ran out.
 #[test]
 fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
     for used_by_a_quad in [false, true] {
@@ -254,13 +253,19 @@ fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
             }
             graph
         };
-        let view = GtsFoldView::new(build()).expect("the fold view admits the graph");
-        assert_eq!(view.nq_token(1), "_:unbound_triple_1");
-        let graph = build();
-        let err = dataset_from_gts_graph(&graph).expect_err("no row binds the bare term");
-        assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
-        let err = flattened_dataset_from_gts_graph(&graph).expect_err("no row binds the bare term");
-        assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+        every_door_degrades(build, &[1], "a bare triple term keying a row");
+        let mut expected = vec![
+            "_:unbound_triple_1 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( _:unbound_triple_1 <https://example.org/p> <https://example.org/p> )>> ."
+                .to_owned(),
+        ];
+        if used_by_a_quad {
+            expected.push(
+                "_:unbound_triple_1 <https://example.org/p> <https://example.org/p> .".to_owned(),
+            );
+        }
+        expected.sort();
+        assert_eq!(nquads(&build()), expected);
     }
 }
 
@@ -268,8 +273,9 @@ fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
 /// id, is read as GTS-SPEC §7.2 and §7.4 require: the `rf` is a
 /// `ForwardReference` and is treated as absent, the row is dropped with
 /// `PositionConstraint`, and the term states no triple. The fold view renders it
-/// as the blank node of an unbound triple term, and the dataset bridges refuse it
-/// as unbound, exactly as they treat a bare triple term.
+/// as the blank node of an unbound triple term, and the dataset bridge projects
+/// the same blank node, exactly as for a bare triple term. The event importer
+/// still refuses the file, because it fails on any reader diagnostic.
 #[test]
 fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
     let mut writer = purrdf_gts::writer::Writer::new("purrdf-test");
@@ -289,8 +295,10 @@ fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
         "the row keyed by the term is dropped"
     );
 
-    let err = dataset_from_gts_graph(&graph).expect_err("no row binds the term");
-    assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+    assert_eq!(
+        nquads(&graph),
+        ["<https://example.org/s> <https://example.org/p> _:unbound_triple_2 ."]
+    );
     let Err(err) = purrdf_rdf::import_gts_events(&bytes) else {
         panic!("the event importer refuses the file");
     };

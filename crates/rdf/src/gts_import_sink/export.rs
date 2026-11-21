@@ -140,13 +140,16 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
     }
 
     fn kind(&mut self, key: TermKey) -> Result<Kind, RdfDiagnostic> {
-        Ok(match self.term(key)?.kind {
+        let term = self.term(key)?;
+        let (kind, bare) = (term.kind, term.is_bare_triple());
+        drop(term);
+        Ok(match kind {
             TermKind::Iri => Kind::Iri,
             TermKind::Bnode => Kind::Blank,
             TermKind::Literal => Kind::Literal,
-            // A triple term that reaches itself is the blank node an unbound
-            // triple term is.
-            TermKind::Triple if self.reaches_itself(key)? => Kind::Blank,
+            // A bare triple term, or one that reaches itself, states no triple
+            // and is the blank node an unbound triple term is.
+            TermKind::Triple if bare || self.reaches_itself(key)? => Kind::Blank,
             TermKind::Triple => Kind::Triple,
         })
     }
@@ -229,7 +232,7 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         Ok(reaches)
     }
 
-    /// Write the blank node a triple term that reaches itself stands for.
+    /// Write the blank node a triple term that states no triple stands for.
     fn write_unbound_triple(&mut self, key: TermKey) -> Result<(), RdfDiagnostic> {
         let baseline = self.memory.admitted_bytes();
         let label = self
@@ -364,7 +367,9 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             .release_bytes(self.memory.admitted_bytes() - baseline)?;
                     }
                     TermKind::Triple => {
-                        if self.reaches_itself(key)? {
+                        // A bare triple term states no triple (§7.3): like one that
+                        // reaches itself, it is a fresh blank node.
+                        if term.is_bare_triple() || self.reaches_itself(key)? {
                             self.write_unbound_triple(key)?;
                             continue;
                         }

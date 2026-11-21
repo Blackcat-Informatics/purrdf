@@ -284,7 +284,11 @@ fn term_from_id_depth(
         TermKind::Triple => {
             // A self-describing triple term (wire `"tt"`) states its own
             // components; only the older indirect spelling routes through a
-            // reifier id, which `Graph::triple_of` resolves as a fallback.
+            // reifier id, which `Graph::triple_of` resolves as a fallback. A
+            // term with neither states no triple (§7.3) and is a blank node.
+            if term.is_bare_triple() {
+                return Ok(RdfTerm::blank_node(format!("unbound_triple_{term_id}")));
+            }
             let Some((s, p, o)) = graph.triple_of(term_id) else {
                 let (code, detail) = match term.reifier {
                     Some(reifier_id) => (
