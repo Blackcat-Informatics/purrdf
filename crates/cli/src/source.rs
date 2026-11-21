@@ -674,14 +674,21 @@ fn gts_envelope_ledger(lookaside: &RdfLookaside, source: &str) -> LossLedger {
         }
         let mut detail = vec![LossDetail::count("count", count as u64)];
         if code == GTS_LOSS_CODES[0].0 {
-            // The head ids in segment order, so an operator can trace a converted
-            // document back to the exact segments it came from.
+            // One fact per segment, in segment order, so an operator can trace a
+            // converted document back to the exact segments it came from: the
+            // head id, or the position of a segment that carries none.
             detail.extend(
                 lookaside
                     .segments
                     .iter()
-                    .filter_map(|segment| segment.head.as_deref())
-                    .map(|head| LossDetail::identifier("segment-head", head)),
+                    .enumerate()
+                    .map(|(position, segment)| {
+                        segment.head.as_deref().map_or_else(
+                            // usize widens to u64 without loss on every supported target.
+                            || LossDetail::count("headless-segment", position as u64),
+                            |head| LossDetail::identifier("segment-head", head),
+                        )
+                    }),
             );
         }
         ledger.record(LossEntry {

@@ -2060,7 +2060,10 @@ fn graphql_names_literal_enumerations_beside_their_array_form() {
                 .losses
                 .entries()
                 .iter()
-                .any(|entry| format!("{:?}", entry.subject).contains("ex:e")),
+                .any(|entry| matches!(
+                    &entry.subject,
+                    purrdf_core::LossSubject::Pointer(tokens) if tokens.iter().any(|token| token == "ex:e")
+                )),
             "{:#?}",
             graphql.losses
         );

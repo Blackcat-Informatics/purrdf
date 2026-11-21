@@ -182,11 +182,15 @@ impl GraphInterner {
         // MOVE the lexical form and language tag out.
         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
         let language = std::mem::take(&mut self.terms[gts_id].lang);
+        let direction = crate::gts_resolve::parse_gts_direction(
+            self.terms[gts_id].direction.as_deref(),
+            language.as_deref(),
+        )?;
         if let Some(tag) = language.as_deref() {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
                 &lexical_form,
-                tag,
+                (tag, direction),
                 crate::gts_language_fold::FoldSite {
                     logical: "gts:graph",
                     segment: None,
@@ -195,10 +199,6 @@ impl GraphInterner {
                 memory,
             )?;
         }
-        let direction = crate::gts_resolve::parse_gts_direction(
-            self.terms[gts_id].direction.as_deref(),
-            language.as_deref(),
-        )?;
         // A composite literal's embedded blank labels bind into the SAME
         // flattened scope `intern_blank` puts this reader's bare labels in, so
         // both spellings of one node stay one node across a GTS round trip.

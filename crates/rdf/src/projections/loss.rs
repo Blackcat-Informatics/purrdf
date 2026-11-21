@@ -12,11 +12,13 @@
 use std::borrow::Cow;
 
 use purrdf_core::loss::check_ledger_sound;
-use purrdf_core::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject, LossTerm};
+use purrdf_core::{
+    LossDetail, LossEntry, LossGraphName, LossLedger, LossSite, LossSubject, LossTerm,
+};
 use purrdf_lex::json::record::ToJson;
 
 use super::ProjectionError;
-use super::source_rows::source_identifier;
+use super::source_rows::source_digest;
 use super::term::ProjectionTerm;
 
 /// The typed term a projection term is.
@@ -31,11 +33,12 @@ pub(crate) fn loss_term(term: &ProjectionTerm) -> LossTerm {
             lexical,
             datatype,
             language,
-            ..
+            direction,
         } => LossTerm::Literal {
             lexical: lexical.clone(),
             datatype: datatype.clone(),
             language: language.clone(),
+            direction: *direction,
         },
         ProjectionTerm::Triple {
             subject,
@@ -79,14 +82,34 @@ pub(crate) fn record_contract_loss(
     });
 }
 
-/// Record the contract entry `code` in the stage `logical`, on the row
-/// `identifier` of kind `logical`.
+/// The subject a graph name is: a graph named by an IRI or a blank node, or
+/// the term itself for a graph name of another kind.
+pub(crate) fn graph_subject(name: &ProjectionTerm) -> LossSubject {
+    match name {
+        ProjectionTerm::Iri { value } => LossSubject::Graph(LossGraphName::Iri(value.clone())),
+        ProjectionTerm::Blank { label, scope } => LossSubject::Graph(LossGraphName::Blank {
+            label: label.clone(),
+            scope: Some(scope.to_string()),
+        }),
+        other => LossSubject::Term(loss_term(other)),
+    }
+}
+
+/// The subject a record is that the document names by its own `identifier`.
+pub(crate) fn resource_subject(kind: &str, identifier: &str) -> LossSubject {
+    LossSubject::Resource {
+        kind: kind.to_owned(),
+        identifier: identifier.to_owned(),
+    }
+}
+
+/// Record the contract entry `code` in the stage `logical`, on `subject`.
 pub(crate) fn record_logical_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
     code: &'static str,
     logical: &str,
-    identifier: impl Into<String>,
+    subject: LossSubject,
 ) {
     record_contract_loss(
         ledger,
@@ -96,10 +119,7 @@ pub(crate) fn record_logical_loss(
             LossSite::Stage {
                 name: logical.to_owned(),
             },
-            LossSubject::Row {
-                kind: logical.to_owned(),
-                identifier: identifier.into(),
-            },
+            subject,
             Vec::new(),
         ),
     );
@@ -128,23 +148,26 @@ pub(crate) fn record_term_loss(
     );
 }
 
-/// Record the contract entry `code` for one source row at the logical
-/// location `logical`, the row named by its stable identifier under `prefix`.
-///
-/// # Errors
-///
-/// Returns [`source_identifier`]'s refusal.
+/// Record the contract entry `code` for one source row of kind `kind` at the
+/// logical location `logical`, the row named by its [`source_digest`].
 pub(crate) fn record_row_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
     code: &'static str,
     logical: &str,
-    prefix: &str,
+    kind: &str,
     row: &impl ToJson,
-) -> Result<(), ProjectionError> {
-    let subject = source_identifier(prefix, row)?;
-    record_logical_loss(ledger, contract, code, logical, subject);
-    Ok(())
+) {
+    record_logical_loss(
+        ledger,
+        contract,
+        code,
+        logical,
+        LossSubject::Row {
+            kind: kind.to_owned(),
+            digest: source_digest(row),
+        },
+    );
 }
 
 /// Refuse a runtime ledger that records a loss the `from` → `to` pair's
@@ -227,7 +250,7 @@ mod tests {
             &contract,
             "example-dropped",
             "example:quad",
-            "q1",
+            resource_subject("quad", "q1"),
         );
         let [entry] = ledger.entries() else {
             panic!("exactly one entry");
@@ -241,17 +264,11 @@ mod tests {
                 name: "example:quad".to_owned()
             }
         );
-        assert_eq!(
-            entry.subject,
-            LossSubject::Row {
-                kind: "example:quad".to_owned(),
-                identifier: "q1".to_owned()
-            }
-        );
+        assert_eq!(entry.subject, resource_subject("quad", "q1"));
     }
 
     #[test]
-    fn a_row_loss_names_the_row_by_its_stable_identifier() {
+    fn a_row_loss_names_the_row_by_its_kind_and_digest() {
         let contract = contract();
         let mut ledger = LossLedger::new();
         record_row_loss(
@@ -261,14 +278,12 @@ mod tests {
             "example:quad",
             "quad",
             &"row",
-        )
-        .expect("identifier");
-        let subject = source_identifier("quad", &"row").expect("identifier");
+        );
         assert_eq!(
             ledger.entries()[0].subject,
             LossSubject::Row {
-                kind: "example:quad".to_owned(),
-                identifier: subject
+                kind: "quad".to_owned(),
+                digest: source_digest(&"row"),
             }
         );
     }
@@ -281,7 +296,7 @@ mod tests {
             &contract(),
             "undeclared",
             "example:quad",
-            "q1",
+            LossSubject::Absent,
         );
     }
 }

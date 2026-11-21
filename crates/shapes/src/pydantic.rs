@@ -1483,18 +1483,19 @@ impl<'a> Renderer<'a> {
         }
         if let Some(format) = object.get("format").and_then(Value::as_str) {
             let note = if matches!(format, "date-time" | "date" | "time") {
-                format!(
-                    "JSON Schema format {format:?} maps to a standard-library temporal type, but \
-                     Pydantic's parser is not byte-identical to JSON Schema format validation; \
-                     the exact assertion remains on model_json_schema()"
-                )
+                "the JSON Schema format maps to a standard-library temporal type, but \
+                 Pydantic's parser is not byte-identical to JSON Schema format validation; the \
+                 exact assertion remains on model_json_schema()"
             } else {
-                format!(
-                    "JSON Schema format {format:?} is retained on model_json_schema() while the \
-                     runtime carrier is a strict string"
-                )
+                "the JSON Schema format is retained on model_json_schema() while the runtime \
+                 carrier is a strict string"
             };
-            self.record("format-validation-widened", &path.child("format"), &note);
+            self.record_detailed(
+                "format-validation-widened",
+                &path.child("format"),
+                note,
+                vec![purrdf_core::LossDetail::identifier("format", format)],
+            );
         }
         if let Some(value) = object.get("pattern") {
             let pattern = value
@@ -1544,10 +1545,8 @@ impl<'a> Renderer<'a> {
                 self.record(
                     "keyword-validation-dropped",
                     &path.child(key),
-                    &format!(
-                        "JSON Schema assertion keyword {key:?} is preserved on \
-                         model_json_schema() but has no emitted runtime validator"
-                    ),
+                    "the JSON Schema assertion keyword at this path is preserved on \
+                     model_json_schema() but has no emitted runtime validator",
                 );
             }
         }
@@ -1579,17 +1578,28 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &'static str) {
+        self.record_detailed(code, path, note, Vec::new());
+    }
+
+    /// Record a loss whose occurrence carries typed facts beyond its path.
+    fn record_detailed(
+        &mut self,
+        code: &str,
+        path: &SchemaPath,
+        note: &'static str,
+        detail: Vec<purrdf_core::LossDetail>,
+    ) {
         self.ledger.record(LossEntry {
             code: code.to_owned().into(),
             from: "json-schema".into(),
             to: PYDANTIC_DIALECT.into(),
-            note: note.to_owned().into(),
+            note: note.into(),
             site: purrdf_core::LossSite::Stage {
                 name: "pydantic-emitter".to_owned(),
             },
             subject: path.to_loss_subject(),
-            detail: Vec::new(),
+            detail,
         });
     }
 
@@ -3503,9 +3513,14 @@ mod tests {
             .entries()
             .iter()
             .filter(|entry| entry.code.as_ref() == "negation-validation-dropped")
-            .filter_map(|entry| entry.subject.text())
+            .map(|entry| entry.subject.clone())
             .collect::<Vec<_>>();
-        assert_eq!(located, ["#/$defs/Holder/properties/ex:keys/not"]);
+        assert_eq!(
+            located,
+            [crate::schema_catalog::pointer_subject(
+                "#/$defs/Holder/properties/ex:keys/not"
+            )]
+        );
     }
 
     #[test]
@@ -3622,13 +3637,17 @@ mod tests {
         );
         assert!(out.losses.entries().iter().any(|entry| {
             entry.code.as_ref() == "keyword-validation-dropped"
-                && entry.subject.text().as_deref()
-                    == Some("#/$defs/Lossy/properties/ex:temporal/minLength")
+                && entry.subject
+                    == crate::schema_catalog::pointer_subject(
+                        "#/$defs/Lossy/properties/ex:temporal/minLength",
+                    )
         }));
         assert!(out.losses.entries().iter().any(|entry| {
             entry.code.as_ref() == "format-validation-widened"
-                && entry.subject.text().as_deref()
-                    == Some("#/$defs/Lossy/properties/ex:temporal/format")
+                && entry.subject
+                    == crate::schema_catalog::pointer_subject(
+                        "#/$defs/Lossy/properties/ex:temporal/format",
+                    )
         }));
         assert!(
             out.losses

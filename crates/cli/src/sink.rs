@@ -340,7 +340,10 @@ pub(crate) fn write_rdf<D: DatasetView>(
                     .into_iter()
                     .map(|graph| match graph {
                         TermValue::Iri(iri) => Ok(LossGraphName::Iri(iri)),
-                        TermValue::Blank { label, .. } => Ok(LossGraphName::Blank(label)),
+                        TermValue::Blank { label, scope } => Ok(LossGraphName::Blank {
+                            label,
+                            scope: Some(scope.ordinal().to_string()),
+                        }),
                         other => Err(CliError::Runtime(format!(
                             "a declared graph name must be an IRI or a blank node, found {other:?}"
                         ))),

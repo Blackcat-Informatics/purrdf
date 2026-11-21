@@ -6,7 +6,7 @@ use crate::projections::loss::record_contract_loss;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::{LossLedger, LossSite, LossSubject, RdfDataset};
+use purrdf_core::{LossDetail, LossLedger, LossSite, LossSubject, LossTerm, RdfDataset};
 use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::jsonld::{
@@ -14,7 +14,7 @@ use crate::native_codecs::jsonld::{
 };
 
 use super::super::{ProjectionError, ProjectionLimits, ProjectionPackage, validate_absolute_iri};
-use super::{ResearchObjectConfig, ResearchObjectModel};
+use super::{ResearchObjectConfig, ResearchObjectModel, ResearchText};
 use purrdf_lex::json::record::sorted_last_wins;
 
 /// Caller-owned, locally interpreted JSON-LD context.
@@ -268,13 +268,14 @@ fn validate_package_bounds(
     Ok(())
 }
 
-/// Record the contract entry `code` in the artifact at `path`, on `subject`.
+/// Record the contract entry `code` in the artifact at `path`, on `subject`,
+/// qualified by `detail`.
 pub(super) fn record_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
     code: &'static str,
     path: &str,
-    subject: &str,
+    (subject, detail): (LossSubject, Vec<LossDetail>),
 ) {
     record_contract_loss(
         ledger,
@@ -286,10 +287,95 @@ pub(super) fn record_loss(
                 line: None,
                 column: None,
             },
-            LossSubject::pointer(subject),
-            Vec::new(),
+            subject,
+            detail,
         ),
     );
+}
+
+/// Record the contract entry `code` in the artifact at `path`, on the member
+/// the JSON Pointer `pointer` names.
+///
+/// # Panics
+///
+/// When `pointer` is not a JSON Pointer. Every reader builds its pointers with
+/// [`json_pointer`] from RFC 6901-escaped tokens, starting from the root
+/// pointer `""`, so a pointer that does not parse is a programming error.
+pub(super) fn record_pointer_loss(
+    ledger: &mut LossLedger,
+    contract: &LossLedger,
+    code: &'static str,
+    path: &str,
+    pointer: &str,
+) {
+    let subject = LossSubject::parse_pointer(pointer)
+        .unwrap_or_else(|error| panic!("a reader built an invalid pointer: {error}"));
+    record_loss(ledger, contract, code, path, (subject, Vec::new()));
+}
+
+/// A value of a research-object entity: the entity's IRI, the member that holds
+/// it and, for one of several values, its 0-based position in that member.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Member<'a> {
+    entity: &'a str,
+    member: Option<&'static str>,
+    position: Option<usize>,
+}
+
+impl<'a> Member<'a> {
+    /// The entity itself.
+    pub(super) const fn entity(entity: &'a str) -> Self {
+        Self {
+            entity,
+            member: None,
+            position: None,
+        }
+    }
+
+    /// The member `member` of `entity`.
+    pub(super) const fn new(entity: &'a str, member: &'static str) -> Self {
+        Self {
+            entity,
+            member: Some(member),
+            position: None,
+        }
+    }
+
+    /// The value at `position` of this member.
+    pub(super) const fn at(self, position: usize) -> Self {
+        Self {
+            position: Some(position),
+            ..self
+        }
+    }
+
+    /// The occurrence: the entity as an IRI subject, then the member and the
+    /// position as details, then `value` when the loss concerns a literal.
+    pub(super) fn occurrence(self, value: Option<&ResearchText>) -> (LossSubject, Vec<LossDetail>) {
+        let mut detail = Vec::new();
+        if let Some(member) = self.member {
+            detail.push(LossDetail::identifier("member", member));
+        }
+        if let Some(position) = self.position {
+            // A `usize` widens to `u64` without loss on every supported target.
+            detail.push(LossDetail::count("position", position as u64));
+        }
+        if let Some(value) = value {
+            detail.push(LossDetail::term(
+                "value",
+                LossTerm::Literal {
+                    lexical: value.value.clone(),
+                    datatype: value.datatype.clone(),
+                    language: value.language.clone(),
+                    direction: value.direction,
+                },
+            ));
+        }
+        (
+            LossSubject::Term(LossTerm::Iri(self.entity.to_owned())),
+            detail,
+        )
+    }
 }
 
 /// Re-parse a lifted dataset's own JSON-LD serialization, so every profile adapter hands

@@ -1120,10 +1120,8 @@ impl<'a> Renderer<'a> {
                 self.record(
                     "keyword-validation-dropped",
                     &path.child(key),
-                    &format!(
-                        "JSON Schema assertion keyword {key:?} is outside the closed TypeScript \
-                         7.0 capability table"
-                    ),
+                    "the JSON Schema assertion keyword at this path is outside the closed \
+                     TypeScript 7.0 capability table",
                 );
             }
         }
@@ -1191,7 +1189,18 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &'static str) {
+        self.record_detailed(code, path, note, Vec::new());
+    }
+
+    /// Record a loss whose occurrence carries typed facts beyond its path.
+    fn record_detailed(
+        &mut self,
+        code: &str,
+        path: &SchemaPath,
+        note: &'static str,
+        detail: Vec<purrdf_core::LossDetail>,
+    ) {
         if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
@@ -1199,12 +1208,12 @@ impl<'a> Renderer<'a> {
             code: code.to_owned().into(),
             from: LOSS_FROM.into(),
             to: TYPESCRIPT_DIALECT.into(),
-            note: note.to_owned().into(),
+            note: note.into(),
             site: purrdf_core::LossSite::Stage {
                 name: LOSS_CONTEXT.to_owned(),
             },
             subject: path.to_loss_subject(),
-            detail: Vec::new(),
+            detail,
         });
     }
 }
@@ -2657,8 +2666,10 @@ mod tests {
         assert!(source.contains("export type ImpossibleArray = never;"));
         assert!(package.losses.entries().iter().any(|entry| {
             entry.code == "additional-properties-validation-widened"
-                && entry.subject.text().as_deref()
-                    == Some("#/$defs/ImpossibleObject/additionalProperties")
+                && entry.subject
+                    == crate::schema_catalog::pointer_subject(
+                        "#/$defs/ImpossibleObject/additionalProperties",
+                    )
         }));
     }
 
@@ -2780,7 +2791,7 @@ mod tests {
         let located = |location: &str| {
             package.losses.entries().iter().any(|entry| {
                 entry.code == "unique-items-validation-dropped"
-                    && entry.subject.text().as_deref() == Some(location)
+                    && entry.subject == crate::schema_catalog::pointer_subject(location)
             })
         };
         assert!(located("#/$defs/Open/uniqueItems"));
@@ -2824,13 +2835,13 @@ mod tests {
             .entries()
             .iter()
             .filter(|entry| entry.code == "numeric-validation-dropped")
-            .filter_map(|entry| entry.subject.text())
+            .map(|entry| entry.subject.clone())
             .collect::<BTreeSet<_>>();
         assert_eq!(
             codes,
             BTreeSet::from([
-                "#/$defs/Fractional/multipleOf".to_owned(),
-                "#/$defs/Open/minimum".to_owned(),
+                crate::schema_catalog::pointer_subject("#/$defs/Fractional/multipleOf"),
+                crate::schema_catalog::pointer_subject("#/$defs/Open/minimum"),
             ])
         );
     }
@@ -2917,7 +2928,8 @@ mod tests {
             ),
         ] {
             assert!(package.losses.entries().iter().any(|entry| {
-                entry.code == code && entry.subject.text().as_deref() == Some(location)
+                entry.code == code
+                    && entry.subject == crate::schema_catalog::pointer_subject(location)
             }));
         }
     }

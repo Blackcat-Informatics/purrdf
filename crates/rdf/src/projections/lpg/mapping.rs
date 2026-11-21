@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use crate::projections::loss::ensure_sound;
-use crate::projections::loss::record_logical_loss;
+use crate::projections::loss::{graph_subject, record_logical_loss, resource_subject};
 use crate::projections::util::RecordBudget;
 use crate::projections::util::reject_duplicate_keys;
 use crate::projections::util::reject_duplicates;
+use purrdf_core::LossSubject;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -368,13 +369,12 @@ where
     let mut ledger = LossLedger::new();
     let contract = rdf_to_lpg_loss_ledger();
     for graph_name in &graph.named_graphs {
-        let id = node_identifier(graph_name, config.limits())?;
         record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_NAMED_GRAPH_SIDEBAND,
             "lpg:named-graph",
-            &id,
+            graph_subject(graph_name),
         );
         if graph_name.contains_blank() {
             record_logical_loss(
@@ -382,7 +382,7 @@ where
                 &contract,
                 LOSS_LPG_BLANK_SCOPE_SIDEBAND,
                 "lpg:named-graph",
-                &id,
+                graph_subject(graph_name),
             );
         }
     }
@@ -397,14 +397,21 @@ where
         } else {
             LOSS_LPG_EDGE_SEMANTICS_LOWERED
         };
-        record_logical_loss(&mut ledger, &contract, primary, "lpg:statement", &id);
+        let subject = resource_subject("statement", &id);
+        record_logical_loss(
+            &mut ledger,
+            &contract,
+            primary,
+            "lpg:statement",
+            subject.clone(),
+        );
         record_term_sideband_losses(
             &mut ledger,
             &contract,
             [&quad.subject, &quad.object],
             &quad.graph,
             "lpg:statement",
-            &id,
+            &subject,
         );
     }
     for row in &graph.reifiers {
@@ -413,7 +420,7 @@ where
             &contract,
             LOSS_LPG_REIFIER_SIDEBAND,
             "lpg:reifier",
-            &row.id,
+            resource_subject("reifier", &row.id),
         );
         record_term_sideband_losses(
             &mut ledger,
@@ -421,7 +428,7 @@ where
             [&row.reifier, &row.statement],
             &row.graph,
             "lpg:reifier",
-            &row.id,
+            &resource_subject("reifier", &row.id),
         );
     }
     for row in &graph.annotations {
@@ -430,7 +437,7 @@ where
             &contract,
             LOSS_LPG_ANNOTATION_SIDEBAND,
             "lpg:annotation",
-            &row.id,
+            resource_subject("annotation", &row.id),
         );
         record_term_sideband_losses(
             &mut ledger,
@@ -438,7 +445,7 @@ where
             [&row.reifier, &row.object],
             &row.graph,
             "lpg:annotation",
-            &row.id,
+            &resource_subject("annotation", &row.id),
         );
     }
     ensure_sound(&ledger, "rdf-1.2-dataset", "lpg")?;
@@ -506,7 +513,7 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
             &contract,
             LOSS_LPG_NODE_ID_INTERPRETED,
             "lpg:node",
-            &node.id,
+            resource_subject("node", &node.id),
         );
         for label in &node.labels {
             record_logical_loss(
@@ -514,7 +521,7 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
                 &contract,
                 LOSS_LPG_LABEL_INTERPRETED,
                 "lpg:label",
-                &label.statement_id,
+                resource_subject("statement", &label.statement_id),
             );
         }
         for property in &node.properties {
@@ -523,14 +530,14 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
                 &contract,
                 LOSS_LPG_PROPERTY_KEY_INTERPRETED,
                 "lpg:property",
-                &property.statement_id,
+                resource_subject("statement", &property.statement_id),
             );
             record_logical_loss(
                 &mut ledger,
                 &contract,
                 LOSS_LPG_VALUE_INTERPRETED,
                 "lpg:property",
-                &property.statement_id,
+                resource_subject("statement", &property.statement_id),
             );
         }
     }
@@ -540,14 +547,14 @@ pub fn lift_lpg(graph: &LpgGraph, config: &LpgConfig) -> Result<LpgLiftOutcome, 
             &contract,
             LOSS_LPG_EDGE_TYPE_INTERPRETED,
             "lpg:edge",
-            &edge.id,
+            resource_subject("edge", &edge.id),
         );
         record_logical_loss(
             &mut ledger,
             &contract,
             LOSS_LPG_EDGE_ID_DROPPED,
             "lpg:edge",
-            &edge.id,
+            resource_subject("edge", &edge.id),
         );
     }
     ensure_sound(&ledger, "lpg", "rdf-1.2-dataset")?;
@@ -669,7 +676,7 @@ fn record_term_sideband_losses<'a>(
     terms: impl IntoIterator<Item = &'a ProjectionTerm>,
     graph: &LpgGraphContext,
     logical: &str,
-    subject: &str,
+    subject: &LossSubject,
 ) {
     let terms: Vec<&ProjectionTerm> = terms.into_iter().collect();
     if terms.iter().any(|term| term.contains_blank())
@@ -680,7 +687,7 @@ fn record_term_sideband_losses<'a>(
             contract,
             LOSS_LPG_BLANK_SCOPE_SIDEBAND,
             logical,
-            subject,
+            subject.clone(),
         );
     }
     if terms.iter().any(|term| term.is_triple())
@@ -691,7 +698,7 @@ fn record_term_sideband_losses<'a>(
             contract,
             LOSS_LPG_TRIPLE_TERM_SIDEBAND,
             logical,
-            subject,
+            subject.clone(),
         );
     }
     if !matches!(graph, LpgGraphContext::Default) {
@@ -700,7 +707,7 @@ fn record_term_sideband_losses<'a>(
             contract,
             LOSS_LPG_NAMED_GRAPH_SIDEBAND,
             logical,
-            subject,
+            subject.clone(),
         );
     }
 }
@@ -834,7 +841,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
+                .all(|entry| entry.subject != LossSubject::Absent)
         );
 
         let lifted = lift_lpg(&projected.graph, &config(1_000)).expect("lift");
@@ -865,7 +872,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
+                .all(|entry| entry.subject != LossSubject::Absent)
         );
 
         let projected_again =
@@ -1147,7 +1154,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
+                .all(|entry| entry.subject != LossSubject::Absent)
         );
         let graph = graph.graph;
         let bytes = graph.to_canonical_json(&config).expect("JSON");

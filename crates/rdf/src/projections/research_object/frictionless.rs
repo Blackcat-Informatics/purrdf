@@ -16,8 +16,9 @@ use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
 use super::json::{
-    ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
-    json_pointer, normalize_lifted_jsonld, parse_strict_json, record_loss, require_artifact,
+    Member, ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json,
+    ensure_sound, json_pointer, normalize_lifted_jsonld, parse_strict_json, record_loss,
+    record_pointer_loss, require_artifact,
 };
 use super::{
     ResearchAgent, ResearchChecksum, ResearchDataset, ResearchObjectConfig, ResearchObjectModel,
@@ -184,7 +185,7 @@ fn encode_document(
         &mut root,
         "title",
         &dataset.titles,
-        "dataset:title",
+        Member::new(&dataset.id, "title"),
         config,
         contract,
         ledger,
@@ -193,7 +194,7 @@ fn encode_document(
         &mut root,
         "description",
         &dataset.descriptions,
-        "dataset:description",
+        Member::new(&dataset.id, "description"),
         config,
         contract,
         ledger,
@@ -202,7 +203,7 @@ fn encode_document(
         &mut root,
         "homepage",
         &dataset.landing_pages,
-        "dataset:homepage",
+        Member::new(&dataset.id, "homepage"),
         config,
         contract,
         ledger,
@@ -212,7 +213,7 @@ fn encode_document(
         &mut root,
         "created",
         &dataset.issued,
-        "dataset:created",
+        Member::new(&dataset.id, "created"),
         config,
         contract,
         ledger,
@@ -221,7 +222,7 @@ fn encode_document(
         &mut root,
         "version",
         &dataset.versions,
-        "dataset:version",
+        Member::new(&dataset.id, "version"),
         config,
         contract,
         ledger,
@@ -241,7 +242,7 @@ fn encode_document(
                             config,
                             contract,
                             ledger,
-                            &format!("dataset:keyword[{index}]"),
+                            Member::new(&dataset.id, "keyword").at(index),
                         );
                         Value::String(value.value.clone())
                     })
@@ -282,12 +283,12 @@ fn encode_document(
     }
     root.insert("resources".to_owned(), Value::Array(encoded_resources));
 
-    for identifier in &dataset.identifiers {
+    for index in 0..dataset.identifiers.len() {
         forward_loss(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("dataset:identifier:{}", identifier.lexical().to_owned()),
+            Member::new(&dataset.id, "identifier").at(index),
         );
     }
     for (index, _) in dataset.modified.iter().enumerate() {
@@ -295,7 +296,7 @@ fn encode_document(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("dataset:modified[{index}]"),
+            Member::new(&dataset.id, "modified").at(index),
         );
     }
     for activity in &model.activities {
@@ -303,7 +304,7 @@ fn encode_document(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &activity.id,
+            Member::entity(&activity.id),
         );
     }
     for record_set in &model.record_sets {
@@ -311,7 +312,7 @@ fn encode_document(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &record_set.id,
+            Member::entity(&record_set.id),
         );
     }
     for resource in &model.resources {
@@ -320,7 +321,7 @@ fn encode_document(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                &resource.id,
+                Member::entity(&resource.id),
             );
         }
     }
@@ -335,7 +336,7 @@ fn encode_licenses(
 ) -> Vec<Value> {
     let mut encoded = Vec::new();
     for (index, license) in dataset.licenses.iter().enumerate() {
-        let subject = format!("dataset:license[{index}]");
+        let subject = Member::new(&dataset.id, "license").at(index);
         match license {
             ResearchValue::Iri { value } => {
                 encoded.push(Value::Object(Object::from_iter([(
@@ -344,7 +345,7 @@ fn encode_licenses(
                 )])));
             }
             ResearchValue::Text(value) => {
-                record_text_fidelity(value, config, contract, ledger, &subject);
+                record_text_fidelity(value, config, contract, ledger, subject);
                 if is_name_token(&value.value) {
                     encoded.push(Value::Object(Object::from_iter([(
                         "name".to_owned(),
@@ -355,7 +356,7 @@ fn encode_licenses(
                         ledger,
                         contract,
                         LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                        &subject,
+                        subject,
                     );
                 }
             }
@@ -419,13 +420,19 @@ fn encode_contributor(
             agent.id
         ))
     })?;
-    record_text_fidelity(name, config, contract, ledger, &agent.id);
+    record_text_fidelity(
+        name,
+        config,
+        contract,
+        ledger,
+        Member::new(&agent.id, "name").at(0),
+    );
     for index in 1..agent.names.len() {
         forward_loss(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("{}:name[{index}]", agent.id),
+            Member::new(&agent.id, "name").at(index),
         );
     }
     Ok(Value::Object(Object::from_iter([
@@ -471,7 +478,7 @@ fn encode_resource(
                     config,
                     contract,
                     ledger,
-                    &format!("{}:url[{index}]", resource.id),
+                    Member::new(&resource.id, "url").at(index),
                 );
                 paths.push(Value::String(value.value.clone()));
             }
@@ -479,7 +486,7 @@ fn encode_resource(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                &format!("{}:url[{index}]", resource.id),
+                Member::new(&resource.id, "url").at(index),
             ),
         }
     }
@@ -497,7 +504,7 @@ fn encode_resource(
         &mut object,
         "title",
         &resource.names,
-        &format!("{}:title", resource.id),
+        Member::new(&resource.id, "title"),
         config,
         contract,
         ledger,
@@ -506,7 +513,7 @@ fn encode_resource(
         &mut object,
         "description",
         &resource.descriptions,
-        &format!("{}:description", resource.id),
+        Member::new(&resource.id, "description"),
         config,
         contract,
         ledger,
@@ -515,7 +522,7 @@ fn encode_resource(
         &mut object,
         "mediatype",
         &resource.media_types,
-        &format!("{}:mediatype", resource.id),
+        Member::new(&resource.id, "mediatype"),
         config,
         contract,
         ledger,
@@ -524,7 +531,7 @@ fn encode_resource(
         &mut object,
         "format",
         &resource.formats,
-        &format!("{}:format", resource.id),
+        Member::new(&resource.id, "format"),
         config,
         contract,
         ledger,
@@ -551,7 +558,7 @@ fn encode_hash(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("{}:checksum[{index}]", resource.id),
+            Member::new(&resource.id, "checksum").at(index),
         );
     }
     let algorithm = checksum.algorithm.lexical().to_owned();
@@ -560,21 +567,21 @@ fn encode_hash(
         config,
         contract,
         ledger,
-        &format!("{}:checksum-algorithm", resource.id),
+        Member::new(&resource.id, "checksum-algorithm"),
     );
     record_text_fidelity(
         &checksum.value,
         config,
         contract,
         ledger,
-        &format!("{}:checksum-value", resource.id),
+        Member::new(&resource.id, "checksum-value"),
     );
     if !is_name_token(&algorithm) || !is_hex(&checksum.value.value) {
         forward_loss(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("{}:checksum", resource.id),
+            Member::new(&resource.id, "checksum"),
         );
         return None;
     }
@@ -585,7 +592,7 @@ fn insert_required_single_text(
     object: &mut Object,
     member: &str,
     values: &[ResearchText],
-    subject: &str,
+    subject: Member<'_>,
     config: &FrictionlessConfig,
     contract: &LossLedger,
     ledger: &mut LossLedger,
@@ -603,7 +610,7 @@ fn insert_single_text(
     object: &mut Object,
     member: &str,
     values: &[ResearchText],
-    subject: &str,
+    subject: Member<'_>,
     config: &FrictionlessConfig,
     contract: &LossLedger,
     ledger: &mut LossLedger,
@@ -618,7 +625,7 @@ fn insert_single_text(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("{subject}[{index}]"),
+            subject.at(index),
         );
     }
 }
@@ -628,7 +635,7 @@ fn insert_single_value(
     object: &mut Object,
     member: &str,
     values: &[ResearchValue],
-    subject: &str,
+    subject: Member<'_>,
     config: &FrictionlessConfig,
     contract: &LossLedger,
     ledger: &mut LossLedger,
@@ -648,7 +655,7 @@ fn insert_single_value(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &format!("{subject}[{index}]"),
+            subject.at(index),
         );
     }
     Ok(())
@@ -659,7 +666,7 @@ fn record_value_fidelity(
     config: &FrictionlessConfig,
     contract: &LossLedger,
     ledger: &mut LossLedger,
-    subject: &str,
+    subject: Member<'_>,
 ) {
     if let ResearchValue::Text(value) = value {
         record_text_fidelity(value, config, contract, ledger, subject);
@@ -671,23 +678,35 @@ fn record_text_fidelity(
     config: &FrictionlessConfig,
     contract: &LossLedger,
     ledger: &mut LossLedger,
-    subject: &str,
+    subject: Member<'_>,
 ) {
     if value.datatype != config.common().roles().iri(super::ResearchRole::XsdString)
         || value.language.is_some()
         || value.direction.is_some()
     {
-        forward_loss(
+        record_loss(
             ledger,
             contract,
             LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED,
-            subject,
+            FRICTIONLESS_ARTIFACT,
+            subject.occurrence(Some(value)),
         );
     }
 }
 
-fn forward_loss(ledger: &mut LossLedger, contract: &LossLedger, code: &'static str, subject: &str) {
-    record_loss(ledger, contract, code, FRICTIONLESS_ARTIFACT, subject);
+fn forward_loss(
+    ledger: &mut LossLedger,
+    contract: &LossLedger,
+    code: &'static str,
+    subject: Member<'_>,
+) {
+    record_loss(
+        ledger,
+        contract,
+        code,
+        FRICTIONLESS_ARTIFACT,
+        subject.occurrence(None),
+    );
 }
 
 struct FrictionlessDecoder<'a> {
@@ -704,7 +723,7 @@ struct DecodedContributors {
 
 impl LossRecorder for FrictionlessDecoder<'_> {
     fn loss(&mut self, code: &'static str, pointer: &str) {
-        record_loss(
+        record_pointer_loss(
             self.ledger,
             self.contract,
             code,

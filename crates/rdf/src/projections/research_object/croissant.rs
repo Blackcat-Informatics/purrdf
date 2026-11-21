@@ -553,10 +553,7 @@ fn encode_resource(
                         line: None,
                         column: None,
                     },
-                    purrdf_core::LossSubject::Row {
-                        kind: "resource".to_owned(),
-                        identifier: resource.id.clone(),
-                    },
+                    purrdf_core::LossSubject::Term(purrdf_core::LossTerm::Iri(resource.id.clone())),
                     Vec::new(),
                 ),
             );

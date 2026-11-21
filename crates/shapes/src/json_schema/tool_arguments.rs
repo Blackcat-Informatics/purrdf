@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::json_model::{Map, Object, Value, json};
 use crate::shapes::{Constraint, NodeKindValue, Path, Shape, Shapes, Target};
 use crate::term::Term;
+use purrdf_core::{LossDetail, LossTerm};
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use purrdf_lex::json::record::IntoJsonNative;
 use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_INTEGER, XSD_STRING};
@@ -649,14 +650,6 @@ macro_rules! format {
 }
 pub(super) use format;
 
-macro_rules! record {
-    ($ctx:expr; $code:expr, $subject:expr, $note:expr $(,)?) => {{
-        let note = $note;
-        $crate::json_schema::tool_arguments::record_loss($ctx, $code, $subject, note)
-    }};
-}
-pub(super) use record;
-
 impl Admission for ToolPolicy {
     fn resize(&mut self, live_bytes: usize) -> Result<(), StorageError> {
         // Shrink remains possible after the first refusal, after native scratch
@@ -704,30 +697,95 @@ pub(super) fn collect<T>(ctx: &mut Ctx<'_>, values: impl IntoIterator<Item = T>)
         .unwrap_or_default()
 }
 
-pub(super) fn record_loss(ctx: &mut Ctx<'_>, code: &str, subject: &str, note: &str) {
-    let subject = ctx.loss_subject(subject);
+/// One typed fact qualifying a recorded loss, borrowed until the loss admits it.
+#[derive(Clone, Copy)]
+pub(super) enum Fact<'a> {
+    /// A named identifier: a property key, a pattern source, a path's text.
+    Identifier(&'static str, &'a str),
+    /// A named IRI.
+    Iri(&'static str, &'a str),
+    /// A named shapes-graph term.
+    Term(&'static str, &'a Term),
+}
+
+impl Fact<'_> {
+    fn detail(self) -> LossDetail {
+        match self {
+            Self::Identifier(name, text) => LossDetail::identifier(name, text),
+            Self::Iri(name, iri) => LossDetail::term(name, LossTerm::Iri(iri.to_owned())),
+            Self::Term(name, term) => LossDetail::term(name, term.to_loss_term()),
+        }
+    }
+
+    fn admit(self, memory: &mut Memory<'_, ToolPolicy>) -> Result<LossDetail, StorageError> {
+        Ok(match self {
+            Self::Identifier(name, text) => LossDetail::identifier(name, memory.string(text)?),
+            Self::Iri(name, iri) => LossDetail::term(name, LossTerm::Iri(memory.string(iri)?)),
+            Self::Term(name, term) => LossDetail::term(name, admit_term(term, memory)?),
+        })
+    }
+}
+
+/// `term` as a loss-ledger term, every string admitted through `memory`.
+fn admit_term(term: &Term, memory: &mut Memory<'_, ToolPolicy>) -> Result<LossTerm, StorageError> {
+    Ok(match term {
+        Term::NamedNode(iri) => LossTerm::Iri(memory.string(iri.as_str())?),
+        Term::BlankNode(label) => LossTerm::Blank {
+            label: memory.string(label)?,
+            scope: None,
+        },
+        Term::Literal(literal) => LossTerm::Literal {
+            lexical: memory.string(literal.value())?,
+            datatype: memory.string(literal.datatype_str())?,
+            language: literal
+                .language()
+                .map(|language| memory.string(language))
+                .transpose()?,
+            direction: literal.direction(),
+        },
+        Term::Triple(triple) => {
+            let subject = admit_term(&triple.subject, memory)?;
+            let predicate = LossTerm::Iri(memory.string(triple.predicate.as_str())?);
+            let object = admit_term(&triple.object, memory)?;
+            LossTerm::Triple {
+                subject: memory.boxed(subject)?,
+                predicate: memory.boxed(predicate)?,
+                object: memory.boxed(object)?,
+            }
+        }
+    })
+}
+
+/// Record one runtime loss: `code` names the SHACL construct that could not be
+/// mapped, `subject` the shape or class it concerns, `note` the fixed reason,
+/// and `facts` the typed values that identify this occurrence.
+pub(super) fn record_loss(
+    ctx: &mut Ctx<'_>,
+    code: &'static str,
+    subject: &Term,
+    note: &'static str,
+    facts: &[Fact<'_>],
+) {
     let Some(policy) = &mut ctx.tool else {
-        ctx.ledger.record(super::loss_entry(code, subject, note));
+        let mut entry = super::loss_entry(code, subject.to_loss_term(), note);
+        entry.detail = facts.iter().map(|fact| fact.detail()).collect();
+        ctx.ledger.record(entry);
         return;
     };
     if !policy.charge(1) || !policy.native_nodes(1) {
         return;
     }
     policy.native(|memory| {
-        let code = memory.string(code)?;
-        let note = memory.string(note)?;
-        ctx.ledger.record_with_memory(
-            super::LossEntry {
-                code: code.into(),
-                from: "shacl".into(),
-                to: "json-schema".into(),
-                note: note.into(),
-                site: super::LossSite::Unspecified,
-                subject: super::LossSubject::Term(subject),
-                detail: Vec::new(),
-            },
-            memory,
-        )
+        let subject = admit_term(subject, memory)?;
+        let mut detail = Vec::new();
+        memory.reserve(&mut detail, facts.len())?;
+        for fact in facts {
+            let fact = fact.admit(memory)?;
+            memory.push(&mut detail, fact)?;
+        }
+        let mut entry = super::loss_entry(code, subject, note);
+        entry.detail = detail;
+        ctx.ledger.record_with_memory(entry, memory)
     });
 }
 
@@ -1512,7 +1570,12 @@ pub(super) fn scalar_term(term: &Term) -> bool {
     }
 }
 
-pub(super) fn datatype_schema(datatype: &str, shape: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
+pub(super) fn datatype_schema(
+    datatype: &str,
+    shape: super::ShapeName<'_>,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     if ctx.tool.is_none() {
         return datatype_value_schema(datatype, ctx.ns);
     }
@@ -1606,7 +1669,12 @@ pub(super) fn class_schema(class: &str, ctx: &mut Ctx<'_>) -> Value {
     }
 }
 
-pub(super) fn member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut Ctx<'_>) -> Value {
+pub(super) fn member_schema(
+    shape: &Shape,
+    shape_iri: super::ShapeName<'_>,
+    key: &str,
+    ctx: &mut Ctx<'_>,
+) -> Value {
     if shape.deactivated {
         return json!({});
     }
@@ -1619,13 +1687,13 @@ pub(super) fn member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut
             .expect("plain mode")
             .error
             .get_or_insert(ToolSchemaError::StackMargin {
-                location: shape_iri.to_owned(),
+                location: shape_iri.text.to_owned(),
             });
         return json!({});
     }
     if !shape.constraint_annotations.is_empty() || !shape.deactivated_when.is_empty() {
         ctx.tool.as_mut().expect("plain mode").refuse(
-            shape_iri,
+            shape_iri.text,
             if shape.constraint_annotations.is_empty() {
                 ToolRepresentationError::DynamicDeactivation
             } else {
@@ -1641,7 +1709,7 @@ pub(super) fn member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut
             Err(e) => {
                 ctx.tool.as_mut().expect("plain mode").error.get_or_insert(
                     ToolSchemaError::Model {
-                        location: shape_iri.to_owned(),
+                        location: shape_iri.text.to_owned(),
                         cause: e,
                     },
                 );
@@ -1657,8 +1725,11 @@ pub(super) fn member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut
         return compile_object_schema(resolved, ctx);
     }
     let source = format_text(ctx, format_args!("{}", resolved.id));
-    ctx.register_shape(&source, &resolved.id);
-    compile_member_schema_body(resolved, &source, key, ctx)
+    let source = super::ShapeName {
+        term: &resolved.id,
+        text: &source,
+    };
+    compile_member_schema_body(resolved, source, key, ctx)
 }
 
 pub(super) fn step(ctx: &mut Ctx<'_>) -> bool {

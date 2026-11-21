@@ -224,6 +224,15 @@ impl SchemaPath {
     }
 }
 
+/// The loss subject the schema location written `#/...` names.
+#[cfg(test)]
+pub(crate) fn pointer_subject(location: &str) -> purrdf_core::LossSubject {
+    let pointer = location
+        .strip_prefix('#')
+        .expect("a schema location starts with #");
+    purrdf_core::LossSubject::parse_pointer(pointer).expect("a schema location is pointer text")
+}
+
 impl std::fmt::Display for SchemaPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "#{}", self.0)

@@ -46,7 +46,10 @@ mod completeness;
 mod occurrence;
 mod profile;
 pub use completeness::LossCompletenessError;
-pub use occurrence::{LossDetail, LossGraphName, LossSite, LossSubject, LossTerm, LossValue};
+pub use occurrence::{
+    LossDetail, LossGraphName, LossPathStep, LossPointerError, LossSite, LossSubject, LossTerm,
+    LossValue,
+};
 pub use profile::{LossDefinition, LossProfile, LossProfileError, LossSoundnessError};
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
@@ -122,6 +125,20 @@ pub struct LossEntry {
     /// Typed counts, identifiers and terms qualifying this occurrence, in the
     /// order the producer recorded them. Empty for every contract entry.
     pub detail: Vec<LossDetail>,
+}
+
+impl purrdf_hash::error::StructuredError for LossEntry {
+    purrdf_hash::error_visit! {
+        @record self { code, from, to, note, site, subject, detail } => "loss-entry" {
+            "code" => Code(self.code.as_ref()),
+            "from" => Code(self.from.as_ref()),
+            "to" => Code(self.to.as_ref()),
+            "note" => Text(self.note.as_ref()),
+            "site" => Record(&self.site),
+            "subject" => Record(&self.subject),
+            "detail" => List(self.detail.iter().map(|detail| purrdf_hash::error::ErrorValue::Record(detail))),
+        }
+    }
 }
 
 impl LossEntry {
@@ -3116,6 +3133,7 @@ mod tests {
                 lexical: "cat".to_owned(),
                 datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
                 language: Some("en".to_owned()),
+                direction: None,
             }),
             detail: vec![LossDetail::count("rows", 3)],
         });
@@ -3165,9 +3183,10 @@ mod tests {
                 column: None,
             },
             LossSubject::Term(LossTerm::Literal {
-                lexical: "cat".to_owned(),
+                lexical: "c\"a\u{1}t".to_owned(),
                 datatype: "http://example.org/dt".to_owned(),
                 language: Some("en".to_owned()),
+                direction: Some(crate::RdfTextDirection::Rtl),
             }),
             vec![LossDetail::count("rows", 3)],
         ));
@@ -3182,7 +3201,7 @@ mod tests {
             },
             LossSubject::Row {
                 kind: "quad".to_owned(),
-                identifier: "q1".to_owned(),
+                digest: [0xab; 32],
             },
             vec![LossDetail::identifier("head", "h1")],
         ));
@@ -3207,21 +3226,47 @@ mod tests {
         ledger.record(entry(
             "d",
             LossSite::Unspecified,
-            LossSubject::Graph(LossGraphName::Blank("g".to_owned())),
+            LossSubject::Graph(LossGraphName::Blank {
+                label: "g".to_owned(),
+                scope: None,
+            }),
             vec![
                 LossDetail::graph("g", LossGraphName::Default),
                 LossDetail::term("i", LossTerm::Indexed(7)),
             ],
         ));
+        ledger.record(entry(
+            "e",
+            LossSite::Unspecified,
+            LossSubject::Resource {
+                kind: "node".to_owned(),
+                identifier: "n1".to_owned(),
+            },
+            Vec::new(),
+        ));
+        ledger.record(entry(
+            "f",
+            LossSite::Unspecified,
+            LossSubject::Path(vec![
+                LossPathStep::Element {
+                    name: "resource".to_owned(),
+                    position: 1,
+                },
+                LossPathStep::Attribute {
+                    name: "lang".to_owned(),
+                },
+            ]),
+            Vec::new(),
+        ));
         let expected = concat!(
             "{\n  \"schema_version\": 2,\n  \"losses\": [\n",
             "    {\n      \"code\": \"a\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
             "      \"site\": {\"kind\": \"document\", \"path\": \"x.ttl\", \"line\": 3, \"column\": null},\n",
-            "      \"subject\": {\"kind\": \"term\", \"term\": {\"kind\": \"literal\", \"lexical\": \"cat\", \"datatype\": \"http://example.org/dt\", \"language\": \"en\"}},\n",
+            "      \"subject\": {\"kind\": \"term\", \"term\": {\"kind\": \"literal\", \"lexical\": \"c\\\"a\\u0001t\", \"datatype\": \"http://example.org/dt\", \"language\": \"en\", \"direction\": \"rtl\"}},\n",
             "      \"detail\": [{\"kind\": \"detail\", \"name\": \"rows\", \"value\": {\"kind\": \"count\", \"count\": 3}}]\n    },\n",
             "    {\n      \"code\": \"b\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
             "      \"site\": {\"kind\": \"gts\", \"segment\": 1, \"frame\": 2, \"term\": null, \"quad\": null, \"reifier\": null},\n",
-            "      \"subject\": {\"kind\": \"row\", \"row_kind\": \"quad\", \"identifier\": \"q1\"},\n",
+            "      \"subject\": {\"kind\": \"row\", \"row_kind\": \"quad\", \"digest\": \"abababababababababababababababababababababababababababababababab\"},\n",
             "      \"detail\": [{\"kind\": \"detail\", \"name\": \"head\", \"value\": {\"kind\": \"identifier\", \"identifier\": \"h1\"}}]\n    },\n",
             "    {\n      \"code\": \"c\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
             "      \"site\": {\"kind\": \"stage\", \"name\": \"s\"},\n",
@@ -3229,11 +3274,80 @@ mod tests {
             "      \"detail\": [{\"kind\": \"detail\", \"name\": \"t\", \"value\": {\"kind\": \"term\", \"term\": {\"kind\": \"triple\", \"subject\": {\"kind\": \"iri\", \"value\": \"s\"}, \"predicate\": {\"kind\": \"iri\", \"value\": \"p\"}, \"object\": {\"kind\": \"blank\", \"label\": \"b\", \"scope\": \"0\"}}}}]\n    },\n",
             "    {\n      \"code\": \"d\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
             "      \"site\": {\"kind\": \"unspecified\"},\n",
-            "      \"subject\": {\"kind\": \"graph\", \"graph\": {\"kind\": \"blank\", \"label\": \"g\"}},\n",
-            "      \"detail\": [{\"kind\": \"detail\", \"name\": \"g\", \"value\": {\"kind\": \"graph\", \"graph\": {\"kind\": \"default\"}}}, {\"kind\": \"detail\", \"name\": \"i\", \"value\": {\"kind\": \"term\", \"term\": {\"kind\": \"indexed\", \"index\": 7}}}]\n    }\n",
+            "      \"subject\": {\"kind\": \"graph\", \"graph\": {\"kind\": \"blank\", \"label\": \"g\", \"scope\": null}},\n",
+            "      \"detail\": [{\"kind\": \"detail\", \"name\": \"g\", \"value\": {\"kind\": \"graph\", \"graph\": {\"kind\": \"default\"}}}, {\"kind\": \"detail\", \"name\": \"i\", \"value\": {\"kind\": \"term\", \"term\": {\"kind\": \"indexed\", \"index\": 7}}}]\n    },\n",
+            "    {\n      \"code\": \"e\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"unspecified\"},\n",
+            "      \"subject\": {\"kind\": \"resource\", \"resource_kind\": \"node\", \"identifier\": \"n1\"},\n",
+            "      \"detail\": []\n    },\n",
+            "    {\n      \"code\": \"f\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"unspecified\"},\n",
+            "      \"subject\": {\"kind\": \"path\", \"steps\": [{\"kind\": \"element\", \"name\": \"resource\", \"position\": 1}, {\"kind\": \"attribute\", \"name\": \"lang\"}]},\n",
+            "      \"detail\": []\n    }\n",
             "  ]\n}\n",
         );
         assert_eq!(ledger.render_json(), expected);
+    }
+
+    /// RDF 1.2 base direction is part of a literal's identity: two literals
+    /// that differ only in direction are distinct subjects, and two that agree
+    /// in every part are equal.
+    #[test]
+    fn a_literal_subject_keeps_its_base_direction() {
+        let literal = |direction| LossTerm::Literal {
+            lexical: "x".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("en".to_owned()),
+            direction,
+        };
+        let ltr = literal(Some(crate::RdfTextDirection::Ltr));
+        let rtl = literal(Some(crate::RdfTextDirection::Rtl));
+        assert_ne!(ltr, rtl);
+        assert_eq!(ltr, literal(Some(crate::RdfTextDirection::Ltr)));
+        assert_ne!(ltr.to_string(), rtl.to_string());
+    }
+
+    /// Only a JSON Pointer becomes a pointer subject: text that is not one is
+    /// refused rather than stored as a one-token pointer.
+    #[test]
+    fn a_pointer_subject_is_parsed_from_pointer_text_only() {
+        for refused in ["dataset:identifier:x", "a/b", "/a~2b"] {
+            let error = LossSubject::parse_pointer(refused).unwrap_err();
+            assert_eq!(error.text(), refused);
+        }
+        assert_eq!(
+            LossSubject::parse_pointer("/$defs/a~1b").unwrap(),
+            LossSubject::Pointer(vec!["$defs".to_owned(), "a/b".to_owned()])
+        );
+        assert_eq!(
+            LossSubject::parse_pointer("").unwrap(),
+            LossSubject::Pointer(Vec::new())
+        );
+    }
+
+    /// A recorded entry is inspectable through the structured-error protocol,
+    /// its subject and details as nested records.
+    #[test]
+    fn a_loss_entry_is_inspectable_as_structured_data() {
+        use purrdf_hash::error::ErrorValue;
+        let entry = LossEntry {
+            code: Cow::Borrowed("c"),
+            from: Cow::Borrowed("f"),
+            to: Cow::Borrowed("t"),
+            note: Cow::Borrowed("n"),
+            site: LossSite::Unspecified,
+            subject: LossSubject::Resource {
+                kind: "node".to_owned(),
+                identifier: "n1".to_owned(),
+            },
+            detail: vec![LossDetail::count("rows", 4)],
+        };
+        let captured = purrdf_testkit::error_capture::Capture::read(&entry);
+        assert!(matches!(captured.field("code"), ErrorValue::Code("c")));
+        assert!(matches!(
+            captured.child("subject").field("identifier"),
+            ErrorValue::Text("n1")
+        ));
     }
 
     /// Absence is an explicit variant, never an omitted member or a reserved value.

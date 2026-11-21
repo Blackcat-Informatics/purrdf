@@ -60,8 +60,14 @@ pub enum LossGraphName {
     Default,
     /// A graph named by an IRI.
     Iri(String),
-    /// A graph named by a blank node, by its label.
-    Blank(String),
+    /// A graph named by a blank node: its label and, when the producer scopes
+    /// labels, its scope.
+    Blank {
+        /// The blank-node label.
+        label: String,
+        /// The label scope, when labels are scoped.
+        scope: Option<String>,
+    },
 }
 
 /// An RDF term, kept with every part that identifies it.
@@ -77,7 +83,8 @@ pub enum LossTerm {
         /// The label scope, when labels are scoped.
         scope: Option<String>,
     },
-    /// A literal with its datatype IRI and, for a language-tagged literal, its tag.
+    /// A literal with its datatype IRI and, for a language-tagged literal, its
+    /// tag and, for a directional one, its base direction.
     Literal {
         /// The lexical form.
         lexical: String,
@@ -85,6 +92,8 @@ pub enum LossTerm {
         datatype: String,
         /// The language tag.
         language: Option<String>,
+        /// The base direction of a directional language-tagged literal.
+        direction: Option<crate::RdfTextDirection>,
     },
     /// A triple term.
     Triple {
@@ -108,18 +117,79 @@ pub enum LossSubject {
     Absent,
     /// An RDF term.
     Term(LossTerm),
-    /// A row of a table, by its kind and its stable identifier (a content
-    /// digest-derived identifier, or the identifier the source assigned).
+    /// A source row, by its kind and the SHA-256 digest of its canonical JSON
+    /// form.
     Row {
-        /// The row kind.
+        /// The row kind, such as `quad`, `reifier` or `annotation`.
         kind: String,
-        /// The row's stable identifier.
+        /// The SHA-256 digest of the row's canonical JSON form.
+        digest: [u8; 32],
+    },
+    /// A record a document names by an identifier of its own (an LPG node or
+    /// edge id, a research-object entity id), by its kind and that identifier.
+    Resource {
+        /// The record kind, such as `node`, `edge` or `statement`.
+        kind: String,
+        /// The identifier the document assigns.
         identifier: String,
     },
     /// A graph.
     Graph(LossGraphName),
-    /// A JSON Pointer, as its unescaped reference tokens in order.
+    /// A JSON Pointer, as its unescaped reference tokens in order. Built from
+    /// text only through [`LossSubject::parse_pointer`].
     Pointer(Vec<String>),
+    /// A node of an XML document, as its path of steps from the root element.
+    Path(Vec<LossPathStep>),
+}
+
+/// One step of a [`LossSubject::Path`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum LossPathStep {
+    /// An element, by its local name and its 1-based position among its
+    /// parent's element children.
+    Element {
+        /// The element's local name.
+        name: String,
+        /// The 1-based position among the parent's element children.
+        position: u64,
+    },
+    /// An attribute of the preceding element, by its local name.
+    Attribute {
+        /// The attribute's local name.
+        name: String,
+    },
+}
+
+/// Text that is not a JSON Pointer (RFC 6901): it neither is empty nor begins
+/// with `/`, or a `~` in it is not followed by `0` or `1`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LossPointerError {
+    text: String,
+}
+
+impl LossPointerError {
+    /// The refused text.
+    #[must_use]
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+impl std::fmt::Display for LossPointerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?} is not a JSON Pointer (RFC 6901)", self.text)
+    }
+}
+
+impl std::error::Error for LossPointerError {}
+
+impl StructuredError for LossPointerError {
+    purrdf_hash::error_visit! {
+        @record self { text } => "loss-pointer-invalid" {
+            "text" => Text(&self.text),
+        }
+    }
 }
 
 /// The value of one [`LossDetail`].
@@ -208,8 +278,16 @@ impl LossSubject {
         match self {
             Self::Absent => None,
             Self::Term(term) => Some(term.to_string()),
-            Self::Row { identifier, .. } => Some(identifier.clone()),
+            Self::Row { kind, digest } => {
+                Some(format!("{kind} {}", purrdf_hash::hex::Lower(digest)))
+            }
+            Self::Resource { kind, identifier } => Some(format!("{kind} {identifier}")),
             Self::Graph(graph) => Some(graph.to_string()),
+            Self::Path(steps) => {
+                let mut out = String::new();
+                present_path(steps, &mut out);
+                Some(out)
+            }
             Self::Pointer(tokens) => {
                 let mut out = String::from("#");
                 for token in tokens {
@@ -223,22 +301,28 @@ impl LossSubject {
 
     /// The subject a JSON Pointer (RFC 6901) names: its reference tokens, with
     /// `~1` and `~0` decoded. The empty string names the document root (no
-    /// tokens). A path that does not begin with `/` is one token, because it is
-    /// not a pointer and is not split.
-    #[must_use]
-    pub fn pointer(path: &str) -> Self {
-        let Some(rest) = path.strip_prefix('/') else {
-            return Self::Pointer(if path.is_empty() {
-                Vec::new()
-            } else {
-                vec![path.to_owned()]
-            });
+    /// tokens).
+    ///
+    /// # Errors
+    ///
+    /// [`LossPointerError`] when `pointer` is not a JSON Pointer: it is not
+    /// empty and does not begin with `/`, or it holds a `~` not followed by `0`
+    /// or `1`.
+    pub fn parse_pointer(pointer: &str) -> Result<Self, LossPointerError> {
+        purrdf_lex::json_pointer::tokens(pointer)
+            .map(|tokens| Self::Pointer(tokens.into_iter().map(Cow::into_owned).collect()))
+            .ok_or_else(|| LossPointerError {
+                text: pointer.to_owned(),
+            })
+    }
+}
+
+fn present_path(steps: &[LossPathStep], out: &mut String) {
+    for step in steps {
+        let _ = match step {
+            LossPathStep::Element { name, position } => write!(out, "/{name}[{position}]"),
+            LossPathStep::Attribute { name } => write!(out, "/@{name}"),
         };
-        Self::Pointer(
-            rest.split('/')
-                .map(|token| token.replace("~1", "/").replace("~0", "~"))
-                .collect(),
-        )
     }
 }
 
@@ -277,7 +361,10 @@ impl StructuredError for LossGraphName {
     purrdf_hash::error_visit! {
         Default => "loss-graph-default" {},
         Iri(iri) => "loss-graph-iri" { "iri" => Iri(iri) },
-        Blank(label) => "loss-graph-blank" { "label" => Text(label) },
+        Blank { label, scope } => "loss-graph-blank" {
+            "label" => Text(label),
+            "scope" => Value(scope.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+        },
     }
 }
 
@@ -288,10 +375,11 @@ impl StructuredError for LossTerm {
             "label" => Text(label),
             "scope" => Value(scope.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
         },
-        Literal { lexical, datatype, language } => "loss-term-literal" {
+        Literal { lexical, datatype, language, direction } => "loss-term-literal" {
             "lexical" => Text(lexical),
             "datatype" => Iri(datatype),
             "language" => Value(language.as_deref().map_or(ErrorValue::Absent, ErrorValue::Text)),
+            "direction" => Value(direction.map_or(ErrorValue::Absent, |direction| ErrorValue::Code(direction.as_str()))),
         },
         Triple { subject, predicate, object } => "loss-term-triple" {
             "subject" => Record(&**subject),
@@ -310,10 +398,23 @@ impl StructuredError for LossSubject {
                 visitor.variant("loss-subject-term");
                 visitor.value(Some("term"), ErrorValue::Record(term));
             }
-            Self::Row { kind, identifier } => {
+            Self::Row { kind, digest } => {
                 visitor.variant("loss-subject-row");
                 visitor.value(Some("kind"), ErrorValue::Code(kind));
+                visitor.value(Some("digest"), ErrorValue::Bytes(digest));
+            }
+            Self::Resource { kind, identifier } => {
+                visitor.variant("loss-subject-resource");
+                visitor.value(Some("kind"), ErrorValue::Code(kind));
                 visitor.value(Some("identifier"), ErrorValue::Text(identifier));
+            }
+            Self::Path(steps) => {
+                visitor.variant("loss-subject-path");
+                visitor.begin_list(Some("steps"), steps.len());
+                for step in steps {
+                    visitor.value(None, ErrorValue::Record(step));
+                }
+                visitor.end_list();
             }
             Self::Graph(graph) => {
                 visitor.variant("loss-subject-graph");
@@ -328,6 +429,16 @@ impl StructuredError for LossSubject {
                 visitor.end_list();
             }
         }
+    }
+}
+
+impl StructuredError for LossPathStep {
+    purrdf_hash::error_visit! {
+        Element { name, position } => "loss-path-element" {
+            "name" => Text(name),
+            "position" => Unsigned(u128::from(*position)),
+        },
+        Attribute { name } => "loss-path-attribute" { "name" => Text(name) },
     }
 }
 
@@ -360,7 +471,13 @@ impl LossGraphName {
             Self::Iri(iri) => {
                 let _ = write!(out, "<{iri}>");
             }
-            Self::Blank(label) => {
+            Self::Blank {
+                label,
+                scope: Some(scope),
+            } => {
+                let _ = write!(out, "_:{label} (scope {scope})");
+            }
+            Self::Blank { label, scope: None } => {
                 let _ = write!(out, "_:{label}");
             }
         }
@@ -380,11 +497,23 @@ impl LossTerm {
                 lexical,
                 datatype,
                 language: Some(language),
+                direction: Some(direction),
+            } => write!(
+                out,
+                "\"{lexical}\"@{language}--{} ({datatype})",
+                direction.as_str()
+            ),
+            Self::Literal {
+                lexical,
+                datatype,
+                language: Some(language),
+                direction: None,
             } => write!(out, "\"{lexical}\"@{language} ({datatype})"),
             Self::Literal {
                 lexical,
                 datatype,
                 language: None,
+                ..
             } => write!(out, "\"{lexical}\"^^<{datatype}>"),
             Self::Triple {
                 subject,
@@ -454,8 +583,19 @@ impl LossSubject {
                 out.push_str("concerning ");
                 term.present(out);
             }
-            Self::Row { kind, identifier } => {
-                let _ = write!(out, "concerning {kind} row {identifier}");
+            Self::Row { kind, digest } => {
+                let _ = write!(
+                    out,
+                    "concerning {kind} row {}",
+                    purrdf_hash::hex::Lower(digest)
+                );
+            }
+            Self::Resource { kind, identifier } => {
+                let _ = write!(out, "concerning {kind} {identifier}");
+            }
+            Self::Path(steps) => {
+                out.push_str("concerning ");
+                present_path(steps, out);
             }
             Self::Graph(graph) => {
                 out.push_str("concerning graph ");
@@ -602,10 +742,12 @@ impl<'out> JsonWriter<'out> {
                 self.member("value");
                 self.string(iri);
             }
-            LossGraphName::Blank(label) => {
+            LossGraphName::Blank { label, scope } => {
                 self.open("blank");
                 self.member("label");
                 self.string(label);
+                self.member("scope");
+                self.optional_string(scope.as_deref());
             }
         }
         self.close();
@@ -629,6 +771,7 @@ impl<'out> JsonWriter<'out> {
                 lexical,
                 datatype,
                 language,
+                direction,
             } => {
                 self.open("literal");
                 self.member("lexical");
@@ -637,6 +780,8 @@ impl<'out> JsonWriter<'out> {
                 self.string(datatype);
                 self.member("language");
                 self.optional_string(language.as_deref());
+                self.member("direction");
+                self.optional_string(direction.map(crate::RdfTextDirection::as_str));
             }
             LossTerm::Triple {
                 subject,
@@ -668,12 +813,45 @@ impl<'out> JsonWriter<'out> {
                 self.member("term");
                 self.term(term);
             }
-            LossSubject::Row { kind, identifier } => {
+            LossSubject::Row { kind, digest } => {
                 self.open("row");
                 self.member("row_kind");
                 self.string(kind);
+                self.member("digest");
+                let _ = write!(self.out, "\"{}\"", purrdf_hash::hex::Lower(digest));
+            }
+            LossSubject::Resource { kind, identifier } => {
+                self.open("resource");
+                self.member("resource_kind");
+                self.string(kind);
                 self.member("identifier");
                 self.string(identifier);
+            }
+            LossSubject::Path(steps) => {
+                self.open("path");
+                self.member("steps");
+                self.out.push('[');
+                for (position, step) in steps.iter().enumerate() {
+                    if position > 0 {
+                        self.out.push_str(", ");
+                    }
+                    match step {
+                        LossPathStep::Element { name, position } => {
+                            self.open("element");
+                            self.member("name");
+                            self.string(name);
+                            self.member("position");
+                            let _ = write!(self.out, "{position}");
+                        }
+                        LossPathStep::Attribute { name } => {
+                            self.open("attribute");
+                            self.member("name");
+                            self.string(name);
+                        }
+                    }
+                    self.close();
+                }
+                self.out.push(']');
             }
             LossSubject::Graph(graph) => {
                 self.open("graph");

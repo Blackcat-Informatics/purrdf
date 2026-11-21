@@ -262,6 +262,7 @@ impl Term {
                 lexical: literal.value().to_owned(),
                 datatype: literal.datatype_str().to_owned(),
                 language: literal.language().map(str::to_owned),
+                direction: literal.direction(),
             },
             Self::Triple(triple) => LossTerm::Triple {
                 subject: Box::new(triple.subject.to_loss_term()),

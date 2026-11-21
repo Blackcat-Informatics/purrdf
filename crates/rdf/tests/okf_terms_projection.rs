@@ -85,7 +85,7 @@ const LOSS_LEDGER: &str = r#"{
       "intentional": true,
       "note": "OKF documents have no named-graph placement; a quad asserted outside the default graph cannot be represented in Markdown frontmatter or body text.",
       "site": {"kind": "stage", "name": "okf-terms:named-graph"},
-      "subject": {"kind": "row", "row_kind": "okf-terms:named-graph", "identifier": "OkfTermsGraph_9dc301f2a53e6251c3b75db81bcc816cd67937f8522d74658f285d97cbf67545"},
+      "subject": {"kind": "graph", "graph": {"kind": "iri", "value": "https://example.org/source"}},
       "detail": []
     },
     {
@@ -95,7 +95,7 @@ const LOSS_LEDGER: &str = r#"{
       "intentional": true,
       "note": "OKF documents have no named-graph placement; a quad asserted outside the default graph cannot be represented in Markdown frontmatter or body text.",
       "site": {"kind": "stage", "name": "okf-terms:quad"},
-      "subject": {"kind": "row", "row_kind": "okf-terms:quad", "identifier": "OkfTermsQuad_69199f28e43f6d3d9f3f5163b9c6942dbe35e6913e78953e1ac0d58c0a231ca1"},
+      "subject": {"kind": "row", "row_kind": "quad", "digest": "69199f28e43f6d3d9f3f5163b9c6942dbe35e6913e78953e1ac0d58c0a231ca1"},
       "detail": []
     },
     {
@@ -105,7 +105,7 @@ const LOSS_LEDGER: &str = r#"{
       "intentional": true,
       "note": "An RDF statement outside the caller-configured OKF profile, including an OWL axiom, has no Markdown/frontmatter field and is omitted from the bundle.",
       "site": {"kind": "stage", "name": "okf-terms:quad"},
-      "subject": {"kind": "row", "row_kind": "okf-terms:quad", "identifier": "OkfTermsQuad_5f65b0f5d8da82f971f4714cd9ab12a713089c929ca9031ac908af887900066f"},
+      "subject": {"kind": "row", "row_kind": "quad", "digest": "5f65b0f5d8da82f971f4714cd9ab12a713089c929ca9031ac908af887900066f"},
       "detail": []
     }
   ]

@@ -90,19 +90,6 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         direction: Option<&str>,
     ) -> Result<TermKey, RdfDiagnostic> {
         // Once per term, as the importer's resolver callback is.
-        if let Some(tag) = language {
-            crate::gts_language_fold::record_language_fold_loss(
-                &mut self.metadata.losses,
-                lexical,
-                tag,
-                crate::gts_language_fold::FoldSite {
-                    logical: "gts:sink",
-                    segment: Some(key.segment),
-                    term: key.term as u64,
-                },
-                self.memory,
-            )?;
-        }
         let datatype = datatype.map(|key| self.term(key)).transpose()?;
         if datatype
             .as_deref()
@@ -118,6 +105,19 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         let direction =
             crate::gts_resolve::parse_gts_direction_with_memory(direction, language, self.memory)
                 .map_err(|error| self.native_error(error))?;
+        if let Some(tag) = language {
+            crate::gts_language_fold::record_language_fold_loss(
+                &mut self.metadata.losses,
+                lexical,
+                (tag, direction),
+                crate::gts_language_fold::FoldSite {
+                    logical: "gts:sink",
+                    segment: Some(key.segment),
+                    term: key.term as u64,
+                },
+                self.memory,
+            )?;
+        }
         let datatype = crate::RdfLiteral::datatype_iri_from_parts(
             datatype.as_deref().and_then(|term| term.value.as_deref()),
             language,

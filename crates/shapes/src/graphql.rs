@@ -1094,10 +1094,8 @@ impl<'a> Planner<'a> {
                 self.record(
                     "keyword-validation-delegated",
                     &path.child(key),
-                    &format!(
-                        "JSON Schema assertion keyword {key:?} is outside the closed GraphQL \
-                         capability table"
-                    ),
+                    "the JSON Schema assertion keyword at this path is outside the closed \
+                     GraphQL capability table",
                 );
             }
         }
@@ -1359,7 +1357,18 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &'static str) {
+        self.record_detailed(code, path, note, Vec::new());
+    }
+
+    /// Record a loss whose occurrence carries typed facts beyond its path.
+    fn record_detailed(
+        &mut self,
+        code: &str,
+        path: &SchemaPath,
+        note: &'static str,
+        detail: Vec<purrdf_core::LossDetail>,
+    ) {
         if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
@@ -1367,12 +1376,12 @@ impl<'a> Planner<'a> {
             code: code.to_owned().into(),
             from: LOSS_FROM.into(),
             to: GRAPHQL_DIALECT.into(),
-            note: note.to_owned().into(),
+            note: note.into(),
             site: purrdf_core::LossSite::Stage {
                 name: LOSS_CONTEXT.to_owned(),
             },
             subject: path.to_loss_subject(),
-            detail: Vec::new(),
+            detail,
         });
     }
 
@@ -3662,20 +3671,15 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .map(|entry| {
-                (
-                    entry.code.to_string(),
-                    entry.subject.text().unwrap_or_default(),
-                )
-            })
+            .map(|entry| (entry.code.to_string(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert!(located.contains(&(
             "numeric-validation-dropped".to_owned(),
-            format!("{items}/minimum")
+            crate::schema_catalog::pointer_subject(&format!("{items}/minimum"))
         )));
         assert!(located.contains(&(
             "integer-domain-validation-delegated".to_owned(),
-            format!("{items}/anyOf/0/type")
+            crate::schema_catalog::pointer_subject(&format!("{items}/anyOf/0/type"))
         )));
         assert!(
             located
@@ -3819,7 +3823,8 @@ mod tests {
             assert!(package.names.unions.is_empty());
             assert!(package.losses.entries().iter().any(|entry| {
                 entry.code == "union-validation-delegated"
-                    && entry.subject.text().as_deref() == Some("#/$defs/Choice/anyOf")
+                    && entry.subject
+                        == crate::schema_catalog::pointer_subject("#/$defs/Choice/anyOf")
             }));
         }
         // Kinds a union admits beside a keyword judging another kind make the

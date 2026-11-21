@@ -5,7 +5,9 @@
 
 use std::sync::Arc;
 
-use purrdf_core::{LossDetail, LossGraphName, LossSite, LossSubject, LossTerm, LossValue};
+use purrdf_core::{
+    LossDetail, LossGraphName, LossPathStep, LossSite, LossSubject, LossTerm, LossValue,
+};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
@@ -33,9 +35,10 @@ fn graph_dict<'py>(py: Python<'py>, graph: &LossGraphName) -> PyResult<Bound<'py
             dict.set_item("kind", "iri")?;
             dict.set_item("value", iri)?;
         }
-        LossGraphName::Blank(label) => {
+        LossGraphName::Blank { label, scope } => {
             dict.set_item("kind", "blank")?;
             dict.set_item("label", label)?;
+            dict.set_item("scope", scope)?;
         }
         other => return Err(unsupported("graph name", other)),
     }
@@ -58,11 +61,13 @@ fn term_dict<'py>(py: Python<'py>, term: &LossTerm) -> PyResult<Bound<'py, PyDic
             lexical,
             datatype,
             language,
+            direction,
         } => {
             dict.set_item("kind", "literal")?;
             dict.set_item("lexical", lexical)?;
             dict.set_item("datatype", datatype)?;
             dict.set_item("language", language)?;
+            dict.set_item("direction", direction.map(|direction| direction.as_str()))?;
         }
         LossTerm::Triple {
             subject,
@@ -159,7 +164,9 @@ impl PyProjectionLoss {
     }
 
     /// What the loss concerns: a dict whose `kind` is `absent`, `term`, `row`,
-    /// `graph` or `pointer`, with that kind's typed members.
+    /// `resource`, `graph`, `pointer` or `path`, with that kind's typed members.
+    /// A row carries its kind and the 32-byte digest of its source content; a
+    /// path carries its steps as `element` and `attribute` dicts.
     #[getter]
     fn subject<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let dict = PyDict::new(py);
@@ -169,9 +176,14 @@ impl PyProjectionLoss {
                 dict.set_item("kind", "term")?;
                 dict.set_item("term", term_dict(py, term)?)?;
             }
-            LossSubject::Row { kind, identifier } => {
+            LossSubject::Row { kind, digest } => {
                 dict.set_item("kind", "row")?;
                 dict.set_item("row_kind", kind)?;
+                dict.set_item("digest", PyBytes::new(py, digest))?;
+            }
+            LossSubject::Resource { kind, identifier } => {
+                dict.set_item("kind", "resource")?;
+                dict.set_item("resource_kind", kind)?;
                 dict.set_item("identifier", identifier)?;
             }
             LossSubject::Graph(graph) => {
@@ -182,19 +194,44 @@ impl PyProjectionLoss {
                 dict.set_item("kind", "pointer")?;
                 dict.set_item("tokens", tokens)?;
             }
+            LossSubject::Path(steps) => {
+                dict.set_item("kind", "path")?;
+                let steps = steps
+                    .iter()
+                    .map(|step| {
+                        let entry = PyDict::new(py);
+                        match step {
+                            LossPathStep::Element { name, position } => {
+                                entry.set_item("kind", "element")?;
+                                entry.set_item("name", name)?;
+                                entry.set_item("position", position)?;
+                            }
+                            LossPathStep::Attribute { name } => {
+                                entry.set_item("kind", "attribute")?;
+                                entry.set_item("name", name)?;
+                            }
+                            other => return Err(unsupported("path step", other)),
+                        }
+                        Ok(entry)
+                    })
+                    .collect::<PyResult<Vec<_>>>()?;
+                dict.set_item("steps", steps)?;
+            }
             other => return Err(unsupported("subject", other)),
         }
         Ok(dict)
     }
 
     /// The typed counts, identifiers, terms and graph names qualifying the
-    /// loss, in recorded order: dicts with `name` and a kinded `value`.
+    /// loss, in recorded order: dicts whose `kind` is `detail`, with `name`
+    /// and a kinded `value`.
     #[getter]
     fn detail<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyDict>>> {
         self.detail
             .iter()
             .map(|detail| {
                 let dict = PyDict::new(py);
+                dict.set_item("kind", "detail")?;
                 dict.set_item("name", detail.name.as_ref())?;
                 let value = PyDict::new(py);
                 match &detail.value {

@@ -11,7 +11,6 @@
 
 use purrdf_core::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject, LossTerm};
 use purrdf_iri::langtag::is_identity_folded;
-use purrdf_iri::vocab::rdf::LANG_STRING;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
 /// Where a GTS literal sits: the label of the reader, the segment when
@@ -30,7 +29,7 @@ pub(crate) struct FoldSite {
 /// Otherwise the literal's strings, the detail list and the ledger slot are
 /// admitted through `memory`. The entry's static code, pair names and note hold
 /// no allocation. The subject is the literal as written, with its datatype and
-/// written tag, and the `held-tag` detail is the tag the dataset holds, so the
+/// written tag and base direction, and the `held-tag` detail is the tag the dataset holds, so the
 /// term the fold merges with its case variant is identified.
 ///
 /// # Errors
@@ -38,7 +37,7 @@ pub(crate) struct FoldSite {
 pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
     losses: &mut LossLedger,
     lexical: &str,
-    tag: &str,
+    (tag, direction): (&str, Option<purrdf_core::RdfTextDirection>),
     site: FoldSite,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), StorageError> {
@@ -47,8 +46,11 @@ pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
     }
     let subject = LossSubject::Term(LossTerm::Literal {
         lexical: memory.string(lexical)?,
-        datatype: memory.string(LANG_STRING)?,
+        datatype: memory.string(purrdf_iri::vocab::language_datatype_iri(
+            direction.is_some(),
+        ))?,
         language: Some(memory.string(tag)?),
+        direction,
     });
     let mut detail = Vec::new();
     let held = memory.string(&tag.to_ascii_lowercase())?;
@@ -118,6 +120,7 @@ mod tests {
                 lexical: "x".to_owned(),
                 datatype: LANG_STRING.to_owned(),
                 language: Some("EN-us".to_owned()),
+                direction: None,
             }),
             "the written literal is the subject, with its datatype and tag"
         );
@@ -157,7 +160,7 @@ mod tests {
             let result = record_language_fold_loss(
                 &mut losses,
                 "x",
-                tag,
+                (tag, None),
                 site(logical),
                 &mut Memory::new(&mut ceiling),
             );

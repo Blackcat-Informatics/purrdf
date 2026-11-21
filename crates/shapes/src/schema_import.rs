@@ -4131,20 +4131,11 @@ mod tests {
             }
         });
         let imported = import_json_schema(&schema.to_string(), &config()).expect("import schema");
-        let texts = imported
+        let observed = imported
             .losses
             .entries()
             .iter()
-            .map(|entry| {
-                (
-                    entry.code.as_ref(),
-                    entry.subject.text().expect("located loss"),
-                )
-            })
-            .collect::<Vec<_>>();
-        let observed = texts
-            .iter()
-            .map(|(code, text)| (*code, text.as_str()))
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         for expected in [
             ("schema-identity-dropped", "#/$schema"),
@@ -4179,8 +4170,9 @@ mod tests {
             ("non-object-definition-dropped", "#/$defs/Scalar"),
             ("boolean-schema-dropped", "#/$defs/Impossible"),
         ] {
+            let (code, location) = expected;
             assert!(
-                observed.contains(&expected),
+                observed.contains(&(code, crate::schema_catalog::pointer_subject(location))),
                 "missing {expected:?}: {observed:?}"
             );
         }
@@ -4349,23 +4341,21 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .map(|entry| (entry.code.as_ref(), entry.subject.text()))
-            .collect::<Vec<_>>();
-        let observed = observed
-            .iter()
-            .map(|(code, text)| (*code, text.as_deref()))
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert!(observed.contains(&(
             "value-term-kind-widened",
-            Some("#/$defs/Record/properties/@id")
+            crate::schema_catalog::pointer_subject("#/$defs/Record/properties/@id")
         )));
         assert!(observed.contains(&(
             "value-term-kind-widened",
-            Some("#/$defs/Record/properties/ex:choice/type")
+            crate::schema_catalog::pointer_subject("#/$defs/Record/properties/ex:choice/type")
         )));
         assert!(observed.contains(&(
             "schema-applicator-dropped",
-            Some("#/$defs/Record/properties/ex:alternative/anyOf")
+            crate::schema_catalog::pointer_subject(
+                "#/$defs/Record/properties/ex:alternative/anyOf"
+            )
         )));
     }
 

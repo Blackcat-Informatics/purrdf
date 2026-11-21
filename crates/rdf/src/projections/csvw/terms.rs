@@ -6,7 +6,7 @@
 use super::super::selection::{GraphSelection, SubjectSelector};
 use super::table::table_fragment_iri;
 use crate::direction_json::{direction_from_json, direction_to_json};
-use crate::projections::loss::record_row_loss;
+use crate::projections::loss::{graph_subject, record_logical_loss, record_row_loss};
 use crate::projections::source_rows::{SourceAnnotation, SourceQuad, SourceReifier};
 use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
@@ -1044,11 +1044,11 @@ impl<'a> TermsProjector<'a> {
         for index in 0..self.quads.len() {
             let quad = &self.quads[index];
             if !self.graph_selected(quad.graph.as_ref()) {
-                self.record_quad_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED)?;
+                self.record_quad_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED);
                 continue;
             }
             let ProjectionTerm::Iri { value: subject } = &quad.subject else {
-                self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNREPRESENTABLE)?;
+                self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNREPRESENTABLE);
                 continue;
             };
             let mut has_matching_table = false;
@@ -1072,17 +1072,17 @@ impl<'a> TermsProjector<'a> {
                 }
             }
             if !has_matching_table {
-                self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNSELECTED)?;
+                self.record_quad_loss(index, LOSS_CSVW_TERMS_SUBJECT_UNSELECTED);
                 continue;
             }
             if represented {
                 if quad.graph.is_some() {
-                    self.record_quad_loss(index, LOSS_CSVW_TERMS_NAMED_GRAPH_PLACEMENT_DROPPED)?;
+                    self.record_quad_loss(index, LOSS_CSVW_TERMS_NAMED_GRAPH_PLACEMENT_DROPPED);
                 }
             } else if mapped_predicate {
-                self.record_quad_loss(index, LOSS_CSVW_TERMS_OBJECT_UNREPRESENTABLE)?;
+                self.record_quad_loss(index, LOSS_CSVW_TERMS_OBJECT_UNREPRESENTABLE);
             } else {
-                self.record_quad_loss(index, LOSS_CSVW_TERMS_PREDICATE_UNMAPPED)?;
+                self.record_quad_loss(index, LOSS_CSVW_TERMS_PREDICATE_UNMAPPED);
             }
         }
         Ok(())
@@ -1096,22 +1096,22 @@ impl<'a> TermsProjector<'a> {
             .collect::<BTreeSet<_>>();
         for index in 0..self.named_graphs.len() {
             if !self.graph_selected(Some(&self.named_graphs[index])) {
-                self.record_named_graph_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED)?;
+                self.record_named_graph_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED);
             } else if !non_empty_graphs.contains(&self.named_graphs[index]) {
-                self.record_named_graph_loss(index, LOSS_CSVW_TERMS_EMPTY_GRAPH_DROPPED)?;
+                self.record_named_graph_loss(index, LOSS_CSVW_TERMS_EMPTY_GRAPH_DROPPED);
             }
         }
         for index in 0..self.reifiers.len() {
             if !self.graph_selected(self.reifiers[index].graph.as_ref()) {
-                self.record_reifier_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED)?;
+                self.record_reifier_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED);
             }
-            self.record_reifier_loss(index, LOSS_CSVW_TERMS_REIFIER_DROPPED)?;
+            self.record_reifier_loss(index, LOSS_CSVW_TERMS_REIFIER_DROPPED);
         }
         for index in 0..self.annotations.len() {
             if !self.graph_selected(self.annotations[index].graph.as_ref()) {
-                self.record_annotation_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED)?;
+                self.record_annotation_loss(index, LOSS_CSVW_TERMS_GRAPH_UNSELECTED);
             }
-            self.record_annotation_loss(index, LOSS_CSVW_TERMS_ANNOTATION_DROPPED)?;
+            self.record_annotation_loss(index, LOSS_CSVW_TERMS_ANNOTATION_DROPPED);
         }
         Ok(())
     }
@@ -1134,64 +1134,47 @@ impl<'a> TermsProjector<'a> {
         }
     }
 
-    fn record_quad_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_quad_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
             code,
             "csvw-terms:quad",
-            "CsvwTermsQuad",
+            "quad",
             &self.quads[index],
-        )
+        );
     }
 
-    fn record_named_graph_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
-        record_row_loss(
+    fn record_named_graph_loss(&mut self, index: usize, code: &'static str) {
+        record_logical_loss(
             &mut self.ledger,
             &self.contract,
             code,
             "csvw-terms:named-graph",
-            "CsvwTermsGraph",
-            &self.named_graphs[index],
-        )
+            graph_subject(&self.named_graphs[index]),
+        );
     }
 
-    fn record_reifier_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_reifier_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
             code,
             "csvw-terms:reifier",
-            "CsvwTermsReifier",
+            "reifier",
             &self.reifiers[index],
-        )
+        );
     }
 
-    fn record_annotation_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_annotation_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
             code,
             "csvw-terms:annotation",
-            "CsvwTermsAnnotation",
+            "annotation",
             &self.annotations[index],
-        )
+        );
     }
 }
 

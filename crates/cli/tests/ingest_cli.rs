@@ -200,21 +200,49 @@ fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
     assert!(o.status.success(), "gts convert failed: {}", stderr(&o));
 
     let ledger = std::fs::read_to_string(&ledger_path).expect("read ledger");
-    assert!(
-        ledger.contains("gts-segment-ledger-dropped"),
-        "the segment ledger must be reported: {ledger}"
-    );
-    assert!(
-        ledger.contains(r#""name": "count", "value": {"kind": "count", "count": 2}"#),
+    let parsed = purrdf_lex::json::read(&ledger).expect("ledger JSON");
+    // The values of the facts named `name` on the entry whose code is `code`.
+    let facts = |code: &str, name: &str| -> Vec<purrdf_lex::json::Value> {
+        let entry = parsed["losses"]
+            .as_array()
+            .expect("loss array")
+            .iter()
+            .find(|entry| entry["code"].as_str() == Some(code))
+            .unwrap_or_else(|| panic!("{code} must be reported: {ledger}"));
+        entry["detail"]
+            .as_array()
+            .expect("detail array")
+            .iter()
+            .filter(|detail| detail["name"].as_str() == Some(name))
+            .map(|detail| detail["value"].clone())
+            .collect()
+    };
+    let count = |code: &str| {
+        let counts = facts(code, "count");
+        assert_eq!(counts.len(), 1, "{code} carries one count: {ledger}");
+        assert_eq!(counts[0]["kind"].as_str(), Some("count"), "{ledger}");
+        counts[0]["count"].as_u64().expect("an unsigned count")
+    };
+    assert_eq!(
+        count("gts-segment-ledger-dropped"),
+        2,
         "the segment count must be the one the importer produced: {ledger}"
     );
-    assert!(
-        ledger.matches(r#""name": "segment-head""#).count() == 2,
+    let heads = facts("gts-segment-ledger-dropped", "segment-head");
+    assert_eq!(
+        heads.len(),
+        2,
         "the segment head ids are the provenance the envelope carried: {ledger}"
     );
     assert!(
-        ledger.contains("gts-blob-references-dropped")
-            && ledger.matches(r#""kind": "count", "count": 2"#).count() == 2,
+        heads
+            .iter()
+            .all(|head| head["kind"].as_str() == Some("identifier")),
+        "{ledger}"
+    );
+    assert_eq!(
+        count("gts-blob-references-dropped"),
+        2,
         "both blob references must be reported: {ledger}"
     );
     // Material the file did NOT carry is not claimed.
