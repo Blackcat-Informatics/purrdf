@@ -232,9 +232,10 @@ U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
 XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
 where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
 raw. The digest is over the binary line encodings and does not depend on these
-spellings. The retained 4.x `purrdf-rdfc12` output keeps the spelling it had,
-U+FFFE and U+FFFF raw (profile version 3), so a stored 4.x digest of a dataset
-holding either in a literal recomputes; see "Stored digests".
+spellings. The retained 4.x `purrdf-rdfc12` output keeps the spelling it had
+(profile version 3): U+FFFE and U+FFFF raw in a literal, and DEL and the C1
+controls escaped as `\u007F` through `\u009F` in an IRI, so every stored 4.x
+digest recomputes; see "Stored digests".
 
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
@@ -250,7 +251,9 @@ and are never parsed back.
 A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
 overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
 dataset. To check one, recompute it with the 4.x function, which writes the bytes
-4.x wrote (profile version 3), so every stored 4.x digest recomputes unchanged:
+4.x wrote (profile version 3), so every stored 4.x digest recomputes unchanged,
+whatever the dataset holds, including U+FFFE and U+FFFF in a literal and DEL or a
+C1 control in an IRI taken through a caller's own `DatasetView`:
 
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or

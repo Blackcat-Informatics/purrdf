@@ -10,7 +10,7 @@
 
 **5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文为标识符和版本，所有已记录的摘要重新计算结果不变。重新计算本 profile 的读取方包括 PACK 版本 1 的 `rdfc_digest`、`rdfc10-sha256` 压缩证书、PURREMB 版本 1 的来源摘要，以及内嵌的 `stream:contentRefoldDigest`。
 
-本 profile 将字面量中的 U+FFFE 和 U+FFFF 原样写出。RDF 1.2 N-Quads 的规范形式（第 3 节）把这两个字符写为 `UCHAR`，因为它们都不符合 XML 1.1 `Char` 产生式，5.0 的规范文档遵循这一规定。本 profile 不这样做，因为它记录的摘要基于原样字节，而保留它正是为了重新计算这些摘要。版本仍为 3：每个数据集的规范化结果都与版本 3 产生的字节相同。
+本 profile 将字面量中的 U+FFFE 和 U+FFFF 原样写出。RDF 1.2 N-Quads 的规范形式（第 3 节）把这两个字符写为 `UCHAR`，因为它们都不符合 XML 1.1 `Char` 产生式，5.0 的规范文档遵循这一规定。本 profile 不这样做，因为它记录的摘要基于原样字节，而保留它正是为了重新计算这些摘要。本 profile 同样把 IRI 中的 DEL 和 C1 控制字符写为 `\u007F` 至 `\u009F` 的转义，而规范形式将它们原样写出，原因相同。版本仍为 3：每个数据集（包括调用方自己的 `DatasetView` 提供含此类 IRI 的数据集）的规范化结果都与版本 3 产生的字节相同，因此每个已记录的摘要都能重新计算。
 
 这两个值不仅写在文档里，也可从库中读取：`purrdf_core::rdfc12::CANON_PROFILE_ID` 和 `purrdf_core::rdfc12::CANON_PROFILE_VERSION`。使用方因此可以断言，实际链接的构建实现的正是自己固定的 profile。
 
