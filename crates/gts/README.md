@@ -193,13 +193,11 @@ here. It is not corrected in place: `vectors/` is governed upstream by
 [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and carried
 into this repository verbatim, so it is hand-edited by nobody, in either
 direction — not regenerated to "fix" the field, and not resynced from
-upstream to match it. `scripts/check-corpus-frozen.py` does not byte-freeze
-this root either (its `GUARDED_ROOTS` covers `vectors/shacl` and
-`vectors/shexTest`, not the corpus root, by the same upstream-governance
-reasoning its own comment states for `vectors/*.gts`). The manifests are
-therefore maintained by hand upstream and carried here as-is; the only
-guarantee this repository makes over them is the review-time rule that
-nothing under `vectors/` is hand-edited locally (AGENTS.md), not a
+upstream to match it. `scripts/check-corpus-frozen.py` byte-freezes the upstream
+vectors at the top of this root (`vectors-flat.sha256`) but not the
+manifests. The manifests are maintained by hand upstream and carried here
+as-is; the only guarantee this repository makes over them is the review-time
+rule that nothing under `vectors/` is hand-edited locally (AGENTS.md), not a
 machine-verified freeze gate.
 
 ## Usage

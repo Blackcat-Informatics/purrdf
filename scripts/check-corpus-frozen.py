@@ -31,46 +31,35 @@ import subprocess
 import tomllib
 from pathlib import Path
 
-# Each guarded root -> its manifest file is declared in conformance-frozen/roots.toml.
-# A root is frozen whole:
-# every payload file beneath it is hashed. These are the corpora the SHACL/shexTest
-# conformance runners consume, the first-party frozen SHACL corpus, the first-party
-# execution-governor corpus (whose freeze manifest is itself the preimage of the
-# `GOVERNOR_CORPUS_DIGEST` a consumer pins), the vendored
-# W3C OWL 2 suite the entailment (DL-consistency) row grades against, and the
-# vendored W3C OWL 2 *entailment* suite (premise + conclusion pairs, plus the
-# 489-row upstream `census.tsv`) the OWL 2 RL row grades against, the vendored
-# W3C RDF 1.2 syntax/eval corpus the native text codecs (Turtle / TriG /
-# N-Triples / N-Quads / RDF-XML) round-trip against — which is also where every
-# language-tag and base-direction negative vector lives — the vendored W3C
-# SPARQL 1.0, 1.1 and 1.2 suites the conformance matrix grades against, and the
-# official JSON-Schema-Test-Suite and the draft 2020-12, 2019-09 and draft-07
-# meta-schemas `purrdf-jsonschema`'s tests register (test data only: the crate
-# compiles no meta-schema in) — together with the vendored W3C SHACL 1.2 vocabularies,
-# shacl12-test-suite and crate-local vocabulary copies under crates/shapes/spec,
-# all declared
-# byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
-# in gmeow-gts and is intentionally not policed here; adding a new root is a
-# deliberate edit to that registry followed by `--update` — a corpus is NEVER guarded
-# until it appears here.)
+# Each guarded root -> its receipt is declared in conformance-frozen/roots.toml; a
+# corpus is NEVER guarded until it appears there, and adding one is a deliberate
+# edit followed by `--update`. A root is frozen whole: every payload file beneath
+# it is hashed. A *flat* root freezes only the registered-suffix files directly
+# inside one directory (its subdirectories are roots of their own), minus the
+# files this project generates itself, which the registry names.
 #
 # The roots name *vendored* trees, not their first-party parents. Freezing is
 # the claim "no one hand-edits this", and it is only true of a tree PurRDF
 # copies from upstream and never authors into. That is why the guarded SPARQL
-# entries are `suite/w3c-sparql10`, `suite/w3c-sparql11` and `suite/w3c-sparql12` rather than
-# `suite/`: the sibling `suite/purrdf-*` suites are first-party cases this
-# project writes as features land, and freezing them would make every added
-# conformance test demand a `--update` — turning the loud, reviewable
-# re-vendor act into routine noise and destroying the signal for the vendored
+# entries are `suite/w3c-sparql10`, `suite/w3c-sparql11` and `suite/w3c-sparql12`
+# rather than `suite/`: the sibling `suite/purrdf-*` suites are first-party cases
+# this project writes as features land, and freezing them would make every added
+# conformance test demand a `--update`, destroying the signal for the vendored
 # corpora that actually need it.
-GUARDED_ROOTS: dict[str, str] = tomllib.loads(
+_REGISTRY = tomllib.loads(
     (Path(__file__).resolve().parent / "conformance-frozen/roots.toml").read_text()
-)["roots"]
+)
+GUARDED_ROOTS: dict[str, str] = _REGISTRY["roots"]
+FLAT_ROOTS: dict[str, dict] = _REGISTRY.get("flat_roots", {})
 if not isinstance(GUARDED_ROOTS, dict) or not GUARDED_ROOTS or any(
     not root or not isinstance(receipt, str) or not receipt
     for root, receipt in GUARDED_ROOTS.items()
+) or any(
+    not root or not isinstance(flat, dict) or not flat.get("receipt")
+    or not flat.get("suffixes") or any(not s.startswith(".") for s in flat["suffixes"])
+    for root, flat in FLAT_ROOTS.items()
 ):
-    raise ValueError("conformance-frozen/roots.toml requires non-empty roots and receipt paths")
+    raise ValueError("conformance-frozen/roots.toml requires non-empty roots, receipts and dotted suffixes")
 
 
 def repo_root() -> Path:
@@ -80,19 +69,14 @@ def repo_root() -> Path:
 def corpus_root(root: Path, corpus_rel: str) -> Path:
     """Resolve the consumer-acquired XML suite without redistributing payloads."""
     if corpus_rel == "vectors/xmlconf":
-        subprocess.run(
-            [sys.executable, str(root / "scripts/vendor-xmlconf.py")],
-            check=True,
-        )
+        subprocess.run([sys.executable, str(root / "scripts/vendor-xmlconf.py")], check=True)
         return root / "target/conformance/xmlconf"
     return root / corpus_rel
 
 
 def _is_frozen_payload(rel: Path) -> bool:
-    """Vendored payload only — skip first-party sidecars so editing them (e.g. a
-    provenance README) does not require regenerating the freeze manifest, and
-    skip hidden files so OS metadata (``.DS_Store``, editor dotfiles) never
-    contaminates the manifest across contributors' platforms."""
+    """Vendored payload only: not first-party sidecars (a provenance README) and
+    not hidden OS or editor files, so neither touches the manifest."""
     if rel.name.startswith("."):
         return False
     if rel.name in {"README.md", "PROVENANCE.md", "REUSE.toml"}:
@@ -105,12 +89,10 @@ def _is_frozen_payload(rel: Path) -> bool:
 
 
 def hash_tree(root: Path) -> list[tuple[str, str]]:
-    """Return sorted ``(relpath, sha256-hex)`` for every payload file under *root*.
+    """Sorted ``(relpath, sha256-hex)`` for every payload file under *root*.
 
-    Ordering is by the POSIX relative-path string, not by ``Path`` objects:
-    ``Path`` sorts by component tuples and case-folds on Windows, which would
-    emit a differently-ordered/cased manifest off-Linux. Sorting the final
-    ``(posix_rel, digest)`` tuples keeps the manifest reproducible everywhere.
+    Sorting the ``(posix_rel, digest)`` tuples, not ``Path`` objects, keeps the
+    manifest reproducible off-Linux, where ``Path`` order case-folds.
     """
     entries: list[tuple[str, str]] = []
     for path in root.rglob("*"):
@@ -123,6 +105,17 @@ def hash_tree(root: Path) -> list[tuple[str, str]]:
         entries.append((rel.as_posix(), digest))
     entries.sort()
     return entries
+
+
+def hash_flat(root: Path, flat: dict) -> list[tuple[str, str]]:
+    """Sorted ``(name, sha256-hex)`` of the payload files directly in *root*."""
+    skip = set(flat.get("exclude", []))
+    return sorted(
+        (p.name, hashlib.sha256(p.read_bytes()).hexdigest())
+        for p in root.iterdir()
+        if p.is_file() and p.name.endswith(tuple(flat["suffixes"]))
+        and p.name not in skip and _is_frozen_payload(Path(p.name))
+    )
 
 
 def render_manifest(entries: list[tuple[str, str]]) -> str:
@@ -140,46 +133,51 @@ def parse_manifest(text: str) -> list[tuple[str, str]]:
     return entries
 
 
+def targets(root: Path):
+    """Every guard as ``(label, receipt path, hasher)``, whole-tree roots first."""
+    whole = [
+        (rel, receipt, lambda r=rel: hash_tree(corpus_root(root, r)))
+        for rel, receipt in GUARDED_ROOTS.items()
+    ]
+    flat = [
+        (f"{rel} (files directly inside)", f["receipt"], lambda r=rel, f=f: hash_flat(root / r, f))
+        for rel, f in FLAT_ROOTS.items()
+    ]
+    return whole + flat
+
+
 def update(root: Path) -> int:
-    for corpus_rel, manifest_rel in GUARDED_ROOTS.items():
-        manifest = root / manifest_rel
+    for _label, receipt, hasher in targets(root):
+        manifest = root / receipt
         manifest.parent.mkdir(parents=True, exist_ok=True)
-        manifest.write_text(
-            render_manifest(hash_tree(corpus_root(root, corpus_rel))), encoding="utf-8"
-        )
-        print(f"wrote {manifest_rel}")
+        manifest.write_text(render_manifest(hasher()), encoding="utf-8")
+        print(f"wrote {receipt}")
     return 0
 
 
 def verify(root: Path) -> int:
     failed = False
-
-    for corpus_rel, manifest_rel in GUARDED_ROOTS.items():
-        manifest = root / manifest_rel
+    checks = targets(root)
+    for label, receipt, hasher in checks:
+        manifest = root / receipt
         if not manifest.is_file():
             failed = True
-            print(
-                f"Byte-freeze FAILED: missing manifest {manifest_rel} for "
-                f"{corpus_rel}; regenerate with --update.",
-                file=sys.stderr,
-            )
+            print(f"Byte-freeze FAILED: missing manifest {receipt} for {label}; regenerate with --update.", file=sys.stderr)
             continue
         want = dict(parse_manifest(manifest.read_text(encoding="utf-8")))
-        have = dict(hash_tree(corpus_root(root, corpus_rel)))
-
+        have = dict(hasher())
         changed = sorted(r for r in want.keys() & have.keys() if want[r] != have[r])
         missing = sorted(want.keys() - have.keys())
         extra = sorted(have.keys() - want.keys())
         if changed or missing or extra:
             failed = True
-            print(f"Byte-freeze FAILED for {corpus_rel}:", file=sys.stderr)
+            print(f"Byte-freeze FAILED for {label}:", file=sys.stderr)
             for rel in changed:
                 print(f"  content changed: {rel}", file=sys.stderr)
             for rel in missing:
                 print(f"  missing (in manifest, not on disk): {rel}", file=sys.stderr)
             for rel in extra:
                 print(f"  new (on disk, not in manifest): {rel}", file=sys.stderr)
-
     if failed:
         print(
             "\nThe vendored corpora are byte-frozen. If this is a deliberate "
@@ -188,9 +186,7 @@ def verify(root: Path) -> int:
             file=sys.stderr,
         )
         return 1
-
-    total = sum(1 for _ in GUARDED_ROOTS)
-    print(f"OK: {total} vendored corpora byte-frozen.")
+    print(f"OK: {len(checks)} vendored corpora byte-frozen.")
     return 0
 
 

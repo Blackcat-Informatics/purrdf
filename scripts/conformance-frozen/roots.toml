@@ -36,3 +36,24 @@
 "crates/text/lexicons/icu-78.3" = "scripts/conformance-frozen/text-icu-78.3.sha256"
 "crates/text/tests/stemming_vectors" = "scripts/conformance-frozen/text-stemming-vectors.sha256"
 "crates/text/tests/phonetic_vectors" = "scripts/conformance-frozen/text-phonetic-vectors.sha256"
+
+# A flat root freezes only the files directly inside its directory; the
+# subdirectories of `vectors/` are roots of their own. The GTS vectors at the top
+# of `vectors/` are carried verbatim from the format owner's corpus, except the
+# vectors this project generates with its maintainer binaries, which are named
+# here and are not frozen: regenerating one must not demand a re-vendor.
+[flat_roots."vectors"]
+receipt = "scripts/conformance-frozen/vectors-flat.sha256"
+suffixes = [".gts", ".expected.json"]
+exclude = [
+  "25b-streamable-compacted.gts",
+  "25b-streamable-compacted.expected.json",
+  "30-dict-rawcontent.gts",
+  "30-dict-rawcontent.expected.json",
+  "31-dict-trained.gts",
+  "31-dict-trained.expected.json",
+  "32-dict-rsyncable.gts",
+  "32-dict-rsyncable.expected.json",
+  "33-multi-dict.gts",
+  "33-multi-dict.expected.json",
+]

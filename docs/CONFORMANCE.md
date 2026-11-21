@@ -515,7 +515,10 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   vendored verbatim and run against the PurRDF drop-in.
 - `vectors/*.gts` + subdirs — the GTS conformance corpus shared byte-exact
   with the other GTS engines (governed in
-  [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)).
+  [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)). The 68
+  files of the 34 upstream vectors at the top of `vectors/` are byte-frozen
+  (`scripts/conformance-frozen/vectors-flat.sha256`); the five vectors this
+  project generates are not.
 
 ## Running them
 
