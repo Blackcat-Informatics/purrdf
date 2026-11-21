@@ -360,9 +360,8 @@ regression to silence.
 
 `vectors/signed/` holds the signed-frame corpus of the sister repository
 `gmeow-gts`, vendored at revision `cd123c2dd357eca85fb4236a6067a7ad5b0a9a3b`
-(`vectors/signed/`). It has 69 vectors: the 68 files added here, each
-byte-identical to the file at that revision, and `basic.json`, which was
-already carried. The root is byte-frozen by `scripts/check-corpus-frozen.py`
+(`vectors/signed/`). It has 69 vectors, each byte-identical to the file at
+that revision. The root is byte-frozen by `scripts/check-corpus-frozen.py`
 with its receipt in `scripts/conformance-frozen/vectors-signed.sha256`; a later
 resync is a re-vendor at a named upstream revision followed by `--update`.
 
