@@ -8,8 +8,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-## [5.0.0] - 2026-11-20
+## [5.0.0] - 2026-11-21
 
+- **Behaviour change: a triple term with neither `tt` nor `rf` projects as a
+  fresh blank node on every path.** Such a term states no triple, and the
+  specification's third resolution rule says a reader keeps it as a distinct
+  term and a projection renders it as a fresh blank node. The fold view already
+  did; `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, the
+  streaming importers (`import_gts_events` and its dictionary and blob forms) and
+  `export_gts_rdf_nquads_with_dictionary` refused the same file. They now project
+  `_:unbound_triple_{id}`, the node a term that reaches itself already becomes: one
+  id names one node in a projection and a second bare term names another.
+  `native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
+  `rdf-ir-unbound-triple-term` remain defined for API compatibility and no public
+  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the case,
+  and `ResolvedSink::err_unbound_triple` stays a required method that the
+  resolver no longer calls.
+
+- **The byte-freeze guard covers the flat GTS vectors.** `check-corpus-frozen.py`
+  gains a flat root, which freezes the registered files directly inside one
+  directory and none of its subdirectories, and `vectors/` registers one: the 68
+  files of the 34 upstream vectors carried at its top level. The five vectors
+  this project generates (`25b`, `30` to `33`) are named in the registry and are
+  not frozen. A changed, missing or unregistered file among the frozen ones now
+  fails the guard.
 - **Breaking: loss entries record typed occurrences, and the runtime ledger is
   schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
   with three typed members: `site` (`LossSite`: unspecified, a document position,
@@ -253,12 +275,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   caller that stored such normal forms holds the old spelling. A host letter
   that percent-decoding exposes is now lower-cased as well (`http://%41/` was
   `http://A/` and is `http://a/`), so the normal form is a fixed point.
-- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines.** The
-  canonical form of RDF 1.2 N-Quads (section 3) writes a character outside the
-  XML 1.1 `Char` production as `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and
-  `term_syntax::write_literal` do so for every caller, where 4.0.2 wrote both
-  raw. Other literal characters keep their 4.0.2 spelling, among them U+1FFFE,
-  U+FDD0 and U+0085. The canonical IRI writer escapes what `IRIREF` forbids; an
+- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
+  IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
+  N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
+  `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
+  for every caller but one, where 4.0.2 wrote both raw; the C1 controls stay raw.
+  Other literal characters keep their 4.0.2 spelling, among them U+1FFFE, U+FDD0
+  and U+0085. The canonical IRI writer escapes exactly what `IRIREF` forbids; an
   IRI holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
   `write_term_value` and the retained `purrdf_core::rdfc12` functions write
   U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2 wrote them as `\u007F`
@@ -266,18 +289,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   characters in both versions: `freeze` after `intern_iri`, the GTS import
   functions and the pack dictionary reader each refuse them with
   `iri-disallowed-char`. The difference reaches only an IRI that a caller's own
-  `DatasetView` supplies.
-  The carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
+  `DatasetView` supplies. The carrier-aware `iri_escape::*_for` functions name the
+  wider XML set, which the
   Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
-  (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
-  `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
-  the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
-  literal, or U+007F or U+0080 to U+009F in an IRI, no longer recomputes with the
-  retained `purrdf_core::rdfc12` functions, because it was taken over the
-  4.0.2 spelling; every other stored digest recomputes unchanged. The readers affected are the PACK version 1
+  (for the last, to keep the bytes of a SARIF `logicalLocation` stable). The one
+  exception is the retained `purrdf_core::rdfc12` path, which writes U+FFFE and
+  U+FFFF raw through the new `literal_escape::write_rdfc12_v3` and
+  `term_syntax::write_literal_rdfc12_v3`: its bytes, `CANON_PROFILE_VERSION` (3)
+  and `CANON_CORPUS_DIGEST` are those of 4.0.2, so every stored 4.x digest of a
+  dataset holding either in a literal recomputes, including the PACK version 1
   `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
-  source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
-  over binary lines and does not move; the 5.0 document spells those characters
+  source digests and the embedded `stream:contentRefoldDigest`. The one 4.x
+  spelling it does not keep is U+007F and U+0080 to U+009F in an IRI (see
+  above): a stored digest of a dataset holding one of them in an IRI that a
+  caller's own `DatasetView` supplied no longer recomputes. The 5.0 digest is
+  over binary lines and does not move; the 5.0 document spells U+FFFE and U+FFFF
   as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
   SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
 - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`

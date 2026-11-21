@@ -100,8 +100,7 @@ impl GraphInterner {
                         })?;
                         let kind = term.kind;
                         let datatype = term.datatype;
-                        let components = if kind == TermKind::Triple && !self.reaching.contains(id)
-                        {
+                        let components = if self.states_triple(id) {
                             Some(self.triple_components(id)?)
                         } else {
                             None
@@ -134,7 +133,7 @@ impl GraphInterner {
                             TermKind::Iri => self.intern_iri(id)?,
                             TermKind::Bnode => self.intern_blank(id)?,
                             TermKind::Literal => self.intern_literal(id, memory)?,
-                            TermKind::Triple if self.reaching.contains(id) => {
+                            TermKind::Triple if !self.states_triple(id) => {
                                 self.intern_unbound_triple(id)?
                             }
                             TermKind::Triple => self.intern_triple(id)?,
@@ -172,6 +171,14 @@ impl GraphInterner {
         let label = std::mem::take(&mut self.terms[gts_id].value)
             .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
         Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
+    }
+
+    /// Whether `gts_id` is a triple term that states a triple: it does not reach
+    /// itself and carries `tt` or `rf`. Every other triple term states none
+    /// (§7.3) and interns as a blank node.
+    fn states_triple(&self, gts_id: usize) -> bool {
+        let term = &self.terms[gts_id];
+        term.kind == TermKind::Triple && !term.is_bare_triple() && !self.reaching.contains(gts_id)
     }
 
     /// The blank node a triple term that states no triple stands for, named by

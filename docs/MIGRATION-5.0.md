@@ -23,11 +23,10 @@ digests before opening a 4.x artifact.
   blank node.
 - RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
   algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
-  read-side recompute of stored 4.x digests (profile version 4). A stored 4.x
-  digest of a dataset holding U+FFFE or U+FFFF in a literal, or U+007F or U+0080
-  to U+009F in an IRI, no longer recomputes (see "Stored digests"); every other
-  stored digest recomputes unchanged. No
-  writer records a 4.x digest in a new artifact. A GTS compaction certificate names the function that recorded its
+  read-side recompute of stored 4.x digests (profile version 3), and every
+  stored 4.x digest recomputes unchanged, except one of a dataset holding U+007F
+  or U+0080 to U+009F in an IRI (see "Stored digests"). No writer records a 4.x
+  digest in a new artifact. A GTS compaction certificate names the function that recorded its
   refold digests (see "Containers").
 - The search bound is a limit on the walk of the specification (section 8.3), a
   function of the input as given and of the bound, so every engine refuses the
@@ -242,21 +241,21 @@ the labels of the blank nodes of an input with a nested term need not be
 consecutive.
 
 The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
-U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
-XML 1.1 `Char` production; 4.0.2 wrote both raw. Every other literal character
-keeps its 4.0.2 spelling, among them U+1FFFE, U+FDD0 and U+0085. An IRI is
-escaped where the `IRIREF` production forbids a scalar. An IRI holding U+00A0 is
-spelled as in 4.0.2. `term_syntax::write_iri`, `write_term_value` and the retained
-`rdfc12` functions write U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2
-wrote `\u007F` and `\u0080` to `\u009F`. The library's own IRI parser refuses
-those characters in both versions: `freeze` after `intern_iri`, the GTS import
-functions and the pack dictionary reader each refuse them with
-`iri-disallowed-char`. The difference reaches only an IRI that a caller's own
-`DatasetView` supplies. The digest is over the binary line encodings and does not depend on these
-spellings. The retained 4.x `purrdf-rdfc12` output spells U+FFFE and U+FFFF the
-same way (profile version 4), so a stored 4.x digest of a dataset holding either
-in a literal no longer recomputes, and the raw spelling of U+007F and U+0080 to
-U+009F in an IRI has the same effect; see "Stored digests".
+U+FFFF in a literal are written `\uFFFE` and `\uFFFF` in the 5.0 document, since neither matches the
+XML 1.1 `Char` production; 4.0.2 wrote both raw. The C1 controls stay raw. Every
+other literal character keeps its 4.0.2 spelling, among them U+1FFFE, U+FDD0 and
+U+0085. An IRI is escaped where the `IRIREF` production forbids a scalar. An IRI
+holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
+`write_term_value` and the retained `rdfc12` functions write U+007F and U+0080 to
+U+009F in an IRI raw, where 4.0.2 wrote `\u007F` and `\u0080` to `\u009F`. The
+library's own IRI parser refuses those characters in both versions: `freeze`
+after `intern_iri`, the GTS import functions and the pack dictionary reader each
+refuse them with `iri-disallowed-char`. The difference reaches only an IRI that a
+caller's own `DatasetView` supplies. The digest is over the binary line
+encodings and does not depend on these spellings. The retained 4.x
+`purrdf-rdfc12` output keeps the spelling it had, U+FFFE and U+FFFF raw (profile
+version 3), so a stored 4.x digest of a dataset holding either in a literal
+recomputes; see "Stored digests".
 
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
@@ -271,14 +270,12 @@ and are never parsed back.
 
 A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
 overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
-dataset. To check one, recompute it with the 4.x function. A digest of a dataset
-holding U+FFFE or U+FFFF in a literal does not recompute, because it was taken
-over the raw spelling that profile version 3 wrote. A digest of a dataset holding
-U+007F or U+0080 to U+009F in an IRI does not recompute either, because profile
-version 3 wrote those characters as escapes and the retained functions now write
-them raw; such an IRI exists only where a caller's own `DatasetView` supplies it (see
-"Spelling as N-Quads 1.2"). Every other stored 4.x digest recomputes
-unchanged:
+dataset. To check one, recompute it with the 4.x function, which writes the bytes
+4.x wrote (profile version 3), so every stored 4.x digest recomputes unchanged,
+with one exception: a dataset holding U+007F or U+0080 to U+009F in an IRI, which
+profile version 3 wrote as escapes and the retained functions write raw. Such an
+IRI exists only where a caller's own `DatasetView` supplies it (see "Spelling as
+N-Quads 1.2"):
 
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
@@ -287,9 +284,8 @@ unchanged:
   `purrdf_rdf::rdfc12`, with the same name and signature it had at the crate
   root. See "Items that left the crate root".
 
-The 4.x path behaves as it did, apart from the spelling of U+FFFE and U+FFFF in
-a literal (profile version 4; see "Stored digests"): labels are `c14nN`, the hash is the
-caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
+The 4.x path behaves as it did (profile version 3): labels are `c14nN`, the hash
+is the caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
 `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
 reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
 them.
@@ -338,10 +334,9 @@ the two versions:
 | The document above | `aaf33dafb5db00ee598645aa948ca515aa5d0dc1d271c965cf4b09d9783fa613` | `309b1d21584c49f04ce2f5032c25c6954eca1cdc58f5f2db3c8ffae3932ad355` |
 | A literal `"a\uFFFEb"` | `3bc961a7900eda98b148cf8e71e77b4b8720d48e39d0a77da045b3108eda83ae` | `d0b1dc9e154af46ee5eab50d892ab74eb05a4353a5296e5c20b4ee0b36a833d0` |
 
-The first two rows recompute with `purrdf_rdf::rdfc12`. The third does not:
-4.0.2 wrote the U+FFFE raw and `purrdf_rdf::rdfc12` writes `\uFFFE`, so it
-yields `39300607dc1a19df1f23baebefc720617ba2aa9f1e2c531bfcc7d2466e998d20`. The
-5.0 identifier of a dataset without a blank node differs from its 4.0.2
+All three rows recompute with `purrdf_rdf::rdfc12`. The retained path writes the
+U+FFFE raw, as 4.0.2 did, and yields the 4.0.2 value in the third row. The 5.0
+identifier of a dataset without a blank node differs from its 4.0.2
 identifier too, and the quads of the first row also change order.
 
 A consumer that stores a canonical digest as an identifier does the following:
@@ -555,8 +550,8 @@ behaviour.
 
 These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
 or `purrdf`. Each keeps its name, signature and 4.x behaviour under
-`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`), except that U+FFFE and U+FFFF
-in a literal are spelled as escapes (profile version 4; see "Stored digests"). A caller that wants the 5.0
+`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`), except that U+007F and U+0080 to
+U+009F in an IRI are written raw (profile version 3; see "Stored digests"). A caller that wants the 5.0
 canonical output uses the default-family item in the third column, which is
 exported from the crate root. Two of the functions below keep the name of a
 default-family function: `purrdf_core::try_canonicalize` and
@@ -766,10 +761,9 @@ lost or retyped a public field, and none of these enums lost a variant.
   any reader diagnostic other than a blob-budget refusal, so it now refuses
   every file holding the spelling with `rdf-ir-gts-fold-diagnostic` carrying the
   `ForwardReference`, whether or not the term has a `tt` and whether or not a
-  quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` refuses
-  a file whose term has no `tt` and is named by a quad or a row, with
-  `native-codec-unbound-triple-term`; 4.0.2 imported that file too. Only the
-  fold view reads the file, and it renders the term as a fresh blank node. The
+  quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` and the
+  fold view read the file and render the term as a fresh blank node (see
+  "Triple terms with neither `tt` nor `rf`"). The
   conforming spelling names an earlier IRI or blank-node reifier in `rf` and
   keys the row by that reifier. A file whose `reifies` row is keyed by a
   quoted-triple term, whatever its `tt` or `rf`, loses that row.
@@ -829,18 +823,16 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function
-  that recorded it; a version `1` `rdfc_digest` of a dataset holding U+FFFE or
-  U+FFFF in a literal does not recompute. Because the line sequence holds a line for each declared empty
-  graph, a pack that declares an empty graph now has a different digest from the
+  that recorded it. Because the line sequence holds a line for each declared
+  empty graph, a pack that declares an empty graph now has a different digest from the
   same pack without the declaration; under version `1` they were equal.
 - **GTS compaction certificates.** A certificate's canonical CBOR map carries a
   `refold_canon` text field naming the function that computed its refold digests:
   `rdfc10-sha256` (the 4.x RDFC-1.0 flat form) or `nrl1-lines-sha256` (SHA-256 of
   the default-family canonical document). An absent field means `rdfc10-sha256`,
   so every certificate written by 4.x reads unchanged (its refold digests still
-  recompute, except for a dataset holding U+FFFE or U+FFFF in a literal), and an
-  `rdfc10-sha256`
-  certificate is written without the field, byte for byte as 4.x wrote it.
+  recompute), and an `rdfc10-sha256` certificate is written without the field,
+  byte for byte as 4.x wrote it.
   `compact_and_certify_versioned` writes `nrl1-lines-sha256` and returns a
   `VersionedCertificate { canon, certificate }`; `compact_and_certify` keeps its
   signature and the `rdfc10-sha256` certificate. `verify_compaction_with`,
@@ -852,8 +844,7 @@ lost or retyped a public field, and none of these enums lost a variant.
   `CompactionCertificate::from_canonical_cbor` refuses a certificate that is not
   `rdfc10-sha256` (`rdf-certificate-cbor-unexpected-canon`); read a certificate of
   either kind with `VersionedCertificate::from_canonical_cbor`. The digest the
-  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest (it now
-  follows profile version 4 for such a dataset), because
+  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest, because
   the GTS wire format is governed in `gmeow-gts`; both writers author the same
   pack bytes.
 - **Segmented images.** The writer emits format version `8` (`PURRSEG8`), whose
@@ -877,18 +868,14 @@ lost or retyped a public field, and none of these enums lost a variant.
   content digests of blobs and of the manifest. They are unchanged.
 - **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest
   and the blank-node target identities carry canonical labels. Format version `1`
-  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels (a source digest
-  of a dataset holding U+FFFE or U+FFFF in a literal does not recompute). The 5.0
+  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels. The 5.0
   writer emits format version `2`, whose digest is the line-sequence digest and
   whose labels are the labelling's decimal labels. Nothing else in the framing or
   the sections changes. The reader accepts both versions and refuses any other,
   and a file whose header and trailer name different versions. Source
   verification recomputes the digest and the labels with the run the version
   names, so a 4.x embedding keeps verifying against the pack or Columnar files it
-  was written for, except for a dataset holding U+FFFE or U+FFFF in a literal,
-  whose version `1` source digest no longer recomputes. Version `1` blank-node
-  labels (`c14nN`) can also move for such a dataset, because the first-degree
-  hashes of RDFC-1.0 include the spelling of an adjacent literal. The same file with its version byte changed to `2` is refused
+  was written for. The same file with its version byte changed to `2` is refused
   as a certified-RDF digest mismatch. A newly written artifact differs from the
   4.x artifact of the same inputs in the header and trailer version fields, the
   source digest, the dataset target identity, every blank-node target identity
@@ -900,6 +887,43 @@ lost or retyped a public field, and none of these enums lost a variant.
   (`purremb-unsupported-version`, "unsupported PURREMB version 2"); it does not
   misread one. Re-embedding is not needed to keep a 4.x file readable by 5.0, but
   a 5.0 file is not readable by 4.x.
+
+## Triple terms with neither `tt` nor `rf`
+
+A `k:3` term that carries neither `tt` nor `rf` states no triple. GTS section 7.3
+says a reader keeps such a term as a distinct term, and a projection renders it
+as a fresh blank node.
+
+Every public path projects it as the blank node `_:unbound_triple_{id}`, the
+node a term that reaches itself projects as: `GtsFoldView`,
+`dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`,
+the streaming importers (`import_gts_events` and its dictionary and blob forms)
+and `export_gts_rdf_nquads_with_dictionary`. The term is accepted wherever a
+blank node is legal: as a quad subject, as the subject of a reified triple,
+inside a `tt` component and as an annotation value. Within one projection the
+same term id names one blank node and a second bare term names another.
+
+A term whose `rf` names its own id is read as having no `rf`, because the
+reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView` and
+`dataset_from_gts_graph` then project it as a bare term. `import_gts_events` and
+its dictionary and blob forms refuse the file with `rdf-ir-gts-fold-diagnostic`,
+because they fail on any reader diagnostic.
+
+`native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
+`rdf-ir-unbound-triple-term` remain defined for API compatibility. No public
+input produces them. A consumer that matched them to detect a bare term
+inspects the term instead, through `purrdf_gts::model::Term::is_bare_triple`. A
+writer that wants the term to state a triple writes `tt`.
+
+Two limits apply to the projection:
+
+- The projected node is labelled `unbound_triple_N`. A document blank node
+  with that label in the same scope denotes the same node as the projected one.
+  A term that reaches itself has the same label.
+- A term whose `rf` names a reifier with no `reifies` row is not a bare term.
+  `GtsFoldView` renders it as a blank node, while `dataset_from_gts_graph`,
+  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
+  and the exporter refuse it with a missing-reifier-binding code.
 
 ## Hosts
 

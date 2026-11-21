@@ -613,7 +613,7 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
 #[test]
 fn the_profile_identity_is_readable_from_the_api() {
     assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-    assert_eq!(CANON_PROFILE_VERSION, 4);
+    assert_eq!(CANON_PROFILE_VERSION, 3);
     assert_eq!(CANON_PRESENTATION_OVERLAY_ID, "overlay");
     assert_eq!(CANON_PRESENTATION_OVERLAY_VERSION, 1);
     assert_eq!(CANON_PRESENTATION_FLAT_ASSERTION_ID, "flat-assertion");

@@ -572,6 +572,55 @@ fn explicit_reference_preparation_keeps_unrelated_reifier_terms_out_of_raw_admis
     );
 }
 
+/// A bare triple term states no triple (GTS-SPEC section 7.3) and projects as a
+/// fresh blank node, so the text exporter must accept it where a blank node is
+/// legal: as a quad subject, as the subject of a reified triple, inside a `tt`
+/// component and as an annotation value. The exported text reparses to the
+/// dataset the streaming importer builds; a `tt` term over a bare subject is the
+/// neighbouring valid case.
+#[test]
+fn the_text_exporter_projects_a_bare_triple_term_wherever_a_blank_node_is_legal() {
+    let mut bare = Term::triple_term((0, 0, 0));
+    bare.triple = None;
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        bare.clone(),                       // 2
+        Term::iri("https://example.org/r"), // 3: the reifier
+        Term::triple_term((2, 1, 0)),       // 4: a `tt` whose subject is bare
+        bare,                               // 5
+    ]);
+    writer.add_quads(&[(2, 1, 0, None), (0, 1, 4, None)]);
+    writer.add_reifies(&[(3, (2, 1, 0), None)]);
+    writer.add_annot(&[(3, 1, 5, None)]);
+    let bytes = writer.into_bytes();
+
+    let directory = purrdf_testkit::temp_dir!().expect("exporter directory");
+    let root = directory.path();
+    let mut raw = storage::Files::new(&root.join("raw"));
+    let replay = raw.replay();
+    let mut resolution = storage::Resolution::new(&root.join("export"));
+    let mut output = WriterDrain(Vec::new());
+    let mut ceiling = Ceiling(128 * 1024);
+    export_gts_rdf_nquads_with_dictionary(
+        &bytes,
+        &mut raw,
+        &mut resolution,
+        replay,
+        &mut output,
+        &mut Memory::new(&mut ceiling),
+    )
+    .expect("a bare triple term exports as a blank node");
+    let exported = parse_dataset(&output.0, "application/n-quads", None)
+        .expect("the exported text is RDF 1.2");
+    let imported = import_gts_events(&bytes).expect("the streaming importer admits the file");
+    assert_eq!(render(&exported), render(&imported.dataset));
+    assert_eq!(exported.owned_quads().count(), 2, "both quads are exported");
+    assert_eq!(exported.owned_reifiers().count(), 1);
+    assert_eq!(exported.owned_annotations().count(), 1);
+}
+
 #[test]
 fn native_eviction_reopening_and_actual_import_export_preserve_complete_rdf() {
     let directory = purrdf_testkit::temp_dir!().expect("native qualification directory");

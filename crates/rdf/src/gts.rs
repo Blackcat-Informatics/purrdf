@@ -48,8 +48,9 @@ use crate::native_codecs::ser_model::{SerGraph, SerReifierRow, SerTerm, SerTermK
 /// Everything downstream of this bridge — the IR fold's `SerInterner`, the
 /// N-Triples/TriG writers, the RDF/XML and JSON-LD serializers — walks a quoted
 /// triple's components recursively with no depth bound. A triple term that reaches
-/// itself (GTS-SPEC §7.3) therefore states no triple here: it becomes the blank node
-/// `unbound_triple_{id}`, and every `reifies` row naming it still projects.
+/// itself (GTS-SPEC §7.3) therefore states no triple here, as does a triple term with
+/// neither `tt` nor `rf`: each becomes the blank node `unbound_triple_{id}`, and every
+/// `reifies` row naming it still projects.
 ///
 /// # Errors
 ///
@@ -61,9 +62,10 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
     let mut described: Vec<SerReifierRow> = Vec::new();
     let mut terms = Vec::with_capacity(g.terms.len());
     for (id, t) in g.terms.iter().enumerate() {
-        if reaching.contains(id) {
-            // A triple term that reaches itself states no triple (§7.3): it is
-            // the fresh blank node an unbound triple term projects as.
+        if reaching.contains(id) || t.is_bare_triple() {
+            // A triple term that reaches itself, or carries neither `tt` nor
+            // `rf`, states no triple (§7.3): it is the fresh blank node an
+            // unbound triple term projects as.
             terms.push(SerTerm {
                 kind: SerTermKind::Bnode,
                 value: Some(format!("unbound_triple_{id}")),
@@ -85,9 +87,8 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
             // leave the spelling alone so a genuine `rdf:reifies` row still emits.
             t.reifier
         } else {
-            // States no triple (§7.3, third resolution rule): an `rf` with no row,
-            // or neither `tt` nor `rf`. An absent `rf` names no reifier, not the
-            // term's own id. The fold and the serializers report it as unbound.
+            // States no triple (§7.3, third resolution rule): an `rf` with no row.
+            // The fold and the serializers report it as unbound.
             t.reifier
         };
         terms.push(SerTerm {

@@ -180,6 +180,16 @@ impl Term {
         }
     }
 
+    /// Whether this is a triple term that carries neither `"tt"` nor `"rf"`.
+    ///
+    /// Such a term states no triple (§7.3, third resolution rule): a reader keeps
+    /// it as a distinct term and every projection renders it as a fresh blank
+    /// node. It names no reifier, so no `reifies` row can bind it.
+    #[must_use]
+    pub const fn is_bare_triple(&self) -> bool {
+        matches!(self.kind, TermKind::Triple) && self.triple.is_none() && self.reifier.is_none()
+    }
+
     /// A term of `kind` carrying `value` and no other column: the one spelling of
     /// the seven-field literal every constructor below starts from.
     fn bare(kind: TermKind, value: String) -> Self {

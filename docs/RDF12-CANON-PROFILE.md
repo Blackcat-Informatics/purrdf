@@ -5,20 +5,24 @@
 
 English | [简体中文](RDF12-CANON-PROFILE.zh-Hans.md)
 
-**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 4 &nbsp;·&nbsp;
+**Profile identifier:** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile version:** 3 &nbsp;·&nbsp;
 **Editor:** Patrick Audley, Blackcat Informatics® Inc.
 
 **Standing in 5.0.** The default canonical output of PurRDF is no longer this
 profile: it is the canonical line sequence of the nested-refinement labelling
 (see the [5.0 migration guide](MIGRATION-5.0.md)). This profile stays callable,
 under `purrdf_core::rdfc12`, as the read-side recompute of every digest recorded
-before 5.0, with the identifier and version below. A digest recorded under
-version 3 of a dataset holding U+FFFE or U+FFFF in a literal no longer
-recomputes, because it was taken over a spelling that does not conform to the
-canonical form of RDF 1.2 N-Quads; every other recorded digest recomputes
-unchanged. The affected readers are the PACK version 1 `rdfc_digest`,
-`rdfc10-sha256` compaction certificates, PURREMB version 1 source digests and the
-embedded `stream:contentRefoldDigest`.
+before 5.0, with the identifier and version below, and every recorded digest
+recomputes unchanged. The readers that recompute it are the PACK version 1
+`rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1 source
+digests and the embedded `stream:contentRefoldDigest`.
+
+This profile writes U+FFFE and U+FFFF in a literal raw. The canonical form of RDF
+1.2 N-Quads (section 3) writes them as `UCHAR`, since neither matches the XML 1.1
+`Char` production, and the 5.0 canonical document follows it. This profile does
+not, because the digests it recorded were taken over the raw bytes and
+recomputing them is what it is kept for. The version stays 3: every dataset
+canonicalizes to the bytes version 3 produced.
 
 Both values are readable from the library rather than only from this document —
 `purrdf_core::rdfc12::CANON_PROFILE_ID` and `purrdf_core::rdfc12::CANON_PROFILE_VERSION` — so a
@@ -499,10 +503,6 @@ diagnostic message — does not increment it. That restraint is what makes the
 number worth pinning: a version that changed on every release would tell a
 consumer nothing.
 
-| Version | Change | Inputs whose output moves |
-|---|---|---|
-| 4 | U+FFFE and U+FFFF in a literal are written as `\uFFFE` and `\uFFFF` (N-Quads 1.2 §3: a character outside XML 1.1 `Char` is a `UCHAR`) | datasets holding either character in a literal; no other |
-
 ## 8. Normative vector corpus
 
 The corpus lives at `vectors/rdf12-canon/` and is **frozen**: every payload byte is
@@ -532,7 +532,7 @@ artifact it actually linked:
 | Field | Source |
 |---|---|
 | profile id | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `4` |
+| profile version | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
 | presentation | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID` (→ `overlay`, version `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`) or `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID` (→ `flat-assertion`, version `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`) (§3.3) |
 | hash algorithm | `CanonHash::Sha256` or `CanonHash::Sha384` (§2) |
 | corpus digest | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST` (§8) |
