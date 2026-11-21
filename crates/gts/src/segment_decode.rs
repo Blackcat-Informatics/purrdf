@@ -192,8 +192,9 @@ pub trait ResolvedSink {
     /// Iterative resolution no longer calls it.
     fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
-    /// Build the error for a quoted-triple term that states neither its own
-    /// `(s, p, o)` nor a reifier id to resolve them through.
+    /// Legacy unbound-triple error factory, retained for source compatibility.
+    /// A triple term that states neither its own `(s, p, o)` nor a reifier id
+    /// interns as a blank node (§7.3), and resolution no longer calls it.
     fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
     /// Build the error for a triple term whose reifier no `reifies` event ever

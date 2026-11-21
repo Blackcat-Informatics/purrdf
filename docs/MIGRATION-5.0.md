@@ -687,24 +687,38 @@ lost or retyped a public field, and none of these enums lost a variant.
 
 A `k:3` term that carries neither `tt` nor `rf` states no triple. GTS section 7.3
 says a reader keeps such a term as a distinct term, and a projection renders it
-as a fresh blank node. This also holds for a term whose `rf` names its own id,
-because the reader diagnoses that `rf` and treats it as absent.
+as a fresh blank node.
 
-Every public path now projects it as the blank node `_:unbound_triple_{id}`,
-the node a term that reaches itself already projects as: `GtsFoldView`,
+Every public path projects it as the blank node `_:unbound_triple_{id}`, the
+node a term that reaches itself projects as: `GtsFoldView`,
 `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`,
-and the streaming importers (`import_gts_events` and its dictionary and blob
-forms). In 4.0.2 and in earlier 5.0 builds only the fold view did; the dataset
-bridges refused the file with `native-codec-unbound-triple-term` or
-`gts-unbound-triple-term`, and the streaming importers with
-`rdf-ir-unbound-triple-term`. Within one projection the same term id names one
-blank node and a second bare term names another.
+the streaming importers (`import_gts_events` and its dictionary and blob forms)
+and `export_gts_rdf_nquads_with_dictionary`. The term is accepted wherever a
+blank node is legal: as a quad subject, as the subject of a reified triple,
+inside a `tt` component and as an annotation value. Within one projection the
+same term id names one blank node and a second bare term names another.
 
-A consumer that matched on the three refusal codes to detect such a file no
-longer sees them for a GTS file. It inspects the term instead, through
-`purrdf_gts::model::Term::is_bare_triple`. The codes remain for a
-caller-assembled serialization graph or event stream that bypasses the
-readers. A writer that wants the term to state a triple writes `tt`.
+A term whose `rf` names its own id is read as having no `rf`, because the
+reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView` and
+`dataset_from_gts_graph` then project it as a bare term. `import_gts_events` and
+its dictionary and blob forms refuse the file with `rdf-ir-gts-fold-diagnostic`,
+because they fail on any reader diagnostic.
+
+`native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
+`rdf-ir-unbound-triple-term` remain defined for API compatibility. No public
+input produces them. A consumer that matched them to detect a bare term
+inspects the term instead, through `purrdf_gts::model::Term::is_bare_triple`. A
+writer that wants the term to state a triple writes `tt`.
+
+Two limits apply to the projection:
+
+- The projected node is labelled `unbound_triple_N`. A document blank node
+  with that label in the same scope denotes the same node as the projected one.
+  A term that reaches itself has the same label.
+- A term whose `rf` names a reifier with no `reifies` row is not a bare term.
+  `GtsFoldView` renders it as a blank node, while `dataset_from_gts_graph`,
+  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
+  and the exporter refuse it with a missing-reifier-binding code.
 
 ## Hosts
 
