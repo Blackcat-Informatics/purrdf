@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-11-20T23:14:42-06:00\n"
+"POT-Creation-Date: 2026-11-21T10:41:30-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -3342,25 +3342,25 @@ msgstr "`__init__.pyi`"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'lpg-csv'"
 msgstr "'lpg-csv'"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'neo4j-csv'"
 msgstr "'neo4j-csv'"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'open-cypher'"
 msgstr "'open-cypher'"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'graphml'"
 msgstr "'graphml'"
 
@@ -3442,111 +3442,111 @@ msgstr "'commit-package'"
 msgid "'abort-package'"
 msgstr "'abort-package'"
 
-#: src/reference/python-api-signatures.md:452
+#: src/reference/python-api-signatures.md:460
 msgid "'budget'"
 msgstr "'budget'"
 
-#: src/reference/python-api-signatures.md:452
+#: src/reference/python-api-signatures.md:460
 msgid "'stopped'"
 msgstr "'stopped'"
 
-#: src/reference/python-api-signatures.md:452
+#: src/reference/python-api-signatures.md:460
 msgid "'refused'"
 msgstr "'refused'"
 
-#: src/reference/python-api-signatures.md:452
-#: src/reference/python-api-signatures.md:453
+#: src/reference/python-api-signatures.md:460
+#: src/reference/python-api-signatures.md:461
 msgid "'unknown'"
 msgstr "'unknown'"
 
-#: src/reference/python-api-signatures.md:453
+#: src/reference/python-api-signatures.md:461
 msgid "'certain'"
 msgstr "'certain'"
 
-#: src/reference/python-api-signatures.md:453
+#: src/reference/python-api-signatures.md:461
 msgid "'at-most'"
 msgstr "'at-most'"
 
-#: src/reference/python-api-signatures.md:588
+#: src/reference/python-api-signatures.md:596
 msgid "'answered'"
 msgstr "'answered'"
 
-#: src/reference/python-api-signatures.md:588
+#: src/reference/python-api-signatures.md:596
 msgid "'closure-stopped'"
 msgstr "'closure-stopped'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'json'"
 msgstr "'json'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'srj'"
 msgstr "'srj'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'sparql-json'"
 msgstr "'sparql-json'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'application/sparql-results+json'"
 msgstr "'application/sparql-results+json'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'xml'"
 msgstr "'xml'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'sparql-xml'"
 msgstr "'sparql-xml'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'application/sparql-results+xml'"
 msgstr "'application/sparql-results+xml'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'csv'"
 msgstr "'csv'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'text/csv'"
 msgstr "'text/csv'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'tsv'"
 msgstr "'tsv'"
 
-#: src/reference/python-api-signatures.md:792
+#: src/reference/python-api-signatures.md:800
 msgid "'text/tab-separated-values'"
 msgstr "'text/tab-separated-values'"
 
-#: src/reference/python-api-signatures.md:845
+#: src/reference/python-api-signatures.md:853
 msgid ""
 "\"\"\"Expand original document bytes under a closed version-one request."
 "\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:849
+#: src/reference/python-api-signatures.md:857
 msgid ""
 "\"\"\"Compact source bytes using the explicit request output context.\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:853
+#: src/reference/python-api-signatures.md:861
 msgid ""
 "\"\"\"Flatten source bytes, optionally compacting under an output context."
 "\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:857
+#: src/reference/python-api-signatures.md:865
 msgid ""
 "\"\"\"Frame separate source and frame bytes under a closed version-one "
 "request.\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:1144
+#: src/reference/python-api-signatures.md:1152
 msgid "'unbounded'"
 msgstr "'unbounded'"
 
-#: src/reference/python-api-signatures.md:1226
+#: src/reference/python-api-signatures.md:1234
 msgid ""
 "\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
 "\"\"\""
@@ -3554,15 +3554,15 @@ msgstr ""
 "\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
 "\"\"\""
 
-#: src/reference/python-api-signatures.md:1243
+#: src/reference/python-api-signatures.md:1251
 msgid "\"\"\"A SHACL validation report.\"\"\""
 msgstr "\"\"\"A SHACL validation report.\"\"\""
 
-#: src/reference/python-api-signatures.md:1268
+#: src/reference/python-api-signatures.md:1276
 msgid "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
 msgstr "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
 
-#: src/reference/python-api-signatures.md:1286
+#: src/reference/python-api-signatures.md:1294
 msgid ""
 "\"\"\"A refusal from the prepared-shapes-product admission boundary.\n"
 "\n"
@@ -3582,7 +3582,7 @@ msgstr ""
 "    not parse was never admitted). Branch on it, never on `str(exc)`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1295
+#: src/reference/python-api-signatures.md:1303
 msgid ""
 "\"\"\"A shapes graph's `owl:imports` closure is not in hand, or the "
 "`imports` table\n"
@@ -3652,7 +3652,7 @@ msgstr ""
 "    `unheld-shapes-graph-link`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1323
+#: src/reference/python-api-signatures.md:1331
 msgid ""
 "\"\"\"An immutable shape preparation, reusable across data graphs and "
 "writable as\n"
@@ -3662,7 +3662,7 @@ msgstr ""
 "writable as\n"
 "    a prepared product.\"\"\""
 
-#: src/reference/python-api-signatures.md:1339
+#: src/reference/python-api-signatures.md:1347
 msgid ""
 "\"\"\"The outcome of `PreparedShapes.validate_store_changes`: the report, "
 "plus the\n"
@@ -3682,7 +3682,7 @@ msgstr ""
 "    question it answered. Read `bounded` first.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1363
+#: src/reference/python-api-signatures.md:1371
 msgid ""
 "\"\"\"A prepared product whose envelope is verified and whose self-"
 "description is\n"
@@ -3692,84 +3692,84 @@ msgstr ""
 "description is\n"
 "    decoded — but which has NOT been admitted.\"\"\""
 
-#: src/reference/python-api-signatures.md:1445
+#: src/reference/python-api-signatures.md:1453
 msgid "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
 msgstr ""
 "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
 
-#: src/reference/python-api-signatures.md:1794
+#: src/reference/python-api-signatures.md:1802
 msgid "'empty'"
 msgstr "'empty'"
 
-#: src/reference/python-api-signatures.md:1794
+#: src/reference/python-api-signatures.md:1802
 msgid "'baseline'"
 msgstr "'baseline'"
 
-#: src/reference/python-api-signatures.md:1794
+#: src/reference/python-api-signatures.md:1802
 msgid "'dictionary'"
 msgstr "'dictionary'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'preserve'"
 msgstr "'preserve'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'latin-greek-cyrillic'"
 msgstr "'latin-greek-cyrillic'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'latin-greek-cyrillic-arabic-hebrew'"
 msgstr "'latin-greek-cyrillic-arabic-hebrew'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'latin'"
 msgstr "'latin'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'greek'"
 msgstr "'greek'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'cyrillic'"
 msgstr "'cyrillic'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'hebrew'"
 msgstr "'hebrew'"
 
-#: src/reference/python-api-signatures.md:1798
+#: src/reference/python-api-signatures.md:1806
 msgid "'arabic'"
 msgstr "'arabic'"
 
-#: src/reference/python-api-signatures.md:1799
+#: src/reference/python-api-signatures.md:1807
 msgid "'none'"
 msgstr "'none'"
 
-#: src/reference/python-api-signatures.md:1799
+#: src/reference/python-api-signatures.md:1807
 msgid "'english'"
 msgstr "'english'"
 
-#: src/reference/python-api-signatures.md:1800
+#: src/reference/python-api-signatures.md:1808
 msgid "'plain'"
 msgstr "'plain'"
 
-#: src/reference/python-api-signatures.md:1800
+#: src/reference/python-api-signatures.md:1808
 msgid "'html-text'"
 msgstr "'html-text'"
 
-#: src/reference/python-api-signatures.md:1800
+#: src/reference/python-api-signatures.md:1808
 msgid "'html-attribute'"
 msgstr "'html-attribute'"
 
-#: src/reference/python-api-signatures.md:1803
+#: src/reference/python-api-signatures.md:1811
 msgid "'lexical'"
 msgstr "'lexical'"
 
-#: src/reference/python-api-signatures.md:1803
+#: src/reference/python-api-signatures.md:1811
 msgid "'han'"
 msgstr "'han'"
 
-#: src/reference/python-api-signatures.md:1815
+#: src/reference/python-api-signatures.md:1823
 msgid ""
 "\"\"\"A refusal from the plan-document boundary: `certify_plan`, "
 "`explain_depth`.\n"
@@ -3805,17 +3805,17 @@ msgstr ""
 "    `unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1842
-#: src/reference/python-api-signatures.md:1854
-#: src/reference/python-api-signatures.md:1858
+#: src/reference/python-api-signatures.md:1850
+#: src/reference/python-api-signatures.md:1862
+#: src/reference/python-api-signatures.md:1866
 msgid "'turtle'"
 msgstr "'turtle'"
 
-#: src/reference/python-api-signatures.md:1878
+#: src/reference/python-api-signatures.md:1886
 msgid "`geo.pyi`"
 msgstr "`geo.pyi`"
 
-#: src/reference/python-api-signatures.md:1885
+#: src/reference/python-api-signatures.md:1893
 msgid ""
 "\"\"\"Immutable strict native profile; omitted input selects standard "
 "CRS84.\"\"\""
@@ -3823,13 +3823,13 @@ msgstr ""
 "\"\"\"Immutable strict native profile; omitted input selects standard "
 "CRS84.\"\"\""
 
-#: src/reference/python-api-signatures.md:1894
+#: src/reference/python-api-signatures.md:1902
 msgid ""
 "\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
 msgstr ""
 "\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
 
-#: src/reference/python-api-signatures.md:1900
+#: src/reference/python-api-signatures.md:1908
 msgid ""
 "\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
 "refusal.\"\"\""
@@ -3837,7 +3837,7 @@ msgstr ""
 "\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
 "refusal.\"\"\""
 
-#: src/reference/python-api-signatures.md:1910
+#: src/reference/python-api-signatures.md:1918
 msgid ""
 "\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
 "\"\"\""
@@ -3845,7 +3845,7 @@ msgstr ""
 "\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
 "\"\"\""
 
-#: src/reference/python-api-signatures.md:1913
+#: src/reference/python-api-signatures.md:1921
 msgid ""
 "\"\"\"Search through the same native comparison law and refusal channel."
 "\"\"\""
@@ -27266,10 +27266,9 @@ msgstr ""
 
 #: src/project/conformance.md:47
 msgid ""
-"frozen cross-language vectors — all 39 fold byte-exactly into their committed "
-"expectation"
-msgstr ""
-"冻结的跨语言向量——39 个全部按字节精确折叠为其已提交的预期结果"
+"frozen cross-language vectors — all 39 fold byte-exactly into their "
+"committed expectation"
+msgstr "冻结的跨语言向量——39 个全部按字节精确折叠为其已提交的预期结果"
 
 #: src/project/conformance.md:48
 msgid "rdflib drop-in"
@@ -28416,14 +28415,18 @@ msgstr "产生这些事件的流不一致；请重新生成该流。"
 msgid "`native-codec-unbound-triple-term`"
 msgstr "`native-codec-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:69
-msgid "A triple term names neither its components nor a reifier."
-msgstr "某个三元组项既未给出其组成部分，也未指明具体化节点。"
+#: src/project/diagnostic-codes.md:69 src/project/diagnostic-codes.md:122
+#: src/project/diagnostic-codes.md:135
+msgid ""
+"Retained for API compatibility; no public input produces it. A triple term "
+"that names neither its components nor a reifier projects as a fresh blank "
+"node."
+msgstr ""
 
 #: src/project/diagnostic-codes.md:69 src/project/diagnostic-codes.md:122
 #: src/project/diagnostic-codes.md:135
-msgid "Give the triple term its components or a reifier."
-msgstr "为该三元组项给出其组成部分或具体化节点。"
+msgid "None."
+msgstr ""
 
 #: src/project/diagnostic-codes.md:71
 msgid ""
@@ -28767,10 +28770,6 @@ msgstr "导入的三元组项嵌套超出了深度上限。"
 msgid "`rdf-ir-unbound-triple-term`"
 msgstr "`rdf-ir-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:122
-msgid "An imported triple term names neither its components nor a reifier."
-msgstr "某个导入的三元组项既未给出其组成部分，也未指明具体化节点。"
-
 #: src/project/diagnostic-codes.md:124
 msgid "`gts-*` and `rdf-*` — GTS graph resolution, verification and writing"
 msgstr "`gts-*` 与 `rdf-*`——GTS 图的解析、验证与写出"
@@ -28834,10 +28833,6 @@ msgstr "某个 GTS 三元组项引用了一个该图未绑定的具体化节点�
 #: src/project/diagnostic-codes.md:135
 msgid "`gts-unbound-triple-term`"
 msgstr "`gts-unbound-triple-term`"
-
-#: src/project/diagnostic-codes.md:135
-msgid "A GTS triple term names neither its own components nor a reifier."
-msgstr "某个 GTS 三元组项既未给出其自身的组成部分，也未指明具体化节点。"
 
 #: src/project/diagnostic-codes.md:136
 msgid "`gts-self-reaching-term`"
@@ -30308,6 +30303,18 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid "A triple term names neither its components nor a reifier."
+#~ msgstr "某个三元组项既未给出其组成部分，也未指明具体化节点。"
+
+#~ msgid "Give the triple term its components or a reifier."
+#~ msgstr "为该三元组项给出其组成部分或具体化节点。"
+
+#~ msgid "An imported triple term names neither its components nor a reifier."
+#~ msgstr "某个导入的三元组项既未给出其组成部分，也未指明具体化节点。"
+
+#~ msgid "A GTS triple term names neither its own components nor a reifier."
+#~ msgstr "某个 GTS 三元组项既未给出其自身的组成部分，也未指明具体化节点。"
 
 #~ msgid ""
 #~ "Every functional version of every crate in the 37-crate release set is "

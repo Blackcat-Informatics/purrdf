@@ -192,8 +192,9 @@ pub trait ResolvedSink {
     /// Iterative resolution no longer calls it.
     fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
-    /// Build the error for a quoted-triple term that states neither its own
-    /// `(s, p, o)` nor a reifier id to resolve them through.
+    /// Legacy unbound-triple error factory, retained for source compatibility.
+    /// A triple term that states neither its own `(s, p, o)` nor a reifier id
+    /// interns as a blank node (§7.3), and resolution no longer calls it.
     fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
     /// Build the error for a triple term whose reifier no `reifies` event ever
@@ -692,10 +693,12 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                         .err_dangling_term(segment_index, current, STATE_DROPPED));
                 }
             }
-            let degraded = held.component.degrades();
             let Some(term) = held.term.as_deref() else {
                 return Err(self.sink.err_dangling_term(segment_index, current, role));
             };
+            // A term that reaches itself and a bare triple term state no triple
+            // (§7.3): both intern as the fresh blank node of an unbound term.
+            let degraded = held.component.degrades() || term.is_bare_triple();
             let dependency = match term.kind {
                 TermKind::Literal if held.next == 0 => {
                     term.datatype.map(|id| (id, "literal datatype"))
@@ -825,9 +828,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             // that id may now bind several triples, in which case its FIRST
             // binding is the one such a term can mean (the reader flags the
             // ambiguity as `ConflictingReifier`).
-            // A triple term that reaches itself states no triple (GTS-SPEC
-            // §7.3): it interns as the fresh blank node an unbound triple term
-            // is, named by its own id.
+            // A triple term that reaches itself, or carries neither `tt` nor
+            // `rf`, states no triple (GTS-SPEC §7.3): it interns as the fresh
+            // blank node an unbound triple term is, named by its own id.
             TermKind::Triple if degraded => self.sink.intern_blank(
                 segment_index,
                 gts_id,
@@ -848,7 +851,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
 
     /// Locate components without resolving them. Explicit components take
     /// precedence; otherwise the first binding of the reifier id its `rf` names
-    /// is a lookup, not a term edge. With neither, the term states no triple.
+    /// is a lookup, not a term edge. A bare term states no triple and interns as
+    /// a blank node, so the caller never asks for one; the unbound error is the
+    /// guard for a caller that does.
     fn triple_components(
         &mut self,
         segment_index: u64,

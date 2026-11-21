@@ -66,7 +66,7 @@ and a grammar that forbids relative references; their remedies differ.
 | `native-codec-predicate-not-iri` | A term in an IRI-only position (the predicate) is not an IRI. | Use an IRI predicate. |
 | `native-codec-reifier-not-triple` | A reifier binds something other than a triple term. | Bind the reifier to a triple term. |
 | `native-codec-term-out-of-range` | A term id in the event stream is outside the range the stream introduced. | The producing stream is inconsistent; regenerate it. |
-| `native-codec-unbound-triple-term` | A triple term names neither its components nor a reifier. | Give the triple term its components or a reifier. |
+| `native-codec-unbound-triple-term` | Retained for API compatibility; no public input produces it. A triple term that names neither its components nor a reifier projects as a fresh blank node. | None. |
 
 The last nine arise when the codec lane consumes term events rather than
 text — a GTS graph being resolved through the codec surface — and mirror the
@@ -119,7 +119,7 @@ whose terms do not form a well-formed dataset.
 | `rdf-ir-literal-datatype-not-iri` | An imported literal's datatype resolves to a non-IRI. | Give the literal an IRI datatype. |
 | `rdf-ir-missing-reifier-binding` | An imported triple term references a reifier with no recorded binding. | Bind the reifier in the container. |
 | `rdf-ir-term-nesting-limit` | Imported triple-term nesting exceeds the depth limit. | Flatten the nesting. |
-| `rdf-ir-unbound-triple-term` | An imported triple term names neither its components nor a reifier. | Give the triple term its components or a reifier. |
+| `rdf-ir-unbound-triple-term` | Retained for API compatibility; no public input produces it. A triple term that names neither its components nor a reifier projects as a fresh blank node. | None. |
 
 ## `gts-*` and `rdf-*` — GTS graph resolution, verification and writing
 
@@ -132,7 +132,7 @@ whose terms do not form a well-formed dataset.
 | `gts-direction-without-language` | A GTS literal carries a base direction but no language tag. | Add a language tag, or drop the direction. |
 | `gts-invalid-direction` | A GTS literal base direction is neither `ltr` nor `rtl`. | Use `ltr` or `rtl`. |
 | `gts-missing-reifier-binding` | A GTS triple term references a reifier the graph does not bind. | Bind the reifier in the container. |
-| `gts-unbound-triple-term` | A GTS triple term names neither its own components nor a reifier. | Give the triple term its components or a reifier. |
+| `gts-unbound-triple-term` | Retained for API compatibility; no public input produces it. A triple term that names neither its components nor a reifier projects as a fresh blank node. | None. |
 | `gts-self-reaching-term` | A literal datatype chain resolves through itself, so no walk of its components can terminate. | Remove the cycle. |
 | `gts-term-nesting-limit` | GTS term nesting exceeds the depth limit. | Flatten the nesting. |
 | `gts-fold-diagnostic` | The GTS fold reported one or more diagnostics. | Inspect the fold diagnostics listed in the detail. |
