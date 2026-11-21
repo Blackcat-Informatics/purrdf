@@ -1552,7 +1552,33 @@ pub enum DictSelection {
 /// its zstd level was INFERRED from the profile string (`profile == "dist"`),
 /// so level 12 was unreachable under any other profile no matter what the
 /// caller wanted. Both are now caller-stated data.
+///
+/// The struct is `#[non_exhaustive]`: build it with [`Self::undicted`] or
+/// [`Self::dist_default`] and assign the public fields the plan needs, so a
+/// field added later does not break the caller.
+///
+/// ```
+/// use purrdf_rdf::gts_compose::MediumPlan;
+///
+/// let mut plan = MediumPlan::undicted(None);
+/// plan.zstd_level = Some(12);
+/// assert_eq!(plan.zstd_level, Some(12));
+/// ```
+///
+/// A struct literal outside this crate is refused:
+///
+/// ```compile_fail
+/// use std::collections::BTreeMap;
+/// use purrdf_rdf::gts_compose::MediumPlan;
+///
+/// let _ = MediumPlan {
+///     dicts: Vec::new(),
+///     assignment: BTreeMap::new(),
+///     zstd_level: None,
+/// };
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MediumPlan {
     /// Named in-band dictionaries pinned in the header `"dct"` map (§5).
     pub dicts: Vec<(String, Vec<u8>)>,
@@ -2533,11 +2559,8 @@ mod tests {
 
     #[test]
     fn a_populated_medium_plan_requires_a_total_assignment() {
-        let plan = MediumPlan {
-            dicts: vec![("docs".to_string(), vec![1, 2, 3])],
-            assignment: BTreeMap::new(),
-            zstd_level: Some(12),
-        };
+        let mut plan = MediumPlan::undicted(Some(12));
+        plan.dicts = vec![("docs".to_string(), vec![1, 2, 3])];
         let err = plan
             .select(&FrameSlot::Snapshot)
             .expect_err("a populated plan may not omit a frame slot");
@@ -2560,20 +2583,18 @@ mod tests {
         let refs: Vec<&[u8]> = samples.iter().map(Vec::as_slice).collect();
         let dict = purrdf_gts::dict::raw_content_dict(&refs, 1024).expect("dictionary builds");
         let rep = "purrdf:doc/guide".to_string();
-        let plan = MediumPlan {
-            dicts: vec![("docs".to_string(), dict)],
-            assignment: BTreeMap::from([
-                (
-                    FrameSlot::Blob(rep.clone()),
-                    DictSelection::Named("docs".to_string()),
-                ),
-                (
-                    FrameSlot::Snapshot,
-                    DictSelection::Named("docs".to_string()),
-                ),
-            ]),
-            zstd_level: Some(12),
-        };
+        let mut plan = MediumPlan::undicted(Some(12));
+        plan.dicts = vec![("docs".to_string(), dict)];
+        plan.assignment = BTreeMap::from([
+            (
+                FrameSlot::Blob(rep.clone()),
+                DictSelection::Named("docs".to_string()),
+            ),
+            (
+                FrameSlot::Snapshot,
+                DictSelection::Named("docs".to_string()),
+            ),
+        ]);
         let bytes = emit_gts_owned(
             builder,
             "dist",

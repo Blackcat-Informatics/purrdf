@@ -580,7 +580,12 @@ impl OperationPoint {
 }
 
 /// Original mathematical model; constants in interoperability laws are exact decimals.
+///
+/// The enum is `#[non_exhaustive]`: the set of models grows with the geodesy
+/// data, so a `match` outside this crate carries a wildcard arm that refuses
+/// a model it cannot handle with a typed error.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum OperationModel {
     /// Published rational/harmonic GCJ interoperability equations. Applicability is mandatory.
     GcjRationalHarmonicV1(Applicability),

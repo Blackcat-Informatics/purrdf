@@ -131,6 +131,12 @@ pub enum RemoteError {
     /// Without `SILENT` this is [`EvalError::ServiceUnconfigured`], the same error as
     /// evaluating a `SERVICE` with no source at all.
     Unconfigured(String),
+    /// The engine was given no remote query source at all, so there was nowhere to
+    /// send the request. Raised by the engine itself, never by a resolver.
+    ///
+    /// Without `SILENT` this is [`EvalError::ServiceUnconfigured`], the same error as
+    /// a source answering [`Self::Unconfigured`].
+    NoSource,
     /// A [`ServiceResolver`] refused the service because its per-service policy withheld
     /// a capability — see [`crate::service`].
     ///
@@ -226,6 +232,7 @@ impl purrdf_hash::error::StructuredError for RemoteError {
         Decode(message) => "service-decode" { "message" => Message(message) },
         Disabled => "service-disabled" {},
         Unconfigured(message) => "service-unconfigured" { "message" => Message(message) },
+        NoSource => "service-no-source" {},
         Denied(error) => "service-denied" { "cause" => Cause(error) },
         HostDenied { endpoint, message } => "service-host-denied" {
             "endpoint" => Iri(endpoint), "message" => Message(message),
@@ -253,6 +260,7 @@ impl core::fmt::Display for RemoteError {
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
             Self::Unconfigured(m) => write!(f, "{m}"),
+            Self::NoSource => write!(f, "no remote query source configured"),
             Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::HostDenied { endpoint, message } => {
                 write!(f, "<{endpoint}>: the host denied the request: {message}")
@@ -736,10 +744,10 @@ impl RetainedServiceFailure {
                 EvalError::ServiceHostFault { endpoint, message }
             }
             RemoteError::SourceRead(message) => EvalError::SourceRead(message),
-            RemoteError::Unconfigured(message) => {
-                EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}"))
+            cause @ (RemoteError::Unconfigured(_) | RemoteError::NoSource) => {
+                EvalError::service_unconfigured(endpoint, cause)
             }
-            other => EvalError::remote(format!("SERVICE <{endpoint}>: {other}")),
+            cause => EvalError::remote(endpoint, cause),
         }
     }
     /// Borrow the original invocation error without detaching its owner.
@@ -766,7 +774,9 @@ impl RetainedServiceFailure {
         match self.error.error() {
             RemoteError::Decode(_) => purrdf_core::SilencedKind::Decode,
             RemoteError::Disabled => purrdf_core::SilencedKind::Disabled,
-            RemoteError::Unconfigured(_) => purrdf_core::SilencedKind::Unconfigured,
+            RemoteError::Unconfigured(_) | RemoteError::NoSource => {
+                purrdf_core::SilencedKind::Unconfigured
+            }
             RemoteError::Denied(_) => purrdf_core::SilencedKind::Denied,
             RemoteError::HostDenied { .. } => purrdf_core::SilencedKind::HostDenied,
             RemoteError::HostFault { .. } => purrdf_core::SilencedKind::Fault,
@@ -1780,7 +1790,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
                 &workspace,
             )?)
         } else {
-            EvalError::ServiceUnconfigured(message.to_string())
+            EvalError::service_unconfigured(endpoint, RemoteError::NoSource)
         };
         return failed_invocation(
             endpoint,
@@ -2939,7 +2949,7 @@ mod tests {
         // The neighbour: the same clause without SILENT is the unconfigured error.
         let (result, silenced) = run_recorded(&local(), None, &query.replace("SILENT ", ""));
         assert!(
-            matches!(result, Err(EvalError::ServiceUnconfigured(_))),
+            matches!(result, Err(EvalError::ServiceUnconfigured { .. })),
             "{result:?}"
         );
         assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
@@ -3129,10 +3139,11 @@ mod tests {
             let error = result.expect_err(name);
             match name {
                 "unconfigured" => {
-                    assert!(
-                        matches!(error, EvalError::ServiceUnconfigured(_)),
-                        "{error:?}"
-                    );
+                    let EvalError::ServiceUnconfigured { endpoint, cause } = &error else {
+                        panic!("{error:?}");
+                    };
+                    assert_eq!(endpoint, "http://example.org/unconfigured");
+                    assert!(matches!(cause, RemoteError::Unconfigured(_)), "{cause:?}");
                 }
                 "denied" => assert!(matches!(error, EvalError::ServiceDenied(_)), "{error:?}"),
                 "host-denied" => {
@@ -3141,7 +3152,18 @@ mod tests {
                         "{error:?}"
                     );
                 }
-                _ => assert!(matches!(error, EvalError::Remote(_)), "{error:?}"),
+                _ => {
+                    let EvalError::Remote { endpoint, cause } = &error else {
+                        panic!("{error:?}");
+                    };
+                    assert_eq!(endpoint, &format!("http://example.org/{name}"));
+                    let expected = match name {
+                        "transport" => matches!(cause, RemoteError::Transport(_)),
+                        "decode" => matches!(cause, RemoteError::Decode(_)),
+                        _ => matches!(cause, RemoteError::Disabled),
+                    };
+                    assert!(expected, "{name}: {cause:?}");
+                }
             }
             assert_eq!(
                 kinds(&silenced),
@@ -3255,7 +3277,7 @@ mod tests {
             let (result, _) =
                 run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
             assert!(
-                matches!(result, Err(EvalError::Remote(_))),
+                matches!(result, Err(EvalError::Remote { .. })),
                 "{body}: {result:?}"
             );
         }
@@ -3385,7 +3407,10 @@ mod tests {
             );
             let (result, _) =
                 run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
-            assert!(matches!(result, Err(EvalError::Remote(_))), "{result:?}");
+            assert!(
+                matches!(result, Err(EvalError::Remote { .. })),
+                "{result:?}"
+            );
         }
     }
 
@@ -3425,7 +3450,7 @@ mod tests {
              SERVICE <http://example.org/missing> { ?o <http://example.org/name> ?n } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Remote(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Remote { .. }), "got {err:?}");
     }
 
     // ── LATERAL variable-endpoint SERVICE forwarding counts ───────────────────

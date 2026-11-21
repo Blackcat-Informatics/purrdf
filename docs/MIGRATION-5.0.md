@@ -46,6 +46,9 @@ digests before opening a 4.x artifact.
 - Loss entries carry typed `site`, `subject` and `detail` members in place of
   `location`, and the runtime loss ledger JSON is schema version 2 (see "Loss
   occurrences").
+- `MediumPlan` and `OperationModel` are `#[non_exhaustive]`, and
+  `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the endpoint and
+  a typed `RemoteError` (see "Public types that changed shape").
 
 ## The canonical line sequence
 
@@ -484,6 +487,26 @@ instead of `u64`, and the payload of `IndexBindingError::Source` is two
 
 No canonicalization or compaction-certificate struct with public fields gained,
 lost or retyped a public field, and none of these enums lost a variant.
+
+Types made `#[non_exhaustive]` so that a later addition is not a breaking change.
+No field, variant, constructor or emitted byte changed:
+
+| Type | A 4.x caller |
+|---|---|
+| `purrdf_rdf::gts_compose::MediumPlan` | A struct literal outside the crate no longer compiles. Build the plan with `MediumPlan::undicted` or `MediumPlan::dist_default` and assign the public fields it needs (`plan.zstd_level = Some(12)`). A pattern that names every field adds `..` |
+| `purrdf_geo_kernel::operation::OperationModel` | An exhaustive `match` adds a wildcard arm. Refuse a model the caller cannot handle with a typed error, as `purrdf-validate` does with `GeoError::Unsupported` |
+
+Variant payloads of `purrdf_sparql_eval::EvalError` that changed. The `Display`
+text and the diagnostic codes of both are unchanged for every existing case:
+
+| Variant | 4.x payload | 5.0 payload | A 4.x caller |
+|---|---|---|---|
+| `EvalError::Remote` | `String` | `{ endpoint: String, cause: RemoteError }` | Match `Remote { endpoint, cause }` or `Remote { .. }`, and read the failure from `cause`. `EvalError::remote` takes the endpoint and the `RemoteError`, in place of a displayable message. The structured visitor reports `endpoint` as an IRI and `cause` as the nested `RemoteError` with its own fields |
+| `EvalError::ServiceUnconfigured` | `String` | `{ endpoint: String, cause: RemoteError }` | As above. `cause` is `RemoteError::Unconfigured` when a source declined the endpoint, and the new `RemoteError::NoSource` when the engine was given no source at all. Construct it with `EvalError::service_unconfigured` |
+
+`RemoteError::NoSource` is a new variant of the already `#[non_exhaustive]`
+`RemoteError`; a host that matches the enum needs no change where a wildcard arm
+exists; the engine raises it itself.
 
 ## Containers
 

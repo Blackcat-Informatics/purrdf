@@ -4,7 +4,8 @@
 //! Explicit offline operation models and chains; no zones, epochs or heights inferred.
 
 use purrdf_geo_kernel::{
-    CoordinateOperation, OperationChain, OperationPoint, PreparationBudget, PreparedEllipsoid, Rat,
+    CoordinateOperation, GeoError, OperationChain, OperationPoint, PreparationBudget,
+    PreparedEllipsoid, Rat,
     operation::{
         Applicability, BilinearGrid, BilinearGridInverse, CoordinateUnit, GridNode,
         HelmertParameters, HelmertRates, Hemisphere, MetricSourceDomain, OperationModel,
@@ -768,6 +769,11 @@ fn model_json(
                 source_domain_json(&parameters.source_domain, decode)?,
                 decode.storage.memory(),
             )?
+        }
+        _ => {
+            return Err(GeoCallError::Engine(GeoError::unsupported(
+                "coordinate-operation model has no response encoding",
+            )));
         }
     };
     Ok(fields.into())
