@@ -318,7 +318,7 @@ pub(super) fn record_pointer_loss(
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Member<'a> {
     entity: &'a str,
-    member: Option<&'static str>,
+    name: Option<&'static str>,
     position: Option<usize>,
 }
 
@@ -327,7 +327,7 @@ impl<'a> Member<'a> {
     pub(super) const fn entity(entity: &'a str) -> Self {
         Self {
             entity,
-            member: None,
+            name: None,
             position: None,
         }
     }
@@ -336,7 +336,7 @@ impl<'a> Member<'a> {
     pub(super) const fn new(entity: &'a str, member: &'static str) -> Self {
         Self {
             entity,
-            member: Some(member),
+            name: Some(member),
             position: None,
         }
     }
@@ -353,7 +353,7 @@ impl<'a> Member<'a> {
     /// position as details, then `value` when the loss concerns a literal.
     pub(super) fn occurrence(self, value: Option<&ResearchText>) -> (LossSubject, Vec<LossDetail>) {
         let mut detail = Vec::new();
-        if let Some(member) = self.member {
+        if let Some(member) = self.name {
             detail.push(LossDetail::identifier("member", member));
         }
         if let Some(position) = self.position {

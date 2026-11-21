@@ -67,7 +67,10 @@ fn term_dict<'py>(py: Python<'py>, term: &LossTerm) -> PyResult<Bound<'py, PyDic
             dict.set_item("lexical", lexical)?;
             dict.set_item("datatype", datatype)?;
             dict.set_item("language", language)?;
-            dict.set_item("direction", direction.map(|direction| direction.as_str()))?;
+            dict.set_item(
+                "direction",
+                direction.map(purrdf_core::RdfTextDirection::as_str),
+            )?;
         }
         LossTerm::Triple {
             subject,
