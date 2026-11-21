@@ -702,6 +702,8 @@ pub(super) fn collect<T>(ctx: &mut Ctx<'_>, values: impl IntoIterator<Item = T>)
 pub(super) enum Fact<'a> {
     /// A named identifier: a property key, a pattern source, a path's text.
     Identifier(&'static str, &'a str),
+    /// A named count: a byte limit.
+    Count(&'static str, u64),
     /// A named IRI.
     Iri(&'static str, &'a str),
     /// A named shapes-graph term.
@@ -709,9 +711,10 @@ pub(super) enum Fact<'a> {
 }
 
 impl Fact<'_> {
-    fn detail(self) -> LossDetail {
+    pub(super) fn detail(self) -> LossDetail {
         match self {
             Self::Identifier(name, text) => LossDetail::identifier(name, text),
+            Self::Count(name, count) => LossDetail::count(name, count),
             Self::Iri(name, iri) => LossDetail::term(name, LossTerm::Iri(iri.to_owned())),
             Self::Term(name, term) => LossDetail::term(name, term.to_loss_term()),
         }
@@ -720,6 +723,7 @@ impl Fact<'_> {
     fn admit(self, memory: &mut Memory<'_, ToolPolicy>) -> Result<LossDetail, StorageError> {
         Ok(match self {
             Self::Identifier(name, text) => LossDetail::identifier(name, memory.string(text)?),
+            Self::Count(name, count) => LossDetail::count(name, count),
             Self::Iri(name, iri) => LossDetail::term(name, LossTerm::Iri(memory.string(iri)?)),
             Self::Term(name, term) => LossDetail::term(name, admit_term(term, memory)?),
         })

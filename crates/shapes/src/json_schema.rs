@@ -4555,14 +4555,13 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
                         error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
                         | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
                     ) => {
-                        let reason = tool_arguments::format!(ctx; "{error}");
                         ctx.record(
                             "sh:pattern",
                             shape_iri.term,
                             "the pattern has no ECMA-262 translation",
                             &[
                                 tool_arguments::Fact::Identifier("pattern", regex),
-                                tool_arguments::Fact::Identifier("reason", &reason),
+                                pattern_error_fact(&error),
                             ],
                         );
                         tool_arguments::push!(ctx; &mut comments,tool_arguments::format!(ctx;
@@ -5037,6 +5036,23 @@ const fn constraint_term(constraint: &Constraint) -> &'static str {
         Constraint::SomeValue(_) => "sh:someValue",
         Constraint::UniqueValuesFor { .. } => "sh:uniqueValuesFor",
         Constraint::Component { .. } => "sh:ConstraintComponent",
+    }
+}
+
+/// The typed fact for a pattern that has no ECMA-262 translation: the
+/// unsupported construct, or the byte limit the translation exceeds.
+fn pattern_error_fact(error: &purrdf_core::xsd_regex::Ecma262Error) -> tool_arguments::Fact<'_> {
+    use purrdf_core::xsd_regex::Ecma262Error;
+    match error {
+        Ecma262Error::Unsupported(construct) => {
+            tool_arguments::Fact::Identifier("unsupported-construct", construct)
+        }
+        Ecma262Error::TooLarge => tool_arguments::Fact::Count(
+            "translated-byte-limit",
+            purrdf_core::xsd_regex::MAX_TRANSLATED_BYTES as u64,
+        ),
+        // The callers match exactly these two variants before recording.
+        _ => unreachable!("only unsupported and oversized translations are recorded"),
     }
 }
 
@@ -5781,14 +5797,13 @@ fn compile_property_refs_body(
                         error @ (purrdf_core::xsd_regex::Ecma262Error::Unsupported(_)
                         | purrdf_core::xsd_regex::Ecma262Error::TooLarge),
                     ) => {
-                        let reason = tool_arguments::format!(ctx; "{error}");
                         ctx.record(
                             "sh:pattern",
                             shape_iri.term,
                             "the pattern has no ECMA-262 translation",
                             &[
                                 tool_arguments::Fact::Identifier("pattern", regex),
-                                tool_arguments::Fact::Identifier("reason", &reason),
+                                pattern_error_fact(&error),
                                 tool_arguments::Fact::Identifier("property", key),
                             ],
                         );
@@ -9899,6 +9914,63 @@ mod tests {
         assert!(
             validates(&compiled.schema_json, &node),
             "a projected instance must validate against its own sh:in enum; projected = {node}"
+        );
+    }
+
+    /// A pattern whose translation exceeds the byte limit is recorded with the
+    /// limit as a typed count, and an unsupported construct as its identifier:
+    /// no rendered error text is stored.
+    #[test]
+    fn a_pattern_without_a_translation_records_typed_facts_not_error_text() {
+        let oversized = r"\\p{L}".repeat(1000);
+        let c = compile_ttl(&format!(
+            r#"
+            meta:CodeShape a sh:NodeShape ;
+                sh:targetClass meta:Code ;
+                sh:property [ sh:path meta:code ; sh:maxCount 1 ; sh:pattern "{oversized}" ] .
+            "#
+        ));
+        let entry = c
+            .losses
+            .entries()
+            .iter()
+            .find(|entry| entry.code == "sh:pattern")
+            .expect("the untranslatable pattern is a recorded loss");
+        assert_eq!(
+            entry.detail,
+            [
+                purrdf_core::LossDetail::identifier("pattern", oversized.replace("\\\\", "\\")),
+                purrdf_core::LossDetail::count(
+                    "translated-byte-limit",
+                    purrdf_core::xsd_regex::MAX_TRANSLATED_BYTES as u64
+                ),
+                purrdf_core::LossDetail::identifier("property", "meta:code"),
+            ]
+        );
+        // The neighbouring valid pattern records no such loss.
+        let valid = compile_ttl(
+            r#"
+            meta:CodeShape a sh:NodeShape ;
+                sh:targetClass meta:Code ;
+                sh:property [ sh:path meta:code ; sh:maxCount 1 ; sh:pattern "^[A-Z]+$" ] .
+            "#,
+        );
+        assert!(
+            valid
+                .losses
+                .entries()
+                .iter()
+                .flat_map(|e| &e.detail)
+                .all(|d| d.name != "translated-byte-limit"),
+            "{:?}",
+            valid.losses
+        );
+        assert_eq!(
+            pattern_error_fact(&purrdf_core::xsd_regex::Ecma262Error::Unsupported(
+                "byte character classes"
+            ))
+            .detail(),
+            purrdf_core::LossDetail::identifier("unsupported-construct", "byte character classes")
         );
     }
 
