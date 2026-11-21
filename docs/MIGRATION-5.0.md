@@ -461,8 +461,16 @@ lost or retyped a public field, and none of these enums lost a variant.
     `VerificationError::NonCanonicalProtectedHeader` name this cause, so it is
     told from a signature that fails to verify. `cose::signature_refusal` reads
     the cause of a retained envelope. The status stays `invalid`, and
-    `Sign1Error` and `VerificationError` each gain a variant, so an exhaustive
-    `match` on either must add an arm.
+    `Sign1Error` gains a variant and becomes `#[non_exhaustive]`: an exhaustive
+    `match` on it no longer compiles and needs the new arm and a wildcard.
+    `VerificationError` was already `#[non_exhaustive]` and gains a variant, so a
+    `match` with a wildcard arm compiles unchanged.
+  - Compaction and the certify callers parse each retained envelope with the
+    same rules. A file whose signature has a header that is not deterministically
+    encoded, or an integer outside the range, is refused by compaction
+    (`CompactRefusedError::FrameCose`, or `DetachedCose` for a carried detached
+    signature) and by the certify checks at parse, where 4.0.2 compacted it and
+    carried the signature. Verify stored signed material before compacting it.
   - A header declaring its algorithm as a text string (RFC 9052 section 3.1)
     was malformed and `Invalid` with no `kid`; it is `Unverified` with its `kid`,
     as an integer algorithm this engine does not implement is.

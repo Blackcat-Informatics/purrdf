@@ -12,6 +12,7 @@
 //! bytes, so only the header decides the outcome.
 
 use purrdf_ed25519::SigningKey;
+use purrdf_gts::compact::CompactRefusedError;
 use purrdf_gts::cose::{self, SigStatus, Sign1Error};
 use purrdf_gts::{model, wire};
 use purrdf_lex::cbor::Value;
@@ -69,9 +70,9 @@ fn the_deterministic_header_verifies_valid() {
 }
 
 /// Each header below decodes to the same map `{1: -8}` or an equivalent one,
-/// yet is not the deterministic encoding of it. A signature over any of them
-/// used to verify `valid`; it is `invalid` now, with a cause a caller can read,
-/// and the cause is not the one a damaged envelope reports.
+/// yet is not the deterministic encoding of it. A valid signature over any of
+/// them is `invalid`, with a cause a caller can read, and the cause is not the
+/// one a damaged envelope reports.
 #[test]
 fn a_header_that_is_not_deterministically_encoded_is_invalid_with_its_own_cause() {
     let cases: [(&str, &[u8]); 5] = [
@@ -133,8 +134,9 @@ fn a_damaged_envelope_does_not_report_the_non_canonical_cause() {
     assert_eq!(status_of(&attached).0, "invalid");
 }
 
-/// The header grammar admits integers from -2^63 to 2^63-1. A label one past
-/// either end is malformed; the labels at the ends are accepted.
+/// The header grammar admits integers from -2^63 to 2^63-1, as a label, a value
+/// or anywhere inside a nested value. One past either end is malformed; the
+/// integers at the ends are accepted.
 #[test]
 fn a_header_integer_outside_the_signed_64_bit_range_is_malformed() {
     let over_max: &[u8] = &[0xa2, 0x01, 0x27, 0x1b, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x00];
@@ -146,6 +148,26 @@ fn a_header_integer_outside_the_signed_64_bit_range_is_malformed() {
             "{name}"
         );
     }
+    // `{1: -8, 99: [2^64-1]}` and `{1: -8, 99: {1: -2^64}}`: deterministic, with
+    // an out-of-range integer one and two levels below the top-level map.
+    let nested_array: &[u8] = &[
+        0xa2, 0x01, 0x27, 0x18, 0x63, 0x81, 0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    ];
+    let nested_map: &[u8] = &[
+        0xa2, 0x01, 0x27, 0x18, 0x63, 0xa1, 0x01, 0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff,
+    ];
+    for (name, protected) in [("nested array", nested_array), ("nested map", nested_map)] {
+        assert_eq!(
+            cose::signature_refusal(&envelope(protected)),
+            Some(Sign1Error::Malformed),
+            "{name}"
+        );
+    }
+    let nested_in_range: &[u8] = &[
+        0xa2, 0x01, 0x27, 0x18, 0x63, 0x81, 0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    ];
+    assert_eq!(cose::signature_refusal(&envelope(nested_in_range)), None);
     let max: &[u8] = &[
         0xa2, 0x01, 0x27, 0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
     ];
@@ -188,4 +210,73 @@ fn an_algorithm_that_is_neither_integer_nor_text_is_malformed() {
         cose::signature_refusal(&envelope(bytes_alg)),
         Some(Sign1Error::Malformed)
     );
+}
+
+/// A file whose signature has a protected header that is not deterministically
+/// encoded is reported by the file verifier with its own cause, and compaction
+/// refuses it; the same file with a deterministic header and a signature that
+/// does not verify is `invalid` without that cause and compacts.
+#[test]
+fn a_non_canonical_header_is_named_by_the_file_verifier_and_refused_by_compaction() {
+    use purrdf_gts::compact::detached_signature_pairs;
+    use purrdf_gts::reader::read;
+    use purrdf_gts::verify::{Keyring, VerificationError, verify_file_with_keyring};
+    use purrdf_gts::writer::{FrameOptions, Writer};
+
+    // The writer declares its transport key, so the verifier reaches the
+    // signatures; the explicit frame signature is the one under test.
+    let file = |protected: &[u8]| {
+        let mut writer = Writer::new("generic");
+        writer.sign_with(key(), "test-kid");
+        writer
+            .add_frame_with_options(
+                "meta",
+                FrameOptions {
+                    payload: Some(Value::Map(vec![("k".into(), "v".into())])),
+                    signature: Some(envelope(protected)),
+                    ..FrameOptions::default()
+                },
+            )
+            .expect("a frame with an explicit signature writes");
+        writer.into_bytes()
+    };
+    let mut keyring = Keyring::default();
+    keyring.insert("test-kid", key().verifying_key());
+
+    let non_canonical = file(&[0xa1, 0x01, 0x3b, 0, 0, 0, 0, 0, 0, 0, 0x07]);
+    let result = verify_file_with_keyring(&non_canonical, &keyring);
+    assert!(
+        result.errors.iter().any(|error| matches!(
+            error,
+            VerificationError::NonCanonicalProtectedHeader { count: 1 }
+        )),
+        "{:?}",
+        result.errors
+    );
+    assert_eq!(result.invalid, 1);
+    let graph = read(&non_canonical, true, None);
+    assert!(matches!(
+        detached_signature_pairs(&graph),
+        Err(CompactRefusedError::FrameCose(
+            Sign1Error::NonCanonicalProtectedHeader
+        ))
+    ));
+
+    // A deterministic header is not named by the cause. This envelope is signed
+    // over a fixed test frame id, not the file's frame id, so it is `invalid` for
+    // that reason alone.
+    let canonical = file(CANONICAL);
+    let result = verify_file_with_keyring(&canonical, &keyring);
+    assert_eq!(result.valid, 0, "{:?}", result.errors);
+    assert_eq!(result.invalid, 1, "{:?}", result.errors);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|error| matches!(error, VerificationError::NonCanonicalProtectedHeader { .. })),
+        "{:?}",
+        result.errors
+    );
+    let graph = read(&canonical, true, None);
+    assert_eq!(detached_signature_pairs(&graph).expect("compacts").len(), 1);
 }

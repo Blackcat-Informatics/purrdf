@@ -95,6 +95,7 @@ pub enum SigStatus {
 
 /// Structural/algorithm failure or a failed composite signing operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Sign1Error {
     /// Invalid envelope, duplicate/ambiguous headers or unsupported critical data.
     Malformed,
@@ -318,17 +319,37 @@ fn decode_protected_header(protected: &[u8]) -> Result<Value, Sign1Error> {
             _ => Sign1Error::Malformed,
         },
     )?;
-    let fits = |value: &Value| {
-        value
-            .as_integer()
-            .is_none_or(|integer| i64::try_from(integer.get()).is_ok())
-    };
-    let map = decoded.as_map().ok_or(Sign1Error::Malformed)?;
-    if map.iter().all(|(key, value)| fits(key) && fits(value)) {
+    decoded.as_map().ok_or(Sign1Error::Malformed)?;
+    if every_integer_fits(&decoded) {
         Ok(decoded)
     } else {
         Err(Sign1Error::Malformed)
     }
+}
+
+/// Whether every integer at any depth of `root`, key or value, lies in the
+/// signed 64-bit range. The walk is iterative: a header is attacker-sized.
+fn every_integer_fits(root: &Value) -> bool {
+    let mut pending = purrdf_lex::walk::WorkList::<&Value, 16>::with(root);
+    while let Some(value) = pending.pop() {
+        match value {
+            Value::Array(items) => items.iter().for_each(|item| pending.push(item)),
+            Value::Map(entries) => entries.iter().for_each(|(key, value)| {
+                pending.push(key);
+                pending.push(value);
+            }),
+            Value::Tag(_, inner) => pending.push(inner),
+            other => {
+                if other
+                    .as_integer()
+                    .is_some_and(|integer| i64::try_from(integer.get()).is_err())
+                {
+                    return false;
+                }
+            }
+        }
+    }
+    true
 }
 
 /// The structure of a detached Sign1 whose algorithm may be one this engine

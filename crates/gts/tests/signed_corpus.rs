@@ -48,14 +48,14 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
     ),
     // RFC 9052 section 3.1 makes `kid` optional, and the engine documents and
     // tests that an envelope without one verifies with a supplied key. The
-    // requirement exists only in an unreleased changelog entry and the vector.
+    // specification does not require a `kid`; only the vector does.
     (
         "sigalg-missing-kid.json",
-        "the format requires a kid only in an unreleased changelog entry; RFC 9052 makes it optional",
+        "the specification does not require a kid and RFC 9052 makes it optional",
     ),
-    // The order of the signature-length check and key resolution rests only on
-    // an unreleased changelog entry: the engine refuses a wrong-length EdDSA
-    // signature as invalid before any key is looked up.
+    // The specification does not order the signature-length check and key
+    // resolution: the engine refuses a wrong-length EdDSA signature as invalid
+    // before any key is looked up.
     (
         "sigalg-eddsa-short.json",
         "a short EdDSA signature is invalid before key resolution; the vector orders them the other way",
