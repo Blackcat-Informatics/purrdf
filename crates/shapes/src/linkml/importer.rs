@@ -2292,23 +2292,21 @@ mod tests {
                 .iter()
                 .any(|constraint| matches!(constraint, Constraint::MaxCount(4)))
         );
-        let texts: Vec<(&str, String)> = imported
+        let observed = imported
             .losses
             .entries()
             .iter()
-            .filter_map(|entry| Some((entry.code.as_ref(), entry.subject.text()?)))
-            .collect();
-        let observed = texts
-            .iter()
-            .map(|(code, text)| (*code, text.as_str()))
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert!(observed.contains(&(
             "unique-items-validation-dropped",
-            "#/classes/Person/attributes/tags/list_elements_unique"
+            crate::schema_catalog::pointer_subject(
+                "#/classes/Person/attributes/tags/list_elements_unique"
+            )
         )));
         assert!(observed.contains(&(
             "enum-metadata-dropped",
-            "#/enums/Color/permissible_values/red/title"
+            crate::schema_catalog::pointer_subject("#/enums/Color/permissible_values/red/title")
         )));
         check_ledger_sound(&imported.losses, SOURCE, TARGET).expect("sound ledger");
 
@@ -2540,14 +2538,19 @@ mod tests {
         let observed = losses
             .entries()
             .iter()
-            .filter_map(|entry| Some((entry.code.to_string(), entry.subject.text()?)))
-            .filter(|(_, subject)| subject.contains("has_member"))
+            .filter(|entry| {
+                crate::schema_catalog::pointer_tokens(&entry.subject)
+                    .is_some_and(|tokens| tokens.iter().any(|token| token == "has_member"))
+            })
+            .map(|entry| (entry.code.to_string(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert_eq!(
             observed,
             BTreeSet::from([(
                 "schema-applicator-dropped".to_owned(),
-                "#/classes/Person/attributes/color/has_member".to_owned()
+                crate::schema_catalog::pointer_subject(
+                    "#/classes/Person/attributes/color/has_member"
+                )
             )])
         );
         check_ledger_sound(&losses, SOURCE, TARGET).expect("sound ledger");
@@ -2585,15 +2588,11 @@ mod tests {
         let document = LinkmlDocument::from_value(value).expect("extended native document");
         let imported = import_document(&document, &config(), None).expect("ledgered import");
         assert_eq!(imported.shapes.node_shapes.len(), 3);
-        let texts: Vec<(&str, String)> = imported
+        let observed = imported
             .losses
             .entries()
             .iter()
-            .filter_map(|entry| Some((entry.code.as_ref(), entry.subject.text()?)))
-            .collect();
-        let observed = texts
-            .iter()
-            .map(|(code, text)| (*code, text.as_str()))
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         for expected in [
             (
@@ -2621,7 +2620,11 @@ mod tests {
                 "#/classes/Child/extra_slots/x-extra-extension",
             ),
         ] {
-            assert!(observed.contains(&expected), "missing {expected:?}");
+            let (code, location) = expected;
+            assert!(
+                observed.contains(&(code, crate::schema_catalog::pointer_subject(location))),
+                "missing {expected:?}"
+            );
         }
         check_ledger_sound(&imported.losses, SOURCE, TARGET).expect("sound ledger");
 

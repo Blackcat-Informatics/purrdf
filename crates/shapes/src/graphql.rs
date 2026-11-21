@@ -3344,12 +3344,13 @@ mod tests {
         check_ledger_sound(&imported.losses, GRAPHQL_DIALECT, "shacl")
             .expect("sound reverse ledger");
         assert_eq!(imported.shapes.node_shapes.len(), 1);
-        assert!(imported.losses.entries().iter().all(|entry| {
-            entry
-                .subject
-                .text()
-                .is_some_and(|subject| subject.starts_with("#/"))
-        }));
+        assert!(
+            imported
+                .losses
+                .entries()
+                .iter()
+                .all(|entry| { matches!(&entry.subject, purrdf_core::LossSubject::Pointer(_)) })
+        );
     }
 
     #[test]
@@ -3451,10 +3452,9 @@ mod tests {
         check_ledger_complete(&package.losses, &expected)
             .expect("the complete closed GraphQL profile is exercised");
         assert!(package.losses.entries().iter().all(|entry| {
-            entry
-                .subject
-                .text()
-                .is_some_and(|subject| subject.starts_with("#/$defs/"))
+            crate::schema_catalog::pointer_tokens(&entry.subject).is_some_and(|tokens| {
+                tokens.first().is_some_and(|token| token == "$defs") && tokens.len() > 1
+            })
         }));
         let source = sdl(&package);
         let a_required = source.contains("a: AInput!");

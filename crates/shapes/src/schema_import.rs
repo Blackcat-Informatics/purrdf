@@ -4429,10 +4429,13 @@ mod tests {
     fn reads_exactly(losses: &LossLedger) -> bool {
         losses.entries().iter().all(|entry| {
             entry.code == "annotation-dropped"
-                && entry
-                    .subject
-                    .text()
-                    .is_some_and(|subject| subject.ends_with("/properties/ex:v/$comment"))
+                && crate::schema_catalog::pointer_tokens(&entry.subject).is_some_and(|tokens| {
+                    tokens.ends_with(&[
+                        "properties".to_owned(),
+                        "ex:v".to_owned(),
+                        "$comment".to_owned(),
+                    ])
+                })
         })
     }
 

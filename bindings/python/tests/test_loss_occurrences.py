@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import purrdf
 
 _CONFIG = """{
@@ -60,3 +62,24 @@ def test_loss_occurrences_are_typed_site_subject_and_detail_dictionaries() -> No
     assert edge.subject["kind"] == "resource"
     assert edge.subject["resource_kind"]
     assert edge.subject["identifier"]
+
+
+def test_a_dropped_row_is_identified_by_kind_and_a_digest_of_bytes() -> None:
+    """A source row carries its kind and a 32-byte digest; a graph carries its name."""
+    root = Path(__file__).resolve().parents[3] / "crates/rdf/tests/fixtures"
+    package = purrdf.project(
+        (root / "okf-terms.trig").read_bytes(),
+        format=purrdf.RdfFormat.TRIG,
+        profile="okf-terms",
+        config=(root / "okf-terms.json").read_bytes(),
+    )
+    rows = [loss.subject for loss in package.losses if loss.subject["kind"] == "row"]
+    assert rows
+    for row in rows:
+        assert row["row_kind"] == "quad"
+        assert isinstance(row["digest"], bytes) and len(row["digest"]) == 32
+    graphs = [
+        loss.subject for loss in package.losses if loss.subject["kind"] == "graph"
+    ]
+    assert graphs
+    assert graphs[0]["graph"] == {"kind": "iri", "value": "https://example.org/source"}

@@ -2388,12 +2388,13 @@ mod tests {
         check_ledger_sound(&imported.losses, TYPESCRIPT_DIALECT, "shacl")
             .expect("sound reverse ledger");
         assert_eq!(imported.shapes.node_shapes.len(), 1);
-        assert!(imported.losses.entries().iter().all(|entry| {
-            entry
-                .subject
-                .text()
-                .is_some_and(|subject| subject.starts_with("#/"))
-        }));
+        assert!(
+            imported
+                .losses
+                .entries()
+                .iter()
+                .all(|entry| { matches!(&entry.subject, purrdf_core::LossSubject::Pointer(_)) })
+        );
     }
 
     #[test]
@@ -2482,10 +2483,8 @@ mod tests {
             .expect("all losses are registered");
         check_ledger_complete(&package.losses, &expected).expect("profile is fully exercised");
         assert!(package.losses.entries().iter().all(|entry| {
-            entry
-                .subject
-                .text()
-                .is_some_and(|subject| subject.starts_with("#/$defs/Lossy"))
+            crate::schema_catalog::pointer_tokens(&entry.subject)
+                .is_some_and(|tokens| tokens.starts_with(&["$defs".to_owned(), "Lossy".to_owned()]))
         }));
         let source = declaration(&package);
         assert!(source.contains("export type Lossy ="));
@@ -2912,10 +2911,9 @@ mod tests {
         // No JavaScript array has 2^32 elements.
         assert!(source.contains("export type LargeBound = never;"));
         assert!(package.losses.entries().iter().all(|entry| {
-            entry
-                .subject
-                .text()
-                .is_none_or(|subject| !subject.starts_with("#/$defs/LargeBound"))
+            crate::schema_catalog::pointer_tokens(&entry.subject).is_none_or(|tokens| {
+                !tokens.starts_with(&["$defs".to_owned(), "LargeBound".to_owned()])
+            })
         }));
         for (code, location) in [
             (

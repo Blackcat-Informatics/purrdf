@@ -141,6 +141,35 @@ mod tests {
         assert_eq!(graph.envelope.losses.entries().len(), 1);
     }
 
+    /// A directional literal's base direction is part of the recorded subject,
+    /// and its datatype is the directional language-string datatype.
+    #[test]
+    fn a_directional_literal_keeps_its_base_direction_in_the_subject() {
+        let mut losses = LossLedger::new();
+        let mut ceiling = Ceiling(1 << 20);
+        record_language_fold_loss(
+            &mut losses,
+            "x",
+            ("AR-eg", Some(purrdf_core::RdfTextDirection::Rtl)),
+            FoldSite {
+                logical: "gts:sink",
+                segment: Some(0),
+                term: 3,
+            },
+            &mut Memory::new(&mut ceiling),
+        )
+        .expect("admitted");
+        assert_eq!(
+            losses.entries()[0].subject,
+            LossSubject::Term(LossTerm::Literal {
+                lexical: "x".to_owned(),
+                datatype: purrdf_iri::vocab::language_datatype_iri(true).to_owned(),
+                language: Some("AR-eg".to_owned()),
+                direction: Some(purrdf_core::RdfTextDirection::Rtl),
+            })
+        );
+    }
+
     /// The subject's strings, the detail list and the ledger
     /// slot are admitted through the caller's memory. A budget that fits the note
     /// and a short label but not a long label is the typed storage refusal and

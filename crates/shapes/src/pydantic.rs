@@ -3280,12 +3280,13 @@ mod tests {
         check_ledger_sound(&imported.losses, PYDANTIC_DIALECT, "shacl")
             .expect("sound reverse ledger");
         assert_eq!(imported.shapes.node_shapes.len(), 1);
-        assert!(imported.losses.entries().iter().all(|entry| {
-            entry
-                .subject
-                .text()
-                .is_some_and(|subject| subject.starts_with("#/"))
-        }));
+        assert!(
+            imported
+                .losses
+                .entries()
+                .iter()
+                .all(|entry| { matches!(&entry.subject, purrdf_core::LossSubject::Pointer(_)) })
+        );
     }
 
     #[test]

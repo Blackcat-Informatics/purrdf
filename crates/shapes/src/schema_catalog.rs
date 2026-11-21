@@ -233,6 +233,15 @@ pub(crate) fn pointer_subject(location: &str) -> purrdf_core::LossSubject {
     purrdf_core::LossSubject::parse_pointer(pointer).expect("a schema location is pointer text")
 }
 
+/// The pointer tokens of a loss subject; `None` when it is not a pointer.
+#[cfg(test)]
+pub(crate) const fn pointer_tokens(subject: &purrdf_core::LossSubject) -> Option<&[String]> {
+    match subject {
+        purrdf_core::LossSubject::Pointer(tokens) => Some(tokens.as_slice()),
+        _ => None,
+    }
+}
+
 impl std::fmt::Display for SchemaPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "#{}", self.0)
