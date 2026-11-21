@@ -12,29 +12,9 @@ use purrdf_gts::model::{ReifierRow, Term, TermKind};
 use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
 use purrdf_gts::writer::Writer;
 
-fn triple_term(s: usize, p: usize, o: usize) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: None,
-        triple: Some((s, p, o)),
-    }
-}
-
-fn indirect_triple_term(reifier: usize) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: Some(reifier),
-        triple: None,
-    }
-}
+#[path = "support/reifier_terms.rs"]
+mod reifier_terms;
+use reifier_terms::{indirect_triple_term, triple_term};
 
 /// One file holding every kind of reifier: ids 3, 4 and 10 are kept IRI and
 /// blank-node reifiers, 8 is the exempt spelling, and 5, 6, 7 and 9 are refused.

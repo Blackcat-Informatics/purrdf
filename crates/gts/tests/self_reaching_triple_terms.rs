@@ -35,19 +35,9 @@ use purrdf_gts::model::{Graph, ReifierRow, Term, TermKind};
 use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
 use purrdf_gts::writer::Writer;
 
-/// The legacy indirect spelling: components come from the `reifies` row bound
-/// to `reifier`.
-fn indirect_triple_term(reifier: usize) -> Term {
-    Term {
-        kind: TermKind::Triple,
-        value: None,
-        datatype: None,
-        lang: None,
-        direction: None,
-        reifier: Some(reifier),
-        triple: None,
-    }
-}
+#[path = "support/reifier_terms.rs"]
+mod reifier_terms;
+use reifier_terms::indirect_triple_term;
 
 /// A plain second segment, so the reader takes the multi-segment union path.
 fn plain_segment() -> Vec<u8> {
