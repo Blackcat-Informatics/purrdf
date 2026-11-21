@@ -355,3 +355,20 @@ there (sister repository issue 1670). Until that lands and is regenerated, this
 one file is knowingly ahead of its generator; the gate failing after a future
 sync is the correct signal that the upstream fix has not yet arrived, not a
 regression to silence.
+
+## Signed-frame vectors (`vectors/signed/`)
+
+`vectors/signed/` holds the signed-frame corpus of the sister repository
+`gmeow-gts`, vendored at revision `cd123c2dd357eca85fb4236a6067a7ad5b0a9a3b`
+(`vectors/signed/`). It has 69 vectors: the 68 files added here, each
+byte-identical to the file at that revision, and `basic.json`, which was
+already carried. The root is byte-frozen by `scripts/check-corpus-frozen.py`
+with its receipt in `scripts/conformance-frozen/vectors-signed.sha256`; a later
+resync is a re-vendor at a named upstream revision followed by `--update`.
+
+Each vector gives the GTS bytes, the signing key and `kid`, and the status the
+format owner expects with and without that key. The corpus is evidence of the
+format owner's expectations, not an endorsement of each one: the engine follows
+RFC 9052 where a vector departs from it, and `crates/gts/tests/signed_corpus.rs`
+lists each such difference with its reason and fails when a listed vector starts
+to agree or an unlisted one disagrees.
