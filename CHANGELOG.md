@@ -193,6 +193,18 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
   `SrlError::Execution`, and a rule deriving another predicate still runs.
+- **Behaviour change: a protected header that is not deterministically encoded
+  is `Invalid`.** A COSE_Sign1 whose protected header is not the deterministic
+  encoding the specification requires (section 4: shortest-form integers and
+  lengths, definite lengths, map keys in bytewise order) was `Valid` with a
+  resolved key; it is `Invalid`, with the cause `Sign1Error::NonCanonicalProtectedHeader`
+  (and `VerificationError::NonCanonicalProtectedHeader` in a file verification),
+  readable through `cose::signature_refusal`. A header integer outside -2^63 to
+  2^63-1 is `Malformed`. A text-string `alg` is `Unverified`, and the `kid` of
+  an unsupported-algorithm envelope is reported. `Sign1Error` and
+  `VerificationError` each gain a variant. The migration guide gives the bucket
+  each case moves between. `vectors/signed` carries the upstream signed corpus
+  and `signed_corpus` grades it, with seven named differences.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2
