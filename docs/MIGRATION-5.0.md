@@ -448,8 +448,9 @@ lost or retyped a public field, and none of these enums lost a variant.
   deterministic encoding the specification requires of every signed byte string
   (section 4, RFC 8949 section 4.2): shortest-form integers and lengths,
   definite-length items and map keys in bytewise order. Header integers are not
-  bounded beyond what CBOR encodes, as in 4.0.2. Each case moves between the three outcomes as follows, for a caller
-  that treats `Unverified` as "unchecked" and `Invalid` as "failed":
+  bounded beyond what CBOR encodes, as in 4.0.2. Each case moves between the
+  three outcomes as follows, for a caller that treats `Unverified` as
+  "unchecked" and `Invalid` as "failed":
   - A header that is not deterministically encoded was `Valid` with a resolved
     key and `Unverified` without one in 4.0.2; it is `Invalid` in both cases.
     This moves a result away from `Valid`: a stored signature whose protected
