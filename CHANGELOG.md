@@ -8,6 +8,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: loss entries record typed occurrences, and the runtime ledger is
+  schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
+  with three typed members: `site` (`LossSite`: unspecified, a document position,
+  a GTS anchor, or a named stage), `subject` (`LossSubject`: absent, a `LossTerm`
+  with its datatype, language and base direction, a source row by its kind and
+  the SHA-256 digest of its content, a resource by its kind and the identifier
+  its document assigns, a `LossGraphName` with a blank node's scope, a JSON
+  Pointer as its token list, or an XML location as element and attribute steps)
+  and `detail` (an ordered list of `LossDetail`, each a named count,
+  identifier, term or graph name).
+  Absence is an explicit variant, so no member's meaning depends on a prefix,
+  suffix or reserved value. Every producer records values it holds: counts,
+  segment head identifiers, graph names, terms, property keys, patterns and
+  paths are no longer formatted into `note`, which keeps only the code's static
+  explanation; `LossSubject::parse_pointer` refuses text that is not a JSON
+  Pointer; the CLI no longer
+  names an endpoint `unknown`; and a graph name that is neither an IRI nor a
+  blank node is refused rather than rendered with `Debug`. All of these types
+  implement `StructuredError`, and `LossEntry::presentation` renders prose from
+  the typed members. `LossLedger::render_json` writes `schema_version` 2 with
+  `site`, `subject` and `detail` members in place of the single `location`
+  string; the static matrices carry no occurrences and are unchanged. The
+  Python `ProjectionLoss.location` attribute is replaced by `site`, `subject`
+  and `detail` dictionaries (a row digest is `bytes`, and each detail has
+  `kind` `detail`), and the C and WebAssembly surfaces carry the same members
+  in the ledger JSON. `RdfLocation` and `RdfDiagnostic` are unchanged. The
+  migration guide gives the mapping.
 - **Behaviour change: a triple term that reaches itself states no triple, and its `reifies` row is kept.**
   A term that is reachable from its own components, through `tt` or through the
   first `reifies` row of the reifier id its `rf` names, is no longer
@@ -145,7 +172,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   that a segmented stack made only of image layers, with no removal or
   declaration owners and no resident head, keeps its 4.x snapshot identity and
   the receipts bound to it (see "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
-  keeps its 4.x additive value and is deprecated. The first identity request
+  is removed. The first identity request
   of a dataset frozen without eager statistics now sorts its record digests in a
   scratch buffer, a text delta hashes the whole row directory, and a standalone
   surface delta sorts every source digest (about 9% more instructions at 2048

@@ -76,7 +76,7 @@ A linked property.
 const PROPERTY_INDEX: &str = "# Properties\n\n* [Beta](B.md) - A linked property.\n";
 
 const LOSS_LEDGER: &str = r#"{
-  "schema_version": 1,
+  "schema_version": 2,
   "losses": [
     {
       "code": "named-graph-dropped",
@@ -84,7 +84,9 @@ const LOSS_LEDGER: &str = r#"{
       "to": "okf",
       "intentional": true,
       "note": "OKF documents have no named-graph placement; a quad asserted outside the default graph cannot be represented in Markdown frontmatter or body text.",
-      "location": "okf-terms:named-graph subject=OkfTermsGraph_9dc301f2a53e6251c3b75db81bcc816cd67937f8522d74658f285d97cbf67545"
+      "site": {"kind": "stage", "name": "okf-terms:named-graph"},
+      "subject": {"kind": "graph", "graph": {"kind": "iri", "value": "https://example.org/source"}},
+      "detail": []
     },
     {
       "code": "named-graph-dropped",
@@ -92,7 +94,9 @@ const LOSS_LEDGER: &str = r#"{
       "to": "okf",
       "intentional": true,
       "note": "OKF documents have no named-graph placement; a quad asserted outside the default graph cannot be represented in Markdown frontmatter or body text.",
-      "location": "okf-terms:quad subject=OkfTermsQuad_69199f28e43f6d3d9f3f5163b9c6942dbe35e6913e78953e1ac0d58c0a231ca1"
+      "site": {"kind": "stage", "name": "okf-terms:quad"},
+      "subject": {"kind": "row", "row_kind": "quad", "digest": "69199f28e43f6d3d9f3f5163b9c6942dbe35e6913e78953e1ac0d58c0a231ca1"},
+      "detail": []
     },
     {
       "code": "okf-non-profile-quad-dropped",
@@ -100,7 +104,9 @@ const LOSS_LEDGER: &str = r#"{
       "to": "okf",
       "intentional": true,
       "note": "An RDF statement outside the caller-configured OKF profile, including an OWL axiom, has no Markdown/frontmatter field and is omitted from the bundle.",
-      "location": "okf-terms:quad subject=OkfTermsQuad_5f65b0f5d8da82f971f4714cd9ab12a713089c929ca9031ac908af887900066f"
+      "site": {"kind": "stage", "name": "okf-terms:quad"},
+      "subject": {"kind": "row", "row_kind": "quad", "digest": "5f65b0f5d8da82f971f4714cd9ab12a713089c929ca9031ac908af887900066f"},
+      "detail": []
     }
   ]
 }

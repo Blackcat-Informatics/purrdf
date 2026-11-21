@@ -378,7 +378,7 @@ fn probe(
         location: location.to_owned(),
     });
     if let Some(loss) = &expected_loss
-        && !oracle::has_loss(&package.losses, &loss.code, &loss.location)
+        && !oracle::has_loss(&package.losses, &loss.code, &loss.location)?
     {
         return Err(format!(
             "probe {label:?} names absent loss {} at {}",

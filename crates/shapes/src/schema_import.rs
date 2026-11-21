@@ -17,7 +17,6 @@ use std::sync::{Arc, OnceLock};
 
 use crate::json_model::{Map, Number, NumberKind, Object, Value, ValueKind};
 use crate::limits::MAX_SCHEMA_DEPTH;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::RdfTextDirection;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use purrdf_hash::fnv::fnv1a64;
@@ -474,9 +473,11 @@ impl<'a> ImportContext<'a> {
             from: self.source.to_owned().into(),
             to: "shacl".to_owned().into(),
             note: contract.note.to_string().into(),
-            location: Some(Box::new(
-                RdfLocation::logical("schema-importer").with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: "schema-importer".to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 
@@ -4134,16 +4135,7 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .map(|entry| {
-                (
-                    entry.code.as_ref(),
-                    entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.as_deref())
-                        .expect("located loss"),
-                )
-            })
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         for expected in [
             ("schema-identity-dropped", "#/$schema"),
@@ -4178,8 +4170,9 @@ mod tests {
             ("non-object-definition-dropped", "#/$defs/Scalar"),
             ("boolean-schema-dropped", "#/$defs/Impossible"),
         ] {
+            let (code, location) = expected;
             assert!(
-                observed.contains(&expected),
+                observed.contains(&(code, crate::schema_catalog::pointer_subject(location))),
                 "missing {expected:?}: {observed:?}"
             );
         }
@@ -4348,27 +4341,21 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .map(|entry| {
-                (
-                    entry.code.as_ref(),
-                    entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.as_deref()),
-                )
-            })
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert!(observed.contains(&(
             "value-term-kind-widened",
-            Some("#/$defs/Record/properties/@id")
+            crate::schema_catalog::pointer_subject("#/$defs/Record/properties/@id")
         )));
         assert!(observed.contains(&(
             "value-term-kind-widened",
-            Some("#/$defs/Record/properties/ex:choice/type")
+            crate::schema_catalog::pointer_subject("#/$defs/Record/properties/ex:choice/type")
         )));
         assert!(observed.contains(&(
             "schema-applicator-dropped",
-            Some("#/$defs/Record/properties/ex:alternative/anyOf")
+            crate::schema_catalog::pointer_subject(
+                "#/$defs/Record/properties/ex:alternative/anyOf"
+            )
         )));
     }
 
@@ -4442,11 +4429,13 @@ mod tests {
     fn reads_exactly(losses: &LossLedger) -> bool {
         losses.entries().iter().all(|entry| {
             entry.code == "annotation-dropped"
-                && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
-                    .is_some_and(|subject| subject.ends_with("/properties/ex:v/$comment"))
+                && crate::schema_catalog::pointer_tokens(&entry.subject).is_some_and(|tokens| {
+                    tokens.ends_with(&[
+                        "properties".to_owned(),
+                        "ex:v".to_owned(),
+                        "$comment".to_owned(),
+                    ])
+                })
         })
     }
 

@@ -306,6 +306,29 @@ fn json(text: &str) -> Value {
     value
 }
 
+/// A typed ledger subject as the text the expectations below spell it: a term
+/// in angle brackets or `_:` form, a pointer as `#/` tokens.
+fn subject_text(subject: &Value) -> String {
+    let token = |value: &Value| value.as_str().expect("token").to_owned();
+    match subject["kind"].as_str().expect("subject kind") {
+        "pointer" => {
+            let tokens = subject["tokens"].as_array().expect("tokens");
+            let mut escaped = String::from("#");
+            for value in tokens {
+                escaped.push('/');
+                escaped.push_str(&token(value).replace('~', "~0").replace('/', "~1"));
+            }
+            escaped
+        }
+        "term" => match subject["term"]["kind"].as_str().expect("term kind") {
+            "iri" => format!("<{}>", token(&subject["term"]["value"])),
+            "blank" => format!("_:{}", token(&subject["term"]["label"])),
+            other => panic!("unexpected term kind {other}"),
+        },
+        other => panic!("unexpected subject kind {other}"),
+    }
+}
+
 fn ledger_rows(ledger: &str) -> Vec<(String, String, String)> {
     let ledger: Value = purrdf_lex::json::read(ledger).expect("ledger JSON");
     ledger["losses"]
@@ -313,15 +336,41 @@ fn ledger_rows(ledger: &str) -> Vec<(String, String, String)> {
         .expect("losses array")
         .iter()
         .map(|entry| {
-            let location = entry["location"].as_str().unwrap_or_default();
-            let subject = location.split_once("subject=").map_or(location, |(_, s)| s);
             (
                 entry["code"].as_str().expect("code").to_owned(),
-                subject.to_owned(),
-                entry["note"].as_str().expect("note").to_owned(),
+                subject_text(&entry["subject"]),
+                note_with_details(entry),
             )
         })
         .collect()
+}
+
+/// The entry's static note followed by its typed facts, `name=value`, in
+/// recorded order: what distinguishes two occurrences of one code and subject.
+fn note_with_details(entry: &Value) -> String {
+    let note = entry["note"].as_str().expect("note");
+    let facts: Vec<String> = entry["detail"]
+        .as_array()
+        .expect("detail array")
+        .iter()
+        .map(|detail| {
+            let value = &detail["value"];
+            let text = match value["kind"].as_str().expect("value kind") {
+                "identifier" => value["identifier"].as_str().expect("identifier").to_owned(),
+                "term" => value["term"]["value"]
+                    .as_str()
+                    .expect("iri term")
+                    .to_owned(),
+                other => panic!("unexpected fact kind {other}"),
+            };
+            format!("{}={text}", detail["name"].as_str().expect("name"))
+        })
+        .collect();
+    if facts.is_empty() {
+        note.to_owned()
+    } else {
+        format!("{note} [{}]", facts.join("; "))
+    }
 }
 
 /// `(code, subject, note)` of every SHACL → JSON Schema entry.
@@ -1577,12 +1626,12 @@ fn json_schema_projects_subset_of() {
             (
                 "sh:subsetOf",
                 HOLDER,
-                "a comparison of the values against the nodes the path <https://example.org/allowed>/<https://example.org/member> reaches from the focus node has no projection in this emitter"
+                "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=<https://example.org/allowed>]"
             ),
             (
                 "sh:subsetOf",
                 HOLDER,
-                "a comparison of the values against the nodes the path <https://example.org/allowed> reaches from the focus node has no projection in this emitter"
+                "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=<https://example.org/allowed>/<https://example.org/member>; property=ex:subject]"
             ),
         ])
     );
@@ -1707,22 +1756,22 @@ fn json_schema_projects_path_valued_pairs() {
             (
                 "sh:disjoint",
                 HOLDER,
-                "a comparison of the values against the nodes the path <https://example.org/a>/<https://example.org/b> reaches from the focus node has no projection in this emitter"
+                "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=<https://example.org/a>/<https://example.org/b>]"
             ),
             (
                 "sh:equals",
                 HOLDER,
-                "a comparison of the values against the nodes the path <https://example.org/a>/<https://example.org/b> reaches from the focus node has no projection in this emitter"
+                "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=<https://example.org/a>/<https://example.org/b>; property=ex:subject]"
             ),
             (
                 "sh:lessThan",
                 HOLDER,
-                "a comparison of the values against the nodes the path ^<https://example.org/c> reaches from the focus node has no projection in this emitter"
+                "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=^<https://example.org/c>; property=ex:subject]"
             ),
             (
                 "sh:lessThanOrEquals",
                 HOLDER,
-                "a comparison of the values against the nodes the path <https://example.org/d>* reaches from the focus node has no projection in this emitter"
+                "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=<https://example.org/d>*; property=ex:subject]"
             ),
         ])
     );
@@ -1866,7 +1915,7 @@ fn json_schema_projects_iri_pair() {
         owned3(&[(
             "sh:equals",
             HOLDER,
-            "a comparison of the values against the nodes the path <https://example.org/twin> reaches from the focus node has no projection in this emitter"
+            "a comparison of the values against the nodes another path reaches from the focus node has no projection in this emitter [path=<https://example.org/twin>; property=ex:subject]"
         ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];
@@ -2373,12 +2422,12 @@ fn json_schema_projects_unique_values_for() {
             (
                 "sh:uniqueValuesFor",
                 HOLDER,
-                "a uniqueness condition on the values of (<https://example.org/serial>) across every target node of the shape has no projection in a schema that judges one instance alone"
+                "a uniqueness condition on values across every target node of the shape has no projection in a schema that judges one instance alone [compared-property=https://example.org/a; compared-property=https://example.org/b]"
             ),
             (
                 "sh:uniqueValuesFor",
                 HOLDER,
-                "a uniqueness condition on the values of (<https://example.org/a> <https://example.org/b>) across every target node of the shape has no projection in a schema that judges one instance alone"
+                "a uniqueness condition on values across every target node of the shape has no projection in a schema that judges one instance alone [compared-property=https://example.org/serial; property=ex:subject]"
             ),
         ])
     );
@@ -2995,12 +3044,12 @@ fn json_schema_projects_debug_severity() {
             (
                 "sh:severity",
                 HOLDER,
-                "a sh:datatype constraint whose results carry the severity <http://www.w3.org/ns/shacl#Debug>, outside the default conformance-disallow set, decides no conformance the schema states"
+                "a constraint whose results carry a severity outside the default conformance-disallow set decides no conformance the schema states [constraint=sh:datatype; severity=http://www.w3.org/ns/shacl#Debug; property=ex:subject]"
             ),
             (
                 "sh:severity",
                 HOLDER,
-                "a sh:maxCount constraint whose results carry the severity <http://www.w3.org/ns/shacl#Debug>, outside the default conformance-disallow set, decides no conformance the schema states"
+                "a constraint whose results carry a severity outside the default conformance-disallow set decides no conformance the schema states [constraint=sh:maxCount; severity=http://www.w3.org/ns/shacl#Debug; property=ex:subject]"
             ),
         ])
     );
@@ -3150,7 +3199,7 @@ fn json_schema_projects_reifier_severity() {
         owned3(&[(
             "sh:severity",
             HOLDER,
-            "a sh:datatype constraint whose results carry the severity <http://www.w3.org/ns/shacl#Trace>, outside the default conformance-disallow set, decides no conformance the schema states"
+            "a constraint whose results carry a severity outside the default conformance-disallow set decides no conformance the schema states [constraint=sh:datatype; severity=http://www.w3.org/ns/shacl#Trace; property=ex:subject]"
         ),])
     );
     let holder = &emitted.schema["$defs"]["Holder"];

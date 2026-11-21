@@ -208,9 +208,37 @@ impl SchemaPath {
         Self(self.0.child(token.as_ref()))
     }
 
+    /// This location's reference tokens in order.
+    pub(crate) fn tokens(&self) -> &[String] {
+        self.0.tokens()
+    }
+
+    /// This location as a loss-ledger subject: its reference tokens in order.
+    pub(crate) fn to_loss_subject(&self) -> purrdf_core::LossSubject {
+        purrdf_core::LossSubject::Pointer(self.0.tokens().to_vec())
+    }
+
     /// This location extended by the array index `index`.
     pub(crate) fn child_index(&self, index: usize) -> Self {
         Self(self.0.child_index(index))
+    }
+}
+
+/// The loss subject the schema location written `#/...` names.
+#[cfg(test)]
+pub(crate) fn pointer_subject(location: &str) -> purrdf_core::LossSubject {
+    let pointer = location
+        .strip_prefix('#')
+        .expect("a schema location starts with #");
+    purrdf_core::LossSubject::parse_pointer(pointer).expect("a schema location is pointer text")
+}
+
+/// The pointer tokens of a loss subject; `None` when it is not a pointer.
+#[cfg(test)]
+pub(crate) const fn pointer_tokens(subject: &purrdf_core::LossSubject) -> Option<&[String]> {
+    match subject {
+        purrdf_core::LossSubject::Pointer(tokens) => Some(tokens.as_slice()),
+        _ => None,
     }
 }
 

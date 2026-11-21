@@ -7,7 +7,6 @@ use crate::schema_catalog::{SchemaPath, definition_path};
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::RdfTextDirection;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 
@@ -72,12 +71,13 @@ pub(super) fn import_document(
     let mut losses = importer.losses;
     for entry in imported.losses.entries() {
         let mut remapped = entry.clone();
-        if let Some(location) = remapped.location.as_mut() {
-            if let Some(subject) = location.subject.as_deref() {
-                location.subject = Some(remap_location(subject, &importer.locations));
-            }
-            location.logical = Some(LOSS_CONTEXT.to_owned());
+        if let purrdf_core::LossSubject::Pointer(tokens) = &remapped.subject {
+            remapped.subject =
+                purrdf_core::LossSubject::Pointer(remap_location(tokens, &importer.locations));
         }
+        remapped.site = purrdf_core::LossSite::Stage {
+            name: LOSS_CONTEXT.to_owned(),
+        };
         losses.record(remapped);
     }
     check_ledger_sound(&losses, SOURCE, TARGET).map_err(LinkmlError::from)?;
@@ -260,7 +260,7 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
                 }
                 expected_losses.insert((
                     "slot-identity-rehomed".to_owned(),
-                    rename.source_path.clone(),
+                    source_pointer(&rename.source_path)?,
                 ));
             }
             LinkmlSlotDisposition::Skipped => {
@@ -318,11 +318,11 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
         }
         expected_losses.insert((
             "slot-name-policy-dropped".to_owned(),
-            diagnostic.source_path.clone(),
+            source_pointer(&diagnostic.source_path)?,
         ));
     }
 
-    let mut observed_losses = BTreeMap::<(String, String), usize>::new();
+    let mut observed_losses = BTreeMap::<(String, Vec<String>), usize>::new();
     for entry in package.losses.entries() {
         if !matches!(
             entry.code.as_ref(),
@@ -330,26 +330,24 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
         ) {
             continue;
         }
-        let location = entry.location.as_deref().ok_or_else(|| {
-            LinkmlError::new(format!(
-                "LinkML package loss {:?} lacks its source location",
-                entry.code
-            ))
-        })?;
-        if location.logical.as_deref() != Some("shapes:linkml") {
+        if entry.site
+            != (purrdf_core::LossSite::Stage {
+                name: "shapes:linkml".to_owned(),
+            })
+        {
             return Err(LinkmlError::new(format!(
                 "LinkML package loss {:?} has the wrong logical source",
                 entry.code
             )));
         }
-        let subject = location.subject.as_deref().ok_or_else(|| {
-            LinkmlError::new(format!(
+        let purrdf_core::LossSubject::Pointer(tokens) = &entry.subject else {
+            return Err(LinkmlError::new(format!(
                 "LinkML package loss {:?} lacks its source JSON Pointer",
                 entry.code
-            ))
-        })?;
+            )));
+        };
         *observed_losses
-            .entry((entry.code.to_string(), subject.to_owned()))
+            .entry((entry.code.to_string(), tokens.clone()))
             .or_default() += 1;
     }
     if observed_losses.len() != expected_losses.len()
@@ -362,6 +360,19 @@ fn verify_slot_reports(package: &LinkmlPackage) -> Result<(), LinkmlError> {
         ));
     }
     Ok(())
+}
+
+/// The reference tokens of a slot report's `#/...` source path.
+fn source_pointer(source_path: &str) -> Result<Vec<String>, LinkmlError> {
+    source_path
+        .strip_prefix('#')
+        .and_then(purrdf_iri::json_pointer::JsonPointer::parse)
+        .map(|pointer| pointer.tokens().to_vec())
+        .ok_or_else(|| {
+            LinkmlError::new(format!(
+                "LinkML package slot report path {source_path:?} is not a JSON Pointer"
+            ))
+        })
 }
 
 fn verify_report_order<T, F>(rows: &[T], key: F) -> Result<(), LinkmlError>
@@ -484,7 +495,7 @@ struct NativeImporter {
     type_cache: BTreeMap<String, Value>,
     ignored_class_names: BTreeSet<String>,
     used_slots: BTreeSet<String>,
-    locations: BTreeMap<String, String>,
+    locations: BTreeMap<Vec<String>, Vec<String>>,
     contract: LossLedger,
     losses: LossLedger,
     recorded_losses: BTreeSet<(String, SchemaPath)>,
@@ -1977,14 +1988,17 @@ impl NativeImporter {
             from: SOURCE.to_owned().into(),
             to: TARGET.to_owned().into(),
             note: contract.note.to_string().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 
     fn map_location(&mut self, pivot: &SchemaPath, native: &SchemaPath) {
-        self.locations.insert(pivot.to_string(), native.to_string());
+        self.locations
+            .insert(pivot.tokens().to_vec(), native.tokens().to_vec());
     }
 }
 
@@ -2092,22 +2106,21 @@ fn element_path(section: &str, name: &str) -> SchemaPath {
     SchemaPath::root().child(section).child(name)
 }
 
-/// `subject` with its longest mapped pivot (`subject` itself, or a prefix of
-/// it that a `/` follows) replaced by the pivot's native location. The
-/// candidates are looked up one by one, longest first, so each subject costs
-/// its own length and a lookup per `/`, not a scan of every mapping.
-fn remap_location(subject: &str, mappings: &BTreeMap<String, String>) -> String {
-    let mut end = subject.len();
-    loop {
-        let pivot = &subject[..end];
-        if let Some(native) = mappings.get(pivot) {
-            return format!("{native}{}", &subject[end..]);
-        }
-        match pivot.rfind('/') {
-            Some(slash) => end = slash,
-            None => return subject.to_owned(),
+/// `subject` with its longest mapped pivot prefix (the whole path, or the
+/// leading tokens of it) replaced by the pivot's native location. Candidates
+/// are looked up longest first, so each subject costs one lookup per token.
+fn remap_location(
+    subject: &[String],
+    mappings: &BTreeMap<Vec<String>, Vec<String>>,
+) -> Vec<String> {
+    for end in (0..=subject.len()).rev() {
+        if let Some(native) = mappings.get(&subject[..end]) {
+            let mut remapped = native.clone();
+            remapped.extend_from_slice(&subject[end..]);
+            return remapped;
         }
     }
+    subject.to_vec()
 }
 
 #[cfg(test)]
@@ -2283,20 +2296,17 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .filter_map(|entry| {
-                Some((
-                    entry.code.as_ref(),
-                    entry.location.as_ref()?.subject.as_deref()?,
-                ))
-            })
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert!(observed.contains(&(
             "unique-items-validation-dropped",
-            "#/classes/Person/attributes/tags/list_elements_unique"
+            crate::schema_catalog::pointer_subject(
+                "#/classes/Person/attributes/tags/list_elements_unique"
+            )
         )));
         assert!(observed.contains(&(
             "enum-metadata-dropped",
-            "#/enums/Color/permissible_values/red/title"
+            crate::schema_catalog::pointer_subject("#/enums/Color/permissible_values/red/title")
         )));
         check_ledger_sound(&imported.losses, SOURCE, TARGET).expect("sound ledger");
 
@@ -2528,19 +2538,19 @@ mod tests {
         let observed = losses
             .entries()
             .iter()
-            .filter_map(|entry| {
-                Some((
-                    entry.code.to_string(),
-                    entry.location.as_ref()?.subject.as_deref()?.to_owned(),
-                ))
+            .filter(|entry| {
+                crate::schema_catalog::pointer_tokens(&entry.subject)
+                    .is_some_and(|tokens| tokens.iter().any(|token| token == "has_member"))
             })
-            .filter(|(_, subject)| subject.contains("has_member"))
+            .map(|entry| (entry.code.to_string(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert_eq!(
             observed,
             BTreeSet::from([(
                 "schema-applicator-dropped".to_owned(),
-                "#/classes/Person/attributes/color/has_member".to_owned()
+                crate::schema_catalog::pointer_subject(
+                    "#/classes/Person/attributes/color/has_member"
+                )
             )])
         );
         check_ledger_sound(&losses, SOURCE, TARGET).expect("sound ledger");
@@ -2582,12 +2592,7 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .filter_map(|entry| {
-                Some((
-                    entry.code.as_ref(),
-                    entry.location.as_ref()?.subject.as_deref()?,
-                ))
-            })
+            .map(|entry| (entry.code.as_ref(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         for expected in [
             (
@@ -2615,7 +2620,11 @@ mod tests {
                 "#/classes/Child/extra_slots/x-extra-extension",
             ),
         ] {
-            assert!(observed.contains(&expected), "missing {expected:?}");
+            let (code, location) = expected;
+            assert!(
+                observed.contains(&(code, crate::schema_catalog::pointer_subject(location))),
+                "missing {expected:?}"
+            );
         }
         check_ledger_sound(&imported.losses, SOURCE, TARGET).expect("sound ledger");
 

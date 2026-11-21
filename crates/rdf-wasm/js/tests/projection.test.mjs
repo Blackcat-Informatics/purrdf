@@ -72,11 +72,11 @@ test("projection archive matches the shared Rust/Python bytes", () => {
     "656066450fa23c55976f5434840169452c36324b943435e2f7ae55f8e9b6ef4e",
   );
   const ledger = JSON.parse(first.lossLedgerJson);
-  assert.equal(ledger.schema_version, 1);
+  assert.equal(ledger.schema_version, 2);
   assert.ok(ledger.losses.some((loss) => loss.code === "lpg-edge-semantics-lowered"));
 
   const lifted = liftProjection(first.archive, "lpg-csv", CONFIG);
-  assert.equal(JSON.parse(lifted.lossLedgerJson).schema_version, 1);
+  assert.equal(JSON.parse(lifted.lossLedgerJson).schema_version, 2);
   const liftedDataset = lifted.takeDataset();
   assert.equal(liftedDataset.size, 1);
   assert.equal(lifted.takeDataset(), undefined);
@@ -184,7 +184,7 @@ test("attached RO-Crate matches the cross-host archive through generated WASM", 
     createHash("sha256").update(first.archive).digest("hex"),
     ATTACHED_ARCHIVE_SHA256,
   );
-  assert.equal(JSON.parse(first.lossLedgerJson).schema_version, 1);
+  assert.equal(JSON.parse(first.lossLedgerJson).schema_version, 2);
   const lifted = liftProjection(first.archive, "ro-crate-1.3", configJson);
   assert.ok(lifted.takeDataset().size > 0);
 });

@@ -27,7 +27,6 @@ use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json}
 use crate::limits::{self, MAX_SCHEMA_DEPTH};
 // A JSON string literal is a GraphQL `StringValue` with the same value.
 use crate::json_model::json_string as graphql_string;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
@@ -1095,10 +1094,8 @@ impl<'a> Planner<'a> {
                 self.record(
                     "keyword-validation-delegated",
                     &path.child(key),
-                    &format!(
-                        "JSON Schema assertion keyword {key:?} is outside the closed GraphQL \
-                         capability table"
-                    ),
+                    "the JSON Schema assertion keyword at this path is outside the closed \
+                     GraphQL capability table",
                 );
             }
         }
@@ -1360,7 +1357,18 @@ impl<'a> Planner<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &'static str) {
+        self.record_detailed(code, path, note, Vec::new());
+    }
+
+    /// Record a loss whose occurrence carries typed facts beyond its path.
+    fn record_detailed(
+        &mut self,
+        code: &str,
+        path: &SchemaPath,
+        note: &'static str,
+        detail: Vec<purrdf_core::LossDetail>,
+    ) {
         if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
@@ -1368,10 +1376,12 @@ impl<'a> Planner<'a> {
             code: code.to_owned().into(),
             from: LOSS_FROM.into(),
             to: GRAPHQL_DIALECT.into(),
-            note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            note: note.into(),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail,
         });
     }
 
@@ -3334,13 +3344,13 @@ mod tests {
         check_ledger_sound(&imported.losses, GRAPHQL_DIALECT, "shacl")
             .expect("sound reverse ledger");
         assert_eq!(imported.shapes.node_shapes.len(), 1);
-        assert!(imported.losses.entries().iter().all(|entry| {
-            entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
-                .is_some_and(|subject| subject.starts_with("#/"))
-        }));
+        assert!(
+            imported
+                .losses
+                .entries()
+                .iter()
+                .all(|entry| { matches!(&entry.subject, purrdf_core::LossSubject::Pointer(_)) })
+        );
     }
 
     #[test]
@@ -3442,11 +3452,9 @@ mod tests {
         check_ledger_complete(&package.losses, &expected)
             .expect("the complete closed GraphQL profile is exercised");
         assert!(package.losses.entries().iter().all(|entry| {
-            entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
-                .is_some_and(|subject| subject.starts_with("#/$defs/"))
+            crate::schema_catalog::pointer_tokens(&entry.subject).is_some_and(|tokens| {
+                tokens.first().is_some_and(|token| token == "$defs") && tokens.len() > 1
+            })
         }));
         let source = sdl(&package);
         let a_required = source.contains("a: AInput!");
@@ -3663,24 +3671,15 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .map(|entry| {
-                (
-                    entry.code.to_string(),
-                    entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.clone())
-                        .unwrap_or_default(),
-                )
-            })
+            .map(|entry| (entry.code.to_string(), entry.subject.clone()))
             .collect::<BTreeSet<_>>();
         assert!(located.contains(&(
             "numeric-validation-dropped".to_owned(),
-            format!("{items}/minimum")
+            crate::schema_catalog::pointer_subject(&format!("{items}/minimum"))
         )));
         assert!(located.contains(&(
             "integer-domain-validation-delegated".to_owned(),
-            format!("{items}/anyOf/0/type")
+            crate::schema_catalog::pointer_subject(&format!("{items}/anyOf/0/type"))
         )));
         assert!(
             located
@@ -3824,11 +3823,8 @@ mod tests {
             assert!(package.names.unions.is_empty());
             assert!(package.losses.entries().iter().any(|entry| {
                 entry.code == "union-validation-delegated"
-                    && entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.as_deref())
-                        == Some("#/$defs/Choice/anyOf")
+                    && entry.subject
+                        == crate::schema_catalog::pointer_subject("#/$defs/Choice/anyOf")
             }));
         }
         // Kinds a union admits beside a keyword judging another kind make the

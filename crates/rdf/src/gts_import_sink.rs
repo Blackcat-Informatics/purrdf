@@ -104,7 +104,7 @@ impl SinkImporter<'_> {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
                 lexical,
-                tag,
+                (tag, direction),
                 crate::gts_language_fold::FoldSite {
                     logical: "gts:sink",
                     segment: Some(segment_index),

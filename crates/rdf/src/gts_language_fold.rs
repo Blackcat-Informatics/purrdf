@@ -9,26 +9,11 @@
 //! each affected literal as `language-tag-case-folded` in the envelope's loss
 //! ledger.
 
-use std::fmt;
-
-use purrdf_core::{LossEntry, LossLedger, RdfLocation};
+use purrdf_core::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject, LossTerm};
 use purrdf_iri::langtag::is_identity_folded;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 
-/// A tag as the dataset holds it, written without building the folded copy.
-struct Folded<'a>(&'a str);
-
-impl fmt::Debug for Folded<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("\"")?;
-        for c in self.0.chars() {
-            write!(f, "{}", c.to_ascii_lowercase().escape_debug())?;
-        }
-        f.write_str("\"")
-    }
-}
-
-/// Where a GTS literal sits: the logical label of the reader, the segment when
+/// Where a GTS literal sits: the label of the reader, the segment when
 /// the reader is per segment, and the GTS term id.
 #[derive(Clone, Copy)]
 pub(crate) struct FoldSite {
@@ -41,44 +26,54 @@ pub(crate) struct FoldSite {
 /// already lower case into `losses`. A tag the dataset holds as written returns
 /// before anything is built or allocated.
 ///
-/// Otherwise the note text, the location's label text and the boxed location
-/// are admitted through `memory`, and the ledger slot through
-/// `record_with_memory`. The numeric location fields and the entry's static
-/// code and pair names hold no allocation. The note names the literal, the
-/// written tag and the tag the dataset holds, so the term the fold merges with
-/// its case variant is identified.
+/// Otherwise the literal's strings, the detail list and the ledger slot are
+/// admitted through `memory`. The entry's static code, pair names and note hold
+/// no allocation. The subject is the literal as written, with its datatype and
+/// written tag and base direction, and the `held-tag` detail is the tag the dataset holds, so the
+/// term the fold merges with its case variant is identified.
 ///
 /// # Errors
 /// The storage refusal of `memory`; the ledger is unchanged.
 pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
     losses: &mut LossLedger,
     lexical: &str,
-    tag: &str,
+    (tag, direction): (&str, Option<purrdf_core::RdfTextDirection>),
     site: FoldSite,
     memory: &mut Memory<'_, S>,
 ) -> Result<(), StorageError> {
     if is_identity_folded(tag) {
         return Ok(());
     }
-    let note = memory.format(&format_args!(
-        "the literal {lexical:?} with written language tag {tag:?} is held as {:?}; \
-         a term of this file that differs only in tag case is the same dataset term",
-        Folded(tag)
-    ))?;
-    let logical = memory.string(site.logical)?;
-    let location = memory.boxed(RdfLocation {
-        logical: Some(logical),
-        gts_segment_index: site.segment,
-        gts_term_id: Some(site.term),
-        ..RdfLocation::default()
-    })?;
+    let subject = LossSubject::Term(LossTerm::Literal {
+        lexical: memory.string(lexical)?,
+        datatype: memory.string(purrdf_iri::vocab::language_datatype_iri(
+            direction.is_some(),
+        ))?,
+        language: Some(memory.string(tag)?),
+        direction,
+    });
+    let mut detail = Vec::new();
+    let held = memory.string(&tag.to_ascii_lowercase())?;
+    memory.push(&mut detail, LossDetail::identifier("held-tag", held))?;
+    let reader = memory.string(site.logical)?;
+    memory.push(&mut detail, LossDetail::identifier("reader", reader))?;
     losses.record_with_memory(
         LossEntry {
             code: "language-tag-case-folded".into(),
             from: "gts".into(),
             to: "rdf-1.2-dataset".into(),
-            note: note.into(),
-            location: Some(location),
+            note: "a language-tagged literal is held with its tag folded to lower case; \
+                   a term of this file that differs only in tag case is the same dataset term"
+                .into(),
+            site: LossSite::Gts {
+                segment: site.segment,
+                frame: None,
+                term: Some(site.term),
+                quad: None,
+                reifier: None,
+            },
+            subject,
+            detail,
         },
         memory,
     )
@@ -86,8 +81,9 @@ pub(crate) fn record_language_fold_loss<S: Admission + ?Sized>(
 
 #[cfg(test)]
 mod tests {
-    use purrdf_core::LossLedger;
+    use purrdf_core::{LossDetail, LossLedger, LossSubject, LossTerm};
     use purrdf_gts::model::{Graph, Term};
+    use purrdf_iri::vocab::rdf::LANG_STRING;
     use purrdf_lex::allocation::{Ceiling, Memory, StorageError};
 
     use super::{FoldSite, record_language_fold_loss};
@@ -118,7 +114,21 @@ mod tests {
         let losses = bundle.envelope.losses.entries();
         assert_eq!(losses.len(), 1);
         assert_eq!(losses[0].code, "language-tag-case-folded");
-        assert!(losses[0].note.contains("\"EN-us\"") && losses[0].note.contains("\"en-us\""));
+        assert_eq!(
+            losses[0].subject,
+            LossSubject::Term(LossTerm::Literal {
+                lexical: "x".to_owned(),
+                datatype: LANG_STRING.to_owned(),
+                language: Some("EN-us".to_owned()),
+                direction: None,
+            }),
+            "the written literal is the subject, with its datatype and tag"
+        );
+        assert!(
+            losses[0]
+                .detail
+                .contains(&LossDetail::identifier("held-tag", "en-us"))
+        );
         assert!(
             purrdf_core::check_ledger_sound(&bundle.envelope.losses, "gts", "rdf-1.2-dataset")
                 .is_ok()
@@ -131,7 +141,36 @@ mod tests {
         assert_eq!(graph.envelope.losses.entries().len(), 1);
     }
 
-    /// The note, the location's label text, the boxed location and the ledger
+    /// A directional literal's base direction is part of the recorded subject,
+    /// and its datatype is the directional language-string datatype.
+    #[test]
+    fn a_directional_literal_keeps_its_base_direction_in_the_subject() {
+        let mut losses = LossLedger::new();
+        let mut ceiling = Ceiling(1 << 20);
+        record_language_fold_loss(
+            &mut losses,
+            "x",
+            ("AR-eg", Some(purrdf_core::RdfTextDirection::Rtl)),
+            FoldSite {
+                logical: "gts:sink",
+                segment: Some(0),
+                term: 3,
+            },
+            &mut Memory::new(&mut ceiling),
+        )
+        .expect("admitted");
+        assert_eq!(
+            losses.entries()[0].subject,
+            LossSubject::Term(LossTerm::Literal {
+                lexical: "x".to_owned(),
+                datatype: purrdf_iri::vocab::language_datatype_iri(true).to_owned(),
+                language: Some("AR-eg".to_owned()),
+                direction: Some(purrdf_core::RdfTextDirection::Rtl),
+            })
+        );
+    }
+
+    /// The subject's strings, the detail list and the ledger
     /// slot are admitted through the caller's memory. A budget that fits the note
     /// and a short label but not a long label is the typed storage refusal and
     /// leaves the ledger empty; the same budget admits the short label; a tag
@@ -150,7 +189,7 @@ mod tests {
             let result = record_language_fold_loss(
                 &mut losses,
                 "x",
-                tag,
+                (tag, None),
                 site(logical),
                 &mut Memory::new(&mut ceiling),
             );
@@ -162,10 +201,10 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(held, 0);
-        let (admitted, held) = record("EN-us", "gts:sink", 1024);
+        let (admitted, held) = record("EN-us", "gts:sink", 4096);
         assert!(admitted.is_ok(), "{admitted:?}");
         assert_eq!(held, 1);
-        let (refused, held) = record("EN-us", long, 1024);
+        let (refused, held) = record("EN-us", long, 4096);
         assert!(
             matches!(refused, Err(StorageError::AdmissionFailed)),
             "the label text is charged: {refused:?}"

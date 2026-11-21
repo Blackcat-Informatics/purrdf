@@ -394,13 +394,19 @@ pub fn stable_identifier(prefix: &str, key: &[u8]) -> Result<String, ProjectionE
             "identifier prefix must start with an ASCII letter and contain only ASCII alphanumerics or `_`",
         ));
     }
-    let digest = Sha256::digest(key);
+    let digest = stable_digest(key);
     let mut output = String::with_capacity(prefix.len() + 1 + digest.len() * 2);
     output.push_str(prefix);
     output.push('_');
     // Infallible: `String`'s `fmt::Write` never returns an error.
     let _ = write!(output, "{}", purrdf_hash::hex::Lower(&digest));
     Ok(output)
+}
+
+/// The SHA-256 digest a [`stable_identifier`] spells after its prefix.
+#[must_use]
+pub(crate) fn stable_digest(key: &[u8]) -> [u8; 32] {
+    Sha256::digest(key).into()
 }
 
 /// Validate a mandatory absolute IRI configuration field.

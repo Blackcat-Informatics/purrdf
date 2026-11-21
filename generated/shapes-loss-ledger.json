@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "losses": [
     {
       "code": "sh:SPARQLTarget",
@@ -7,7 +7,9 @@
       "to": "json-schema",
       "intentional": true,
       "note": "SHACL-AF SPARQL target (sh:target/sh:SPARQLTarget) selects focus nodes via an arbitrary SPARQL query with no closed-world JSON Schema equivalent; the shape's SPARQL-selected instances are not enforced by the emitted schema",
-      "location": "<unknown> subject=<https://example.org/SparqlTargetedShape>"
+      "site": {"kind": "unspecified"},
+      "subject": {"kind": "term", "term": {"kind": "iri", "value": "https://example.org/SparqlTargetedShape"}},
+      "detail": []
     },
     {
       "code": "sh:expression",
@@ -15,7 +17,9 @@
       "to": "json-schema",
       "intentional": true,
       "note": "SHACL-AF expression constraint has no JSON Schema equivalent",
-      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+      "site": {"kind": "unspecified"},
+      "subject": {"kind": "term", "term": {"kind": "iri", "value": "https://example.org/GuardedShape"}},
+      "detail": []
     },
     {
       "code": "sh:not",
@@ -23,7 +27,9 @@
       "to": "json-schema",
       "intentional": true,
       "note": "sh:not inner shape is not losslessly expressible in the object projection; omitted rather than emitting a base-negating (vacuous) not",
-      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+      "site": {"kind": "unspecified"},
+      "subject": {"kind": "term", "term": {"kind": "iri", "value": "https://example.org/GuardedShape"}},
+      "detail": []
     },
     {
       "code": "sh:sparql",
@@ -31,7 +37,9 @@
       "to": "json-schema",
       "intentional": true,
       "note": "SPARQL-AF constraint has no JSON Schema equivalent",
-      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+      "site": {"kind": "unspecified"},
+      "subject": {"kind": "term", "term": {"kind": "iri", "value": "https://example.org/GuardedShape"}},
+      "detail": []
     },
     {
       "code": "sh:sparql",
@@ -39,7 +47,9 @@
       "to": "json-schema",
       "intentional": true,
       "note": "SPARQL-AF constraint has no JSON Schema equivalent",
-      "location": "<unknown> subject=<https://example.org/GuardedShape>"
+      "site": {"kind": "unspecified"},
+      "subject": {"kind": "term", "term": {"kind": "iri", "value": "https://example.org/GuardedShape"}},
+      "detail": []
     }
   ]
 }
