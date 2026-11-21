@@ -27266,12 +27266,10 @@ msgstr ""
 
 #: src/project/conformance.md:47
 msgid ""
-"frozen cross-language vectors — 38 of the 39 fold byte-exactly into their "
-"committed expectation, with the 39th a ledgered divergence from an upstream "
-"expectation this reader contradicts"
+"frozen cross-language vectors — all 39 fold byte-exactly into their committed "
+"expectation"
 msgstr ""
-"冻结的跨语言向量——39 个中有 38 个按字节精确折叠为其已提交的预期结果，第 39 个"
-"是一项入台账的分歧，所针对的上游预期结果与本读取器相矛盾"
+"冻结的跨语言向量——39 个全部按字节精确折叠为其已提交的预期结果"
 
 #: src/project/conformance.md:48
 msgid "rdflib drop-in"

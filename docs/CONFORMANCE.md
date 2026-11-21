@@ -73,7 +73,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft 2020-12 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2342 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft 2019-09 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2298 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
-| GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
+| GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 39 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
 | Python binding suite | first-party (incl. compat differential vs rdflib) | 4288 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
@@ -150,7 +150,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
 | Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4288** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
-| GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
+| GTS transport | frozen cross-language vectors, `vectors/` | **39 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 0 ledgered divergences. The harness keeps its two-way discipline over an empty ledger: a vector listed as diverging must still disagree, and no unlisted vector may start disagreeing |
 
 ## Native YAML-LD Basic
 
