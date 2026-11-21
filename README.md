@@ -50,17 +50,24 @@ graphs, provenance, and linked binary content. PurRDF keeps those distinctions
 through querying, validation and the carriers that can represent them; a
 projection that loses information returns a located loss ledger.
 
-**Version 4.0 brings the logic engines, document carriers and operational
-storage under explicit, inspectable contracts.** Rules can be prepared and
-maintained across signed changes; ground reasoning answers retain their native
-structure and checking evidence; reasoning request failures retain native causes
-across the language bindings. Geography
-now includes certified geodesy, explicit coordinate operations, buffers and
-overlays. Lossless TOML and MIME join the document codecs.
+**Version 5.0 makes canonical form and content identity collision-resistant
+and gives network operations one caller-supplied exchange.** The default
+canonical form labels blank nodes by nested colour refinement and hashes the
+resulting line sequence with BLAKE3. The 4.x algorithm stays callable as
+`purrdf_core::rdfc12`, where every stored 4.x digest recomputes (the
+[migration guide](./docs/MIGRATION-5.0.md) names the one IRI-spelling exception).
+Identities of row sets are BLAKE3 over sorted row digests, and a dataset's
+content identity is computed only when a caller asks for it. `SERVICE` and `LOAD`
+share one `HttpExchange`. A GTS reader projects a triple term that states no
+triple as a fresh blank node, loss entries record typed occurrences, and an
+unsupported signature algorithm verifies as `Unverified`. The logic engines,
+document carriers, certified geodesy and operational storage below keep their
+explicit, inspectable contracts.
 
-This checkout contains the 4.0 release candidate. Registry badges and install
-commands below refer to the versions available from each registry; consult the
-[4.0 migration guide](./docs/MIGRATION-4.0.md) when moving from 3.x.
+This checkout holds PurRDF 5.0.0. Registry badges and install commands below
+refer to the versions available from each registry. Read the
+[5.0 migration guide](./docs/MIGRATION-5.0.md) when moving from 4.x; the
+[4.0 migration guide](./docs/MIGRATION-4.0.md) covers 3.x.
 
 **One RDF engine. One behavior. Every language.** The language surfaces expose
 different portions of the toolkit, described below. Every published Rust crate
@@ -69,7 +76,8 @@ also builds for `wasm32-unknown-unknown`.
 [Try the browser playground](https://blackcat-informatics.github.io/purrdf/playground/)
 · [Read the book](https://blackcat-informatics.github.io/purrdf/)
 · [Rust API](https://docs.rs/purrdf)
-· [Migrating to 4.0](./docs/MIGRATION-4.0.md)
+· [Migrating to 5.0](./docs/MIGRATION-5.0.md)
+· [Earlier guide: migrating to 4.0](./docs/MIGRATION-4.0.md)
 
 ## What you can build
 
@@ -89,7 +97,7 @@ own vocabularies, extension registrations, network transports and embedding
 models. Standard RDF vocabulary terms are built in; application namespaces are
 explicit configuration.
 
-## Logic engines in 4.0
+## Logic engines
 
 PurRDF supports both materializing consequences and answering a particular
 goal. The shared [`datalog`](./crates/datalog/src/lib.rs) module is available
@@ -240,7 +248,8 @@ It installs no network loader. Graph and research-object projections
 include Neo4j CSV, openCypher, GraphML, CSVW, OBO Graphs, SKOS, DCAT, VoID,
 RO-Crate, Croissant, DataCite and Frictionless. Supported reversible carriers
 retain RDF 1.2 through an exact sideband; lossy views report what was lost.
-See [projections](./docs/book/src/concepts/projections.md) and the
+Loss entries record typed occurrences, a `site`, a `subject` and ordered `detail`
+members, and the runtime ledger JSON is schema version 2. See [projections](./docs/book/src/concepts/projections.md) and the
 [generated loss matrix](./generated/transcode-loss-matrix.json).
 
 **One canonical columnar projection.**
@@ -251,8 +260,7 @@ scoped blanks, quoted terms, directions, empty named graphs and verified blobs.
 GTS's append-order inspection IDs remain a separate authority.
 
 **Two immutable storage paths.** Eager pack snapshots provide a front-coded
-dictionary, bitmap indexes and content verification. The new
-[`SegmentedSession`](./crates/rdf-core/STORAGE.md) reads a certified persistent
+dictionary, bitmap indexes and content verification. [`SegmentedSession`](./crates/rdf-core/STORAGE.md) reads a certified persistent
 representation through a host range provider, authenticates admitted blocks,
 and shares a live ledger between sparse caches, pins, evidence and operator
 workspace. It preserves global IDs across sealing and reopening; persisted
@@ -267,7 +275,9 @@ forms return a typed refusal. Construction, full certification, host buffers
 and caller-owned outputs have separate memory obligations. The kernel performs
 no filesystem or network I/O. See the [storage contract](./crates/rdf-core/STORAGE.md)
 and [4.0 migration guide](./docs/MIGRATION-4.0.md) for the exact boundaries and
-stored-artifact rebuild requirements.
+stored-artifact rebuild requirements. `SegmentedBuilder` writes segmented image
+format version 8 (`PURRSEG8`), whose source checkpoints carry BLAKE3 Merkle
+nodes; version 7 images still certify and open.
 
 Rust's `explain_query_fallible_view` measures the operational view directly and
 returns its explanation with final storage evidence. Its options and stop-signal
@@ -279,7 +289,84 @@ content-addressed, append-only container with deterministic fold, binary
 payloads, chained CBOR segments, COSE signing/encryption and pure-Rust crypto.
 Its container API reaches Rust, Python and C, and the CLI reads it as an input
 format. The npm / JavaScript package does not expose it. Frozen transport
-vectors are shared with the [authoritative GTS project](https://github.com/Blackcat-Informatics/gmeow-gts).
+vectors are shared with the [authoritative GTS project](https://github.com/Blackcat-Informatics/gmeow-gts),
+and a flat byte-freeze guard covers the carried vectors at the top of `vectors/`.
+`purrdf_gts::writer::StreamWriter` frames a log into a caller's sink one frame at
+a time, byte-identical to `Writer`.
+
+**GTS reads project what a document states.** A triple term with neither `tt` nor
+`rf`, and a term that reaches itself, state no triple. Every public path (the fold
+view, dataset and graph import, the streaming importers and the N-Quads export)
+projects such a term as a fresh blank node, `_:unbound_triple_{id}`, that no
+document can name. A `reifies` row whose reifier is a literal or a quoted triple
+is dropped with a `PositionConstraint` diagnostic. A blob whose payload cannot be
+a stream of its codec folds as an opaque node with `DamagedFrame`. Reading a file
+into a dataset folds language tags to lower case and reports each as a
+`language-tag-case-folded` loss. Python's fold view raises `ValueError` for a
+damaged file.
+
+**Signature outcomes distinguish what was checked.** A COSE_Sign1 whose protected
+header is not deterministically encoded is `Invalid`. A signature whose declared
+algorithm this engine does not implement verifies as `SigStatus::Unverified`;
+`Invalid` remains for a signature that was checked and failed or is malformed.
+A caller that requires a verified signature accepts only `SigStatus::Valid`.
+The certify callers refuse an unsupported algorithm at parse. The 68 `sigalg-*`
+vectors of the signed corpus state a protected-header grammar that version 1 of
+the GTS specification does not contain, so they are outside the conformance
+statement.
+
+## Canonical form and identity
+
+**Canonical output is the nested-refinement labelling.** The default entry points
+in Rust, Python, WebAssembly, C and the CLI route to the labelling
+`nested-refinement-labelling` version 1. A search runs only on a cell that
+refinement cannot split, a finite search bound is a typed `limit` refusal, and a
+triple term nested in another lowers to one term node, so the lowered set grows
+linearly with nesting. The canonical document is the canonical line sequence
+spelled as N-Quads 1.2 with decimal blank-node labels (`_:0`, `_:1`); the
+canonical digest is its 32-byte BLAKE3 digest and moves for every dataset. The
+5.0 document writes U+FFFE and U+FFFF as `\uFFFE` and `\uFFFF`, as section 3 of
+RDF 1.2 N-Quads requires. See
+[canonical labelling of blank nodes](./docs/design/purrdf-canonical-labelling.md).
+
+**The 4.x algorithm stays callable.** RDFC-1.0 remains a named entry point and the
+W3C suite passes unchanged. The 4.x algorithm lives under `purrdf_core::rdfc12`
+(also `purrdf_rdf::rdfc12`, profile version 3) as the read-side recompute of
+stored digests. It writes U+FFFE and U+FFFF raw, as 4.0.2 did, so every stored
+4.x digest recomputes; the one exception is an IRI holding U+007F or U+0080 to
+U+009F that a caller's own `DatasetView` supplies. No writer records a 4.x digest
+in a new artifact: PACK and PURREMB write format 2, GTS compaction certificates
+carry `refold_canon`, and the readers accept both generations. See the
+[profile](./docs/RDF12-CANON-PROFILE.md) and the
+[migration guide](./docs/MIGRATION-5.0.md#stored-digests).
+
+**Row-set identities are BLAKE3 over sorted row digests.** Content identities,
+execution receipts, `SourceVersion::content_fingerprint`, text index source
+fingerprints and generations, and surface generations no longer use an additive
+sum that a party choosing rows can make collide. Values recorded by 4.x stop
+matching and are recomputed from the data. `Multiset256::fingerprint` is
+`accounting_check`, `GeoIndex::source_fingerprint` is a 32-byte digest, and
+`TextIndex::with_delta` refuses a removal of a row the index does not hold
+(`TextDeltaError::UnheldRemoval`).
+
+**A content identity is computed on request.** No freeze, view construction or
+query computes one; `ContentIdentified::content_identity` does, so the first
+governed query on a fresh dataset does not hash every row. A host binds a query
+receipt to a dataset's content with `query --content-identity` in the CLI,
+`QuadStore.bind_execution_receipt` in Python, `Dataset#bindExecutionReceipt` in
+WebAssembly, `purrdf_execution_receipt_bind` in C, and
+`purrdf_validate::query::bind_execution_receipt(receipt, &view)` in Rust, which
+takes a view that implements `ContentIdentified`. Host receipts carry
+`runIdentity` and `readsFocusGraph`.
+
+**Guards refuse instead of switching off.** An unreadable stack floor refuses
+through `purrdf_stack::try_remaining` and `FloorError` rather than disabling the
+guard. A `wasm32-unknown-unknown` module that links the evaluator without
+`purrdf-wasm` installs a host clock and entropy source or supplies the query time
+and seed, or the request is refused with `EvalError::HostSourceMissing`.
+`Iri::normalize` keeps an encoded dot segment (`a/%2e/b`) and lower-cases a host
+letter that percent-decoding exposes. `InferOptions::with_never_derive_declarations`
+refuses an SRL rule that derives a protected predicate.
 
 ## Validation, reasoning and accountable execution
 
@@ -425,8 +512,10 @@ on crates.io. See [CLI usage](./crates/cli/README.md).
 Every parsing surface accepts an explicit document base for relative IRIs.
 An unresolved relative IRI is diagnosed when no explicit or in-document base
 is available.
-Network access is host-supplied: synchronous shipped surfaces install no
-federation resolver, and the core ships no HTTP client.
+Network access is host-supplied: `SERVICE` and `LOAD` share one caller-supplied
+`HttpExchange`, and `HttpGraphResolver` authorizes and admits every redirect hop
+it follows when the host returns each redirect to it. Synchronous shipped
+surfaces install no federation resolver, and the core ships no HTTP client.
 
 ## Crate map
 
@@ -469,9 +558,13 @@ federation resolver, and the core ships no HTTP client.
 | [`purrdf-ed25519`](./crates/ed25519/) | Ed25519 signing and strict verification. |
 | [`purrdf-stack`](./crates/stack/) | Native/WASM stack admission. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | Engine and ESM bindings for JavaScript. |
+| [`purrdf-testkit`](./crates/testkit/) | Published development library: goldens, properties and benchmark harness. |
+| [`purrdf-alloc-probe`](./crates/alloc-probe/) | Published development library: allocation measurement. |
+| [`purrdf-conformance-kit`](./crates/conformance-kit/) | Published development library: conformance grading. |
 
-The C ABI, CLI, Python extension and test/benchmark tools live in the same
-workspace but are not published as Cargo packages. Shared first-party lexical,
+These 40 crates are published to crates.io. The C ABI, CLI, Python extension,
+conformance harnesses and benchmark tools live in the same workspace but are not
+published as Cargo packages. Shared first-party lexical,
 codec, hashing and signature foundations reduce the external dependency surface;
 each shared job has one enforced home. There are no semantic Cargo features,
 so an install-time feature selection cannot change the carrier's behavior.
@@ -505,9 +598,9 @@ every possible input or every language surface has been exercised:
 | Entailment (SPARQL regimes) | W3C `sparql11` `entailment/` group | **70 / 70**, 0 ledgered |
 | Entailment (OWL 2 DL consistency) | vendored W3C OWL 2 suite | **262 / 262** agreeing, 0 ledgered, 0 unledgered |
 | Entailment (OWL 2 RL, W3C entailment tests) | vendored W3C OWL 2 entailment suite | **50 / 50** agreeing, 0 ledgered, 0 unledgered — negative lane **23 / 23** (no unsoundness), positive lane **27 / 27** |
-| RDFC-1.0 | W3C canonicalization fixtures | green |
-| RDF 1.2 canonicalization profile (`purrdf-rdfc12` v2) | first-party vectors (`vectors/rdf12-canon/`) | **12 / 12** |
-| GTS | frozen cross-language vectors (`vectors/`) | **39 / 39** fold byte-exactly into their committed expectation, 0 ledgered |
+| RDFC-1.0 | W3C canonicalization fixtures | **65** vectors (64 eval + 1 negative), green |
+| RDF 1.2 canonicalization profile (`purrdf-rdfc12` version 3) | first-party vectors (`vectors/rdf12-canon/`) | **12 / 12** |
+| GTS | frozen cross-language vectors (`vectors/`) | **39 / 39** fold byte-exactly into their committed expectation, 0 ledgered. The upstream corpus at revision `cd123c2` holds 52 vectors and the engine agrees with 51; `13c-self-describing-triple-term` is the one standing divergence, and the 68 `sigalg-*` vectors are outside the statement |
 
 Performance evidence is workload- and host-specific. The benchmark harness
 records distributions and allocation evidence; `make bench` runs the native
