@@ -2479,7 +2479,7 @@ summary = "the pack triples `(?,p,o)` access path (`partition_rows`: the shorter
 
 [[site]]
 id = "core.canon-escape"
-summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `write_literal` over `purrdf_lex::iri_escape` and the `Canonical` carrier of `purrdf_lex::literal_escape`: one chunked scan per value, bulk copies of the clean runs"
+summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `write_literal_rdfc12_v3` over `purrdf_lex::iri_escape` and the `Canonical` kernel of `purrdf_lex::literal_escape`: one chunked scan per value, bulk copies of the clean runs"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
@@ -2639,7 +2639,7 @@ summary = "the RDFC-1.0 N-Quads writer's terms, `term_syntax::write_iri` / `writ
   label = "literal"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_lex"
-  symbol = "purrdf_lex::term_syntax::write_literal_for"
+  symbol = "purrdf_lex::term_syntax::write_literal_with"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
