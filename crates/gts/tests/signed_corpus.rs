@@ -20,8 +20,10 @@ use purrdf_ed25519::VerifyingKey;
 use purrdf_gts::cose::verify_signatures;
 use purrdf_gts::reader::read;
 
-/// Vectors the engine knowingly does not follow, with the reason for each.
-const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
+/// Vectors the engine knowingly does not follow: the vector, the reason, and the
+/// exact disagreement the engine reports for it. Pinning the disagreement keeps
+/// a listed vector from drifting to a different outcome unnoticed.
+const EXPECTED_DIFFERENCES: &[(&str, &str, &str)] = &[
     // The vectors place unrelated values under COSE labels 5, 6 and 7. RFC 9052
     // section 3.1 types label 5 and 6 as byte strings and does not define 7, and
     // the engine follows the RFC. Whether the format means to depart from it is
@@ -29,22 +31,27 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
     (
         "sigalg-depth-8.json",
         "header labels 5 to 7 hold non-byte-string values; RFC 9052 types them",
+        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
     ),
     (
         "sigalg-header-null-bool-values.json",
         "header labels 5 to 7 hold non-byte-string values; RFC 9052 types them",
+        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
     ),
     (
         "sigalg-int-max-value.json",
         "header label 5 holds an integer; RFC 9052 types it as a byte string",
+        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
     ),
     (
         "sigalg-int-min-value.json",
         "header label 5 holds an integer; RFC 9052 types it as a byte string",
+        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
     ),
     (
         "sigalg-text-valid-multibyte.json",
         "header label 5 holds a text string; RFC 9052 types it as a byte string",
+        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
     ),
     // Deterministic Encoding admits every integer CBOR can encode, and neither
     // the specification nor RFC 9052 bounds a header integer further. The bound
@@ -52,10 +59,12 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
     (
         "sigalg-int-over-max-key.json",
         "a header integer beyond 2^63-1 is deterministic CBOR; the specification sets no bound",
+        "with key: status valid, want invalid; without key: status unverified, want invalid",
     ),
     (
         "sigalg-int-under-min-key.json",
         "a header integer below -2^63 is deterministic CBOR; the specification sets no bound",
+        "with key: status valid, want invalid; without key: status unverified, want invalid",
     ),
     // RFC 9052 section 3.1 makes `kid` optional, and the engine documents and
     // tests that an envelope without one verifies with a supplied key. The
@@ -63,6 +72,7 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
     (
         "sigalg-missing-kid.json",
         "the specification does not require a kid and RFC 9052 makes it optional",
+        "with key: status unverified, want invalid; without key: status unverified, want invalid",
     ),
     // The specification does not order the signature-length check and key
     // resolution: the engine refuses a wrong-length EdDSA signature as invalid
@@ -70,6 +80,7 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
     (
         "sigalg-eddsa-short.json",
         "a short EdDSA signature is invalid before key resolution; the vector orders them the other way",
+        "with key: kid None, want test-kid; without key: kid None, want test-kid; without key: status invalid, want unverified",
     ),
 ];
 
@@ -125,6 +136,7 @@ fn disagreement(name: &str) -> Option<String> {
             }
         }
     }
+    problems.sort_unstable();
     problems.dedup();
     (!problems.is_empty()).then(|| problems.join("; "))
 }
@@ -170,17 +182,27 @@ fn the_signed_corpus_agrees_with_the_verifier_except_the_listed_differences() {
     let listed = |name: &str| {
         EXPECTED_DIFFERENCES
             .iter()
-            .any(|(listed, _)| *listed == name)
+            .find(|(listed, _, _)| *listed == name)
+            .map(|(_, _, observed)| *observed)
     };
+    let mut drift: Vec<String> = Vec::new();
     for (name, problem) in &results {
         match (problem, listed(name)) {
-            (Some(problem), false) => {
+            (Some(problem), None) => {
                 panic!("{name} disagrees and is not a listed difference: {problem}")
             }
-            (None, true) => panic!("{name} now agrees: remove it from EXPECTED_DIFFERENCES"),
+            (None, Some(_)) => panic!("{name} now agrees: remove it from EXPECTED_DIFFERENCES"),
+            (Some(problem), Some(observed)) if problem != observed => {
+                drift.push(format!("{name}: listed {observed:?}, observed {problem:?}"));
+            }
             _ => {}
         }
     }
+    assert!(
+        drift.is_empty(),
+        "listed differences changed:\n{}",
+        drift.join("\n")
+    );
     assert_eq!(
         results
             .iter()
