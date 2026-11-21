@@ -194,7 +194,9 @@ pub fn write_literal_rdfc12_v3<W: TextOut + ?Sized>(
 }
 
 /// The one literal frame: `"`, the lexical form through `body`, `"`, then the
-/// tag or the datatype.
+/// tag or the datatype. Kept out of line so the SIMD census measures the one
+/// escape driver every literal writer shares.
+#[inline(never)]
 fn write_literal_with<W: TextOut + ?Sized>(
     lexical_form: &str,
     body: impl FnOnce(&str, &mut W),
