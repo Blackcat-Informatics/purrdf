@@ -197,9 +197,9 @@ direction — not regenerated to "fix" the field, and not resynced from
 upstream to match it. `scripts/check-corpus-frozen.py` byte-freezes the upstream
 vectors at the top of this root (`vectors-flat.sha256`) but not the
 manifests. The manifests are maintained by hand upstream and carried here
-as-is; the only guarantee this repository makes over them is the review-time
-rule that nothing under `vectors/` is hand-edited locally (AGENTS.md), not a
-machine-verified freeze gate.
+with the differences from upstream that `PROVENANCE.md` lists; the only
+guarantee this repository makes over them is the review-time rule that nothing under `vectors/` is hand-edited
+locally (AGENTS.md), not a machine-verified freeze gate.
 
 ## Usage
 
