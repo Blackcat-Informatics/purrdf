@@ -189,9 +189,10 @@ The four vector manifests at the corpus root (`vectors/manifest.json`,
 each carry `"generated_by": "scripts/check_vector_manifest.py --write"`. No
 such script exists in this repository, and `git log` over the manifests shows
 no commit ever added one — the field names a generator that was never built
-here. It is not corrected in place: `vectors/` is governed upstream by
-[`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and carried
-into this repository verbatim, so it is hand-edited by nobody, in either
+here. It is not corrected in place: the upstream vectors in `vectors/` are
+governed by [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and
+carried into this repository verbatim (ten files, five vectors, are this
+project's own generated files), so they are hand-edited by nobody, in either
 direction — not regenerated to "fix" the field, and not resynced from
 upstream to match it. `scripts/check-corpus-frozen.py` byte-freezes the upstream
 vectors at the top of this root (`vectors-flat.sha256`) but not the

@@ -156,6 +156,30 @@ fn a_flat_root_refuses_an_edited_or_added_payload_file_and_only_that() {
     );
 }
 
+/// The upstream GTS vectors at the top of `vectors/` stay guarded: dropping the
+/// registration would leave the guard passing over an unfrozen corpus.
+#[test]
+fn the_upstream_gts_vectors_are_registered_as_a_flat_root_with_their_receipt() {
+    let workspace = purrdf_testkit::paths::workspace_root!();
+    let registry = fs::read_to_string(workspace.join("scripts/conformance-frozen/roots.toml"))
+        .expect("freeze registry");
+    assert!(registry.contains("[flat_roots.\"vectors\"]"));
+    assert!(registry.contains("receipt = \"scripts/conformance-frozen/vectors-flat.sha256\""));
+    let receipt =
+        fs::read_to_string(workspace.join("scripts/conformance-frozen/vectors-flat.sha256"))
+            .expect("flat receipt");
+    let frozen: BTreeSet<_> = receipt
+        .lines()
+        .map(|line| line.split_once("  ").expect("SHA-256 receipt record").1)
+        .collect();
+    assert_eq!(frozen.len(), 68, "34 upstream vectors, two files each");
+    assert!(frozen.contains("12-conflicting-reifier.expected.json"));
+    assert!(
+        !frozen.contains("25b-streamable-compacted.gts"),
+        "generated vectors are not frozen"
+    );
+}
+
 #[test]
 fn every_data_r2_leaf_and_the_root_closure_have_the_exact_pinned_inventory() {
     use purrdf_sparql_conformance::manifest;

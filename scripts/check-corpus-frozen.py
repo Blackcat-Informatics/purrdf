@@ -6,7 +6,7 @@
 
 The vendored suites are declared **byte-frozen** — never hand-edited. This gate
 makes that claim true rather than aspirational: it recomputes a SHA-256 over
-every file under each guarded root and compares it to a committed manifest, so a
+every payload file of each guarded root and compares it to a committed manifest, so a
 silent content edit (a changed expected result, a tampered shape, a re-synced
 byte) fails the build. Exact-count assertions in the harnesses catch add / remove
 / rename drift; this catches *content* drift, which counts alone cannot.

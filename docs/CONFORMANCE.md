@@ -513,12 +513,13 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   resolution examples.
 - `bindings/python/tests/rdflib_suite/vendor/` — rdflib 7.6's own tests,
   vendored verbatim and run against the PurRDF drop-in.
-- `vectors/*.gts` + subdirs — the GTS conformance corpus shared byte-exact
-  with the other GTS engines (governed in
+- `vectors/*.gts` + subdirs — the GTS conformance corpus (governed in
   [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)). The 68
-  files of the 34 upstream vectors at the top of `vectors/` are byte-frozen
-  (`scripts/conformance-frozen/vectors-flat.sha256`); the five vectors this
-  project generates are not.
+  files of the 34 upstream vectors at the top of `vectors/` are byte-identical
+  to the upstream corpus, shared byte-exact with the other GTS engines, and
+  byte-frozen (`scripts/conformance-frozen/vectors-flat.sha256`). The other ten
+  files, five vectors, are this project's own generated files and are not
+  frozen.
 
 ## Running them
 

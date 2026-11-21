@@ -372,15 +372,43 @@ are not frozen, so regenerating one needs no re-vendor: `25b-streamable-compacte
 (the current writer compacts `25-streamable-source`, so the pack carries the
 provenance the writer now records; the upstream file of that name predates it)
 and `30-dict-rawcontent`, `31-dict-trained`, `32-dict-rsyncable` and
-`33-multi-dict` (no upstream counterpart). The registry names them.
+`33-multi-dict` (no upstream counterpart). The registry names them, and
+tests check each against a fresh regeneration: `streamable_vectors.rs`
+(`frozen_vector_is_byte_identical_to_a_fresh_regeneration`) for the `25b` pack,
+and `dict_vectors.rs` for `30`
+(`rawcontent_vector_is_byte_identical_to_a_fresh_regeneration`), `32`
+(`rsyncable_vector_is_byte_identical_to_a_fresh_regeneration`) and `33`
+(`multi_dict_vector_is_byte_identical_to_a_fresh_regeneration`). Vector `31`
+trains a dictionary with floating-point arithmetic, so its bytes are not
+platform-stable and `trained_vector_folds_identically_to_a_fresh_regeneration`
+checks its fold instead. `every_dictionary_vector_expected_json_matches_its_frozen_fold`
+checks the four dictionary expectations, and `gts_corpus_expected_fold.rs`
+(`every_frozen_vector_matches_its_committed_expected_fold`) checks every
+expectation of the 39 vectors, `25b` included.
 
 The carried `12-conflicting-reifier.expected.json` is the upstream file: the
 fold retains every `reifies` row bound to the reifier id and reports no
 `ConflictingReifier`, as the specification requires. The four `manifest*.json`
-files at the top of `vectors/` are carried as they were and are not frozen: the
-carried `manifest.json` and `manifest.core.json` still list `ConflictingReifier`
-for that vector, and they differ from the upstream manifest. A later resync is a
-re-vendor at a named upstream revision followed by `--update`.
+files at the top of `vectors/` are not frozen, because the flat root registers
+only `.gts` and `.expected.json` files. Three differ from the upstream files:
+
+- `manifest.json` lists 73 vectors where the upstream file lists 158, and
+  `manifest.core.json` lists 27 where the upstream file lists 44. Every carried
+  entry equals its upstream entry except vector 12 and, in `manifest.json`,
+  vector `25b`. The carried entry for vector 12 is `negative` with the
+  diagnostic `ConflictingReifier` and lacks the `writer-determinism` subset and
+  the `writer` tier; the upstream entry is not negative, has no diagnostic, and
+  lists both. The carried entry for `25b` names the head of the pack this
+  project regenerated.
+- `manifest.profiles.json` lists the same 16 vectors as the upstream file and
+  differs in one entry: the `expected_head` and `segment_heads` of `25b`.
+- `manifest.transforms.json` is byte-identical to the upstream file. It is not
+  registered because the flat root's suffixes name the vector files only, and a
+  receipt over one of the four manifests would suggest the other three are held
+  to upstream bytes.
+
+A later resync is a re-vendor at a named upstream revision followed by
+`--update`.
 
 ## Signed-frame vectors (`vectors/signed/`)
 
