@@ -47,9 +47,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `ResolutionStorage` method is added. `ComponentState` is a new public type.
 - **Behaviour change: the GTS reader drops a `reifies` row whose reifier is a
   literal or a quoted triple.** The row is diagnosed `PositionConstraint`;
-  4.0.2 kept it silently. The indirect spelling stored files hold (a
-  quoted-triple term with no `tt` whose `rf` is its own id) is an exception and
-  keeps its binding with no diagnostic. See the migration guide.
+  4.0.2 kept it silently. A term whose `rf` names its own id is now a
+  `ForwardReference` and its `rf` reads as absent, as the format specification
+  requires for any `rf` at or past the term's id. See the migration guide.
 - **Behaviour change: a GTS blob whose payload cannot be a stream of its codec
   is an opaque node.** A blob frame that declares its digest and whose `zstd`,
   `zstd-rsyncable` or `gzip` payload fails a structural check at fold (frame

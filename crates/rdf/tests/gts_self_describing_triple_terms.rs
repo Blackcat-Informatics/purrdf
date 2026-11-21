@@ -91,7 +91,7 @@ fn a_tt_only_triple_term_folds_and_renders_as_a_quoted_triple() {
     );
     assert!(
         !text.contains("rdf-syntax-ns#reifies"),
-        "a self-bound triple term is not an `rdf:reifies` statement: {text}"
+        "a self-describing triple term is not an `rdf:reifies` statement: {text}"
     );
 }
 

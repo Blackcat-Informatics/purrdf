@@ -39,12 +39,12 @@ pub(super) fn source(repeats: usize, snapshot: bool) -> Vec<u8> {
             ("v".into(), "typed".into()),
             ("dt".into(), id(4)),
         ]),
+        Value::Map(vec![("k".into(), 2.into()), ("v".into(), "b".into())]),
         Value::Map(vec![
             ("k".into(), 3.into()),
             ("rf".into(), id(6)),
             ("tt".into(), Value::Array(vec![id(0), id(1), id(5)])),
         ]),
-        Value::Map(vec![("k".into(), 2.into()), ("v".into(), "b".into())]),
         Value::Map(vec![
             ("k".into(), 1.into()),
             ("v".into(), "directional".into()),
@@ -53,7 +53,7 @@ pub(super) fn source(repeats: usize, snapshot: bool) -> Vec<u8> {
         ]),
     ]);
     let rows = [
-        Value::Array(vec![id(7), id(1), id(6), id(3)]),
+        Value::Array(vec![id(6), id(1), id(7), id(3)]),
         Value::Array(vec![id(0), id(1), id(8)]),
         Value::Array(vec![id(0), id(1), id(5)]),
     ];
@@ -65,11 +65,11 @@ pub(super) fn source(repeats: usize, snapshot: bool) -> Vec<u8> {
         ),
         (
             "reifies",
-            Value::Array(vec![Value::Array(vec![id(7), id(0), id(1), id(5), id(3)])]),
+            Value::Array(vec![Value::Array(vec![id(6), id(0), id(1), id(5), id(3)])]),
         ),
         (
             "annot",
-            Value::Array(vec![Value::Array(vec![id(7), id(1), id(8), id(3)])]),
+            Value::Array(vec![Value::Array(vec![id(6), id(1), id(8), id(3)])]),
         ),
     ];
     if snapshot {

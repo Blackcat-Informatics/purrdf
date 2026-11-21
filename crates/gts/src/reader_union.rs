@@ -28,9 +28,10 @@ use crate::wire::map_get;
 // components therefore runs over an acyclic term graph.
 //
 // A term's datatype and reifier are not part of its identity, yet the walk maps
-// them too, and they can close a loop the components do not: a triple term whose
-// `rf` names a self-bound triple term whose binding has the first term as a
-// component. Such a pair is not self-reaching, and both keep their triples. The
+// them too, and they can close a loop the components do not: a term whose `rf`
+// or datatype leads, through a chain of earlier terms, to a term whose binding
+// has the first term as a component. Such terms are not self-reaching, and each
+// keeps its triple. The
 // terms on a loop of the whole walk (`Unioner::settle_later`, found once per
 // segment) therefore have their datatype and reifier mapped only after the term
 // itself is pushed (`Unioner::unsettled`), which breaks every such loop.
@@ -145,8 +146,8 @@ impl Unioner {
 
     /// The terms of `seg` that lie on a loop of [`Self::map_term_walk`]. The walk
     /// follows exactly these edges: a triple term's key components unless it
-    /// reaches itself, a datatype, a reifier unless the term is self-bound or
-    /// reaches itself, and the components of a `tt`.
+    /// reaches itself, a datatype, a reifier unless the term reaches itself, and
+    /// the components of a `tt`.
     fn walk_loops(seg: &Graph, reaching: &SelfReaching) -> Vec<bool> {
         let mut first: FastMap<usize, Triple3> = FastMap::default();
         for &(reifier, triple, _) in &seg.reifiers {
@@ -163,8 +164,7 @@ impl Unioner {
                 successors.extend(<[usize; 3]>::from(triple));
             }
             successors.extend(t.datatype);
-            let self_bound = t.kind == TermKind::Triple && t.reifier == Some(tid);
-            if !degraded && !self_bound {
+            if !degraded {
                 successors.extend(t.reifier);
             }
             if let Some(triple) = t.triple {
@@ -191,9 +191,7 @@ impl Unioner {
                 let datatype = self.map_term_walk(seg, seg_idx, datatype);
                 self.out.terms[union_id].datatype = Some(datatype);
             }
-            let self_bound = t.kind == TermKind::Triple && t.reifier == Some(source);
-            if !self_bound
-                && !self.reaching.contains(source)
+            if !self.reaching.contains(source)
                 && let Some(reifier) = t.reifier
             {
                 let reifier = self.map_term_walk(seg, seg_idx, reifier);
@@ -208,8 +206,7 @@ impl Unioner {
     /// A term's key is found first. A quoted triple keys on its interned SPO
     /// binding, taken from the term's own `tt` when it has one and otherwise through
     /// the legacy reifier indirection, so its subject, predicate and object are
-    /// mapped first, in that order. A self-bound triple term uses `rf == tid` and its
-    /// reifier is not mapped. A term whose key the union already holds is that union
+    /// mapped first, in that order. A term whose key the union already holds is that union
     /// term; any other has its datatype, then its reifier, then its `tt` components
     /// mapped, and is pushed once all of them are, so its union id is the length of
     /// the union's term table at that moment. Every nested mapping runs to completion
@@ -248,7 +245,6 @@ impl Unioner {
             // borrowed across the `&mut self` mappings; only the two `Option<String>`
             // fields that move into the pushed `Term` are cloned below.
             let t = &seg.terms[frame.tid];
-            let self_bound = t.kind == TermKind::Triple && t.reifier == Some(frame.tid);
             let mapped = match frame.stage {
                 MapStage::Start => {
                     let degraded = self.reaching.contains(frame.tid);
@@ -287,10 +283,7 @@ impl Unioner {
                 }
                 MapStage::Datatype => {
                     frame.datatype = frame.results.pop();
-                    if !self_bound
-                        && !self.reaching.contains(frame.tid)
-                        && !self.settles_later(frame.tid)
-                    {
+                    if !self.reaching.contains(frame.tid) && !self.settles_later(frame.tid) {
                         frame.calls.extend(t.reifier);
                     }
                     frame.stage = MapStage::Reifier;
@@ -309,11 +302,7 @@ impl Unioner {
                     // Mapping the datatype, reifier and components can push terms, so
                     // this term's output id is taken only now that they are done.
                     let new_id = self.out.terms.len();
-                    let reifier = if self_bound {
-                        Some(new_id)
-                    } else {
-                        frame.reifier
-                    };
+                    let reifier = frame.reifier;
                     // Blank nodes are relabelled with a segment prefix (§7.1 permits
                     // isomorphism-preserving relabeling): within a segment,
                     // byte-identical entries already intern to one union term (§7.8);
@@ -519,12 +508,7 @@ mod term_walk_tests {
             return got;
         }
         let datatype = t.datatype.map(|d| reference_map(union, seg, seg_idx, d));
-        let self_bound = t.kind == TermKind::Triple && t.reifier == Some(tid);
-        let mapped_reifier = if self_bound {
-            None
-        } else {
-            t.reifier.map(|r| reference_map(union, seg, seg_idx, r))
-        };
+        let reifier = t.reifier.map(|r| reference_map(union, seg, seg_idx, r));
         let triple = t.triple.map(|(s, p, o)| {
             (
                 reference_map(union, seg, seg_idx, s),
@@ -533,11 +517,6 @@ mod term_walk_tests {
             )
         });
         let new_id = union.out.terms.len();
-        let reifier = if self_bound {
-            Some(new_id)
-        } else {
-            mapped_reifier
-        };
         let value = if t.kind == TermKind::Bnode {
             Some(match t.value.as_deref() {
                 Some(label) if !label.is_empty() => format!("s{seg_idx}.{label}"),
@@ -572,8 +551,7 @@ mod term_walk_tests {
     }
 
     /// A generated segment term table as the reader leaves one: every component,
-    /// datatype and reifier names an earlier term (or, for a self-bound triple term, the
-    /// term itself), triple terms state their components or reach them through a
+    /// datatype and reifier names an earlier term, triple terms state their components or reach them through a
     /// reifier row, and labels, values and shapes repeat so the union deduplicates.
     fn generated(seed: u64) -> Graph {
         let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
@@ -606,15 +584,20 @@ mod term_walk_tests {
                     triple
                 }
                 4 => {
-                    // Self-bound: the reifier row is keyed by the term's own id.
+                    // Legacy indirection (section 7.3 step 2): `rf` names an earlier
+                    // IRI or blank node, and a row keyed by it binds the triple.
                     let mut triple = term(TermKind::Triple, None);
-                    triple.reifier = Some(index);
+                    let mut reifier = rng.below_usize(index);
+                    while !matches!(graph.terms[reifier].kind, TermKind::Iri | TermKind::Bnode) {
+                        reifier -= 1;
+                    }
+                    triple.reifier = Some(reifier);
                     let components = (
                         rng.below_usize(index),
                         rng.below_usize(index),
                         rng.below_usize(index),
                     );
-                    graph.reifiers.push((index, components, None));
+                    graph.reifiers.push((reifier, components, None));
                     triple
                 }
                 _ => {
