@@ -291,21 +291,21 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
   N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
   `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
-  for every caller; the C1 controls stay raw. The canonical IRI writer escapes
-  exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
+  for every caller but one; the C1 controls stay raw. The canonical IRI writer
+  escapes exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
   carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
   Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
-  (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
-  `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
-  the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
-  literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
-  because it was taken over a non-conforming spelling; every other stored digest
-  recomputes unchanged. The readers affected are the PACK version 1
-  `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
-  source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
-  over binary lines and does not move; the 5.0 document spells those characters
-  as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
-  SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
+  (for the last, to keep the bytes of a SARIF `logicalLocation` stable). The one
+  exception is the retained `purrdf_core::rdfc12` path, which writes U+FFFE and
+  U+FFFF raw through the new `literal_escape::write_rdfc12_v3` and
+  `term_syntax::write_literal_rdfc12_v3`: its bytes, `CANON_PROFILE_VERSION` (3)
+  and `CANON_CORPUS_DIGEST` are those of 4.0.2, so every stored 4.x digest
+  recomputes, including the PACK version 1 `rdfc_digest`, `rdfc10-sha256`
+  compaction certificates, PURREMB version 1 source digests and the embedded
+  `stream:contentRefoldDigest`. The 5.0 digest is over binary lines and does not
+  move; the 5.0 document spells those characters as escapes. The
+  `nrl1-lines-sha256` compaction certificate digest, which is the SHA-256 of the
+  5.0 document, follows its spelling and moves for such a dataset.
 - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
