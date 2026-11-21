@@ -545,11 +545,23 @@ fn f7_f8_every_enforcement_point_runs_the_ratchet() {
         assert_ne!(mode & 0o111, 0, "pre-merge-commit is executable");
     }
     let makefile = read("Makefile");
-    let check = makefile
-        .split("\ncheck:")
-        .nth(1)
-        .and_then(|rest| rest.split("\n\n").next())
-        .expect("a check target");
+    let recipe = |target: &str| {
+        makefile
+            .split(&format!("\n{target}:"))
+            .nth(1)
+            .and_then(|rest| rest.split("\n\n").next())
+            .unwrap_or_else(|| panic!("a {target} target"))
+            .to_owned()
+    };
+    let mut check = recipe("check");
+    for nested in check
+        .clone()
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("$(MAKE) "))
+    {
+        check.push('\n');
+        check.push_str(&recipe(nested.split_whitespace().last().expect("a target")));
+    }
     assert!(
         check.contains("--non-rust-ratchet") && check.contains("--target worktree"),
         "make check runs the ratchet on the working tree"
