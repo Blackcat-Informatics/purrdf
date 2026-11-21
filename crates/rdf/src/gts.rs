@@ -58,7 +58,7 @@ use crate::native_codecs::ser_model::{SerGraph, SerReifierRow, SerTerm, SerTermK
 pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDiagnostic> {
     let reaching = ensure_terms_terminate(g)?;
 
-    let mut self_bound: Vec<SerReifierRow> = Vec::new();
+    let mut described: Vec<SerReifierRow> = Vec::new();
     let mut terms = Vec::with_capacity(g.terms.len());
     for (id, t) in g.terms.iter().enumerate() {
         if reaching.contains(id) {
@@ -78,7 +78,7 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
             t.reifier
         } else if let Some(triple) = t.triple {
             // Self-describing (`tt`): re-spell it under the term's own id.
-            self_bound.push((id, triple, None));
+            described.push((id, triple, None));
             Some(id)
         } else if t.reifier.is_some_and(|rid| g.reifier(rid).is_some()) {
             // The legacy indirection already resolves through the statement layer;
@@ -105,7 +105,7 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
         });
     }
 
-    let mut reifiers = self_bound;
+    let mut reifiers = described;
     reifiers.extend(g.reifiers.iter().copied());
     Ok(SerGraph {
         terms,

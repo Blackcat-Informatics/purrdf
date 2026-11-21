@@ -264,6 +264,36 @@ fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
     }
 }
 
+/// A file whose triple term names its own id as `rf`, with a row keyed by that
+/// id, is read as GTS-SPEC §7.2 and §7.4 require: the `rf` is a
+/// `ForwardReference` and is treated as absent, the row is dropped with
+/// `PositionConstraint`, and the term states no triple. The fold view renders it
+/// as the blank node of an unbound triple term, and the dataset bridges refuse it
+/// as unbound, exactly as they treat a bare triple term.
+#[test]
+fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
+    let mut writer = purrdf_gts::writer::Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        indirect_triple_term(2),            // 2: `rf` names the term itself
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    writer.add_reifies(&[(2, (0, 1, 0), None)]);
+    let graph = purrdf_gts::reader::read(&writer.into_bytes(), false, None);
+    let codes: Vec<&str> = graph.diagnostics.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(codes, ["ForwardReference", "PositionConstraint"]);
+    assert!(
+        graph.reifiers.is_empty(),
+        "the row keyed by the term is dropped"
+    );
+
+    let err = dataset_from_gts_graph(&graph).expect_err("no row binds the term");
+    assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+    let view = GtsFoldView::new(graph).expect("the fold view admits the graph");
+    assert_eq!(view.nq_token(2), "_:unbound_triple_2");
+}
+
 /// `tt` takes precedence over the reifier indirection, so a graph whose `tt` closes a
 /// loop degrades even when the reifier row it also carries is perfectly sound.
 #[test]

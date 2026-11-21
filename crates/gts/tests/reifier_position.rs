@@ -8,16 +8,18 @@
 //! and dropped; the reifier term itself is untouched, and a quoted triple stays
 //! legal as the object of a `reifies` row.
 
-use purrdf_gts::model::{ReifierRow, Term, TermKind};
+use purrdf_gts::model::{DiagnosticCause, ReifierRow, Term, TermKind};
 use purrdf_gts::reader::{ReadOptions, StreamingSink, read, read_to_sink_with_options};
 use purrdf_gts::writer::Writer;
+use purrdf_hash::error::{ErrorValue, StructuredError};
+use purrdf_testkit::error_capture::Capture;
 
 #[path = "support/reifier_terms.rs"]
 mod reifier_terms;
 use reifier_terms::{indirect_triple_term, triple_term};
 
 /// One file holding every kind of reifier: ids 3, 4 and 10 are kept IRI and
-/// blank-node reifiers, 8 is the exempt spelling, and 5, 6, 7 and 9 are refused.
+/// blank-node reifiers, and 5, 6, 7, 8 and 9 are refused.
 fn mixed_reifier_file() -> Vec<u8> {
     let terms = vec![
         Term::iri("http://example.org/a"),       // 0
@@ -28,7 +30,7 @@ fn mixed_reifier_file() -> Vec<u8> {
         Term::literal("x", None),                // 5
         triple_term(0, 1, 2),                    // 6 carries `tt`
         indirect_triple_term(3),                 // 7 `rf` names another term
-        indirect_triple_term(8),                 // 8 `rf` is its own id
+        indirect_triple_term(8),                 // 8 `rf` is its own id (§7.2 forbids it)
         Term {
             kind: TermKind::Triple,
             value: None,
@@ -61,9 +63,11 @@ fn mixed_reifier_file() -> Vec<u8> {
 /// quoted triple as the OBJECT of a `reifies` row is retained: the constraint
 /// binds the reifier position only.
 ///
-/// One quoted-triple reifier is exempt: the indirect spelling stored files hold,
-/// a term with no `tt` whose `rf` is its own id. Its binding is kept with no
-/// diagnostic.
+/// A term with no `tt` whose `rf` is its own id gets no exception: §7.2 makes
+/// that `rf` a `ForwardReference`, so the term states no triple, and its row is
+/// dropped like any other quoted-triple reifier. Each row diagnostic names the
+/// reifier and the triple the row would have bound, so a consumer can act on it
+/// without reading the file again.
 #[test]
 fn a_reifier_that_is_a_literal_or_quoted_triple_drops_its_row() {
     let bytes = mixed_reifier_file();
@@ -74,17 +78,51 @@ fn a_reifier_that_is_a_literal_or_quoted_triple_drops_its_row() {
         vec![
             (3, (0, 1, 2), None),
             (4, (0, 1, 2), None),
-            (8, (0, 1, 2), None),
-            (10, (0, 1, 6), None),
+            (10, (0, 1, 6), None)
         ],
-        "the literal and non-exempt quoted-triple reifier rows are dropped"
+        "the literal and quoted-triple reifier rows are dropped"
     );
     let codes: Vec<&str> = graph.diagnostics.iter().map(|d| d.code.as_str()).collect();
-    assert_eq!(codes, ["PositionConstraint"; 4]);
     assert_eq!(
-        graph.triple_of(8),
-        Some((0, 1, 2)),
-        "the exempt term still states its own triple"
+        codes,
+        [
+            "ForwardReference",
+            "PositionConstraint",
+            "PositionConstraint",
+            "PositionConstraint",
+            "PositionConstraint",
+            "PositionConstraint",
+        ]
+    );
+    assert_eq!(graph.terms[8].reifier, None, "the self-naming rf is absent");
+    assert_eq!(graph.triple_of(8), None, "the term states no triple");
+    let dropped: Vec<(u128, [u128; 3])> = graph.diagnostics[1..]
+        .iter()
+        .map(|diagnostic| {
+            let Some(DiagnosticCause::Native(cause)) = diagnostic.cause.as_ref() else {
+                panic!("the row diagnostic keeps its typed cause: {diagnostic:?}");
+            };
+            let error: &dyn StructuredError = &***cause;
+            let fields = Capture::read(error);
+            assert_eq!(fields.code, "gts-reifier-kind");
+            let unsigned = |name: &str| match fields.field(name) {
+                ErrorValue::Unsigned(value) => value,
+                other => panic!("{name} is {other:?}"),
+            };
+            (
+                unsigned("id"),
+                [
+                    unsigned("subject"),
+                    unsigned("predicate"),
+                    unsigned("object"),
+                ],
+            )
+        })
+        .collect();
+    assert_eq!(
+        dropped,
+        [5, 6, 7, 8, 9].map(|id| (id, [0, 1, 2])),
+        "each row diagnostic names its reifier and the triple it would have bound"
     );
     assert_eq!(
         graph.terms[6].kind,
@@ -116,5 +154,15 @@ fn the_streaming_reader_applies_the_same_reifier_position_rule() {
         diagnostics.iter().map(|d| d.code.clone()).collect()
     };
     assert_eq!(codes(&streamed.diagnostics), codes(&folded.diagnostics));
-    assert_eq!(codes(&streamed.diagnostics), ["PositionConstraint"; 4]);
+    assert_eq!(
+        codes(&streamed.diagnostics),
+        [
+            "ForwardReference",
+            "PositionConstraint",
+            "PositionConstraint",
+            "PositionConstraint",
+            "PositionConstraint",
+            "PositionConstraint",
+        ]
+    );
 }

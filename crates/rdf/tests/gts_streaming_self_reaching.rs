@@ -16,7 +16,7 @@ use purrdf_rdf::gts::dataset_from_gts_graph;
 use purrdf_rdf::{RdfDataset, SerializeGraph, import_gts_events, serialize_dataset};
 
 /// A `k:3` term with no `tt` that takes its components from the first row
-/// bound to `reifier`. Naming its own id makes it self-bound.
+/// bound to `reifier`, an earlier term (GTS-SPEC §7.2).
 fn indirect_triple(reifier: usize) -> Term {
     let mut term = Term::triple_term((0, 0, 0));
     term.triple = None;
@@ -82,17 +82,19 @@ fn both_ways(
 /// whichever term the search starts from.
 #[test]
 fn every_member_of_a_component_degrades_whichever_term_the_search_starts_from() {
-    for [a, b, c] in [[2, 3, 4], [4, 2, 3], [3, 4, 2]] {
+    for [a, b, c] in [[5, 6, 7], [7, 5, 6], [6, 7, 5]] {
         let mut terms = vec![
             Term::iri("https://example.org/s"),
             Term::iri("https://example.org/p"),
         ];
-        // Each member is self-bound, so the row keyed by its own id binds it.
+        // Members 5, 6 and 7 read the IRI reifiers 2, 3 and 4, so the row keyed
+        // by a member's reifier (its id minus 3) binds it.
+        terms.extend((2..5).map(|r| Term::iri(format!("https://example.org/r{r}"))));
         terms.extend((2..5).map(indirect_triple));
         let rows = [
-            (a, (c, 1, b), None),
-            (b, (0, 1, c), None),
-            (c, (a, 1, 0), None),
+            (a - 3, (c, 1, b), None),
+            (b - 3, (0, 1, c), None),
+            (c - 3, (a, 1, 0), None),
         ];
         let (quads, _) = both_ways(
             &terms,

@@ -483,12 +483,18 @@ lost or retyped a public field, and none of these enums lost a variant.
   a literal or a quoted-triple term, and diagnoses it `PositionConstraint`;
   4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
   `quads` subject and as the object of a `reifies` or `annot` row. One
-  quoted-triple reifier is an exception to the specification's rule, because
-  stored files hold it: a quoted-triple term with no `tt` whose `rf` is its own
-  id, keyed by a row on that id, keeps its binding with no diagnostic. A file
-  whose `reifies` row is keyed by a quoted-triple term that carries `tt`, by one
-  whose `rf` names another term, or by one with neither `tt` nor `rf` loses
-  that row.
+  quoted-triple term whose `rf` names its own id or a later id breaks the
+  specification's rule that `rf` names a strictly earlier term. The reader
+  diagnoses it `ForwardReference` and reads its `rf` as absent. The term then
+  resolves by its `tt` when that is valid and states no triple otherwise, and a
+  `reifies` row keyed by it is dropped with `PositionConstraint`. The row
+  diagnostic carries the frame index, the reifier id and the row's triple. The
+  conforming spelling names an earlier IRI or blank-node reifier in `rf` and
+  keys the row by that reifier. A file whose `reifies` row is keyed by a
+  quoted-triple term, whatever its `tt` or `rf`, loses that row.
+  A count of 56 distinct stored `.gts` files found none holding the former
+  spelling. The count has limits: writer versions are not recorded in the
+  files' headers, and older archived versions of the live files were not read.
 - **Damaged blob payload in GTS.** A blob frame that declares its digest and
   whose transformed payload cannot be a stream of its codec folds as an opaque
   node with a `DamagedFrame` diagnostic, and the blob is not in the blob table;

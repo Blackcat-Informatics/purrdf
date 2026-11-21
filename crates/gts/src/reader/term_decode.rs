@@ -214,24 +214,18 @@ pub(super) fn decode_references(
     let tid = term_id as i128;
     let dt_raw = reference(map_get(entries, "dt"), base, &mut diagnose);
     let rf_raw = reference(map_get(entries, "rf"), base, &mut diagnose);
-    // Sanitise refs: dt MUST name an already-introduced term, and rf
-    // normally does too (§7.5). A quoted-triple term may self-bind
-    // its reifier (`rf == term_id`) so the term can be used directly
-    // as an RDF 1.2 triple term while the following `reifies` frame
-    // supplies the SPO binding.
+    // Section 7.2: `dt` and `rf` MUST name a term-id strictly less than the
+    // term's own id. A reference at or past the term's own id, including an
+    // `rf` naming the term itself, is a forward reference (section 7.5): it is
+    // diagnosed and treated as absent.
     let sanitize_prior = |r: Option<i128>| match r {
         Some(d) if (0..tid).contains(&d) => Some(d as usize),
         _ => None,
     };
     let dt = sanitize_prior(dt_raw);
-    let rf = match rf_raw {
-        Some(d) if (0..tid).contains(&d) => Some(d as usize),
-        Some(d) if kind == TermKind::Triple && d == tid => Some(d as usize),
-        _ => None,
-    };
+    let rf = sanitize_prior(rf_raw);
     let dt_out_of_range = matches!(dt_raw, Some(d) if d >= tid);
-    let rf_out_of_range =
-        matches!(rf_raw, Some(d) if d >= tid && !(kind == TermKind::Triple && d == tid));
+    let rf_out_of_range = matches!(rf_raw, Some(d) if d >= tid);
     // `tt` — the quoted triple's OWN components (§7.1). Every id must
     // name an already-introduced term, exactly like `dt`; a triple term
     // therefore cannot contain itself, which is what makes `tt` the

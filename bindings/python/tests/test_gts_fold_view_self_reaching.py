@@ -51,14 +51,6 @@ SELF_REACHING = [
         [1],
         id="a-reifier-binding-naming-its-own-triple-term",
     ),
-    pytest.param(
-        # A self-bound triple term names its own id as its reifier, so the binding
-        # keyed by that id supplies its components - and here that binding names it.
-        [_iri(f"{EX}p"), (3, None, None, None, None, 1, None)],
-        [(1, (1, 0, 1), None)],
-        [1],
-        id="a-self-bound-term-whose-binding-names-it",
-    ),
 ]
 
 
