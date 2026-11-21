@@ -21,8 +21,11 @@ This profile writes U+FFFE and U+FFFF in a literal raw. The canonical form of RD
 1.2 N-Quads (section 3) writes them as `UCHAR`, since neither matches the XML 1.1
 `Char` production, and the 5.0 canonical document follows it. This profile does
 not, because the digests it recorded were taken over the raw bytes and
-recomputing them is what it is kept for. The version stays 3: every dataset
-canonicalizes to the bytes version 3 produced.
+recomputing them is what it is kept for. It writes DEL and the C1 controls in an
+IRI escaped as `\u007F` through `\u009F`, where the canonical form writes them
+raw, for the same reason. The version stays 3: every dataset, including one a
+caller's own `DatasetView` supplies with such an IRI, canonicalizes to the bytes
+version 3 produced, so every recorded digest recomputes.
 
 Both values are readable from the library rather than only from this document —
 `purrdf_core::rdfc12::CANON_PROFILE_ID` and `purrdf_core::rdfc12::CANON_PROFILE_VERSION` — so a
