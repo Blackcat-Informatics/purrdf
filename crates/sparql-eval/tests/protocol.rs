@@ -1200,7 +1200,7 @@ fn host_faults_are_sanitized_and_evaluation_failures_are_not() {
             ..
         }
     ));
-    let unconfigured = problem_for(FailureCode::from(&EvalError::service_unconfigured(
+    let unconfigured = problem_for(FailureCode::from(&EvalError::remote(
         "https://example.org/s",
         RemoteError::Unconfigured("no source".to_owned()),
     )));

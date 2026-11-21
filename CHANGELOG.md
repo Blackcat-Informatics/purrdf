@@ -20,7 +20,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **Breaking: `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the
   endpoint and a typed `RemoteError`.** Both held a formatted `String`; they now
   hold `{ endpoint, cause }`, `EvalError::remote` takes the endpoint and the
-  cause, and `EvalError::service_unconfigured` builds the second. The structured
+  cause and chooses the variant from it. The structured
   visitor reports `endpoint` and the nested `cause` fields by name. `Display` and
   the diagnostic codes are unchanged. `RemoteError::NoSource` names an engine
   given no remote query source, which `ServiceUnconfigured` previously carried

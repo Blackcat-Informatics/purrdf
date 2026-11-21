@@ -295,6 +295,19 @@ impl core::fmt::Display for RemoteError {
 
 impl std::error::Error for RemoteError {}
 
+/// The one spelling of the message for a `SERVICE` that had no remote query source.
+pub(crate) struct NoSourceText<'a>(pub(crate) &'a str);
+
+impl core::fmt::Display for NoSourceText<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "no remote query source configured for SERVICE <{}>",
+            self.0
+        )
+    }
+}
+
 purrdf_lex::variant_from!(RemoteError { Denied(ServiceDenial) });
 
 /// The complete `SERVICE` request handed to a [`ServiceResolver`].
@@ -744,9 +757,6 @@ impl RetainedServiceFailure {
                 EvalError::ServiceHostFault { endpoint, message }
             }
             RemoteError::SourceRead(message) => EvalError::SourceRead(message),
-            cause @ (RemoteError::Unconfigured(_) | RemoteError::NoSource) => {
-                EvalError::service_unconfigured(endpoint, cause)
-            }
             cause => EvalError::remote(endpoint, cause),
         }
     }
@@ -800,6 +810,11 @@ impl fmt::Display for RetainedServiceFailure {
                 f,
                 "SERVICE federation error: SERVICE <{}>: {message}",
                 self.endpoint.as_str()
+            ),
+            RemoteError::NoSource => write!(
+                f,
+                "SERVICE federation error: {}",
+                NoSourceText(self.endpoint.as_str())
             ),
             RemoteError::SourceRead(message) => write!(f, "dataset read failed: {message}"),
             other => write!(
@@ -1782,7 +1797,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     use purrdf_core::SilencedKind;
     let workspace = ctx.growth.clone();
     let Some(source) = ctx.remote else {
-        let message = format_args!("no remote query source configured for SERVICE <{endpoint}>");
+        let message = NoSourceText(endpoint);
         let error = if workspace.is_bounded() {
             EvalError::RetainedDiagnostic(crate::RetainedDiagnostic::render(
                 EvalError::SERVICE_UNCONFIGURED_CODE,
@@ -1790,7 +1805,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
                 &workspace,
             )?)
         } else {
-            EvalError::service_unconfigured(endpoint, RemoteError::NoSource)
+            EvalError::remote(endpoint, RemoteError::NoSource)
         };
         return failed_invocation(
             endpoint,
@@ -3144,6 +3159,16 @@ mod tests {
                     };
                     assert_eq!(endpoint, "http://example.org/unconfigured");
                     assert!(matches!(cause, RemoteError::Unconfigured(_)), "{cause:?}");
+                    // The text a caller read before the payload was typed.
+                    assert_eq!(
+                        error.to_string(),
+                        "SERVICE federation error: SERVICE <http://example.org/unconfigured>: no handler"
+                    );
+                    assert!(
+                        std::error::Error::source(&error).is_some_and(|source| source
+                            .downcast_ref::<RemoteError>()
+                            == Some(cause))
+                    );
                 }
                 "denied" => assert!(matches!(error, EvalError::ServiceDenied(_)), "{error:?}"),
                 "host-denied" => {
@@ -3157,6 +3182,20 @@ mod tests {
                         panic!("{error:?}");
                     };
                     assert_eq!(endpoint, &format!("http://example.org/{name}"));
+                    let text = match name {
+                        "transport" => "transport: connection refused",
+                        "decode" => "decode: not a results document",
+                        _ => "federation disabled",
+                    };
+                    assert_eq!(
+                        error.to_string(),
+                        format!("SERVICE federation error: SERVICE <{endpoint}>: {text}")
+                    );
+                    assert!(
+                        std::error::Error::source(&error).is_some_and(|source| source
+                            .downcast_ref::<RemoteError>()
+                            == Some(cause))
+                    );
                     let expected = match name {
                         "transport" => matches!(cause, RemoteError::Transport(_)),
                         "decode" => matches!(cause, RemoteError::Decode(_)),

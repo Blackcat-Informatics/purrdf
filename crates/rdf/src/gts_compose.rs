@@ -1567,7 +1567,7 @@ pub enum DictSelection {
 ///
 /// A struct literal outside this crate is refused:
 ///
-/// ```compile_fail
+/// ```compile_fail,E0639
 /// use std::collections::BTreeMap;
 /// use purrdf_rdf::gts_compose::MediumPlan;
 ///

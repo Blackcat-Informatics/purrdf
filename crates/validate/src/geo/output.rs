@@ -497,9 +497,10 @@ pub(super) fn operation_chain(chain: &purrdf_geo_kernel::OperationChain) -> Resu
             | OperationModel::TransverseMercatorInverse(_)
             | OperationModel::Helmert(_)
             | OperationModel::Similarity2d(_) => 0,
-            _ => {
-                return Err(GeoError::unsupported(
-                    "coordinate-operation model has no output layout",
+            unknown => {
+                return Err(super::operation::unsupported_model(
+                    unknown,
+                    "output layout",
                 ));
             }
         };

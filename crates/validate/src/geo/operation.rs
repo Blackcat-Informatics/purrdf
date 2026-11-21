@@ -770,13 +770,25 @@ fn model_json(
                 decode.storage.memory(),
             )?
         }
-        _ => {
-            return Err(GeoCallError::Engine(GeoError::unsupported(
-                "coordinate-operation model has no response encoding",
+        unknown => {
+            return Err(GeoCallError::Engine(unsupported_model(
+                unknown,
+                "a response encoding",
             )));
         }
     };
     Ok(fields.into())
+}
+
+/// The refusal for a coordinate-operation model this boundary has no `what` for;
+/// it names the model's variant.
+pub(super) fn unsupported_model(model: &OperationModel, what: &str) -> GeoError {
+    let debug = format!("{model:?}");
+    let name = debug
+        .split(|character: char| !character.is_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    GeoError::unsupported(format!("coordinate-operation model {name} has no {what}"))
 }
 
 fn source_domain_json(

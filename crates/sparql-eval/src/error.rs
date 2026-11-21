@@ -442,6 +442,13 @@ pub enum EvalError {
     /// non-silent federation failure aborts the query rather than silently contributing
     /// no bindings; `SERVICE SILENT` instead answers the join identity and records the
     /// failure on the execution's evidence.
+    ///
+    /// `cause` is any [`RemoteError`](crate::RemoteError) except
+    /// [`Unconfigured`](crate::RemoteError::Unconfigured) and
+    /// [`NoSource`](crate::RemoteError::NoSource), which are
+    /// [`Self::ServiceUnconfigured`]. [`EvalError::remote`] chooses the variant from the
+    /// cause, so build the value through it; a literal that pairs a cause with the wrong
+    /// variant is a caller error, and [`Self::code`] follows the variant.
     Remote {
         /// The service IRI that was asked.
         endpoint: String,
@@ -457,8 +464,10 @@ pub enum EvalError {
     /// owners: [`Self::Remote`] is an endpoint that was asked and failed, this is a host
     /// that was never given a way to ask — its own configuration, not the endpoint's
     /// fault. Like every failed invocation, `SERVICE SILENT` answers it with the join
-    /// identity and records it. It renders exactly as [`Self::Remote`] does; the two
-    /// differ in [`Self::code`].
+    /// identity and records it. It renders as [`Self::Remote`] does, except that
+    /// [`RemoteError::NoSource`](crate::RemoteError::NoSource) names the missing source
+    /// instead of the endpoint's reply; the two differ in [`Self::code`]. Build it
+    /// through [`EvalError::remote`], which refuses to pair another cause with it.
     ServiceUnconfigured {
         /// The service IRI that no source reaches.
         endpoint: String,
@@ -1099,8 +1108,8 @@ impl core::fmt::Display for EvalError {
                 cause: crate::remote::RemoteError::NoSource,
             } => write!(
                 f,
-                "SERVICE federation error: no remote query source configured for SERVICE \
-                 <{endpoint}>"
+                "SERVICE federation error: {}",
+                crate::remote::NoSourceText(endpoint)
             ),
             Self::ServiceUnconfigured { endpoint, cause } => {
                 write!(f, "SERVICE federation error: SERVICE <{endpoint}>: {cause}")
@@ -1203,26 +1212,20 @@ impl std::error::Error for EvalError {
 }
 
 impl EvalError {
-    /// A `SERVICE` step failed: `cause` is why the invocation of `endpoint` failed.
+    /// A `SERVICE` step on `endpoint` failed with `cause`.
+    ///
+    /// The variant follows the cause: [`RemoteError::Unconfigured`](crate::RemoteError::Unconfigured)
+    /// and [`RemoteError::NoSource`](crate::RemoteError::NoSource) give
+    /// [`Self::ServiceUnconfigured`], every other cause gives [`Self::Remote`], so the
+    /// code and the classification of the error cannot disagree with its cause.
     #[must_use]
     pub fn remote(endpoint: impl Into<String>, cause: crate::remote::RemoteError) -> Self {
-        Self::Remote {
-            endpoint: endpoint.into(),
-            cause,
-        }
-    }
-
-    /// A `SERVICE` step had no source that reaches `endpoint`; `cause` is
-    /// [`RemoteError::Unconfigured`](crate::RemoteError::Unconfigured) or
-    /// [`RemoteError::NoSource`](crate::RemoteError::NoSource).
-    #[must_use]
-    pub fn service_unconfigured(
-        endpoint: impl Into<String>,
-        cause: crate::remote::RemoteError,
-    ) -> Self {
-        Self::ServiceUnconfigured {
-            endpoint: endpoint.into(),
-            cause,
+        let endpoint = endpoint.into();
+        match cause {
+            crate::remote::RemoteError::Unconfigured(_) | crate::remote::RemoteError::NoSource => {
+                Self::ServiceUnconfigured { endpoint, cause }
+            }
+            cause => Self::Remote { endpoint, cause },
         }
     }
 }
