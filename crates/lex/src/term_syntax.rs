@@ -29,8 +29,9 @@
 //! There are no knobs. A writer that needs a different spelling is writing a
 //! different syntax (a CURIE-compacting Turtle writer, an XML carrier), and
 //! composes these pieces with its own rather than asking for a variant. The
-//! one other literal spelling is [`write_literal_rdfc12_v3`], the bytes the
-//! retained canonicalization profile `purrdf-rdfc12` recorded its digests over.
+//! other spellings are [`write_iri_rdfc12_v3`] and [`write_literal_rdfc12_v3`],
+//! the bytes the retained canonicalization profile `purrdf-rdfc12` recorded its
+//! digests over.
 
 use crate::literal_escape::{self, Carrier};
 use crate::text_out::TextOut;
@@ -85,6 +86,23 @@ pub fn write_iri_for<W: TextOut + ?Sized>(
     out.push('<');
     crate::iri_escape::push_escaped_for(iri, carrier, out);
     out.push('>');
+}
+
+/// Append `iri` as profile `purrdf-rdfc12` version 3 spells an `IRIREF`: the
+/// [`Xml`](crate::iri_escape::Carrier::Xml) set, which escapes DEL and the C1
+/// controls as well as what `IRIREF` forbids. That profile is the retained
+/// canonicalization whose recorded digests recompute only from these bytes;
+/// every other canonical writer calls [`write_iri`].
+///
+/// ```
+/// use purrdf_lex::term_syntax::write_iri_rdfc12_v3;
+///
+/// let mut out = String::new();
+/// write_iri_rdfc12_v3("urn:ex:a\u{7f}\u{85}\u{a0}", &mut out);
+/// assert_eq!(out, "<urn:ex:a\\u007F\\u0085\u{a0}>");
+/// ```
+pub fn write_iri_rdfc12_v3<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
+    write_iri_for(iri, crate::iri_escape::Carrier::Xml, out);
 }
 
 /// Append a literal in its canonical form.
@@ -164,9 +182,10 @@ pub fn write_literal_for<W: TextOut + ?Sized>(
 
 /// Append a literal as profile `purrdf-rdfc12` version 3 spells it: the
 /// [`write_literal`] form with the lexical form through
-/// [`literal_escape::write_rdfc12_v3`], so U+FFFE and U+FFFF ride raw. That
-/// profile is the retained canonicalization whose recorded digests recompute
-/// only from these bytes; every other writer calls [`write_literal`].
+/// [`literal_escape::write_rdfc12_v3`], so U+FFFE and U+FFFF ride raw, and the
+/// datatype spelled by [`write_iri_rdfc12_v3`]. That profile is the retained
+/// canonicalization whose recorded digests recompute only from these bytes;
+/// every other writer calls [`write_literal`].
 ///
 /// ```
 /// use purrdf_lex::term_syntax::write_literal_rdfc12_v3;
@@ -186,7 +205,7 @@ pub fn write_literal_rdfc12_v3<W: TextOut + ?Sized>(
         lexical_form,
         literal_escape::write_rdfc12_v3,
         datatype,
-        crate::iri_escape::Carrier::Canonical,
+        crate::iri_escape::Carrier::Xml,
         lang,
         dir,
         out,

@@ -282,7 +282,9 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (for the last, to keep the bytes of a SARIF `logicalLocation` stable). The one
   exception is the retained `purrdf_core::rdfc12` path, which writes U+FFFE and
   U+FFFF raw through the new `literal_escape::write_rdfc12_v3` and
-  `term_syntax::write_literal_rdfc12_v3`: its bytes, `CANON_PROFILE_VERSION` (3)
+  `term_syntax::write_literal_rdfc12_v3`, and DEL and the C1 controls in an IRI
+  escaped through the new `term_syntax::write_iri_rdfc12_v3` (the `Xml` carrier,
+  the one escaper body): its bytes, `CANON_PROFILE_VERSION` (3)
   and `CANON_CORPUS_DIGEST` are those of 4.0.2, so every stored 4.x digest
   recomputes, including the PACK version 1 `rdfc_digest`, `rdfc10-sha256`
   compaction certificates, PURREMB version 1 source digests and the embedded
