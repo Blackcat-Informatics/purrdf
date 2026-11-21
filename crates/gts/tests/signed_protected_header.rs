@@ -134,47 +134,42 @@ fn a_damaged_envelope_does_not_report_the_non_canonical_cause() {
     assert_eq!(status_of(&attached).0, "invalid");
 }
 
-/// The header grammar admits integers from -2^63 to 2^63-1, as a label, a value
-/// or anywhere inside a nested value. One past either end is malformed; the
-/// integers at the ends are accepted.
+/// Deterministic Encoding admits every integer CBOR can encode, and neither the
+/// specification nor RFC 9052 bounds a header integer further. A deterministic
+/// header holding an integer beyond the signed 64-bit range, as a label, as a
+/// value or nested inside a value, is sound, and a valid signature over it is
+/// `valid`.
 #[test]
-fn a_header_integer_outside_the_signed_64_bit_range_is_malformed() {
-    let over_max: &[u8] = &[0xa2, 0x01, 0x27, 0x1b, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x00];
-    let under_min: &[u8] = &[0xa2, 0x01, 0x27, 0x3b, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x00];
-    for (name, protected) in [("2^63", over_max), ("-2^63-1", under_min)] {
-        assert_eq!(
-            cose::signature_refusal(&envelope(protected)),
-            Some(Sign1Error::Malformed),
-            "{name}"
-        );
-    }
-    // `{1: -8, 99: [2^64-1]}` and `{1: -8, 99: {1: -2^64}}`: deterministic, with
-    // an out-of-range integer one and two levels below the top-level map.
-    let nested_array: &[u8] = &[
-        0xa2, 0x01, 0x27, 0x18, 0x63, 0x81, 0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+fn a_deterministic_header_with_an_integer_beyond_64_bit_signed_range_verifies() {
+    let cases: [(&str, &[u8]); 4] = [
+        // `{1: -8, 2^63: 0}`
+        (
+            "label 2^63",
+            &[0xa2, 0x01, 0x27, 0x1b, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x00],
+        ),
+        // `{1: -8, -2^63-1: 0}`
+        (
+            "label -2^63-1",
+            &[0xa2, 0x01, 0x27, 0x3b, 0x80, 0, 0, 0, 0, 0, 0, 0, 0x00],
+        ),
+        // `{1: -8, 99: [2^64-1]}`
+        (
+            "nested array value 2^64-1",
+            &[
+                0xa2, 0x01, 0x27, 0x18, 0x63, 0x81, 0x1b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff,
+            ],
+        ),
+        // `{1: -8, 99: {1: -2^64}}`
+        (
+            "nested map value -2^64",
+            &[
+                0xa2, 0x01, 0x27, 0x18, 0x63, 0xa1, 0x01, 0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+                0xff, 0xff,
+            ],
+        ),
     ];
-    let nested_map: &[u8] = &[
-        0xa2, 0x01, 0x27, 0x18, 0x63, 0xa1, 0x01, 0x3b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff,
-    ];
-    for (name, protected) in [("nested array", nested_array), ("nested map", nested_map)] {
-        assert_eq!(
-            cose::signature_refusal(&envelope(protected)),
-            Some(Sign1Error::Malformed),
-            "{name}"
-        );
-    }
-    let nested_in_range: &[u8] = &[
-        0xa2, 0x01, 0x27, 0x18, 0x63, 0x81, 0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-    ];
-    assert_eq!(cose::signature_refusal(&envelope(nested_in_range)), None);
-    let max: &[u8] = &[
-        0xa2, 0x01, 0x27, 0x1b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
-    ];
-    let min: &[u8] = &[
-        0xa2, 0x01, 0x27, 0x3b, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00,
-    ];
-    for (name, protected) in [("2^63-1", max), ("-2^63", min)] {
+    for (name, protected) in cases {
         let envelope = envelope(protected);
         assert_eq!(cose::signature_refusal(&envelope), None, "{name}");
         assert_eq!(status_of(&envelope).0, "valid", "{name}");

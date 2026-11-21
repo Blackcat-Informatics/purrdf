@@ -200,9 +200,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   order) was `Valid` with a resolved key; it is `Invalid`, with the cause
   `Sign1Error::NonCanonicalProtectedHeader` (and
   `VerificationError::NonCanonicalProtectedHeader` in a file verification),
-  readable through `cose::signature_refusal`. A header integer outside -2^63 to
-  2^63-1, as a label, a value or nested at any depth, is `Malformed`. A
-  text-string `alg` is `Unverified`, and the `kid` of an unsupported-algorithm
+  readable through `cose::signature_refusal`. Header integers are not bounded
+  beyond what CBOR encodes, as in 4.0.2. A text-string `alg` is `Unverified`, and the `kid` of an unsupported-algorithm
   envelope is reported. `Sign1Error` was an exhaustive enum and is now
   `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles and
   needs a wildcard arm; `VerificationError` was already `#[non_exhaustive]`.
@@ -211,7 +210,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (`CompactRefusedError::FrameCose` or `DetachedCose`) where 4.0.2 carried the
   signature. The migration guide gives the bucket each case moves between.
   `vectors/signed` carries the upstream signed corpus and `signed_corpus` grades
-  it, with seven named differences.
+  it, with nine named differences.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2

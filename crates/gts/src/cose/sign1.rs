@@ -310,8 +310,10 @@ fn validate_headers(
 }
 
 /// Specification section 4: the protected header is a hashed and signed byte
-/// string, so it is deterministically encoded, and its integers fit the signed
-/// 64-bit range the header grammar admits (-2^63 to 2^63-1).
+/// string, so it uses Deterministic Encoding (RFC 8949 section 4.2): shortest-form
+/// integers and lengths, definite-length items and map keys in bytewise order.
+/// Neither the specification nor RFC 9052 bounds a header integer further, so
+/// any integer CBOR can encode is admitted.
 fn decode_protected_header(protected: &[u8]) -> Result<Value, Sign1Error> {
     let decoded = cbor::decode_deterministic(protected, cbor::Limits::DEFAULT).map_err(
         |error| match error.kind() {
@@ -320,36 +322,7 @@ fn decode_protected_header(protected: &[u8]) -> Result<Value, Sign1Error> {
         },
     )?;
     decoded.as_map().ok_or(Sign1Error::Malformed)?;
-    if every_integer_fits(&decoded) {
-        Ok(decoded)
-    } else {
-        Err(Sign1Error::Malformed)
-    }
-}
-
-/// Whether every integer at any depth of `root`, key or value, lies in the
-/// signed 64-bit range. The walk is iterative: a header is attacker-sized.
-fn every_integer_fits(root: &Value) -> bool {
-    let mut pending = purrdf_lex::walk::WorkList::<&Value, 16>::with(root);
-    while let Some(value) = pending.pop() {
-        match value {
-            Value::Array(items) => items.iter().for_each(|item| pending.push(item)),
-            Value::Map(entries) => entries.iter().for_each(|(key, value)| {
-                pending.push(key);
-                pending.push(value);
-            }),
-            Value::Tag(_, inner) => pending.push(inner),
-            other => {
-                if other
-                    .as_integer()
-                    .is_some_and(|integer| i64::try_from(integer.get()).is_err())
-                {
-                    return false;
-                }
-            }
-        }
-    }
-    true
+    Ok(decoded)
 }
 
 /// The structure of a detached Sign1 whose algorithm may be one this engine

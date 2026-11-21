@@ -823,7 +823,7 @@ fn content_type_headers_obey_restricted_names_before_lookup() {
             .iter()
             .cloned()
             .map(Value::Text)
-            .chain([Value::Integer(0.into()), Value::Integer(i64::MAX.into())])
+            .chain([Value::Integer(0.into()), Value::Integer(u64::MAX.into())])
         {
             let (protected, envelope) = encode(value);
             let parsed = cose::parse_sign1(&envelope).unwrap();

@@ -447,8 +447,8 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **COSE_Sign1 protected header.** The protected header is read as the
   deterministic encoding the specification requires of every signed byte string
   (section 4, RFC 8949 section 4.2): shortest-form integers and lengths,
-  definite-length items, map keys in bytewise order, and integers within -2^63
-  to 2^63-1. Each case moves between the three outcomes as follows, for a caller
+  definite-length items and map keys in bytewise order. Header integers are not
+  bounded beyond what CBOR encodes, as in 4.0.2. Each case moves between the three outcomes as follows, for a caller
   that treats `Unverified` as "unchecked" and `Invalid` as "failed":
   - A header that is not deterministically encoded was `Valid` with a resolved
     key and `Unverified` without one in 4.0.2; it is `Invalid` in both cases.
@@ -467,7 +467,7 @@ lost or retyped a public field, and none of these enums lost a variant.
     `match` with a wildcard arm compiles unchanged.
   - Compaction and the certify callers parse each retained envelope with the
     same rules. A file whose signature has a header that is not deterministically
-    encoded, or an integer outside the range, is refused by compaction
+    encoded is refused by compaction
     (`CompactRefusedError::FrameCose`, or `DetachedCose` for a carried detached
     signature) and by the certify checks at parse, where 4.0.2 compacted it and
     carried the signature. Verify stored signed material before compacting it.
@@ -477,7 +477,6 @@ lost or retyped a public field, and none of these enums lost a variant.
   - The `kid` of an envelope that declares an unsupported algorithm is
     reported, where 4.0.2 reported none.
     The status is unchanged.
-  - A header integer outside -2^63 to 2^63-1 is `Malformed`.
   A COSE_Sign1 with no `kid` is unchanged: `kid` stays optional (RFC 9052
   section 3.1) at every entry point. A short EdDSA signature stays `Invalid`
   before key resolution.

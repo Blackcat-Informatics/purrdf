@@ -46,6 +46,17 @@ const EXPECTED_DIFFERENCES: &[(&str, &str)] = &[
         "sigalg-text-valid-multibyte.json",
         "header label 5 holds a text string; RFC 9052 types it as a byte string",
     ),
+    // Deterministic Encoding admits every integer CBOR can encode, and neither
+    // the specification nor RFC 9052 bounds a header integer further. The bound
+    // the vectors apply is the format owner's to state in the specification.
+    (
+        "sigalg-int-over-max-key.json",
+        "a header integer beyond 2^63-1 is deterministic CBOR; the specification sets no bound",
+    ),
+    (
+        "sigalg-int-under-min-key.json",
+        "a header integer below -2^63 is deterministic CBOR; the specification sets no bound",
+    ),
     // RFC 9052 section 3.1 makes `kid` optional, and the engine documents and
     // tests that an envelope without one verifies with a supplied key. The
     // specification does not require a `kid`; only the vector does.
