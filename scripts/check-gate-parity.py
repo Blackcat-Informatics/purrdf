@@ -765,7 +765,7 @@ def consumer_gate_problems(makefile_text: str, workflow_texts: dict[str, str]) -
             _join_continuations(text), ("#",)
         ))).split())
 
-    local = live(check_recipe(makefile_text, "check"))
+    local = live(" ".join(check_recipe(makefile_text, t) for t in ["check", *(n for _f, n in MAKE_RECURSION.findall(check_recipe(makefile_text, "check")))]))
     ci = " ".join(live(text) for text in merge_blocking(workflow_texts).values())
     return [
         f"excluded preserve-order consumer gate `{command}` is absent from {where}"
