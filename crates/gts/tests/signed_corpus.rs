@@ -31,27 +31,27 @@ const EXPECTED_DIFFERENCES: &[(&str, &str, &str)] = &[
     (
         "sigalg-depth-8.json",
         "header labels 5 to 7 hold non-byte-string values; RFC 9052 types them",
-        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
+        "with key, signature 1: status invalid, want valid; with key, signature 1: kid None, want test-kid; with key, signature 2: status invalid, want valid; with key, signature 2: kid None, want test-kid; without key, signature 1: status invalid, want unverified; without key, signature 1: kid None, want test-kid; without key, signature 2: status invalid, want unverified; without key, signature 2: kid None, want test-kid",
     ),
     (
         "sigalg-header-null-bool-values.json",
         "header labels 5 to 7 hold non-byte-string values; RFC 9052 types them",
-        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
+        "with key, signature 1: status invalid, want valid; with key, signature 1: kid None, want test-kid; with key, signature 2: status invalid, want valid; with key, signature 2: kid None, want test-kid; without key, signature 1: status invalid, want unverified; without key, signature 1: kid None, want test-kid; without key, signature 2: status invalid, want unverified; without key, signature 2: kid None, want test-kid",
     ),
     (
         "sigalg-int-max-value.json",
         "header label 5 holds an integer; RFC 9052 types it as a byte string",
-        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
+        "with key, signature 1: status invalid, want valid; with key, signature 1: kid None, want test-kid; with key, signature 2: status invalid, want valid; with key, signature 2: kid None, want test-kid; without key, signature 1: status invalid, want unverified; without key, signature 1: kid None, want test-kid; without key, signature 2: status invalid, want unverified; without key, signature 2: kid None, want test-kid",
     ),
     (
         "sigalg-int-min-value.json",
         "header label 5 holds an integer; RFC 9052 types it as a byte string",
-        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
+        "with key, signature 1: status invalid, want valid; with key, signature 1: kid None, want test-kid; with key, signature 2: status invalid, want valid; with key, signature 2: kid None, want test-kid; without key, signature 1: status invalid, want unverified; without key, signature 1: kid None, want test-kid; without key, signature 2: status invalid, want unverified; without key, signature 2: kid None, want test-kid",
     ),
     (
         "sigalg-text-valid-multibyte.json",
         "header label 5 holds a text string; RFC 9052 types it as a byte string",
-        "with key: kid None, want test-kid; with key: status invalid, want valid; without key: kid None, want test-kid; without key: status invalid, want unverified",
+        "with key, signature 1: status invalid, want valid; with key, signature 1: kid None, want test-kid; with key, signature 2: status invalid, want valid; with key, signature 2: kid None, want test-kid; without key, signature 1: status invalid, want unverified; without key, signature 1: kid None, want test-kid; without key, signature 2: status invalid, want unverified; without key, signature 2: kid None, want test-kid",
     ),
     // Deterministic Encoding admits every integer CBOR can encode, and neither
     // the specification nor RFC 9052 bounds a header integer further. The bound
@@ -59,12 +59,12 @@ const EXPECTED_DIFFERENCES: &[(&str, &str, &str)] = &[
     (
         "sigalg-int-over-max-key.json",
         "a header integer beyond 2^63-1 is deterministic CBOR; the specification sets no bound",
-        "with key: status valid, want invalid; without key: status unverified, want invalid",
+        "with key, signature 1: status valid, want invalid; with key, signature 2: status valid, want invalid; without key, signature 1: status unverified, want invalid; without key, signature 2: status unverified, want invalid",
     ),
     (
         "sigalg-int-under-min-key.json",
         "a header integer below -2^63 is deterministic CBOR; the specification sets no bound",
-        "with key: status valid, want invalid; without key: status unverified, want invalid",
+        "with key, signature 1: status valid, want invalid; with key, signature 2: status valid, want invalid; without key, signature 1: status unverified, want invalid; without key, signature 2: status unverified, want invalid",
     ),
     // RFC 9052 section 3.1 makes `kid` optional, and the engine documents and
     // tests that an envelope without one verifies with a supplied key. The
@@ -72,7 +72,7 @@ const EXPECTED_DIFFERENCES: &[(&str, &str, &str)] = &[
     (
         "sigalg-missing-kid.json",
         "the specification does not require a kid and RFC 9052 makes it optional",
-        "with key: status unverified, want invalid; without key: status unverified, want invalid",
+        "with key, signature 1: status unverified, want invalid; with key, signature 2: status unverified, want invalid; without key, signature 1: status unverified, want invalid; without key, signature 2: status unverified, want invalid",
     ),
     // The specification does not order the signature-length check and key
     // resolution: the engine refuses a wrong-length EdDSA signature as invalid
@@ -80,7 +80,7 @@ const EXPECTED_DIFFERENCES: &[(&str, &str, &str)] = &[
     (
         "sigalg-eddsa-short.json",
         "a short EdDSA signature is invalid before key resolution; the vector orders them the other way",
-        "with key: kid None, want test-kid; without key: kid None, want test-kid; without key: status invalid, want unverified",
+        "with key, signature 1: kid None, want test-kid; with key, signature 2: kid None, want test-kid; without key, signature 1: status invalid, want unverified; without key, signature 1: kid None, want test-kid; without key, signature 2: status invalid, want unverified; without key, signature 2: kid None, want test-kid",
     ),
 ];
 
@@ -125,19 +125,24 @@ fn disagreement(name: &str) -> Option<String> {
         verify_signatures(&mut graph.signatures, |candidate| {
             (resolve_key && candidate == kid).then_some(key)
         });
-        for signature in &graph.signatures {
+        for (position, signature) in graph.signatures.iter().enumerate() {
+            let signature_number = position + 1;
             if signature.status != want {
-                problems.push(format!("{label}: status {}, want {want}", signature.status));
+                problems.push(format!(
+                    "{label}, signature {signature_number}: status {}, want {want}",
+                    signature.status
+                ));
             }
             if let Some(reported) = reported
                 && signature.kid.as_deref() != Some(reported)
             {
-                problems.push(format!("{label}: kid {:?}, want {reported}", signature.kid));
+                problems.push(format!(
+                    "{label}, signature {signature_number}: kid {:?}, want {reported}",
+                    signature.kid
+                ));
             }
         }
     }
-    problems.sort_unstable();
-    problems.dedup();
     (!problems.is_empty()).then(|| problems.join("; "))
 }
 
