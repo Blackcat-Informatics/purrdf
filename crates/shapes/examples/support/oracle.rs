@@ -49,16 +49,14 @@ pub(crate) fn compiled(schema: &Value) -> Result<CompiledSchema, purrdf_lex::jso
     })
 }
 
-/// Whether `losses` records `code` at the subject `location`.
+/// Whether `losses` records `code` at the schema location `location`, a `#`
+/// JSON Pointer.
 pub(crate) fn has_loss(losses: &LossLedger, code: &str, location: &str) -> bool {
-    losses.entries().iter().any(|entry| {
-        entry.code == code
-            && entry
-                .location
-                .as_ref()
-                .and_then(|value| value.subject.as_deref())
-                == Some(location)
-    })
+    let subject = purrdf_core::LossSubject::pointer(location.strip_prefix('#').unwrap_or(location));
+    losses
+        .entries()
+        .iter()
+        .any(|entry| entry.code == code && entry.subject == subject)
 }
 
 /// Locate a fixture assertion through the emitted, shared schema references.

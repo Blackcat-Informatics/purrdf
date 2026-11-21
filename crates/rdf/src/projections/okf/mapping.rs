@@ -1555,7 +1555,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         let counts = projected.loss_ledger.entries().iter().fold(
             BTreeMap::<&str, usize>::new(),

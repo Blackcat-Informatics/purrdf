@@ -7,7 +7,7 @@
 //!
 //! `generated/rdf-loss-matrix.json` / `generated/transcode-loss-matrix.json`
 //! (drift-gated in `crates/rdf-core/src/loss.rs`) pin the **contract**
-//! (bare-array) shape; this file pins the **runtime** (`{ "schema_version": 1,
+//! (bare-array) shape; this file pins the **runtime** (`{ "schema_version": 2,
 //! "losses": [...] }`) shape the shapes emitter (and future `--loss-ledger`
 //! consumers, see the crate root docs) actually produce, so downstream
 //! consumers can rely on a stable, versioned envelope.
@@ -119,7 +119,7 @@ fn shapes_loss_ledger_has_not_drifted() {
     );
 }
 
-/// The runtime ledger's public schema is pinned at `schema_version: 1` — the
+/// The runtime ledger's public schema is pinned at `schema_version: 2` — the
 /// stable envelope a future `--loss-ledger` flag (and any other downstream
 /// consumer) can rely on.
 #[test]
@@ -127,8 +127,8 @@ fn shapes_loss_ledger_schema_version_is_pinned() {
     let compiled = compile_golden();
     let rendered = compiled.losses.render_json();
     assert!(
-        rendered.starts_with("{\n  \"schema_version\": 1,\n  \"losses\": ["),
-        "runtime ledger envelope must open with a pinned schema_version: 1, got: {rendered}"
+        rendered.starts_with("{\n  \"schema_version\": 2,\n  \"losses\": ["),
+        "runtime ledger envelope must open with a pinned schema_version: 2, got: {rendered}"
     );
     assert!(rendered.ends_with("]\n}\n"), "got: {rendered}");
 }

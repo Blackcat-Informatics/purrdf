@@ -1389,7 +1389,7 @@ mod tests {
             read.loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
 
         let projected = project_frictionless(&read.dataset, &config).expect("project fixture");

@@ -6,7 +6,7 @@ use crate::projections::loss::record_contract_loss;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use purrdf_core::{LossLedger, RdfDataset, RdfLocation};
+use purrdf_core::{LossLedger, LossSite, LossSubject, RdfDataset};
 use purrdf_lex::json::{Object, Value};
 
 use crate::native_codecs::jsonld::{
@@ -280,7 +280,15 @@ pub(super) fn record_loss(
         ledger,
         contract,
         code,
-        RdfLocation::file(path).with_subject(subject),
+        (
+            LossSite::Document {
+                path: Some(path.to_owned()),
+                line: None,
+                column: None,
+            },
+            LossSubject::pointer(subject),
+            Vec::new(),
+        ),
     );
 }
 

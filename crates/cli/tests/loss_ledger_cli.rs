@@ -630,7 +630,7 @@ fn the_named_graph_dropped_note_matches_what_convert_actually_does() {
         "the realized drop count must be recorded beside the contract entry; got:\n{ledger}"
     );
     assert!(
-        ledger.contains("1 row(s) asserted in a named graph"),
+        ledger.contains(r#""kind": "count", "count": 1"#),
         "the realized entry must count the dropped row; got:\n{ledger}"
     );
 }

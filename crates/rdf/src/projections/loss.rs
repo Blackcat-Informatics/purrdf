@@ -12,13 +12,45 @@
 use std::borrow::Cow;
 
 use purrdf_core::loss::check_ledger_sound;
-use purrdf_core::{LossEntry, LossLedger, RdfLocation};
+use purrdf_core::{LossDetail, LossEntry, LossLedger, LossSite, LossSubject, LossTerm};
 use purrdf_lex::json::record::ToJson;
 
 use super::ProjectionError;
 use super::source_rows::source_identifier;
+use super::term::ProjectionTerm;
 
-/// Record into `ledger` the contract entry `code`, located at `location`.
+/// The typed term a projection term is.
+pub(crate) fn loss_term(term: &ProjectionTerm) -> LossTerm {
+    match term {
+        ProjectionTerm::Iri { value } => LossTerm::Iri(value.clone()),
+        ProjectionTerm::Blank { label, scope } => LossTerm::Blank {
+            label: label.clone(),
+            scope: Some(scope.to_string()),
+        },
+        ProjectionTerm::Literal {
+            lexical,
+            datatype,
+            language,
+            ..
+        } => LossTerm::Literal {
+            lexical: lexical.clone(),
+            datatype: datatype.clone(),
+            language: language.clone(),
+        },
+        ProjectionTerm::Triple {
+            subject,
+            predicate,
+            object,
+        } => LossTerm::Triple {
+            subject: Box::new(loss_term(subject)),
+            predicate: Box::new(loss_term(predicate)),
+            object: Box::new(loss_term(object)),
+        },
+    }
+}
+
+/// Record into `ledger` the contract entry `code`, at `site`, on `subject`,
+/// qualified by `detail`.
 ///
 /// # Panics
 ///
@@ -29,7 +61,7 @@ pub(crate) fn record_contract_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
     code: &'static str,
-    location: RdfLocation,
+    (site, subject, detail): (LossSite, LossSubject, Vec<LossDetail>),
 ) {
     let template = contract
         .entries()
@@ -41,24 +73,58 @@ pub(crate) fn record_contract_loss(
         from: template.from.clone(),
         to: template.to.clone(),
         note: template.note.clone(),
-        location: Some(Box::new(location)),
+        site,
+        subject,
+        detail,
     });
 }
 
-/// Record the contract entry `code` at the logical location `logical`, on
-/// `subject`.
+/// Record the contract entry `code` in the stage `logical`, on the row
+/// `identifier` of kind `logical`.
 pub(crate) fn record_logical_loss(
     ledger: &mut LossLedger,
     contract: &LossLedger,
     code: &'static str,
     logical: &str,
-    subject: impl Into<String>,
+    identifier: impl Into<String>,
 ) {
     record_contract_loss(
         ledger,
         contract,
         code,
-        RdfLocation::logical(logical).with_subject(subject),
+        (
+            LossSite::Stage {
+                name: logical.to_owned(),
+            },
+            LossSubject::Row {
+                kind: logical.to_owned(),
+                identifier: identifier.into(),
+            },
+            Vec::new(),
+        ),
+    );
+}
+
+/// Record the contract entry `code` in the stage `logical`, on `term`, with
+/// the `detail` facts.
+pub(crate) fn record_term_loss(
+    ledger: &mut LossLedger,
+    contract: &LossLedger,
+    code: &'static str,
+    logical: &str,
+    (term, detail): (&ProjectionTerm, Vec<LossDetail>),
+) {
+    record_contract_loss(
+        ledger,
+        contract,
+        code,
+        (
+            LossSite::Stage {
+                name: logical.to_owned(),
+            },
+            LossSubject::Term(loss_term(term)),
+            detail,
+        ),
     );
 }
 
@@ -105,7 +171,9 @@ mod tests {
             from: Cow::Borrowed("rdf-1.2-dataset"),
             to: Cow::Borrowed("example"),
             note: Cow::Borrowed("An example value is dropped."),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         }])
     }
 
@@ -121,7 +189,9 @@ mod tests {
                 from: Cow::Owned(String::from("rdf-1.2-dataset")),
                 to: Cow::Owned(String::from("example")),
                 note: Cow::Borrowed("a loss"),
-                location: None,
+                site: LossSite::Unspecified,
+                subject: LossSubject::Absent,
+                detail: Vec::new(),
             });
             let original = check_ledger_sound(&ledger, &source, &target)
                 .unwrap_err()
@@ -166,8 +236,17 @@ mod tests {
         assert_eq!(entry.to, "example");
         assert_eq!(entry.note, "An example value is dropped.");
         assert_eq!(
-            entry.location.as_deref(),
-            Some(&RdfLocation::logical("example:quad").with_subject("q1"))
+            entry.site,
+            LossSite::Stage {
+                name: "example:quad".to_owned()
+            }
+        );
+        assert_eq!(
+            entry.subject,
+            LossSubject::Row {
+                kind: "example:quad".to_owned(),
+                identifier: "q1".to_owned()
+            }
         );
     }
 
@@ -186,8 +265,11 @@ mod tests {
         .expect("identifier");
         let subject = source_identifier("quad", &"row").expect("identifier");
         assert_eq!(
-            ledger.entries()[0].location.as_deref(),
-            Some(&RdfLocation::logical("example:quad").with_subject(subject))
+            ledger.entries()[0].subject,
+            LossSubject::Row {
+                kind: "example:quad".to_owned(),
+                identifier: subject
+            }
         );
     }
 

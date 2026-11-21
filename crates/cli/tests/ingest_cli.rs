@@ -205,15 +205,16 @@ fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
         "the segment ledger must be reported: {ledger}"
     );
     assert!(
-        ledger.contains("2 segment record(s)"),
+        ledger.contains(r#""name": "count", "value": {"kind": "count", "count": 2}"#),
         "the segment count must be the one the importer produced: {ledger}"
     );
     assert!(
-        ledger.contains("Segment head id(s), in segment order:"),
+        ledger.matches(r#""name": "segment-head""#).count() == 2,
         "the segment head ids are the provenance the envelope carried: {ledger}"
     );
     assert!(
-        ledger.contains("gts-blob-references-dropped") && ledger.contains("2 content-addressed"),
+        ledger.contains("gts-blob-references-dropped")
+            && ledger.matches(r#""kind": "count", "count": 2"#).count() == 2,
         "both blob references must be reported: {ledger}"
     );
     // Material the file did NOT carry is not claimed.

@@ -834,7 +834,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
 
         let lifted = lift_lpg(&projected.graph, &config(1_000)).expect("lift");
@@ -865,7 +865,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
 
         let projected_again =
@@ -1147,7 +1147,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         let graph = graph.graph;
         let bytes = graph.to_canonical_json(&config).expect("JSON");

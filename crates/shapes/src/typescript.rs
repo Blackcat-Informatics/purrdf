@@ -30,7 +30,6 @@ use std::fmt::Write as _;
 
 use crate::json_model::{Number, NumberKind, Object, Value, ValueKind, json_string};
 use crate::limits;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
@@ -1201,9 +1200,11 @@ impl<'a> Renderer<'a> {
             from: LOSS_FROM.into(),
             to: TYPESCRIPT_DIALECT.into(),
             note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 }
@@ -2380,9 +2381,8 @@ mod tests {
         assert_eq!(imported.shapes.node_shapes.len(), 1);
         assert!(imported.losses.entries().iter().all(|entry| {
             entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
+                .subject
+                .text()
                 .is_some_and(|subject| subject.starts_with("#/"))
         }));
     }
@@ -2474,9 +2474,8 @@ mod tests {
         check_ledger_complete(&package.losses, &expected).expect("profile is fully exercised");
         assert!(package.losses.entries().iter().all(|entry| {
             entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
+                .subject
+                .text()
                 .is_some_and(|subject| subject.starts_with("#/$defs/Lossy"))
         }));
         let source = declaration(&package);
@@ -2658,10 +2657,7 @@ mod tests {
         assert!(source.contains("export type ImpossibleArray = never;"));
         assert!(package.losses.entries().iter().any(|entry| {
             entry.code == "additional-properties-validation-widened"
-                && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
+                && entry.subject.text().as_deref()
                     == Some("#/$defs/ImpossibleObject/additionalProperties")
         }));
     }
@@ -2784,11 +2780,7 @@ mod tests {
         let located = |location: &str| {
             package.losses.entries().iter().any(|entry| {
                 entry.code == "unique-items-validation-dropped"
-                    && entry
-                        .location
-                        .as_ref()
-                        .and_then(|value| value.subject.as_deref())
-                        == Some(location)
+                    && entry.subject.text().as_deref() == Some(location)
             })
         };
         assert!(located("#/$defs/Open/uniqueItems"));
@@ -2832,7 +2824,7 @@ mod tests {
             .entries()
             .iter()
             .filter(|entry| entry.code == "numeric-validation-dropped")
-            .filter_map(|entry| entry.location.as_ref()?.subject.clone())
+            .filter_map(|entry| entry.subject.text())
             .collect::<BTreeSet<_>>();
         assert_eq!(
             codes,
@@ -2910,9 +2902,8 @@ mod tests {
         assert!(source.contains("export type LargeBound = never;"));
         assert!(package.losses.entries().iter().all(|entry| {
             entry
-                .location
-                .as_ref()
-                .and_then(|value| value.subject.as_deref())
+                .subject
+                .text()
                 .is_none_or(|subject| !subject.starts_with("#/$defs/LargeBound"))
         }));
         for (code, location) in [
@@ -2926,12 +2917,7 @@ mod tests {
             ),
         ] {
             assert!(package.losses.entries().iter().any(|entry| {
-                entry.code == code
-                    && entry
-                        .location
-                        .as_ref()
-                        .and_then(|value| value.subject.as_deref())
-                        == Some(location)
+                entry.code == code && entry.subject.text().as_deref() == Some(location)
             }));
         }
     }

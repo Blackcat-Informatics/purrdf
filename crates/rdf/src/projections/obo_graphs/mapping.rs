@@ -2180,7 +2180,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         assert_ledger_complete(
             &projected.loss_ledger,
@@ -2226,11 +2226,10 @@ mod tests {
         assert_ledger_complete(&projection.loss_ledger, &[LOSS_OBO_NAMED_GRAPH_DROPPED]);
         assert_eq!(projection.loss_ledger.entries().len(), 1);
         assert_eq!(
-            projection.loss_ledger.entries()[0]
-                .location
-                .as_ref()
-                .and_then(|location| location.logical.as_deref()),
-            Some("obo-graphs:named-graph")
+            projection.loss_ledger.entries()[0].site,
+            purrdf_core::LossSite::Stage {
+                name: "obo-graphs:named-graph".to_owned()
+            }
         );
     }
 

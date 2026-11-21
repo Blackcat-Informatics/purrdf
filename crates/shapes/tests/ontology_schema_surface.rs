@@ -924,7 +924,7 @@ fn every_language_emitter_carries_the_projection_or_records_its_loss() {
     // What TypeScript cannot type (an existential `contains`) is recorded.
     assert!(typescript.losses.entries().iter().any(|entry| {
         entry.code == "array-contains-validation-dropped"
-            && format!("{:?}", entry.location).contains("#/$defs/Person")
+            && has_pointer_prefix(&entry.subject, &["$defs", "Person"])
     }));
 
     // GraphQL: the enumerated class stays typed; a disjunction over several
@@ -933,7 +933,7 @@ fn every_language_emitter_carries_the_projection_or_records_its_loss() {
     assert!(graphql.names.fields.contains_key("#/$defs/Status"));
     assert!(graphql.losses.entries().iter().any(|entry| {
         entry.code == "intersection-validation-delegated"
-            && format!("{:?}", entry.location).contains("#/$defs/Contact")
+            && has_pointer_prefix(&entry.subject, &["$defs", "Contact"])
     }));
 
     // Pydantic: a required field has no default; an optional one does.
@@ -1814,7 +1814,7 @@ fn reported_outcomes_match_every_emitter_on_an_agent_provenance_slice() {
                     .contains_key(&format!("#/$defs/{class}"))
                     || graphql.losses.entries().iter().any(|entry| {
                         entry.code == "custom-scalar-validation-delegated"
-                            && format!("{:?}", entry.location).contains(&format!("#/$defs/{class}"))
+                            && has_pointer_prefix(&entry.subject, &["$defs", class])
                     }),
                 "GraphQL neither types nor reports {class}"
             );
@@ -2060,7 +2060,7 @@ fn graphql_names_literal_enumerations_beside_their_array_form() {
                 .losses
                 .entries()
                 .iter()
-                .any(|entry| format!("{:?}", entry.location).contains("ex:e")),
+                .any(|entry| format!("{:?}", entry.subject).contains("ex:e")),
             "{:#?}",
             graphql.losses
         );
@@ -2362,4 +2362,10 @@ fn an_external_shape_cell_reports_xml_approximation_at_its_actual_validator() {
             "the emitted external definition admits unchecked XML, so its precision cannot be exact"
         );
     }
+}
+
+/// Whether `subject` is a JSON Pointer whose leading tokens are `prefix`.
+fn has_pointer_prefix(subject: &purrdf_core::LossSubject, prefix: &[&str]) -> bool {
+    matches!(subject, purrdf_core::LossSubject::Pointer(tokens)
+        if tokens.len() >= prefix.len() && tokens.iter().zip(prefix).all(|(a, b)| a == b))
 }

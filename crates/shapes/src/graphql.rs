@@ -27,7 +27,6 @@ use crate::json_model::{Map, NumberKind, Object, ToJson, Value, ValueKind, json}
 use crate::limits::{self, MAX_SCHEMA_DEPTH};
 // A JSON string literal is a GraphQL `StringValue` with the same value.
 use crate::json_model::json_string as graphql_string;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
@@ -1369,9 +1368,11 @@ impl<'a> Planner<'a> {
             from: LOSS_FROM.into(),
             to: GRAPHQL_DIALECT.into(),
             note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 
@@ -3336,9 +3337,8 @@ mod tests {
         assert_eq!(imported.shapes.node_shapes.len(), 1);
         assert!(imported.losses.entries().iter().all(|entry| {
             entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
+                .subject
+                .text()
                 .is_some_and(|subject| subject.starts_with("#/"))
         }));
     }
@@ -3443,9 +3443,8 @@ mod tests {
             .expect("the complete closed GraphQL profile is exercised");
         assert!(package.losses.entries().iter().all(|entry| {
             entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
+                .subject
+                .text()
                 .is_some_and(|subject| subject.starts_with("#/$defs/"))
         }));
         let source = sdl(&package);
@@ -3666,11 +3665,7 @@ mod tests {
             .map(|entry| {
                 (
                     entry.code.to_string(),
-                    entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.clone())
-                        .unwrap_or_default(),
+                    entry.subject.text().unwrap_or_default(),
                 )
             })
             .collect::<BTreeSet<_>>();
@@ -3824,11 +3819,7 @@ mod tests {
             assert!(package.names.unions.is_empty());
             assert!(package.losses.entries().iter().any(|entry| {
                 entry.code == "union-validation-delegated"
-                    && entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.as_deref())
-                        == Some("#/$defs/Choice/anyOf")
+                    && entry.subject.text().as_deref() == Some("#/$defs/Choice/anyOf")
             }));
         }
         // Kinds a union admits beside a keyword judging another kind make the

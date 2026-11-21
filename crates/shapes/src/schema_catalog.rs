@@ -208,6 +208,16 @@ impl SchemaPath {
         Self(self.0.child(token.as_ref()))
     }
 
+    /// This location's reference tokens in order.
+    pub(crate) fn tokens(&self) -> &[String] {
+        self.0.tokens()
+    }
+
+    /// This location as a loss-ledger subject: its reference tokens in order.
+    pub(crate) fn to_loss_subject(&self) -> purrdf_core::LossSubject {
+        purrdf_core::LossSubject::Pointer(self.0.tokens().to_vec())
+    }
+
     /// This location extended by the array index `index`.
     pub(crate) fn child_index(&self, index: usize) -> Self {
         Self(self.0.child_index(index))

@@ -968,15 +968,55 @@ export type LiftProfile = Exclude<
   "csvw-terms" | "okf-terms" | "obo-graphs" | "skos" | "dcat-rdf" | "void"
 >;
 
+export type LossGraphName =
+  | { kind: "default" }
+  | { kind: "iri"; value: string }
+  | { kind: "blank"; label: string };
+
+export type LossTerm =
+  | { kind: "iri"; value: string }
+  | { kind: "blank"; label: string; scope: string | null }
+  | { kind: "literal"; lexical: string; datatype: string; language: string | null }
+  | { kind: "triple"; subject: LossTerm; predicate: LossTerm; object: LossTerm }
+  | { kind: "indexed"; index: number };
+
+export type LossSite =
+  | { kind: "unspecified" }
+  | { kind: "document"; path: string | null; line: number | null; column: number | null }
+  | {
+      kind: "gts";
+      segment: number | null;
+      frame: number | null;
+      term: number | null;
+      quad: number | null;
+      reifier: number | null;
+    }
+  | { kind: "stage"; name: string };
+
+export type LossSubject =
+  | { kind: "absent" }
+  | { kind: "term"; term: LossTerm }
+  | { kind: "row"; row_kind: string; identifier: string }
+  | { kind: "graph"; graph: LossGraphName }
+  | { kind: "pointer"; tokens: string[] };
+
+export type LossDetailValue =
+  | { kind: "count"; count: number }
+  | { kind: "identifier"; identifier: string }
+  | { kind: "term"; term: LossTerm }
+  | { kind: "graph"; graph: LossGraphName };
+
 export interface ProjectionLossLedger {
-  schema_version: 1;
+  schema_version: 2;
   losses: Array<{
     code: string;
     from: string;
     to: string;
     intentional: boolean;
     note: string;
-    location?: string;
+    site: LossSite;
+    subject: LossSubject;
+    detail: Array<{ kind: "detail"; name: string; value: LossDetailValue }>;
   }>;
 }
 

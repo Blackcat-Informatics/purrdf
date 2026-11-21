@@ -1303,7 +1303,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         assert_ledger_complete(
             &projected.loss_ledger,
@@ -1405,7 +1405,8 @@ mod tests {
         assert!(union_text.contains("named-concept"));
         for result in [&default, &named, &union] {
             assert!(result.loss_ledger.entries().iter().any(|entry| {
-                entry.code == LOSS_SKOS_NAMED_GRAPH_DROPPED && entry.location.is_some()
+                entry.code == LOSS_SKOS_NAMED_GRAPH_DROPPED
+                    && entry.subject != purrdf_core::LossSubject::Absent
             }));
         }
     }
@@ -1566,11 +1567,10 @@ mod tests {
             LOSS_SKOS_NAMED_GRAPH_DROPPED
         );
         assert_eq!(
-            projected.loss_ledger.entries()[0]
-                .location
-                .as_ref()
-                .and_then(|location| location.logical.as_deref()),
-            Some("skos:named-graph")
+            projected.loss_ledger.entries()[0].site,
+            purrdf_core::LossSite::Stage {
+                name: "skos:named-graph".to_owned()
+            }
         );
     }
 }

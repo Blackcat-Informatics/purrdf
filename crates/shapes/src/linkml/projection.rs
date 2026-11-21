@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
 
@@ -2416,9 +2415,11 @@ impl<'a> Renderer<'a> {
             from: LOSS_FROM.into(),
             to: LOSS_TO.into(),
             note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 
@@ -3143,7 +3144,13 @@ mod tests {
                 "unevaluated-validation-dropped",
             ])
         );
-        let rendered = output.losses.render_json();
+        let rendered = output
+            .losses
+            .entries()
+            .iter()
+            .filter_map(|entry| entry.subject.text())
+            .collect::<Vec<_>>()
+            .join("\n");
         assert!(rendered.contains("#/$defs/Lossy/properties/ex:label/minLength"));
         assert!(rendered.contains("#/$defs/Lossy/properties/ex:number/multipleOf"));
         assert!(rendered.contains("#/$defs/Lossy/properties/ex:array/minContains"));

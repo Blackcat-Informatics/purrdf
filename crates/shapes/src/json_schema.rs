@@ -150,9 +150,9 @@ use std::sync::Arc;
 
 use crate::json_model::{Map, ToJson, Value, ValueKind, json};
 use ::purrdf_rdf::RdfDataset;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::RdfTextDirection;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
+use purrdf_core::{LossSite, LossSubject, LossTerm};
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, rdfs};
@@ -457,18 +457,19 @@ impl Namespaces {
 pub use purrdf_iri::local_name;
 
 /// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`
-/// is `"json-schema"`, and `location` carries `subject` — the shape/class IRI
-/// (or blank-node id) the loss concerns. Every `code` passed here MUST be one
+/// is `"json-schema"`, and `subject` is the shape or class term the loss concerns. Every `code` passed here MUST be one
 /// enumerated in `SHACL_JSON_SCHEMA_PROFILE` (`crates/rdf-core/src/loss.rs`)
 /// — a documented, accepted drop, never a bug — since a ledger's `intentional`
 /// JSON field is derived (not stored) as membership in that profile.
-fn loss_entry(code: &str, subject: &str, note: &str) -> LossEntry {
+fn loss_entry(code: &str, subject: LossTerm, note: &str) -> LossEntry {
     LossEntry {
         code: code.to_owned().into(),
         from: "shacl".into(),
         to: "json-schema".into(),
         note: note.to_owned().into(),
-        location: Some(Box::new(RdfLocation::default().with_subject(subject))),
+        site: LossSite::Unspecified,
+        subject: LossSubject::Term(subject),
+        detail: Vec::new(),
     }
 }
 
@@ -1255,6 +1256,10 @@ struct Ctx<'ns> {
     /// The runtime loss ledger this compilation accumulates into (surfaced as
     /// [`CompiledSchema::losses`]).
     ledger: LossLedger,
+    /// The typed term of each shape whose display text a loss site passes as
+    /// its subject: the producer holds the term and registers it once, so the
+    /// ledger stores the term and never re-reads the text.
+    loss_terms: BTreeMap<String, LossTerm>,
     /// The set of `Namespaces::def_key` keys that WILL receive a `$def` — i.e.
     /// every `def_key(target_class)` over all non-deactivated
     /// `Target::Class(..)` shapes. This MUST use the same key function as the
@@ -1319,6 +1324,7 @@ impl<'ns> Ctx<'ns> {
             reserved_defs: BTreeSet::new(),
             pattern_error: None,
             ledger: LossLedger::new(),
+            loss_terms: BTreeMap::new(),
             emitted_defs,
             value_vocab_enums,
             predicate_ranges,
@@ -1448,6 +1454,33 @@ impl<'ns> Ctx<'ns> {
     /// blank-node id it concerns; `note` = a human-readable reason).
     fn record(&mut self, code: &str, subject: &str, note: &str) {
         tool_arguments::record_loss(self, code, subject, note);
+    }
+
+    /// The display text of `shape`'s identity, registering its typed term so a
+    /// loss recorded under that text carries the term.
+    fn shape_label(&mut self, shape: &Term) -> String {
+        let label = shape.to_string();
+        self.loss_terms
+            .entry(label.clone())
+            .or_insert_with(|| shape.to_loss_term());
+        label
+    }
+
+    /// Register `shape`'s typed term under the display `label` a loss site will pass.
+    fn register_shape(&mut self, label: &str, shape: &Term) {
+        if !self.loss_terms.contains_key(label) {
+            self.loss_terms
+                .insert(label.to_owned(), shape.to_loss_term());
+        }
+    }
+
+    /// The typed subject for a loss site's `subject` text: the registered shape
+    /// term, else the IRI the text spells (a class IRI passed unwrapped).
+    fn loss_subject(&self, subject: &str) -> LossTerm {
+        self.loss_terms
+            .get(subject)
+            .cloned()
+            .unwrap_or_else(|| LossTerm::Iri(subject.to_owned()))
     }
 
     /// Absorb a batch of already-built [`LossEntry`] values (e.g. the
@@ -1633,7 +1666,7 @@ pub fn compile_with_value_vocab(
             continue;
         }
         let body = compile_object_schema(shape, &mut ctx);
-        let shape_iri = shape.id.to_string();
+        let shape_iri = ctx.shape_label(&shape.id);
         for target in &shape.targets {
             match target {
                 Target::Class(c) => {
@@ -1803,7 +1836,7 @@ fn compile_with_surface(
             continue;
         }
         let body = compile_object_schema(shape, &mut ctx);
-        let shape_iri = shape.id.to_string();
+        let shape_iri = ctx.shape_label(&shape.id);
         for target in &shape.targets {
             match target {
                 Target::Class(class) => {
@@ -3367,7 +3400,7 @@ fn value_vocab_enum_defs(
         if members.is_empty() {
             losses.push(loss_entry(
                 "value-vocabulary",
-                class_iri,
+                LossTerm::Iri(class_iri.to_owned()),
                 "no named individuals; emitting an empty enum",
             ));
         }
@@ -3462,11 +3495,16 @@ fn members_of(
     let losses: Vec<LossEntry> = blank_labels
         .into_iter()
         .map(|label| {
-            loss_entry(
+            let mut entry = loss_entry(
                 "value-vocabulary member",
-                class_iri,
-                &format!("blank-node individual _:{label} cannot be an enum member; dropped"),
-            )
+                LossTerm::Iri(class_iri.to_owned()),
+                "a blank-node individual cannot be an enum member; dropped",
+            );
+            entry.detail.push(purrdf_core::LossDetail::term(
+                "individual",
+                LossTerm::Blank { label, scope: None },
+            ));
+            entry
         })
         .collect();
 
@@ -3665,12 +3703,12 @@ fn owning_shapes(data: &RdfDataset, node: Term) -> Vec<Term> {
 fn node_expression_deactivation_losses(shapes: &Shapes) -> Vec<LossEntry> {
     let data = &shapes.shapes_dataset;
     let predicate = Term::NamedNode(NamedNode::from(crate::model::sh::DEACTIVATED));
-    let mut subjects: Vec<String> =
+    let mut subjects: Vec<LossTerm> =
         native_quads(data, None, Some(&predicate), None, GraphFilter::AnyGraph)
             .into_iter()
             .filter(|(_, _, object)| matches!(object, Term::BlankNode(_)))
             .flat_map(|(subject, _, _)| owning_shapes(data, subject))
-            .map(|subject| subject.to_string())
+            .map(|subject| subject.to_loss_term())
             .collect();
     // The same value on a reifier annotates the statement it reifies: the shape that
     // is that statement's subject is the one projected as active.
@@ -3687,7 +3725,7 @@ fn node_expression_deactivation_losses(shapes: &Shapes) -> Vec<LossEntry> {
             if reified.iter().any(|(reifier, _)| *reifier == quad.s)
                 && let ::purrdf_rdf::TermRef::Triple { s, .. } = data.resolve(quad.o)
             {
-                subjects.push(crate::term::term_id_to_native(data, s).to_string());
+                subjects.push(crate::term::term_id_to_native(data, s).to_loss_term());
             }
         }
     }
@@ -3695,7 +3733,13 @@ fn node_expression_deactivation_losses(shapes: &Shapes) -> Vec<LossEntry> {
     subjects.dedup();
     subjects
         .iter()
-        .map(|subject| loss_entry("sh:deactivated", subject, NODE_EXPRESSION_DEACTIVATED_NOTE))
+        .map(|subject| {
+            loss_entry(
+                "sh:deactivated",
+                subject.clone(),
+                NODE_EXPRESSION_DEACTIVATED_NOTE,
+            )
+        })
         .collect()
 }
 
@@ -4072,6 +4116,7 @@ fn compile_object_schema_in_model(shape: &Shape, ctx: &mut Ctx<'_>) -> Value {
         return tool_arguments::emitted_json!(ctx; {});
     }
     let shape_iri = tool_arguments::format_text(ctx, format_args!("{}", shape.id));
+    ctx.register_shape(&shape_iri, &shape.id);
     if !tool_arguments::admit_object(shape, ctx) {
         return tool_arguments::emitted_json!(ctx; {});
     }
@@ -4848,6 +4893,7 @@ fn compile_negand_body(
     // Property shapes: express only direct-predicate paths whose every value
     // constraint round-trips through `compile_property`.
     let inner_iri = tool_arguments::format_text(ctx, format_args!("{}", inner.id));
+    ctx.register_shape(&inner_iri, &inner.id);
     let model = ctx.model.clone();
     for view in inner.properties_in(model.as_deref()) {
         let view = match view {
@@ -7854,6 +7900,9 @@ fn value_shape_exact(
         .tool
         .is_some()
         .then(|| tool_arguments::format_text(ctx, format_args!("{}", shape.id)));
+    if let Some(label) = &source {
+        ctx.register_shape(label, &shape.id);
+    }
     let location = (source.as_deref().unwrap_or(location.0), location.1);
     let disallowed = ConformanceDisallows::default();
     let result = tool_arguments::numeric::with_finite_scope(ctx, &shape.constraints, |ctx| {
@@ -8637,7 +8686,8 @@ mod tests {
     fn has_loss(ledger: &LossLedger, code: &str, subject: &str) -> bool {
         ledger.entries().iter().any(|e| {
             e.code == code
-                && e.location.as_ref().and_then(|l| l.subject.as_deref()) == Some(subject)
+                && (e.subject.text().as_deref() == Some(subject)
+                    || e.subject == LossSubject::Term(LossTerm::Iri(subject.to_owned())))
         })
     }
 

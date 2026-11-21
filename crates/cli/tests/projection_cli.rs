@@ -206,7 +206,7 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
     assert_eq!(projected.stdout, [] as [u8; 0]);
     let ledger: json::Value =
         json::read_slice(&projected.stderr, json::Limits::DEFAULT).expect("project ledger JSON");
-    assert_eq!(ledger["schema_version"], 1);
+    assert_eq!(ledger["schema_version"], 2);
     assert!(
         ledger["losses"]
             .as_array()
@@ -253,7 +253,7 @@ fn project_is_byte_deterministic_and_lift_round_trips_with_ledgers() {
     );
     let ledger: json::Value =
         json::read_slice(&lifted.stderr, json::Limits::DEFAULT).expect("lift ledger JSON");
-    assert_eq!(ledger["schema_version"], 1);
+    assert_eq!(ledger["schema_version"], 2);
     assert_ne!(
         ledger["losses"].as_array().expect("loss array").as_slice(),
         [] as [json::Value; 0]

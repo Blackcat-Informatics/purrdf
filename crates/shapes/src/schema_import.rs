@@ -17,7 +17,6 @@ use std::sync::{Arc, OnceLock};
 
 use crate::json_model::{Map, Number, NumberKind, Object, Value, ValueKind};
 use crate::limits::MAX_SCHEMA_DEPTH;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::RdfTextDirection;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use purrdf_hash::fnv::fnv1a64;
@@ -474,9 +473,11 @@ impl<'a> ImportContext<'a> {
             from: self.source.to_owned().into(),
             to: "shacl".to_owned().into(),
             note: contract.note.to_string().into(),
-            location: Some(Box::new(
-                RdfLocation::logical("schema-importer").with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: "schema-importer".to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 
@@ -4130,20 +4131,20 @@ mod tests {
             }
         });
         let imported = import_json_schema(&schema.to_string(), &config()).expect("import schema");
-        let observed = imported
+        let texts = imported
             .losses
             .entries()
             .iter()
             .map(|entry| {
                 (
                     entry.code.as_ref(),
-                    entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.as_deref())
-                        .expect("located loss"),
+                    entry.subject.text().expect("located loss"),
                 )
             })
+            .collect::<Vec<_>>();
+        let observed = texts
+            .iter()
+            .map(|(code, text)| (*code, text.as_str()))
             .collect::<BTreeSet<_>>();
         for expected in [
             ("schema-identity-dropped", "#/$schema"),
@@ -4348,15 +4349,11 @@ mod tests {
             .losses
             .entries()
             .iter()
-            .map(|entry| {
-                (
-                    entry.code.as_ref(),
-                    entry
-                        .location
-                        .as_ref()
-                        .and_then(|location| location.subject.as_deref()),
-                )
-            })
+            .map(|entry| (entry.code.as_ref(), entry.subject.text()))
+            .collect::<Vec<_>>();
+        let observed = observed
+            .iter()
+            .map(|(code, text)| (*code, text.as_deref()))
             .collect::<BTreeSet<_>>();
         assert!(observed.contains(&(
             "value-term-kind-widened",
@@ -4443,9 +4440,8 @@ mod tests {
         losses.entries().iter().all(|entry| {
             entry.code == "annotation-dropped"
                 && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
+                    .subject
+                    .text()
                     .is_some_and(|subject| subject.ends_with("/properties/ex:v/$comment"))
         })
     }

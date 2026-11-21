@@ -8,6 +8,27 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: loss entries record typed occurrences, and the runtime ledger is
+  schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
+  with three typed members: `site` (`LossSite`: unspecified, a document position,
+  a GTS anchor, or a named stage), `subject` (`LossSubject`: absent, a `LossTerm`
+  with its datatype and language, a row kind with its identifier, a
+  `LossGraphName`, or a JSON Pointer as its token list) and `detail` (an ordered
+  list of `LossDetail`, each a named count, identifier, term or graph name).
+  Absence is an explicit variant, so no member's meaning depends on a prefix,
+  suffix or reserved value. Every producer records values it holds: counts,
+  segment head identifiers, graph names and terms are no longer formatted into
+  `note`, which keeps only the code's static explanation; the CLI no longer
+  names an endpoint `unknown`; and a graph name that is neither an IRI nor a
+  blank node is refused rather than rendered with `Debug`. All of these types
+  implement `StructuredError`, and `LossEntry::presentation` renders prose from
+  the typed members. `LossLedger::render_json` writes `schema_version` 2 with
+  `site`, `subject` and `detail` members in place of the single `location`
+  string; the static matrices carry no occurrences and are unchanged. The
+  Python `ProjectionLoss.location` attribute is replaced by `site`, `subject`
+  and `detail`, and the C and WebAssembly surfaces carry the same members in
+  the ledger JSON. `RdfLocation` and `RdfDiagnostic` are unchanged. The
+  migration guide gives the mapping.
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop

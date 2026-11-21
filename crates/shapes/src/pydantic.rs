@@ -42,7 +42,6 @@ use std::fmt::Write as _;
 use crate::json_model::{Map, Object, Value, ValueKind};
 // A JSON string literal is a valid Python `str` literal with the same value.
 use crate::json_model::json_string as python_string;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
 
@@ -1586,9 +1585,11 @@ impl<'a> Renderer<'a> {
             from: "json-schema".into(),
             to: PYDANTIC_DIALECT.into(),
             note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical("pydantic-emitter").with_subject(path.to_string()),
-            )),
+            site: purrdf_core::LossSite::Stage {
+                name: "pydantic-emitter".to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail: Vec::new(),
         });
     }
 
@@ -3271,9 +3272,8 @@ mod tests {
         assert_eq!(imported.shapes.node_shapes.len(), 1);
         assert!(imported.losses.entries().iter().all(|entry| {
             entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
+                .subject
+                .text()
                 .is_some_and(|subject| subject.starts_with("#/"))
         }));
     }
@@ -3503,7 +3503,7 @@ mod tests {
             .entries()
             .iter()
             .filter(|entry| entry.code.as_ref() == "negation-validation-dropped")
-            .filter_map(|entry| entry.location.as_ref()?.subject.clone())
+            .filter_map(|entry| entry.subject.text())
             .collect::<Vec<_>>();
         assert_eq!(located, ["#/$defs/Holder/properties/ex:keys/not"]);
     }
@@ -3622,25 +3622,19 @@ mod tests {
         );
         assert!(out.losses.entries().iter().any(|entry| {
             entry.code.as_ref() == "keyword-validation-dropped"
-                && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
+                && entry.subject.text().as_deref()
                     == Some("#/$defs/Lossy/properties/ex:temporal/minLength")
         }));
         assert!(out.losses.entries().iter().any(|entry| {
             entry.code.as_ref() == "format-validation-widened"
-                && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
+                && entry.subject.text().as_deref()
                     == Some("#/$defs/Lossy/properties/ex:temporal/format")
         }));
         assert!(
             out.losses
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
     }
 

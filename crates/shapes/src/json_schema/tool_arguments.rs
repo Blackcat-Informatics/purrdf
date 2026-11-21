@@ -705,6 +705,7 @@ pub(super) fn collect<T>(ctx: &mut Ctx<'_>, values: impl IntoIterator<Item = T>)
 }
 
 pub(super) fn record_loss(ctx: &mut Ctx<'_>, code: &str, subject: &str, note: &str) {
+    let subject = ctx.loss_subject(subject);
     let Some(policy) = &mut ctx.tool else {
         ctx.ledger.record(super::loss_entry(code, subject, note));
         return;
@@ -715,15 +716,15 @@ pub(super) fn record_loss(ctx: &mut Ctx<'_>, code: &str, subject: &str, note: &s
     policy.native(|memory| {
         let code = memory.string(code)?;
         let note = memory.string(note)?;
-        let subject = memory.string(subject)?;
-        let location = memory.boxed(super::RdfLocation::default().with_subject(subject))?;
         ctx.ledger.record_with_memory(
             super::LossEntry {
                 code: code.into(),
                 from: "shacl".into(),
                 to: "json-schema".into(),
                 note: note.into(),
-                location: Some(location),
+                site: super::LossSite::Unspecified,
+                subject: super::LossSubject::Term(subject),
+                detail: Vec::new(),
             },
             memory,
         )
@@ -1656,6 +1657,7 @@ pub(super) fn member_schema(shape: &Shape, shape_iri: &str, key: &str, ctx: &mut
         return compile_object_schema(resolved, ctx);
     }
     let source = format_text(ctx, format_args!("{}", resolved.id));
+    ctx.register_shape(&source, &resolved.id);
     compile_member_schema_body(resolved, &source, key, ctx)
 }
 

@@ -306,6 +306,29 @@ fn json(text: &str) -> Value {
     value
 }
 
+/// A typed ledger subject as the text the expectations below spell it: a term
+/// in angle brackets or `_:` form, a pointer as `#/` tokens.
+fn subject_text(subject: &Value) -> String {
+    let token = |value: &Value| value.as_str().expect("token").to_owned();
+    match subject["kind"].as_str().expect("subject kind") {
+        "pointer" => {
+            let tokens = subject["tokens"].as_array().expect("tokens");
+            let mut escaped = String::from("#");
+            for value in tokens {
+                escaped.push('/');
+                escaped.push_str(&token(value).replace('~', "~0").replace('/', "~1"));
+            }
+            escaped
+        }
+        "term" => match subject["term"]["kind"].as_str().expect("term kind") {
+            "iri" => format!("<{}>", token(&subject["term"]["value"])),
+            "blank" => format!("_:{}", token(&subject["term"]["label"])),
+            other => panic!("unexpected term kind {other}"),
+        },
+        other => panic!("unexpected subject kind {other}"),
+    }
+}
+
 fn ledger_rows(ledger: &str) -> Vec<(String, String, String)> {
     let ledger: Value = purrdf_lex::json::read(ledger).expect("ledger JSON");
     ledger["losses"]
@@ -313,11 +336,9 @@ fn ledger_rows(ledger: &str) -> Vec<(String, String, String)> {
         .expect("losses array")
         .iter()
         .map(|entry| {
-            let location = entry["location"].as_str().unwrap_or_default();
-            let subject = location.split_once("subject=").map_or(location, |(_, s)| s);
             (
                 entry["code"].as_str().expect("code").to_owned(),
-                subject.to_owned(),
+                subject_text(&entry["subject"]),
                 entry["note"].as_str().expect("note").to_owned(),
             )
         })

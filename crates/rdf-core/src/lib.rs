@@ -265,7 +265,8 @@ pub use lookaside::{
     RdfSuppressionRecord,
 };
 pub use loss::{
-    LossCompletenessError, LossEntry, LossLedger, LossSoundnessError, PROJECTION_CODECS,
+    LossCompletenessError, LossDetail, LossEntry, LossGraphName, LossLedger, LossSite,
+    LossSoundnessError, LossSubject, LossTerm, LossValue, PROJECTION_CODECS,
     RESEARCH_OBJECT_CODECS, SCHEMA_IMPORT_CODECS, assert_ledger_complete, assert_ledger_sound,
     check_ledger_complete, check_ledger_sound, gts_to_rdf_loss_ledger, loss_matrix_json,
     lpg_to_rdf_loss_ledger, okf_to_rdf_loss_ledger, pair_loss_ledger, profile_for,

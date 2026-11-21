@@ -123,8 +123,8 @@ use std::io::Read;
 use std::sync::Arc;
 
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, PackView, RdfDataset, RdfDiagnostic, RdfLookaside,
-    dataset_from_view, verify_pack,
+    DatasetView, LossDetail, LossEntry, LossLedger, LossSite, LossSubject, PackView, RdfDataset,
+    RdfDiagnostic, RdfLookaside, dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
     NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
@@ -672,25 +672,30 @@ fn gts_envelope_ledger(lookaside: &RdfLookaside, source: &str) -> LossLedger {
         if count == 0 {
             continue;
         }
-        let mut text = format!("{source}: {count} {note}.");
+        let mut detail = vec![LossDetail::count("count", count as u64)];
         if code == GTS_LOSS_CODES[0].0 {
-            let heads: Vec<&str> = lookaside
-                .segments
-                .iter()
-                .filter_map(|segment| segment.head.as_deref())
-                .collect();
-            if !heads.is_empty() {
-                text.push_str(" Segment head id(s), in segment order: ");
-                text.push_str(&heads.join(", "));
-                text.push('.');
-            }
+            // The head ids in segment order, so an operator can trace a converted
+            // document back to the exact segments it came from.
+            detail.extend(
+                lookaside
+                    .segments
+                    .iter()
+                    .filter_map(|segment| segment.head.as_deref())
+                    .map(|head| LossDetail::identifier("segment-head", head)),
+            );
         }
         ledger.record(LossEntry {
             code: Cow::Borrowed(code),
             from: Cow::Borrowed("gts"),
             to: Cow::Borrowed("rdf-1.2-dataset"),
-            note: Cow::Owned(text),
-            location: None,
+            note: Cow::Borrowed(note),
+            site: LossSite::Document {
+                path: Some(source.to_owned()),
+                line: None,
+                column: None,
+            },
+            subject: LossSubject::Absent,
+            detail,
         });
     }
     ledger

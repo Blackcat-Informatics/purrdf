@@ -43,6 +43,9 @@ digests before opening a 4.x artifact.
   exchange").
 - `GeoIndex::source_fingerprint` is a 32-byte digest, not a `u64` (see "Geo index
   source identity").
+- Loss entries carry typed `site`, `subject` and `detail` members in place of
+  `location`, and the runtime loss ledger JSON is schema version 2 (see "Loss
+  occurrences").
 
 ## The canonical line sequence
 
@@ -384,6 +387,49 @@ signature, and one relaxed a bound:
 `try_canonicalize`, `check_admissible`, `canonical_relabel` and
 `canonical_relabel_with_mapping` keep their signatures and change only what they
 compute.
+
+## Loss occurrences
+
+`LossEntry` no longer has a `location`. A producer records where the loss
+happened, what it concerns and the facts that qualify it as values:
+
+| 4.x | 5.0 |
+|---|---|
+| `location: Some(RdfLocation { path, line, column, .. })` | `site: LossSite::Document { path, line, column }` |
+| `location` with `gts_segment_index`, `gts_frame_index`, `gts_term_id`, `gts_quad_index` or `gts_reifier_id` | `site: LossSite::Gts { segment, frame, term, quad, reifier }` |
+| `location.logical`, an adapter or stage label | `site: LossSite::Stage { name }` |
+| `location.subject`, spelled `<iri>`, `_:label`, `literal:lexical`, `term#N` or `#/pointer` | `subject`: `LossSubject::Term(LossTerm)`, `Row { kind, identifier }`, `Graph(LossGraphName)` or `Pointer(tokens)` |
+| counts, segment head identifiers and graph names inside `note` | `detail: Vec<LossDetail>`, each a named `Count`, `Identifier`, `Term` or `Graph` value |
+| no location (`None`) | `LossSite::Unspecified`, `LossSubject::Absent` and an empty `detail` |
+
+`note` holds the code's explanation only. `LossEntry::presentation` renders
+the note and the typed members as one line for a person. `LossTerm` keeps a
+literal's datatype and language, a blank node's label and scope, and a triple
+term's parts, so no subject identifies two terms alike. The types are
+`#[non_exhaustive]` and implement `StructuredError`.
+
+A runtime ledger renders `schema_version` 2. Each entry has `code`, `from`,
+`to`, `intentional` and `note`, then:
+
+- `site`: an object whose `kind` is `unspecified`, `document` (`path`, `line`,
+  `column`), `gts` (`segment`, `frame`, `term`, `quad`, `reifier`) or `stage`
+  (`name`);
+- `subject`: an object whose `kind` is `absent`, `term` (`term`), `row`
+  (`row_kind`, `identifier`), `graph` (`graph`) or `pointer` (`tokens`);
+- `detail`: an array of `{ "kind": "detail", "name", "value" }` where the
+  value's `kind` is `count`, `identifier`, `term` or `graph`.
+
+A term object has `kind` `iri`, `blank`, `literal`, `triple` or `indexed`, and
+a graph object `default`, `iri` or `blank`. Absent members are `null`. The
+`location` member is gone; read `site` and `subject`. The static matrices
+(`generated/rdf-loss-matrix.json`, `generated/transcode-loss-matrix.json`)
+keep their array shape.
+
+The Python `ProjectionLoss.location` attribute is replaced by `site`,
+`subject` and `detail`: dictionaries with the same `kind` members as the JSON.
+The CLI records an in-memory source as `rdf-1.2-dataset` instead of
+`unknown`, and refuses a declared graph name that is not an IRI or a blank
+node. `RdfLocation` and `RdfDiagnostic` keep every field.
 
 ## Public types that changed shape
 

@@ -45,7 +45,9 @@ fn downstream_projection_checks_soundness_and_intent() {
             note: "The particular input needs an enforced check"
                 .to_owned()
                 .into(),
-            location: None,
+            site: purrdf_core::LossSite::Unspecified,
+            subject: purrdf_core::LossSubject::Absent,
+            detail: Vec::new(),
         });
     }
     check_ledger_sound_in(&profile, &ledger, "source-model", "target-json").unwrap();
@@ -66,7 +68,9 @@ fn downstream_projection_checks_soundness_and_intent() {
         from: "source-model".to_owned().into(),
         to: "target-json".to_owned().into(),
         note: "An undeclared loss must fail soundness".to_owned().into(),
-        location: None,
+        site: purrdf_core::LossSite::Unspecified,
+        subject: purrdf_core::LossSubject::Absent,
+        detail: Vec::new(),
     });
     let error =
         check_ledger_sound_in(&profile, &ledger, "source-model", "target-json").unwrap_err();
@@ -97,7 +101,9 @@ fn downstream_projection_checks_soundness_and_intent() {
         from: "wrong-source".into(),
         to: "target-json".into(),
         note: "A known code must not disguise the wrong conversion".into(),
-        location: None,
+        site: purrdf_core::LossSite::Unspecified,
+        subject: purrdf_core::LossSubject::Absent,
+        detail: Vec::new(),
     });
     // Restore the unregistered-code neighbor; the later pair mismatch then wins.
     let profile = profile

@@ -846,7 +846,7 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
         let ledger_bytes = buffer_bytes(project_ledger);
         assert_ne!(archive_bytes, [] as [u8; 0]);
         let ledger = String::from_utf8(ledger_bytes).expect("ledger JSON");
-        assert!(ledger.starts_with("{\n  \"schema_version\": 1,"));
+        assert!(ledger.starts_with("{\n  \"schema_version\": 2,"));
 
         let mut lifted: *mut PurrdfDataset = std::ptr::null_mut();
         let mut lift_ledger: *mut PurrdfBuffer = std::ptr::null_mut();
@@ -871,7 +871,7 @@ fn projection_archive_and_ledger_round_trip_through_owned_c_handles() {
         assert_eq!(count, 1);
         let lift_ledger_bytes = buffer_bytes(lift_ledger);
         let lift_ledger_json = String::from_utf8(lift_ledger_bytes).expect("lift ledger");
-        assert!(lift_ledger_json.starts_with("{\n  \"schema_version\": 1,"));
+        assert!(lift_ledger_json.starts_with("{\n  \"schema_version\": 2,"));
 
         purrdf_buffer_free(lift_ledger);
         purrdf_dataset_free(lifted);
