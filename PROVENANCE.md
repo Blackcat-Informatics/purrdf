@@ -370,4 +370,6 @@ format owner expects with and without that key. The corpus is evidence of the
 format owner's expectations, not an endorsement of each one: the engine follows
 RFC 9052 where a vector departs from it, and `crates/gts/tests/signed_corpus.rs`
 lists each such difference with its reason and fails when a listed vector starts
-to agree or an unlisted one disagrees.
+to agree or an unlisted one disagrees. The 68 `sigalg-*` vectors state a
+protected-header grammar that version 1 of the GTS specification does not
+contain; they are outside the conformance statement. `basic.json` agrees.

@@ -299,8 +299,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so a file that holds such a signature is refused there
   (`CompactRefusedError::FrameCose` or `DetachedCose`) where 4.0.2 carried the
   signature. The migration guide gives the bucket each case moves between.
-  `vectors/signed` carries the upstream signed corpus and `signed_corpus` grades
-  it, with nine named differences.
+  `vectors/signed` carries the upstream signed corpus. Its 68 `sigalg-*`
+  vectors state a protected-header grammar that version 1 of the GTS
+  specification does not contain, so they are outside the conformance
+  statement; `signed_corpus` lists the nine where the engine departs from them,
+  and `basic.json` agrees.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2
