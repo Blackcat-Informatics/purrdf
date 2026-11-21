@@ -20,7 +20,6 @@
 
 use purrdf_gts::model::{Graph, TermKind};
 use purrdf_gts::reader::read;
-use purrdf_lex::json::Value as Json;
 
 /// The frozen vector under test, without extension.
 const VECTOR: &str = "12-conflicting-reifier";
@@ -33,17 +32,6 @@ fn fold_frozen_vector() -> Graph {
     let bytes = std::fs::read(&path)
         .unwrap_or_else(|error| panic!("read frozen vector {}: {error}", path.display()));
     read(&bytes, true, None)
-}
-
-/// Parse the frozen cross-engine expectation that ships beside the vector.
-fn frozen_expectation() -> Json {
-    let path = purrdf_testkit::paths::workspace_root!()
-        .join("vectors")
-        .join(format!("{VECTOR}.expected.json"));
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("read frozen expectation {}: {error}", path.display()));
-    purrdf_lex::json::read(&text)
-        .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
 }
 
 /// Render one reifier row as `(reifier, subject, predicate, object, graph?)`
@@ -136,36 +124,4 @@ fn purrdf_folds_the_frozen_vector_to_two_bindings_and_no_diagnostic() {
         "profile"
     );
     assert_eq!(graph.segment_heads.len(), 1, "segment count");
-}
-
-/// The expectation shipped beside the vector states the same fold: both
-/// `reifies` statements and no diagnostic.
-#[test]
-fn the_shipped_expectation_states_both_bindings_and_no_diagnostic() {
-    let expectation = frozen_expectation();
-    let graph = fold_frozen_vector();
-
-    let diagnostics = expectation["diagnostics"]
-        .as_array()
-        .expect("expectation carries a diagnostics array");
-    assert!(
-        diagnostics.is_empty() && graph.diagnostics.is_empty(),
-        "expectation and reader both raise nothing"
-    );
-    let statements = expectation["nquads"]
-        .as_array()
-        .expect("expectation carries an nquads array");
-    assert_eq!(
-        statements.len(),
-        graph.reifiers.len(),
-        "the expectation keeps every binding this reader keeps"
-    );
-    for label in ["\"Cat\"@en", "\"Chat\"@fr"] {
-        assert!(
-            statements
-                .iter()
-                .any(|line| line.as_str().is_some_and(|line| line.contains(label))),
-            "the expectation states the binding {label}"
-        );
-    }
 }

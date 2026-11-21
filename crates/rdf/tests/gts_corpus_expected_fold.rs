@@ -25,9 +25,7 @@
 //!
 //! The fold prints a `GTS-VECTORS:` scoreboard line, which is what
 //! `scripts/conformance-matrix.py` scrapes for the corpus's row in the umbrella
-//! `make conformance` matrix. Before that row existed the 38-of-39 state was
-//! recorded only in [`KNOWN_DIVERGENCES`] below, so the umbrella gate could not
-//! see this corpus at all; the line is emitted unconditionally, before any
+//! `make conformance` matrix. The line is emitted unconditionally, before any
 //! assertion, so a red run still reports what it measured.
 
 use std::collections::BTreeSet;
