@@ -1,11 +1,10 @@
 {
  "blobs": {},
- "diagnostics": [
-  "ConflictingReifier"
- ],
+ "diagnostics": [],
  "mode": "default",
  "nquads": [
-  "<https://example.org/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en )>> ."
+  "<https://example.org/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Cat\"@en )>> .",
+  "<https://example.org/r1> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#label> \"Chat\"@fr )>> ."
  ],
  "opaque_reasons": [],
  "profiles": [
