@@ -229,7 +229,7 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         Ok(reaches)
     }
 
-    /// Write the blank node a triple term that reaches itself stands for.
+    /// Write the blank node a triple term that states no triple stands for.
     fn write_unbound_triple(&mut self, key: TermKey) -> Result<(), RdfDiagnostic> {
         let baseline = self.memory.admitted_bytes();
         let label = self
@@ -364,7 +364,9 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             .release_bytes(self.memory.admitted_bytes() - baseline)?;
                     }
                     TermKind::Triple => {
-                        if self.reaches_itself(key)? {
+                        // A bare triple term states no triple (§7.3): like one that
+                        // reaches itself, it is a fresh blank node.
+                        if term.is_bare_triple() || self.reaches_itself(key)? {
                             self.write_unbound_triple(key)?;
                             continue;
                         }
