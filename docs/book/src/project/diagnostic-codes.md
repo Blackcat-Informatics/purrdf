@@ -130,6 +130,7 @@ whose terms do not form a well-formed dataset.
 | `gts-predicate-not-iri` | A GTS predicate term is not an IRI. | Use an IRI predicate. |
 | `gts-literal-datatype-not-iri` | A GTS literal datatype does not resolve to an IRI. | Give the literal an IRI datatype. |
 | `gts-direction-without-language` | A GTS literal carries a base direction but no language tag. | Add a language tag, or drop the direction. |
+| `gts-scope-limit` | The streaming importer ran out of blank-node scopes: a segment index of `u32::MAX - 1` or more has no scope, because the last scope is reserved for triple terms that state no triple. | Split the container so that it has fewer segments. |
 | `gts-invalid-direction` | A GTS literal base direction is neither `ltr` nor `rtl`. | Use `ltr` or `rtl`. |
 | `gts-missing-reifier-binding` | Retained for API compatibility; no public input produces it. A triple term whose reifier has no binding projects as a fresh blank node. | None. |
 | `gts-unbound-triple-term` | Retained for API compatibility; no public input produces it. A triple term that names neither its components nor a reifier projects as a fresh blank node. | None. |

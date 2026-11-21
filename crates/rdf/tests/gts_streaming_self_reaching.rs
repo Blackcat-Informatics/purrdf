@@ -32,6 +32,7 @@ fn indirect_triple(reifier: usize) -> Term {
 /// dropped so the label reads as the fold's, which has no segments.
 fn unescape_blank_labels(text: &str) -> String {
     text.replace("purrdfesc1_", "")
+        .replace("_:purrdfesc_", "_:")
         .replace(
             "unbound_00005Ftriple_00005F0_00005F",
             "unbound_00005Ftriple_00005F",
@@ -300,16 +301,28 @@ fn a_document_blank_node_labelled_like_an_unbound_triple_stays_a_distinct_node()
         Term::iri("https://example.org/p"), // 1
         bare,                               // 2
         Term::blank("unbound_triple_2"),    // 3: the label the old projection used
+        // 4: a label that already spells the projected node's escaped token
+        Term::blank("purrdfesc4294967295_unbound_00005Ftriple_00005F2"),
     ];
-    let quads = [(2, 1, 0, None), (3, 1, 0, None)];
+    let quads = [(2, 1, 0, None), (3, 1, 0, None), (4, 1, 0, None)];
     let streamed = every_dataset_path(&terms, &quads, &[]);
     assert_eq!(
-        streamed,
-        [
-            "_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
-            "_:unbound_triple_2 <https://example.org/p> <https://example.org/s> .",
-        ],
-        "two subjects, two quads"
+        streamed.len(),
+        3,
+        "three subjects, three quads: {streamed:?}"
+    );
+    assert!(
+        streamed.contains(
+            &"_:purrdfesc4294967295_unbound_triple_2 <https://example.org/p> <https://example.org/s> ."
+                .to_owned()
+        ),
+        "{streamed:?}"
+    );
+    assert!(
+        streamed.contains(
+            &"_:unbound_triple_2 <https://example.org/p> <https://example.org/s> .".to_owned()
+        ),
+        "{streamed:?}"
     );
 
     let mut writer = Writer::new("purrdf-test");
@@ -322,6 +335,8 @@ fn a_document_blank_node_labelled_like_an_unbound_triple_stays_a_distinct_node()
         view.nq_token(3),
         "the fold view's tokens differ"
     );
+    assert_ne!(view.nq_token(2), view.nq_token(4));
+    assert_ne!(view.nq_token(3), view.nq_token(4));
     assert_eq!(view.nq_token(3), "_:unbound_triple_2");
 }
 
@@ -338,8 +353,10 @@ fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
         indirect_triple(2),                 // 3: states no triple
         Term::iri("https://example.org/q"), // 4: a reifier with a row
         indirect_triple(4),                 // 5: resolves through the row
+        Term::triple_term((0, 1, 0)),       // 6: a `tt` term, no row under its id
+        indirect_triple(6),                 // 7: `rf` names the `tt` term: no row, no triple
     ];
-    let quads = [(0, 1, 3, None), (0, 1, 5, None)];
+    let quads = [(0, 1, 3, None), (0, 1, 5, None), (0, 1, 7, None)];
     let rows = [(4, (0, 1, 0), None)];
     let streamed = every_dataset_path(&terms, &quads, &rows);
     assert!(
@@ -348,6 +365,13 @@ fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
                 .to_owned()
         ),
         "{streamed:?}"
+    );
+    assert!(
+        streamed.contains(
+            &"<https://example.org/s> <https://example.org/p> _:purrdfesc4294967295_unbound_triple_7 ."
+                .to_owned()
+        ),
+        "an `rf` naming a `tt` term binds no triple: {streamed:?}"
     );
     assert!(
         streamed.contains(
@@ -370,5 +394,9 @@ fn a_term_naming_a_reifier_with_no_row_is_a_blank_node_beside_one_with_a_row() {
     assert_eq!(
         view.nq_token(5),
         "<<( <https://example.org/s> <https://example.org/p> <https://example.org/s> )>>"
+    );
+    assert_eq!(
+        view.nq_token(7),
+        "_:purrdfesc4294967295_unbound_00005Ftriple_00005F7"
     );
 }

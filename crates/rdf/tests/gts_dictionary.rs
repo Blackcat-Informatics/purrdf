@@ -602,6 +602,7 @@ fn the_text_exporter_projects_a_bare_triple_term_wherever_a_blank_node_is_legal(
         Term::iri("https://example.org/r6"), // 7: a reifier no row binds
         indirect(7),                         // 8: `rf` 7, no row: states no triple
         indirect(3),                         // 9: `rf` 3, which a row binds
+        indirect(4),                         // 10: `rf` 4, a `tt` term no row binds
     ]);
     writer.add_quads(&[
         (2, 1, 0, None),
@@ -609,6 +610,7 @@ fn the_text_exporter_projects_a_bare_triple_term_wherever_a_blank_node_is_legal(
         (6, 1, 0, None),
         (0, 1, 8, None),
         (0, 1, 9, None),
+        (0, 1, 10, None),
     ]);
     writer.add_reifies(&[(3, (2, 1, 0), None)]);
     writer.add_annot(&[(3, 1, 5, None)]);
@@ -636,10 +638,10 @@ fn the_text_exporter_projects_a_bare_triple_term_wherever_a_blank_node_is_legal(
     assert_eq!(render(&exported), render(&imported.dataset));
     // The document blank node labelled like the old projection is its own subject:
     // the quad it states stays apart from the bare term's.
-    // Terms 4 and 9 denote one triple term, so five quads are four statements.
+    // Terms 4 and 9 denote one triple term, so six quads are five statements.
     assert_eq!(
         exported.owned_quads().count(),
-        4,
+        5,
         "every statement is exported"
     );
     assert_eq!(exported.owned_reifiers().count(), 1);

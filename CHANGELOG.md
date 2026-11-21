@@ -24,7 +24,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the node `unbound_triple_{id}` and a streamed file names it
   `unbound_triple_{segment}_{id}`, each in that scope, and the N-Quads token of
   the fold view and of the text exporter is the scoped escape
-  `_:purrdfesc4294967295_...`. The streaming importers keep segment scopes at most
+  `_:purrdfesc4294967295_...` (the exporter's also names the segment). The fold
+  view's `nq_token` writes document blank nodes through the same encoder, so a
+  label that is not a valid N-Quads blank-node label or begins with `purrdfesc`
+  is now written escaped instead of verbatim. The streaming importers keep segment scopes at most
   `u32::MAX - 1`, so a segment index of `u32::MAX - 1` is refused with
   `gts-scope-limit` where it was admitted. `ResolvedSink` gains the provided
   method `intern_unbound_triple`, whose body interns the old label through

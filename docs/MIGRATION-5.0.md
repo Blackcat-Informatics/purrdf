@@ -697,9 +697,13 @@ dictionary and blob forms) and `export_gts_rdf_nquads_with_dictionary`. The node
 lives in blank-node scope `u32::MAX`, which no document blank node has: a folded
 graph interns the label `unbound_triple_{id}` there, a streamed file interns
 `unbound_triple_{segment}_{id}`, and a document blank node labelled
-`unbound_triple_N` stays a different node. In N-Quads text the node is the scoped
-escape `_:purrdfesc4294967295_unbound_00005Ftriple_00005F{id}`, which the fold
-view's `nq_token` and the text exporter write. The term is accepted wherever a
+`unbound_triple_N` stays a different node. In N-Quads text the node is a scoped
+escape: the fold view's `nq_token` writes
+`_:purrdfesc4294967295_unbound_00005Ftriple_00005F{id}`, and the text exporter
+writes `_:purrdfesc4294967295_unbound_00005Ftriple_00005F{segment}_00005F{id}`.
+`nq_token` also writes document blank nodes through the same encoder, so a label
+that is not a valid N-Quads blank-node label, or that begins with `purrdfesc`,
+is written escaped where it was written verbatim. The term is accepted wherever a
 blank node is legal: as a quad subject, as the subject of a reified triple,
 inside a `tt` component and as an annotation value. Within one projection the
 same term id names one blank node and a second such term names another. A term

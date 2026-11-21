@@ -90,8 +90,10 @@ pub(crate) fn gts_to_ser(g: &purrdf_gts::model::Graph) -> Result<SerGraph, RdfDi
         } else {
             // States no triple (§7.3, third resolution rule): an `rf` with no row,
             // or neither `tt` nor `rf`. The fold interns it as the fresh blank node
-            // an unbound triple term projects as.
-            t.reifier
+            // an unbound triple term projects as. The `rf` is dropped: a `tt` term
+            // is re-spelled as a synthetic row under its own id, which an `rf`
+            // naming that id would otherwise find, and no real row binds it.
+            None
         };
         terms.push(SerTerm {
             kind: match t.kind {
