@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! A caller-built GTS term table must not be able to kill the process.
+//! A triple term that reaches itself states no triple, and a caller-built GTS
+//! term table must not be able to kill the process.
 //!
 //! GTS-SPEC §7.3 makes termination normative for EVERY walk of a triple term's
 //! resolved components. This crate's walkers — the fold view's `render_term`, the
@@ -11,19 +12,21 @@
 //! table they walk terminates. A stack overflow in Rust ABORTS: it is not a catchable
 //! panic, so a self-reaching term is a process kill, not an error a caller can handle.
 //!
-//! The GTS reader refuses a `reifies` row that would close such a loop, which closes
-//! the WIRE route. It does not close the route through a graph a caller ASSEMBLED:
-//! `purrdf_gts::model::Graph`'s fields are public, `GtsFoldView::new` is public, and
-//! `dataset_from_gts_graph` / `flattened_dataset_from_gts_graph` take a `&Graph`
-//! straight from the caller. Those are the doors this suite stands in.
+//! A triple term that is reachable from its own components keeps an identity of its
+//! own and projects as the fresh blank node an unbound triple term projects as, and
+//! the `reifies` rows that name it still project. A graph a caller ASSEMBLED reaches
+//! this crate through public doors: `purrdf_gts::model::Graph`'s fields are public,
+//! `GtsFoldView::new` is public, and `dataset_from_gts_graph` /
+//! `flattened_dataset_from_gts_graph` take a `&Graph` straight from the caller. Those
+//! are the doors this suite stands in.
 //!
-//! Every case here drives a PUBLIC entry point and asserts a REFUSAL. There is
-//! deliberately no assertion about what the walkers would have done: reaching them at
-//! all is the defect.
+//! A literal is not a triple term: a datatype chain that leads back to its own
+//! literal is not degradable, and every door refuses it.
 
 use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_rdf::gts::{dataset_from_gts_graph, flattened_dataset_from_gts_graph};
 use purrdf_rdf::gts_view::GtsFoldView;
+use purrdf_rdf::{SerializeGraph, serialize_dataset};
 
 /// The diagnostic code the fold-time refusal reports.
 const SELF_REACHING: &str = "gts-self-reaching-term";
@@ -42,9 +45,9 @@ fn indirect_triple_term(reifier: usize) -> Term {
     }
 }
 
-/// A quoted triple that names NO reifier: §7.1 lets a self-bound triple term leave
-/// `rf` implicit, and `Graph::triple_of` then keys the binding by the term's own id.
-fn implicit_rf_triple_term() -> Term {
+/// A quoted triple with neither `tt` nor `rf`. It states no triple (§7.3, third
+/// resolution rule): an absent `rf` names no reifier, not the term's own id.
+fn bare_triple_term() -> Term {
     Term {
         kind: TermKind::Triple,
         value: Some(String::new()),
@@ -101,40 +104,88 @@ fn every_door_refuses(build: impl Fn() -> Graph, what: &str) {
     );
 }
 
-/// The minimal kill: one self-describing triple term whose own `(s, p, o)` is itself.
-/// Term ids are all in range, so a range-only check waves it straight through.
+/// The N-Quads of `graph` through the dataset bridge, sorted.
+fn nquads(graph: &Graph) -> Vec<String> {
+    let dataset = dataset_from_gts_graph(graph).expect("a self-reaching term degrades");
+    let bytes = serialize_dataset(&dataset, "application/n-quads", SerializeGraph::Dataset)
+        .expect("the dataset serializes");
+    let mut lines: Vec<String> = String::from_utf8(bytes)
+        .expect("N-Quads are UTF-8")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    lines.sort();
+    lines
+}
+
+/// Assert that every public door admits `build()` and that the fold view renders
+/// each term of `degraded` as the blank node of an unbound triple term. The two
+/// dataset bridges are only required to admit the graph here; the tests that
+/// follow assert what the dataset bridge renders.
+fn every_door_degrades(build: impl Fn() -> Graph, degraded: &[usize], what: &str) {
+    let view = GtsFoldView::new(build())
+        .unwrap_or_else(|error| panic!("GtsFoldView::new must admit {what}: {error:?}"));
+    for &tid in degraded {
+        assert_eq!(
+            view.nq_token(tid),
+            format!("_:unbound_triple_{tid}"),
+            "term {tid} of {what} states no triple"
+        );
+    }
+    let graph = build();
+    dataset_from_gts_graph(&graph)
+        .unwrap_or_else(|error| panic!("dataset_from_gts_graph must admit {what}: {error:?}"));
+    flattened_dataset_from_gts_graph(&graph).unwrap_or_else(|error| {
+        panic!("flattened_dataset_from_gts_graph must admit {what}: {error:?}")
+    });
+}
+
+/// The minimal kill: one self-describing triple term whose own `(s, p, o)` names itself.
+/// Term ids are all in range, so a range-only check waves it straight through. The term
+/// is the blank node an unbound triple term is, and the quad that uses it stays.
 #[test]
-fn a_triple_term_that_names_itself_is_refused() {
-    every_door_refuses(
-        || {
-            let mut graph = Graph::default();
-            graph.terms.push(Term::triple_term((0, 0, 0)));
-            graph
-        },
-        "a triple term whose components are itself",
+fn a_triple_term_that_names_itself_states_no_triple() {
+    let build = || {
+        let mut graph = Graph::default();
+        graph.terms.push(Term::iri("https://example.org/s")); // 0
+        graph.terms.push(Term::iri("https://example.org/p")); // 1
+        graph.terms.push(Term::triple_term((2, 1, 0))); // 2 — names itself
+        graph.quads.push((0, 1, 2, None));
+        graph
+    };
+    every_door_degrades(build, &[2], "a triple term whose components name itself");
+    assert_eq!(
+        nquads(&build()),
+        ["<https://example.org/s> <https://example.org/p> _:unbound_triple_2 ."]
     );
 }
 
 /// The loop does not have to be a self-edge. Two triple terms that name each other
 /// reach themselves in two steps, which a check that only compared a term to its own
-/// id would miss.
+/// id would miss. Both degrade; a term that merely CONTAINS one does not, and renders
+/// around it.
 #[test]
-fn two_triple_terms_that_name_each_other_are_refused() {
-    every_door_refuses(
-        || {
-            let mut graph = Graph::default();
-            graph.terms.push(Term::iri("https://example.org/p")); // 0
-            graph.terms.push(Term::triple_term((2, 0, 2))); // 1 — reaches 2
-            graph.terms.push(Term::triple_term((1, 0, 1))); // 2 — reaches 1
-            graph
-        },
-        "a two-step cycle between triple terms",
+fn two_triple_terms_that_name_each_other_both_state_no_triple() {
+    let build = || {
+        let mut graph = Graph::default();
+        graph.terms.push(Term::iri("https://example.org/p")); // 0
+        graph.terms.push(Term::triple_term((2, 0, 2))); // 1 — reaches 2
+        graph.terms.push(Term::triple_term((1, 0, 1))); // 2 — reaches 1
+        graph.terms.push(Term::triple_term((1, 0, 0))); // 3 — contains 1, is not on the loop
+        graph
+    };
+    every_door_degrades(build, &[1, 2], "a two-step cycle between triple terms");
+    let view = GtsFoldView::new(build()).expect("the loop degrades");
+    assert_eq!(
+        view.nq_token(3),
+        "<<( _:unbound_triple_1 <https://example.org/p> <https://example.org/p> )>>",
+        "a term that contains a self-reaching term keeps its own components"
     );
 }
 
-/// The loop can close through a component that is not a triple term itself: a
-/// quoted triple reaching a literal whose DATATYPE is that same quoted triple.
-/// `render_literal` follows the datatype edge, so it is part of the walk.
+/// The loop can close through a literal's DATATYPE. A literal is not a triple term, so
+/// it cannot degrade, and `render_literal` follows the datatype edge: that shape is
+/// refused.
 #[test]
 fn a_literal_datatype_that_reaches_its_own_term_is_refused() {
     every_door_refuses(
@@ -162,44 +213,98 @@ fn a_datatype_cycle_through_a_triple_term_is_refused() {
 }
 
 /// The ORIGINAL indirect spelling closes the same loop through the statement layer:
-/// term 1 names reifier `<r>`, and `<r>`'s binding has term 1 as its own subject.
+/// term 1 names reifier `<r>`, and `<r>`'s binding has term 1 as its own subject. The
+/// term degrades and the row still projects as `<r> rdf:reifies <<( ... )>>`.
 #[test]
-fn a_reifier_binding_that_reaches_its_own_triple_term_is_refused() {
-    every_door_refuses(
-        || {
-            let mut graph = Graph::default();
-            graph.terms.push(Term::iri("https://example.org/p")); // 0
-            graph.terms.push(indirect_triple_term(2)); // 1
-            graph.terms.push(Term::iri("https://example.org/r")); // 2 — the reifier
-            graph.reifiers.push((2, (1, 0, 1), None));
-            graph
-        },
-        "a reifier binding naming its own triple term",
+fn a_reifier_binding_that_reaches_its_own_triple_term_keeps_its_row() {
+    let build = || {
+        let mut graph = Graph::default();
+        graph.terms.push(Term::iri("https://example.org/p")); // 0
+        graph.terms.push(indirect_triple_term(2)); // 1
+        graph.terms.push(Term::iri("https://example.org/r")); // 2 — the reifier
+        graph.reifiers.push((2, (1, 0, 0), None));
+        graph
+    };
+    every_door_degrades(build, &[1], "a reifier binding naming its own triple term");
+    assert_eq!(
+        nquads(&build()),
+        [
+            "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+          <<( _:unbound_triple_1 <https://example.org/p> <https://example.org/p> )>> ."
+        ]
     );
 }
 
-/// §7.1's implicit `rf`: the term names no reifier, so its binding is keyed by its
-/// OWN id — and that binding names the term. A check that only followed the explicit
-/// `rf` and `tt` spellings would admit this one.
+/// A term with neither `tt` nor `rf` states no triple, so a row keyed by its own
+/// id does not bind it. The fold view renders the term as the blank node of an
+/// unbound triple term, and the dataset bridges refuse it at once as unbound,
+/// whether it is the row's reifier alone or a quad also uses it. Reading that row
+/// as the term's binding made the term contain itself, and the bridge then walked
+/// it until storage ran out.
 #[test]
-fn an_implicit_self_binding_that_reaches_its_own_term_is_refused() {
-    every_door_refuses(
-        || {
+fn a_bare_triple_term_is_not_bound_by_a_row_keyed_by_its_own_id() {
+    for used_by_a_quad in [false, true] {
+        let build = || {
             let mut graph = Graph::default();
             graph.terms.push(Term::iri("https://example.org/p")); // 0
-            graph.terms.push(implicit_rf_triple_term()); // 1
-            graph.reifiers.push((1, (1, 0, 1), None));
+            graph.terms.push(bare_triple_term()); // 1
+            graph.reifiers.push((1, (1, 0, 0), None));
+            if used_by_a_quad {
+                graph.quads.push((1, 0, 0, None));
+            }
             graph
-        },
-        "an implicit self-binding naming its own term",
+        };
+        let view = GtsFoldView::new(build()).expect("the fold view admits the graph");
+        assert_eq!(view.nq_token(1), "_:unbound_triple_1");
+        let graph = build();
+        let err = dataset_from_gts_graph(&graph).expect_err("no row binds the bare term");
+        assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+        let err = flattened_dataset_from_gts_graph(&graph).expect_err("no row binds the bare term");
+        assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+    }
+}
+
+/// A file whose triple term names its own id as `rf`, with a row keyed by that
+/// id, is read as GTS-SPEC §7.2 and §7.4 require: the `rf` is a
+/// `ForwardReference` and is treated as absent, the row is dropped with
+/// `PositionConstraint`, and the term states no triple. The fold view renders it
+/// as the blank node of an unbound triple term, and the dataset bridges refuse it
+/// as unbound, exactly as they treat a bare triple term.
+#[test]
+fn a_triple_term_naming_its_own_id_as_rf_reads_as_an_unbound_term() {
+    let mut writer = purrdf_gts::writer::Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        indirect_triple_term(2),            // 2: `rf` names the term itself
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    writer.add_reifies(&[(2, (0, 1, 0), None)]);
+    let bytes = writer.into_bytes();
+    let graph = purrdf_gts::reader::read(&bytes, false, None);
+    let codes: Vec<&str> = graph.diagnostics.iter().map(|d| d.code.as_str()).collect();
+    assert_eq!(codes, ["ForwardReference", "PositionConstraint"]);
+    assert!(
+        graph.reifiers.is_empty(),
+        "the row keyed by the term is dropped"
     );
+
+    let err = dataset_from_gts_graph(&graph).expect_err("no row binds the term");
+    assert_eq!(err.code, "native-codec-unbound-triple-term", "{err:?}");
+    let Err(err) = purrdf_rdf::import_gts_events(&bytes) else {
+        panic!("the event importer refuses the file");
+    };
+    assert_eq!(err.code, "rdf-ir-gts-fold-diagnostic", "{err:?}");
+    assert!(err.message.contains("ForwardReference"), "{err:?}");
+    let view = GtsFoldView::new(graph).expect("the fold view admits the graph");
+    assert_eq!(view.nq_token(2), "_:unbound_triple_2");
 }
 
 /// `tt` takes precedence over the reifier indirection, so a graph whose `tt` closes a
-/// loop is refused even when the reifier row it also carries is perfectly sound.
+/// loop degrades even when the reifier row it also carries is perfectly sound.
 #[test]
-fn a_self_reaching_tt_is_refused_even_beside_a_sound_reifier_row() {
-    every_door_refuses(
+fn a_self_reaching_tt_states_no_triple_beside_a_sound_reifier_row() {
+    every_door_degrades(
         || {
             let mut graph = Graph::default();
             graph.terms.push(Term::iri("https://example.org/s")); // 0
@@ -212,6 +317,7 @@ fn a_self_reaching_tt_is_refused_even_beside_a_sound_reifier_row() {
             graph.reifiers.push((3, (0, 1, 2), None));
             graph
         },
+        &[4],
         "a self-reaching `tt` beside a sound reifier row",
     );
 }
@@ -230,7 +336,7 @@ fn nested_triple_term_graph() -> Graph {
     graph
 }
 
-/// The refusal is not a blanket ban on nesting. A legitimately nested quoted triple —
+/// Degradation is not a ban on nesting. A legitimately nested quoted triple —
 /// the shape the check exists to keep walkable — still constructs and still renders,
 /// so the guard costs the honest graph nothing.
 #[test]

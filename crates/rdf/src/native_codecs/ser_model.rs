@@ -426,8 +426,8 @@ fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&Base
 /// parsers and the [`DatasetView`](crate::DatasetView) lowering in `serialize.rs` both
 /// intern a triple term's components BEFORE the term itself, so a component id is
 /// always strictly smaller than the term naming it; and `crate::gts::gts_to_ser`,
-/// whose input is a caller-supplied GTS graph and which therefore proves it, refusing
-/// a self-reaching table with `gts-self-reaching-term`. A fourth producer must do the
+/// whose input is a caller-supplied GTS graph and which therefore proves it, turning a
+/// triple term that reaches itself into a blank node. A fourth producer must do the
 /// same — a self-reaching table would never finish writing.
 ///
 /// `ix` is the caller's one-per-document [`ReifierIndex`]: quoted-triple terms resolve

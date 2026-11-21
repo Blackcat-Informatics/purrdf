@@ -135,7 +135,7 @@ package = purrdf.project(
 )
 lifted = purrdf.lift(package.archive, profile="lpg-csv", config=config)
 assert lifted.dataset.quad_count() == 1
-print([(loss.code, loss.location) for loss in package.losses])
+print([(loss.code, loss.subject["kind"]) for loss in package.losses])
 ```
 
 Project profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`,

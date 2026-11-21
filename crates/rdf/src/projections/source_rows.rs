@@ -63,8 +63,14 @@ impl SourceAnnotation {
     }
 }
 
-/// The stable identifier of a source row: `prefix`, then the SHA-256 of the
-/// row's compact JSON (members in declaration order, an absent graph `null`).
+/// The SHA-256 of a source row's compact JSON (members in declaration order,
+/// an absent graph `null`).
+pub(crate) fn source_digest(value: &impl ToJson) -> [u8; 32] {
+    super::util::stable_digest(&to_vec(value))
+}
+
+/// The stable identifier of a source row: `prefix`, then its
+/// [`source_digest`] in lowercase hex.
 pub(crate) fn source_identifier(
     prefix: &str,
     value: &impl ToJson,

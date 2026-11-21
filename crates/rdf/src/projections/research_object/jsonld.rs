@@ -23,7 +23,7 @@ use purrdf_lex::json::record::{Owned, into_owned};
 use purrdf_lex::json::{Object, Value};
 
 use super::super::{ProjectionError, validate_absolute_iri};
-use super::json::{OfflineJsonLdContext, json_pointer, record_loss};
+use super::json::{OfflineJsonLdContext, json_pointer, record_pointer_loss};
 use super::{ResearchObjectConfig, ResearchObjectRoles, ResearchRole, ResearchText, ResearchValue};
 
 /// A JSON-LD profile's compact-term vocabulary, as its configuration sees it.
@@ -234,7 +234,7 @@ pub(super) trait LossRecorder {
 impl<T: ProfileReader + ?Sized> LossRecorder for T {
     fn loss(&mut self, code: &'static str, pointer: &str) {
         let (ledger, contract) = self.ledgers();
-        record_loss(ledger, contract, code, Self::ARTIFACT, pointer);
+        record_pointer_loss(ledger, contract, code, Self::ARTIFACT, pointer);
     }
 }
 

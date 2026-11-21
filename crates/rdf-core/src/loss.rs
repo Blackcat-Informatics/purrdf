@@ -42,11 +42,14 @@ use std::collections::BTreeSet;
 
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
-use crate::RdfLocation;
-
 mod completeness;
+mod occurrence;
 mod profile;
 pub use completeness::LossCompletenessError;
+pub use occurrence::{
+    LossDetail, LossGraphName, LossPathStep, LossPointerError, LossSite, LossSubject, LossTerm,
+    LossValue,
+};
 pub use profile::{LossDefinition, LossProfile, LossProfileError, LossSoundnessError};
 
 /// In-band machine code: a `CONSTRUCT` whose `WHERE` bound an RDF-1.2 reifier (via
@@ -103,7 +106,7 @@ pub const SCHEMA_IMPORT_CODECS: &[&str] = &[
 /// - **record** (runtime): built via [`LossLedger::record`] while an actual
 ///   conversion runs, using owned (`Cow::Owned`) strings. Duplicates are
 ///   expected — the same code can fire many times over one input — and each
-///   entry MAY carry a [`location`](Self::location) pinpointing where the loss
+///   entry MAY carry a [`site`](Self::site) and [`subject`](Self::subject) pinpointing where the loss
 ///   occurred.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LossEntry {
@@ -115,10 +118,61 @@ pub struct LossEntry {
     pub to: Cow<'static, str>,
     /// Human-readable explanation of what is dropped and why.
     pub note: Cow<'static, str>,
-    /// Where the loss occurred, when known. `None` for every contract entry;
-    /// `record`-discipline entries MAY set this to pinpoint the shape/term/
-    /// subject the loss concerns.
-    pub location: Option<Box<RdfLocation>>,
+    /// Where the loss occurred. [`LossSite::Unspecified`] for every contract entry.
+    pub site: LossSite,
+    /// What the loss concerns. [`LossSubject::Absent`] for every contract entry.
+    pub subject: LossSubject,
+    /// Typed counts, identifiers and terms qualifying this occurrence, in the
+    /// order the producer recorded them. Empty for every contract entry.
+    pub detail: Vec<LossDetail>,
+}
+
+impl purrdf_hash::error::StructuredError for LossEntry {
+    purrdf_hash::error_visit! {
+        @record self { code, from, to, note, site, subject, detail } => "loss-entry" {
+            "code" => Code(self.code.as_ref()),
+            "from" => Code(self.from.as_ref()),
+            "to" => Code(self.to.as_ref()),
+            "note" => Text(self.note.as_ref()),
+            "site" => Record(&self.site),
+            "subject" => Record(&self.subject),
+            "detail" => List(self.detail.iter().map(|detail| purrdf_hash::error::ErrorValue::Record(detail))),
+        }
+    }
+}
+
+impl LossEntry {
+    /// The occurrence data as one human-readable line. Presentation only: the
+    /// typed members are the stored and serialized form.
+    #[must_use]
+    pub fn presentation(&self) -> String {
+        let mut out = String::from(self.note.as_ref());
+        let mut part = String::new();
+        self.site.present(&mut part);
+        if !part.is_empty() {
+            out.push_str(" (");
+            out.push_str(&part);
+            part.clear();
+            self.subject.present(&mut part);
+            if !part.is_empty() {
+                out.push_str(", ");
+                out.push_str(&part);
+            }
+            out.push(')');
+        } else {
+            self.subject.present(&mut part);
+            if !part.is_empty() {
+                out.push_str(" (");
+                out.push_str(&part);
+                out.push(')');
+            }
+        }
+        for detail in &self.detail {
+            out.push_str("; ");
+            detail.present(&mut out);
+        }
+        out
+    }
 }
 
 /// An ordered, deterministic set of [`LossEntry`] for one conversion direction
@@ -205,7 +259,7 @@ impl LossLedger {
     /// For a [`Self::contract`] ledger this is sorted by `code` (the
     /// construction-time order). For a [`Self::record`]-built ledger this is
     /// insertion order; use [`Self::render_json`] for the canonical
-    /// `(from, to, code, location)` sort.
+    /// `(from, to, code, site, subject, detail)` sort.
     pub fn entries(&self) -> &[LossEntry] {
         &self.entries
     }
@@ -216,9 +270,10 @@ impl LossLedger {
     }
 
     /// Render the ledger as deterministic, versioned JSON: a top-level object
-    /// `{ "schema_version": 1, "losses": [ ... ] }`, entries sorted by
-    /// `(from, to, code, location)`, 2-space indented, with a trailing
-    /// newline. A `location` field is emitted per entry when present.
+    /// `{ "schema_version": 2, "losses": [ ... ] }`, entries sorted by
+    /// `(from, to, code, site, subject, detail)`, 2-space indented, with a
+    /// trailing newline. Each entry carries typed `site`, `subject` and
+    /// `detail` members.
     ///
     /// This is the stable public runtime-ledger schema downstream consumers
     /// (e.g. a `--loss-ledger` CLI flag) pin against; `schema_version` bumps
@@ -240,7 +295,12 @@ impl LossLedger {
                 .cmp(&b.from)
                 .then_with(|| a.to.cmp(&b.to))
                 .then_with(|| a.code.cmp(&b.code))
-                .then_with(|| a.location.cmp(&b.location))
+                .then_with(|| {
+                    a.site
+                        .cmp(&b.site)
+                        .then_with(|| a.subject.cmp(&b.subject))
+                        .then_with(|| a.detail.cmp(&b.detail))
+                })
         });
         render_versioned(&sorted, profile)
     }
@@ -732,7 +792,9 @@ fn contract_profile(
                 from: Cow::Borrowed(from),
                 to: Cow::Borrowed(to),
                 note: Cow::Borrowed(note),
-                location: None,
+                site: LossSite::Unspecified,
+                subject: LossSubject::Absent,
+                detail: Vec::new(),
             })
             .collect(),
     )
@@ -966,7 +1028,9 @@ fn empty_named_graph_entries() -> Vec<LossEntry> {
                 from: Cow::Borrowed(from),
                 to: Cow::Borrowed(to),
                 note: Cow::Borrowed(EMPTY_NAMED_GRAPH_DROPPED_NOTE),
-                location: None,
+                site: LossSite::Unspecified,
+                subject: LossSubject::Absent,
+                detail: Vec::new(),
             });
         }
     }
@@ -1002,7 +1066,9 @@ pub fn pair_loss_ledger(from: &str, to: &str) -> LossLedger {
         from: Cow::Borrowed(from),
         to: Cow::Borrowed(to),
         note: Cow::Borrowed(note),
-        location: None,
+        site: LossSite::Unspecified,
+        subject: LossSubject::Absent,
+        detail: Vec::new(),
     };
 
     let mut entries: Vec<LossEntry> = Vec::new();
@@ -2117,7 +2183,9 @@ fn shacl_json_schema_entries() -> Vec<LossEntry> {
             from: Cow::Borrowed("shacl"),
             to: Cow::Borrowed("json-schema"),
             note: Cow::Borrowed(note),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         })
         .collect()
 }
@@ -2132,7 +2200,9 @@ fn json_schema_pydantic_entries() -> Vec<LossEntry> {
             from: Cow::Borrowed("json-schema"),
             to: Cow::Borrowed("pydantic-v2"),
             note: Cow::Borrowed(note),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         })
         .collect()
 }
@@ -2147,7 +2217,9 @@ fn json_schema_linkml_entries() -> Vec<LossEntry> {
             from: Cow::Borrowed("json-schema"),
             to: Cow::Borrowed("linkml-1.11"),
             note: Cow::Borrowed(note),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         })
         .collect()
 }
@@ -2162,7 +2234,9 @@ fn json_schema_typescript_entries() -> Vec<LossEntry> {
             from: Cow::Borrowed("json-schema"),
             to: Cow::Borrowed("typescript-7.0"),
             note: Cow::Borrowed(note),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         })
         .collect()
 }
@@ -2177,7 +2251,9 @@ fn json_schema_graphql_entries() -> Vec<LossEntry> {
             from: Cow::Borrowed("json-schema"),
             to: Cow::Borrowed("graphql-september-2025"),
             note: Cow::Borrowed(note),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         })
         .collect()
 }
@@ -2191,7 +2267,9 @@ fn schema_shacl_entries(source: &'static str) -> Vec<LossEntry> {
             from: Cow::Borrowed(source),
             to: Cow::Borrowed("shacl"),
             note: Cow::Borrowed(note),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         })
         .collect()
 }
@@ -2457,10 +2535,12 @@ fn render_in(entries: &[LossEntry], emit_location: bool, profile: &LossProfile) 
             .description(&entry.from, &entry.to, &entry.code)
             .is_some();
         push_bool_field(&mut out, "intentional", intentional);
-        let location = emit_location.then_some(entry.location.as_deref()).flatten();
-        push_field(&mut out, "note", entry.note.as_ref(), location.is_none());
-        if let Some(location) = location {
-            push_field(&mut out, "location", &location.display(), true);
+        push_field(&mut out, "note", entry.note.as_ref(), !emit_location);
+        if emit_location {
+            let mut writer = occurrence::JsonWriter::new(&mut out);
+            writer.member_line("site", |w| w.site(&entry.site), false);
+            writer.member_line("subject", |w| w.subject(&entry.subject), false);
+            writer.member_line("detail", |w| w.details(&entry.detail), true);
         }
         out.push_str("  }");
         if i + 1 < entries.len() {
@@ -2473,12 +2553,12 @@ fn render_in(entries: &[LossEntry], emit_location: bool, profile: &LossProfile) 
 }
 
 /// Wrap an already-sorted runtime ledger's [`render`] output (with locations)
-/// in the versioned envelope `{ "schema_version": 1, "losses": [ ... ] }` —
+/// in the versioned envelope `{ "schema_version": 2, "losses": [ ... ] }` —
 /// the schema [`LossLedger::render_json`] exposes. `schema_version` is a plain
 /// integer bumped only on a breaking shape change to this envelope.
 fn render_versioned(entries: &[LossEntry], profile: &LossProfile) -> String {
     let array = render_in(entries, true, profile);
-    let mut out = String::from("{\n  \"schema_version\": 1,\n  \"losses\": ");
+    let mut out = String::from("{\n  \"schema_version\": 2,\n  \"losses\": ");
     for (i, line) in array.lines().enumerate() {
         if i > 0 {
             out.push('\n');
@@ -2618,7 +2698,9 @@ mod tests {
             from: Cow::Borrowed("shacl"),
             to: Cow::Borrowed("json-schema"),
             note: Cow::Borrowed("synthetic entry for the intentional-derivation test"),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         };
         let json = render(&[entry], false);
         assert!(
@@ -2856,7 +2938,8 @@ mod tests {
             for entry in ledger.entries() {
                 assert_eq!(entry.from, from);
                 assert_eq!(entry.to, to);
-                assert!(entry.location.is_none());
+                assert_eq!(entry.site, LossSite::Unspecified);
+                assert_eq!(entry.subject, LossSubject::Absent);
             }
             assert_ledger_sound(&ledger, from, to);
         }
@@ -3034,7 +3117,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_ledger_records_owned_entries_with_location() {
+    fn runtime_ledger_renders_typed_occurrence_members() {
         let mut ledger = LossLedger::new();
         assert!(ledger.is_empty());
 
@@ -3043,9 +3126,16 @@ mod tests {
             from: Cow::Owned("some-runtime-from".to_owned()),
             to: Cow::Owned("some-runtime-to".to_owned()),
             note: Cow::Owned("a runtime-recorded loss, owned end to end".to_owned()),
-            location: Some(Box::new(
-                RdfLocation::logical("shapes:compile").with_subject("ex:Cat"),
-            )),
+            site: LossSite::Stage {
+                name: "shapes:compile".to_owned(),
+            },
+            subject: LossSubject::Term(LossTerm::Literal {
+                lexical: "cat".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some("en".to_owned()),
+                direction: None,
+            }),
+            detail: vec![LossDetail::count("rows", 3)],
         });
         assert!(!ledger.is_empty());
 
@@ -3053,16 +3143,236 @@ mod tests {
         assert_eq!(
             rendered,
             ledger.render_json(),
-            "render_json must be deterministic"
+            "render must be deterministic"
+        );
+        assert!(rendered.contains("\"schema_version\": 2"), "{rendered}");
+        assert!(
+            rendered.contains("\"site\": {\"kind\": \"stage\", \"name\": \"shapes:compile\"}"),
+            "{rendered}"
         );
         assert!(
-            rendered.contains("\"location\":"),
-            "location field missing: {rendered}"
+            rendered.contains("\"lexical\": \"cat\"") && rendered.contains("\"language\": \"en\""),
+            "a literal subject keeps its datatype and language: {rendered}"
         );
         assert!(
-            rendered.contains("subject=ex:Cat"),
-            "subject not present in rendered location: {rendered}"
+            rendered.contains("{\"kind\": \"detail\", \"name\": \"rows\", \"value\": {\"kind\": \"count\", \"count\": 3}}"),
+            "{rendered}"
         );
+    }
+
+    /// The runtime ledger's JSON shape is a public contract: every site, subject,
+    /// term, graph and detail variant renders as a `kind`-tagged object, byte for
+    /// byte. A change to any member name or nesting fails here.
+    #[test]
+    fn runtime_ledger_json_shape_is_pinned_for_every_occurrence_variant() {
+        let entry = |code: &str, site, subject, detail| LossEntry {
+            code: Cow::Owned(code.to_owned()),
+            from: Cow::Borrowed("f"),
+            to: Cow::Borrowed("t"),
+            note: Cow::Borrowed("n"),
+            site,
+            subject,
+            detail,
+        };
+        let mut ledger = LossLedger::new();
+        ledger.record(entry(
+            "a",
+            LossSite::Document {
+                path: Some("x.ttl".to_owned()),
+                line: Some(3),
+                column: None,
+            },
+            LossSubject::Term(LossTerm::Literal {
+                lexical: "c\"a\u{1}t".to_owned(),
+                datatype: "http://example.org/dt".to_owned(),
+                language: Some("en".to_owned()),
+                direction: Some(crate::RdfTextDirection::Rtl),
+            }),
+            vec![LossDetail::count("rows", 3)],
+        ));
+        ledger.record(entry(
+            "b",
+            LossSite::Gts {
+                segment: Some(1),
+                frame: Some(2),
+                term: None,
+                quad: None,
+                reifier: None,
+            },
+            LossSubject::Row {
+                kind: "quad".to_owned(),
+                digest: [0xab; 32],
+            },
+            vec![LossDetail::identifier("head", "h1")],
+        ));
+        ledger.record(entry(
+            "c",
+            LossSite::Stage {
+                name: "s".to_owned(),
+            },
+            LossSubject::Pointer(vec!["$defs".to_owned(), "a/b".to_owned()]),
+            vec![LossDetail::term(
+                "t",
+                LossTerm::Triple {
+                    subject: Box::new(LossTerm::Iri("s".to_owned())),
+                    predicate: Box::new(LossTerm::Iri("p".to_owned())),
+                    object: Box::new(LossTerm::Blank {
+                        label: "b".to_owned(),
+                        scope: Some("0".to_owned()),
+                    }),
+                },
+            )],
+        ));
+        ledger.record(entry(
+            "d",
+            LossSite::Unspecified,
+            LossSubject::Graph(LossGraphName::Blank {
+                label: "g".to_owned(),
+                scope: None,
+            }),
+            vec![
+                LossDetail::graph("g", LossGraphName::Default),
+                LossDetail::term("i", LossTerm::Indexed(7)),
+            ],
+        ));
+        ledger.record(entry(
+            "e",
+            LossSite::Unspecified,
+            LossSubject::Resource {
+                kind: "node".to_owned(),
+                identifier: "n1".to_owned(),
+            },
+            Vec::new(),
+        ));
+        ledger.record(entry(
+            "f",
+            LossSite::Unspecified,
+            LossSubject::Path(vec![
+                LossPathStep::Element {
+                    name: "resource".to_owned(),
+                    position: 1,
+                },
+                LossPathStep::Attribute {
+                    name: "lang".to_owned(),
+                },
+            ]),
+            Vec::new(),
+        ));
+        let expected = concat!(
+            "{\n  \"schema_version\": 2,\n  \"losses\": [\n",
+            "    {\n      \"code\": \"a\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"document\", \"path\": \"x.ttl\", \"line\": 3, \"column\": null},\n",
+            "      \"subject\": {\"kind\": \"term\", \"term\": {\"kind\": \"literal\", \"lexical\": \"c\\\"a\\u0001t\", \"datatype\": \"http://example.org/dt\", \"language\": \"en\", \"direction\": \"rtl\"}},\n",
+            "      \"detail\": [{\"kind\": \"detail\", \"name\": \"rows\", \"value\": {\"kind\": \"count\", \"count\": 3}}]\n    },\n",
+            "    {\n      \"code\": \"b\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"gts\", \"segment\": 1, \"frame\": 2, \"term\": null, \"quad\": null, \"reifier\": null},\n",
+            "      \"subject\": {\"kind\": \"row\", \"row_kind\": \"quad\", \"digest\": \"abababababababababababababababababababababababababababababababab\"},\n",
+            "      \"detail\": [{\"kind\": \"detail\", \"name\": \"head\", \"value\": {\"kind\": \"identifier\", \"identifier\": \"h1\"}}]\n    },\n",
+            "    {\n      \"code\": \"c\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"stage\", \"name\": \"s\"},\n",
+            "      \"subject\": {\"kind\": \"pointer\", \"tokens\": [\"$defs\", \"a/b\"]},\n",
+            "      \"detail\": [{\"kind\": \"detail\", \"name\": \"t\", \"value\": {\"kind\": \"term\", \"term\": {\"kind\": \"triple\", \"subject\": {\"kind\": \"iri\", \"value\": \"s\"}, \"predicate\": {\"kind\": \"iri\", \"value\": \"p\"}, \"object\": {\"kind\": \"blank\", \"label\": \"b\", \"scope\": \"0\"}}}}]\n    },\n",
+            "    {\n      \"code\": \"d\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"unspecified\"},\n",
+            "      \"subject\": {\"kind\": \"graph\", \"graph\": {\"kind\": \"blank\", \"label\": \"g\", \"scope\": null}},\n",
+            "      \"detail\": [{\"kind\": \"detail\", \"name\": \"g\", \"value\": {\"kind\": \"graph\", \"graph\": {\"kind\": \"default\"}}}, {\"kind\": \"detail\", \"name\": \"i\", \"value\": {\"kind\": \"term\", \"term\": {\"kind\": \"indexed\", \"index\": 7}}}]\n    },\n",
+            "    {\n      \"code\": \"e\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"unspecified\"},\n",
+            "      \"subject\": {\"kind\": \"resource\", \"resource_kind\": \"node\", \"identifier\": \"n1\"},\n",
+            "      \"detail\": []\n    },\n",
+            "    {\n      \"code\": \"f\",\n      \"from\": \"f\",\n      \"to\": \"t\",\n      \"intentional\": false,\n      \"note\": \"n\",\n",
+            "      \"site\": {\"kind\": \"unspecified\"},\n",
+            "      \"subject\": {\"kind\": \"path\", \"steps\": [{\"kind\": \"element\", \"name\": \"resource\", \"position\": 1}, {\"kind\": \"attribute\", \"name\": \"lang\"}]},\n",
+            "      \"detail\": []\n    }\n",
+            "  ]\n}\n",
+        );
+        assert_eq!(ledger.render_json(), expected);
+    }
+
+    /// RDF 1.2 base direction is part of a literal's identity: two literals
+    /// that differ only in direction are distinct subjects, and two that agree
+    /// in every part are equal.
+    #[test]
+    fn a_literal_subject_keeps_its_base_direction() {
+        let literal = |direction| LossTerm::Literal {
+            lexical: "x".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("en".to_owned()),
+            direction,
+        };
+        let ltr = literal(Some(crate::RdfTextDirection::Ltr));
+        let rtl = literal(Some(crate::RdfTextDirection::Rtl));
+        assert_ne!(ltr, rtl);
+        assert_eq!(ltr, literal(Some(crate::RdfTextDirection::Ltr)));
+        assert_ne!(ltr.to_string(), rtl.to_string());
+    }
+
+    /// Only a JSON Pointer becomes a pointer subject: text that is not one is
+    /// refused rather than stored as a one-token pointer.
+    #[test]
+    fn a_pointer_subject_is_parsed_from_pointer_text_only() {
+        for refused in ["dataset:identifier:x", "a/b", "/a~2b"] {
+            let error = LossSubject::parse_pointer(refused).unwrap_err();
+            assert_eq!(error.text(), refused);
+        }
+        assert_eq!(
+            LossSubject::parse_pointer("/$defs/a~1b").unwrap(),
+            LossSubject::Pointer(vec!["$defs".to_owned(), "a/b".to_owned()])
+        );
+        assert_eq!(
+            LossSubject::parse_pointer("").unwrap(),
+            LossSubject::Pointer(Vec::new())
+        );
+    }
+
+    /// A recorded entry is inspectable through the structured-error protocol,
+    /// its subject and details as nested records.
+    #[test]
+    fn a_loss_entry_is_inspectable_as_structured_data() {
+        use purrdf_hash::error::ErrorValue;
+        let entry = LossEntry {
+            code: Cow::Borrowed("c"),
+            from: Cow::Borrowed("f"),
+            to: Cow::Borrowed("t"),
+            note: Cow::Borrowed("n"),
+            site: LossSite::Unspecified,
+            subject: LossSubject::Resource {
+                kind: "node".to_owned(),
+                identifier: "n1".to_owned(),
+            },
+            detail: vec![LossDetail::count("rows", 4)],
+        };
+        let captured = purrdf_testkit::error_capture::Capture::read(&entry);
+        assert!(matches!(captured.field("code"), ErrorValue::Code("c")));
+        assert!(matches!(
+            captured.child("subject").field("identifier"),
+            ErrorValue::Text("n1")
+        ));
+    }
+
+    /// Absence is an explicit variant, never an omitted member or a reserved value.
+    #[test]
+    fn an_entry_without_an_occurrence_renders_explicit_absence() {
+        let mut ledger = LossLedger::new();
+        ledger.record(LossEntry {
+            code: Cow::Borrowed("c"),
+            from: Cow::Borrowed("f"),
+            to: Cow::Borrowed("t"),
+            note: Cow::Borrowed("n"),
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
+        });
+        let rendered = ledger.render_json();
+        assert!(
+            rendered.contains("\"site\": {\"kind\": \"unspecified\"}"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("\"subject\": {\"kind\": \"absent\"}"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\"detail\": []"), "{rendered}");
     }
 
     #[test]
@@ -3270,7 +3580,9 @@ mod tests {
             from: Cow::Owned(from.to_owned()),
             to: Cow::Owned(to.to_owned()),
             note: Cow::Owned("mechanical test entry".to_owned()),
-            location: None,
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail: Vec::new(),
         }
     }
 

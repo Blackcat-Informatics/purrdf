@@ -1445,7 +1445,7 @@ int main(int argc, char **argv) {
     const uint8_t *ledger_bytes = NULL;
     size_t ledger_len = 0;
     purrdf_buffer_data(project_ledger, &ledger_bytes, &ledger_len);
-    const char *ledger_prefix = "{\n  \"schema_version\": 1,";
+    const char *ledger_prefix = "{\n  \"schema_version\": 2,";
     CHECK(ledger_len >= strlen(ledger_prefix) &&
               memcmp(ledger_bytes, ledger_prefix, strlen(ledger_prefix)) == 0,
           "projection ledger JSON present");

@@ -903,7 +903,9 @@ mod tests {
             from: String::from("json-schema").into(),
             to: String::from("shacl").into(),
             note: "a loss".into(),
-            location: None,
+            site: ::purrdf_core::LossSite::Unspecified,
+            subject: ::purrdf_core::LossSubject::Absent,
+            detail: Vec::new(),
         });
         let native = ::purrdf_rdf::check_ledger_sound(&ledger, "json-schema", "shacl").unwrap_err();
         let direct = LinkmlError::from(native);

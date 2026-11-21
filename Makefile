@@ -51,7 +51,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
 
-.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest pytest-load conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt hooks check workspace-gate test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest pytest-load conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri geo-determinism geodtest
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
@@ -89,6 +89,13 @@ hooks: ## Install the pre-commit and pre-merge-commit hooks: the quick subset of
 	git config core.hooksPath .githooks
 
 check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
+	$(MAKE) workspace-gate
+	cargo test --workspace --locked --no-fail-fast
+	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
+	$(MAKE) wasm
+	$(MAKE) wasm-imports
+
+workspace-gate: ## Before a push: every check the hosted `workspace` job runs (fmt, clippy, build, hygiene), without the test suite.
 	cargo fmt --all --check
 	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -169,11 +176,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
-	cargo test --workspace --locked --no-fail-fast
-	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
-	$(MAKE) wasm
-	$(MAKE) wasm-imports
 
 check-issue-refs: ## Reject issue-reference tokens (#NNN and tracker URLs) in comments, docs and corpora.
 	python3 scripts/check-issue-refs.py

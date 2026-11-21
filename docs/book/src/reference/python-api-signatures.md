@@ -69,7 +69,15 @@ class ProjectionLoss:
         ...
 
     @property
-    def location(self) -> str | None:
+    def site(self) -> dict[str, Any]:
+        ...
+
+    @property
+    def subject(self) -> dict[str, Any]:
+        ...
+
+    @property
+    def detail(self) -> list[dict[str, Any]]:
         ...
 
 class ProjectionPackage:

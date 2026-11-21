@@ -133,7 +133,7 @@ whose terms do not form a well-formed dataset.
 | `gts-invalid-direction` | A GTS literal base direction is neither `ltr` nor `rtl`. | Use `ltr` or `rtl`. |
 | `gts-missing-reifier-binding` | A GTS triple term references a reifier the graph does not bind. | Bind the reifier in the container. |
 | `gts-unbound-triple-term` | A GTS triple term names neither its own components nor a reifier. | Give the triple term its components or a reifier. |
-| `gts-self-reaching-term` | A GTS term resolves through itself, so no walk of its components can terminate. | Remove the cycle. |
+| `gts-self-reaching-term` | A literal datatype chain resolves through itself, so no walk of its components can terminate. | Remove the cycle. |
 | `gts-term-nesting-limit` | GTS term nesting exceeds the depth limit. | Flatten the nesting. |
 | `gts-fold-diagnostic` | The GTS fold reported one or more diagnostics. | Inspect the fold diagnostics listed in the detail. |
 | `gts-verify-digest-inclusion` | Content-addressed terms are not included in the verified chain. | The container's chain does not cover its content; do not trust it. |

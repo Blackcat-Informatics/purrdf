@@ -102,7 +102,11 @@ class ProjectionLoss:
     @property
     def note(self) -> str: ...
     @property
-    def location(self) -> str | None: ...
+    def site(self) -> dict[str, Any]: ...
+    @property
+    def subject(self) -> dict[str, Any]: ...
+    @property
+    def detail(self) -> list[dict[str, Any]]: ...
 
 class ProjectionPackage:
     @property
@@ -1484,13 +1488,11 @@ class GtsRelationalRows(TypedDict):
     blobs: list[_BlobExportRow]
 
 class GtsFoldViewNative:
-    # Both constructors raise ValueError carrying `gts-self-reaching-term` when the
-    # term table lets a term resolve through itself. The view's accessors walk a
-    # quoted triple's resolved components to the leaves, so such a term would recurse
-    # without bound and abort the process; the view refuses to EXIST rather than hand
-    # back an object whose every renderer is a process kill. `from_bytes` cannot
-    # normally hit it (the GTS reader refuses the row that closes the loop), but a
-    # term table assembled by the caller and handed to `from_parts` can.
+    # A triple term that reaches itself states no triple (GTS-SPEC 7.3): the view's
+    # accessors render it as `_:unbound_triple_{id}` and its `reifies` rows stay
+    # visible, so no accessor walks its components without bound. Both constructors
+    # raise ValueError carrying `gts-self-reaching-term` when a literal's datatype
+    # chain resolves through itself, which no walk could finish.
     #
     # `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
     # consulted first; built in are only the W3C namespaces rdf, rdfs, owl, xsd

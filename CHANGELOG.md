@@ -10,6 +10,85 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [5.0.0] - 2026-11-20
 
+- **Breaking: loss entries record typed occurrences, and the runtime ledger is
+  schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
+  with three typed members: `site` (`LossSite`: unspecified, a document position,
+  a GTS anchor, or a named stage), `subject` (`LossSubject`: absent, a `LossTerm`
+  with its datatype, language and base direction, a source row by its kind and
+  the SHA-256 digest of its content, a resource by its kind and the identifier
+  its document assigns, a `LossGraphName` with a blank node's scope, a JSON
+  Pointer as its token list, or an XML location as element and attribute steps)
+  and `detail` (an ordered list of `LossDetail`, each a named count,
+  identifier, term or graph name).
+  Absence is an explicit variant, so no member's meaning depends on a prefix,
+  suffix or reserved value. Every producer records values it holds: counts,
+  segment head identifiers, graph names, terms, property keys, patterns and
+  paths are no longer formatted into `note`, which keeps only the code's static
+  explanation; `LossSubject::parse_pointer` refuses text that is not a JSON
+  Pointer; the CLI no longer
+  names an endpoint `unknown`; and a graph name that is neither an IRI nor a
+  blank node is refused rather than rendered with `Debug`. All of these types
+  implement `StructuredError`, and `LossEntry::presentation` renders prose from
+  the typed members. `LossLedger::render_json` writes `schema_version` 2 with
+  `site`, `subject` and `detail` members in place of the single `location`
+  string; the static matrices carry no occurrences and are unchanged. The
+  Python `ProjectionLoss.location` attribute is replaced by `site`, `subject`
+  and `detail` dictionaries (a row digest is `bytes`, and each detail has
+  `kind` `detail`), and the C and WebAssembly surfaces carry the same members
+  in the ledger JSON. `RdfLocation` and `RdfDiagnostic` are unchanged. The
+  migration guide gives the mapping.
+- **Behaviour change: a triple term that reaches itself states no triple, and its `reifies` row is kept.**
+  A term that is reachable from its own components, through `tt` or through the
+  first `reifies` row of the reifier id its `rf` names, is no longer
+  refused. A `k:3` term with neither `tt` nor `rf` states no triple, as the
+  specification's third resolution rule says; an absent `rf` is not read as the
+  term's own id. The GTS reader folds every such row with no diagnostic, where it
+  reported `DamagedFrame` and dropped the row. The term keeps an identity of its
+  own in the multi-segment union and the canonical writer, and the row still
+  projects. `purrdf_gts::resolution::SelfReaching::of` names these terms once per
+  graph and `Graph::resolved_triple_of` answers `None` for each; `Graph::triple_of`
+  keeps returning the declared components. Projections render the term as the
+  fresh blank node of an unbound triple term (`_:unbound_triple_{id}`), so
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView` accept a graph they refused with `gts-self-reaching-term`. That
+  code remains for a literal whose datatype chain leads back to itself. A valid
+  file, whose `tt` names strictly smaller term ids and whose rows name no term
+  that reaches itself, folds, writes and projects as before.
+  The streaming importers (`import_gts_events` and its dictionary and blob
+  forms) and `export_gts_rdf_nquads_with_dictionary` decide the same set and
+  render the same blank node, and the canonical writer keeps the `tt` a
+  self-reaching term carries and orders its components before it.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced: the traversal it bounded no longer exists.
+- **Breaking: `PendingResolution` is `#[non_exhaustive]` and carries the
+  resolver's search state.** `segment_decode::PendingResolution` gains the public
+  field `component: ComponentState` and the constructor
+  `PendingResolution::new(term)`; an external `PendingResolution { .. }`
+  struct literal no longer compiles, which is deliberate: a literal could not set
+  the new field and a storage that forgot it would resolve a self-reaching
+  term wrongly. A `ResolutionStorage` implementation changes only where it builds
+  or rebuilds a record. Before, `PendingResolution { term, parent: None, next: 0,
+  active: false }`; now `PendingResolution::new(term)`, and an implementation that
+  persists a record outside memory stores `component.to_words()` (five `u64`
+  words) with the other fields and restores it with `ComponentState::from_words`,
+  returning exactly what it was given. A storage that returns a default value
+  instead is refused by the resolver with `rdf-ir-dangling-term-ref`. No
+  `ResolutionStorage` method is added. `ComponentState` is a new public type.
+- **Behaviour change: the GTS reader drops a `reifies` row whose reifier is a
+  literal or a quoted triple.** The row is diagnosed `PositionConstraint`;
+  4.0.2 kept it silently. A term whose `rf` names its own id is now a
+  `ForwardReference` and its `rf` reads as absent, as the format specification
+  requires for any `rf` at or past the term's id. See the migration guide.
+- **Behaviour change: a GTS blob whose payload cannot be a stream of its codec
+  is an opaque node.** A blob frame that declares its digest and whose `zstd`,
+  `zstd-rsyncable` or `gzip` payload fails a structural check at fold (frame
+  and block headers, a named dictionary, the gzip magic and trailer) folds as an
+  opaque node with `DamagedFrame` and stays out of the blob table; 4.0.2
+  admitted it and failed only when its bytes were requested. The check decodes
+  nothing. A payload with sound structure and corrupt content still folds and
+  fails on first request; `docs/CONFORMANCE.md` states that limit.
+  `codec::check_chain_structure` is a new public function.
+
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop
@@ -97,7 +176,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   that a segmented stack made only of image layers, with no removal or
   declaration owners and no resident head, keeps its 4.x snapshot identity and
   the receipts bound to it (see "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
-  keeps its 4.x additive value and is deprecated. The first identity request
+  is removed. The first identity request
   of a dataset frozen without eager statistics now sorts its record digests in a
   scratch buffer, a text delta hashes the whole row directory, and a standalone
   surface delta sorts every source digest (about 9% more instructions at 2048
@@ -204,6 +283,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
   `SrlError::Execution`, and a rule deriving another predicate still runs.
+- **Breaking: a protected header that is not deterministically encoded is
+  `Invalid`, and `Sign1Error` gains a variant.** A COSE_Sign1 whose protected
+  header is not the deterministic encoding the specification requires (section 4:
+  shortest-form integers and lengths, definite lengths, map keys in bytewise
+  order) was `Valid` with a resolved key; it is `Invalid`, with the cause
+  `Sign1Error::NonCanonicalProtectedHeader` (and
+  `VerificationError::NonCanonicalProtectedHeader` in a file verification),
+  readable through `cose::signature_refusal`. Header integers are not bounded
+  beyond what CBOR encodes, as in 4.0.2. A text-string `alg` is `Unverified`,
+  and the `kid` of an unsupported-algorithm envelope is reported. `Sign1Error` was an exhaustive enum and is now
+  `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles and
+  needs a wildcard arm; `VerificationError` was already `#[non_exhaustive]`.
+  Compaction and the certify callers read the envelope through the same parse,
+  so a file that holds such a signature is refused there
+  (`CompactRefusedError::FrameCose` or `DetachedCose`) where 4.0.2 carried the
+  signature. The migration guide gives the bucket each case moves between.
+  `vectors/signed` carries the upstream signed corpus and `signed_corpus` grades
+  it, with nine named differences.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2

@@ -48,6 +48,9 @@ digests before opening a 4.x artifact.
 - An unreadable stack floor refuses instead of disabling the guard (see "Stack
   floor"), and `Iri::normalize` keeps an encoded dot segment (see "IRI normal
   form").
+- Loss entries carry typed `site`, `subject` and `detail` members in place of
+  `location`, and the runtime loss ledger JSON is schema version 2 (see "Loss
+  occurrences").
 
 ## The canonical line sequence
 
@@ -317,11 +320,11 @@ the identity from the data and record it again.
 | `SourceMatchEvidence::literal` of a match from an index-built surface, and the literal identity Han occurrences carry | The per-row source identity moved from the additive `purrdf-text/source/v2` law to the sorted `purrdf-text/source/v3` law. |
 | `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
 
-`purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
-deprecated: no 5.0 index carries that value. The value is not
-collision-resistant and must not be used as an identity; use
-`purrdf_text::source_digest` or `TextIndex::source_fingerprint` instead. The
-function is removed in the next major version. `SourceSummary::records` and
+`purrdf_text::source_fingerprint`, the free function over a `Multiset256`, is
+removed: no 5.0 index carries the additive value it computed, and that value is
+not collision-resistant, so it cannot serve as an identity. Replace a call with
+`purrdf_text::source_digest` over the dataset, or read
+`TextIndex::source_fingerprint`. `SourceSummary::records` and
 `SourceSummary::literal_rows` keep their additive `Multiset256` values, which
 combine across physical layers without visiting rows; they are accounting sums
 for drift and population checks between structures one process built, and no
@@ -441,6 +444,60 @@ signature, and one relaxed a bound:
 `canonical_relabel_with_mapping` keep their signatures and change only what they
 compute.
 
+## Loss occurrences
+
+`LossEntry` no longer has a `location`. A producer records where the loss
+happened, what it concerns and the facts that qualify it as values:
+
+| 4.x | 5.0 |
+|---|---|
+| `location: Some(RdfLocation { path, line, column, .. })` | `site: LossSite::Document { path, line, column }` |
+| `location` with `gts_segment_index`, `gts_frame_index`, `gts_term_id`, `gts_quad_index` or `gts_reifier_id` | `site: LossSite::Gts { segment, frame, term, quad, reifier }` |
+| `location.logical`, an adapter or stage label | `site: LossSite::Stage { name }` |
+| `location.subject`, spelled `<iri>`, `_:label`, `literal:lexical`, `term#N` or `#/pointer` | `subject`: `LossSubject::Term(LossTerm)`, `Row { kind, digest }`, `Resource { kind, identifier }`, `Graph(LossGraphName)`, `Pointer(tokens)` or `Path(steps)` |
+| counts, segment head identifiers and graph names inside `note` | `detail: Vec<LossDetail>`, each a named `Count`, `Identifier`, `Term` or `Graph` value |
+| no location (`None`) | `LossSite::Unspecified`, `LossSubject::Absent` and an empty `detail` |
+
+`note` holds the code's explanation only. `LossEntry::presentation` renders
+the note and the typed members as one line for a person. `LossTerm` keeps a
+literal's datatype, language and base direction, a blank node's label and
+scope, and a triple term's parts, so no subject identifies two terms alike. A
+blank `LossGraphName` keeps its scope too. A source row is identified by its
+kind and the SHA-256 digest of its content, a resource by its kind and the
+identifier its document or projection assigns, and an XML location by its
+element steps (name and one-based position among element siblings) and an
+optional attribute step. Build a pointer subject from pointer text with
+`LossSubject::parse_pointer`, which refuses text that is not a JSON Pointer.
+The types are `#[non_exhaustive]` and implement `StructuredError`.
+
+A runtime ledger renders `schema_version` 2. Each entry has `code`, `from`,
+`to`, `intentional` and `note`, then:
+
+- `site`: an object whose `kind` is `unspecified`, `document` (`path`, `line`,
+  `column`), `gts` (`segment`, `frame`, `term`, `quad`, `reifier`) or `stage`
+  (`name`);
+- `subject`: an object whose `kind` is `absent`, `term` (`term`), `row`
+  (`row_kind`, `digest` as lowercase hexadecimal), `resource`
+  (`resource_kind`, `identifier`), `graph` (`graph`), `pointer` (`tokens`) or
+  `path` (`steps`, each `element` with `name` and `position`, or `attribute`
+  with `name`);
+- `detail`: an array of `{ "kind": "detail", "name", "value" }` where the
+  value's `kind` is `count`, `identifier`, `term` or `graph`.
+
+A term object has `kind` `iri`, `blank`, `literal` (with `direction`),
+`triple` or `indexed`, and a graph object `default`, `iri` or `blank` (with
+`scope`). Absent members are `null`. The
+`location` member is gone; read `site` and `subject`. The static matrices
+(`generated/rdf-loss-matrix.json`, `generated/transcode-loss-matrix.json`)
+keep their array shape.
+
+The Python `ProjectionLoss.location` attribute is replaced by `site`,
+`subject` and `detail`: dictionaries with the same `kind` members as the JSON,
+except that a row digest is `bytes`.
+The CLI records an in-memory source as `rdf-1.2-dataset` instead of
+`unknown`, and refuses a declared graph name that is not an IRI or a blank
+node. `RdfLocation` and `RdfDiagnostic` keep every field.
+
 ## Public types that changed shape
 
 The canonicalization and compaction-certificate types below, and the geo index
@@ -486,6 +543,41 @@ lost or retyped a public field, and none of these enums lost a variant.
 
 ## Containers
 
+- **Triple terms that reach themselves.** A `k:3` term that is reachable from its
+  own components, through `tt` or through the first `reifies` row of its `rf`, states
+  no triple. The reader keeps the `reifies` row
+  and reports no diagnostic, where 4.x reported `DamagedFrame` and dropped the row;
+  the term keeps a distinct identity in the multi-segment union and the canonical
+  writer, and projections render it as the blank node `_:unbound_triple_{id}`.
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView::new` accept such a graph instead of refusing it with
+  `gts-self-reaching-term`, which now names only a literal datatype chain that
+  leads back to itself. A caller that walks `Graph::triple_of` recursively reads
+  the components the term declares, and one that must terminate on a caller-built
+  graph takes `purrdf_gts::resolution::SelfReaching::of(&graph)` once and reads
+  components through `Graph::resolved_triple_of`. The streaming importers and
+  the N-Quads export decide the same set. Valid files are unchanged.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced.
+- **`PendingResolution` is `#[non_exhaustive]`.** The streaming resolver keeps
+  the search that finds self-reaching triple terms in the pending record, in the
+  new field `component: ComponentState`. An external `PendingResolution { .. }`
+  literal no longer compiles. A `ResolutionStorage` implementer changes only
+  where it builds a record:
+
+  ```rust
+  // 4.x
+  PendingResolution { term, parent: None, next: 0, active: false }
+  // 5.0
+  PendingResolution::new(term)
+  ```
+
+  A storage that persists records outside memory writes
+  `pending.component.to_words()` (five `u64` words) beside `parent`, `next` and
+  `active`, and reads them back with `ComponentState::from_words`, which returns
+  `None` for words no state encodes. It must return the value it was given: a
+  record read back with the default state is refused with
+  `rdf-ir-dangling-term-ref`. No `ResolutionStorage` method is added.
 - **Unsupported signing algorithm.** `verify_sig` and `verify_sig_with_key`
   return `SigStatus::Unverified` for a COSE_Sign1 whose declared `alg` this
   engine does not implement, where 4.0.2 returned `Invalid`; the file verifiers
@@ -500,6 +592,83 @@ lost or retyped a public field, and none of these enums lost a variant.
   (`gts_certify`, in the authorship and the packaging checks) refuse an
   unsupported algorithm at parse, before any status exists; `Unverified` is
   what a direct verification with `verify_sig` or `verify_sig_with_key` returns.
+- **Reifier position in GTS.** The reader drops a `reifies` row whose reifier is
+  a literal or a quoted-triple term, and diagnoses it `PositionConstraint`;
+  4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
+  `quads` subject and as the object of a `reifies` or `annot` row.
+  A quoted-triple term whose `rf` names its own id breaks the specification's
+  rule that `rf` names a strictly earlier term. 4.0.2 kept such an `rf` without
+  a diagnostic, and already diagnosed an `rf` naming a later id as
+  `ForwardReference`. The reader now diagnoses an `rf` naming its own id as
+  `ForwardReference` too, and reads it as absent. The term then resolves by its
+  `tt` when that is valid and states no triple otherwise, and a `reifies` row
+  keyed by it is dropped with `PositionConstraint`. The row diagnostic carries
+  the frame index, the reifier id and the row's triple.
+  The import outcome follows from the new diagnostic. The event importer
+  (`import_gts_events` and its dictionary and blob forms) fails the import on
+  any reader diagnostic other than a blob-budget refusal, so it now refuses
+  every file holding the spelling with `rdf-ir-gts-fold-diagnostic` carrying the
+  `ForwardReference`, whether or not the term has a `tt` and whether or not a
+  quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` refuses
+  a file whose term has no `tt` and is named by a quad or a row, with
+  `native-codec-unbound-triple-term`; 4.0.2 imported that file too. Only the
+  fold view reads the file, and it renders the term as a fresh blank node. The
+  conforming spelling names an earlier IRI or blank-node reifier in `rf` and
+  keys the row by that reifier. A file whose `reifies` row is keyed by a
+  quoted-triple term, whatever its `tt` or `rf`, loses that row.
+  A read-only count through the 4.0.2 reader over the fourteen stored
+  first-generation files found no term with an `rf`, no triple-kind term, no
+  self-bound term and no reader diagnostic, and their `reifies` rows involve no
+  such term. The count has limits: writer versions are not recorded in the
+  files' headers, and older archived versions of the live files were not read.
+  The conformance vectors, 39 carried and 52 external, are a separate count and
+  contain no writer output; none holds the spelling.
+- **Damaged blob payload in GTS.** A blob frame that declares its digest and
+  whose transformed payload cannot be a stream of its codec folds as an opaque
+  node with a `DamagedFrame` diagnostic, and the blob is not in the blob table;
+  4.0.2 admitted it and failed only when its bytes or size were requested. The
+  fold checks the structure of `zstd`, `zstd-rsyncable` and `gzip` payloads (frame
+  and block headers, a named dictionary, the gzip magic and trailer) without
+  decoding them. A payload whose structure is sound but whose content is corrupt
+  still folds as a blob and returns the codec failure on first request, as in
+  4.0.2. A valid blob folds as before.
+- **COSE_Sign1 protected header.** The protected header is read as the
+  deterministic encoding the specification requires of every signed byte string
+  (section 4, RFC 8949 section 4.2): shortest-form integers and lengths,
+  definite-length items and map keys in bytewise order. Header integers are not
+  bounded beyond what CBOR encodes, as in 4.0.2. Each case moves between the
+  three outcomes as follows, for a caller that treats `Unverified` as
+  "unchecked" and `Invalid` as "failed":
+  - A header that is not deterministically encoded was `Valid` with a resolved
+    key and `Unverified` without one in 4.0.2; it is `Invalid` in both cases.
+    This moves a result away from `Valid`: a stored signature whose protected
+    header is not deterministically encoded stops verifying. No writer in the
+    GTS repository, in any released version, emits such a header, so only a
+    caller-supplied signature (`FrameOptions::signature`) can hold one. Verify
+    stored signed material with the 5.0 verifier before moving a pin.
+    `Sign1Error::NonCanonicalProtectedHeader` and, in a file verification,
+    `VerificationError::NonCanonicalProtectedHeader` name this cause, so it is
+    told from a signature that fails to verify. `cose::signature_refusal` reads
+    the cause of a retained envelope. The status stays `invalid`, and
+    `Sign1Error` gains a variant and becomes `#[non_exhaustive]`: an exhaustive
+    `match` on it no longer compiles and needs the new arm and a wildcard.
+    `VerificationError` was already `#[non_exhaustive]` and gains a variant, so a
+    `match` with a wildcard arm compiles unchanged.
+  - Compaction and the certify callers parse each retained envelope with the
+    same rules. A file whose signature has a header that is not deterministically
+    encoded is refused by compaction
+    (`CompactRefusedError::FrameCose`, or `DetachedCose` for a carried detached
+    signature) and by the certify checks at parse, where 4.0.2 compacted it and
+    carried the signature. Verify stored signed material before compacting it.
+  - A header declaring its algorithm as a text string (RFC 9052 section 3.1)
+    was malformed and `Invalid` with no `kid`; it is `Unverified` with its `kid`,
+    as an integer algorithm this engine does not implement is.
+  - The `kid` of an envelope that declares an unsupported algorithm is
+    reported, where 4.0.2 reported none.
+    The status is unchanged.
+  A COSE_Sign1 with no `kid` is unchanged: `kid` stays optional (RFC 9052
+  section 3.1) at every entry point. A short EdDSA signature stays `Invalid`
+  before key resolution.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function

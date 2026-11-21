@@ -170,7 +170,7 @@ def _assert_reverse(reverse: dict[str, Any], expected_shape_ids: list[str]) -> N
         entry["from"] == "pydantic-v2"
         and entry["to"] == "shacl"
         and entry["intentional"]
-        and " subject=#/" in entry["location"]
+        and entry["subject"]["kind"] == "pointer"
         for entry in reverse_losses
     ):
         raise AssertionError("Pydantic reverse package has an unsound or unlocated loss")
@@ -495,7 +495,7 @@ def main() -> None:
                     "negation-validation-dropped",
                     "one-of-validation-widened",
                 }
-                and "#/$defs/Holder" in entry["location"]
+                and entry["subject"].get("tokens", [])[:2] == ["$defs", "Holder"]
                 for entry in payload["value_shapes"]["losses"]["losses"]
             ):
                 raise AssertionError("value-shape package kept a composition loss")

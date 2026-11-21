@@ -125,21 +125,6 @@ fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
     })
 }
 
-/// The 4.x source law: the additive sum of selected literal-row hashes under
-/// the source domain. No 5.0 index carries this value.
-/// [`TextIndex::source_fingerprint`](super::TextIndex::source_fingerprint) is
-/// BLAKE3 over the sorted selected-row digests, which
-/// [`source_digest`](super::source_digest) computes from a dataset; a party
-/// choosing rows can construct two different row sets with one additive value.
-/// The value is not collision-resistant and must not be used as an identity.
-#[deprecated(
-    since = "5.0.0",
-    note = "this additive value is not collision-resistant and must not be used as an identity: use `source_digest` or `TextIndex::source_fingerprint`"
-)]
-pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
-    additive_check_value::<P>(state)
-}
-
 /// The identity of the selected source rows: BLAKE3 over every selected
 /// literal-row hash in ascending order, one per occurrence, under the
 /// profile's source domain. `sorted` must be ascending; the row directory

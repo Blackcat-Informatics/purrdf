@@ -104,7 +104,7 @@ impl SinkImporter<'_> {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
                 lexical,
-                tag,
+                (tag, direction),
                 crate::gts_language_fold::FoldSite {
                     logical: "gts:sink",
                     segment: Some(segment_index),
@@ -1088,39 +1088,41 @@ mod tests {
 
     #[test]
     fn resolution_cycles_and_failed_callbacks_cannot_be_silently_retried() {
-        for datatype_cycle in [false, true] {
-            let mut resolver = SegmentResolver::new(RecordingSink::new());
-            resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
-            resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
-            let mut term = iri_term("literal");
-            if datatype_cycle {
-                term.kind = TermKind::Literal;
-                term.datatype = Some(2);
-            } else {
-                term.kind = TermKind::Triple;
-                term.triple = Some((0, 1, 2));
-            }
-            resolver.term(0, 2, Arc::new(term));
-            let error = resolver.finish().expect_err("cycle hard-fails");
-            assert_eq!(error.code, "rdf-ir-dangling-term-ref");
-            assert!(error.message.contains(if datatype_cycle {
-                "literal datatype"
-            } else {
-                "reified object"
-            }));
-            assert_eq!(
-                error
-                    .location
-                    .as_ref()
-                    .expect("original location")
-                    .gts_term_id,
-                Some(2)
-            );
-            assert!(
-                resolver.finish().is_err(),
-                "an active failed path remains a hard failure"
-            );
-        }
+        // A triple term that names itself states no triple and resolves; a
+        // literal whose datatype leads back to itself has no resolution.
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        let mut triple = iri_term("triple");
+        triple.kind = TermKind::Triple;
+        triple.triple = Some((0, 1, 2));
+        resolver.term(0, 2, Arc::new(triple));
+        resolver
+            .finish()
+            .expect("a self-reaching triple term degrades");
+
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        let mut term = iri_term("literal");
+        term.kind = TermKind::Literal;
+        term.datatype = Some(2);
+        resolver.term(0, 2, Arc::new(term));
+        let error = resolver.finish().expect_err("cycle hard-fails");
+        assert_eq!(error.code, "rdf-ir-dangling-term-ref");
+        assert!(error.message.contains("literal datatype"));
+        assert_eq!(
+            error
+                .location
+                .as_ref()
+                .expect("original location")
+                .gts_term_id,
+            Some(2)
+        );
+        assert!(
+            resolver.finish().is_err(),
+            "an active failed path remains a hard failure"
+        );
         let mut resolver = SegmentResolver::new(RecordingSink::new());
         let mut term = iri_term("literal");
         term.kind = TermKind::Literal;

@@ -175,7 +175,7 @@ fn indexed_fixture(snapshot: bool) -> Vec<u8> {
             datatype: None,
             lang: None,
             direction: None,
-            reifier: Some(8),
+            reifier: Some(7),
             triple: None,
         },
         Term {
@@ -1154,12 +1154,7 @@ fn native_spill_commits_before_refund_and_never_falls_back_after_failure() {
     state
         .set_pending(
             first,
-            PendingResolution {
-                term: Some(ResolutionTerm::Stored(pin.clone())),
-                parent: None,
-                next: 0,
-                active: false,
-            },
+            PendingResolution::new(Some(ResolutionTerm::Stored(pin.clone()))),
         )
         .expect("persist pending identity");
     drop(state);
@@ -1359,4 +1354,68 @@ fn growing_irregular_terms_keep_text_workspace_bounded_outside_reported_metadata
             measured.peak_working_bytes
         );
     }
+}
+
+/// The stored N-Quads export renders a triple term that reaches itself as the
+/// blank node the resident import interns, with every `reifies` row kept, and
+/// renders a neighbouring term that merely contains one around it.
+#[test]
+fn the_stored_export_renders_self_reaching_triple_terms_as_the_resident_import_does() {
+    let directory = purrdf_testkit::temp_dir!().expect("self-reaching export directory");
+    let root = directory.path();
+    // No `tt`, and `rf` naming an earlier IRI reifier, so the row keyed by that
+    // reifier supplies the term's components.
+    let indirect = |reifier: usize| {
+        let mut term = Term::triple_term((0, 0, 0));
+        term.triple = None;
+        term.reifier = Some(reifier);
+        term
+    };
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"),  // 0
+        Term::iri("https://example.org/p"),  // 1
+        Term::iri("https://example.org/r2"), // 2
+        Term::iri("https://example.org/r3"), // 3
+        Term::iri("https://example.org/r4"), // 4
+        indirect(2),                         // 5: 5 -> 7, 5 -> 6
+        indirect(3),                         // 6: 6 -> 7
+        indirect(4),                         // 7: 7 -> 5
+        Term::triple_term((0, 1, 7)),        // 8: contains a member, reaches no loop
+    ]);
+    writer.add_quads(&[(0, 1, 5, None), (0, 1, 8, None)]);
+    writer.add_reifies(&[
+        (2, (7, 1, 6), None),
+        (3, (0, 1, 7), None),
+        (4, (5, 1, 0), None),
+    ]);
+    let bytes = writer.into_bytes();
+    let resident = import_gts_events(&bytes).expect("resident import degrades the component");
+
+    let mut files = storage::Files::new(&root.join("self-reaching"));
+    let replay = files.replay();
+    let mut state = storage::Resolution::new(&root.join("self-reaching-state"));
+    let mut output = WriterDrain(Vec::new());
+    let mut ceiling = Ceiling(1024 * 1024);
+    export_gts_rdf_nquads_with_dictionary(
+        &bytes,
+        &mut files,
+        &mut state,
+        replay,
+        &mut output,
+        &mut Memory::new(&mut ceiling),
+    )
+    .expect("stored export degrades the component");
+    let parsed =
+        parse_dataset(&output.0, "application/n-quads", None).expect("reparse the degraded export");
+    assert_eq!(render(&parsed), render(&resident.dataset));
+    let text = String::from_utf8(output.0).expect("UTF-8 projection");
+    for id in [5, 6, 7] {
+        // Blank labels are written with `_` escaped.
+        assert!(
+            text.contains(&format!("unbound_00005Ftriple_00005F{id}")),
+            "{text}"
+        );
+    }
+    assert_eq!(text.matches("#reifies>").count(), 3, "every row is kept");
 }

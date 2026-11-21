@@ -53,6 +53,9 @@ struct GraphInterner {
     remap_bytes: usize,
     /// Losses of the read that the dataset cannot represent.
     losses: purrdf_core::LossLedger,
+    /// Triple terms that reach themselves. Such a term states no triple and
+    /// interns as the fresh blank node an unbound triple term is (§7.3).
+    reaching: purrdf_gts::resolution::SelfReaching,
 }
 
 #[derive(Clone, Copy)]
@@ -97,7 +100,8 @@ impl GraphInterner {
                         })?;
                         let kind = term.kind;
                         let datatype = term.datatype;
-                        let components = if kind == TermKind::Triple {
+                        let components = if kind == TermKind::Triple && !self.reaching.contains(id)
+                        {
                             Some(self.triple_components(id)?)
                         } else {
                             None
@@ -130,6 +134,9 @@ impl GraphInterner {
                             TermKind::Iri => self.intern_iri(id)?,
                             TermKind::Bnode => self.intern_blank(id)?,
                             TermKind::Literal => self.intern_literal(id, memory)?,
+                            TermKind::Triple if self.reaching.contains(id) => {
+                                self.intern_unbound_triple(id)?
+                            }
                             TermKind::Triple => self.intern_triple(id)?,
                         };
                         self.remap.insert(id, Some(resolved));
@@ -167,6 +174,14 @@ impl GraphInterner {
         Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
     }
 
+    /// The blank node a triple term that states no triple stands for, named by
+    /// its own id so that it stays distinct from every other term.
+    fn intern_unbound_triple(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
+        Ok(self
+            .builder
+            .intern_blank(&format!("unbound_triple_{gts_id}"), FLATTENED_BLANK_SCOPE)?)
+    }
+
     fn intern_literal(
         &mut self,
         gts_id: usize,
@@ -182,11 +197,15 @@ impl GraphInterner {
         // MOVE the lexical form and language tag out.
         let lexical_form = std::mem::take(&mut self.terms[gts_id].value).unwrap_or_default();
         let language = std::mem::take(&mut self.terms[gts_id].lang);
+        let direction = crate::gts_resolve::parse_gts_direction(
+            self.terms[gts_id].direction.as_deref(),
+            language.as_deref(),
+        )?;
         if let Some(tag) = language.as_deref() {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
                 &lexical_form,
-                tag,
+                (tag, direction),
                 crate::gts_language_fold::FoldSite {
                     logical: "gts:graph",
                     segment: None,
@@ -195,10 +214,6 @@ impl GraphInterner {
                 memory,
             )?;
         }
-        let direction = crate::gts_resolve::parse_gts_direction(
-            self.terms[gts_id].direction.as_deref(),
-            language.as_deref(),
-        )?;
         // A composite literal's embedded blank labels bind into the SAME
         // flattened scope `intern_blank` puts this reader's bare labels in, so
         // both spellings of one node stay one node across a GTS round trip.
@@ -312,6 +327,7 @@ fn import_graph_with_memory(
     // term `value`/`lang` we move).
     let lookaside = crate::gts_core::lookaside_from_graph(&graph);
 
+    let reaching = purrdf_gts::resolution::SelfReaching::of(&graph);
     let Graph {
         terms,
         quads,
@@ -342,6 +358,7 @@ fn import_graph_with_memory(
         remap: crate::FastMap::default(),
         remap_bytes: 0,
         losses: purrdf_core::LossLedger::new(),
+        reaching,
     };
 
     // Intern every term up front (idempotent through the remap), so leaf strings are
@@ -603,11 +620,15 @@ mod tests {
         }
     }
 
-    /// A cyclic quoted-triple term remains a hard failure during iterative resolution.
+    /// A quoted-triple term that reaches itself states no triple: it imports as a
+    /// blank node of its own and the `reifies` row that names it still projects.
     #[test]
-    fn cyclic_triple_term_retains_explicit_cycle_refusal() {
+    fn a_self_reaching_triple_term_imports_as_a_blank_node_and_keeps_its_row() {
         let mut graph = Graph::default();
-        // Triple term 0 bound to reifier 0, whose object is term 0 itself.
+        graph.terms.push(iri_term("http://example.org/r")); // 0
+        graph.terms.push(iri_term("http://example.org/p")); // 1
+        // Triple term 2 names the earlier reifier 0, whose row names term 2 as
+        // its own object.
         graph.terms.push(GtsTerm {
             kind: GtsKind::Triple,
             value: None,
@@ -616,11 +637,20 @@ mod tests {
             direction: None,
             reifier: Some(0),
             triple: None,
-        }); // 0
-        graph.terms.push(iri_term("http://example.org/p")); // 1
-        graph.reifiers.push((0, (1, 1, 0), None));
-        let err = import_gts_graph(graph).expect_err("cycle must fail");
-        assert_eq!(err.code, "gts-self-reaching-term");
+        }); // 2
+        graph.reifiers.push((0, (1, 1, 2), None));
+        let bundle = import_gts_graph(graph).expect("a self-reaching term degrades");
+        let bytes = crate::serialize_dataset(
+            &bundle.dataset,
+            "application/n-quads",
+            crate::SerializeGraph::Dataset,
+        )
+        .expect("the dataset serializes");
+        assert_eq!(
+            String::from_utf8(bytes).expect("N-Quads are UTF-8"),
+            "<http://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
+             <<( <http://example.org/p> <http://example.org/p> _:unbound_triple_2 )>> .\n"
+        );
     }
 
     /// A literal carries its lexical form and (lowercased) language through the move.

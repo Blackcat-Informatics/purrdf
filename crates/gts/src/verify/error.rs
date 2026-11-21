@@ -68,6 +68,14 @@ pub enum VerificationError {
         /// Number of invalid signatures.
         count: usize,
     },
+    /// Signatures whose protected header is not deterministically encoded
+    /// (RFC 8949 section 4.2, required by specification section 4). They are
+    /// also counted in [`Invalid`](Self::Invalid); this names the cause so a
+    /// signature that stops verifying for this reason is not read as tampering.
+    NonCanonicalProtectedHeader {
+        /// Number of such signatures.
+        count: usize,
+    },
     /// Signatures could not be checked because no key resolved.
     Unverified {
         /// Number of unresolved signatures.
@@ -88,6 +96,10 @@ impl fmt::Display for VerificationError {
             Self::VisualFingerprint(cause) => write!(f, "cannot present transport key: {cause}"),
             Self::Integrity(diagnostic) => write!(f, "{}: {}", diagnostic.code, diagnostic.detail),
             Self::Invalid { count } => write!(f, "{count} signature(s) invalid"),
+            Self::NonCanonicalProtectedHeader { count } => write!(
+                f,
+                "{count} signature(s) have a protected header that is not deterministically encoded (RFC 8949 section 4.2); the signed bytes are not in the form the format requires, which is not evidence of tampering"
+            ),
             Self::Unverified { count } => {
                 write!(f, "{count} signature(s) unverified (no key resolved)")
             }
@@ -110,6 +122,7 @@ impl purrdf_hash::error::StructuredError for VerificationError {
         VisualFingerprint(cause) => "gts-verify-visual-fingerprint" { "cause" => Cause(cause) },
         Integrity(diagnostic) => "gts-verify-integrity" { "diagnostic" => Record(diagnostic) },
         Invalid { count } => "gts-verify-invalid-signatures" { "count" => Unsigned(*count as u128) },
+        NonCanonicalProtectedHeader { count } => "gts-verify-noncanonical-protected-header" { "count" => Unsigned(*count as u128) },
         Unverified { count } => "gts-verify-unresolved-signatures" { "count" => Unsigned(*count as u128) },
         Unsigned => "gts-verify-unsigned" {},
     }

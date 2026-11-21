@@ -462,7 +462,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         &routed_config(false)?,
     )?;
     let routed_reverse = reverse_evidence(&routed_reverse_package, &oracle::import_config()?)?;
-    let observed_losses: BTreeSet<(&str, &str)> = package
+    let observed_texts: Vec<(&str, String)> = package
         .losses
         .entries()
         .iter()
@@ -470,12 +470,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             (
                 entry.code.as_ref(),
                 entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
-                    .unwrap_or("<missing>"),
+                    .subject
+                    .text()
+                    .unwrap_or_else(|| "<missing>".to_owned()),
             )
         })
+        .collect();
+    let observed_losses: BTreeSet<(&str, &str)> = observed_texts
+        .iter()
+        .map(|(code, text)| (*code, text.as_str()))
         .collect();
     let expected_losses = BTreeSet::from([(
         "format-validation-widened",

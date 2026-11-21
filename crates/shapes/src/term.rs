@@ -246,6 +246,33 @@ pub enum Term {
     Triple(Box<Triple>),
 }
 
+impl Term {
+    /// This term as a loss-ledger [`LossTerm`](purrdf_core::LossTerm), keeping
+    /// every part that identifies it. A quoted triple nests its parts.
+    #[must_use]
+    pub fn to_loss_term(&self) -> purrdf_core::LossTerm {
+        use purrdf_core::LossTerm;
+        match self {
+            Self::NamedNode(iri) => LossTerm::Iri(iri.as_str().to_owned()),
+            Self::BlankNode(label) => LossTerm::Blank {
+                label: label.clone(),
+                scope: None,
+            },
+            Self::Literal(literal) => LossTerm::Literal {
+                lexical: literal.value().to_owned(),
+                datatype: literal.datatype_str().to_owned(),
+                language: literal.language().map(str::to_owned),
+                direction: literal.direction(),
+            },
+            Self::Triple(triple) => LossTerm::Triple {
+                subject: Box::new(triple.subject.to_loss_term()),
+                predicate: Box::new(LossTerm::Iri(triple.predicate.as_str().to_owned())),
+                object: Box::new(triple.object.to_loss_term()),
+            },
+        }
+    }
+}
+
 impl purrdf_hash::error::StructuredError for Term {
     purrdf_hash::error_visit! {
         NamedNode(value) => "shacl-term-iri" { "iri" => Iri(value.as_str()) },

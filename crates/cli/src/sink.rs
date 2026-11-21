@@ -30,7 +30,8 @@ use std::io::Write;
 
 use purrdf_core::loss::LOSS_EMPTY_NAMED_GRAPH_DROPPED;
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, PackBuilder, TermValue, dataset_from_view, pair_loss_ledger,
+    DatasetView, LossDetail, LossEntry, LossGraphName, LossLedger, LossSite, LossSubject,
+    PackBuilder, TermValue, dataset_from_view, pair_loss_ledger,
 };
 use purrdf_rdf::{
     JsonLdSerializeOptions, NativeRdfFormat, SerializeGraph, SerializeOptions, SourceFormat,
@@ -335,7 +336,19 @@ pub(crate) fn write_rdf<D: DatasetView>(
             // partial document behind. Empty for every target that spells an empty
             // graph, and for a dataset that declares none.
             let empty_named_graphs =
-                empty_named_graphs_dropped(view, format, SerializeGraph::Dataset)?;
+                empty_named_graphs_dropped(view, format, SerializeGraph::Dataset)?
+                    .into_iter()
+                    .map(|graph| match graph {
+                        TermValue::Iri(iri) => Ok(LossGraphName::Iri(iri)),
+                        TermValue::Blank { label, scope } => Ok(LossGraphName::Blank {
+                            label,
+                            scope: Some(scope.ordinal().to_string()),
+                        }),
+                        other => Err(CliError::Runtime(format!(
+                            "a declared graph name must be an IRI or a blank node, found {other:?}"
+                        ))),
+                    })
+                    .collect::<Result<Vec<_>, CliError>>()?;
             // Streamed: the document is written as it is produced rather than built
             // whole and handed over. The loss ledger is unaffected — the drop counts
             // come back in the report instead of the outcome, and mean the same.
@@ -361,9 +374,14 @@ pub(crate) fn write_rdf<D: DatasetView>(
                 },
             };
             target.finish()?;
+            let dst_codec = format.loss_codec_name().ok_or_else(|| {
+                CliError::Runtime(format!(
+                    "the output format {format:?} has no loss-ledger codec name"
+                ))
+            })?;
             Ok(build_ledger(
                 src_codec,
-                format.loss_codec_name(),
+                dst_codec,
                 &RealizedDrops {
                     statement_rows: report.statement_rows_dropped,
                     directional_literals: report.directional_literals_dropped,
@@ -423,85 +441,76 @@ struct RealizedDrops {
     /// Rows dropped because the target is a single-graph syntax.
     named_graph_rows: usize,
     /// Declared named graphs with no row that the target has no spelling for.
-    empty_named_graphs: Vec<TermValue>,
+    empty_named_graphs: Vec<LossGraphName>,
 }
 
 /// Combine the contract losses for `(src_codec → dst_codec)` with the realized
 /// dropped-row counts (RDF-1.2 statement-layer rows, base-direction literals, and
 /// named-graph rows).
-fn build_ledger(
-    src_codec: Option<&str>,
-    dst_codec: Option<&str>,
-    realized: &RealizedDrops,
-) -> LossLedger {
+fn build_ledger(src_codec: Option<&str>, dst_codec: &str, realized: &RealizedDrops) -> LossLedger {
     let &RealizedDrops {
         statement_rows: statement_rows_dropped,
         directional_literals: directional_literals_dropped,
         named_graph_rows: named_graph_rows_dropped,
         ref empty_named_graphs,
     } = realized;
-    let mut ledger = match (src_codec, dst_codec) {
-        (Some(from), Some(to)) => pair_loss_ledger(from, to),
-        _ => LossLedger::new(),
+    let mut ledger = match src_codec {
+        Some(from) => pair_loss_ledger(from, dst_codec),
+        None => LossLedger::new(),
     };
+    // A realized drop runs from the source representation to the target. When the
+    // caller names no source codec the rows come from the in-memory RDF 1.2
+    // dataset the command built, which is that representation.
+    let from = src_codec.unwrap_or("rdf-1.2-dataset");
+    let realized_entry =
+        |code: &'static str, note: &'static str, detail: Vec<LossDetail>| LossEntry {
+            code: Cow::Borrowed(code),
+            from: Cow::Owned(from.to_owned()),
+            to: Cow::Owned(dst_codec.to_owned()),
+            note: Cow::Borrowed(note),
+            site: LossSite::Unspecified,
+            subject: LossSubject::Absent,
+            detail,
+        };
     if statement_rows_dropped > 0 {
-        ledger.record(LossEntry {
-            code: Cow::Borrowed(STATEMENT_ROWS_DROPPED_CODE),
-            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
-            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
-            note: Cow::Owned(format!(
-                "{statement_rows_dropped} RDF-1.2 statement-layer row(s) (reifier bindings + \
-                 annotation triples) were dropped because the target format does not carry the \
-                 star layer"
-            )),
-            location: None,
-        });
+        ledger.record(realized_entry(
+            STATEMENT_ROWS_DROPPED_CODE,
+            "RDF-1.2 statement-layer rows (reifier bindings and annotation triples) were \
+             dropped because the target format does not carry the star layer",
+            vec![LossDetail::count("rows", statement_rows_dropped as u64)],
+        ));
     }
     if directional_literals_dropped > 0 {
-        ledger.record(LossEntry {
-            code: Cow::Borrowed(DIRECTION_DROPPED_CODE),
-            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
-            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
-            note: Cow::Owned(format!(
-                "{directional_literals_dropped} literal base direction(s) were dropped because \
-                 the target format (TriX / HexTuples) has no direction surface — the language \
-                 tag is retained but `--ltr` / `--rtl` is lost"
-            )),
-            location: None,
-        });
+        ledger.record(realized_entry(
+            DIRECTION_DROPPED_CODE,
+            "literal base directions were dropped because the target format (TriX / \
+             HexTuples) has no direction surface; the language tag is retained but \
+             `--ltr` / `--rtl` is lost",
+            vec![LossDetail::count(
+                "literals",
+                directional_literals_dropped as u64,
+            )],
+        ));
     }
     if named_graph_rows_dropped > 0 {
-        ledger.record(LossEntry {
-            code: Cow::Borrowed(NAMED_GRAPH_ROWS_DROPPED_CODE),
-            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
-            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
-            note: Cow::Owned(format!(
-                "{named_graph_rows_dropped} row(s) asserted in a named graph (base quads plus \
-                 the statement-layer rows scoped to them) were DROPPED because the target \
-                 format is a single-graph syntax with no named-graph construct — they are not \
-                 folded into the default graph"
-            )),
-            location: None,
-        });
+        ledger.record(realized_entry(
+            NAMED_GRAPH_ROWS_DROPPED_CODE,
+            "rows asserted in a named graph (base quads plus the statement-layer rows \
+             scoped to them) were DROPPED because the target format is a single-graph \
+             syntax with no named-graph construct; they are not folded into the default \
+             graph",
+            vec![LossDetail::count("rows", named_graph_rows_dropped as u64)],
+        ));
     }
     for graph in empty_named_graphs {
-        let name = match graph {
-            TermValue::Blank { label, .. } => format!("_:{label}"),
-            TermValue::Iri(iri) => format!("<{iri}>"),
-            // A graph name is an IRI or a blank node; anything else could not have
-            // been declared, but is still reported rather than dropped silently.
-            other => format!("{other:?}"),
-        };
-        ledger.record(LossEntry {
-            code: Cow::Borrowed(LOSS_EMPTY_NAMED_GRAPH_DROPPED),
-            from: Cow::Owned(src_codec.unwrap_or("unknown").to_string()),
-            to: Cow::Owned(dst_codec.unwrap_or("unknown").to_string()),
-            note: Cow::Owned(format!(
-                "the declared named graph {name} holds no row, and the target format has no \
-                 spelling for an empty named graph, so it was DROPPED"
-            )),
-            location: None,
-        });
+        let mut entry = realized_entry(
+            LOSS_EMPTY_NAMED_GRAPH_DROPPED,
+            "a declared named graph holds no row, and the target format has no spelling \
+             for an empty named graph, so it was DROPPED",
+            Vec::new(),
+        );
+        entry.subject = LossSubject::Graph(graph.clone());
+        ledger.record(entry);
     }
     ledger
 }
