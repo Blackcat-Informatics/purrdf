@@ -223,9 +223,9 @@ fn source_findings(
     purrdf_testkit::paths::collect_rs_filtered(directory, &mut sources, &|path| {
         !path.is_symlink()
             && (!feature
-                || path
-                    .file_name()
-                    .is_none_or(|name| name != ".git" && name != ".worktrees" && name != "target"))
+                || path.file_name().is_none_or(|name| {
+                    name != ".git" && name != ".stage" && name != ".worktrees" && name != "target"
+                }))
     });
     let mut findings = Vec::new();
     for path in &sources {
