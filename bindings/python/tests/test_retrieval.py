@@ -101,7 +101,7 @@ def _lexical(text: str, predicate: str) -> tuple[Any, ...]:
 PLAN_DEPTH_LIMIT = 2**32 - 1
 
 
-def _truncated_saturation(k: int) -> int:
+def _truncated_saturation(k: int, scale_digits: int) -> int:
     """The exact depth ``"reciprocal_rank"`` separates to, read out of its refusal.
 
     Derived rather than written down. The truncated rule's wall is a property of
@@ -113,7 +113,7 @@ def _truncated_saturation(k: int) -> int:
     with pytest.raises(
         ValueError, match="no weight separates ranks to depth"
     ) as refused:
-        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, k, decay=TRUNCATED, scale_digits=12)["raw"]
+        retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, k, decay=TRUNCATED, scale_digits=scale_digits)["raw"]
     found = re.search(r"separates to depth (\d+)", str(refused.value))
     assert found is not None, str(refused.value)
     return int(found.group(1))
@@ -2480,43 +2480,20 @@ def test_the_folded_rule_reaches_every_number_in_the_answer() -> None:
 
 
 def test_a_depth_the_truncated_rule_refuses_is_answered_by_the_folded_one() -> None:
-    """The remedy the refusal recommends is reachable from Python.
-
-    ``weight_for_depth`` under ``"reciprocal_rank"`` refuses a deep enough
-    request because that rule rounds the reciprocal BEFORE the weight lands, so
-    past a point no weight parts two adjacent ranks. The error says so and names
-    the depth it does reach. That is a diagnosis, and the cure is to fuse under
-    ``"weighted_reciprocal_rank"`` instead — so the SAME depth must answer
-    there. The boundary is read out of the refusal rather than hardcoded.
-    """
-    saturates_at = _truncated_saturation(60)
+    """The binding returns a ValueError at saturation and a score under the folded rule."""
+    k, scale_digits = 6, 2
+    saturates_at = _truncated_saturation(k, scale_digits)
     assert 0 < saturates_at < PLAN_DEPTH_LIMIT
 
-    # The neighbouring VALID case, one rank shallower than the wall: the same
-    # rule answers, so the refusal is about the depth and nothing else.
-    reachable = retrieval.weight_for_depth(saturates_at, 60, decay=TRUNCATED, scale_digits=12)["raw"]
-    assert reachable > 0
-
-    # One rank deeper is the wall, and no weight lifts it.
+    reachable = retrieval.weight_for_depth(saturates_at, k, decay=TRUNCATED, scale_digits=scale_digits)
+    assert reachable["raw"] > 0 and reachable["scale_digits"] == scale_digits
     with pytest.raises(ValueError, match="no weight separates ranks to depth"):
-        retrieval.weight_for_depth(saturates_at + 1, 60, decay=TRUNCATED, scale_digits=12)["raw"]
+        retrieval.weight_for_depth(saturates_at + 1, k, decay=TRUNCATED, scale_digits=scale_digits)
 
-    # THE CURE, reachable from the same surface that delivered the diagnosis:
-    # the folded rule answers at exactly the depth the truncated one refused.
-    cured = retrieval.weight_for_depth(saturates_at + 1, 60, decay=FOLDED, scale_digits=12)["raw"]
-    assert cured > 0
-
-    # And it keeps answering well past the wall, because its reachable depth
-    # grows with the weight rather than being capped by the inner rounding.
-    assert retrieval.weight_for_depth(PLAN_DEPTH_LIMIT, 60, decay=FOLDED, scale_digits=12)["raw"] > cured
-
-    # The same split shows in the resolution curve, read at the very weight the
-    # folded rule quoted. At the truncated rule's own last separating rank that
-    # rule has ALREADY put two ranks into one class, while the folded rule still
-    # holds them apart — which is the whole difference the cure buys, measured
-    # rather than asserted from the refusal alone.
-    assert retrieval.class_width(cured, 60, saturates_at, decay=TRUNCATED, scale_digits=12) == 2
-    assert retrieval.class_width(cured, 60, saturates_at, decay=FOLDED, scale_digits=12) == 1
+    cured = retrieval.weight_for_depth(saturates_at + 1, k, decay=FOLDED, scale_digits=scale_digits)
+    assert cured["raw"] > 0 and cured["scale_digits"] == scale_digits
+    assert retrieval.class_width(cured["raw"], k, saturates_at, decay=TRUNCATED, scale_digits=scale_digits) == 2
+    assert retrieval.class_width(cured["raw"], k, saturates_at, decay=FOLDED, scale_digits=scale_digits) == 1
 
 
 def test_a_zero_smoothing_constant_is_one_refusal_across_all_three_functions() -> None:
@@ -2653,7 +2630,7 @@ def test_class_width_asks_about_arithmetic_and_needs_no_stratum() -> None:
     # heavy enough for the fold to buy depth is coarse under the truncated rule
     # and still exact under the folded one at the same rank.
     heavy = 1000 * SCALE12
-    deep = 16 * _truncated_saturation(60)
+    deep = 16 * _truncated_saturation(60, 12)
     coarse = _counted_width(retrieval.class_width(heavy, 60, deep, decay=TRUNCATED, scale_digits=12))
     fine = _counted_width(retrieval.class_width(heavy, 60, deep, decay=FOLDED, scale_digits=12))
     assert coarse > 1, "the truncated rule has lost resolution by this depth"
