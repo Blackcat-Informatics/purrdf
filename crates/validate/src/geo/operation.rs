@@ -4,7 +4,8 @@
 //! Explicit offline operation models and chains; no zones, epochs or heights inferred.
 
 use purrdf_geo_kernel::{
-    CoordinateOperation, OperationChain, OperationPoint, PreparationBudget, PreparedEllipsoid, Rat,
+    CoordinateOperation, GeoError, OperationChain, OperationPoint, PreparationBudget,
+    PreparedEllipsoid, Rat,
     operation::{
         Applicability, BilinearGrid, BilinearGridInverse, CoordinateUnit, GridNode,
         HelmertParameters, HelmertRates, Hemisphere, MetricSourceDomain, OperationModel,
@@ -769,8 +770,23 @@ fn model_json(
                 decode.storage.memory(),
             )?
         }
+        unknown => {
+            return Err(GeoCallError::Engine(unsupported_model(
+                unknown,
+                "a response encoding",
+            )));
+        }
     };
     Ok(fields.into())
+}
+
+/// The refusal for a coordinate-operation model this boundary has no `what` for;
+/// it names the model's variant.
+pub(super) fn unsupported_model(model: &OperationModel, what: &str) -> GeoError {
+    GeoError::unsupported(format!(
+        "coordinate-operation model {} has no {what}",
+        model.name()
+    ))
 }
 
 fn source_domain_json(

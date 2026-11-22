@@ -483,7 +483,26 @@ pub(super) fn operation_chain(chain: &purrdf_geo_kernel::OperationChain) -> Resu
             OperationModel::BilinearGridInverse(parameters) => parameters.grid.nodes().len(),
             OperationModel::Polynomial2d(polynomial) => polynomial.terms().len(),
             OperationModel::Polynomial2dInverse(parameters) => parameters.polynomial.terms().len(),
-            _ => 0,
+            OperationModel::GcjRationalHarmonicV1(_)
+            | OperationModel::GcjRationalHarmonicInverseV1(_)
+            | OperationModel::Bd09LlV1
+            | OperationModel::Bd09LlInverseV1
+            | OperationModel::BaiduMercatorAnalyticV1
+            | OperationModel::EllipsoidalMercator { .. }
+            | OperationModel::WebMercator { .. }
+            | OperationModel::GeographicToGeocentric { .. }
+            | OperationModel::MercatorToGeographic { .. }
+            | OperationModel::GeocentricToGeographic { .. }
+            | OperationModel::TransverseMercator(_)
+            | OperationModel::TransverseMercatorInverse(_)
+            | OperationModel::Helmert(_)
+            | OperationModel::Similarity2d(_) => 0,
+            unknown => {
+                return Err(super::operation::unsupported_model(
+                    unknown,
+                    "output layout",
+                ));
+            }
         };
         let members = checked(count.checked_mul(4).and_then(|n| n.checked_add(32)))?;
         let element = fields.finish(members, 512, false)?;
