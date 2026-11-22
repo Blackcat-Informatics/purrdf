@@ -15,6 +15,7 @@
 //! (no silent repair).
 
 use std::fmt;
+use std::sync::Arc;
 
 use purrdf_hash::hex::Digest32;
 use sha2::{Digest, Sha256};
@@ -144,12 +145,11 @@ impl std::error::Error for ContentStoreError {}
 /// A content-addressed blob store: bytes keyed by their SHA-256 [`ContentDigest`].
 ///
 /// Insertion is idempotent — equal bytes always yield the same id and are stored
-/// once. The store is the single owner of blob payloads in an
-/// [`RdfBundle`](crate::bundle::RdfBundle); the dataset and artifact index hold
-/// only the digest reference.
+/// once. Store clones share immutable payloads and can retain different digest
+/// sets. The dataset and artifact index hold only digest references.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContentStore {
-    blobs: FastMap<ContentDigest, Bytes>,
+    blobs: FastMap<ContentDigest, Arc<Bytes>>,
 }
 
 impl ContentStore {
@@ -167,7 +167,7 @@ impl ContentStore {
     /// payload is ever owned.
     pub fn insert(&mut self, bytes: Bytes) -> ContentDigest {
         let id = ContentDigest::of(&bytes);
-        self.blobs.entry(id).or_insert(bytes);
+        self.blobs.entry(id).or_insert_with(|| Arc::new(bytes));
         id
     }
 
@@ -186,13 +186,13 @@ impl ContentStore {
         if actual != stored {
             return Err(ContentStoreError::DigestMismatch { stored, actual });
         }
-        self.blobs.entry(stored).or_insert(bytes);
+        self.blobs.entry(stored).or_insert_with(|| Arc::new(bytes));
         Ok(stored)
     }
 
     /// Borrow the bytes for `digest`, or `None` if not present.
     pub fn get(&self, digest: &ContentDigest) -> Option<&Bytes> {
-        self.blobs.get(digest)
+        self.blobs.get(digest).map(Arc::as_ref)
     }
 
     /// True if `digest` is present.
@@ -212,7 +212,15 @@ impl ContentStore {
 
     /// Iterate `(digest, bytes)` over every stored blob.
     pub fn iter(&self) -> impl Iterator<Item = (&ContentDigest, &Bytes)> {
-        self.blobs.iter()
+        self.blobs
+            .iter()
+            .map(|(digest, bytes)| (digest, bytes.as_ref()))
+    }
+
+    /// Keep the matching digest entries. Removed payloads remain available
+    /// through other stores that share them.
+    pub fn retain(&mut self, mut keep: impl FnMut(&ContentDigest) -> bool) {
+        self.blobs.retain(|digest, _| keep(digest));
     }
 
     /// Re-hash every stored blob and hard-fail on the first mismatch. The bundle
@@ -269,7 +277,7 @@ mod tests {
         // Corruption belongs at this private owner: public insertion refuses it.
         store
             .blobs
-            .insert(stored, b"original integrity payload".to_vec());
+            .insert(stored, Arc::new(b"original integrity payload".to_vec()));
         let verified = store.verify_all().unwrap_err();
         drop(store);
         for error in [inserted, verified] {
@@ -335,5 +343,38 @@ mod tests {
         store.insert(b"a".to_vec());
         store.insert(b"b".to_vec());
         assert!(store.verify_all().is_ok());
+    }
+
+    /// A filtered content store shares surviving allocations and leaves bytes
+    /// selected by a sibling store available there until that store is dropped.
+    #[test]
+    fn stores_retain_independent_digest_sets_over_shared_payloads() {
+        let mut publisher = ContentStore::new();
+        let retained = publisher.insert(b"selected representation".to_vec());
+        let detached = publisher.insert(b"unselected representation".to_vec());
+        let retained_backing = Arc::downgrade(&publisher.blobs[&retained]);
+        let detached_backing = Arc::downgrade(&publisher.blobs[&detached]);
+
+        let mut reader = publisher.clone();
+        reader.retain(|digest| *digest == retained);
+        assert!(std::ptr::eq(
+            reader.get(&retained).expect("selected payload"),
+            publisher.get(&retained).expect("published payload"),
+        ));
+        assert!(!reader.contains(&detached));
+        assert!(publisher.contains(&detached));
+        assert!(detached_backing.upgrade().is_some());
+        drop(publisher);
+        assert!(detached_backing.upgrade().is_none());
+        assert_eq!(
+            reader.get(&retained).map(Vec::as_slice),
+            Some(b"selected representation".as_slice()),
+        );
+        reader
+            .verify_all()
+            .expect("the selection preserves digests");
+        reader.retain(|_| false);
+        assert!(reader.is_empty());
+        assert!(retained_backing.upgrade().is_none());
     }
 }
