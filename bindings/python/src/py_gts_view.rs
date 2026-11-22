@@ -31,11 +31,11 @@ type PyReifierRow = (usize, (usize, usize, usize), Option<usize>);
 /// graph slot is the one described on [`PyReifierRow`].
 type PyAnnotationRow = (usize, usize, usize, Option<usize>);
 
-/// Whole-read limits used by every GTS byte importer.
+/// Whole-read limits selected explicitly for hostile GTS input.
 #[pyclass(name = "GtsReadLimits", frozen)]
 #[derive(Clone, Copy, Debug)]
 pub struct PyGtsReadLimits {
-    inner: purrdf_gts::reader::GtsReadLimits,
+    pub(crate) inner: purrdf_gts::reader::GtsReadLimits,
 }
 
 #[pymethods]
@@ -149,15 +149,14 @@ impl PyGtsFoldView {
         curie_prefixes: Vec<(String, String)>,
         read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
     ) -> PyResult<Self> {
-        let read_limits = read_limits
-            .as_ref()
-            .map_or(purrdf_gts::reader::GtsReadLimits::DEFAULT, |limits| {
-                limits.inner
-            });
+        let read_limits = read_limits.as_ref().map(|limits| limits.inner);
         // A fold diagnostic is an error here exactly as in every other byte consumer:
         // a damaged file never becomes an empty or partial view.
         let graph = py
-            .detach(|| purrdf::gts::read_graph_with_limits(data, true, read_limits))
+            .detach(|| match read_limits {
+                Some(limits) => purrdf::gts::read_graph_with_limits(data, true, limits),
+                None => purrdf::gts::read_graph(data, true),
+            })
             .map_err(|diagnostic| native_error(py, &diagnostic))?;
         py.detach(|| {
             Ok(Self {
@@ -422,13 +421,12 @@ fn gts_relational_rows_from_bytes<'py>(
     data: &[u8],
     read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let read_limits = read_limits
-        .as_ref()
-        .map_or(purrdf_gts::reader::GtsReadLimits::DEFAULT, |limits| {
-            limits.inner
-        });
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let graph = py
-        .detach(|| purrdf::gts::read_graph_with_limits(data, true, read_limits))
+        .detach(|| match read_limits {
+            Some(limits) => purrdf::gts::read_graph_with_limits(data, true, limits),
+            None => purrdf::gts::read_graph(data, true),
+        })
         .map_err(|diagnostic| native_error(py, &diagnostic))?;
     let (rows, directions) = py
         .detach(|| {

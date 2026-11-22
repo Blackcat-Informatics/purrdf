@@ -2812,7 +2812,7 @@ int32_t purrdf_graph_freeze(const PurrdfGraph *graph,
 void purrdf_graph_free(PurrdfGraph *graph);
 
 /**
- * Initialize `*out` with the finite limits used by [`purrdf_from_gts`].
+ * Initialize `*out` with the finite limits for hostile input.
  *
  * # Safety
  * `out` must be writable.
@@ -2840,7 +2840,8 @@ int32_t purrdf_from_gts(const uint8_t *bytes,
 /**
  * Read a GTS container under caller-selected whole-read limits.
  *
- * `limits == NULL` selects the same finite defaults as [`purrdf_from_gts`].
+ * `limits == NULL` selects finite hostile-input defaults. The legacy
+ * [`purrdf_from_gts`] entry point retains its unbounded v4 contract.
  * Zero is a valid inclusive ceiling in every field.
  *
  * # Safety

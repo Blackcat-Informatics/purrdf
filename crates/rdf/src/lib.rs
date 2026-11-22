@@ -116,7 +116,9 @@ pub use gts_import_blobs::{
     GtsBlobMetadataSource, GtsBlobOmission, GtsBlobOmissionKind, GtsBlobRecord,
     GtsBlobRetentionRefusal, GtsBlobSelector, GtsBlobStager, GtsBlobUsage, GtsImportWithBlobs,
     GtsImportedBlob, GtsInlineExport, GtsRefusedBlob, GtsStagedBlob, GtsStagedPayload,
-    import_gts_events_with_blobs, import_gts_inline_for_export, import_gts_inline_to,
+    import_gts_events_with_blobs, import_gts_inline_for_export,
+    import_gts_inline_for_export_with_read_limits, import_gts_inline_to,
+    import_gts_inline_to_with_read_limits,
 };
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::{

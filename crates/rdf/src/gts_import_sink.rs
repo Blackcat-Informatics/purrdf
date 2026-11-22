@@ -727,10 +727,14 @@ pub(crate) fn import_with_collector<'a>(
     bytes: &[u8],
     blobs: Option<BlobCollector<'a>>,
 ) -> Result<(GtsBundle, Option<BlobCollector<'a>>), RdfDiagnostic> {
-    import_with_collector_limits(bytes, blobs, purrdf_gts::reader::GtsReadLimits::DEFAULT)
+    let mut importer = SinkImporter::new();
+    importer.blobs = blobs;
+    let mut resolver = SegmentResolver::new(importer);
+    let _ = purrdf_gts::reader::read_to_sink(bytes, true, None, &mut resolver);
+    finish_collected_import(resolver)
 }
 
-fn import_with_collector_limits<'a>(
+pub(crate) fn import_with_collector_limits<'a>(
     bytes: &[u8],
     blobs: Option<BlobCollector<'a>>,
     limits: purrdf_gts::reader::GtsReadLimits,
@@ -746,6 +750,12 @@ fn import_with_collector_limits<'a>(
     )
     .map_err(crate::gts_core::read_limit_failure)?;
 
+    finish_collected_import(resolver)
+}
+
+fn finish_collected_import<'a>(
+    mut resolver: SegmentResolver<SinkImporter<'a>>,
+) -> Result<(GtsBundle, Option<BlobCollector<'a>>), RdfDiagnostic> {
     // A latched streaming error (e.g. a reader diagnostic) precedes phase-2.
     if let Some(error) = resolver.take_error() {
         return Err(error);

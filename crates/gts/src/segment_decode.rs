@@ -127,6 +127,10 @@ pub trait ResolvedSink {
     fn retained_metadata(&mut self, _entries: usize) -> Result<(), Self::Error> {
         Ok(())
     }
+    /// Admit new retained metadata entries before storage.
+    fn metadata_entries(&mut self, _additional: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
     /// Complete encoded-input bound for streaming readers.
     fn encoded_input_limit(&self) -> Option<usize> {
         None
@@ -1201,6 +1205,15 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
             return;
         }
         if let Err(error) = self.sink.retained_metadata(entries) {
+            self.fail(error);
+        }
+    }
+
+    fn metadata_entries(&mut self, additional: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.metadata_entries(additional) {
             self.fail(error);
         }
     }

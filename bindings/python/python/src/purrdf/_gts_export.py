@@ -93,7 +93,9 @@ def _staging() -> Iterator[Any]:
         yield SimpleNamespace(begin=begin, write=write, read=read, discard=discard)
 
 
-def gts_to_sqlite(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResult:
+def gts_to_sqlite(
+    data: bytes, path: str, *, blob_limits: Any, read_limits: Any = None
+) -> GtsExportResult:
     """Write canonical native v1 rows to SQLite; return paths and admission report.
 
     Existing projection tables are replaced in one transaction. SQLite is part
@@ -103,7 +105,7 @@ def gts_to_sqlite(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResul
 
     with _staging() as staging:
         rows, blobs, report = _native._gts_columnar_staged_from_bytes(
-            data, blob_limits=blob_limits, staging=staging
+            data, blob_limits=blob_limits, staging=staging, read_limits=read_limits
         )
         connection = sqlite3.connect(path, autocommit=False)
         try:
@@ -134,7 +136,9 @@ def gts_to_sqlite(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResul
     return GtsExportResult((path,), report)
 
 
-def gts_to_duckdb(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResult:
+def gts_to_duckdb(
+    data: bytes, path: str, *, blob_limits: Any, read_limits: Any = None
+) -> GtsExportResult:
     """Write canonical native v1 rows to DuckDB; return paths and admission report.
 
     Requires ``pip install 'purrdf[duckdb]'``. Existing tables are replaced
@@ -142,7 +146,9 @@ def gts_to_duckdb(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResul
     """
     duckdb = _require("duckdb", "duckdb")
     with TemporaryDirectory(prefix="purrdf-duckdb-") as directory:
-        projected = gts_to_parquet(data, directory, blob_limits=blob_limits)
+        projected = gts_to_parquet(
+            data, directory, blob_limits=blob_limits, read_limits=read_limits
+        )
         connection = duckdb.connect(path)
         try:
             connection.execute("BEGIN TRANSACTION")
@@ -162,7 +168,9 @@ def gts_to_duckdb(data: bytes, path: str, *, blob_limits: Any) -> GtsExportResul
     return GtsExportResult((path,), projected.report)
 
 
-def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: Any) -> GtsExportResult:
+def gts_to_parquet(
+    data: bytes, out_dir: str, *, blob_limits: Any, read_limits: Any = None
+) -> GtsExportResult:
     """Write first-party native v1 Parquet files in canonical table order.
 
     No optional encoder dependency is required. The output includes all five
@@ -184,7 +192,11 @@ def gts_to_parquet(data: bytes, out_dir: str, *, blob_limits: Any) -> GtsExportR
                 _write_chunk(files[name], chunk)
 
             report = _native._gts_columnar_stream_to(
-                data, blob_limits=blob_limits, staging=staging, emit=emit,
+                data,
+                blob_limits=blob_limits,
+                staging=staging,
+                emit=emit,
+                read_limits=read_limits,
             )
         written = []
         for name in files:

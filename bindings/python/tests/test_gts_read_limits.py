@@ -34,3 +34,17 @@ def test_limits_are_discoverable_under_the_gts_namespace() -> None:
     assert purrdf.gts.GtsReadLimits is purrdf.GtsReadLimits
     finite = purrdf.GtsReadLimits().encoded_input_bytes
     assert finite < purrdf.GtsReadLimits.unbounded().encoded_input_bytes
+
+
+@pytest.mark.parametrize(
+    "read",
+    [purrdf.gts_columnar_rows_from_bytes, purrdf.gts_columnar_parquet_from_bytes],
+)
+def test_columnar_byte_readers_apply_explicit_whole_read_limits(read) -> None:
+    data = _container()
+    with pytest.raises(ValueError, match="resource limit"):
+        read(
+            data,
+            blob_limits=purrdf.GtsBlobLimits.unbounded(),
+            read_limits=purrdf.GtsReadLimits(encoded_input_bytes=len(data) - 1),
+        )

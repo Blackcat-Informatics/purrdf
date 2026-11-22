@@ -18,7 +18,8 @@ mod staging;
 pub use error::GtsBlobRetentionRefusal;
 pub use export::{
     GtsBlobOmission, GtsBlobOmissionKind, GtsInlineExport, import_gts_inline_for_export,
-    import_gts_inline_to,
+    import_gts_inline_for_export_with_read_limits, import_gts_inline_to,
+    import_gts_inline_to_with_read_limits,
 };
 use staging::{PayloadFailure, stage_payload};
 

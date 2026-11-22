@@ -14,9 +14,9 @@ const MIB: usize = 1024 * 1024;
 
 /// Complete resource contract for one GTS read.
 ///
-/// The finite default is used by the compatibility reader and every host
-/// surface. Callers processing already trusted local artifacts can select
-/// [`Self::UNBOUNDED`] explicitly; hostile input must keep finite limits.
+/// New bounded entry points use the finite default when their caller does not
+/// provide a record. Legacy v4 entry points retain their unbounded contract;
+/// hostile input must use a bounded entry point and keep finite limits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GtsReadLimits {
     /// Complete encoded input bytes.
@@ -56,7 +56,11 @@ impl GtsReadLimits {
         rows: 8_000_000,
         metadata_entries: 262_144,
         diagnostics: 4_096,
-        work: 32_000_000,
+        // Encoded and decoded bytes each count as work, alongside item and row
+        // events. Keep the independent work ceiling above every combination
+        // admitted by the other defaults so it binds pathological structure,
+        // not ordinary byte throughput.
+        work: 600_000_000,
     };
 
     /// Explicit trusted-input behavior matching the historical reader.
@@ -455,6 +459,20 @@ impl StreamingSink for ReadLimiter<'_> {
             )
         {
             self.inner.retained_metadata(entries);
+        }
+    }
+
+    fn metadata_entries(&mut self, additional: usize) {
+        let required = self.usage.metadata_entries.saturating_add(additional);
+        self.usage.metadata_entries = required;
+        if !self.charge_work(additional)
+            && !self.trip(
+                GtsReadResource::MetadataEntries,
+                required,
+                self.limits.metadata_entries,
+            )
+        {
+            self.inner.metadata_entries(additional);
         }
     }
 

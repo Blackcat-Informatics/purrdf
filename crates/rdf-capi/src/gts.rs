@@ -73,7 +73,7 @@ impl PurrdfGtsReadLimits {
     };
 }
 
-/// Initialize `*out` with the finite limits used by [`purrdf_from_gts`].
+/// Initialize `*out` with the finite limits for hostile input.
 ///
 /// # Safety
 /// `out` must be writable.
@@ -125,7 +125,8 @@ pub unsafe extern "C" fn purrdf_from_gts(
 
 /// Read a GTS container under caller-selected whole-read limits.
 ///
-/// `limits == NULL` selects the same finite defaults as [`purrdf_from_gts`].
+/// `limits == NULL` selects finite hostile-input defaults. The legacy
+/// [`purrdf_from_gts`] entry point retains its unbounded v4 contract.
 /// Zero is a valid inclusive ceiling in every field.
 ///
 /// # Safety

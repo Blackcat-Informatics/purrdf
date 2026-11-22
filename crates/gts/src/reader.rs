@@ -416,6 +416,8 @@ pub trait StreamingSink {
     fn decoded_payload_refused(&mut self, _blob: bool, _required: usize, _limit: usize) {}
     /// Current aggregate retained reader metadata entries.
     fn retained_metadata(&mut self, _entries: usize) {}
+    /// Admit new retained metadata entries before they are stored.
+    fn metadata_entries(&mut self, _additional: usize) {}
     /// Optional complete encoded-input bound for streaming readers.
     fn encoded_input_limit(&self) -> Option<usize> {
         None
@@ -1512,6 +1514,14 @@ impl Folder<'_, '_, '_> {
         if let Value::Map(entries) = payload {
             for (k, v) in entries {
                 let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
+                if !self.g.meta.iter().any(|(existing, _)| existing == &key)
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.metadata_entries(1);
+                    if !sink.continue_reading() {
+                        return;
+                    }
+                }
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1635,6 +1645,14 @@ impl Folder<'_, '_, '_> {
                     Some(text) => text.into_owned(),
                     None => format!("{:?}", key.to_value()?.as_ref()),
                 };
+                if !self.g.meta.iter().any(|(existing, _)| existing == &key)
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.metadata_entries(1);
+                    if !sink.continue_reading() {
+                        return Ok(());
+                    }
+                }
                 self.g.set_meta(key, value.to_value()?.into_owned());
             }
         }
@@ -1825,6 +1843,24 @@ pub struct SegmentAppendState {
 /// segment header, or its last item has no `"id"` — appending onto any of those
 /// would silently break the chain.
 pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, AppendError> {
+    segment_append_state_unbounded(data)
+}
+
+/// Recover append state under an explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal before parsing append state, followed by
+/// the ordinary append-state refusals.
+pub fn segment_append_state_with_limits(
+    data: &[u8],
+    limits: GtsReadLimits,
+) -> Result<SegmentAppendState, AppendError> {
+    check_read_limits(data, ReadOptions::new(true, None), limits)
+        .map_err(AppendError::ReadLimit)?;
+    segment_append_state_unbounded(data)
+}
+
+fn segment_append_state_unbounded(data: &[u8]) -> Result<SegmentAppendState, AppendError> {
     let (items, torn) = iter_items_with_error(data);
     if let Some(error) = torn {
         return Err(AppendError::Torn {
@@ -1952,13 +1988,7 @@ pub fn read(data: &[u8], allow_segments: bool, expected_head: Option<&[u8]>) -> 
 
 /// Read and fold a GTS file using explicit options.
 pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
-    match read_with_limits(data, options, GtsReadLimits::DEFAULT) {
-        Ok(graph) => graph,
-        Err(error) => Graph {
-            diagnostics: vec![error.diagnostic()],
-            ..Graph::default()
-        },
-    }
+    read_with_options_unbounded(data, options)
 }
 
 /// Read and fold a GTS file under one explicit whole-read resource contract.
@@ -2106,17 +2136,15 @@ pub fn read_to_sink_with_options(
     options: ReadOptions<'_>,
     sink: &mut dyn StreamingSink,
 ) -> StreamingReadResult {
-    match read_to_sink_with_limits(data, options, GtsReadLimits::DEFAULT, sink) {
-        Ok((result, _)) => result,
-        Err(error) => {
-            let diagnostic = error.diagnostic();
-            sink.diagnostic(&diagnostic);
-            StreamingReadResult {
-                diagnostics: vec![diagnostic],
-                ..StreamingReadResult::default()
-            }
-        }
-    }
+    read_items(
+        &mut SliceItems {
+            remaining: data,
+            offset: 0,
+            maximum: None,
+        },
+        options,
+        sink,
+    )
 }
 
 /// Read into a streaming sink under one explicit whole-read resource contract.
@@ -2233,6 +2261,33 @@ pub fn read_to_sink_with_dictionary(
         sink,
         Some(dictionary),
     )
+}
+
+/// Read through caller-owned dictionary storage after whole-read admission.
+///
+/// The immutable input is preflighted without publishing sink events or
+/// mutating dictionary storage. Ordinary dictionary limits remain independent.
+///
+/// # Errors
+/// Returns the first whole-read refusal as a dictionary limit, followed by the
+/// original dictionary storage, admission and cancellation failures.
+pub fn read_to_sink_with_dictionary_and_limits(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    read_limits: GtsReadLimits,
+    dictionary: &mut dyn TermStorage,
+    sink: &mut dyn StreamingSink,
+) -> Result<StreamingReadResult, DictionaryError> {
+    check_read_limits(data, options, read_limits).map_err(dictionary_read_limit)?;
+    read_to_sink_with_dictionary(data, options, dictionary, sink)
+}
+
+fn dictionary_read_limit(error: GtsReadLimitError) -> DictionaryError {
+    DictionaryError::Limit {
+        resource: error.resource.label(),
+        required: error.required,
+        limit: error.limit,
+    }
 }
 
 struct StreamingCountingReader<R> {
@@ -3033,6 +3088,45 @@ pub fn read_to_sink_from_reader_with_dictionary<R: Read>(
     read_items_stored(&mut reader, options, sink, Some(dictionary))
 }
 
+/// Drive a byte stream through caller-owned dictionary storage under a
+/// whole-read resource contract.
+///
+/// Sink and storage events are provisional until this function returns `Ok`;
+/// callers must discard or roll them back on refusal. Dictionary storage is not
+/// committed after a whole-read limit trips.
+///
+/// # Errors
+/// Returns the first whole-read refusal as a dictionary limit, followed by the
+/// original dictionary storage, admission and cancellation failures.
+pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
+    reader: R,
+    options: ReadOptions<'_>,
+    read_limits: GtsReadLimits,
+    dictionary: &mut dyn TermStorage,
+    sink: &mut dyn StreamingSink,
+) -> Result<StreamingReadResult, DictionaryError> {
+    let dictionary_limits = dictionary.limits()?;
+    let input_maximum = u64::try_from(read_limits.encoded_input_bytes).unwrap_or(u64::MAX);
+    let mut reader = StreamingCountingReader {
+        inner: reader,
+        pos: 0,
+        address_exhausted: None,
+        maximum: Some(
+            dictionary_limits
+                .encoded_frame_bytes
+                .min(read_limits.encoded_frame_bytes),
+        ),
+        input_maximum: Some(input_maximum),
+    };
+    let mut limiter = read_limits::ReadLimiter::new(sink, read_limits, 0);
+    let result = read_items_stored(&mut reader, options, &mut limiter, Some(dictionary));
+    limiter.complete_input(usize::try_from(reader.pos).unwrap_or(usize::MAX));
+    if let Some(error) = limiter.take_error() {
+        return Err(dictionary_read_limit(error));
+    }
+    result
+}
+
 fn read_items(
     reader: &mut impl ItemSource,
     options: ReadOptions<'_>,
@@ -3121,6 +3215,21 @@ fn read_items_stored(
                 return Ok(result);
             }
             if let StreamItem::Header(item) = item {
+                let retained_header_entries = unwrap_header(&item).map_or(1, |header| {
+                    let nested = ["cat", "dct"]
+                        .into_iter()
+                        .filter_map(|key| match map_get(header, key) {
+                            Some(Value::Map(entries)) => Some(entries.len()),
+                            _ => None,
+                        })
+                        .fold(0usize, usize::saturating_add);
+                    header.len().saturating_add(nested)
+                });
+                sink.metadata_entries(retained_header_entries);
+                if !sink.continue_reading() {
+                    cancelled = true;
+                    return Ok(result);
+                }
                 if let Some(segment) = current.take() {
                     if !options.allow_segments {
                         segment.finish_into_result(
@@ -3368,6 +3477,22 @@ pub struct FileSegments {
 /// Fold a file segment-by-segment WITHOUT unioning — the composition ledger
 /// view that `gts info`/`gts verify` report per-segment (§14.1).
 pub fn read_file_segments(data: &[u8]) -> FileSegments {
+    read_file_segments_unbounded(data)
+}
+
+/// Fold a file segment-by-segment under an explicit whole-read contract.
+///
+/// # Errors
+/// Returns the first resource refusal without publishing partial segments.
+pub fn read_file_segments_with_limits(
+    data: &[u8],
+    limits: GtsReadLimits,
+) -> Result<FileSegments, GtsReadLimitError> {
+    check_read_limits(data, ReadOptions::new(true, None), limits)?;
+    Ok(read_file_segments_unbounded(data))
+}
+
+fn read_file_segments_unbounded(data: &[u8]) -> FileSegments {
     let (items, torn) = iter_items_with_error(data);
     if items.is_empty() {
         let diagnostic = Diagnostic {

@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use std::sync::Arc;
 
+use crate::py_gts_view::PyGtsReadLimits;
+
 mod stream;
 
 /// Caller-owned byte policy. Every field is explicit; None means unbounded.
@@ -235,15 +237,25 @@ fn limits_from(value: &Bound<'_, PyAny>) -> PyResult<GtsBlobLimits> {
 
 /// Canonical rows and their complete native admission report.
 #[pyfunction]
-#[pyo3(signature = (data, *, blob_limits))]
+#[pyo3(signature = (data, *, blob_limits, read_limits = None))]
 fn gts_columnar_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<(Bound<'py, PyDict>, PyGtsBlobExportReport)> {
     let limits = limits_from(blob_limits)?;
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let (projection, report) = py
-        .detach(|| purrdf::prepare_gts_columnar(data, limits)?.project())
+        .detach(|| {
+            match read_limits {
+                Some(read_limits) => {
+                    purrdf::prepare_gts_columnar_with_read_limits(data, limits, read_limits)
+                }
+                None => purrdf::prepare_gts_columnar(data, limits),
+            }?
+            .project()
+        })
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok((
         crate::py_gts_view::columnar_rows_dict(py, &projection)?,
@@ -253,17 +265,24 @@ fn gts_columnar_rows_from_bytes<'py>(
 
 /// Native file bytes and their complete native admission/writer loss report.
 #[pyfunction]
-#[pyo3(signature = (data, *, blob_limits))]
+#[pyo3(signature = (data, *, blob_limits, read_limits = None))]
 fn gts_columnar_parquet_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<(Bound<'py, PyDict>, PyGtsBlobExportReport)> {
     let limits = limits_from(blob_limits)?;
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let (files, report) = py
         .detach(|| {
-            purrdf::prepare_gts_columnar(data, limits)?
-                .write(purrdf_columnar::Compression::Uncompressed)
+            match read_limits {
+                Some(read_limits) => {
+                    purrdf::prepare_gts_columnar_with_read_limits(data, limits, read_limits)
+                }
+                None => purrdf::prepare_gts_columnar(data, limits),
+            }?
+            .write(purrdf_columnar::Compression::Uncompressed)
         })
         .map_err(|error| PyValueError::new_err(error.to_string()))?;
     Ok((

@@ -285,11 +285,12 @@ fn term_display(graph: &Graph, term_id: usize) -> String {
 
 /// Fold GTS bytes into a graph and fail if the reader produced diagnostics.
 pub fn read_graph(bytes: &[u8], allow_segments: bool) -> Result<Graph, RdfDiagnostic> {
-    read_graph_with_limits(
-        bytes,
-        allow_segments,
-        purrdf_gts::reader::GtsReadLimits::DEFAULT,
-    )
+    let graph = purrdf_gts::reader::read(bytes, allow_segments, None);
+    if graph.diagnostics.is_empty() {
+        Ok(graph)
+    } else {
+        Err(diagnostics_to_error(&graph))
+    }
 }
 
 /// Fold GTS bytes under an explicit whole-read resource contract.

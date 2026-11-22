@@ -7,13 +7,61 @@ use std::sync::Arc;
 
 use purrdf_gts::model::Term;
 use purrdf_gts::reader::{
-    GtsReadLimits, GtsReadResource, ReadOptions, StreamingSink,
+    GtsReadLimits, GtsReadResource, ReadOptions, StreamingSink, read_file_segments_with_limits,
     read_to_sink_from_reader_with_limits, read_to_sink_with_limits, read_with_limits,
+    segment_append_state_with_limits,
 };
 use purrdf_gts::writer::{FrameOptions, Writer};
+use purrdf_lex::cbor::{ReplayStorage, Value, encode};
 
 struct Null;
 impl StreamingSink for Null {}
+
+#[derive(Default)]
+struct MemoryReplay(std::io::Cursor<Vec<u8>>);
+
+impl std::io::Read for MemoryReplay {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        std::io::Read::read(&mut self.0, bytes)
+    }
+}
+
+impl std::io::Write for MemoryReplay {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        std::io::Write::write(&mut self.0, bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::io::Seek for MemoryReplay {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.0, position)
+    }
+}
+
+impl ReplayStorage for MemoryReplay {
+    fn finish(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct ReplaySink {
+    terms: usize,
+}
+
+impl StreamingSink for ReplaySink {
+    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
+        Some(Ok(Box::new(MemoryReplay::default())))
+    }
+
+    fn term(&mut self, _segment: u64, _id: usize, _term: Arc<Term>) {
+        self.terms += 1;
+    }
+}
 
 fn rdf_bytes() -> Vec<u8> {
     let mut writer = Writer::new("generic");
@@ -40,6 +88,44 @@ fn blob_bytes() -> Vec<u8> {
             )
             .expect("small compressed blob frame");
     }
+    writer.into_bytes()
+}
+
+fn transformed_snapshot_bytes() -> Vec<u8> {
+    let snapshot = Value::Map(vec![
+        (
+            "terms".into(),
+            Value::Array(
+                ["one", "two", "three"]
+                    .into_iter()
+                    .map(|name| {
+                        purrdf_gts::writer::term_to_wire(&Term::iri(format!(
+                            "https://example.org/{name}"
+                        )))
+                    })
+                    .collect(),
+            ),
+        ),
+        (
+            "blobs".into(),
+            Value::Map(vec![("embedded".into(), Value::Bytes(vec![b'x'; 4096]))]),
+        ),
+        (
+            "meta".into(),
+            Value::Map(vec![
+                ("first".into(), 1.into()),
+                ("second".into(), 2.into()),
+            ]),
+        ),
+    ]);
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "snapshot",
+        None,
+        Some(encode(&snapshot)),
+        Some(&["gzip".to_owned()]),
+        None,
+    );
     writer.into_bytes()
 }
 
@@ -193,4 +279,68 @@ fn incremental_input_enforces_the_complete_encoded_boundary() {
     )
     .expect_err("the first excess source byte is refused");
     assert_eq!(error.resource, GtsReadResource::EncodedInputBytes);
+}
+
+#[test]
+fn transformed_snapshot_replay_refuses_embedded_blobs_and_stops_rows() {
+    let bytes = transformed_snapshot_bytes();
+    let mut sink = ReplaySink::default();
+    let error = read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        limits(GtsReadResource::DecodedBlobBytes, 4095),
+        &mut sink,
+    )
+    .expect_err("the embedded blob exceeds the explicit replay ceiling");
+    assert_eq!(error.resource, GtsReadResource::DecodedBlobBytes);
+    assert_eq!(error.usage.largest_decoded_blob_bytes, 4096);
+    assert_eq!(
+        sink.terms, 3,
+        "rows before the refused blob are provisional"
+    );
+
+    let mut sink = ReplaySink::default();
+    let error = read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        limits(GtsReadResource::Terms, 1),
+        &mut sink,
+    )
+    .expect_err("the second snapshot term exceeds the explicit row ceiling");
+    assert_eq!(error.resource, GtsReadResource::Terms);
+    assert_eq!(error.usage.terms, 2);
+    assert_eq!(sink.terms, 1, "replay stops at the first refused row");
+}
+
+#[test]
+fn finite_defaults_do_not_contradict_their_component_ceilings() {
+    let limits = GtsReadLimits::DEFAULT;
+    let admitted_work = limits
+        .encoded_input_bytes
+        .saturating_add(limits.total_decoded_bytes)
+        .saturating_add(limits.terms)
+        .saturating_add(limits.rows)
+        .saturating_add(limits.metadata_entries)
+        .saturating_add(limits.diagnostics)
+        .saturating_add(limits.items.saturating_mul(10));
+    assert!(
+        limits.work >= admitted_work,
+        "the independent work ceiling must not shadow the component defaults"
+    );
+}
+
+#[test]
+fn low_level_file_views_apply_the_explicit_input_contract() {
+    let bytes = rdf_bytes();
+    let limits = limits(GtsReadResource::EncodedInputBytes, bytes.len() - 1);
+    let append = segment_append_state_with_limits(&bytes, limits)
+        .expect_err("append-state admission refuses the first excess byte");
+    assert!(matches!(
+        append,
+        purrdf_gts::reader::AppendError::ReadLimit(ref error)
+            if error.resource == GtsReadResource::EncodedInputBytes
+    ));
+    let segments = read_file_segments_with_limits(&bytes, limits)
+        .expect_err("per-segment admission refuses the first excess byte");
+    assert_eq!(segments.resource, GtsReadResource::EncodedInputBytes);
 }

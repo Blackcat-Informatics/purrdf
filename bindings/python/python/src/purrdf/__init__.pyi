@@ -1721,21 +1721,39 @@ class GtsExportResult:
 _GtsBlobPolicy: TypeAlias = GtsBlobLimits | TypingLiteral["unbounded"]
 
 def gts_columnar_rows_from_bytes(
-    data: bytes, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> tuple[ColumnarRows, GtsBlobExportReport]: ...
 def gts_columnar_parquet_from_bytes(
-    data: bytes, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> tuple[dict[str, bytes], GtsBlobExportReport]: ...
 
 # Writers use the canonical native v1 schema, with its own dense value-order ids.
 def gts_to_sqlite(
-    data: bytes, path: str, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    path: str,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> GtsExportResult: ...
 def gts_to_duckdb(
-    data: bytes, path: str, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    path: str,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> GtsExportResult: ...
 def gts_to_parquet(
-    data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    out_dir: str,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> GtsExportResult: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
