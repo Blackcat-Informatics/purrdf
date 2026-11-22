@@ -69,6 +69,17 @@ pub const fn head_len(argument: u64) -> usize {
     encode(0, argument).1
 }
 
+/// Visit the shortest head of `major` with `argument` without allocating.
+pub fn with_encoded_head<R>(major: u8, argument: u64, visit: impl FnOnce(&[u8]) -> R) -> R {
+    let (bytes, len) = encode(major, argument);
+    visit(&bytes[..len])
+}
+
+/// Visit a definite text string's shortest head and its UTF-8 bytes.
+pub fn with_encoded_text<R>(text: &str, visit: impl FnOnce(&[u8], &[u8]) -> R) -> R {
+    with_encoded_head(TEXT, text.len() as u64, |head| visit(head, text.as_bytes()))
+}
+
 /// Append the shortest head of `major` with `argument` to `out`.
 ///
 /// ```rust
@@ -81,8 +92,7 @@ pub const fn head_len(argument: u64) -> usize {
 /// assert_eq!(out, [0xa2, 0x78, 24, 0x79, 0x01, 0x00]);
 /// ```
 pub fn push_head(out: &mut Vec<u8>, major: u8, argument: u64) {
-    let (bytes, len) = encode(major, argument);
-    out.extend_from_slice(&bytes[..len]);
+    with_encoded_head(major, argument, |head| out.extend_from_slice(head));
 }
 
 /// Write the shortest head of `major` with `argument` to `writer`.
@@ -91,8 +101,7 @@ pub fn push_head(out: &mut Vec<u8>, major: u8, argument: u64) {
 ///
 /// The writer's error.
 pub fn write_head<W: Write + ?Sized>(writer: &mut W, major: u8, argument: u64) -> io::Result<()> {
-    let (bytes, len) = encode(major, argument);
-    writer.write_all(&bytes[..len])
+    with_encoded_head(major, argument, |head| writer.write_all(head))
 }
 
 /// Write a definite text string: its head, then its UTF-8 bytes.
@@ -101,8 +110,10 @@ pub fn write_head<W: Write + ?Sized>(writer: &mut W, major: u8, argument: u64) -
 ///
 /// The writer's error.
 pub fn write_text<W: Write + ?Sized>(writer: &mut W, text: &str) -> io::Result<()> {
-    write_head(writer, TEXT, text.len() as u64)?;
-    writer.write_all(text.as_bytes())
+    with_encoded_text(text, |head, body| {
+        writer.write_all(head)?;
+        writer.write_all(body)
+    })
 }
 
 /// Write a definite byte string: its head, then its bytes.

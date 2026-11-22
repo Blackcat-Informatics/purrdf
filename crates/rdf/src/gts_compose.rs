@@ -29,7 +29,7 @@ use std::hash::BuildHasher;
 
 use purrdf_core::hash::table::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
-use purrdf_gts::wire::digest_str;
+use purrdf_gts::wire::digest_label;
 use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 use purrdf_lex::cbor::{Value, head};
@@ -1299,9 +1299,26 @@ impl SnapshotBuilder {
     /// compared only against another snapshot content id; and it is a
     /// published identity recorded against the GTS archives it attests, so a
     /// domain cannot be added without breaking every recorded id for an
-    /// existing archive.
+    /// existing archive. Feed the canonical encoding directly to BLAKE3.
     pub fn snapshot_content_id(&self) -> String {
-        digest_str(&self.snapshot_canonical_bytes())
+        let (order, remap) = self.canonical_order();
+        let quads = self.canonical_quad_keys(&remap);
+        let (reifies, annot) = self.canonical_binding_rows(&remap);
+        let mut hasher = purrdf_hash::blake3::Hasher::new();
+        // Each owned string is emitted at most once. The CBOR row framing and
+        // u32 IDs fit within the live source row storage on 64-bit targets.
+        // The owned snapshot fits within BLAKE3's u64 input limit.
+        self.write_snapshot(
+            |bytes| {
+                hasher.update(bytes);
+            },
+            &order,
+            &remap,
+            &quads,
+            &reifies,
+            &annot,
+        );
+        digest_label(hasher.finalize().as_bytes())
     }
 
     /// The canonical CBOR encoding of [`Self::snapshot_payload`], written straight
@@ -1315,65 +1332,77 @@ impl SnapshotBuilder {
         let (order, remap) = self.canonical_order();
         let quads = self.canonical_quad_keys(&remap);
         let (reifies, annot) = self.canonical_binding_rows(&remap);
-        let mut len = Count(0);
-        self.write_snapshot(&mut len, &order, &remap, &quads, &reifies, &annot)
-            .expect("counting accepts every write");
-        let mut out = Vec::with_capacity(len.0);
-        self.write_snapshot(&mut out, &order, &remap, &quads, &reifies, &annot)
-            .expect("a Vec accepts every write");
-        debug_assert_eq!(out.len(), len.0);
+        let mut len = 0;
+        self.write_snapshot(
+            |bytes| len += bytes.len(),
+            &order,
+            &remap,
+            &quads,
+            &reifies,
+            &annot,
+        );
+        let mut out = Vec::with_capacity(len);
+        self.write_snapshot(
+            |bytes| out.extend_from_slice(bytes),
+            &order,
+            &remap,
+            &quads,
+            &reifies,
+            &annot,
+        );
+        debug_assert_eq!(out.len(), len);
         out
     }
 
     /// The canonical payload map. Keys sit in the order of their encodings (RFC
     /// 8949 §4.2.1): equal-length text keys bytewise, shorter before longer.
-    fn write_snapshot<W: std::io::Write>(
+    fn write_snapshot(
         &self,
-        out: &mut W,
+        append: impl FnMut(&[u8]),
         order: &[usize],
         remap: &[usize],
         quads: &[[u32; 4]],
         reifies: &[ReifierRow],
         annot: &[AnnotationRow],
-    ) -> std::io::Result<()> {
+    ) {
+        let mut out = SnapshotCbor(append);
         let entries = 2 + u64::from(!reifies.is_empty()) + u64::from(!annot.is_empty());
-        head::write_head(out, head::MAP, entries)?;
+        out.head(head::MAP, entries);
         if !annot.is_empty() {
-            head::write_text(out, "annot")?;
-            head::write_head(out, head::ARRAY, annot.len() as u64)?;
+            out.text("annot");
+            out.head(head::ARRAY, annot.len() as u64);
             for &(r, p, v, g) in annot {
-                write_id_row(out, &[r, p, v], g)?;
+                out.id_row(&[r, p, v], g);
             }
         }
-        head::write_text(out, "quads")?;
-        head::write_head(out, head::ARRAY, quads.len() as u64)?;
+        out.text("quads");
+        out.head(head::ARRAY, quads.len() as u64);
         for &[g, s, p, o] in quads {
             let graph = g.checked_sub(1).map(|g| g as usize);
-            write_id_row(out, &[s as usize, p as usize, o as usize], graph)?;
+            out.id_row(&[s as usize, p as usize, o as usize], graph);
         }
-        head::write_text(out, "terms")?;
-        head::write_head(out, head::ARRAY, order.len() as u64)?;
+        out.text("terms");
+        out.head(head::ARRAY, order.len() as u64);
         for &old in order {
-            self.write_term(out, &self.terms[old], remap)?;
+            self.write_term(&mut out, &self.terms[old], remap);
         }
         if !reifies.is_empty() {
-            head::write_text(out, "reifies")?;
-            head::write_head(out, head::ARRAY, reifies.len() as u64)?;
+            out.text("reifies");
+            out.head(head::ARRAY, reifies.len() as u64);
             for &(rid, (s, p, o), g) in reifies {
-                write_id_row(out, &[rid, s, p, o], g)?;
+                out.id_row(&[rid, s, p, o], g);
             }
         }
-        Ok(())
     }
 
     /// One term as the writer spells it: the map [`term_into_wire`] builds, keys
     /// in canonical order (`k`, `l`, `v`, `dt`, `tt`, `dir`; `rf` is never set).
-    fn write_term<W: std::io::Write>(
+    fn write_term(
         &self,
-        out: &mut W,
+        out: &mut SnapshotCbor<impl FnMut(&[u8])>,
         row: &TermRow,
         remap: &[usize],
-    ) -> std::io::Result<()> {
+    ) {
         let datatype = self.datatype_id(row, remap);
         let direction = row
             .direction
@@ -1384,59 +1413,54 @@ impl SnapshotBuilder {
             + u64::from(datatype.is_some())
             + u64::from(row.triple.is_some())
             + u64::from(direction.is_some());
-        head::write_head(out, head::MAP, entries)?;
-        head::write_text(out, "k")?;
-        head::write_head(out, head::UNSIGNED, row.kind as u64)?;
+        out.head(head::MAP, entries);
+        out.text("k");
+        out.head(head::UNSIGNED, row.kind as u64);
         if let Some(lang) = &row.lang {
-            head::write_text(out, "l")?;
-            head::write_text(out, lang)?;
+            out.text("l");
+            out.text(lang);
         }
-        head::write_text(out, "v")?;
-        head::write_text(out, &row.value)?;
+        out.text("v");
+        out.text(&row.value);
         if let Some(datatype) = datatype {
-            head::write_text(out, "dt")?;
-            head::write_head(out, head::UNSIGNED, datatype as u64)?;
+            out.text("dt");
+            out.head(head::UNSIGNED, datatype as u64);
         }
         if let Some((s, p, o)) = row.triple {
-            head::write_text(out, "tt")?;
-            write_id_row(out, &[remap[s], remap[p], remap[o]], None)?;
+            out.text("tt");
+            out.id_row(&[remap[s], remap[p], remap[o]], None);
         }
         if let Some(direction) = direction {
-            head::write_text(out, "dir")?;
-            head::write_text(out, direction)?;
+            out.text("dir");
+            out.text(direction);
         }
-        Ok(())
     }
 }
 
-/// An array of term ids, with the graph id appended when there is one.
-fn write_id_row<W: std::io::Write>(
-    out: &mut W,
-    ids: &[usize],
-    graph: Option<usize>,
-) -> std::io::Result<()> {
-    head::write_head(
-        out,
-        head::ARRAY,
-        (ids.len() + usize::from(graph.is_some())) as u64,
-    )?;
-    for &id in ids.iter().chain(graph.as_ref()) {
-        head::write_head(out, head::UNSIGNED, id as u64)?;
-    }
-    Ok(())
-}
+/// The canonical snapshot encoder sends each chunk to an in-memory consumer.
+struct SnapshotCbor<F>(F);
 
-/// A sink that keeps only how many bytes it was given.
-struct Count(usize);
-
-impl std::io::Write for Count {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0 += buf.len();
-        Ok(buf.len())
+impl<F: FnMut(&[u8])> SnapshotCbor<F> {
+    fn head(&mut self, major: u8, argument: u64) {
+        head::with_encoded_head(major, argument, &mut self.0);
     }
 
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
+    fn text(&mut self, text: &str) {
+        head::with_encoded_text(text, |head, body| {
+            (self.0)(head);
+            (self.0)(body);
+        });
+    }
+
+    /// An array of term ids, with the graph id appended when present.
+    fn id_row(&mut self, ids: &[usize], graph: Option<usize>) {
+        self.head(
+            head::ARRAY,
+            (ids.len() + usize::from(graph.is_some())) as u64,
+        );
+        for &id in ids.iter().chain(graph.as_ref()) {
+            self.head(head::UNSIGNED, id as u64);
+        }
     }
 }
 
@@ -1983,14 +2007,14 @@ mod tests {
             ),
             "application/trig",
         );
-        assert_eq!(
-            builder.snapshot_canonical_bytes(),
-            canonical(&builder.snapshot_payload())
-        );
-        assert_eq!(
-            SnapshotBuilder::new().snapshot_canonical_bytes(),
-            canonical(&SnapshotBuilder::new().snapshot_payload())
-        );
+        for builder in [builder, SnapshotBuilder::new()] {
+            let canonical_bytes = canonical(&builder.snapshot_payload());
+            assert_eq!(builder.snapshot_canonical_bytes(), canonical_bytes);
+            assert_eq!(
+                builder.snapshot_content_id(),
+                purrdf_gts::wire::digest_str(&canonical_bytes)
+            );
+        }
     }
 
     /// Text is measured in bytes, not characters, on the wire: multi-byte IRIs
@@ -2030,9 +2054,8 @@ mod tests {
                 nesting: 0,
             };
             let mut bytes = Vec::new();
-            builder
-                .write_term(&mut bytes, &row, &[])
-                .expect("a Vec accepts every write");
+            let mut out = SnapshotCbor(|chunk: &[u8]| bytes.extend_from_slice(chunk));
+            builder.write_term(&mut out, &row, &[]);
             let tree = term_into_wire(Term {
                 kind: TermKind::Literal,
                 value: Some("x".to_owned()),
