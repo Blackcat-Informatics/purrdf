@@ -50,6 +50,7 @@ impl PayloadContext<'_, '_> {
             .transpose()
             .map(Option::flatten)
             .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause)))?;
+        let limit = decoded_limit();
         if blob
             && let Some(bytes) = bytes.as_deref()
             && let Some(limit) = encoded_blob_limit()
@@ -70,7 +71,6 @@ impl PayloadContext<'_, '_> {
             // A blob frame is bounded by the blob ceiling; every other frame by
             // the frame ceiling, which is what keeps an embedded snapshot blob
             // map from decoding without limit.
-            let limit = decoded_limit();
             let decoded = if let Some(content_key) = self.content_key {
                 let limit = limit.unwrap_or(usize::MAX);
                 let decrypt =
@@ -90,13 +90,25 @@ impl PayloadContext<'_, '_> {
         }
         if blob
             && let Some(bytes) = bytes.as_deref()
-            && let Some(limit) = decoded_limit()
+            && let Some(limit) = limit
             && bytes.len() > limit
         {
             return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
                 actual: bytes.len(),
                 limit,
             }));
+        }
+        if !blob
+            && let Some(value) = d
+            && let Some(limit) = limit
+        {
+            let actual = match value {
+                ValueRef::Owned(value) => cbor::encoded_len(value),
+                ValueRef::Encoded(value) => value.encoded().len(),
+            };
+            if actual > limit {
+                return Err(crate::codec::CodecError::Limit { limit }.into());
+            }
         }
         Ok(Payload::Value(d))
     }

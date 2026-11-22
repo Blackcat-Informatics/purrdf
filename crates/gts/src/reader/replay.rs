@@ -71,8 +71,23 @@ impl Folder<'_, '_, '_> {
             .ok_or(PayloadError::Damaged(PayloadCause::TransformedNotBytes))?;
         let codecs = super::payload::resolve_codecs(&self.catalog, ids)?;
         let limit = self.decode_limit(false).unwrap_or(usize::MAX);
-        let mut source = crate::codec::decode_chain_reader(&codecs, bytes, limit)?;
-        let spooled = cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT)?;
+        let mut source = match crate::codec::decode_chain_reader(&codecs, bytes, limit) {
+            Ok(source) => source,
+            Err(error) => {
+                let error = PayloadError::from(error);
+                self.report_decoded_refusal(false, &error);
+                return Err(error);
+            }
+        };
+        let spooled = match cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT) {
+            Ok(spooled) => spooled,
+            Err(error) => {
+                let error = PayloadError::from(error);
+                self.report_decoded_refusal(false, &error);
+                return Err(error);
+            }
+        };
+        let decoded_len = spooled.item().encoded_len();
         let mut replay = cbor::ReplayBuffer::new(scratch)?;
         self.h_snapshot_range(spooled.item(), &mut replay, index)
             .map_err(|error| match error {
@@ -89,6 +104,9 @@ impl Folder<'_, '_, '_> {
             }
         })?;
         replay.into_inner().finish()?;
+        if let Some(sink) = self.sink.as_deref_mut() {
+            sink.decoded_payload(false, decoded_len);
+        }
         Ok(())
     }
 

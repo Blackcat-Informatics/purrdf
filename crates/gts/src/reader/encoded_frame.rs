@@ -128,6 +128,16 @@ impl BlobBytes<'_> {
 static NULL: Value = Value::Null;
 
 impl Payload<'_> {
+    pub(super) fn decoded_len(&self) -> usize {
+        match self {
+            Self::Value(Some(ValueRef::Owned(value))) => cbor::encoded_len(value),
+            Self::Value(Some(ValueRef::Encoded(value))) => value.encoded().len(),
+            Self::Value(None) => 0,
+            Self::Encoded(value) => value.view().encoded().len(),
+            Self::Blob(bytes) => bytes.len(),
+        }
+    }
+
     pub(super) fn view(&self) -> ValueRef<'_> {
         match self {
             Self::Value(value) => value.unwrap_or(ValueRef::Owned(&NULL)),

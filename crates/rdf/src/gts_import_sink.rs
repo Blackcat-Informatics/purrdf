@@ -605,6 +605,19 @@ pub fn import_gts_events(bytes: &[u8]) -> Result<GtsBundle, RdfDiagnostic> {
     import_with_collector(bytes, None).map(|(bundle, _)| bundle)
 }
 
+/// Authoritative GTS ingestion under one explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first reader resource refusal, fold diagnostic, dangling
+/// reference or native RDF storage failure. A refusal returns no partial
+/// dataset.
+pub fn import_gts_events_with_limits(
+    bytes: &[u8],
+    limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<GtsBundle, RdfDiagnostic> {
+    import_with_collector_limits(bytes, None, limits).map(|(bundle, _)| bundle)
+}
+
 /// Import through the authoritative scoped builder with external dictionary state.
 ///
 /// The host owns raw term storage, pending/completed resolution records and the
@@ -652,6 +665,31 @@ where
     finish_importer(resolver.into_sink()).map(|(bundle, _)| bundle)
 }
 
+/// Import with caller-owned dictionary state after whole-read admission.
+///
+/// # Errors
+/// Returns the first whole-read resource refusal before mutating caller-owned
+/// storage, then preserves the ordinary dictionary import failures.
+pub fn import_gts_events_with_dictionary_and_limits<D>(
+    bytes: &[u8],
+    limits: purrdf_gts::reader::GtsReadLimits,
+    dictionary: &mut dyn purrdf_gts::dictionary::TermStorage,
+    resolution: &mut D,
+    replay: [Box<dyn purrdf_lex::cbor::ReplayStorage>; 3],
+) -> Result<GtsBundle, RdfDiagnostic>
+where
+    D: purrdf_gts::segment_decode::ResolutionStorage<TermId>,
+    D::Error: purrdf_hash::error::NativeError + 'static,
+{
+    purrdf_gts::reader::check_read_limits(
+        bytes,
+        purrdf_gts::reader::ReadOptions::new(true, None),
+        limits,
+    )
+    .map_err(crate::gts_core::read_limit_failure)?;
+    import_gts_events_with_dictionary(bytes, dictionary, resolution, replay)
+}
+
 fn dictionary_import_failure<E: purrdf_hash::error::NativeError + 'static>(
     cause: E,
 ) -> RdfDiagnostic {
@@ -689,10 +727,24 @@ pub(crate) fn import_with_collector<'a>(
     bytes: &[u8],
     blobs: Option<BlobCollector<'a>>,
 ) -> Result<(GtsBundle, Option<BlobCollector<'a>>), RdfDiagnostic> {
+    import_with_collector_limits(bytes, blobs, purrdf_gts::reader::GtsReadLimits::DEFAULT)
+}
+
+fn import_with_collector_limits<'a>(
+    bytes: &[u8],
+    blobs: Option<BlobCollector<'a>>,
+    limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<(GtsBundle, Option<BlobCollector<'a>>), RdfDiagnostic> {
     let mut importer = SinkImporter::new();
     importer.blobs = blobs;
     let mut resolver = SegmentResolver::new(importer);
-    let _ = purrdf_gts::reader::read_to_sink(bytes, true, None, &mut resolver);
+    purrdf_gts::reader::read_to_sink_with_limits(
+        bytes,
+        purrdf_gts::reader::ReadOptions::new(true, None),
+        limits,
+        &mut resolver,
+    )
+    .map_err(crate::gts_core::read_limit_failure)?;
 
     // A latched streaming error (e.g. a reader diagnostic) precedes phase-2.
     if let Some(error) = resolver.take_error() {

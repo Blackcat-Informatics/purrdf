@@ -347,6 +347,10 @@ fn parse_direction(
 }
 
 impl ResolvedSink for EventEmitter<'_> {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
     type Id = EventTermId;
     type Error = EventError;
 

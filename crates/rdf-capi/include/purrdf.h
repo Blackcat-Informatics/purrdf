@@ -1257,6 +1257,56 @@ typedef struct {
 } PurrdfQueryGovernors;
 
 /**
+ * C-ABI whole-read limits for hostile GTS input.
+ */
+typedef struct {
+    /**
+     * Complete encoded input bytes.
+     */
+    uint64_t encoded_input_bytes;
+    /**
+     * CBOR sequence item count.
+     */
+    uint64_t items;
+    /**
+     * Encoded bytes in one header or frame.
+     */
+    uint64_t encoded_frame_bytes;
+    /**
+     * Decoded bytes in one non-blob payload.
+     */
+    uint64_t decoded_frame_bytes;
+    /**
+     * Decoded bytes in one blob payload.
+     */
+    uint64_t decoded_blob_bytes;
+    /**
+     * Aggregate decoded payload bytes.
+     */
+    uint64_t total_decoded_bytes;
+    /**
+     * Accepted term rows.
+     */
+    uint64_t terms;
+    /**
+     * Accepted RDF and suppression rows.
+     */
+    uint64_t rows;
+    /**
+     * Retained reader metadata entries.
+     */
+    uint64_t metadata_entries;
+    /**
+     * Reader diagnostics.
+     */
+    uint64_t diagnostics;
+    /**
+     * Measurable reader work events.
+     */
+    uint64_t work;
+} PurrdfGtsReadLimits;
+
+/**
  * A fixed projection of the kernel's eight currently named resource dimensions.
  *
  * This layout remains fixed when the Rust vocabulary grows. New dimensions need
@@ -2762,6 +2812,14 @@ int32_t purrdf_graph_freeze(const PurrdfGraph *graph,
 void purrdf_graph_free(PurrdfGraph *graph);
 
 /**
+ * Initialize `*out` with the finite limits used by [`purrdf_from_gts`].
+ *
+ * # Safety
+ * `out` must be writable.
+ */
+int32_t purrdf_gts_read_limits_init(PurrdfGtsReadLimits *out);
+
+/**
  * Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
  * caller-owned handle (free with `purrdf_dataset_free`).
  *
@@ -2778,6 +2836,22 @@ int32_t purrdf_from_gts(const uint8_t *bytes,
                         size_t len,
                         PurrdfDataset **out_dataset,
                         PurrdfError **out_error);
+
+/**
+ * Read a GTS container under caller-selected whole-read limits.
+ *
+ * `limits == NULL` selects the same finite defaults as [`purrdf_from_gts`].
+ * Zero is a valid inclusive ceiling in every field.
+ *
+ * # Safety
+ * `bytes` must be valid for `len` bytes; non-null `limits` and the out-params
+ * must be readable/writable respectively.
+ */
+int32_t purrdf_from_gts_with_limits(const uint8_t *bytes,
+                                    size_t len,
+                                    const PurrdfGtsReadLimits *limits,
+                                    PurrdfDataset **out_dataset,
+                                    PurrdfError **out_error);
 
 /**
  * Write a frozen dataset to canonical GTS container bytes under `profile`

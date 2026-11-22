@@ -1487,6 +1487,47 @@ class GtsRelationalRows(TypedDict):
     annotations: list[_AnnotationRow]
     blobs: list[_BlobExportRow]
 
+class GtsReadLimits:
+    def __init__(
+        self,
+        *,
+        encoded_input_bytes: int | None = ...,
+        items: int | None = ...,
+        encoded_frame_bytes: int | None = ...,
+        decoded_frame_bytes: int | None = ...,
+        decoded_blob_bytes: int | None = ...,
+        total_decoded_bytes: int | None = ...,
+        terms: int | None = ...,
+        rows: int | None = ...,
+        metadata_entries: int | None = ...,
+        diagnostics: int | None = ...,
+        work: int | None = ...,
+    ) -> None: ...
+    @staticmethod
+    def unbounded() -> GtsReadLimits: ...
+    @property
+    def encoded_input_bytes(self) -> int: ...
+    @property
+    def items(self) -> int: ...
+    @property
+    def encoded_frame_bytes(self) -> int: ...
+    @property
+    def decoded_frame_bytes(self) -> int: ...
+    @property
+    def decoded_blob_bytes(self) -> int: ...
+    @property
+    def total_decoded_bytes(self) -> int: ...
+    @property
+    def terms(self) -> int: ...
+    @property
+    def rows(self) -> int: ...
+    @property
+    def metadata_entries(self) -> int: ...
+    @property
+    def diagnostics(self) -> int: ...
+    @property
+    def work(self) -> int: ...
+
 class GtsFoldViewNative:
     # A triple term that reaches itself states no triple (GTS-SPEC 7.3): the view's
     # accessors render it as a blank node no document label spells and its `reifies`
@@ -1500,7 +1541,10 @@ class GtsFoldViewNative:
     # the caller supplies its prefix.
     @staticmethod
     def from_bytes(
-        data: bytes, curie_prefixes: list[tuple[str, str]] = ...
+        data: bytes,
+        curie_prefixes: list[tuple[str, str]] = ...,
+        *,
+        read_limits: GtsReadLimits | None = ...,
     ) -> GtsFoldViewNative: ...
     @staticmethod
     def from_parts(
@@ -1570,7 +1614,9 @@ class GtsFoldViewNative:
     ) -> list[tuple[str, str | None, bool]]: ...
     def relational_rows(self) -> GtsRelationalRows: ...
 
-def gts_relational_rows_from_bytes(data: bytes) -> GtsRelationalRows: ...
+def gts_relational_rows_from_bytes(
+    data: bytes, *, read_limits: GtsReadLimits | None = ...
+) -> GtsRelationalRows: ...
 
 class ColumnarRows(TypedDict):
     schema: dict[str, list[tuple[str, str, bool]]]
@@ -2857,6 +2903,7 @@ _gts_to_duckdb = gts_to_duckdb
 _gts_to_parquet = gts_to_parquet
 _RdfDataset = RdfDataset
 _GtsFoldViewNative = GtsFoldViewNative
+_GtsReadLimits = GtsReadLimits
 
 _gts_GtsBlobLimits = GtsBlobLimits
 _gts_GtsBlobUsage = GtsBlobUsage
@@ -2865,6 +2912,7 @@ _gts_GtsBlobExportReport = GtsBlobExportReport
 _gts_GtsExportResult = GtsExportResult
 
 class gts:
+    GtsReadLimits = _GtsReadLimits
     GtsBlobLimits = _gts_GtsBlobLimits
     GtsBlobUsage = _gts_GtsBlobUsage
     GtsBlobOmission = _gts_GtsBlobOmission

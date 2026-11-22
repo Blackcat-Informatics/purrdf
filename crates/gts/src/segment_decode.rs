@@ -86,6 +86,67 @@ pub use storage::{
 /// context). Non-RDF events pass through with no-op defaults so a target that
 /// only cares about triples need not implement them.
 pub trait ResolvedSink {
+    /// Whether the reader should deliver another event.
+    fn continue_reading(&self) -> bool {
+        true
+    }
+    /// One complete CBOR sequence item before it is processed.
+    fn item(&mut self, _encoded_bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Encoded item parsing stopped at the first byte beyond its limit.
+    fn encoded_frame_refused(
+        &mut self,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Streaming input crossed its complete encoded-byte ceiling.
+    fn encoded_input_refused(
+        &mut self,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// One successfully decoded payload's exact extent.
+    fn decoded_payload(&mut self, _blob: bool, _bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// A bounded decoder refused the first byte beyond its effective limit.
+    fn decoded_payload_refused(
+        &mut self,
+        _blob: bool,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Aggregate retained reader metadata entries.
+    fn retained_metadata(&mut self, _entries: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Complete encoded-input bound for streaming readers.
+    fn encoded_input_limit(&self) -> Option<usize> {
+        None
+    }
+    /// Encoded bound for each header or frame.
+    fn encoded_frame_limit(&self) -> Option<usize> {
+        None
+    }
+    /// One embedded blob already included in its enclosing snapshot charge.
+    fn embedded_blob(&mut self, _bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// An embedded blob exceeded its per-blob ceiling.
+    fn embedded_blob_refused(
+        &mut self,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     /// Caller-owned replay storage for transformed RDF frames, when supported.
     fn frame_scratch(
         &mut self,
@@ -1086,6 +1147,88 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
 }
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentResolver<S, D> {
+    fn continue_reading(&self) -> bool {
+        !self.failed && self.sink.continue_reading()
+    }
+
+    fn item(&mut self, encoded_bytes: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.item(encoded_bytes) {
+            self.fail(error);
+        }
+    }
+
+    fn encoded_frame_refused(&mut self, required: usize, limit: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.encoded_frame_refused(required, limit) {
+            self.fail(error);
+        }
+    }
+
+    fn encoded_input_refused(&mut self, required: usize, limit: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.encoded_input_refused(required, limit) {
+            self.fail(error);
+        }
+    }
+
+    fn decoded_payload(&mut self, blob: bool, bytes: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.decoded_payload(blob, bytes) {
+            self.fail(error);
+        }
+    }
+
+    fn decoded_payload_refused(&mut self, blob: bool, required: usize, limit: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.decoded_payload_refused(blob, required, limit) {
+            self.fail(error);
+        }
+    }
+
+    fn retained_metadata(&mut self, entries: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.retained_metadata(entries) {
+            self.fail(error);
+        }
+    }
+
+    fn encoded_input_limit(&self) -> Option<usize> {
+        self.sink.encoded_input_limit()
+    }
+
+    fn encoded_frame_limit(&self) -> Option<usize> {
+        self.sink.encoded_frame_limit()
+    }
+
+    fn embedded_blob(&mut self, bytes: usize) {
+        if !self.failed
+            && let Err(error) = self.sink.embedded_blob(bytes)
+        {
+            self.fail(error);
+        }
+    }
+
+    fn embedded_blob_refused(&mut self, required: usize, limit: usize) {
+        if !self.failed
+            && let Err(error) = self.sink.embedded_blob_refused(required, limit)
+        {
+            self.fail(error);
+        }
+    }
+
     fn frame_scratch(
         &mut self,
     ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
