@@ -32,7 +32,8 @@ pub enum TextDeltaError {
         /// Canonical selected addition ordinal.
         ordinal: usize,
     },
-    /// Reversing the delta does not recover the indexed source accounting.
+    /// The supplied delta disagrees with independently observed source rows.
+    /// The accounting values can agree even when the rows differ.
     SourceMismatch {
         /// Check value of the existing selected-source accounting: a domain-bound
         /// hash of its additive sum, for diagnosis, not a source identity.
@@ -99,7 +100,7 @@ impl core::fmt::Display for TextDeltaError {
             ),
             Self::SourceMismatch { expected, actual } => write!(
                 f,
-                "text delta source mismatch: expected {}, reconstructed {}",
+                "text delta source rows disagree (expected accounting {}, reconstructed {})",
                 purrdf_hash::hex::Lower(expected),
                 purrdf_hash::hex::Lower(actual)
             ),

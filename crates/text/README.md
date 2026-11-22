@@ -111,14 +111,16 @@ IDFs to validated corpus statistics and the immutable profile.
 `index.with_delta(&next_dataset, &added, &removed)` updates an owned index from
 effective statement additions and removals. The inputs use the same carrier
 profile as the index. Both asserted and annotation literal rows count, including
-a literal present in both layers. Reversing the delta must recover the indexed
-source fingerprint; missing additions and incomplete deltas are typed refusals.
-Each removed row must also be held by the index. The index keeps a sorted
-directory of the digest of every selected source row, token-less rows included,
-once per occurrence. A removal consumes one occurrence of its row digest, and a
+a literal present in both layers. Applying the delta must recover the exact
+selected rows of the next source. Versioned views supply independent net row
+changes. Other views supply an exact literal population and support probes for
+every subject expected after the delta. Missing additions and incomplete deltas
+are typed refusals. Each removed row must also be held by the index. The index
+keeps a sorted directory of each selected source row's digest and subject,
+token-less rows included, once per occurrence. A removal consumes one occurrence of its row digest, and a
 row that is absent or removed more often than held is refused with
 `TextDeltaError::UnheldRemoval`. The directory follows every applied delta. It
-lives in memory beside the index and is not part of either fingerprint.
+lives in memory beside the index. The source fingerprint hashes its row digests.
 The next source also refreshes predicate coverage for nonliteral changes.
 
 Only changed documents are analyzed, using their complete key:
