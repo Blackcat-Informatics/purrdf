@@ -1337,10 +1337,8 @@ jobs:
             --test knn_wasm_determinism --test knn_wasm_reassociated --test knn_contract
           cargo test --locked -p purrdf-hnsw --lib
 
-  # The Python binding gate — separate from the Rust `workspace`/`test` jobs above
-  # (AGENTS.md §3: `make check` stays a pure-Rust gate). Builds the native module
-  # with maturin and checks only that it imports and exposes the Rust functions;
-  # behavior is tested in Rust. `make pytest` remains the full local suite.
+  # Build and load the Python extension once. The Python conformance shard
+  # reuses that installation and contributes its rows to the conformance matrix.
   pytest:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
@@ -1376,6 +1374,19 @@ jobs:
 
       - name: Python binding load check (maturin build + import + exports)
         run: make pytest-load
+
+      - name: Python conformance matrix
+        env:
+          UV_NO_SYNC: "1"
+        run: make conformance CONFORMANCE_ARGS="--shard python --no-build --emit-results target/conformance-results/python.json"
+
+      - name: Upload Python conformance rows
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-results-python
+          path: target/conformance-results/python.json
+          if-no-files-found: error
 
   # Publisher tooling has its own Python/platform lock and never needs release
   # credentials to run its regressions. Every identity/signing/HTTP path in
@@ -1437,8 +1448,8 @@ jobs:
   # published to the job summary via $GITHUB_STEP_SUMMARY. The REAL rdflib is the
   # differential oracle (installed by uv), never the top-level rdflib shadow.
   #
-  # The suites run on four runners, one per shard of scripts/conformance-matrix.py's
-  # SHARDS (suites that compile the same crates share one), and each writes its rows
+  # The native suites run on three runners grouped by their Rust dependencies.
+  # The pytest job runs the Python shard. All four shards write their rows
   # unjudged. The `conformance` job reassembles every shard's rows in matrix order
   # and judges the whole matrix -- the ratchet and its orphan check, the scoreboard,
   # the job summary and the docs/CONFORMANCE.md drift check -- exactly as a single
@@ -1451,11 +1462,10 @@ jobs:
     env:
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
       CARGO_BUILD_FINGERPRINT: content
-      UV_PYTHON: "3.13"
     strategy:
       fail-fast: false
       matrix:
-        shard: [core, sparql, shapes, python]
+        shard: [core, sparql, shapes]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1474,12 +1484,6 @@ jobs:
           cache-workspace-crates: true
           save-if: false
 
-      - name: Install uv
-        if: matrix.shard == 'python'
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-
       - name: Conformance matrix (this shard's suites)
         env:
           SHARD: ${{ matrix.shard }}
@@ -1494,7 +1498,7 @@ jobs:
           if-no-files-found: error
 
   conformance:
-    needs: conformance-shard
+    needs: [conformance-shard, pytest]
     # Runs whatever the shards concluded, so a red suite is still reported in the one
     # scoreboard; a shard that wrote no rows fails here by name.
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection) }}
@@ -1519,7 +1523,8 @@ jobs:
       - name: Require every shard job to have succeeded
         env:
           SHARDS_RESULT: ${{ needs.conformance-shard.result }}
-        run: test "$SHARDS_RESULT" = success
+          PYTHON_RESULT: ${{ needs.pytest.result }}
+        run: test "$SHARDS_RESULT" = success && test "$PYTHON_RESULT" = success
   # Optional controlled experiment. Required workspace/test/capi jobs above are
   # unchanged and continue to provide the strict lint/hygiene acceptance gates.
   native-profile-admission:
