@@ -1,0 +1,19 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 0812d7a8ca02beb900060383bfce5bd0e6dda183
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1473
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1473
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 958bf2dcf1e83db43c3beb229efada81095b2cc4
+GhpRsq-Head-Ref: paudley/1468-run-the-sssom-corpus-test-once-in
+GhpRsq-Head-OID: 0812d7a8ca02beb900060383bfce5bd0e6dda183
+GhpRsq-Result-Tree: d9d29b0b9028cd02ed4bd9014077eae7a6830176
+GhpRsq-Result-Commit: a0ac34d11211561fc9c353b466cfa7c47af41003
+GhpRsq-Parent-Hashes: 0812d7a8ca02beb900060383bfce5bd0e6dda183
+GhpRsq-Squash-Notes-SHA256: c0c34d430b43a1557c77e8c0197631c6abefecfc88149c49503620a35aaf9ce0
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
