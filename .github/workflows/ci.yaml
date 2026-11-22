@@ -303,15 +303,9 @@ jobs:
       - name: Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # `cargo test --workspace --locked` (`make test`), as seven parallel shards. As one
-  # job it compiled for 25 minutes before running a test and was cancelled at its
-  # timeout; nearly all of that is first-party test targets, so a dependency cache
-  # alone could not bring it back under budget. `make test-shard` defines the
-  # shards and carries the proof that together they are exactly the old command:
-  # every shard selects `--workspace`, so dependency features resolve as they did,
-  # and the lib / doc / five integration-test shards partition its default target
-  # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
-  # job below already runs through `make capi-check`.
+  # `make test-shard` partitions the lib, doc and integration targets from
+  # `cargo test --workspace --locked`. Each shard selects the whole workspace
+  # to preserve feature unification. The capi job runs c_abi_smoke separately.
   test-shard:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     name: test (${{ matrix.shard }})
@@ -323,7 +317,11 @@ jobs:
       # the suite, and a cancelled slice is a slice nobody saw.
       fail-fast: false
       matrix:
-        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4, integration-5]
+        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4, integration-5, integration-6, integration-7]
+    env:
+      # Check the source bytes for reuse across fresh runner checkouts.
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
@@ -362,15 +360,14 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # One cache for all seven shards. Every shard resolves features over the whole
-      # workspace, so each compiles its dependencies identically and one saved set
-      # serves them all; the lib shard, which builds every package's dev-dependencies,
-      # is the one that saves it. First-party crates are never cached (the action
-      # cleans them), so every shard still compiles the code under test.
-      - name: Cache the dependency build (shared by every shard)
+      # The lib shard seeds the cache with the shared test-profile units. Cargo
+      # reuses matching units across fresh checkouts and rebuilds changed inputs.
+      # Each shard can compile independently when the cache is cold.
+      - name: Share compiled test libraries
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: workspace-test-checksums-v1
+          cache-workspace-crates: true
           save-if: ${{ matrix.shard == 'lib' }}
 
       - name: Install Node for the Unicode ECMAScript oracle
@@ -382,7 +379,7 @@ jobs:
         if: matrix.shard == 'lib'
         uses: ./.github/actions/binaryen-toolchain
 
-      - name: Run workspace tests (this shard; the seven include the doc tests)
+      - name: Run this workspace test shard
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
         # vector path of each family this job requires; the distance, kNN and HNSW
         # tests still assert they executed every path the runner reports, and every
@@ -1360,6 +1357,8 @@ jobs:
     # Leave headroom for wheel compilation, tests and the cache-save post steps.
     timeout-minutes: 45
     env:
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
       # Exercise the declared minimum; uv's moving latest can outrun wheel support.
       UV_PYTHON: "3.13"
     steps:
@@ -1373,13 +1372,11 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The test lane's `lib` shard dependency build, restored and never re-saved: the
-      # module build shares most dependency units with it, and no new cache entry
-      # competes for the repository's quota.
-      - name: Restore the workspace test lane's dependency build
+      - name: Restore shared test libraries
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: workspace-test-checksums-v1
+          cache-workspace-crates: true
           save-if: false
 
       - name: Install uv
@@ -1462,6 +1459,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
       UV_PYTHON: "3.13"
     strategy:
       fail-fast: false
@@ -1478,13 +1477,11 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The dependency build the test lane's `lib` shard saves, restored and never re-saved:
-      # Cargo fingerprints each unit, so only matching feature/profile builds
-      # are reused, and no new cache entry competes for the repository's quota.
-      - name: Restore the workspace test lane's dependency build
+      - name: Restore shared test libraries
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: workspace-test-checksums-v1
+          cache-workspace-crates: true
           save-if: false
 
       - name: Install uv
