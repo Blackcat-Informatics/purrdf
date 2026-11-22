@@ -92,6 +92,9 @@ jobs:
                   and (.conclusion == "cancelled" or .conclusion == "failure")
                   and .path == ".github/workflows/release-cargo.yaml"
                   and .head_repository.full_name == $repo) | .head_sha')
+            [[ "$release_sha" =~ ^[a-f0-9]{40}$ ]]
+            gh api "repos/$GITHUB_REPOSITORY/compare/$release_sha...$GITHUB_SHA" |
+              jq -e --arg sha "$release_sha" '.merge_base_commit.sha == $sha'
             gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN/jobs?per_page=100" |
               jq -e '
                 [.[].jobs[]] as $jobs |
@@ -129,14 +132,9 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          ref: ${{ needs.source.outputs.sha }}
+          ref: ${{ github.sha }}
 
-      # Nightly is named in rust-toolchain.toml for its sharper lint surface;
-      # that buys nothing for an artifact a consumer installs, and shipping one
-      # compiled by an unreleased compiler is risk without upside. The workspace
-      # uses no nightly features (the `msrv` CI job holds that floor at 1.98),
-      # so stable always builds. See the workflow-level `env` above for why
-      # RUSTUP_TOOLCHAIN, not this input, is what actually selects stable.
+      # Compile and restore cache entries with this run's exact stable version.
       - name: Install resolved stable Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
       - name: Cache native compilation
@@ -207,7 +205,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          ref: ${{ needs.source.outputs.sha }}
+          ref: ${{ github.sha }}
       - name: Install resolved stable Rust and WebAssembly target
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
       - name: Cache WebAssembly compilation
@@ -245,7 +243,7 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          ref: ${{ needs.source.outputs.sha }}
+          ref: ${{ github.sha }}
       - name: Install resolved stable Rust
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Package release crates
