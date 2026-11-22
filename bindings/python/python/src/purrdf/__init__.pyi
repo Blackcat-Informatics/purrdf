@@ -960,14 +960,9 @@ class _QuadStore:
     # added, from one frozen snapshot. Raises ValueError for a receipt that is not one,
     # or a run that cannot have an execution identity.
     def bind_execution_receipt(self, receipt_json: str) -> str: ...
-    # INTERNAL cross-package protocol, not a caller surface: a capsule exposing a
-    # frozen snapshot of this store by address, which `purrdf.shapes.Shapes`
-    # (`purrdf_shapes`) calls BY STRING so the SHACL engine validates natively with no
-    # N-Triples round-trip. Declared because it is live — the underscore is the whole
-    # of its "do not call this" — and because a member the stub omits is a member a
-    # checked caller cannot see at all, including to see that it is private. The
-    # snapshot is immutable: a later `add`/`remove`/`update` leaves a capsule already
-    # handed out untouched.
+    # INTERNAL compatibility protocol. Native validation authenticates the
+    # concrete PyO3 class instead of trusting a capsule returned by an arbitrary
+    # object, but existing callers can still obtain this owned frozen snapshot.
     def _store_capsule(self) -> CapsuleType: ...
 
 class Store(_QuadStore):

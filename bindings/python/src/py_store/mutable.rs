@@ -28,7 +28,7 @@ use crate::{
 
 /// A COW mutable RDF dataset over the native `purrdf-core` IR.
 ///
-/// The query, UPDATE, iteration and validation-capsule surface is the
+/// The query, UPDATE, iteration and native-validation surface is the
 /// [`PyQuadStore`] base class's, shared with `Store`.
 /// The keyword-only `remember_empty_graphs=True` selects native remembered
 /// graph slots by default; false selects row-driven lifetime. Compaction and

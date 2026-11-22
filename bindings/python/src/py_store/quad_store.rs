@@ -4,11 +4,11 @@
 //! The copy-on-write quad store `Store` and `MutableDataset` both are.
 //!
 //! Both Python classes wrap one [`MutableDataset`] and answer SPARQL query, UPDATE,
-//! the governed and entailment-aware variants, iteration, length, and the
-//! `_store_capsule` validation protocol identically: each is a function of the COW
-//! dataset alone. So those methods live once, on the [`PyQuadStore`] base class
-//! both extend, and each subclass carries only what is genuinely its own (the
-//! blank-scope policy of its `load`, and its own mutation surface).
+//! the governed and entailment-aware variants, iteration, length, and native
+//! validation identically: each is a function of the COW dataset alone. So those
+//! methods live once, on the [`PyQuadStore`] base class both extend, and each
+//! subclass carries only what is genuinely its own (the blank-scope policy of its
+//! `load`, and its own mutation surface).
 
 use super::env::{division_policy, extension_env};
 use super::presentation;
@@ -84,12 +84,35 @@ impl QueryMode for (bool, Option<&Bound<'_, PyAny>>, bool) {
 }
 
 /// The copy-on-write RDF 1.2 quad store `Store` and `MutableDataset` extend: the
-/// one home of the query, UPDATE, iteration and validation-capsule surface they
+/// one home of the query, UPDATE, iteration and native-validation surface they
 /// share.
 #[pyclass(name = "QuadStore", subclass)]
 #[derive(Debug)]
 pub struct PyQuadStore {
     pub(super) inner: MutableDataset,
+}
+
+/// Freeze the exact native quad-store base shared by `Store` and
+/// `MutableDataset` for SHACL validation.
+///
+/// Extracting the PyO3 class guard authenticates the producer before any native
+/// state is read. A Python object cannot satisfy this boundary by implementing a
+/// method with the right spelling or by constructing a named capsule.
+pub(crate) fn validation_snapshot(data: &Bound<'_, PyAny>) -> PyResult<Arc<RdfDataset>> {
+    let store = data.extract::<PyRef<'_, PyQuadStore>>().map_err(|_| {
+        let type_name = data.get_type().name().map_or_else(
+            |_| "Python object".into(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        PyTypeError::new_err(format!(
+            "validate_store: a {type_name} is not a purrdf.Store or \
+             purrdf.MutableDataset; pass one of those native quad containers, or call \
+             validate_nt for a document held as text"
+        ))
+    })?;
+    let snapshot = store.freeze_snapshot(data.py());
+    drop(store);
+    snapshot
 }
 
 #[pymethods]
@@ -1002,45 +1025,30 @@ impl PyQuadStore {
         Py::new(py, PyQuadIter { quads, pos: 0 })
     }
 
-    /// Internal protocol: a capsule exposing a frozen `Arc<RdfDataset>` snapshot of
-    /// this store by address, consumed by `purrdf_shapes.Shapes.validate_store` so the
-    /// SHACL engine validates this store natively with no N-Triples round-trip. Do
-    /// not call from Python directly. The capsule name and pointee type match exactly
-    /// what `purrdf_shapes` consumes from `purrdf_validate.ValidationStore`.
+    /// Internal compatibility protocol: a capsule exposing a frozen
+    /// `Arc<RdfDataset>` snapshot of this store by address.
     ///
-    /// The capsule's destructor owns the `Arc<RdfDataset>`, so the dataset is kept
-    /// alive for the capsule's entire lifetime. Because the snapshot is an immutable
-    /// frozen `Arc` taken now, a later `add`/`remove`/`update` on this `Store` leaves
-    /// the snapshot a consumer already holds untouched (snapshot-vs-mutation aliasing
-    /// safety).
-    /// The leading underscore belongs to the PYTHON name, not the Rust one: it is
-    /// the cross-package protocol `purrdf_shapes` calls by string
-    /// (`data.call_method0("_store_capsule")`), and Python spells "internal" with
-    /// an underscore. Naming the Rust item `_store_capsule` too would make it an
-    /// underscore-prefixed item that the crate then uses — the convention for
-    /// "deliberately unused" — so the Python spelling is carried by
-    /// `#[pyo3(name = ...)]` and the Rust item keeps an ordinary name.
+    /// New in-process consumers authenticate the native PyO3 class and call
+    /// [`validation_snapshot`] instead. This producer remains available for v4
+    /// compatibility; a capsule name alone never authenticates an arbitrary
+    /// Python object's pointer.
     #[pyo3(name = "_store_capsule")]
     fn store_capsule<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyCapsule>> {
         let py = slf.py();
         let guard = slf.borrow();
         let inner = &guard.inner;
-        // The COW freeze can be a real copy on a mutated store — run it detached.
         let snapshot: Arc<RdfDataset> = py.detach(|| {
             inner
                 .freeze()
                 .map_err(|e| PyValueError::new_err(format!("store snapshot failed: {e}")))
         })?;
         drop(guard);
-        // Heap-box the Arc so its address is stable; the destructor reclaims the box
-        // (dropping the held Arc) when the capsule is collected.
         let boxed: Box<Arc<RdfDataset>> = Box::new(snapshot);
         let addr = (&raw const *boxed) as usize;
         let keepalive = boxed;
-        // SAFETY: `addr` is the address of the `Arc<RdfDataset>` owned by `keepalive`,
-        // moved into the destructor closure; it stays live and at a stable address for
-        // the capsule's entire lifetime. The consumer reads the `Arc<RdfDataset>` at
-        // that address (cloning it to extend the lifetime as needed).
+        // SAFETY: `addr` points to the `Arc<RdfDataset>` owned by `keepalive`,
+        // which the destructor closure retains at a stable address for the
+        // capsule's complete lifetime.
         PyCapsule::new_with_value_and_destructor(
             py,
             addr,
@@ -1120,13 +1128,12 @@ impl PyQuadStore {
     /// rows added on top of it, and the rows suppressed from it, read through one
     /// view rather than copied.
     ///
-    /// The change-path counterpart of [`store_capsule`](Self::store_capsule), and
-    /// deliberately not a capsule: that protocol hands out a frozen
-    /// `Arc<RdfDataset>` with the change already flattened away, which is the one
-    /// thing an incremental validation needs. This is Rust-side and `pub(crate)`
-    /// because the consumer (`crate::shacl`) is in this crate, and because a
-    /// `DeltaDatasetView` names this store's own interners — there is no honest way
-    /// to hand one across a language boundary.
+    /// The change-path counterpart of [`validation_snapshot`]. That helper freezes
+    /// the complete dataset with the change flattened into it; incremental validation
+    /// instead needs the delta itself. This is Rust-side and `pub(crate)` because the
+    /// consumer (`crate::shacl`) is in this crate, and because a `DeltaDatasetView`
+    /// names this store's own interners — there is no honest way to hand one across a
+    /// language boundary.
     ///
     /// # Errors
     ///

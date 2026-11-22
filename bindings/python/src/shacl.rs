@@ -84,14 +84,14 @@ use std::sync::Arc;
 use ::purrdf::RdfDataset;
 use pyo3::create_exception;
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyCapsule, PyCapsuleMethods, PyDict, PyList, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyTuple};
 
 use purrdf_shapes::engine;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::xpath::XPathValidationError;
 use purrdf_validate::ShapesProductRefusal;
 
-use crate::py_store::PyStore;
+use crate::py_store::{PyStore, validation_snapshot};
 
 /// Validate a data graph (N-Triples) against a shapes graph (Turtle).
 ///
@@ -1166,20 +1166,15 @@ impl PyShapes {
 
     /// Validate a borrowed native dataset against these parsed shapes.
     ///
-    /// `data` is any object exposing the internal snapshot protocol — a
-    /// `_store_capsule()` method returning a capsule that carries a frozen
-    /// `Arc<RdfDataset>` — which on the Python surface is `purrdf.Store`,
-    /// `purrdf.MutableDataset` and `purrdf_validate.ValidationStore`. Validating
-    /// through the capsule is what avoids serialising the data to N-Triples and
-    /// parsing it back for each validation phase.
+    /// `data` is exactly a `purrdf.Store` or `purrdf.MutableDataset`. The native
+    /// PyO3 class extraction authenticates the producer before the shared quad-store
+    /// base is read, then freezes its copy-on-write dataset without serialising it to
+    /// N-Triples and parsing it back.
     ///
     /// # Errors
     ///
-    /// Returns `TypeError` naming the argument's type if it does not implement that
-    /// protocol: a missing private attribute is not a diagnosis, so the refusal says
-    /// what the protocol is and which types satisfy it rather than letting an
-    /// `AttributeError` about `_store_capsule` escape to a caller who never wrote
-    /// that name. Returns `ValueError` if the capsule is present but cannot be read.
+    /// Returns `TypeError` naming the argument's type if it is not one of those native
+    /// quad containers. Returns `ValueError` if its dataset cannot be frozen.
     ///
     /// `xpath_regex` selects the dated native XPath pattern law — see the
     /// [module documentation](self).
@@ -1190,33 +1185,7 @@ impl PyShapes {
         xpath_regex: Option<&str>,
     ) -> PyResult<PyValidationReport> {
         let selection = crate::xpath_regex::selection(xpath_regex)?;
-        if !data.hasattr("_store_capsule")? {
-            return Err(pyo3::exceptions::PyTypeError::new_err(format!(
-                "validate_store: a {} exposes no `_store_capsule()`, the internal protocol this \
-                 call reads a frozen dataset snapshot through, so there is no data graph here to \
-                 validate. Pass a purrdf.Store or a purrdf.MutableDataset — both hand the snapshot \
-                 over directly, with no serialization — or, for a document you hold as text, call \
-                 validate_nt with its N-Triples",
-                data.get_type().name()?
-            )));
-        }
-        let capsule = data.call_method0("_store_capsule")?;
-        let capsule = capsule.cast::<PyCapsule>().map_err(|_| {
-            pyo3::exceptions::PyTypeError::new_err(
-                "validate_store: `_store_capsule()` returned something other than a capsule, so \
-                 the snapshot protocol was not honoured and no dataset can be read from it",
-            )
-        })?;
-        let ptr = capsule
-            .pointer_checked(Some(c"purrdf-validation-dataset"))
-            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-        let addr = unsafe { *ptr.cast::<usize>().as_ptr() };
-        // SAFETY: the capsule's value is the address of an `Arc<RdfDataset>` the
-        // producer keeps alive (and at a stable address) for the capsule's lifetime.
-        // We clone the `Arc` (extending the dataset's lifetime past the capsule
-        // borrow) so validation can run detached (GIL released) without touching
-        // any py-bound value.
-        let dataset = Arc::clone(unsafe { &*(addr as *const Arc<RdfDataset>) });
+        let dataset = validation_snapshot(data)?;
         let py = data.py();
         let report = match selection {
             None => py
