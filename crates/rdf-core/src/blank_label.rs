@@ -159,6 +159,66 @@ use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
 
 use crate::BlankScope;
 
+/// The blank-node scope of a query's own labels: a query is a blank-node document
+/// of its own, so its `_:b` never names a node of a dataset. No dataset interns a
+/// blank node under it.
+pub const QUERY_BLANK_SCOPE: BlankScope = BlankScope(u32::MAX);
+
+/// The blank-node scope of every triple term that states no triple (GTS-SPEC 7.3).
+/// The projected node is fresh, so no document or query label may name it.
+///
+/// Scope reservations. [`BlankScope::DEFAULT`] is a parsed or folded document's
+/// scope. Every allocator that numbers scopes (the import merge, the builder's merge
+/// scopes, the per-source scopes of a quad-source freeze, the event sink's
+/// `open_scope`, the streaming GTS importer's segment scopes) counts up from `1` and
+/// stops at [`MAX_ALLOCATED_SCOPE`], through [`allocatable_scope`] and
+/// [`first_free_scope_after`], so none hands out a reserved scope. The two scopes
+/// above it are reserved: [`UNBOUND_TRIPLE_BLANK_SCOPE`] (`u32::MAX - 1`) and
+/// [`QUERY_BLANK_SCOPE`] (`u32::MAX`). A dataset may hold a node at the former, and
+/// an allocator that starts above the highest scope a dataset uses ignores reserved
+/// scopes ([`is_reserved_scope`]).
+pub const UNBOUND_TRIPLE_BLANK_SCOPE: BlankScope = BlankScope(u32::MAX - 1);
+
+/// The highest scope an allocator hands out: the one below both reservations.
+pub const MAX_ALLOCATED_SCOPE: u32 = u32::MAX - 2;
+
+/// Whether `scope` is one of the two reserved scopes.
+#[must_use]
+pub const fn is_reserved_scope(scope: BlankScope) -> bool {
+    scope.0 > MAX_ALLOCATED_SCOPE
+}
+
+/// The scope numbered `candidate`, if an allocator may hand it out.
+///
+/// # Errors
+/// Returns the typed capacity refusal for `space`, naming the exact attempted count
+/// and [`MAX_ALLOCATED_SCOPE`], when `candidate` is a reserved scope or beyond.
+pub fn allocatable_scope(
+    space: purrdf_lex::allocation::CapacitySpace,
+    candidate: u64,
+) -> Result<BlankScope, StorageError> {
+    purrdf_lex::allocation::CapacityError::check(
+        space,
+        u128::from(candidate),
+        u128::from(MAX_ALLOCATED_SCOPE),
+    )?;
+    u32::try_from(candidate)
+        .map(BlankScope)
+        .map_err(|_| StorageError::SizeOverflow)
+}
+
+/// The first scope after `highest`, the highest non-reserved scope in use, that is
+/// never reserved.
+///
+/// # Errors
+/// As [`allocatable_scope`].
+pub fn first_free_scope_after(
+    space: purrdf_lex::allocation::CapacitySpace,
+    highest: u32,
+) -> Result<BlankScope, StorageError> {
+    allocatable_scope(space, u64::from(highest) + 1)
+}
+
 /// Which label grammar [`is_valid_label`] should check against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LabelAlphabet {
@@ -733,6 +793,42 @@ pub(crate) use purrdf_lex::terminals::{is_pn_chars, is_pn_chars_u};
 
 #[cfg(test)]
 mod tests {
+    /// The scope allocators never hand out a reserved scope: the last allocatable
+    /// scope is granted, the first reserved one is refused with the typed capacity
+    /// error naming the exact attempt, and the grant is unchanged after the refusal.
+    #[test]
+    fn allocators_stop_at_the_last_scope_below_the_reservations() {
+        use super::{
+            MAX_ALLOCATED_SCOPE, QUERY_BLANK_SCOPE, UNBOUND_TRIPLE_BLANK_SCOPE, allocatable_scope,
+            first_free_scope_after, is_reserved_scope,
+        };
+        use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
+        let space = CapacitySpace::ImportBlankScopes;
+        assert_ne!(UNBOUND_TRIPLE_BLANK_SCOPE, QUERY_BLANK_SCOPE);
+        assert!(is_reserved_scope(UNBOUND_TRIPLE_BLANK_SCOPE));
+        assert!(is_reserved_scope(QUERY_BLANK_SCOPE));
+        assert!(!is_reserved_scope(BlankScope(MAX_ALLOCATED_SCOPE)));
+        let last = BlankScope(MAX_ALLOCATED_SCOPE);
+        assert_eq!(
+            first_free_scope_after(space, MAX_ALLOCATED_SCOPE - 1),
+            Ok(last)
+        );
+        let refused = Err(StorageError::Capacity(CapacityError::new(
+            space,
+            u128::from(MAX_ALLOCATED_SCOPE) + 1,
+            u128::from(MAX_ALLOCATED_SCOPE),
+        )));
+        assert_eq!(first_free_scope_after(space, MAX_ALLOCATED_SCOPE), refused);
+        assert_eq!(
+            allocatable_scope(space, u64::from(MAX_ALLOCATED_SCOPE) + 1),
+            refused
+        );
+        assert_eq!(
+            first_free_scope_after(space, MAX_ALLOCATED_SCOPE - 1),
+            Ok(last)
+        );
+    }
+
     use super::{
         ESCAPE_MARKER, LabelAlphabet, decode_blank_label, encode_blank_label, escape_label,
         is_pn_chars, is_pn_chars_u, is_valid_blank_node_label, is_valid_blank_node_label_prefix,

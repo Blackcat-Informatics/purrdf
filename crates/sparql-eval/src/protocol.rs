@@ -1296,8 +1296,8 @@ impl From<&EvalError> for FailureCode {
                 Some(UnsupportedKind::QuotedTripleTermVariable) => Self::QuotedTripleTermVariable,
                 Some(UnsupportedKind::HeldInUnconfigured) => Self::Evaluation,
             },
-            EvalError::Remote(_) => Self::ServiceFailed,
-            EvalError::ServiceUnconfigured(_) => Self::ServiceUnconfigured,
+            EvalError::Remote { .. } => Self::ServiceFailed,
+            EvalError::ServiceUnconfigured { .. } => Self::ServiceUnconfigured,
             EvalError::ServiceDenied(_) => Self::ServiceDenied,
             EvalError::ServiceHostDenied { .. } => Self::ServiceHostDenied,
             EvalError::ServiceHostFault { .. } => Self::HostFault,
@@ -1375,7 +1375,7 @@ impl From<&RemoteError> for FailureCode {
             | RemoteError::Decode(_)
             | RemoteError::Disabled
             | RemoteError::OpaqueRedirect { .. } => Self::ServiceFailed,
-            RemoteError::Unconfigured(_) => Self::ServiceUnconfigured,
+            RemoteError::Unconfigured(_) | RemoteError::NoSource => Self::ServiceUnconfigured,
             RemoteError::Denied(_) => Self::ServiceDenied,
             RemoteError::HostDenied { .. } => Self::ServiceHostDenied,
             RemoteError::HostFault { .. } => Self::HostFault,

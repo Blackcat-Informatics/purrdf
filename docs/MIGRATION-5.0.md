@@ -60,6 +60,9 @@ digests before opening a 4.x artifact.
   `purrdf-wasm` must install a host clock and entropy source or supply the query
   time and seed, or the request is refused with `EvalError::HostSourceMissing`
   (see "Evaluator host source").
+- `MediumPlan` and `OperationModel` are `#[non_exhaustive]`, and
+  `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the endpoint and
+  a typed `RemoteError` (see "Public types that changed shape").
 
 ## The canonical line sequence
 
@@ -241,21 +244,14 @@ the labels of the blank nodes of an input with a nested term need not be
 consecutive.
 
 The escapes follow the canonical form of RDF 1.2 N-Quads (section 3). U+FFFE and
-U+FFFF in a literal are written `\uFFFE` and `\uFFFF` in the 5.0 document, since neither matches the
-XML 1.1 `Char` production; 4.0.2 wrote both raw. The C1 controls stay raw. Every
-other literal character keeps its 4.0.2 spelling, among them U+1FFFE, U+FDD0 and
-U+0085. An IRI is escaped where the `IRIREF` production forbids a scalar. An IRI
-holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
-`write_term_value` and the retained `rdfc12` functions write U+007F and U+0080 to
-U+009F in an IRI raw, where 4.0.2 wrote `\u007F` and `\u0080` to `\u009F`. The
-library's own IRI parser refuses those characters in both versions: `freeze`
-after `intern_iri`, the GTS import functions, the pack dictionary reader and the columnar reader (through `freeze`) each
-refuse them with `iri-disallowed-char`. The difference reaches only an IRI that a
-caller's own implementation of the open `DatasetView` trait supplies. The digest is over the binary line
-encodings and does not depend on these spellings. The retained 4.x
-`purrdf-rdfc12` output keeps the spelling it had, U+FFFE and U+FFFF raw (profile
-version 3), so a stored 4.x digest of a dataset holding either in a literal
-recomputes; see "Stored digests".
+U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
+XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
+where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
+raw. The digest is over the binary line encodings and does not depend on these
+spellings. The retained 4.x `purrdf-rdfc12` output keeps the spelling it had
+(profile version 3): U+FFFE and U+FFFF raw in a literal, and DEL and the C1
+controls escaped as `\u007F` through `\u009F` in an IRI, so every stored 4.x
+digest recomputes; see "Stored digests".
 
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
@@ -272,10 +268,8 @@ A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
 overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
 dataset. To check one, recompute it with the 4.x function, which writes the bytes
 4.x wrote (profile version 3), so every stored 4.x digest recomputes unchanged,
-with one exception: a dataset holding U+007F or U+0080 to U+009F in an IRI, which
-profile version 3 wrote as escapes and the retained functions write raw. Such an
-IRI exists only where a caller's own `DatasetView` supplies it (see "Spelling as
-N-Quads 1.2"):
+whatever the dataset holds, including U+FFFE and U+FFFF in a literal and DEL or a
+C1 control in an IRI taken through a caller's own `DatasetView`:
 
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
@@ -693,6 +687,26 @@ instead of `u64`, and the payload of `IndexBindingError::Source` is two
 No canonicalization or compaction-certificate struct with public fields gained,
 lost or retyped a public field, and none of these enums lost a variant.
 
+Types made `#[non_exhaustive]` so that a later addition is not a breaking change.
+No field, variant, constructor or emitted byte changed:
+
+| Type | A 4.x caller |
+|---|---|
+| `purrdf_rdf::gts_compose::MediumPlan` | A struct literal outside the crate no longer compiles. Build the plan with `MediumPlan::undicted` or `MediumPlan::dist_default` and assign the public fields it needs (`plan.zstd_level = Some(12)`). A pattern that names every field adds `..` |
+| `purrdf_geo_kernel::operation::OperationModel` | An exhaustive `match` adds a wildcard arm. Refuse a model the caller cannot handle with a typed error, as `purrdf-validate` does with `GeoError::Unsupported` |
+
+Variant payloads of `purrdf_sparql_eval::EvalError` that changed. The `Display`
+text and the diagnostic codes of both are unchanged for every existing case:
+
+| Variant | 4.x payload | 5.0 payload | A 4.x caller |
+|---|---|---|---|
+| `EvalError::Remote` | `String` | `{ endpoint: String, cause: RemoteError }` | Match `Remote { endpoint, cause }` or `Remote { .. }`, and read the failure from `cause`. `EvalError::remote` takes the endpoint and the `RemoteError`, in place of a displayable message, and chooses the variant from the cause. The structured visitor reports `endpoint` as an IRI and `cause` as the nested `RemoteError` with its own fields |
+| `EvalError::ServiceUnconfigured` | `String` | `{ endpoint: String, cause: RemoteError }` | As above. `cause` is `RemoteError::Unconfigured` when a source declined the endpoint, and the new `RemoteError::NoSource` when the engine was given no source at all. Construct it with `EvalError::remote`, which gives `ServiceUnconfigured` for those two causes and, for the other causes, the variant the engine raises (`Remote` for transport, decode, disabled, redirect and governor causes; `ServiceDenied`, `ServiceHostDenied`, `ServiceHostFault`, `SourceRead` and the stack refusals for theirs) |
+
+`RemoteError::NoSource` is a new variant of the already `#[non_exhaustive]`
+`RemoteError`; a host that matches the enum needs no change where a wildcard arm
+exists; the engine raises it itself.
+
 ## Containers
 
 - **Triple terms that reach themselves.** A `k:3` term that is reachable from its
@@ -763,7 +777,7 @@ lost or retyped a public field, and none of these enums lost a variant.
   `ForwardReference`, whether or not the term has a `tt` and whether or not a
   quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` and the
   fold view read the file and render the term as a fresh blank node (see
-  "Triple terms with neither `tt` nor `rf`"). The
+  "Triple terms that state no triple"). The
   conforming spelling names an earlier IRI or blank-node reifier in `rf` and
   keys the row by that reifier. A file whose `reifies` row is keyed by a
   quoted-triple term, whatever its `tt` or `rf`, loses that row.
@@ -888,42 +902,59 @@ lost or retyped a public field, and none of these enums lost a variant.
   misread one. Re-embedding is not needed to keep a 4.x file readable by 5.0, but
   a 5.0 file is not readable by 4.x.
 
-## Triple terms with neither `tt` nor `rf`
+## Triple terms that state no triple
 
-A `k:3` term that carries neither `tt` nor `rf` states no triple. GTS section 7.3
-says a reader keeps such a term as a distinct term, and a projection renders it
-as a fresh blank node.
+A `k:3` term states no triple when it carries neither `tt` nor `rf`, when its
+`rf` names a reifier no `reifies` row binds, or when it reaches itself. GTS
+section 7.3 says a reader keeps such a term as a distinct term, and a projection
+renders it as a fresh blank node.
 
-Every public path projects it as the blank node `_:unbound_triple_{id}`, the
-node a term that reaches itself projects as: `GtsFoldView`,
-`dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`,
-the streaming importers (`import_gts_events` and its dictionary and blob forms)
-and `export_gts_rdf_nquads_with_dictionary`. The term is accepted wherever a
+Every public path projects it as a blank node no document label can name:
+`GtsFoldView`, `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`,
+`import_gts_graph`, the streaming importers (`import_gts_events` and its
+dictionary and blob forms) and `export_gts_rdf_nquads_with_dictionary`. The node
+lives in blank-node scope `u32::MAX - 1`, which no document blank node has: a folded
+graph interns the label `unbound_triple_{id}` there, a streamed file interns
+`unbound_triple_{segment}_{id}`, and a document blank node labelled
+`unbound_triple_N` stays a different node. In N-Quads text the node is a scoped
+escape: the fold view's `nq_token` writes
+`_:purrdfesc4294967294_unbound_00005Ftriple_00005F{id}`, and the text exporter
+writes `_:purrdfesc4294967294_unbound_00005Ftriple_00005F{segment}_00005F{id}`.
+`nq_token` also writes document blank nodes through the same encoder, so a label
+that is not a valid N-Quads blank-node label, or that begins with `purrdfesc`,
+is written escaped where it was written verbatim. The term is accepted wherever a
 blank node is legal: as a quad subject, as the subject of a reified triple,
 inside a `tt` component and as an annotation value. Within one projection the
-same term id names one blank node and a second bare term names another.
+same term id names one blank node and a second such term names another. A term
+whose `rf` names a reifier with a row still resolves through the first row, and a
+term with `tt` is unchanged.
+
+The streaming importers give segment scopes the ordinals 1 to `u32::MAX - 2`, so
+a segment index of `u32::MAX - 2` is refused with `gts-scope-limit`. The import
+merge, the builder's merge scopes, the per-source scopes of a quad-source freeze
+and the event sink stop at the same ordinal, and the import merge numbers
+documents above the highest scope that is not reserved. An
+implementor of `purrdf_gts::segment_decode::ResolvedSink` overrides the provided
+method `intern_unbound_triple` to place the node outside every scope a document
+reaches; the provided body interns `unbound_triple_{id}` through `intern_blank`,
+which a document label can equal. `purrdf_gts::event_stream::EventEmitter` opens a
+scope of its own for each such term.
 
 A term whose `rf` names its own id is read as having no `rf`, because the
-reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView` and
-`dataset_from_gts_graph` then project it as a bare term. `import_gts_events` and
-its dictionary and blob forms refuse the file with `rdf-ir-gts-fold-diagnostic`,
-because they fail on any reader diagnostic.
+reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView`,
+`dataset_from_gts_graph`, `flattened_dataset_from_gts_graph` and
+`import_gts_graph` then project it as a bare term. `import_gts_events` and its
+dictionary and blob forms, and `export_gts_rdf_nquads_with_dictionary`, refuse the
+file with `rdf-ir-gts-fold-diagnostic`, because they fail on any reader
+diagnostic.
 
-`native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
-`rdf-ir-unbound-triple-term` remain defined for API compatibility. No public
-input produces them. A consumer that matched them to detect a bare term
-inspects the term instead, through `purrdf_gts::model::Term::is_bare_triple`. A
-writer that wants the term to state a triple writes `tt`.
-
-Two limits apply to the projection:
-
-- The projected node is labelled `unbound_triple_N`. A document blank node
-  with that label in the same scope denotes the same node as the projected one.
-  A term that reaches itself has the same label.
-- A term whose `rf` names a reifier with no `reifies` row is not a bare term.
-  `GtsFoldView` renders it as a blank node, while `dataset_from_gts_graph`,
-  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
-  and the exporter refuse it with a missing-reifier-binding code.
+`native-codec-unbound-triple-term`, `gts-unbound-triple-term`,
+`rdf-ir-unbound-triple-term`, `native-codec-missing-reifier-binding`,
+`rdf-ir-missing-reifier-binding` and `gts-missing-reifier-binding` remain defined
+for API compatibility. No public input produces them. A consumer that matched them
+to detect such a term inspects the term instead, through
+`purrdf_gts::model::Term::is_bare_triple` for a bare term. A writer that wants the
+term to state a triple writes `tt`.
 
 ## Hosts
 

@@ -115,6 +115,22 @@ pub trait ResolvedSink {
         label: &str,
     ) -> Result<Self::Id, Self::Error>;
 
+    /// Intern the blank node a triple term that states no triple stands for
+    /// (§7.3: no `tt`, no `rf` row, or a term that reaches itself), returning its
+    /// target id.
+    ///
+    /// The node is fresh: no blank-node label a document spells may denote it.
+    /// A target overrides this with a node outside every label scope a document
+    /// reaches. The provided body interns the label `unbound_triple_{gts_id}`
+    /// through [`Self::intern_blank`], which a document label can equal.
+    fn intern_unbound_triple(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+    ) -> Result<Self::Id, Self::Error> {
+        self.intern_blank(segment_index, gts_id, &format!("unbound_triple_{gts_id}"))
+    }
+
     /// Intern a resolved literal term, returning its target id. The datatype (if
     /// any) is already resolved to a target id; the target performs its own
     /// datatype-must-be-IRI check and base-direction parsing.
@@ -197,8 +213,10 @@ pub trait ResolvedSink {
     /// interns as a blank node (§7.3), and resolution no longer calls it.
     fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
-    /// Build the error for a triple term whose reifier no `reifies` event ever
-    /// bound.
+    /// Legacy missing-reifier error factory, retained for source compatibility.
+    /// A triple term whose reifier no `reifies` event bound states no triple and
+    /// interns through [`Self::intern_unbound_triple`] (§7.3); resolution no
+    /// longer calls this.
     fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> Self::Error;
 
     /// Per-frame provenance passthrough (default no-op).
@@ -696,9 +714,14 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             let Some(term) = held.term.as_deref() else {
                 return Err(self.sink.err_dangling_term(segment_index, current, role));
             };
-            // A term that reaches itself and a bare triple term state no triple
-            // (§7.3): both intern as the fresh blank node of an unbound term.
-            let degraded = held.component.degrades() || term.is_bare_triple();
+            // A term that reaches itself, a bare triple term and a term whose
+            // `rf` names a reifier no `reifies` row binds state no triple (§7.3):
+            // each interns as the fresh blank node of an unbound term.
+            let degraded = held.component.degrades()
+                || (term.kind == TermKind::Triple
+                    && self
+                        .declared_components(segment_index, term.triple, term.reifier)?
+                        .is_none());
             let dependency = match term.kind {
                 TermKind::Literal if held.next == 0 => {
                     term.datatype.map(|id| (id, "literal datatype"))
@@ -828,14 +851,12 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             // that id may now bind several triples, in which case its FIRST
             // binding is the one such a term can mean (the reader flags the
             // ambiguity as `ConflictingReifier`).
-            // A triple term that reaches itself, or carries neither `tt` nor
-            // `rf`, states no triple (GTS-SPEC §7.3): it interns as the fresh
-            // blank node an unbound triple term is, named by its own id.
-            TermKind::Triple if degraded => self.sink.intern_blank(
-                segment_index,
-                gts_id,
-                &format!("unbound_triple_{gts_id}"),
-            )?,
+            // A triple term that reaches itself, carries neither `tt` nor `rf`,
+            // or names a reifier with no row, states no triple (GTS-SPEC §7.3):
+            // it interns as the fresh blank node an unbound triple term is.
+            TermKind::Triple if degraded => {
+                self.sink.intern_unbound_triple(segment_index, gts_id)?
+            }
             TermKind::Triple => {
                 let (s, p, o) = self.triple_components(segment_index, gts_id, &term)?;
                 let (s, p, o) = (

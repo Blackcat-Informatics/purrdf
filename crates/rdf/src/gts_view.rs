@@ -30,8 +30,10 @@ use purrdf_iri::vocab::{owl, rdf, rdfs, skos};
 use purrdf_lex::term_syntax;
 use purrdf_xsd::datatype::{XSD_NS as XSD, XSD_STRING};
 
-use crate::RdfDiagnostic;
-use crate::gts_resolve::ensure_terms_terminate;
+use crate::gts_resolve::{
+    UNBOUND_TRIPLE_SCOPE, blank_token, ensure_terms_terminate, unbound_triple_label,
+};
+use crate::{BlankScope, RdfDiagnostic};
 use purrdf_gts::resolution::SelfReaching;
 
 /// Scope name for the default graph (quads with no graph term).
@@ -287,9 +289,10 @@ impl GtsFoldView {
     /// through itself. The view's accessors — [`GtsFoldView::nq_token`],
     /// [`GtsFoldView::public_value`] and everything built on them — walk a quoted
     /// triple's resolved components to the leaves. A triple term that reaches
-    /// itself (GTS-SPEC §7.3) states no triple there and renders as
-    /// `_:unbound_triple_{id}`, so every renderer terminates; its `reifies` rows
-    /// stay visible through [`GtsFoldView::reifiers`].
+    /// itself (GTS-SPEC §7.3) states no triple there, as does one with neither
+    /// `tt` nor `rf` and one whose `rf` no `reifies` row binds. Each renders as a
+    /// blank node no document label spells, so every renderer terminates; its
+    /// `reifies` rows stay visible through [`GtsFoldView::reifiers`].
     ///
     /// Returns `gts-unreadable-language-tag` when a term's `lang` is a tag the RDF
     /// concrete-syntax grammar refuses. The reasoning is the same shape: the reader
@@ -1028,7 +1031,9 @@ fn render_term(graph: &Graph, reaching: &SelfReaching, tid: usize) -> String {
         match term.kind {
             TermKind::Iri => term_syntax::write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_ref() {
-                Some(value) => term_syntax::write_blank(value, &mut out),
+                Some(value) => {
+                    term_syntax::write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out);
+                }
                 None => {
                     let _ = write!(out, "_:b{tid}");
                 }
@@ -1060,9 +1065,16 @@ fn render_term(graph: &Graph, reaching: &SelfReaching, tid: usize) -> String {
                     ]);
                     next = Some(Piece::Term(s));
                 }
-                None => {
-                    let _ = write!(out, "_:unbound_triple_{tid}");
-                }
+                // A triple term that states no triple is the fresh blank node of
+                // the scope no document label reaches, so its token never equals
+                // a document blank node's (see `blank_token`).
+                None => term_syntax::write_blank(
+                    &blank_token(
+                        &unbound_triple_label(None, tid).to_string(),
+                        UNBOUND_TRIPLE_SCOPE,
+                    ),
+                    &mut out,
+                ),
             },
         }
     }
@@ -1525,6 +1537,8 @@ mod term_walk_tests {
     use purrdf_core::{Nested, TermValue, try_fold_nested};
     use purrdf_gts::model::{Graph, Term, TermKind};
 
+    use crate::BlankScope;
+    use crate::gts_resolve::{UNBOUND_TRIPLE_SCOPE, blank_token, unbound_triple_label};
     use purrdf_lex::term_syntax::{write_blank, write_iri, write_literal};
     use purrdf_xsd::datatype::XSD_STRING;
 
@@ -1592,7 +1606,7 @@ mod term_walk_tests {
         match term.kind {
             TermKind::Iri => write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_deref() {
-                Some(value) => write_blank(value, &mut out),
+                Some(value) => write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out),
                 None => out = format!("_:b{tid}"),
             },
             TermKind::Literal => write_literal(
@@ -1606,7 +1620,17 @@ mod term_walk_tests {
             ),
             TermKind::Triple => {
                 out = graph.triple_of(tid).map_or_else(
-                    || format!("_:unbound_triple_{tid}"),
+                    || {
+                        let mut out = String::new();
+                        write_blank(
+                            &blank_token(
+                                &unbound_triple_label(None, tid).to_string(),
+                                UNBOUND_TRIPLE_SCOPE,
+                            ),
+                            &mut out,
+                        );
+                        out
+                    },
                     |(s, p, o)| {
                         format!(
                             "<<( {} {} {} )>>",

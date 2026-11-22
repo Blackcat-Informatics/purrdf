@@ -343,3 +343,34 @@ fn a_blank_free_query_literal_keeps_its_lexical_form() {
     assert_eq!(lexical_form, "{ '2': 01, '1': 'x' }");
     assert_eq!(datatype, CDT_MAP);
 }
+
+/// The scope a GTS projection interns the node of a triple term that states no
+/// triple under is not the query's scope: a query whose composite literal spells the
+/// projected label (`_:unbound_triple_2`) writes a blank node of its own document and
+/// does not denote the projected node. The neighbouring case, the same label at the
+/// query's own scope on both sides, is the one node the query names twice.
+#[test]
+fn a_query_authored_blank_does_not_denote_a_projected_unbound_triple_node() {
+    use purrdf_core::blank_label::{QUERY_BLANK_SCOPE, UNBOUND_TRIPLE_BLANK_SCOPE};
+    assert_ne!(UNBOUND_TRIPLE_BLANK_SCOPE, QUERY_BLANK_SCOPE);
+    let mut b = RdfDatasetBuilder::new();
+    let s = b.intern_iri("http://example.org/s").unwrap();
+    let p = b.intern_iri("http://example.org/p").unwrap();
+    let o = b
+        .intern_blank("unbound_triple_2", UNBOUND_TRIPLE_BLANK_SCOPE)
+        .unwrap();
+    b.push_quad(s, p, o, None).unwrap();
+    let ds = b.freeze().expect("freeze fixture");
+    assert!(ask(
+        &ds,
+        r#"BIND( "[_:unbound_triple_2, 42]"^^cdt:List AS ?l ) ex:s ex:p ?bn .
+           BIND( cdt:get(?l,1) AS ?e1 )
+           FILTER( isBLANK(?e1) ) FILTER( isBLANK(?bn) ) FILTER( ?e1 != ?bn )"#
+    ));
+    assert!(ask(
+        &empty(),
+        r#"BIND( "[_:unbound_triple_2, _:unbound_triple_2]"^^cdt:List AS ?l )
+           BIND( cdt:get(?l,1) AS ?e1 ) BIND( cdt:get(?l,2) AS ?e2 )
+           FILTER( ?e1 = ?e2 )"#
+    ));
+}

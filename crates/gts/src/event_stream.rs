@@ -376,6 +376,33 @@ impl ResolvedSink for EventEmitter<'_> {
         Ok(id)
     }
 
+    /// A triple term that states no triple is a blank node alone in a scope of
+    /// its own: no label a document spells in any segment scope denotes it.
+    fn intern_unbound_triple(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+    ) -> Result<Self::Id, Self::Error> {
+        self.ensure_scope(segment_index)?;
+        let id = mint_event_id(&mut self.next_id)?;
+        if self.cancelled {
+            return Ok(id);
+        }
+        let scope = self.sink.open_scope()?;
+        let label = format!("unbound_triple_{segment_index}_{gts_id}");
+        self.emit_term(
+            id,
+            EventTerm::Blank {
+                label: &label,
+                scope,
+            },
+        )?;
+        if !self.cancelled && self.sink.close_scope(scope)? == ControlFlow::Break(()) {
+            self.cancelled = true;
+        }
+        Ok(id)
+    }
+
     fn intern_literal(
         &mut self,
         segment_index: u64,

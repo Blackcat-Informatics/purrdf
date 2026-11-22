@@ -10,20 +10,58 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [5.0.0] - 2026-11-21
 
-- **Behaviour change: a triple term with neither `tt` nor `rf` projects as a
-  fresh blank node on every path.** Such a term states no triple, and the
-  specification's third resolution rule says a reader keeps it as a distinct
-  term and a projection renders it as a fresh blank node. The fold view already
-  did; `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, the
-  streaming importers (`import_gts_events` and its dictionary and blob forms) and
-  `export_gts_rdf_nquads_with_dictionary` refused the same file. They now project
-  `_:unbound_triple_{id}`, the node a term that reaches itself already becomes: one
-  id names one node in a projection and a second bare term names another.
+- **Breaking: `MediumPlan` and `OperationModel` are `#[non_exhaustive]`.** A struct
+  literal of `MediumPlan` outside `purrdf-rdf` is replaced by `MediumPlan::undicted`
+  or `MediumPlan::dist_default` followed by assignment of the public fields; an
+  exhaustive `match` on `OperationModel` adds a wildcard arm. This makes room for
+  the rsyncable unit, window and long-distance matching of a plan and for a
+  coordinate-operation model the geodesy data may need, as additions. No field,
+  variant, constructor or emitted byte changed. In the workspace, the response
+  encoders of `purrdf-validate` refuse a model they have no encoding for with
+  `GeoError::Unsupported`.
+- **Breaking: `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the
+  endpoint and a typed `RemoteError`.** Both held a formatted `String`; they now
+  hold `{ endpoint, cause }`, `EvalError::remote` takes the endpoint and the
+  cause and chooses the variant from it. The structured
+  visitor reports `endpoint` and the nested `cause` fields by name. `Display` and
+  the diagnostic codes are unchanged. `RemoteError::NoSource` names an engine
+  given no remote query source, which `ServiceUnconfigured` previously carried
+  only as text.
+
+- **Behaviour change: a triple term that states no triple projects as a fresh
+  blank node no document label can name, on every path.** A triple term with
+  neither `tt` nor `rf`, a term whose `rf` names a reifier no `reifies` row binds
+  and a term that reaches itself state no triple, and the specification's third
+  resolution rule says a reader keeps each as a distinct term and a projection
+  renders it as a fresh blank node. `GtsFoldView`, `dataset_from_gts_graph`,
+  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
+  (`import_gts_events` and its dictionary and blob forms) and
+  `export_gts_rdf_nquads_with_dictionary` project such a term, where the bridges,
+  importers and exporter refused the first two. The node lives in a blank-node
+  scope no document label reaches (`u32::MAX - 1`), so a document blank node labelled
+  `unbound_triple_N` is a different node; the earlier label in the document's own
+  scope was the same node. The projected identifier changes: a folded graph names
+  the node `unbound_triple_{id}` and a streamed file names it
+  `unbound_triple_{segment}_{id}`, each in that scope, and the N-Quads token of
+  the fold view and of the text exporter is the scoped escape
+  `_:purrdfesc4294967294_...` (the exporter's also names the segment). The fold
+  view's `nq_token` writes document blank nodes through the same encoder, so a
+  label that is not a valid N-Quads blank-node label or begins with `purrdfesc`
+  is now written escaped instead of verbatim. The streaming importers keep segment scopes at most
+  `u32::MAX - 2`, so a segment index of `u32::MAX - 2` is refused with
+  `gts-scope-limit` where it was admitted. Every other scope allocator (the import
+  merge, the builder's merge scopes, the per-source scopes of a quad-source freeze
+  and the event sink) also stops at `u32::MAX - 2`, and the import merge numbers
+  documents above the highest scope that is not reserved, so a graph holding a
+  projected unbound node still merges at low scopes. `ResolvedSink` gains the provided
+  method `intern_unbound_triple`, whose body interns the old label through
+  `intern_blank` for an implementor that does not override it; `EventEmitter`
+  gives each such term a scope of its own. The missing-reifier-binding codes and
   `native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
   `rdf-ir-unbound-triple-term` remain defined for API compatibility and no public
-  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the case,
-  and `ResolvedSink::err_unbound_triple` stays a required method that the
-  resolver no longer calls.
+  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the bare
+  case, and `ResolvedSink::err_unbound_triple` and `err_missing_reifier` stay
+  required methods that the resolver no longer calls.
 
 - **The byte-freeze guard covers the flat GTS vectors.** `check-corpus-frozen.py`
   gains a flat root, which freezes the registered files directly inside one
@@ -295,17 +333,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   (for the last, to keep the bytes of a SARIF `logicalLocation` stable). The one
   exception is the retained `purrdf_core::rdfc12` path, which writes U+FFFE and
   U+FFFF raw through the new `literal_escape::write_rdfc12_v3` and
-  `term_syntax::write_literal_rdfc12_v3`: its bytes, `CANON_PROFILE_VERSION` (3)
-  and `CANON_CORPUS_DIGEST` are those of 4.0.2, so every stored 4.x digest of a
-  dataset holding either in a literal recomputes, including the PACK version 1
-  `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
-  source digests and the embedded `stream:contentRefoldDigest`. The one 4.x
-  spelling it does not keep is U+007F and U+0080 to U+009F in an IRI (see
-  above): a stored digest of a dataset holding one of them in an IRI that a
-  caller's own `DatasetView` supplied no longer recomputes. The 5.0 digest is
-  over binary lines and does not move; the 5.0 document spells U+FFFE and U+FFFF
-  as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
-  SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
+  `term_syntax::write_literal_rdfc12_v3`, and DEL and the C1 controls in an IRI
+  escaped through the new `term_syntax::write_iri_rdfc12_v3` (the `Xml` carrier,
+  the one escaper body): its bytes, `CANON_PROFILE_VERSION` (3)
+  and `CANON_CORPUS_DIGEST` are those of 4.0.2, so every stored 4.x digest
+  recomputes, including the PACK version 1 `rdfc_digest`, `rdfc10-sha256`
+  compaction certificates, PURREMB version 1 source digests and the embedded
+  `stream:contentRefoldDigest`. The 5.0 digest is over binary lines and does not
+  move; the 5.0 document spells those characters as escapes. The
+  `nrl1-lines-sha256` compaction certificate digest, which is the SHA-256 of the
+  5.0 document, follows its spelling and moves for such a dataset.
 - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as

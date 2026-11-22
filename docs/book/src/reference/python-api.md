@@ -641,8 +641,9 @@ assert view.public_text(alice_id, "https://example.org/name") == "Alice"
 
 `GtsFoldViewNative.from_bytes` reads a container;
 `from_parts` admits caller-supplied term, quad, reifier and annotation tables.
-A triple term that reaches itself states no triple and renders as
-`_:unbound_triple_{id}`, while its `reifies` rows stay; both refuse a literal
+A triple term that reaches itself states no triple and renders as a blank
+node no document label spells (`_:purrdfesc4294967294_unbound_00005Ftriple_00005F{id}`),
+while its `reifies` rows stay; both refuse a literal
 whose datatype chain reaches itself with `gts-self-reaching-term`, rather than
 exposing a renderer that recurses forever. `curie_prefixes` supplies
 the host's CURIE mappings; only the documented W3C namespaces are built in.

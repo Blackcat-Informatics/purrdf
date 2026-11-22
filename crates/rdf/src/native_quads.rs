@@ -51,15 +51,10 @@ pub(crate) fn dataset_from_quads_declaring(
 }
 
 fn source_scope(index: usize) -> Result<BlankScope, purrdf_lex::allocation::StorageError> {
-    use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
-    CapacityError::check(
-        CapacitySpace::ImportBlankScopes,
-        index as u128 + 1,
-        u128::from(u32::MAX) + 1,
-    )?;
-    Ok(BlankScope(
-        u32::try_from(index).map_err(|_| StorageError::SizeOverflow)?,
-    ))
+    purrdf_core::blank_label::allocatable_scope(
+        purrdf_lex::allocation::CapacitySpace::ImportBlankScopes,
+        index as u64,
+    )
 }
 
 fn freeze_quad_sources(
@@ -312,23 +307,24 @@ mod tests {
     fn source_scope_preserves_terminal_identity_and_refuses_wraparound() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
 
+        use purrdf_core::blank_label::MAX_ALLOCATED_SCOPE;
+
         assert_eq!(source_scope(0).unwrap(), BlankScope::DEFAULT);
-        let last = usize::try_from(u32::MAX).unwrap();
-        assert_eq!(source_scope(last).unwrap(), BlankScope(u32::MAX));
-        if let Some(next) = last.checked_add(1) {
-            let refused = source_scope(next).unwrap_err();
-            assert_eq!(
-                refused,
-                StorageError::Capacity(CapacityError::new(
-                    CapacitySpace::ImportBlankScopes,
-                    u128::from(u32::MAX) + 2,
-                    u128::from(u32::MAX) + 1
-                ))
-            );
-            let diagnostic = RdfDiagnostic::from(refused);
-            assert_eq!(diagnostic.storage_error(), Some(refused));
-            assert_eq!(source_scope(last).unwrap(), BlankScope(u32::MAX));
-        }
+        let last = usize::try_from(MAX_ALLOCATED_SCOPE).unwrap();
+        assert_eq!(source_scope(last).unwrap(), BlankScope(MAX_ALLOCATED_SCOPE));
+        let next = last + 1;
+        let refused = source_scope(next).unwrap_err();
+        assert_eq!(
+            refused,
+            StorageError::Capacity(CapacityError::new(
+                CapacitySpace::ImportBlankScopes,
+                u128::from(MAX_ALLOCATED_SCOPE) + 1,
+                u128::from(MAX_ALLOCATED_SCOPE)
+            ))
+        );
+        let diagnostic = RdfDiagnostic::from(refused);
+        assert_eq!(diagnostic.storage_error(), Some(refused));
+        assert_eq!(source_scope(last).unwrap(), BlankScope(MAX_ALLOCATED_SCOPE));
     }
 
     #[test]
