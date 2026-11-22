@@ -8,6 +8,24 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+- **Breaking: `MediumPlan` and `OperationModel` are `#[non_exhaustive]`.** A struct
+  literal of `MediumPlan` outside `purrdf-rdf` is replaced by `MediumPlan::undicted`
+  or `MediumPlan::dist_default` followed by assignment of the public fields; an
+  exhaustive `match` on `OperationModel` adds a wildcard arm. This makes room for
+  the rsyncable unit, window and long-distance matching of a plan and for a
+  coordinate-operation model the geodesy data may need, as additions. No field,
+  variant, constructor or emitted byte changed. In the workspace, the response
+  encoders of `purrdf-validate` refuse a model they have no encoding for with
+  `GeoError::Unsupported`.
+- **Breaking: `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the
+  endpoint and a typed `RemoteError`.** Both held a formatted `String`; they now
+  hold `{ endpoint, cause }`, `EvalError::remote` takes the endpoint and the
+  cause and chooses the variant from it. The structured
+  visitor reports `endpoint` and the nested `cause` fields by name. `Display` and
+  the diagnostic codes are unchanged. `RemoteError::NoSource` names an engine
+  given no remote query source, which `ServiceUnconfigured` previously carried
+  only as text.
+
 - **Behaviour change: a triple term with neither `tt` nor `rf` projects as a
   fresh blank node on every path.** Such a term states no triple, and the
   specification's third resolution rule says a reader keeps it as a distinct

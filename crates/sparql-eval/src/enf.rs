@@ -826,7 +826,7 @@ mod effect_free_gate_tests {
 
     fn assert_service_unconfigured_error(err: &EvalError) {
         assert!(
-            matches!(err, EvalError::ServiceUnconfigured(_)),
+            matches!(err, EvalError::ServiceUnconfigured { .. }),
             "expected EvalError::ServiceUnconfigured, got {err:?}"
         );
     }
