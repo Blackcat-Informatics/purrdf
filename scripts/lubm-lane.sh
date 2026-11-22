@@ -198,8 +198,10 @@ fi
 # proved usable.
 # Build and admit every native configuration before acquiring anything or generating.
 # Cargo owns executable freshness and its configured target directory.
+# Integration tests reuse the profile that built their checker.
 native_check() {
-  CARGO_BUILD_JOBS=8 cargo run --manifest-path "${REPO_ROOT}/Cargo.toml" --locked --release --jobs 8 -p purrdf-bench --bin lubm-check -- "$@"
+  CARGO_BUILD_JOBS=8 cargo run --manifest-path "${REPO_ROOT}/Cargo.toml" --locked \
+    --profile "${PURRDF_LUBM_CHECK_PROFILE-release}" --jobs 8 -p purrdf-bench --bin lubm-check -- "$@"
 }
 native_admitted="$(native_check config "${SEED}" "${INDEX}" "${UNIVERSITIES}" "${ONTO}" "${DOC_BASE}")" ||
   die "invalid native configuration: LUBM_SEED='${SEED}' LUBM_INDEX='${INDEX}' LUBM_UNIVERSITIES='${UNIVERSITIES}' LUBM_ONTO='${ONTO}' LUBM_DOC_BASE='${DOC_BASE}'; no acquisition or generation occurred"
