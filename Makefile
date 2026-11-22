@@ -80,7 +80,13 @@ help: ## Show this help.
 metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 	cargo metadata --no-deps --format-version 1 >/dev/null
 	bash scripts/check-generated.sh --write
+	$(MAKE) check-sssom-corpus
 	$(MAKE) license-bundles
+
+.PHONY: check-sssom-corpus
+check-sssom-corpus: ## Parse and validate the committed accessibility mappings.
+	cargo test -p purrdf-core --lib --locked \
+		sssom::tests::corpus_accessibility_parses_and_validates_clean
 
 fmt: ## Auto-format the workspace.
 	cargo fmt --all

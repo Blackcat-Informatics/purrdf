@@ -180,6 +180,7 @@ jobs:
           cargo check --workspace --lib --tests --locked
           cargo run -q --locked -p helper-census -- --no-features
           bash scripts/check-generated.sh
+          make check-sssom-corpus
           # Release-coherence gate at the point of no return: the tag-verify step
           # above checks each crate's OWN version, but not its internal dependency
           # requirements. This catches a partial bump (a stale ^x.y.z internal pin)
