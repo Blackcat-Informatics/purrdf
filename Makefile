@@ -280,6 +280,9 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 		exit 1; \
 	}
 
+# Reuse the checker built by Cargo for the benchmark lane tests.
+test test-shard: private export PURRDF_LUBM_CHECK_PROFILE := test
+
 test: node-prerequisite binaryen-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 

@@ -39,10 +39,6 @@ _BASE = (
 )
 
 
-def test_entail_is_callable() -> None:
-    assert callable(purrdf.shapes.entail)
-
-
 def test_entail_materializes_inferred_triple() -> None:
     out = purrdf.shapes.entail(_SHAPES, _DATA, canonical_search="1000000").value["ntriples"]
     assert _INFERRED in out, f"inferred triple missing from:\n{out}"

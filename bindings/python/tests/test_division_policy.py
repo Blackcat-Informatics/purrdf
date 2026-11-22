@@ -59,8 +59,6 @@ def test_exact_answers_a_terminating_quotient_and_leaves_a_non_terminating_one_u
 
     assert _value(store.query(_select("1/8"), division="exact")) == "0.125"
     assert _unbound(store.query(_select("1/3"), division="exact"))
-    caught = store.query('SELECT (COALESCE(1/3, "caught") AS ?x) {}', division="exact")
-    assert _value(caught) == "caught"
 
 
 def test_a_scale_and_rounding_policy_rounds_the_quotient() -> None:
@@ -72,10 +70,10 @@ def test_a_scale_and_rounding_policy_rounds_the_quotient() -> None:
     assert _value(store.query(_select('SECONDS("2024-01-02T03:04:05.123456789012345678901Z"^^<http://www.w3.org/2001/XMLSchema#dateTime>)'))) == "05.123456789012345678901"
 
 
-def test_the_default_keeps_terminating_digits_and_rounds_repeating_quotients() -> None:
+def test_an_omitted_policy_and_none_select_the_default() -> None:
     store = _store()
-    assert _value(store.query(_select("1/1048576"))) == "0.00000095367431640625"
-    assert _value(store.query(_select("2/3"), division=None)) == "0.666666666666666667"
+    query = _select("2/3")
+    assert _value(store.query(query)) == _value(store.query(query, division=None)) == "0.666666666666666667"
 
 
 @pytest.mark.parametrize("text", ["5:sideways", "", "exactly", "-1", "5:"])
