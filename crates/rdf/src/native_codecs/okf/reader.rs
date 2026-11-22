@@ -16,7 +16,8 @@ use super::{
     OkfBundle, OkfConfig, OkfError, OkfReadOutcome, decimal_lexical_from_f64, minted_document_iri,
     validate_absolute_iri, validate_relative_markdown_path,
 };
-use crate::{LossEntry, LossLedger, RdfLocation};
+use crate::{LossEntry, LossLedger};
+use purrdf_core::{LossSite, LossSubject};
 
 use purrdf_xsd::datatype::XSD_BOOLEAN;
 use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
@@ -234,7 +235,13 @@ fn parse_documents(
                     note: Cow::Borrowed(
                         "Frontmatter-less index.md is navigation-only and has no RDF concept subject.",
                     ),
-                    location: Some(Box::new(RdfLocation::file(path))),
+                    site: LossSite::Document {
+                        path: Some(path.to_owned()),
+                        line: None,
+                        column: None,
+                    },
+                    subject: LossSubject::Absent,
+                    detail: Vec::new(),
                 });
                 continue;
             }

@@ -20,11 +20,12 @@ use purrdf_core::{
 use purrdf_lex::json::{Object, Value};
 
 use super::super::json_codec::role_map_json;
+use super::super::loss::record_contract_loss;
 use super::super::util::{validate_compact_term, validate_role_map};
 use super::super::{ProjectionError, ProjectionPackage, validate_absolute_iri};
 use super::json::{
     ResearchObjectPackageProjection, ResearchObjectReadOutcome, canonical_json, ensure_sound,
-    json_pointer, normalize_lifted_jsonld, parse_strict_json, record_loss, require_artifact,
+    json_pointer, normalize_lifted_jsonld, parse_strict_json, require_artifact,
 };
 use super::{
     OfflineJsonLdContext, ResearchActivity, ResearchAgent, ResearchChecksum, ResearchDataset,
@@ -542,12 +543,19 @@ fn encode_resource(
         if is_sha256(&checksum.algorithm) {
             sha256.push(compact_text(&checksum.value, config.common().roles()));
         } else {
-            record_loss(
+            record_contract_loss(
                 ledger,
                 &contract,
                 LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED,
-                CROISSANT_ARTIFACT,
-                &resource.id,
+                (
+                    purrdf_core::LossSite::Document {
+                        path: Some(CROISSANT_ARTIFACT.to_owned()),
+                        line: None,
+                        column: None,
+                    },
+                    purrdf_core::LossSubject::Term(purrdf_core::LossTerm::Iri(resource.id.clone())),
+                    Vec::new(),
+                ),
             );
         }
     }
@@ -1537,7 +1545,7 @@ mod tests {
             read.loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
 
         let projected = project_croissant(&read.dataset, &config).expect("project fixture");

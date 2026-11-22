@@ -998,7 +998,7 @@ fn the_loss_ledger_is_live_for_rdf_and_refused_for_sarif() {
     let ledger: purrdf_lex::json::Value =
         purrdf_lex::json::read(&std::fs::read_to_string(&ledger_path).expect("ledger written"))
             .expect("the ledger is JSON");
-    assert_eq!(ledger["schema_version"], 1, "the ledger's stable schema");
+    assert_eq!(ledger["schema_version"], 2, "the ledger's stable schema");
     assert!(
         ledger["losses"].as_array().is_some(),
         "the ledger records the ntriples -> rdfxml contract: {ledger}"

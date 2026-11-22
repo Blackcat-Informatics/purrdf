@@ -968,15 +968,74 @@ export type LiftProfile = Exclude<
   "csvw-terms" | "okf-terms" | "obo-graphs" | "skos" | "dcat-rdf" | "void"
 >;
 
+export type LossGraphName =
+  | { kind: "default" }
+  | { kind: "iri"; value: string }
+  | { kind: "blank"; label: string; scope: string | null };
+
+export type LossTerm =
+  | { kind: "iri"; value: string }
+  | { kind: "blank"; label: string; scope: string | null }
+  | {
+      kind: "literal";
+      lexical: string;
+      datatype: string;
+      language: string | null;
+      direction: "ltr" | "rtl" | null;
+    }
+  | { kind: "triple"; subject: LossTerm; predicate: LossTerm; object: LossTerm }
+  | { kind: "indexed"; index: number };
+
+export type LossSite =
+  | { kind: "unspecified" }
+  | { kind: "document"; path: string | null; line: number | null; column: number | null }
+  | {
+      kind: "gts";
+      segment: number | null;
+      frame: number | null;
+      term: number | null;
+      quad: number | null;
+      reifier: number | null;
+    }
+  | { kind: "stage"; name: string };
+
+export type LossSubject =
+  | { kind: "absent" }
+  | { kind: "term"; term: LossTerm }
+  /** A source row, by its kind and the lowercase hexadecimal SHA-256 digest of its content. */
+  | { kind: "row"; row_kind: string; digest: string }
+  | { kind: "resource"; resource_kind: string; identifier: string }
+  | { kind: "graph"; graph: LossGraphName }
+  | { kind: "pointer"; tokens: string[] }
+  | { kind: "path"; steps: LossPathStep[] };
+
+export type LossPathStep =
+  | { kind: "element"; name: string; position: number }
+  | { kind: "attribute"; name: string };
+
+export type LossDetailValue =
+  | { kind: "count"; count: number }
+  | { kind: "identifier"; identifier: string }
+  | { kind: "term"; term: LossTerm }
+  | { kind: "graph"; graph: LossGraphName };
+
+/**
+ * The parsed `lossLedgerJson`. Counts, positions, indexes and GTS ordinals are
+ * unsigned 64-bit integers in the JSON text: `JSON.parse` reads one above
+ * `Number.MAX_SAFE_INTEGER` inexactly, so read the text with a parser that keeps
+ * large integers when a value can exceed that bound.
+ */
 export interface ProjectionLossLedger {
-  schema_version: 1;
+  schema_version: 2;
   losses: Array<{
     code: string;
     from: string;
     to: string;
     intentional: boolean;
     note: string;
-    location?: string;
+    site: LossSite;
+    subject: LossSubject;
+    detail: Array<{ kind: "detail"; name: string; value: LossDetailValue }>;
   }>;
 }
 

@@ -213,17 +213,16 @@ ex:Lossy a sh:NodeShape; sh:datatype xsd:integer; sh:equals ex:other.
     )
     .expect("losses remain available to the original SHACL validator");
     for (code, subject) in [
-        ("sh:equals", "<https://example.org/tools/Lossy>"),
-        ("sh:not", "<https://example.org/tools/Args>"),
+        ("sh:equals", "https://example.org/tools/Lossy"),
+        ("sh:not", "https://example.org/tools/Args"),
     ] {
         assert!(
             compiled.losses.entries().iter().any(|entry| {
                 entry.code == code
-                    && entry
-                        .location
-                        .as_deref()
-                        .and_then(|location| location.subject.as_deref())
-                        == Some(subject)
+                    && entry.subject
+                        == purrdf_core::LossSubject::Term(purrdf_core::LossTerm::Iri(
+                            subject.to_owned(),
+                        ))
             }),
             "missing {code} loss at {subject}"
         );
@@ -474,8 +473,10 @@ ex:Args a sh:NodeShape; sh:targetClass ex:Call;
         };
         assert_eq!(loss.code, "plain:ieee-representability");
         assert_eq!(
-            loss.location.as_ref().unwrap().subject.as_deref(),
-            Some("<https://example.org/tools/Args>")
+            loss.subject,
+            purrdf_core::LossSubject::Term(purrdf_core::LossTerm::Iri(
+                "https://example.org/tools/Args".to_owned()
+            ))
         );
         assert!(compiled.schema_json.contains("original SHACL validation"));
     }

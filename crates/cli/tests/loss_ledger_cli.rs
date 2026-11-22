@@ -625,12 +625,32 @@ fn the_named_graph_dropped_note_matches_what_convert_actually_does() {
 
     // The REALIZED count: exactly one row was discarded, and the ledger says so — the
     // contract half alone would fire even for a source with no named graph at all.
-    assert!(
-        ledger.contains("\"code\": \"named-graph-rows-dropped\""),
-        "the realized drop count must be recorded beside the contract entry; got:\n{ledger}"
-    );
-    assert!(
-        ledger.contains("1 row(s) asserted in a named graph"),
+    let parsed = purrdf_lex::json::read(&ledger).expect("ledger JSON");
+    let realized = parsed["losses"]
+        .as_array()
+        .expect("loss array")
+        .iter()
+        .find(|entry| entry["code"].as_str() == Some("named-graph-rows-dropped"))
+        .unwrap_or_else(|| {
+            panic!(
+                "the realized drop count must be recorded beside the contract entry; \
+                 got:\n{ledger}"
+            )
+        });
+    let counts: Vec<u64> = realized["detail"]
+        .as_array()
+        .expect("detail array")
+        .iter()
+        .filter(|detail| detail["name"].as_str() == Some("rows"))
+        .map(|detail| {
+            detail["value"]["count"]
+                .as_u64()
+                .expect("an unsigned count")
+        })
+        .collect();
+    assert_eq!(
+        counts,
+        [1],
         "the realized entry must count the dropped row; got:\n{ledger}"
     );
 }

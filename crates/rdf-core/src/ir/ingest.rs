@@ -38,7 +38,7 @@ use super::term::{BlankScope, TermId};
 #[cfg(test)]
 use crate::FastSet;
 use crate::{FastMap, RdfLiteral};
-use purrdf_lex::allocation::{CapacityError, CapacitySpace, Memory, Resident, StorageError};
+use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError};
 
 mod error;
 use error::IngestError;
@@ -399,13 +399,12 @@ impl RdfEventSink for DatasetSink {
 
     fn open_scope(&mut self) -> Result<ScopeId, EventError> {
         // Hard-fail on ordinal exhaustion rather than wrapping (no degraded fallback).
-        CapacityError::check(
+        let next = crate::blank_label::first_free_scope_after(
             CapacitySpace::ImportBlankScopes,
-            u128::from(self.next_scope) + 1,
-            u128::from(u32::MAX),
+            self.next_scope,
         )
-        .map_err(|error| event_storage_error(error.into()))?;
-        let next = self.next_scope + 1;
+        .map_err(event_storage_error)?
+        .ordinal();
         self.open_scopes
             .try_reserve(1)
             .map_err(|_| EventError::StorageAllocationFailed)?;
@@ -560,6 +559,7 @@ impl<'a> FrozenDatasetSource<'a> {
         &self,
         sink: &mut S,
         id: TermId,
+        reserved_scopes: &std::collections::BTreeMap<u32, ScopeId>,
     ) -> Result<ControlFlow<()>, EventError> {
         let event_id = EventTermId(u64::try_from(id.index()).expect("bounded local term index"));
         match self.dataset.resolve(id) {
@@ -568,7 +568,10 @@ impl<'a> FrozenDatasetSource<'a> {
                 event_id,
                 EventTerm::Blank {
                     label,
-                    scope: ScopeId(scope.ordinal()),
+                    scope: reserved_scopes
+                        .get(&scope.ordinal())
+                        .copied()
+                        .unwrap_or_else(|| ScopeId(scope.ordinal())),
                 },
             ),
             TermRef::Literal {
@@ -615,26 +618,37 @@ impl RdfEventSource for FrozenDatasetSource<'_> {
         // so opening `max_scope` times yields exactly the ids ScopeId(1..=max_scope),
         // matching the blank ordinals carried by value. ScopeId::DEFAULT (0) is open
         // from the start and is never minted here.
-        let max_scope = (0..self.dataset.term_count())
-            .filter_map(|i| {
-                match self.dataset.resolve(
-                    TermId::from_index(i as u32).expect("stored term index is representable"),
-                ) {
-                    TermRef::Blank { scope, .. } => Some(scope.ordinal()),
-                    _ => None,
+        // A reserved scope (a projected unbound triple term) is not minted by
+        // number: the sink would have to open four billion scopes to reach it, so
+        // each reserved scope in use is opened once, after the numbered ones, and
+        // its blanks are declared under the scope the sink returned.
+        let mut max_scope = 0;
+        let mut reserved = std::collections::BTreeSet::new();
+        for i in 0..self.dataset.term_count() {
+            if let TermRef::Blank { scope, .. } = self
+                .dataset
+                .resolve(TermId::from_index(i as u32).expect("stored term index is representable"))
+            {
+                if crate::blank_label::is_reserved_scope(scope) {
+                    reserved.insert(scope.ordinal());
+                } else {
+                    max_scope = max_scope.max(scope.ordinal());
                 }
-            })
-            .max()
-            .unwrap_or(0);
+            }
+        }
         for _ in 0..max_scope {
             sink.open_scope()?;
+        }
+        let mut reserved_scopes = std::collections::BTreeMap::new();
+        for scope in reserved {
+            reserved_scopes.insert(scope, sink.open_scope()?);
         }
 
         // Terms first, in ascending id order — a triple term's components (lower ids)
         // and a literal's datatype are declared before the term referencing them.
         for i in 0..self.dataset.term_count() {
             let id = TermId::from_index(i as u32).expect("stored term index is representable");
-            if self.emit_term(sink, id)? == ControlFlow::Break(()) {
+            if self.emit_term(sink, id, &reserved_scopes)? == ControlFlow::Break(()) {
                 return Ok(());
             }
         }
@@ -715,18 +729,21 @@ mod tests {
     #[test]
     fn event_scope_capacity_preserves_original_count_and_prior_state() {
         let mut sink = DatasetSink::new();
-        sink.next_scope = u32::MAX - 1;
-        let final_scope = sink.open_scope().expect("last representable scope");
-        assert_eq!(final_scope, ScopeId(u32::MAX));
+        sink.next_scope = crate::blank_label::MAX_ALLOCATED_SCOPE - 1;
+        let final_scope = sink.open_scope().expect("last allocatable scope");
+        assert_eq!(
+            final_scope,
+            ScopeId(crate::blank_label::MAX_ALLOCATED_SCOPE)
+        );
         let prior = sink.open_scopes.clone();
         let expected = EventError::Capacity {
             space: CapacitySpace::ImportBlankScopes.as_str(),
-            attempted: u128::from(u32::MAX) + 1,
-            limit: u128::from(u32::MAX),
+            attempted: u128::from(crate::blank_label::MAX_ALLOCATED_SCOPE) + 1,
+            limit: u128::from(crate::blank_label::MAX_ALLOCATED_SCOPE),
         };
         assert_eq!(sink.open_scope(), Err(expected.clone()));
         assert_eq!(sink.open_scope(), Err(expected));
-        assert_eq!(sink.next_scope, u32::MAX);
+        assert_eq!(sink.next_scope, crate::blank_label::MAX_ALLOCATED_SCOPE);
         assert_eq!(sink.open_scopes, prior);
         assert!(sink.dataset().is_none());
     }

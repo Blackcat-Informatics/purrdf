@@ -104,7 +104,7 @@ impl SinkImporter<'_> {
             crate::gts_language_fold::record_language_fold_loss(
                 &mut self.losses,
                 lexical,
-                tag,
+                (tag, direction),
                 crate::gts_language_fold::FoldSite {
                     logical: "gts:sink",
                     segment: Some(segment_index),
@@ -138,7 +138,8 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
     let index = CapacityError::slot(
         CapacitySpace::ImportBlankScopes,
         segment_index,
-        u64::from(u32::MAX),
+        // The scopes above are reserved for unbound triple terms and queries.
+        u64::from(purrdf_core::blank_label::MAX_ALLOCATED_SCOPE),
     )
     .map_err(|error| {
         let mut diagnostic = RdfDiagnostic::from(StorageError::Capacity(error));
@@ -189,6 +190,22 @@ impl ResolvedSink for SinkImporter<'_> {
     ) -> Result<TermId, RdfDiagnostic> {
         let scope = segment_scope(segment_index)?;
         Ok(self.builder.intern_blank(label, scope)?)
+    }
+
+    /// A triple term that states no triple is a blank node of the one scope no
+    /// segment owns (`segment_scope` stops short of it), so no document label
+    /// denotes it.
+    fn intern_unbound_triple(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+    ) -> Result<TermId, RdfDiagnostic> {
+        segment_scope(segment_index)?;
+        let label =
+            crate::gts_resolve::unbound_triple_label(Some(segment_index), gts_id).to_string();
+        Ok(self
+            .builder
+            .intern_blank(&label, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE)?)
     }
 
     /// GTS *does* carry RDF 1.2 base direction (`purrdf-gts`'s `Term` has a
@@ -741,17 +758,22 @@ mod tests {
     }
 
     #[test]
-    fn segment_scope_refuses_exhaustion_and_preserves_its_valid_neighbour() {
+    fn segment_scope_stops_short_of_the_scope_reserved_for_unbound_triples() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
         let mut sink = SinkImporter::new();
         let last = sink
-            .intern_blank(u64::from(u32::MAX) - 1, 0, "last")
+            .intern_blank(u64::from(u32::MAX) - 3, 0, "last")
             .unwrap();
         assert_eq!(
-            segment_scope(u64::from(u32::MAX) - 1).unwrap(),
-            BlankScope(u32::MAX)
+            segment_scope(u64::from(u32::MAX) - 3).unwrap(),
+            BlankScope(u32::MAX - 2)
         );
-        for index in [u64::from(u32::MAX), u64::MAX] {
+        for index in [
+            u64::from(u32::MAX) - 2,
+            u64::from(u32::MAX) - 1,
+            u64::from(u32::MAX),
+            u64::MAX,
+        ] {
             let error = sink.intern_blank(index, 1, "refused").unwrap_err();
             assert_eq!(error.code, "gts-scope-limit");
             assert_eq!(
@@ -759,12 +781,12 @@ mod tests {
                 Some(StorageError::Capacity(CapacityError::new(
                     CapacitySpace::ImportBlankScopes,
                     u128::from(index) + 1,
-                    u128::from(u32::MAX)
+                    u128::from(u32::MAX - 2)
                 )))
             );
             assert_eq!(error.location.unwrap().gts_segment_index, Some(index));
             assert_eq!(
-                sink.intern_blank(u64::from(u32::MAX) - 1, 0, "last")
+                sink.intern_blank(u64::from(u32::MAX) - 3, 0, "last")
                     .unwrap(),
                 last
             );
@@ -1088,39 +1110,41 @@ mod tests {
 
     #[test]
     fn resolution_cycles_and_failed_callbacks_cannot_be_silently_retried() {
-        for datatype_cycle in [false, true] {
-            let mut resolver = SegmentResolver::new(RecordingSink::new());
-            resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
-            resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
-            let mut term = iri_term("literal");
-            if datatype_cycle {
-                term.kind = TermKind::Literal;
-                term.datatype = Some(2);
-            } else {
-                term.kind = TermKind::Triple;
-                term.triple = Some((0, 1, 2));
-            }
-            resolver.term(0, 2, Arc::new(term));
-            let error = resolver.finish().expect_err("cycle hard-fails");
-            assert_eq!(error.code, "rdf-ir-dangling-term-ref");
-            assert!(error.message.contains(if datatype_cycle {
-                "literal datatype"
-            } else {
-                "reified object"
-            }));
-            assert_eq!(
-                error
-                    .location
-                    .as_ref()
-                    .expect("original location")
-                    .gts_term_id,
-                Some(2)
-            );
-            assert!(
-                resolver.finish().is_err(),
-                "an active failed path remains a hard failure"
-            );
-        }
+        // A triple term that names itself states no triple and resolves; a
+        // literal whose datatype leads back to itself has no resolution.
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        let mut triple = iri_term("triple");
+        triple.kind = TermKind::Triple;
+        triple.triple = Some((0, 1, 2));
+        resolver.term(0, 2, Arc::new(triple));
+        resolver
+            .finish()
+            .expect("a self-reaching triple term degrades");
+
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
+        resolver.term(0, 1, Arc::new(iri_term("http://example.org/p")));
+        let mut term = iri_term("literal");
+        term.kind = TermKind::Literal;
+        term.datatype = Some(2);
+        resolver.term(0, 2, Arc::new(term));
+        let error = resolver.finish().expect_err("cycle hard-fails");
+        assert_eq!(error.code, "rdf-ir-dangling-term-ref");
+        assert!(error.message.contains("literal datatype"));
+        assert_eq!(
+            error
+                .location
+                .as_ref()
+                .expect("original location")
+                .gts_term_id,
+            Some(2)
+        );
+        assert!(
+            resolver.finish().is_err(),
+            "an active failed path remains a hard failure"
+        );
         let mut resolver = SegmentResolver::new(RecordingSink::new());
         let mut term = iri_term("literal");
         term.kind = TermKind::Literal;
@@ -1582,12 +1606,13 @@ mod tests {
         }
     }
 
-    /// A genuinely DANGLING reifier binding — a triple term whose reifier no
-    /// `reifies` event ever bound — is STILL a hard `Err` after ALL events are
-    /// seen (no-optionality). This distinguishes a truly missing binding from a
-    /// merely out-of-order one (which now resolves).
+    /// A triple term whose reifier no `reifies` event ever bound states no
+    /// triple (GTS-SPEC §7.3, third resolution rule) and interns as a blank node
+    /// of the reserved scope after ALL events are seen. This distinguishes a
+    /// truly missing binding from a merely out-of-order one (which resolves
+    /// through its row).
     #[test]
-    fn dangling_reifier_binding_is_err_after_all_events() {
+    fn dangling_reifier_binding_is_a_blank_node_after_all_events() {
         let mut resolver = SegmentResolver::new(SinkImporter::new());
         resolver.term(0, 0, Arc::new(iri_term("http://example.org/s")));
         resolver.term(0, 1, Arc::new(iri_term("http://example.org/asserts")));
@@ -1606,10 +1631,19 @@ mod tests {
             }),
         );
         resolver.quad(0, (0, 1, 2, None));
-        let (_resolver, error) = finish_direct(resolver);
-        let err =
-            error.expect("a genuinely dangling reifier binding must STILL fail after phase 2");
-        assert_eq!(err.code, "rdf-ir-missing-reifier-binding");
+        let (mut resolver, error) = finish_direct(resolver);
+        assert!(error.is_none(), "{error:?}");
+        let dataset = std::mem::take(&mut resolver.sink_mut().builder)
+            .freeze()
+            .expect("freeze");
+        let quad = dataset.quad_refs().next().expect("the quad is kept");
+        match quad.o {
+            TermRef::Blank { label, scope } => {
+                assert_eq!(label, "unbound_triple_0_2");
+                assert_eq!(scope, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE);
+            }
+            other => panic!("expected the unbound triple blank node, got {other:?}"),
+        }
     }
 
     /// GATE 2 (b) — REAL multi-segment GTS bytes. Two `Writer::deterministic`

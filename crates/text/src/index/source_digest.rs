@@ -6,9 +6,11 @@
 use purrdf_hash::multiset::Multiset256;
 
 use super::{
-    CorpusProfile, SOURCE_DIGEST_DOMAIN, SOURCE_IDENTITY_DOMAIN, SourceRow,
-    TRIPLE_SOURCE_DIGEST_DOMAIN, TRIPLE_SOURCE_IDENTITY_DOMAIN,
+    CorpusProfile, SOURCE_DIGEST_DOMAIN, SOURCE_IDENTITY_DOMAIN, Shared, SourceRow,
+    TRIPLE_SOURCE_DIGEST_DOMAIN, TRIPLE_SOURCE_IDENTITY_DOMAIN, share_index,
 };
+use purrdf_core::TermValue;
+use purrdf_core::source::{LiteralSourceRow, SourceRowRef, SourceSide};
 
 /// Sum of the selected row hashes in Z/(2^256), plus their exact population.
 ///
@@ -28,38 +30,19 @@ impl SourceDigest {
         Self { state }
     }
 
-    /// Apply a literal observed by the original source owner, independently of
-    /// the consumer's requested delta. Nonliteral coverage is handled separately.
-    pub(super) fn observe<P: CorpusProfile>(
+    pub(super) const fn population(self) -> u128 {
+        self.state.population()
+    }
+
+    /// Update diagnostic accounting after independently reading a change.
+    pub(super) fn observe(
         &mut self,
-        side: purrdf_core::source::SourceSide,
-        row: purrdf_core::source::SourceRowRef<'_>,
+        side: SourceSide,
+        digest: [u8; 32],
     ) -> Result<(), crate::TextError> {
-        let purrdf_core::TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } = row.object
-        else {
-            return Ok(());
-        };
-        let mut resident = purrdf_lex::allocation::Resident;
-        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-        let hash = purrdf_core::source::LiteralSourceRow {
-            graph: row.graph,
-            subject: row.subject,
-            predicate: row.predicate,
-            lexical: lexical_form,
-            datatype,
-            language: language.as_deref(),
-            direction: *direction,
-        }
-        .hashes_with_memory(&mut memory)
-        .map_err(|error| crate::TextError::data(error.to_string()))?[usize::from(P::GRAPH_FREE)];
         match side {
-            purrdf_core::source::SourceSide::Previous => self.state.remove(hash),
-            purrdf_core::source::SourceSide::Next => self.state.insert(hash),
+            SourceSide::Previous => self.state.remove(digest),
+            SourceSide::Next => self.state.insert(digest),
         }
         .map_err(|error| crate::TextError::data(error.to_string()))
     }
@@ -117,27 +100,38 @@ impl SourceDigest {
     }
 }
 
+/// Digest the literal read through the source-owned change feed in the same
+/// law as a selected text row. Nonliteral records participate in coverage only.
+pub(super) fn observed_hash<P: CorpusProfile>(
+    row: SourceRowRef<'_>,
+) -> Result<Option<[u8; 32]>, crate::TextError> {
+    let TermValue::Literal {
+        lexical_form,
+        datatype,
+        language,
+        direction,
+    } = row.object
+    else {
+        return Ok(None);
+    };
+    let row = LiteralSourceRow {
+        graph: row.graph,
+        subject: row.subject,
+        predicate: row.predicate,
+        lexical: lexical_form,
+        datatype,
+        language: language.as_deref(),
+        direction: *direction,
+    };
+    literal_hash::<P>(&row).map(Some)
+}
+
 fn additive_check_value<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
     state.accounting_check(if P::GRAPH_FREE {
         TRIPLE_SOURCE_DIGEST_DOMAIN
     } else {
         SOURCE_DIGEST_DOMAIN
     })
-}
-
-/// The 4.x source law: the additive sum of selected literal-row hashes under
-/// the source domain. No 5.0 index carries this value.
-/// [`TextIndex::source_fingerprint`](super::TextIndex::source_fingerprint) is
-/// BLAKE3 over the sorted selected-row digests, which
-/// [`source_digest`](super::source_digest) computes from a dataset; a party
-/// choosing rows can construct two different row sets with one additive value.
-/// The value is not collision-resistant and must not be used as an identity.
-#[deprecated(
-    since = "5.0.0",
-    note = "this additive value is not collision-resistant and must not be used as an identity: use `source_digest` or `TextIndex::source_fingerprint`"
-)]
-pub fn source_fingerprint<P: CorpusProfile>(state: Multiset256) -> [u8; 32] {
-    additive_check_value::<P>(state)
 }
 
 /// The identity of the selected source rows: BLAKE3 over every selected
@@ -157,20 +151,61 @@ pub(super) fn sorted_source_fingerprint<P: CorpusProfile>(
     )
 }
 
-/// The sorted per-row hashes of every selected source row, token-less rows
-/// included, each repeated as often as the row occurs.
-pub(super) fn row_directory(
-    mut hashes: Vec<[u8; 32]>,
-) -> Result<super::Table<[u8; 32]>, crate::TextError> {
-    hashes.sort_unstable();
-    super::Table::from_streams(hashes)
+#[derive(Clone, Debug)]
+pub(super) struct SourceEntry {
+    pub(super) digest: [u8; 32],
+    pub(super) subject: Shared<TermValue>,
+}
+
+impl SourceEntry {
+    pub(super) fn new(digest: [u8; 32], subject: TermValue) -> Result<Self, crate::TextError> {
+        Ok(Self {
+            digest,
+            subject: share_index(subject)?,
+        })
+    }
+}
+
+pub(super) fn row_directory<P: CorpusProfile>(
+    rows: Vec<SourceRow<P>>,
+) -> Result<super::Table<SourceEntry>, crate::TextError> {
+    let mut entries = super::token_streams::handles(rows.len())?;
+    for row in rows {
+        let digest = try_row_hash(&row)?;
+        entries.push(SourceEntry::new(digest, row.subject)?);
+    }
+    entries.sort_unstable_by_key(|entry| entry.digest);
+    super::Table::from_streams(entries)
 }
 
 #[cfg(test)]
 fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
-    row_hashes(std::iter::once(row))
-        .next()
-        .expect("one source row was supplied")
+    try_row_hash(row).expect("fixture source row traversal storage")
+}
+
+pub(super) fn try_row_hash<P: CorpusProfile>(
+    row: &SourceRow<P>,
+) -> Result<[u8; 32], crate::TextError> {
+    literal_hash::<P>(&LiteralSourceRow {
+        graph: P::graph(&row.graph),
+        subject: &row.subject,
+        predicate: &row.predicate,
+        lexical: &row.lexical_form,
+        datatype: &row.datatype,
+        language: row.language.as_deref(),
+        direction: row.direction,
+    })
+}
+
+fn literal_hash<P: CorpusProfile>(
+    row: &LiteralSourceRow<'_>,
+) -> Result<[u8; 32], crate::TextError> {
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+    let hashes = row
+        .hashes_with_memory(&mut memory)
+        .map_err(crate::TextError::source_read)?;
+    Ok(hashes[usize::from(P::GRAPH_FREE)])
 }
 
 /// Use the original core row law so independently sealed native metadata and
@@ -179,21 +214,8 @@ fn row_hash<P: CorpusProfile>(row: &SourceRow<P>) -> [u8; 32] {
 pub(super) fn row_hashes<'a, P: CorpusProfile + 'a>(
     rows: impl IntoIterator<Item = &'a SourceRow<P>>,
 ) -> impl Iterator<Item = [u8; 32]> {
-    rows.into_iter().map(|row| {
-        let mut resident = purrdf_lex::allocation::Resident;
-        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-        purrdf_core::source::LiteralSourceRow {
-            graph: P::graph(&row.graph),
-            subject: &row.subject,
-            predicate: &row.predicate,
-            lexical: &row.lexical_form,
-            datatype: &row.datatype,
-            language: row.language.as_deref(),
-            direction: row.direction,
-        }
-        .hashes_with_memory(&mut memory)
-        .expect("resident source row traversal storage")[usize::from(P::GRAPH_FREE)]
-    })
+    rows.into_iter()
+        .map(|row| try_row_hash(row).expect("resident source row traversal storage"))
 }
 
 #[cfg(test)]

@@ -14,6 +14,8 @@ The release lane follows the `gmeow-gts` cargo release pattern:
 - every workspace crate version must match the tag version;
 - the workflow uses pinned actions and no dependency cache in the privileged
   publish job;
+- native verification, WebAssembly verification and audited artifact preparation
+  run concurrently. Native and WebAssembly jobs keep separate compiler caches;
 - crates are packaged before publication;
 - the release crate set is checked on `wasm32-unknown-unknown`;
 - each `.crate` package receives a GitHub build-provenance attestation;
@@ -31,18 +33,25 @@ is a single coherent flow from `main`, using the version-coherence gate and the
 # 1. Bump all three version sources in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
-# 2. Regenerate the committed C-ABI header from the bumped crate version.
+# 2. Re-key the version-keyed WatDiv and LUBM pins in scripts/benchmark-acquire.py
+# (every `.purrdf-<version>` suffix in WORKLOAD_PINS) to the bumped version. The
+# self-test refuses a mismatch with Cargo.toml, so the lanes never report "no pin"
+# for the binary they built. Re-measure the answer counts under the new binary
+# rather than carrying the old values forward, and record the measurement.
+python3 scripts/benchmark-acquire.py --self-test
+
+# 3. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Complete the release notes, preserving existing migration guidance.
+# 4. Complete the release notes, preserving existing migration guidance.
 # Rename the Unreleased section to the bumped version and release date.
 # Use make changelog only for history-generated notes (see below).
 # Add the reviewed short summary at docs/releases/<version>.md.
 
-# 4. Review, then commit the bump, generated header, changelog and summary.
+# 5. Review, then commit the bump, re-keyed pins, generated header, changelog and summary.
 git add -A && git commit -m "chore(release): 0.2.2"
 
-# 5. From an up-to-date main, run every release gate, then push all three tags.
+# 6. From an up-to-date main, run every release gate, then push all three tags.
 make release-tags VERSION=0.2.2
 ```
 
@@ -317,11 +326,28 @@ git tag rust-v0.1.5
 git push origin rust-v0.1.5
 ```
 
-The workflow refuses before packaging if any release crate lacks its record
+The workflow refuses before publication if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
 registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
 functional crates in the declared dependency order and skips a version already
-present. A partially completed release resumes with `gh run rerun <run-id>`.
+present. Retry failed jobs with `gh run rerun <run-id> --failed`. The publish job
+uses the artifact from the successful preparation job in the same run. Its own
+time budget starts when publication begins.
+
+If an earlier tagged run completed verification and audit but stopped during
+publication, resume from its retained artifact. Use the original run ID, tag
+and stable Rust version reported by its install step:
+
+```sh
+gh workflow run release-cargo.yaml --ref main \
+  -f tag="$tag" -f source_run="$run_id" -f toolchain="$rust_version"
+```
+
+The workflow checks the original run against the current remote tag. It
+verifies the retained distribution and its provenance, then matches packages
+from the exact tagged checkout against the retained crate audit. The trusted
+publisher acquires its token after those checks. It continues in dependency
+order and publishes the GitHub Release after the full crate set is available.
 
 ## PyPI Release
 

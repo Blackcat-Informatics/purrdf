@@ -138,8 +138,6 @@ pub use analysis::{
 pub use corpus::{CorpusProfile, GraphFree, GraphLanguage};
 pub use error::{TextDeltaError, TextError};
 pub use fixed::{Fixed, SCALE_DIGITS};
-#[allow(deprecated, reason = "the 4.x public path stays reachable, deprecated")]
-pub use index::source_fingerprint;
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,
     TextIndexConfig, TokenOccurrence, snapshot_fingerprint, source_digest,

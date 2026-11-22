@@ -254,7 +254,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
     check_ledger_sound(&lossy.losses, "json-schema", "linkml-1.11")
         .map_err(purrdf_rdf::loss::LossSoundnessError::into_owned)?;
-    let observed_losses = lossy
+    let observed_texts = lossy
         .losses
         .entries()
         .iter()
@@ -262,12 +262,15 @@ fn main() -> Result<(), Box<dyn Error>> {
             (
                 entry.code.as_ref(),
                 entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
-                    .unwrap_or("<missing>"),
+                    .subject
+                    .text()
+                    .unwrap_or_else(|| "<missing>".to_owned()),
             )
         })
+        .collect::<Vec<_>>();
+    let observed_losses = observed_texts
+        .iter()
+        .map(|(code, text)| (*code, text.as_str()))
         .collect::<BTreeSet<_>>();
     let expected_losses = BTreeSet::from([
         (

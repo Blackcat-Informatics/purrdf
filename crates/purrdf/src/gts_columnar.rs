@@ -4,7 +4,7 @@
 //! Explicit eager GTS inline admission shared by relational and Parquet exports.
 
 use purrdf_lex::allocation::{Memory, Resident, StorageError};
-use purrdf_rdf::{ContentStore, LossLedger, RdfDataset, RdfLocation};
+use purrdf_rdf::{ContentStore, LossLedger, RdfDataset};
 use purrdf_rdf::{GtsBlobLimits, GtsBlobOmission, GtsBlobUsage, RdfDiagnostic};
 use std::sync::Arc;
 
@@ -187,11 +187,13 @@ fn blob_report(
                     "blob omission has no registered loss definition",
                 )
             })?;
-        entry.location = Some(Box::new(
-            RdfLocation::logical("gts:blob")
-                .with_gts_segment(omission.source().segment_index)
-                .with_gts_frame(omission.source().frame_index),
-        ));
+        entry.site = purrdf_core::LossSite::Gts {
+            segment: Some(omission.source().segment_index),
+            frame: Some(omission.source().frame_index),
+            term: None,
+            quad: None,
+            reifier: None,
+        };
         losses.record_with_memory(entry, &mut memory)?;
     }
     Ok(GtsBlobExportReport {

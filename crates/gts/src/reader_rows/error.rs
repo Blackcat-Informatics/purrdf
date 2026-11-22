@@ -3,7 +3,7 @@
 
 //! Original row-width, term-ID and RDF-position failures.
 
-use crate::model::TermKind;
+use crate::model::{TermKind, Triple3};
 use core::fmt;
 use purrdf_hash::error::ErrorValue;
 
@@ -54,6 +54,12 @@ pub(crate) enum RowError {
         id: usize,
         actual: TermKind,
     },
+    ReifierKind {
+        id: usize,
+        actual: TermKind,
+        triple: Triple3,
+        graph: Option<usize>,
+    },
 }
 
 impl fmt::Display for RowError {
@@ -101,6 +107,13 @@ impl fmt::Display for RowError {
             Self::AnnotationGraph { id, .. } => {
                 write!(f, "annot graph name {id} is not an IRI or blank node")
             }
+            Self::ReifierKind { id, triple, .. } => {
+                write!(
+                    f,
+                    "reifier {id} is not an IRI or blank node; its row binding ({}, {}, {}) is dropped",
+                    triple.0, triple.1, triple.2
+                )
+            }
         }
     }
 }
@@ -133,5 +146,13 @@ impl purrdf_hash::error::StructuredError for RowError {
         },
         AnnotationPredicate { id, actual } => "gts-annotation-predicate-kind" { "id" => Unsigned(*id as u128), "actual" => Record(actual) },
         AnnotationGraph { id, actual } => "gts-annotation-graph-kind" { "id" => Unsigned(*id as u128), "actual" => Record(actual) },
+        ReifierKind { id, actual, triple, graph } => "gts-reifier-kind" {
+            "id" => Unsigned(*id as u128),
+            "actual" => Record(actual),
+            "subject" => Unsigned(triple.0 as u128),
+            "predicate" => Unsigned(triple.1 as u128),
+            "object" => Unsigned(triple.2 as u128),
+            "graph" => Value(graph.map_or(ErrorValue::Absent, |id| ErrorValue::Unsigned(id as u128))),
+        },
     }
 }

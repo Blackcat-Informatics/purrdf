@@ -8,7 +8,7 @@ use purrdf_gts::dictionary::ResidentTermStorage;
 use purrdf_gts::dictionary::{DictionaryError, DictionaryLimits, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{Term, TermKind, Triple3};
 use purrdf_gts::segment_decode::{
-    PendingResolution, ResolutionCounts, ResolutionStorage, ResolutionTerm,
+    ComponentState, PendingResolution, ResolutionCounts, ResolutionStorage, ResolutionTerm,
 };
 use purrdf_lex::allocation::{Ceiling, Memory, OwnedAdmission, SharedOwned};
 use purrdf_lex::cbor::{self, ReplayStorage, Value};
@@ -510,22 +510,33 @@ impl<Id: IdCodec> ResolutionStorage<Id> for Resolution<Id> {
         let Some(value) = self.files.read(key, "pending")? else {
             return Ok(None);
         };
-        let Some([present, parent, next, active]) = value.as_array().map(Vec::as_slice) else {
+        let Some([present, parent, next, active, component @ ..]) =
+            value.as_array().map(Vec::as_slice)
+        else {
             return Err(DictionaryError::Corrupt("native continuation"));
         };
-        Ok(Some(PendingResolution {
-            term: if integer(present)? == 1 {
-                Some(ResolutionTerm::Stored(
-                    self.files.get(key)?.ok_or(DictionaryError::Missing(key))?,
-                ))
-            } else {
-                None
-            },
-            parent: optional(parent)?,
-            next: u8::try_from(integer(next)?)
-                .map_err(|_| DictionaryError::Corrupt("native dependency slot"))?,
-            active: integer(active)? == 1,
-        }))
+        let mut words = [0u64; 5];
+        if component.len() != words.len() {
+            return Err(DictionaryError::Corrupt("native component state"));
+        }
+        for (word, value) in words.iter_mut().zip(component) {
+            *word = u64::try_from(integer(value)?)
+                .map_err(|_| DictionaryError::Corrupt("native component state"))?;
+        }
+        let mut pending = PendingResolution::new(if integer(present)? == 1 {
+            Some(ResolutionTerm::Stored(
+                self.files.get(key)?.ok_or(DictionaryError::Missing(key))?,
+            ))
+        } else {
+            None
+        });
+        pending.parent = optional(parent)?;
+        pending.next = u8::try_from(integer(next)?)
+            .map_err(|_| DictionaryError::Corrupt("native dependency slot"))?;
+        pending.active = integer(active)? == 1;
+        pending.component = ComponentState::from_words(words)
+            .ok_or(DictionaryError::Corrupt("native component state"))?;
+        Ok(Some(pending))
     }
     fn set_pending(
         &mut self,
@@ -564,12 +575,17 @@ impl<Id: IdCodec> ResolutionStorage<Id> for Resolution<Id> {
         self.files.write(
             key,
             "pending",
-            &Value::Array(vec![
-                usize::from(value.term.is_some()).into(),
-                value.parent.map_or(Value::Null, Value::from),
-                usize::from(value.next).into(),
-                usize::from(value.active).into(),
-            ]),
+            &Value::Array(
+                [
+                    usize::from(value.term.is_some()).into(),
+                    value.parent.map_or(Value::Null, Value::from),
+                    usize::from(value.next).into(),
+                    usize::from(value.active).into(),
+                ]
+                .into_iter()
+                .chain(value.component.to_words().map(Value::from))
+                .collect(),
+            ),
         )
     }
     fn remove_pending(&mut self, key: TermKey) -> Result<(), DictionaryError> {

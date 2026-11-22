@@ -30,7 +30,6 @@ use std::fmt::Write as _;
 
 use crate::json_model::{Number, NumberKind, Object, Value, ValueKind, json_string};
 use crate::limits;
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 
 use crate::json_schema::CompiledSchema;
@@ -1121,10 +1120,8 @@ impl<'a> Renderer<'a> {
                 self.record(
                     "keyword-validation-dropped",
                     &path.child(key),
-                    &format!(
-                        "JSON Schema assertion keyword {key:?} is outside the closed TypeScript \
-                         7.0 capability table"
-                    ),
+                    "the JSON Schema assertion keyword at this path is outside the closed \
+                     TypeScript 7.0 capability table",
                 );
             }
         }
@@ -1192,7 +1189,18 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &'static str) {
+        self.record_detailed(code, path, note, Vec::new());
+    }
+
+    /// Record a loss whose occurrence carries typed facts beyond its path.
+    fn record_detailed(
+        &mut self,
+        code: &str,
+        path: &SchemaPath,
+        note: &'static str,
+        detail: Vec<purrdf_core::LossDetail>,
+    ) {
         if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
@@ -1200,10 +1208,12 @@ impl<'a> Renderer<'a> {
             code: code.to_owned().into(),
             from: LOSS_FROM.into(),
             to: TYPESCRIPT_DIALECT.into(),
-            note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            note: note.into(),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail,
         });
     }
 }
@@ -2378,13 +2388,13 @@ mod tests {
         check_ledger_sound(&imported.losses, TYPESCRIPT_DIALECT, "shacl")
             .expect("sound reverse ledger");
         assert_eq!(imported.shapes.node_shapes.len(), 1);
-        assert!(imported.losses.entries().iter().all(|entry| {
-            entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
-                .is_some_and(|subject| subject.starts_with("#/"))
-        }));
+        assert!(
+            imported
+                .losses
+                .entries()
+                .iter()
+                .all(|entry| { matches!(&entry.subject, purrdf_core::LossSubject::Pointer(_)) })
+        );
     }
 
     #[test]
@@ -2473,11 +2483,8 @@ mod tests {
             .expect("all losses are registered");
         check_ledger_complete(&package.losses, &expected).expect("profile is fully exercised");
         assert!(package.losses.entries().iter().all(|entry| {
-            entry
-                .location
-                .as_ref()
-                .and_then(|location| location.subject.as_deref())
-                .is_some_and(|subject| subject.starts_with("#/$defs/Lossy"))
+            crate::schema_catalog::pointer_tokens(&entry.subject)
+                .is_some_and(|tokens| tokens.starts_with(&["$defs".to_owned(), "Lossy".to_owned()]))
         }));
         let source = declaration(&package);
         assert!(source.contains("export type Lossy ="));
@@ -2658,11 +2665,10 @@ mod tests {
         assert!(source.contains("export type ImpossibleArray = never;"));
         assert!(package.losses.entries().iter().any(|entry| {
             entry.code == "additional-properties-validation-widened"
-                && entry
-                    .location
-                    .as_ref()
-                    .and_then(|location| location.subject.as_deref())
-                    == Some("#/$defs/ImpossibleObject/additionalProperties")
+                && entry.subject
+                    == crate::schema_catalog::pointer_subject(
+                        "#/$defs/ImpossibleObject/additionalProperties",
+                    )
         }));
     }
 
@@ -2784,11 +2790,7 @@ mod tests {
         let located = |location: &str| {
             package.losses.entries().iter().any(|entry| {
                 entry.code == "unique-items-validation-dropped"
-                    && entry
-                        .location
-                        .as_ref()
-                        .and_then(|value| value.subject.as_deref())
-                        == Some(location)
+                    && entry.subject == crate::schema_catalog::pointer_subject(location)
             })
         };
         assert!(located("#/$defs/Open/uniqueItems"));
@@ -2832,13 +2834,13 @@ mod tests {
             .entries()
             .iter()
             .filter(|entry| entry.code == "numeric-validation-dropped")
-            .filter_map(|entry| entry.location.as_ref()?.subject.clone())
+            .map(|entry| entry.subject.clone())
             .collect::<BTreeSet<_>>();
         assert_eq!(
             codes,
             BTreeSet::from([
-                "#/$defs/Fractional/multipleOf".to_owned(),
-                "#/$defs/Open/minimum".to_owned(),
+                crate::schema_catalog::pointer_subject("#/$defs/Fractional/multipleOf"),
+                crate::schema_catalog::pointer_subject("#/$defs/Open/minimum"),
             ])
         );
     }
@@ -2909,11 +2911,9 @@ mod tests {
         // No JavaScript array has 2^32 elements.
         assert!(source.contains("export type LargeBound = never;"));
         assert!(package.losses.entries().iter().all(|entry| {
-            entry
-                .location
-                .as_ref()
-                .and_then(|value| value.subject.as_deref())
-                .is_none_or(|subject| !subject.starts_with("#/$defs/LargeBound"))
+            crate::schema_catalog::pointer_tokens(&entry.subject).is_none_or(|tokens| {
+                !tokens.starts_with(&["$defs".to_owned(), "LargeBound".to_owned()])
+            })
         }));
         for (code, location) in [
             (
@@ -2927,11 +2927,7 @@ mod tests {
         ] {
             assert!(package.losses.entries().iter().any(|entry| {
                 entry.code == code
-                    && entry
-                        .location
-                        .as_ref()
-                        .and_then(|value| value.subject.as_deref())
-                        == Some(location)
+                    && entry.subject == crate::schema_catalog::pointer_subject(location)
             }));
         }
     }

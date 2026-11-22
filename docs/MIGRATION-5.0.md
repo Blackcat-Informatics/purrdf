@@ -21,14 +21,12 @@ digests before opening a 4.x artifact.
 - The canonical digest is the 32-byte BLAKE3 digest of the line sequence, not
   SHA-256 of N-Quads text. It moves for every dataset, including datasets with no
   blank node.
-- RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
-  algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
-  read-side recompute of stored 4.x digests (profile version 4). A stored 4.x
-  digest of a dataset holding U+FFFE or U+FFFF in a literal no longer recomputes,
-  because it was computed over a spelling that does not conform to the canonical
-  form of RDF 1.2 N-Quads; every other stored digest recomputes unchanged. No
-  writer records a 4.x digest in a new artifact. A GTS compaction certificate names the function that recorded its
-  refold digests (see "Containers").
+- RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. Use the
+  retained `purrdf-rdfc12` overlay or flat form to recompute stored 4.x digests
+  with profile version 3. Both forms preserve their 4.0.2 output bytes, including
+  DEL and C1 escapes in custom-view IRIs (see "Stored digests"). A GTS
+  compaction certificate names the function that
+  recorded its refold digests (see "Containers").
 - The search bound is a limit on the walk of the specification (section 8.3), a
   function of the input as given and of the bound, so every engine refuses the
   same inputs with the same fields. Refusal is the labelling's typed `limit`
@@ -43,6 +41,27 @@ digests before opening a 4.x artifact.
   exchange").
 - `GeoIndex::source_fingerprint` is a 32-byte digest, not a `u64` (see "Geo index
   source identity").
+- A content identity is computed only on request, through `ContentIdentified`
+  (see "Content identity on request").
+- An unreadable stack floor refuses instead of disabling the guard (see "Stack
+  floor"), and `Iri::normalize` keeps an encoded dot segment (see "IRI normal
+  form").
+- Loss entries carry typed `site`, `subject` and `detail` members in place of
+  `location`, and the runtime loss ledger JSON is schema version 2 (see "Loss
+  occurrences").
+- A host binds a query receipt to a dataset's content on request: `query
+  --content-identity` in the CLI, `bind_execution_receipt` in Python,
+  `bindExecutionReceipt` in WebAssembly and `purrdf_execution_receipt_bind` in C
+  (see "Content identity on request").
+- `TextIndex::with_delta` refuses a removal of a row the index does not hold with
+  `TextDeltaError::UnheldRemoval` (see "Text index deltas").
+- A `wasm32-unknown-unknown` module that links the evaluator without
+  `purrdf-wasm` must install a host clock and entropy source or supply the query
+  time and seed, or the request is refused with `EvalError::HostSourceMissing`
+  (see "Evaluator host source").
+- `MediumPlan` and `OperationModel` are `#[non_exhaustive]`, and
+  `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the endpoint and
+  a typed `RemoteError` (see "Public types that changed shape").
 
 ## The canonical line sequence
 
@@ -228,9 +247,10 @@ U+FFFF in a literal are written `\uFFFE` and `\uFFFF`, since neither matches the
 XML 1.1 `Char` production; the C1 controls stay raw. An IRI is escaped exactly
 where the `IRIREF` production forbids a scalar, so DEL and the C1 controls ride
 raw. The digest is over the binary line encodings and does not depend on these
-spellings. The retained 4.x `purrdf-rdfc12` output spells U+FFFE and U+FFFF the
-same way (profile version 4), so a stored 4.x digest of a dataset holding either
-in a literal no longer recomputes; see "Stored digests".
+spellings. The retained 4.x `purrdf-rdfc12` output keeps the spelling it had
+(profile version 3): U+FFFE and U+FFFF raw in a literal, and DEL and the C1
+controls escaped as `\u007F` through `\u009F` in an IRI, so every stored 4.x
+digest recomputes; see "Stored digests".
 
 A composite node is spelled as its literal, with each token `ki` replaced by
 `_:` and the position of the blank node it names. No label spells a composite
@@ -245,10 +265,10 @@ and are never parsed back.
 
 A digest recorded by 4.x is the SHA-256 of the `purrdf-rdfc12` N-Quads, in its
 overlay or flat form. Such a digest is never equal to the 5.0 digest of the same
-dataset. To check one, recompute it with the 4.x function. A digest of a dataset
-holding U+FFFE or U+FFFF in a literal does not recompute, because it was taken
-over the raw spelling that profile version 3 wrote; every other stored 4.x digest
-recomputes unchanged:
+dataset. To check one, recompute it with the 4.x function, which writes the bytes
+4.x wrote (profile version 3), so every stored 4.x digest recomputes unchanged,
+whatever the dataset holds, including U+FFFE and U+FFFF in a literal and DEL or a
+C1 control in an IRI taken through a caller's own `DatasetView`:
 
 - `purrdf_core::rdfc12::try_canonical_sha256_view` with `CanonHash::Sha256` for
   the digest, and `purrdf_core::rdfc12::try_canonicalize_flat_view` or
@@ -257,12 +277,74 @@ recomputes unchanged:
   `purrdf_rdf::rdfc12`, with the same name and signature it had at the crate
   root. See "Items that left the crate root".
 
-The 4.x path behaves as it did, apart from the spelling of U+FFFE and U+FFFF in
-a literal (profile version 4; see "Stored digests"): labels are `c14nN`, the hash is the
-caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
+The 4.x path behaves as it did (profile version 3): labels are `c14nN`, the hash
+is the caller's SHA-256 or SHA-384, and a dataset that holds the reserved vocabulary of
 `docs/RDF12-CANON-PROFILE.md` is refused. The default entry points have no
 reserved vocabulary, so `CanonError::ReservedVocabulary` no longer comes from
 them.
+
+### Worked example
+
+One TriG document, `ex:` standing for `http://example.org/`:
+
+```
+_:a ex:knows _:b {| ex:since "2020" |} .
+```
+
+The 4.0.2 default canonical document, and the document `purrdf_rdf::rdfc12`
+writes on 5.0:
+
+```
+_:c14n0 <http://example.org/since> "2020" <urn:purrdf:rdfc:annotation> .
+_:c14n0 <urn:purrdf:rdfc:reifies> <<( _:c14n1 <http://example.org/knows> _:c14n2 )>> .
+_:c14n1 <http://example.org/knows> _:c14n2 .
+```
+
+Its SHA-256 is `aaf33dafb5db00ee598645aa948ca515aa5d0dc1d271c965cf4b09d9783fa613`.
+This is the identifier a 4.x store holds, and `purrdf_rdf::rdfc12` on 5.0
+reproduces it byte for byte.
+
+The 5.0 default canonical line sequence, spelled as N-Quads 1.2, in the
+sequence's own order:
+
+```
+_:1 <http://example.org/knows> _:2 .
+_:0 <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( _:1 <http://example.org/knows> _:2 )>> .
+_:0 <http://example.org/since> "2020" .
+```
+
+Its BLAKE3 digest is
+`309b1d21584c49f04ce2f5032c25c6954eca1cdc58f5f2db3c8ffae3932ad355`.
+Three things differ: the labels (`_:c14nN` becomes `_:N`), the reifier and the
+annotation (the private `urn:purrdf:rdfc:` graph and predicate become an
+`rdf:reifies` line and an ordinary line), and the hash (SHA-256 of the text
+becomes BLAKE3 of the line sequence). The same dataset has these identifiers on
+the two versions:
+
+| Dataset | 4.0.2 canonical SHA-256 | 5.0 canonical BLAKE3 |
+|---|---|---|
+| Two quads, no blank node | `a984e74b762b5bda125a3c161e824b5334660ff497a2895118537c6ccc7cedc4` | `e975811c67573e7aa33ca7577de0ddf3de8c454a54d9e97a06b8b5a3fdcd96c1` |
+| The document above | `aaf33dafb5db00ee598645aa948ca515aa5d0dc1d271c965cf4b09d9783fa613` | `309b1d21584c49f04ce2f5032c25c6954eca1cdc58f5f2db3c8ffae3932ad355` |
+| A literal `"a\uFFFEb"` | `3bc961a7900eda98b148cf8e71e77b4b8720d48e39d0a77da045b3108eda83ae` | `d0b1dc9e154af46ee5eab50d892ab74eb05a4353a5296e5c20b4ee0b36a833d0` |
+
+All three rows recompute with `purrdf_rdf::rdfc12`. The retained path writes the
+U+FFFE raw, as 4.0.2 did, and yields the 4.0.2 value in the third row. The 5.0
+identifier of a dataset without a blank node differs from its 4.0.2
+identifier too, and the quads of the first row also change order.
+
+A consumer that stores a canonical digest as an identifier does the following:
+
+1. Keep the stored 4.x value only as a 4.x value. Recompute it with
+   `purrdf_rdf::rdfc12` to check it.
+2. Recompute every identifier the consumer keys on from the data, through the
+   default entry points. The 5.0 value is never equal to the 4.0.2 value of the
+   same dataset, so no stored identifier maps to a new one without the data.
+3. Record the version of the function with the value.
+
+The content identity moves in the same way: for the three datasets above,
+`ContentIdentified::content_identity` differs from the 4.0.2
+`DatasetView::snapshot_identity` in every case. `DatasetStateDigest` is equal on
+both versions for every one of them.
 
 ## Row-set identities
 
@@ -293,18 +375,18 @@ the identity from the data and record it again.
 | Value | What moved |
 |---|---|
 | `ContentIdentified::content_identity` of `RdfDataset`, of a triple dataset, and of `CompositeDatasetView`, `DeltaDatasetView`, paged datasets and segmented stack snapshots and queries (see the exception above), and the SHACL data and class-membership views | The resident record and named-graph families, and a mutation snapshot's suppressed, converted and withdrawn-graph families, are sorted-digest fingerprints (domains `purrdf-core/snapshot/rows/v2`, `purrdf-core/snapshot/graphs/v2`, `purrdf-core/delta-snapshot/v2` and its family domains). Composed views hash these identities, so they move with them. The class-membership view hashes its supplementary subclass edges the same way (`purrdf-shapes/class-membership-snapshot/v2`). |
-| Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt(receipt, &view)`, which takes a view that implements `ContentIdentified` (pass the view the query read), by Python `QuadStore.bind_execution_receipt`, by JavaScript `Dataset#bindExecutionReceipt` and by C `purrdf_execution_receipt_bind`; `bind_execution_receipt_hex` and `ReceiptBindError::ContentIdentity` are removed, so replace a call that passed a hex content identity with `bind_execution_receipt` on the view the query read; `QueryCoordinates::execution_identity`, `SuppliedQueryCoordinates::execution_identity` and `RuleCoordinates::execution_identity`, which take these content identities. |
+| Execution receipts | `contentIdentity` and `executionIdentity` of a receipt bound by `purrdf_validate::query::bind_execution_receipt(receipt, &view)` (new in 5.0; pass the view the query read), Python `QuadStore.bind_execution_receipt`, JavaScript `Dataset#bindExecutionReceipt` and C `purrdf_execution_receipt_bind`, and the execution identity from `SuppliedQueryCoordinates::execution_identity`, `RuleCoordinates::execution_identity` and the new `QueryCoordinates::execution_identity`, which take these content identities. |
 | `SourceVersion::content_fingerprint` | BLAKE3 over the population and the canonical Merkle node of the sorted record digests (`purrdf/source-version/v2`). |
 | `TextIndex::source_fingerprint`, `TextSource::source_fingerprint` and `purrdf_text::source_digest` | BLAKE3 over the sorted selected-row digests (`purrdf-text/source/v3`, `purrdf-text/triples/source/v3`). `verify_binding` refuses an index whose stored source identity came from 4.x. |
 | `TextIndex::fingerprint`, `snapshot_fingerprint` and the generation retrieval strata attest | The index generation binds the source identity, so it moves with it, and so does every retrieval evidence identity recorded over a 4.x generation. |
 | `SourceMatchEvidence::literal` of a match from an index-built surface, and the literal identity Han occurrences carry | The per-row source identity moved from the additive `purrdf-text/source/v2` law to the sorted `purrdf-text/source/v3` law. |
 | `SurfaceIndex` generation of a standalone surface (`SourceMatchEvidence::generation`) | The sources enter as a sorted-digest fingerprint (`purrdf-text/surface-generation/v3`). |
 
-`purrdf_text::source_fingerprint` keeps its signature and its 4.x value, and is
-deprecated: no 5.0 index carries that value. The value is not
-collision-resistant and must not be used as an identity; use
-`purrdf_text::source_digest` or `TextIndex::source_fingerprint` instead. The
-function is removed in the next major version. `SourceSummary::records` and
+`purrdf_text::source_fingerprint`, the free function over a `Multiset256`, is
+removed: no 5.0 index carries the additive value it computed, and that value is
+not collision-resistant, so it cannot serve as an identity. Replace a call with
+`purrdf_text::source_digest` over the dataset, or read
+`TextIndex::source_fingerprint`. `SourceSummary::records` and
 `SourceSummary::literal_rows` keep their additive `Multiset256` values, which
 combine across physical layers without visiting rows; they are accounting sums
 for drift and population checks between structures one process built, and no
@@ -335,12 +417,133 @@ or its 64-digit hex form (`Digest32::to_hex`, `Digest32::from_hex`). Code that
 only compares or displays the digests of `IndexBindingError::Source` still
 compiles, and its `Display` output becomes 64 hex digits.
 
+## Content identity on request
+
+No freeze, view construction or query computes a dataset's content identity. A
+caller asks for it through `purrdf_core::ContentIdentified::content_identity`,
+which returns `Result<Digest32, Self::IdentityError>` and computes on the first
+request. The values follow the law in "Row-set identities".
+
+| 4.x | 5.0 |
+|---|---|
+| `DatasetView::snapshot_identity()`, returning `Result<Option<Digest32>, ReadError>` | `ContentIdentified::content_identity()`. A view that cannot certify its content returns an `Err`, not `Ok(None)`, and a view that never can does not implement the trait |
+| `SuppliedQueryCoordinates::snapshot_identity` and `execution_identity` | `run_identity` for the run, and `execution_identity(&ExecutionSources::new(view.content_identity()?))` for the execution, under the `execution-coordinates/v2` law |
+| `RuleCoordinates::snapshot_identity`, `shapes_identity` and `execution_identity`, each returning `Option<&Digest32>` | `RuleCoordinates::execution_identity(&RuleSources)` under `rule-execution/v2`, refusing with `RuleReceiptError`; `snapshot_identity` and `shapes_identity` are removed, and the identities come from `RuleSources::new(data, shapes)` |
+| A host receipt carrying `executionIdentity` and `snapshotIdentity` | A receipt carrying `runIdentity` and `readsFocusGraph`; a rule receipt no longer carries `snapshotIdentity`, `shapesIdentity` or `executionIdentity`; `rule_execution_receipt_value_with_sources` adds `dataIdentity`, `shapesIdentity` and `executionIdentity`. Ask for the identities through `bind_execution_receipt`, `purrdf_execution_receipt_bind`, `Dataset#bindExecutionReceipt`, `QuadStore.bind_execution_receipt` or the CLI `query --content-identity` |
+
+`ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
+which implements `StructuredError`. Stored execution identities change value
+under the version 2 law.
+
+A host asks for the same binding through one entry point each. A query receipt
+carries the run identity only; the entry point hashes every row of the dataset
+on that call and returns the receipt with `contentIdentity` and
+`executionIdentity` added.
+
+| Host | Content identity | Bind a receipt |
+|---|---|---|
+| Python | `QuadStore.content_identity()` | `QuadStore.bind_execution_receipt(receipt_json)`; raises `ValueError` for text that is not an execution receipt or for a run that cannot have an execution identity |
+| WebAssembly | `Dataset.contentIdentity()` | `Dataset.bindExecutionReceipt(receiptJson)`; throws with code `purrdf-wasm-options` for a receipt that is not one and `purrdf-wasm-receipt` for a run that cannot have an execution identity |
+| C | none | `purrdf_execution_receipt_bind(dataset, receipt, out_receipt, out_error)`; a buffer that is not a receipt fails with `PURRDF_STATUS_INVALID_UTF8` or `PURRDF_STATUS_INVALID_ARGUMENT`, and a run that cannot have an execution identity with `PURRDF_STATUS_QUERY_ERROR` |
+
+Pass the dataset the query ran on: a frozen dataset never changes, so binding
+later is exact. A run that called extension code without a certified
+implementation identity has a `runIdentity` of `null` and cannot be bound; no
+hashing happens for it.
+
+The CLI prints its `purrdf-execution` receipt on standard error with the run
+identity only, where 4.x printed `executionIdentity` and `snapshotIdentity`.
+`purrdf query --content-identity` binds the receipt to the data source: the
+receipt then also carries `contentIdentity` and `executionIdentity`, computed
+after a run that succeeded. A run that cannot have an execution identity
+(`--aggregate-namespace` and `--path-relation` call code nothing certifies)
+prints its ordinary receipt, writes no result and exits 2; a data source that
+refuses to produce its content identity exits 1. The flag is refused beside
+`--entailment`, whose closure is not the data source. A caller that read
+`executionIdentity` from the 4.x line passes the flag.
+
+## Stack floor
+
+`purrdf_stack::remaining` used to treat a thread whose stack bounds the operating
+system would not report as having a floor of address 0, which made every later
+check report enough stack. While the floor is unknown, `remaining` is `0`,
+`is_low` is `true`, `reserve` keeps nothing and `widen` returns `false`, so a
+guard refuses with its own typed stack error. `try_remaining` returns
+`Result<usize, FloorError>` for a caller that must tell "too deep" from "cannot
+measure". No code change is needed; a thread on a target or under a condition
+that cannot report its bounds now refuses where 4.x silently continued. A thread
+started by `on_stack` is measured from the size it requested, so it does not
+depend on the system call.
+
+## IRI normal form
+
+`Iri::normalize` keeps a path segment that decodes to `.` or `..` without being
+spelled so percent-encoded (`%2E`, `%2E%2E`) in every path, and lower-cases a host
+letter that percent-decoding exposes. `http://h/a/%2e/b` was `http://h/a/b` and is
+`http://h/a/%2E/b`; `http://%41/` was `http://A/` and is `http://a/`. A caller that
+stored normal forms of such IRIs recomputes them.
+
+## Text index deltas
+
+`TextIndex::with_delta` checks each removed row against the rows the index
+holds. The index keeps a sorted directory of the digest of every selected
+source row, token-less rows included, and each removed row consumes one
+occurrence of its digest. A removal of a row the index never held, or of a row
+more often than it is held, is refused with
+`TextDeltaError::UnheldRemoval { ordinal }`, where `ordinal` is the position of
+the removal in the canonical selected removals (diagnostic code
+`text-delta-unheld-removal`). 4.x accepted such a removal when its hash
+balanced an addition. A genuine delta applies as before. `TextDeltaError` is
+`#[non_exhaustive]`, so a `match` with a wildcard arm compiles unchanged. Pass
+the rows that left the source and no others.
+
+## Evaluator host source
+
+`purrdf-sparql-eval` imports nothing on `wasm32-unknown-unknown`, and it no
+longer depends on `wasm-bindgen`. It reads the wall clock (the default query
+time and a `WallDeadline`) and the entropy seed (`RAND()`, `UUID()` and
+`STRUUID()`) through a source the embedder installs once with
+`purrdf_sparql_eval::host_source::install`, an implementation of `HostSource`
+(`unix_millis` and `entropy_seed`). Installing a second source fails with
+`HostSourceInstalled`, and the first stays. An installed source is the one
+every target reads, native builds included. `purrdf-wasm` installs `Date.now`
+and `Math.random` when its module starts, so its users change nothing, and a
+native build with no source installed reads the operating system as before.
+
+A `wasm32-unknown-unknown` module that links the evaluator without
+`purrdf-wasm` and relied on the default query time, the default entropy seed or
+a wall deadline must install a source, or supply `QueryOptions::with_now` and
+`QueryOptions::with_entropy_seed`. On that target a request that leaves an
+input to the host, with no source installed, is refused with
+`EvalError::HostSourceMissing`, which names the
+missing input (`clock` or `entropy`); its diagnostic code is
+`native-sparql-host-source-missing`. No time or seed is substituted.
+`WallDeadline::try_after` and `EvalCtx::try_new` return the refusal as a
+value; `WallDeadline::after` and `EvalCtx::new` keep their signatures and
+panic with the same message in that one case.
+
+Two further changes follow for a caller that names these types:
+
+- `WallDeadline` and `HostStopWatch` no longer implement `UnwindSafe` and
+  `RefUnwindSafe`. A caller that moves one across `catch_unwind` wraps it in
+  `AssertUnwindSafe`.
+- `EvaluatorInvariant::CoordinateFocusIdentityMissing` is removed.
+  `EvaluatorInvariant` is `#[non_exhaustive]`, so a
+  `match` with a wildcard arm compiles unchanged, and a caller that named the
+  variant deletes the arm.
+
+A `SERVICE` clause answered in process evaluates under the request's own query
+time and a seed derived from its random state, where 4.x sampled a second clock
+reading and fresh entropy. A `ServiceResolver` receives those through the new
+provided method `resolve_coordinated`; one that does not override it keeps its
+behaviour.
+
 ## Items that left the crate root
 
 These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
 or `purrdf`. Each keeps its name, signature and 4.x behaviour under
-`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`). A caller that wants the 5.0
-canonical output uses the default-family item in the third column, which is
+`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`). For 5.0 canonical output,
+use the default-family item in the third column, which is
 exported from the crate root. Two of the functions below keep the name of a
 default-family function: `purrdf_core::try_canonicalize` and
 `purrdf_core::ir::try_canonicalize` run the labelling, while
@@ -357,7 +560,6 @@ runs RDFC-1.0.
 | `try_canonicalize_flat_graph_view(view, graph, hash, control)` | flat document of one graph | `try_canonicalize_checked_graph_view(view, graph, control)` |
 | `check_admissible_flat_view(view)` | admission check | `check_admissible_checked_view(view)` |
 | `try_flat_digest_view(view, hash, control)` | flat SHA-256 digest | `try_canonical_digest_checked_view(view, control)` |
-| `try_flat_blake3_view(view, hash, control)` | flat 32-byte digest | `try_canonical_digest_checked_view(view, control)` |
 | `RDFC_V2_CORPUS_POLICY` | `SearchPolicy::Finite(1_000_000)` | `CANON_CORPUS_POLICY`, the same bound for the engine's work units |
 | `CANON_PROFILE_ID`, `CANON_PROFILE_VERSION` | the 4.x profile name and version | `CANON_LABELLING_NAME`, `CANON_LABELLING_VERSION` |
 | `CANON_PRESENTATION_OVERLAY_ID`, `CANON_PRESENTATION_OVERLAY_VERSION`, `CANON_PRESENTATION_FLAT_ASSERTION_ID`, `CANON_PRESENTATION_FLAT_ASSERTION_VERSION` | the 4.x presentation names | `CANON_PRESENTATION_LINES_ID`, `CANON_PRESENTATION_LINES_VERSION` |
@@ -384,6 +586,60 @@ signature, and one relaxed a bound:
 `try_canonicalize`, `check_admissible`, `canonical_relabel` and
 `canonical_relabel_with_mapping` keep their signatures and change only what they
 compute.
+
+## Loss occurrences
+
+`LossEntry` no longer has a `location`. A producer records where the loss
+happened, what it concerns and the facts that qualify it as values:
+
+| 4.x | 5.0 |
+|---|---|
+| `location: Some(RdfLocation { path, line, column, .. })` | `site: LossSite::Document { path, line, column }` |
+| `location` with `gts_segment_index`, `gts_frame_index`, `gts_term_id`, `gts_quad_index` or `gts_reifier_id` | `site: LossSite::Gts { segment, frame, term, quad, reifier }` |
+| `location.logical`, an adapter or stage label | `site: LossSite::Stage { name }` |
+| `location.subject`, spelled `<iri>`, `_:label`, `literal:lexical`, `term#N` or `#/pointer` | `subject`: `LossSubject::Term(LossTerm)`, `Row { kind, digest }`, `Resource { kind, identifier }`, `Graph(LossGraphName)`, `Pointer(tokens)` or `Path(steps)` |
+| counts, segment head identifiers and graph names inside `note` | `detail: Vec<LossDetail>`, each a named `Count`, `Identifier`, `Term` or `Graph` value |
+| no location (`None`) | `LossSite::Unspecified`, `LossSubject::Absent` and an empty `detail` |
+
+`note` holds the code's explanation only. `LossEntry::presentation` renders
+the note and the typed members as one line for a person. `LossTerm` keeps a
+literal's datatype, language and base direction, a blank node's label and
+scope, and a triple term's parts, so no subject identifies two terms alike. A
+blank `LossGraphName` keeps its scope too. A source row is identified by its
+kind and the SHA-256 digest of its content, a resource by its kind and the
+identifier its document or projection assigns, and an XML location by its
+element steps (name and one-based position among element siblings) and an
+optional attribute step. Build a pointer subject from pointer text with
+`LossSubject::parse_pointer`, which refuses text that is not a JSON Pointer.
+The types are `#[non_exhaustive]` and implement `StructuredError`.
+
+A runtime ledger renders `schema_version` 2. Each entry has `code`, `from`,
+`to`, `intentional` and `note`, then:
+
+- `site`: an object whose `kind` is `unspecified`, `document` (`path`, `line`,
+  `column`), `gts` (`segment`, `frame`, `term`, `quad`, `reifier`) or `stage`
+  (`name`);
+- `subject`: an object whose `kind` is `absent`, `term` (`term`), `row`
+  (`row_kind`, `digest` as lowercase hexadecimal), `resource`
+  (`resource_kind`, `identifier`), `graph` (`graph`), `pointer` (`tokens`) or
+  `path` (`steps`, each `element` with `name` and `position`, or `attribute`
+  with `name`);
+- `detail`: an array of `{ "kind": "detail", "name", "value" }` where the
+  value's `kind` is `count`, `identifier`, `term` or `graph`.
+
+A term object has `kind` `iri`, `blank`, `literal` (with `direction`),
+`triple` or `indexed`, and a graph object `default`, `iri` or `blank` (with
+`scope`). Absent members are `null`. The
+`location` member is gone; read `site` and `subject`. The static matrices
+(`generated/rdf-loss-matrix.json`, `generated/transcode-loss-matrix.json`)
+keep their array shape.
+
+The Python `ProjectionLoss.location` attribute is replaced by `site`,
+`subject` and `detail`: dictionaries with the same `kind` members as the JSON,
+except that a row digest is `bytes`.
+The CLI records an in-memory source as `rdf-1.2-dataset` instead of
+`unknown`, and refuses a declared graph name that is not an IRI or a blank
+node. `RdfLocation` and `RdfDiagnostic` keep every field.
 
 ## Public types that changed shape
 
@@ -428,8 +684,63 @@ instead of `u64`, and the payload of `IndexBindingError::Source` is two
 No canonicalization or compaction-certificate struct with public fields gained,
 lost or retyped a public field, and none of these enums lost a variant.
 
+Types made `#[non_exhaustive]` so that a later addition is not a breaking change.
+No field, variant, constructor or emitted byte changed:
+
+| Type | A 4.x caller |
+|---|---|
+| `purrdf_rdf::gts_compose::MediumPlan` | A struct literal outside the crate no longer compiles. Build the plan with `MediumPlan::undicted` or `MediumPlan::dist_default` and assign the public fields it needs (`plan.zstd_level = Some(12)`). A pattern that names every field adds `..` |
+| `purrdf_geo_kernel::operation::OperationModel` | An exhaustive `match` adds a wildcard arm. Refuse a model the caller cannot handle with a typed error, as `purrdf-validate` does with `GeoError::Unsupported` |
+
+Variant payloads of `purrdf_sparql_eval::EvalError` that changed. The `Display`
+text and the diagnostic codes of both are unchanged for every existing case:
+
+| Variant | 4.x payload | 5.0 payload | A 4.x caller |
+|---|---|---|---|
+| `EvalError::Remote` | `String` | `{ endpoint: String, cause: RemoteError }` | Match `Remote { endpoint, cause }` or `Remote { .. }`, and read the failure from `cause`. `EvalError::remote` takes the endpoint and the `RemoteError`, in place of a displayable message, and chooses the variant from the cause. The structured visitor reports `endpoint` as an IRI and `cause` as the nested `RemoteError` with its own fields |
+| `EvalError::ServiceUnconfigured` | `String` | `{ endpoint: String, cause: RemoteError }` | As above. `cause` is `RemoteError::Unconfigured` when a source declined the endpoint, and the new `RemoteError::NoSource` when the engine was given no source at all. Construct it with `EvalError::remote`, which gives `ServiceUnconfigured` for those two causes and, for the other causes, the variant the engine raises (`Remote` for transport, decode, disabled, redirect and governor causes; `ServiceDenied`, `ServiceHostDenied`, `ServiceHostFault`, `SourceRead` and the stack refusals for theirs) |
+
+`RemoteError::NoSource` is a new variant of the already `#[non_exhaustive]`
+`RemoteError`; a host that matches the enum needs no change where a wildcard arm
+exists; the engine raises it itself.
+
 ## Containers
 
+- **Triple terms that reach themselves.** A `k:3` term that is reachable from its
+  own components, through `tt` or through the first `reifies` row of its `rf`, states
+  no triple. The reader keeps the `reifies` row
+  and reports no diagnostic, where 4.x reported `DamagedFrame` and dropped the row;
+  the term keeps a distinct identity in the multi-segment union and the canonical
+  writer, and projections render it as the blank node `_:unbound_triple_{id}`.
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView::new` accept such a graph instead of refusing it with
+  `gts-self-reaching-term`, which now names only a literal datatype chain that
+  leads back to itself. A caller that walks `Graph::triple_of` recursively reads
+  the components the term declares, and one that must terminate on a caller-built
+  graph takes `purrdf_gts::resolution::SelfReaching::of(&graph)` once and reads
+  components through `Graph::resolved_triple_of`. The streaming importers and
+  the N-Quads export decide the same set. Valid files are unchanged.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced.
+- **`PendingResolution` is `#[non_exhaustive]`.** The streaming resolver keeps
+  the search that finds self-reaching triple terms in the pending record, in the
+  new field `component: ComponentState`. An external `PendingResolution { .. }`
+  literal no longer compiles. A `ResolutionStorage` implementer changes only
+  where it builds a record:
+
+  ```rust
+  // 4.x
+  PendingResolution { term, parent: None, next: 0, active: false }
+  // 5.0
+  PendingResolution::new(term)
+  ```
+
+  A storage that persists records outside memory writes
+  `pending.component.to_words()` (five `u64` words) beside `parent`, `next` and
+  `active`, and reads them back with `ComponentState::from_words`, which returns
+  `None` for words no state encodes. It must return the value it was given: a
+  record read back with the default state is refused with
+  `rdf-ir-dangling-term-ref`. No `ResolutionStorage` method is added.
 - **Unsupported signing algorithm.** `verify_sig` and `verify_sig_with_key`
   return `SigStatus::Unverified` for a COSE_Sign1 whose declared `alg` this
   engine does not implement, where 4.0.2 returned `Invalid`; the file verifiers
@@ -444,6 +755,45 @@ lost or retyped a public field, and none of these enums lost a variant.
   (`gts_certify`, in the authorship and the packaging checks) refuse an
   unsupported algorithm at parse, before any status exists; `Unverified` is
   what a direct verification with `verify_sig` or `verify_sig_with_key` returns.
+- **Reifier position in GTS.** The reader drops a `reifies` row whose reifier is
+  a literal or a quoted-triple term, and diagnoses it `PositionConstraint`;
+  4.0.2 kept the row without a diagnostic. A quoted triple stays legal as a
+  `quads` subject and as the object of a `reifies` or `annot` row.
+  A quoted-triple term whose `rf` names its own id breaks the specification's
+  rule that `rf` names a strictly earlier term. 4.0.2 kept such an `rf` without
+  a diagnostic, and already diagnosed an `rf` naming a later id as
+  `ForwardReference`. The reader now diagnoses an `rf` naming its own id as
+  `ForwardReference` too, and reads it as absent. The term then resolves by its
+  `tt` when that is valid and states no triple otherwise, and a `reifies` row
+  keyed by it is dropped with `PositionConstraint`. The row diagnostic carries
+  the frame index, the reifier id and the row's triple.
+  The import outcome follows from the new diagnostic. The event importer
+  (`import_gts_events` and its dictionary and blob forms) fails the import on
+  any reader diagnostic other than a blob-budget refusal, so it now refuses
+  every file holding the spelling with `rdf-ir-gts-fold-diagnostic` carrying the
+  `ForwardReference`, whether or not the term has a `tt` and whether or not a
+  quad uses it; 4.0.2 imported such a file. `dataset_from_gts_graph` and the
+  fold view read the file and render the term as a fresh blank node (see
+  "Triple terms that state no triple"). The
+  conforming spelling names an earlier IRI or blank-node reifier in `rf` and
+  keys the row by that reifier. A file whose `reifies` row is keyed by a
+  quoted-triple term, whatever its `tt` or `rf`, loses that row.
+  A read-only count through the 4.0.2 reader over the fourteen stored
+  first-generation files found no term with an `rf`, no triple-kind term, no
+  self-bound term and no reader diagnostic, and their `reifies` rows involve no
+  such term. The count has limits: writer versions are not recorded in the
+  files' headers, and older archived versions of the live files were not read.
+  The conformance vectors, 39 carried and 52 external, are a separate count and
+  contain no writer output; none holds the spelling.
+- **Damaged blob payload in GTS.** A blob frame that declares its digest and
+  whose transformed payload cannot be a stream of its codec folds as an opaque
+  node with a `DamagedFrame` diagnostic, and the blob is not in the blob table;
+  4.0.2 admitted it and failed only when its bytes or size were requested. The
+  fold checks the structure of `zstd`, `zstd-rsyncable` and `gzip` payloads (frame
+  and block headers, a named dictionary, the gzip magic and trailer) without
+  decoding them. A payload whose structure is sound but whose content is corrupt
+  still folds as a blob and returns the codec failure on first request, as in
+  4.0.2. A valid blob folds as before.
 - **COSE_Sign1 protected header.** The protected header is read as the
   deterministic encoding the specification requires of every signed byte string
   (section 4, RFC 8949 section 4.2): shortest-form integers and lengths,
@@ -484,18 +834,16 @@ lost or retyped a public field, and none of these enums lost a variant.
 - **PACK.** Format version `1` means a 4.x digest. The 5.0 writer emits format
   version `2`, whose `rdfc_digest` header field is the line-sequence digest. The
   reader accepts both, and `verify_pack` recomputes each version with the function
-  that recorded it; a version `1` `rdfc_digest` of a dataset holding U+FFFE or
-  U+FFFF in a literal does not recompute. Because the line sequence holds a line for each declared empty
-  graph, a pack that declares an empty graph now has a different digest from the
+  that recorded it. Because the line sequence holds a line for each declared
+  empty graph, a pack that declares an empty graph now has a different digest from the
   same pack without the declaration; under version `1` they were equal.
 - **GTS compaction certificates.** A certificate's canonical CBOR map carries a
   `refold_canon` text field naming the function that computed its refold digests:
   `rdfc10-sha256` (the 4.x RDFC-1.0 flat form) or `nrl1-lines-sha256` (SHA-256 of
   the default-family canonical document). An absent field means `rdfc10-sha256`,
   so every certificate written by 4.x reads unchanged (its refold digests still
-  recompute, except for a dataset holding U+FFFE or U+FFFF in a literal), and an
-  `rdfc10-sha256`
-  certificate is written without the field, byte for byte as 4.x wrote it.
+  recompute), and an `rdfc10-sha256` certificate is written without the field,
+  byte for byte as 4.x wrote it.
   `compact_and_certify_versioned` writes `nrl1-lines-sha256` and returns a
   `VersionedCertificate { canon, certificate }`; `compact_and_certify` keeps its
   signature and the `rdfc10-sha256` certificate. `verify_compaction_with`,
@@ -507,8 +855,7 @@ lost or retyped a public field, and none of these enums lost a variant.
   `CompactionCertificate::from_canonical_cbor` refuses a certificate that is not
   `rdfc10-sha256` (`rdf-certificate-cbor-unexpected-canon`); read a certificate of
   either kind with `VersionedCertificate::from_canonical_cbor`. The digest the
-  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest (it now
-  follows profile version 4 for such a dataset), because
+  pack embeds as `stream:contentRefoldDigest` stays the RDFC-1.0 digest, because
   the GTS wire format is governed in `gmeow-gts`; both writers author the same
   pack bytes.
 - **Segmented images.** The writer emits format version `8` (`PURRSEG8`), whose
@@ -523,23 +870,23 @@ lost or retyped a public field, and none of these enums lost a variant.
   4.x image of the same input, and a 4.x reader refuses it. Rewrite a version
   `7` image from its RDF input to restore checkpointed range comparison. A
   range whose digests are all equal still visits each occurrence when the
-  compared sides hold different counts.
+  compared sides hold different counts. `SourceDifferenceWork::members` counts
+  the stored digests hashed while recomputing a canonical directory node below
+  the sparse checkpoints, or from the records of an image whose checkpoints are
+  additive; 4.x counted the digests visited while reading sparse prefix-sum
+  tails. A caller that records the counter reads a different quantity.
 - **Columnar.** The five-table Parquet files record no canonical digest, only
   content digests of blobs and of the manifest. They are unchanged.
 - **Embedding (PURREMB).** The `SOURCE` section records a certified RDF digest
   and the blank-node target identities carry canonical labels. Format version `1`
-  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels (a source digest
-  of a dataset holding U+FFFE or U+FFFF in a literal does not recompute). The 5.0
+  means the 4.x run: the RDFC-1.0 SHA-256 digest and `c14nN` labels. The 5.0
   writer emits format version `2`, whose digest is the line-sequence digest and
   whose labels are the labelling's decimal labels. Nothing else in the framing or
   the sections changes. The reader accepts both versions and refuses any other,
   and a file whose header and trailer name different versions. Source
   verification recomputes the digest and the labels with the run the version
   names, so a 4.x embedding keeps verifying against the pack or Columnar files it
-  was written for, except for a dataset holding U+FFFE or U+FFFF in a literal,
-  whose version `1` source digest no longer recomputes. Version `1` blank-node
-  labels (`c14nN`) can also move for such a dataset, because the first-degree
-  hashes of RDFC-1.0 include the spelling of an adjacent literal. The same file with its version byte changed to `2` is refused
+  was written for. The same file with its version byte changed to `2` is refused
   as a certified-RDF digest mismatch. A newly written artifact differs from the
   4.x artifact of the same inputs in the header and trailer version fields, the
   source digest, the dataset target identity, every blank-node target identity
@@ -552,10 +899,70 @@ lost or retyped a public field, and none of these enums lost a variant.
   misread one. Re-embedding is not needed to keep a 4.x file readable by 5.0, but
   a 5.0 file is not readable by 4.x.
 
+## Triple terms that state no triple
+
+A `k:3` term states no triple when it carries neither `tt` nor `rf`, when its
+`rf` names a reifier no `reifies` row binds, or when it reaches itself. GTS
+section 7.3 says a reader keeps such a term as a distinct term, and a projection
+renders it as a fresh blank node.
+
+Every public path projects it as a blank node no document label can name:
+`GtsFoldView`, `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`,
+`import_gts_graph`, the streaming importers (`import_gts_events` and its
+dictionary and blob forms) and `export_gts_rdf_nquads_with_dictionary`. The node
+lives in blank-node scope `u32::MAX - 1`, which no document blank node has: a folded
+graph interns the label `unbound_triple_{id}` there, a streamed file interns
+`unbound_triple_{segment}_{id}`, and a document blank node labelled
+`unbound_triple_N` stays a different node. In N-Quads text the node is a scoped
+escape: the fold view's `nq_token` writes
+`_:purrdfesc4294967294_unbound_00005Ftriple_00005F{id}`, and the text exporter
+writes `_:purrdfesc4294967294_unbound_00005Ftriple_00005F{segment}_00005F{id}`.
+`nq_token` also writes document blank nodes through the same encoder, so a label
+that is not a valid N-Quads blank-node label, or that begins with `purrdfesc`,
+is written escaped where it was written verbatim. The term is accepted wherever a
+blank node is legal: as a quad subject, as the subject of a reified triple,
+inside a `tt` component and as an annotation value. Within one projection the
+same term id names one blank node and a second such term names another. A term
+whose `rf` names a reifier with a row still resolves through the first row, and a
+term with `tt` is unchanged.
+
+The streaming importers give segment scopes the ordinals 1 to `u32::MAX - 2`, so
+a segment index of `u32::MAX - 2` is refused with `gts-scope-limit`. The import
+merge, the builder's merge scopes, the per-source scopes of a quad-source freeze
+and the event sink stop at the same ordinal, and the import merge numbers
+documents above the highest scope that is not reserved. An
+implementor of `purrdf_gts::segment_decode::ResolvedSink` overrides the provided
+method `intern_unbound_triple` to place the node outside every scope a document
+reaches; the provided body interns `unbound_triple_{id}` through `intern_blank`,
+which a document label can equal. `purrdf_gts::event_stream::EventEmitter` opens a
+scope of its own for each such term.
+
+A term whose `rf` names its own id is read as having no `rf`, because the
+reader diagnoses that `rf` as `ForwardReference`. `GtsFoldView`,
+`dataset_from_gts_graph`, `flattened_dataset_from_gts_graph` and
+`import_gts_graph` then project it as a bare term. `import_gts_events` and its
+dictionary and blob forms, and `export_gts_rdf_nquads_with_dictionary`, refuse the
+file with `rdf-ir-gts-fold-diagnostic`, because they fail on any reader
+diagnostic.
+
+`native-codec-unbound-triple-term`, `gts-unbound-triple-term`,
+`rdf-ir-unbound-triple-term`, `native-codec-missing-reifier-binding`,
+`rdf-ir-missing-reifier-binding` and `gts-missing-reifier-binding` remain defined
+for API compatibility. No public input produces them. A consumer that matched them
+to detect such a term inspects the term instead, through
+`purrdf_gts::model::Term::is_bare_triple` for a bare term. A writer that wants the
+term to state a triple writes `tt`.
+
 ## Hosts
 
 - **Labels and receipts.** Every host returns `_:N` labels. Receipts name the
-  labelling, its version and the `line-sequence` presentation.
+  labelling, its version and the `line-sequence` presentation. The
+  canonicalization receipts of `PipelineBundle::digest`, of the residue leaf and
+  of the equivalent view bundle runs record `Sha256Digest` as their output,
+  where 4.x recorded `Document`: these runs hash the canonical document as its
+  lines are spelled and no longer build it. A caller that matches the recorded
+  output of such a receipt accepts `Sha256Digest`. The digests are unchanged by
+  this.
 - **The bound.** The `canonical_search` argument and `--canonical-search` map onto
   the engine's typed limit: a finite value is a number of limited work units of
   the walk, and `unlimited` is the engine's own limit. A finite bound that the
@@ -577,6 +984,10 @@ lost or retyped a public field, and none of these enums lost a variant.
   document. The identifier `flat-assertion`, version `1`, now names only the 4.x
   flat form reached through `rdfc12`; the default flat document reports
   `line-sequence`, version `1`.
+- **Python GTS fold view.** `GtsFoldViewNative.from_bytes` and
+  `gts_relational_rows_from_bytes` raise `ValueError` (carrying the native `code`
+  and `diagnostic_json`) when the fold reports any diagnostic, where 4.x returned
+  an empty or partial view. Catch the error where a damaged file is possible.
 - **Python, WebAssembly, C and the CLI.** Each routes to the default family.
   Their canonical documents, digests and labels change as above, and a refusal
   under a finite bound is the `limit` refusal.

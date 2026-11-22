@@ -325,6 +325,110 @@ pub fn zstd_block_layout(payload: &[u8]) -> Result<Vec<ZstdBlockInfo>, CodecErro
     Ok(out)
 }
 
+/// Check the wire bytes of a transformed payload against the structure of the
+/// first transform that would decode them, without decoding any block body.
+///
+/// Folding a blob whose digest is declared stores its wire bytes undecoded, so a
+/// payload that cannot be a stream of its declared codec would otherwise fold as
+/// sound and fail only when its bytes are first requested. This is the cheap
+/// part of that decision, sized by the number of frames or blocks and never by
+/// the decoded length:
+///
+/// * `zstd` and `zstd-rsyncable`: every frame header is readable, a skippable
+///   frame is skipped whole, the block headers of every frame reach a last block
+///   inside the payload, a content checksum is present when declared, and a
+///   dictionary id named by a header is the id of the codec's dictionary.
+/// * `gzip`: the payload is not empty, begins with the gzip magic, and is long
+///   enough for a header and trailer.
+///
+/// A corrupt block body, a bad checksum and a wrong gzip length pass this check
+/// and are refused by [`BlobEntry::decode`](crate::model::BlobEntry::decode) on
+/// the first request for the bytes or their size. Every other codec has no
+/// cheap structural check and is accepted here.
+///
+/// # Errors
+/// The codec error the decoder would report for the same structural fault.
+pub fn check_chain_structure(chain: &[Codec], data: &[u8]) -> Result<(), CodecError> {
+    let Some(codec) = chain.last() else {
+        return Ok(());
+    };
+    match codec.name.as_str() {
+        "gzip" => check_gzip_structure(data),
+        "zstd" | "zstd-rsyncable" => check_zstd_structure(codec, data),
+        _ => Ok(()),
+    }
+}
+
+fn check_gzip_structure(data: &[u8]) -> Result<(), CodecError> {
+    // RFC 1952: a 10-byte header and an 8-byte trailer around the deflate stream.
+    const MINIMUM_MEMBER: usize = 18;
+    let fault = if data.is_empty() {
+        purrdf_deflate::Error::Empty
+    } else if !data.starts_with(&[0x1f, 0x8b]) {
+        purrdf_deflate::Error::NotGzip
+    } else if data.len() < MINIMUM_MEMBER {
+        purrdf_deflate::Error::Truncated
+    } else {
+        return Ok(());
+    };
+    Err(CodecError::Failed(CodecFailure::Gzip(fault)))
+}
+
+fn check_zstd_structure(codec: &Codec, data: &[u8]) -> Result<(), CodecError> {
+    use purrdf_zstd::decoding::{
+        Dictionary, errors::ReadFrameHeaderError, find_frame_compressed_size,
+        read_frame_header_info,
+    };
+
+    let mut dictionary_id = None;
+    let mut rest = data;
+    while !rest.is_empty() {
+        match read_frame_header_info(rest, false) {
+            Ok(header) => {
+                if let Some(id) = header.dictionary_id.filter(|id| *id != 0) {
+                    let held = match dictionary_id {
+                        Some(held) => held,
+                        None => {
+                            let held = match codec.dct.as_deref() {
+                                Some(raw) => Some(
+                                    Dictionary::decode_dict(raw)
+                                        .map_err(|e| {
+                                            CodecError::Failed(CodecFailure::ZstdDecodeDictionary(
+                                                FrameDecoderError::from(e),
+                                            ))
+                                        })?
+                                        .id,
+                                ),
+                                None => None,
+                            };
+                            dictionary_id = Some(held);
+                            held
+                        }
+                    };
+                    if held != Some(id) {
+                        return Err(CodecError::Failed(CodecFailure::ZstdDecode(
+                            FrameDecoderError::DictNotProvided { dict_id: id },
+                        )));
+                    }
+                }
+            }
+            // A skippable frame carries no blocks; its extent is checked below.
+            Err(ReadFrameHeaderError::SkipFrame { .. }) => {}
+            Err(e) => return Err(CodecError::Failed(CodecFailure::ZstdHeader(e))),
+        }
+        let frame_len = find_frame_compressed_size(rest)
+            .map_err(|e| CodecError::Failed(CodecFailure::ZstdTruncated(e)))?;
+        if frame_len == 0 || frame_len > rest.len() {
+            return Err(CodecError::Failed(CodecFailure::CompressedLength {
+                compressed_len: frame_len,
+                remaining: rest.len(),
+            }));
+        }
+        rest = &rest[frame_len..];
+    }
+    Ok(())
+}
+
 /// Reverse a resolved codec chain, last to first (§6.1, §8.2).
 ///
 /// The baseline carries no keys, so every `encrypt`-class codec degrades to
@@ -815,5 +919,68 @@ mod tests {
         )
         .expect_err("a dict with nothing to prime must be a hard error");
         assert!(matches!(err, CodecError::Failed(_)));
+    }
+
+    fn zstd_codec(dct: Option<Vec<u8>>) -> Codec {
+        Codec {
+            dct,
+            ..Codec::new("zstd", "compress")
+        }
+    }
+
+    #[test]
+    fn structure_check_refuses_a_zstd_payload_that_is_not_a_frame_stream() {
+        let chain = [zstd_codec(None)];
+        let wire = encode_chain(&["zstd".to_string()], b"structured payload").unwrap();
+        check_chain_structure(&chain, &wire).expect("a sound frame passes");
+        assert!(check_chain_structure(&chain, b"not zstd at all").is_err());
+        assert!(check_chain_structure(&chain, &wire[..wire.len() - 1]).is_err());
+    }
+
+    #[test]
+    fn structure_check_refuses_a_frame_that_names_an_absent_dictionary() {
+        let corpus: Vec<Vec<u8>> = (0..200u32)
+            .map(|i| format!("<https://example.org/s{}> \"claim {i}\" .\n", i % 19).into_bytes())
+            .collect();
+        let slices: Vec<&[u8]> = corpus.iter().map(Vec::as_slice).collect();
+        let dict = crate::dict::raw_content_dict(&slices, 4096).expect("dict builds");
+        let wire = encode_chain_with_options(
+            &["zstd".to_string()],
+            b"claim 7 about cats",
+            EncodeOptions {
+                dict: Some(&dict),
+                ..EncodeOptions::default()
+            },
+        )
+        .expect("primed frame encodes");
+        assert!(check_chain_structure(&[zstd_codec(Some(dict))], &wire).is_ok());
+        assert!(check_chain_structure(&[zstd_codec(None)], &wire).is_err());
+    }
+
+    #[test]
+    fn structure_check_refuses_a_gzip_payload_without_magic_or_a_trailer() {
+        let chain = [Codec::new("gzip", "compress")];
+        assert!(check_chain_structure(&chain, b"").is_err());
+        assert!(check_chain_structure(&chain, b"plain text, not gzip").is_err());
+        assert!(check_chain_structure(&chain, &[0x1f, 0x8b, 0x08]).is_err());
+        let wire = encode_chain(&["gzip".to_string()], b"gzip body").unwrap();
+        assert!(check_chain_structure(&chain, &wire).is_ok());
+    }
+
+    /// A lazy entry whose structure is sound but whose block body is corrupt
+    /// passes the structural check and is refused by the first request for its
+    /// bytes, as a typed failure and never a panic.
+    #[test]
+    fn a_corrupt_block_body_passes_the_structure_check_and_fails_on_first_request() {
+        let chain = [zstd_codec(None)];
+        let mut wire = encode_chain(&["zstd".to_string()], &b"body ".repeat(64)).unwrap();
+        let last = wire.len() - 1;
+        wire[last] ^= 0xff;
+        let middle = wire.len() / 2;
+        wire[middle] ^= 0xff;
+        check_chain_structure(&chain, &wire).expect("the frame structure is sound");
+        let mut entry = crate::model::BlobEntry::lazy(wire, chain.to_vec());
+        assert!(matches!(entry.decoded_len(), Err(CodecError::Failed(_))));
+        assert!(entry.decode().is_err());
     }
 }

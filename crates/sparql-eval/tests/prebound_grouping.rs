@@ -375,6 +375,7 @@ fn an_assignment_of_the_pre_bound_name_out_of_its_scope_answers_by_join() {
     );
     for query in [
         format!("SELECT ?this WHERE {{ ?this <{EX}p> ?o {{ BIND(<{EX}z> AS ?this) }} }}"),
+        format!("SELECT ?value WHERE {{ BIND(<{EX}b> AS $this) $this <{EX}p> ?value }}"),
         format!("SELECT ?o WHERE {{ ?x <{EX}p> ?o BIND(<{EX}z> AS ?this) }}"),
         format!(
             "SELECT ?this ?o WHERE {{ {{ SELECT ?this ?o WHERE {{ ?x <{EX}p> ?o \

@@ -21,7 +21,14 @@ fn both_columnar_outputs_preserve_located_losses_and_owned_causes() {
     assert_eq!(losses[0].code, "blob-byte-budget");
     assert_eq!(losses[0].from, "gts");
     assert_eq!(losses[0].to, "columnar-v1");
-    assert!(losses[0].location.is_some());
+    assert!(matches!(
+        losses[0].site,
+        purrdf_core::LossSite::Gts {
+            segment: Some(_),
+            frame: Some(_),
+            ..
+        }
+    ));
     let (_, files_report) = prepare_gts_columnar(&bytes, policy)
         .unwrap()
         .write(purrdf_columnar::Compression::Uncompressed)

@@ -448,7 +448,7 @@ pub(in crate::json_schema) fn term_value(term: &Term, ctx: &mut Ctx<'_>) -> Valu
 
 pub(in crate::json_schema) fn datatype_schema(
     kind: Kind,
-    shape: &str,
+    shape: crate::json_schema::ShapeName<'_>,
     key: &str,
     ctx: &mut Ctx<'_>,
 ) -> Value {
@@ -465,10 +465,10 @@ pub(in crate::json_schema) fn datatype_schema(
         super::record_loss(
             ctx,
             "plain:ieee-representability",
-            shape,
-            &format!(
-                "property {key} requires original SHACL validation of finite IEEE representability; JSON number membership is not that check"
-            ),
+            shape.term,
+            "the property requires original SHACL validation of finite IEEE representability; \
+             JSON number membership is not that check",
+            &[super::Fact::Identifier("property", key)],
         );
         let comment = native_value(
             ctx,

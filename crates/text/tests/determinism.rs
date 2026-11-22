@@ -131,6 +131,12 @@ fn chronological_walk(graph: GraphSelector) {
     )
     .unwrap();
     let mut index = TextIndex::from_dataset(&snapshot.query(limits).unwrap(), &config).unwrap();
+    let replayed = walk_dataset(&rows[..1]);
+    let same = index
+        .clone()
+        .with_delta(&snapshot.query(limits).unwrap(), &*replayed, &*replayed)
+        .unwrap();
+    assert_eq!(same.fingerprint(), index.fingerprint());
     let empty = walk_dataset(&[]);
     let needle = purrdf_text::Analyzer::empty_lexicon()
         .terms("quick brown river")
@@ -237,6 +243,7 @@ fn chronological_walk(graph: GraphSelector) {
 
 struct UnobservedSource<'a> {
     inner: &'a RdfDataset,
+    summary: Option<&'a RdfDataset>,
     failure: u8,
     failed: std::sync::atomic::AtomicBool,
 }
@@ -336,6 +343,17 @@ impl purrdf_core::DatasetView for UnobservedSource<'_> {
         graph: purrdf_core::GraphMatch<Self::Id>,
         stream: purrdf_core::StatisticsStream,
     ) -> Result<Option<purrdf_core::source::SourceSummary>, Self::ReadError> {
+        if let Some(summary) = self.summary {
+            // The synthetic provider reports the accounting of another dataset
+            // with the same population. Subject probes still read the actual rows.
+            assert!(matches!(graph, purrdf_core::GraphMatch::Any));
+            let predicate = purrdf_core::DatasetView::term_value(self.inner, predicate).unwrap();
+            let predicate = purrdf_core::DatasetView::term_id_by_value(summary, &predicate)
+                .unwrap()
+                .unwrap();
+            return purrdf_core::DatasetView::source_summary(summary, predicate, graph, stream)
+                .map_err(|never| match never {});
+        }
         purrdf_core::DatasetView::source_summary(self.inner, predicate, graph, stream)
             .map_err(|never| match never {})
     }
@@ -354,6 +372,7 @@ fn native_metadata_and_subject_probes_update_without_full_source_iterators() {
     let next = dataset_of(&rows);
     let source = UnobservedSource {
         inner: &next,
+        summary: None,
         failure: 3,
         failed: std::sync::atomic::AtomicBool::new(false),
     };
@@ -368,10 +387,42 @@ fn native_metadata_and_subject_probes_update_without_full_source_iterators() {
 }
 
 #[test]
+fn summary_delta_refuses_different_rows_with_matching_accounting() {
+    let before = dataset_of(&[("unchanged", ""), ("edited", "before")]);
+    let removed = dataset_of(&[("edited", "before")]);
+    let added = dataset_of(&[("edited", "after")]);
+    let expected = dataset_of(&[("unchanged", ""), ("edited", "after")]);
+    let actual = dataset_of(&[("other", ""), ("edited", "after")]);
+    let index = TextIndex::from_dataset(&*before, &config()).unwrap();
+    let mut source = UnobservedSource {
+        inner: &expected,
+        summary: Some(&expected),
+        failure: 3,
+        failed: std::sync::atomic::AtomicBool::new(false),
+    };
+    let updated = index
+        .clone()
+        .with_delta(&source, &*added, &*removed)
+        .unwrap();
+    assert_eq!(
+        updated.source_fingerprint(),
+        TextIndex::from_dataset(&*expected, &config())
+            .unwrap()
+            .source_fingerprint()
+    );
+    source.inner = &actual;
+    assert!(matches!(
+        index.with_delta(&source, &*added, &*removed),
+        Err(purrdf_text::TextDeltaError::SourceMismatch { expected, actual }) if expected == actual
+    ));
+}
+
+#[test]
 fn invalid_corpus_shape_refuses_before_capturing_source_observation() {
     let dataset = dataset_of(&CORPUS);
     let source = UnobservedSource {
         inner: &dataset,
+        summary: None,
         failure: 4,
         failed: std::sync::atomic::AtomicBool::new(false),
     };
@@ -402,6 +453,7 @@ fn unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failu
     for failure in 0..3 {
         let source = UnobservedSource {
             inner: &dataset,
+            summary: None,
             failure,
             failed: std::sync::atomic::AtomicBool::new(false),
         };

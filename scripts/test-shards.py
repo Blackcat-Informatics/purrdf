@@ -1,26 +1,24 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""Target partitions of the workspace test build, preserving feature unification.
-
-Every invocation selects the whole workspace. Package partitions change Cargo's
-feature resolution, so these shards partition target kinds and integration names.
-The sole library exclusion is the Python extension, whose manifest disables tests.
-"""
+"""Partition test targets without changing Cargo workspace feature unification."""
 import argparse
+import fnmatch
 import json
 
-SHARDS = ("lib", "doc", "integration-1", "integration-2", "integration-3", "integration-4", "integration-5")
-PATTERNS = ("[a-d]*", "[e-j]*", "[p-r]*", "[!a-r]*", "[k-o]*")
+PATTERNS = ("[a-d]*", "[e-j]*", "[pq]*", "[!a-r]*", "[k-mo]*", "r*", "n*")
+SHARDS = ("lib", "doc", *(f"integration-{index}" for index in range(1, len(PATTERNS) + 1)))
 
 
 def integration_shard(name: str) -> str:
     """Select one disjoint first-character partition, including non-ASCII names."""
     if not name:
         raise ValueError("an integration test target must have a name")
-    first = name[0]
-    index = 1 if "a" <= first <= "d" else 2 if "e" <= first <= "j" else 5 if "k" <= first <= "o" else 3 if "p" <= first <= "r" else 4
-    return f"integration-{index}"
+    return next(
+        f"integration-{index}"
+        for index, pattern in enumerate(PATTERNS, 1)
+        if fnmatch.fnmatchcase(name, pattern)
+    )
 
 
 if __name__ == "__main__":

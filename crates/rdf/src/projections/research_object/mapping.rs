@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use crate::projections::loss::record_logical_loss;
+use crate::projections::loss::{loss_term, record_term_loss};
 use crate::projections::util::push_iri_triple;
 use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +17,7 @@ use purrdf_core::{
     DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, check_ledger_sound,
     rdf_to_research_object_loss_ledger,
 };
+use purrdf_core::{LossDetail, LossTerm};
 
 use super::super::{ProjectionError, ProjectionTerm, stable_identifier};
 use super::{
@@ -548,12 +549,12 @@ impl<'a> Projector<'a> {
                 .entity_id(term)?
                 .map(|value| ResearchValue::Iri { value }),
             ProjectionTerm::Triple { .. } => {
-                record_logical_loss(
+                record_term_loss(
                     &mut self.ledger,
                     &self.contract,
                     LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
                     "research-object:rdf-term",
-                    term_label(term),
+                    (term, Vec::new()),
                 );
                 None
             }
@@ -567,22 +568,22 @@ impl<'a> Projector<'a> {
                 let key = term.to_canonical_json(self.config.limits())?;
                 let local = stable_identifier("entity", &key)?;
                 let iri = self.config.identity().resolve_relative(&local)?;
-                record_logical_loss(
+                record_term_loss(
                     &mut self.ledger,
                     &self.contract,
                     LOSS_RESEARCH_BLANK_IDENTITY_RESOLVED,
                     "research-object:rdf-identity",
-                    term_label(term),
+                    (term, Vec::new()),
                 );
                 Ok(Some(iri))
             }
             ProjectionTerm::Triple { .. } => {
-                record_logical_loss(
+                record_term_loss(
                     &mut self.ledger,
                     &self.contract,
                     LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
                     "research-object:rdf-identity",
-                    term_label(term),
+                    (term, Vec::new()),
                 );
                 Ok(None)
             }
@@ -599,65 +600,71 @@ impl<'a> Projector<'a> {
             .iter()
             .filter_map(|quad| quad.graph.as_ref())
             .collect();
-        let empty_graphs: Vec<String> = self
+        let empty_graphs: Vec<ProjectionTerm> = self
             .named_graphs
             .iter()
             .filter(|graph| !populated.contains(graph))
-            .map(term_label)
+            .cloned()
             .collect();
-        for graph in empty_graphs {
-            record_logical_loss(
+        for graph in &empty_graphs {
+            record_term_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_RESEARCH_EMPTY_GRAPH_DROPPED,
                 "research-object:named-graph",
-                &graph,
+                (graph, Vec::new()),
             );
         }
-        let named_quads: Vec<(String, String)> = self
+        let named_quads: Vec<(ProjectionTerm, ProjectionTerm)> = self
             .quads
             .iter()
             .filter_map(|quad| {
                 quad.graph
                     .as_ref()
-                    .map(|graph| (term_label(graph), term_label(&quad.subject)))
+                    .map(|graph| (graph.clone(), quad.subject.clone()))
             })
             .collect();
-        for (graph, subject) in named_quads {
-            record_logical_loss(
+        for (graph, subject) in &named_quads {
+            record_term_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_RESEARCH_NAMED_GRAPH_DROPPED,
-                &format!("research-object:named-graph:{graph}"),
-                &subject,
+                "research-object:named-graph",
+                (subject, vec![LossDetail::term("graph", loss_term(graph))]),
             );
         }
-        let reifiers: Vec<String> = self
+        let reifiers: Vec<ProjectionTerm> = self
             .reifiers
             .iter()
-            .map(|(reifier, _, _)| term_label(reifier))
+            .map(|(reifier, _, _)| reifier.clone())
             .collect();
-        for reifier in reifiers {
-            record_logical_loss(
+        for reifier in &reifiers {
+            record_term_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_RESEARCH_REIFIER_DROPPED,
                 "research-object:reifier",
-                &reifier,
+                (reifier, Vec::new()),
             );
         }
-        let annotations: Vec<String> = self
+        let annotations: Vec<(ProjectionTerm, String)> = self
             .annotations
             .iter()
-            .map(|(reifier, predicate, _, _)| format!("{} {predicate}", term_label(reifier)))
+            .map(|(reifier, predicate, _, _)| (reifier.clone(), predicate.clone()))
             .collect();
-        for annotation in annotations {
-            record_logical_loss(
+        for (reifier, predicate) in &annotations {
+            record_term_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_RESEARCH_ANNOTATION_DROPPED,
                 "research-object:annotation",
-                &annotation,
+                (
+                    reifier,
+                    vec![LossDetail::term(
+                        "predicate",
+                        LossTerm::Iri(predicate.clone()),
+                    )],
+                ),
             );
         }
     }
@@ -675,20 +682,26 @@ impl<'a> Projector<'a> {
                 || quad.object.is_triple()
                 || quad.graph.as_ref().is_some_and(ProjectionTerm::is_triple)
             {
-                record_logical_loss(
+                record_term_loss(
                     &mut self.ledger,
                     &self.contract,
                     LOSS_RESEARCH_TRIPLE_TERM_DROPPED,
                     "research-object:unmapped-rdf",
-                    term_label(&quad.subject),
+                    (&quad.subject, Vec::new()),
                 );
             }
-            record_logical_loss(
+            record_term_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED,
                 "research-object:unmapped-rdf",
-                format!("{} {}", term_label(&quad.subject), quad.predicate),
+                (
+                    &quad.subject,
+                    vec![LossDetail::term(
+                        "predicate",
+                        LossTerm::Iri(quad.predicate.clone()),
+                    )],
+                ),
             );
         }
     }
@@ -1179,7 +1192,8 @@ mod tests {
             project_research_object(dataset.as_ref(), "croissant-1.1", &config).expect("project");
         assert_eq!(first.model.dataset.titles[0].value, "Dataset");
         assert!(first.loss_ledger.entries().iter().any(|entry| {
-            entry.code == LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED && entry.location.is_some()
+            entry.code == LOSS_RESEARCH_UNMAPPED_STATEMENT_DROPPED
+                && entry.subject != purrdf_core::LossSubject::Absent
         }));
 
         let lifted = lift_research_object(first.model.clone(), &config).expect("lift");

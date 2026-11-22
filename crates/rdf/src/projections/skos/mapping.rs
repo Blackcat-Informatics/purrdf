@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use crate::projections::loss::record_row_loss;
+use crate::projections::loss::{graph_subject, record_logical_loss, record_row_loss};
 use crate::projections::source_rows::{SourceAnnotation, SourceQuad, SourceReifier};
 use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
@@ -630,48 +630,48 @@ impl<'a> Projector<'a> {
 
     fn record_structural_losses(&mut self) -> Result<(), ProjectionError> {
         for index in 0..self.named_graphs.len() {
-            self.record_named_graph_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED)?;
+            self.record_named_graph_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED);
             if self.named_graphs[index].contains_blank() {
-                self.record_named_graph_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
+                self.record_named_graph_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED);
             }
             if self.named_graphs[index].is_triple() {
-                self.record_named_graph_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
+                self.record_named_graph_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED);
             }
         }
         for index in 0..self.quads.len() {
             if self.quads[index].graph.is_some() {
-                self.record_quad_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED)?;
+                self.record_quad_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED);
             }
         }
         for index in 0..self.reifiers.len() {
             if self.reifiers[index].graph.is_some() {
-                self.record_reifier_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED)?;
+                self.record_reifier_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED);
             }
-            self.record_reifier_loss(index, LOSS_SKOS_REIFIER_DROPPED)?;
-            self.record_reifier_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
+            self.record_reifier_loss(index, LOSS_SKOS_REIFIER_DROPPED);
+            self.record_reifier_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED);
             if self.reifiers[index]
                 .node_terms()
                 .any(ProjectionTerm::contains_blank)
             {
-                self.record_reifier_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
+                self.record_reifier_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED);
             }
         }
         for index in 0..self.annotations.len() {
             if self.annotations[index].graph.is_some() {
-                self.record_annotation_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_SKOS_NAMED_GRAPH_DROPPED);
             }
-            self.record_annotation_loss(index, LOSS_SKOS_ANNOTATION_DROPPED)?;
+            self.record_annotation_loss(index, LOSS_SKOS_ANNOTATION_DROPPED);
             if self.annotations[index]
                 .node_terms()
                 .any(ProjectionTerm::contains_blank)
             {
-                self.record_annotation_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED);
             }
             if self.annotations[index]
                 .node_terms()
                 .any(ProjectionTerm::is_triple)
             {
-                self.record_annotation_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED);
             }
         }
         Ok(())
@@ -682,18 +682,18 @@ impl<'a> Projector<'a> {
             if self.consumed[index] {
                 continue;
             }
-            self.record_quad_loss(index, LOSS_SKOS_NON_PROFILE_STATEMENT_DROPPED)?;
+            self.record_quad_loss(index, LOSS_SKOS_NON_PROFILE_STATEMENT_DROPPED);
             if self.quads[index]
                 .node_terms()
                 .any(ProjectionTerm::contains_blank)
             {
-                self.record_quad_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED)?;
+                self.record_quad_loss(index, LOSS_SKOS_BLANK_IDENTITY_DROPPED);
             }
             if self.quads[index]
                 .node_terms()
                 .any(ProjectionTerm::is_triple)
             {
-                self.record_quad_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED)?;
+                self.record_quad_loss(index, LOSS_SKOS_TRIPLE_TERM_DROPPED);
             }
         }
         Ok(())
@@ -728,11 +728,7 @@ impl<'a> Projector<'a> {
         builder.freeze().map_err(ProjectionError::from)
     }
 
-    fn record_quad_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_quad_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
@@ -740,29 +736,20 @@ impl<'a> Projector<'a> {
             "skos:quad",
             "quad",
             &self.quads[index],
-        )
+        );
     }
 
-    fn record_named_graph_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
-        record_row_loss(
+    fn record_named_graph_loss(&mut self, index: usize, code: &'static str) {
+        record_logical_loss(
             &mut self.ledger,
             &self.contract,
             code,
             "skos:named-graph",
-            "graph",
-            &self.named_graphs[index],
-        )
+            graph_subject(&self.named_graphs[index]),
+        );
     }
 
-    fn record_reifier_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_reifier_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
@@ -770,14 +757,10 @@ impl<'a> Projector<'a> {
             "skos:reifier",
             "reifier",
             &self.reifiers[index],
-        )
+        );
     }
 
-    fn record_annotation_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_annotation_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
@@ -785,7 +768,7 @@ impl<'a> Projector<'a> {
             "skos:annotation",
             "annotation",
             &self.annotations[index],
-        )
+        );
     }
 }
 
@@ -1303,7 +1286,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         assert_ledger_complete(
             &projected.loss_ledger,
@@ -1405,7 +1388,8 @@ mod tests {
         assert!(union_text.contains("named-concept"));
         for result in [&default, &named, &union] {
             assert!(result.loss_ledger.entries().iter().any(|entry| {
-                entry.code == LOSS_SKOS_NAMED_GRAPH_DROPPED && entry.location.is_some()
+                entry.code == LOSS_SKOS_NAMED_GRAPH_DROPPED
+                    && entry.subject != purrdf_core::LossSubject::Absent
             }));
         }
     }
@@ -1566,11 +1550,10 @@ mod tests {
             LOSS_SKOS_NAMED_GRAPH_DROPPED
         );
         assert_eq!(
-            projected.loss_ledger.entries()[0]
-                .location
-                .as_ref()
-                .and_then(|location| location.logical.as_deref()),
-            Some("skos:named-graph")
+            projected.loss_ledger.entries()[0].site,
+            purrdf_core::LossSite::Stage {
+                name: "skos:named-graph".to_owned()
+            }
         );
     }
 }

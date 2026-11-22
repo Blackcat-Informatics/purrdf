@@ -1507,6 +1507,86 @@ mod tests {
         }
     }
 
+    #[test]
+    fn paged_reads_distinguish_colliding_accounting_with_matching_counts() {
+        use crate::source::{SourceRowRef, additive_collision, with_asserted_record_fixture};
+        use purrdf_lex::allocation::{Memory, Resident};
+
+        let subjects = [
+            TermValue::iri("https://example.org/s1"),
+            TermValue::iri("https://example.org/s2"),
+        ];
+        let predicate = TermValue::iri("https://example.org/p");
+        let objects = [
+            TermValue::iri("https://example.org/o1"),
+            TermValue::iri("https://example.org/o2"),
+        ];
+        let (left, right) = additive_collision();
+        let digests = [left[0], right[0], right[1], left[1]];
+        let entries = std::array::from_fn(|index| {
+            let row = SourceRowRef {
+                subject: &subjects[index / 2],
+                predicate: &predicate,
+                object: &objects[index % 2],
+                graph: None,
+            };
+            let digest = row.hashes(&mut Memory::new(&mut Resident)).unwrap()[0];
+            (digest, digests[index])
+        });
+        with_asserted_record_fixture(entries, || {
+            let build = |matching: [usize; 2]| {
+                let mut builder = RdfDatasetBuilder::new();
+                let s = subjects
+                    .each_ref()
+                    .map(|term| builder.intern_value(term).unwrap());
+                let p = builder.intern_value(&predicate).unwrap();
+                let o = objects
+                    .each_ref()
+                    .map(|term| builder.intern_value(term).unwrap());
+                for (subject, object) in s.into_iter().zip(matching) {
+                    builder.push_quad(subject, p, o[object], None).unwrap();
+                }
+                builder.freeze().unwrap()
+            };
+            let honest = build([0, 1]);
+            let substituted = build([1, 0]);
+            assert_eq!(
+                PageSummary::digest_of(&honest).unwrap(),
+                PageSummary::digest_of(&substituted).unwrap(),
+                "both matchings have the same summaries and additive accounting"
+            );
+            let sealed = seal_pages(vec![honest]);
+            sealed.verify_parts().unwrap();
+            let admitted = sealed.query_view(PagedQueryLimits::UNBOUNDED);
+            assert_eq!(admitted.quads().count(), 2);
+            assert!(matches!(
+                admitted.operation_status(),
+                ViewOperationStatus::Ready { .. }
+            ));
+
+            let (dictionary, generation, parts) = sealed.to_parts();
+            let provider =
+                super::super::InMemoryPageProvider::with_generation(vec![substituted], generation);
+            let warm = PagedDataset::from_parts(dictionary, Arc::new(provider), generation, parts)
+                .unwrap();
+            assert!(matches!(
+                warm.verify_parts(),
+                Err(crate::PagedFreezeError::SummaryDrift {
+                    page: PageId(0),
+                    ..
+                })
+            ));
+            let view = warm.query_view(PagedQueryLimits::UNBOUNDED);
+            assert_eq!(view.quads().count(), 0);
+            assert!(matches!(
+                view.operation_status(),
+                ViewOperationStatus::Failed {
+                    error: PagedQueryError::InvalidData { page: PageId(0), message }, ..
+                } if message == "page content identity changed after sealing"
+            ));
+        });
+    }
+
     struct MutableGenerationProvider {
         page: Arc<RdfDataset>,
         generation: AtomicU64,

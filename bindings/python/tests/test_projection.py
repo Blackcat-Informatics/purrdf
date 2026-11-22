@@ -104,7 +104,7 @@ def test_project_matches_rust_bytes_and_returns_immutable_structured_losses() ->
     assert edge_loss.source == "rdf-1.2-dataset"
     assert edge_loss.target == "lpg"
     assert edge_loss.note
-    assert edge_loss.location is not None
+    assert edge_loss.subject["kind"] != "absent"
     with pytest.raises(AttributeError):
         package.profile = "other"
     with pytest.raises(AttributeError):
@@ -346,7 +346,7 @@ ex:term ex:label "Term" ; ex:other ex:value .
             "terms.csv",
         ]
     assert any(loss.code == "csvw-terms-predicate-unmapped" for loss in first.losses)
-    assert all(loss.location is not None for loss in first.losses)
+    assert all(loss.subject["kind"] != "absent" for loss in first.losses)
     with pytest.raises(ValueError, match="not a bidirectional"):
         purrdf.lift(first.archive, profile="csvw-terms", config=config)
 
@@ -381,6 +381,6 @@ def test_curated_okf_terms_matches_the_shared_exact_bundle() -> None:
         ]
     assert [loss.code for loss in first.losses].count("named-graph-dropped") == 2
     assert any(loss.code == "okf-non-profile-quad-dropped" for loss in first.losses)
-    assert all(loss.location is not None for loss in first.losses)
+    assert all(loss.subject["kind"] != "absent" for loss in first.losses)
     with pytest.raises(ValueError, match="not a bidirectional"):
         purrdf.lift(first.archive, profile="okf-terms", config=config)

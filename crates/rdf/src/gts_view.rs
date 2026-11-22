@@ -30,8 +30,11 @@ use purrdf_iri::vocab::{owl, rdf, rdfs, skos};
 use purrdf_lex::term_syntax;
 use purrdf_xsd::datatype::{XSD_NS as XSD, XSD_STRING};
 
-use crate::RdfDiagnostic;
-use crate::gts_resolve::ensure_terms_terminate;
+use crate::gts_resolve::{
+    UNBOUND_TRIPLE_SCOPE, blank_token, ensure_terms_terminate, unbound_triple_label,
+};
+use crate::{BlankScope, RdfDiagnostic};
+use purrdf_gts::resolution::SelfReaching;
 
 /// Scope name for the default graph (quads with no graph term).
 pub const DEFAULT_SCOPE: &str = "";
@@ -209,6 +212,8 @@ pub struct RelationalRows {
 #[derive(Debug)]
 pub struct GtsFoldView {
     graph: Graph,
+    /// The triple terms that reach themselves and so state no triple (§7.3).
+    reaching: SelfReaching,
     iri_index: BTreeMap<String, usize>,
     spo: BTreeMap<ScopeKey, BTreeMap<usize, Vec<(usize, usize)>>>,
     po: BTreeMap<ScopeKey, BTreeMap<(usize, usize), Vec<usize>>>,
@@ -268,8 +273,8 @@ impl GtsFoldView {
     ///
     /// # Errors
     ///
-    /// Returns `gts-self-reaching-term` when the graph's term table lets a term
-    /// resolve through itself, and `gts-unreadable-language-tag` when a term
+    /// Returns `gts-self-reaching-term` when a literal's datatype chain resolves
+    /// through itself, and `gts-unreadable-language-tag` when a term
     /// carries a language tag the RDF concrete-syntax grammar refuses — see
     /// [`GtsFoldView::with_config`].
     pub fn new(graph: Graph) -> Result<Self, RdfDiagnostic> {
@@ -280,16 +285,14 @@ impl GtsFoldView {
     ///
     /// # Errors
     ///
-    /// Returns `gts-self-reaching-term` when the graph's term table lets a term
-    /// resolve through itself. The view's accessors — [`GtsFoldView::nq_token`],
+    /// Returns `gts-self-reaching-term` when a literal's datatype chain resolves
+    /// through itself. The view's accessors — [`GtsFoldView::nq_token`],
     /// [`GtsFoldView::public_value`] and everything built on them — walk a quoted
-    /// triple's resolved components to the leaves, so a self-reaching term would
-    /// recurse without bound and abort the process. A graph off the wire cannot
-    /// contain one (the reader refuses the row that would close the loop); a graph
-    /// a caller assembled can, so the view REFUSES to exist rather than handing
-    /// back an object whose every renderer is a process kill. This is the fold-time
-    /// refusal GTS-SPEC §7.3 permits, applied once at construction rather than as a
-    /// guard inside every walk.
+    /// triple's resolved components to the leaves. A triple term that reaches
+    /// itself (GTS-SPEC §7.3) states no triple there, as does one with neither
+    /// `tt` nor `rf` and one whose `rf` no `reifies` row binds. Each renders as a
+    /// blank node no document label spells, so every renderer terminates; its
+    /// `reifies` rows stay visible through [`GtsFoldView::reifiers`].
     ///
     /// Returns `gts-unreadable-language-tag` when a term's `lang` is a tag the RDF
     /// concrete-syntax grammar refuses. The reasoning is the same shape: the reader
@@ -298,10 +301,11 @@ impl GtsFoldView {
     /// one field by field. Left standing, every renderer built on
     /// [`GtsFoldView::nq_token`] would emit a token no parser reads.
     pub fn with_config(graph: Graph, config: GtsFoldViewConfig) -> Result<Self, RdfDiagnostic> {
-        ensure_terms_terminate(&graph)?;
+        let reaching = ensure_terms_terminate(&graph)?;
         ensure_language_tags_readable(&graph)?;
         let mut view = Self {
             graph,
+            reaching,
             iri_index: BTreeMap::new(),
             spo: BTreeMap::new(),
             po: BTreeMap::new(),
@@ -376,7 +380,7 @@ impl GtsFoldView {
     /// The N-Quads token for the term (`<iri>`, `_:label`, quoted literal, or
     /// `<<( s p o )>>` for a triple term).
     pub fn nq_token(&self, tid: usize) -> String {
-        render_term(&self.graph, tid)
+        render_term(&self.graph, &self.reaching, tid)
     }
 
     /// Project the term to a consumer-facing [`PublicValue`]: XSD
@@ -1002,11 +1006,12 @@ fn best_tagged(by_bcp: &BTreeMap<String, Vec<LitRow>>) -> Option<(&str, &LitRow)
 /// # Termination
 ///
 /// The walk follows a quoted triple's `(s, p, o)` with no depth bound and no visited set,
-/// because the graph it walks has already been proven to terminate. Every route to a
-/// `Graph` inside this module runs through [`GtsFoldView::with_config`], which
-/// refuses a self-reaching term table outright. Keep it that way: a new constructor
-/// that skips that check hands this function an input it would never finish writing.
-fn render_term(graph: &Graph, tid: usize) -> String {
+/// because `reaching` names every triple term that reaches itself, and such a term
+/// resolves no components. Every route to a `Graph` inside this module runs through
+/// [`GtsFoldView::with_config`], which computes `reaching` once. Keep it that way: a
+/// new constructor that skips it hands this function an input it would never finish
+/// writing.
+fn render_term(graph: &Graph, reaching: &SelfReaching, tid: usize) -> String {
     enum Piece {
         Term(usize),
         Text(&'static str),
@@ -1026,7 +1031,9 @@ fn render_term(graph: &Graph, tid: usize) -> String {
         match term.kind {
             TermKind::Iri => term_syntax::write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_ref() {
-                Some(value) => term_syntax::write_blank(value, &mut out),
+                Some(value) => {
+                    term_syntax::write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out);
+                }
                 None => {
                     let _ = write!(out, "_:b{tid}");
                 }
@@ -1044,7 +1051,7 @@ fn render_term(graph: &Graph, tid: usize) -> String {
                 term.lang.as_ref().and(term.direction.as_deref()),
                 &mut out,
             ),
-            TermKind::Triple => match graph.triple_of(tid) {
+            TermKind::Triple => match graph.resolved_triple_of(tid, reaching) {
                 Some((s, p, o)) => {
                     out.push_str(term_syntax::TRIPLE_TERM_OPEN);
                     out.push(' ');
@@ -1058,9 +1065,16 @@ fn render_term(graph: &Graph, tid: usize) -> String {
                     ]);
                     next = Some(Piece::Term(s));
                 }
-                None => {
-                    let _ = write!(out, "_:unbound_triple_{tid}");
-                }
+                // A triple term that states no triple is the fresh blank node of
+                // the scope no document label reaches, so its token never equals
+                // a document blank node's (see `blank_token`).
+                None => term_syntax::write_blank(
+                    &blank_token(
+                        &unbound_triple_label(None, tid).to_string(),
+                        UNBOUND_TRIPLE_SCOPE,
+                    ),
+                    &mut out,
+                ),
             },
         }
     }
@@ -1523,10 +1537,13 @@ mod term_walk_tests {
     use purrdf_core::{Nested, TermValue, try_fold_nested};
     use purrdf_gts::model::{Graph, Term, TermKind};
 
+    use crate::BlankScope;
+    use crate::gts_resolve::{UNBOUND_TRIPLE_SCOPE, blank_token, unbound_triple_label};
     use purrdf_lex::term_syntax::{write_blank, write_iri, write_literal};
     use purrdf_xsd::datatype::XSD_STRING;
 
     use super::render_term;
+    use purrdf_gts::resolution::SelfReaching;
 
     /// Lower `value` into `graph`'s term table, a triple term naming its own components,
     /// and return its term id.
@@ -1589,7 +1606,7 @@ mod term_walk_tests {
         match term.kind {
             TermKind::Iri => write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_deref() {
-                Some(value) => write_blank(value, &mut out),
+                Some(value) => write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out),
                 None => out = format!("_:b{tid}"),
             },
             TermKind::Literal => write_literal(
@@ -1603,7 +1620,17 @@ mod term_walk_tests {
             ),
             TermKind::Triple => {
                 out = graph.triple_of(tid).map_or_else(
-                    || format!("_:unbound_triple_{tid}"),
+                    || {
+                        let mut out = String::new();
+                        write_blank(
+                            &blank_token(
+                                &unbound_triple_label(None, tid).to_string(),
+                                UNBOUND_TRIPLE_SCOPE,
+                            ),
+                            &mut out,
+                        );
+                        out
+                    },
                     |(s, p, o)| {
                         format!(
                             "<<( {} {} {} )>>",
@@ -1628,14 +1655,17 @@ mod term_walk_tests {
             &TermValue::Iri("http://example.org/a b<c>".to_owned()),
         );
         assert_eq!(
-            render_term(&graph, iri),
+            render_term(&graph, &SelfReaching::default(), iri),
             "<http://example.org/a\\u0020b\\u003Cc\\u003E>"
         );
         let plain = lower(
             &mut graph,
             &TermValue::Iri("http://example.org/a".to_owned()),
         );
-        assert_eq!(render_term(&graph, plain), "<http://example.org/a>");
+        assert_eq!(
+            render_term(&graph, &SelfReaching::default(), plain),
+            "<http://example.org/a>"
+        );
         let literal = lower(
             &mut graph,
             &TermValue::Literal {
@@ -1645,7 +1675,10 @@ mod term_walk_tests {
                 direction: None,
             },
         );
-        assert_eq!(render_term(&graph, literal), "\"q\\\"\\b\\f\u{85}\"");
+        assert_eq!(
+            render_term(&graph, &SelfReaching::default(), literal),
+            "\"q\\\"\\b\\f\u{85}\""
+        );
     }
 
     /// The work-list renderer spells every generated term exactly as the recursive
@@ -1666,7 +1699,7 @@ mod term_walk_tests {
             let mut graph = Graph::default();
             let id = lower(&mut graph, &value);
             assert_eq!(
-                render_term(&graph, id),
+                render_term(&graph, &SelfReaching::default(), id),
                 reference(&graph, id),
                 "seed {seed}"
             );
@@ -1684,7 +1717,7 @@ mod term_walk_tests {
             let mut graph = Graph::default();
             let id = lower(&mut graph, &value);
             drop(value);
-            let rendered = render_term(&graph, id);
+            let rendered = render_term(&graph, &SelfReaching::default(), id);
             let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
             assert_eq!(
                 rendered.len(),

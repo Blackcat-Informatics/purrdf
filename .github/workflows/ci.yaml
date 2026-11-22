@@ -303,15 +303,9 @@ jobs:
       - name: Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # `cargo test --workspace --locked` (`make test`), as seven parallel shards. As one
-  # job it compiled for 25 minutes before running a test and was cancelled at its
-  # timeout; nearly all of that is first-party test targets, so a dependency cache
-  # alone could not bring it back under budget. `make test-shard` defines the
-  # shards and carries the proof that together they are exactly the old command:
-  # every shard selects `--workspace`, so dependency features resolve as they did,
-  # and the lib / doc / five integration-test shards partition its default target
-  # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
-  # job below already runs through `make capi-check`.
+  # `make test-shard` partitions the lib, doc and integration targets from
+  # `cargo test --workspace --locked`. Each shard selects the whole workspace
+  # to preserve feature unification. The capi job runs c_abi_smoke separately.
   test-shard:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     name: test (${{ matrix.shard }})
@@ -323,7 +317,11 @@ jobs:
       # the suite, and a cancelled slice is a slice nobody saw.
       fail-fast: false
       matrix:
-        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4, integration-5]
+        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4, integration-5, integration-6, integration-7]
+    env:
+      # Check the source bytes for reuse across fresh runner checkouts.
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
@@ -362,15 +360,14 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # One cache for all seven shards. Every shard resolves features over the whole
-      # workspace, so each compiles its dependencies identically and one saved set
-      # serves them all; the lib shard, which builds every package's dev-dependencies,
-      # is the one that saves it. First-party crates are never cached (the action
-      # cleans them), so every shard still compiles the code under test.
-      - name: Cache the dependency build (shared by every shard)
+      # The lib shard seeds the cache with the shared test-profile units. Cargo
+      # reuses matching units across fresh checkouts and rebuilds changed inputs.
+      # Each shard can compile independently when the cache is cold.
+      - name: Share compiled test libraries
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: workspace-test-checksums-v1
+          cache-workspace-crates: true
           save-if: ${{ matrix.shard == 'lib' }}
 
       - name: Install Node for the Unicode ECMAScript oracle
@@ -382,7 +379,7 @@ jobs:
         if: matrix.shard == 'lib'
         uses: ./.github/actions/binaryen-toolchain
 
-      - name: Run workspace tests (this shard; the seven include the doc tests)
+      - name: Run this workspace test shard
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
         # vector path of each family this job requires; the distance, kNN and HNSW
         # tests still assert they executed every path the runner reports, and every
@@ -554,54 +551,11 @@ jobs:
       - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
         uses: ./.github/actions/wasm-toolchain
 
-      - name: Build release crates on wasm32
-        # `purrdf-bench` is unpublished tooling, and it is on this list because
-        # its library half documents itself as portable. Only the library is
-        # built (`--lib`); the `bench-corpus` binary is std-only and stays out.
-        # This list mirrors the `wasm` target in the Makefile.
-        run: |
-          cargo build --locked --release --target wasm32-unknown-unknown --lib \
-            -p purrdf-events \
-            -p purrdf-lex \
-            -p purrdf-iri \
-            -p purrdf-xsd \
-            -p purrdf-cdt \
-            -p purrdf-jsonschema \
-            -p purrdf-hash \
-            -p purrdf-deflate \
-            -p purrdf-stack \
-            -p purrdf-ed25519 \
-            -p purrdf-gts \
-            -p purrdf-core \
-            -p purrdf-columnar \
-            -p purrdf-datalog \
-            -p purrdf-sparql-algebra \
-            -p purrdf-sparql-results \
-            -p purrdf-sparql-eval \
-            -p purrdf-hnsw \
-            -p purrdf-rdf \
-            -p purrdf-markdown \
-            -p purrdf-mime \
-            -p purrdf-json \
-            -p purrdf-toml \
-            -p purrdf-glob \
-            -p purrdf-slice \
-            -p purrdf-shapes \
-            -p purrdf-shex \
-            -p purrdf-entail \
-            -p purrdf-geo \
-            -p purrdf-geo-kernel \
-            -p purrdf-text \
-            -p purrdf-retrieval \
-            -p purrdf-validate \
-            -p purrdf \
-            -p purrdf-wasm \
-            -p purrdf-bench
+      - name: Build release crates and the host-import probe on wasm32
+        run: make wasm-release-with-import-probe
 
-      - name: Refuse host imports in a module linked from the library crates
-        # A bare wasm32 module has no JavaScript host: host imports belong to
-        # purrdf-wasm and nowhere below it.
-        run: make wasm-imports
+      - name: Refuse host imports in the linked probe
+        run: make wasm-scan-imports
 
   wasm-package:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
@@ -1092,10 +1046,9 @@ jobs:
   # Neither has a named reassociated path, so both execute the reassociated arithmetic
   # along its portable one, against its error bound, and i686 runs the HNSW unit tests
   # that decode and refuse an image recorded on that path.
-  cross-arch:
+  cross-arch-i686:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
-    # Six cold check graphs, the i686 test build and the i586 (x87) test build.
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -1107,7 +1060,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
-          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu, x86_64-pc-windows-gnu
+          targets: i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu, x86_64-pc-windows-gnu
 
       - name: Install the i686 C library
         run: |
@@ -1156,6 +1109,27 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo --test determinism
 
+  cross-arch-i586:
+    if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: i586-unknown-linux-gnu
+
+      - name: Install the 32-bit C library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-multilib
+
       # i586 has no SSE2, so every binary64 and binary32 operation runs on the x87,
       # which rounds to its register precision and again on every store. Every
       # result-affecting operation in the workspace computes through `purrdf_xsd::ieee`,
@@ -1189,6 +1163,19 @@ jobs:
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --test certified_numerical
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo --test determinism
+
+  # Keep one check for the independent architecture suites.
+  cross-arch:
+    needs: [cross-arch-i686, cross-arch-i586]
+    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require both architecture suites to succeed
+        env:
+          I686_RESULT: ${{ needs.cross-arch-i686.result }}
+          I586_RESULT: ${{ needs.cross-arch-i586.result }}
+        run: test "$I686_RESULT" = success && test "$I586_RESULT" = success
 
   # Type-checking the Windows path cannot verify CreateFileW access rights or
   # timestamp resolution. Exercise file, directory, hardlink, and read-only
@@ -1360,6 +1347,8 @@ jobs:
     # Leave headroom for wheel compilation, tests and the cache-save post steps.
     timeout-minutes: 45
     env:
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
       # Exercise the declared minimum; uv's moving latest can outrun wheel support.
       UV_PYTHON: "3.13"
     steps:
@@ -1373,13 +1362,11 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The test lane's `lib` shard dependency build, restored and never re-saved: the
-      # module build shares most dependency units with it, and no new cache entry
-      # competes for the repository's quota.
-      - name: Restore the workspace test lane's dependency build
+      - name: Restore shared test libraries
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: workspace-test-checksums-v1
+          cache-workspace-crates: true
           save-if: false
 
       - name: Install uv
@@ -1462,6 +1449,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
       UV_PYTHON: "3.13"
     strategy:
       fail-fast: false
@@ -1478,13 +1467,11 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The dependency build the test lane's `lib` shard saves, restored and never re-saved:
-      # Cargo fingerprints each unit, so only matching feature/profile builds
-      # are reused, and no new cache entry competes for the repository's quota.
-      - name: Restore the workspace test lane's dependency build
+      - name: Restore shared test libraries
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: workspace-test
+          shared-key: workspace-test-checksums-v1
+          cache-workspace-crates: true
           save-if: false
 
       - name: Install uv

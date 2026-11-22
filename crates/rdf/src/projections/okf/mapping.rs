@@ -1,10 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use crate::projections::loss::record_logical_loss;
-use crate::projections::source_rows::{
-    SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
-};
+use crate::projections::loss::{graph_subject, record_logical_loss, record_row_loss};
+use crate::projections::source_rows::{SourceAnnotation, SourceQuad, SourceReifier};
 use crate::projections::util::reject_duplicates;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -297,7 +295,7 @@ impl<'a> Projector<'a> {
                 .map(|(path, document)| (path.to_owned(), document.as_bytes().to_vec())),
         )?;
 
-        self.record_source_losses()?;
+        self.record_source_losses();
         check_ledger_sound(&self.ledger, "rdf-1.2-dataset", "okf")
             .map_err(ProjectionError::from)?;
 
@@ -736,60 +734,58 @@ impl<'a> Projector<'a> {
         Ok(bundle)
     }
 
-    fn record_source_losses(&mut self) -> Result<(), ProjectionError> {
+    fn record_source_losses(&mut self) {
         for index in 0..self.named_graphs.len() {
-            let subject = source_identifier("OkfTermsGraph", &self.named_graphs[index])?;
             record_logical_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_NAMED_GRAPH_DROPPED,
                 "okf-terms:named-graph",
-                subject,
+                graph_subject(&self.named_graphs[index]),
             );
         }
         for index in 0..self.quads.len() {
             if self.quads[index].graph.is_some() {
-                let subject = source_identifier("OkfTermsQuad", &self.quads[index])?;
-                record_logical_loss(
+                record_row_loss(
                     &mut self.ledger,
                     &self.contract,
                     LOSS_NAMED_GRAPH_DROPPED,
                     "okf-terms:quad",
-                    subject,
+                    "quad",
+                    &self.quads[index],
                 );
             }
             if !self.consumed_quads[index] {
-                let subject = source_identifier("OkfTermsQuad", &self.quads[index])?;
-                record_logical_loss(
+                record_row_loss(
                     &mut self.ledger,
                     &self.contract,
                     LOSS_NON_PROFILE_QUAD_DROPPED,
                     "okf-terms:quad",
-                    subject,
+                    "quad",
+                    &self.quads[index],
                 );
             }
         }
         for index in 0..self.reifiers.len() {
-            let subject = source_identifier("OkfTermsReifier", &self.reifiers[index])?;
-            record_logical_loss(
+            record_row_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_REIFIER_DROPPED,
                 "okf-terms:reifier",
-                subject,
+                "reifier",
+                &self.reifiers[index],
             );
         }
         for index in 0..self.annotations.len() {
-            let subject = source_identifier("OkfTermsAnnotation", &self.annotations[index])?;
-            record_logical_loss(
+            record_row_loss(
                 &mut self.ledger,
                 &self.contract,
                 LOSS_ANNOTATION_DROPPED,
                 "okf-terms:annotation",
-                subject,
+                "annotation",
+                &self.annotations[index],
             );
         }
-        Ok(())
     }
 
     fn graph_selected(&self, graph: Option<&ProjectionTerm>) -> bool {
@@ -1555,7 +1551,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         let counts = projected.loss_ledger.entries().iter().fold(
             BTreeMap::<&str, usize>::new(),

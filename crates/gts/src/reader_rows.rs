@@ -134,6 +134,20 @@ pub(crate) fn decode_reifier_row(
             RowCheckError::Storage => RowDecode::Storage,
         };
     }
+    // §7.4: the reifier of a `reifies` row is an IRI or blank node, never a
+    // literal or a quoted triple. The row is dropped and its diagnostic names
+    // the reifier and the triple it would have bound; the term is untouched.
+    let Some(reifier_kind) = required_kind(terms, rid, failure) else {
+        return RowDecode::Storage;
+    };
+    if matches!(reifier_kind, TermKind::Literal | TermKind::Triple) {
+        return RowDecode::Position(Box::new(RowError::ReifierKind {
+            id: rid,
+            actual: reifier_kind,
+            triple,
+            graph: graph_slot,
+        }));
+    }
     RowDecode::Row((rid, triple, graph_slot))
 }
 

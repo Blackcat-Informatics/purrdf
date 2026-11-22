@@ -19,6 +19,7 @@
 #[path = "support/turtle.rs"]
 mod turtle;
 
+use purrdf_core::{LossSubject, LossTerm};
 use purrdf_shapes::engine::{parse_shapes, validate_graphs};
 
 const PREFIXES: &str = "
@@ -624,16 +625,19 @@ fn a_constraint_node_s_deactivation_loss_names_its_shape() {
     for (what, shapes) in writers {
         // The compile projects the shapes twice (the schema and the OpenAPI document),
         // so the ledger holds the loss once for each; the set of subjects is the claim.
-        let subjects: std::collections::BTreeSet<Option<String>> =
+        let subjects: std::collections::BTreeSet<LossSubject> =
             compiled(&shapes("[ sh:path ex:muted ]"))
                 .losses
                 .entries()
                 .iter()
-                .map(|entry| entry.location.as_ref().and_then(|l| l.subject.clone()))
+                .map(|entry| entry.subject.clone())
                 .collect();
         assert_eq!(
             subjects,
-            [Some("<http://example.org/S>".to_owned())].into(),
+            [LossSubject::Term(LossTerm::Iri(
+                "http://example.org/S".to_owned()
+            ))]
+            .into(),
             "{what}: the loss is recorded against the shape"
         );
         for constant in ["true", "false"] {

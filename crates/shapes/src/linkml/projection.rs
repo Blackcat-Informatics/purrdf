@@ -7,7 +7,6 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::json_model::{Map, Object, Value, ValueKind};
-use ::purrdf_rdf::RdfLocation;
 use ::purrdf_rdf::loss::{LossEntry, LossLedger};
 use purrdf_hash::fnv::fnv1a64;
 
@@ -889,11 +888,9 @@ impl<'a> Renderer<'a> {
         if let Some(values) = object.get("enum").and_then(Value::as_array) {
             let mut expressions = Vec::new();
             for (index, value) in values.iter().enumerate() {
-                if let Some(expression) = self.equality_expression(
-                    value,
-                    &path.child("enum").child_index(index),
-                    "enum member",
-                ) {
+                if let Some(expression) =
+                    self.equality_expression(value, &path.child("enum").child_index(index))
+                {
                     expressions.push(crate::json_model::object(expression));
                 }
             }
@@ -902,8 +899,7 @@ impl<'a> Renderer<'a> {
             }
         }
         if let Some(value) = object.get("const")
-            && let Some(expression) =
-                self.equality_expression(value, &path.child("const"), "const value")
+            && let Some(expression) = self.equality_expression(value, &path.child("const"))
         {
             definition.extend(expression);
         }
@@ -1085,8 +1081,7 @@ impl<'a> Renderer<'a> {
         let mut expression = Map::new();
         self.apply_scalar_constraints(object, &mut expression, path)?;
         if let Some(value) = object.get("const")
-            && let Some(equality) =
-                self.equality_expression(value, &path.child("const"), "const value")
+            && let Some(equality) = self.equality_expression(value, &path.child("const"))
         {
             expression.extend(equality);
         }
@@ -1136,7 +1131,6 @@ impl<'a> Renderer<'a> {
         &mut self,
         value: &Value,
         path: &SchemaPath,
-        label: &str,
     ) -> Option<Map<String, Value>> {
         let mut expression = Map::new();
         match value {
@@ -1150,7 +1144,7 @@ impl<'a> Renderer<'a> {
                 self.record(
                     "keyword-validation-dropped",
                     path,
-                    &format!("A JSON {label} of this carrier has no LinkML equality expression"),
+                    "A JSON value of this carrier has no LinkML equality expression",
                 );
                 return None;
             }
@@ -1774,11 +1768,9 @@ impl<'a> Renderer<'a> {
             } else {
                 let mut expressions = Vec::new();
                 for (index, value) in values.iter().enumerate() {
-                    if let Some(expression) = self.equality_expression(
-                        value,
-                        &path.child("enum").child_index(index),
-                        "enum member",
-                    ) {
+                    if let Some(expression) =
+                        self.equality_expression(value, &path.child("enum").child_index(index))
+                    {
                         expressions.push(crate::json_model::object(expression));
                     }
                 }
@@ -1790,8 +1782,7 @@ impl<'a> Renderer<'a> {
         }
 
         if let Some(value) = object.get("const")
-            && let Some(expression) =
-                self.equality_expression(value, &path.child("const"), "const value")
+            && let Some(expression) = self.equality_expression(value, &path.child("const"))
         {
             slot.extend(expression);
             has_carrier = true;
@@ -2195,13 +2186,15 @@ impl<'a> Renderer<'a> {
             }
         }
         if let Some(format) = object.get("format") {
-            self.record(
+            self.record_detailed(
                 "format-validation-widened",
                 &path.child("format"),
-                &format!(
-                    "JSON Schema format {:?} does not have byte-identical validation semantics in LinkML 1.11",
-                    format.as_str().expect("validated string")
-                ),
+                "The JSON Schema format does not have byte-identical validation semantics in \
+                 LinkML 1.11",
+                vec![purrdf_core::LossDetail::identifier(
+                    "format",
+                    format.as_str().expect("validated string"),
+                )],
             );
         }
         if object.contains_key("multipleOf") {
@@ -2271,9 +2264,8 @@ impl<'a> Renderer<'a> {
                 self.record(
                     "keyword-validation-dropped",
                     &path.child(key),
-                    &format!(
-                        "JSON Schema assertion keyword {key:?} is outside the closed LinkML 1.11 capability table"
-                    ),
+                    "The JSON Schema assertion keyword at this path is outside the closed LinkML \
+                     1.11 capability table",
                 );
             }
         }
@@ -2407,7 +2399,18 @@ impl<'a> Renderer<'a> {
         Ok(())
     }
 
-    fn record(&mut self, code: &str, path: &SchemaPath, note: &str) {
+    fn record(&mut self, code: &str, path: &SchemaPath, note: &'static str) {
+        self.record_detailed(code, path, note, Vec::new());
+    }
+
+    /// Record a loss whose occurrence carries typed facts beyond its path.
+    fn record_detailed(
+        &mut self,
+        code: &str,
+        path: &SchemaPath,
+        note: &'static str,
+        detail: Vec<purrdf_core::LossDetail>,
+    ) {
         if !self.recorded_losses.insert((code.to_owned(), path.clone())) {
             return;
         }
@@ -2415,10 +2418,12 @@ impl<'a> Renderer<'a> {
             code: code.to_owned().into(),
             from: LOSS_FROM.into(),
             to: LOSS_TO.into(),
-            note: note.to_owned().into(),
-            location: Some(Box::new(
-                RdfLocation::logical(LOSS_CONTEXT).with_subject(path.to_string()),
-            )),
+            note: note.into(),
+            site: purrdf_core::LossSite::Stage {
+                name: LOSS_CONTEXT.to_owned(),
+            },
+            subject: path.to_loss_subject(),
+            detail,
         });
     }
 
@@ -3143,16 +3148,23 @@ mod tests {
                 "unevaluated-validation-dropped",
             ])
         );
-        let rendered = output.losses.render_json();
-        assert!(rendered.contains("#/$defs/Lossy/properties/ex:label/minLength"));
-        assert!(rendered.contains("#/$defs/Lossy/properties/ex:number/multipleOf"));
-        assert!(rendered.contains("#/$defs/Lossy/properties/ex:array/minContains"));
-        assert!(!rendered.contains("#/$defs/Lossy/properties/ex:array/contains"));
+        let located = |location: &str| {
+            let subject = crate::schema_catalog::pointer_subject(location);
+            output
+                .losses
+                .entries()
+                .iter()
+                .any(|entry| entry.subject == subject)
+        };
+        assert!(located("#/$defs/Lossy/properties/ex:label/minLength"));
+        assert!(located("#/$defs/Lossy/properties/ex:number/multipleOf"));
+        assert!(located("#/$defs/Lossy/properties/ex:array/minContains"));
+        assert!(!located("#/$defs/Lossy/properties/ex:array/contains"));
         assert_eq!(
             output.document.as_value()["classes"]["Lossy"]["attributes"]["ex:array"]["has_member"],
             json!({ "equals_number": 7 })
         );
-        assert!(rendered.contains("#/$defs/Lossy/propertyNames"));
+        assert!(located("#/$defs/Lossy/propertyNames"));
         assert_eq!(
             output.document.as_value()["classes"]["Lossy"]["extra_slots"]["range_expression"]["range"],
             "integer"

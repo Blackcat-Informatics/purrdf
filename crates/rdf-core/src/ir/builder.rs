@@ -2304,21 +2304,14 @@ impl RdfDatasetBuilder {
         if let Some(scope) = cached {
             return Ok(Some(*scope));
         }
-        use purrdf_lex::allocation::{CapacityError, CapacitySpace};
         let mut next = self.next_merge_scope;
-        loop {
-            CapacityError::check(
-                CapacitySpace::BlankScopes,
-                u128::from(next),
-                u128::from(u32::MAX),
-            )?;
-            let scope = BlankScope(u32::try_from(next).map_err(|_| StorageError::SizeOverflow)?);
+        let scope = loop {
+            let scope = crate::blank_label::allocatable_scope(CapacitySpace::BlankScopes, next)?;
             if !self.used_scopes.contains(&scope) {
-                break;
+                break scope;
             }
             next += 1;
-        }
-        let scope = BlankScope(u32::try_from(next).map_err(|_| StorageError::SizeOverflow)?);
+        };
         if let Some(position) = self.reserve_scope_with_memory(scope, memory)? {
             self.publish_scope(position, scope);
         }
@@ -4789,7 +4782,7 @@ mod native_graph_birth_tests {
             source.push_quad(s, p, object, None).unwrap();
             let source = source.freeze().unwrap();
             let mut destination = RdfDatasetBuilder::new();
-            let exhausted = u64::from(u32::MAX) + 1;
+            let exhausted = u64::from(crate::blank_label::MAX_ALLOCATED_SCOPE) + 1;
             destination.next_merge_scope = exhausted;
             destination.push_dataset(&empty).unwrap();
             destination.push_dataset(&plain).unwrap();
@@ -4802,7 +4795,7 @@ mod native_graph_birth_tests {
             let expected = StorageError::Capacity(purrdf_lex::allocation::CapacityError::new(
                 CapacitySpace::BlankScopes,
                 u128::from(exhausted),
-                u128::from(u32::MAX),
+                u128::from(crate::blank_label::MAX_ALLOCATED_SCOPE),
             ));
             for _ in 0..3 {
                 assert_eq!(destination.push_dataset(&source), Err(expected));
@@ -4812,10 +4805,13 @@ mod native_graph_birth_tests {
                 assert_eq!(destination.scope_journal.len(), 0);
                 assert_eq!(destination.next_merge_scope, exhausted);
             }
-            destination.next_merge_scope = u64::from(u32::MAX);
+            destination.next_merge_scope = u64::from(crate::blank_label::MAX_ALLOCATED_SCOPE);
             destination.push_dataset(&source).unwrap();
             assert_eq!(destination.next_merge_scope, exhausted);
-            assert_eq!(destination.used_scopes, [BlankScope(u32::MAX)]);
+            assert_eq!(
+                destination.used_scopes,
+                [BlankScope(crate::blank_label::MAX_ALLOCATED_SCOPE)]
+            );
             assert_eq!(destination.quads.len(), 2);
             destination.freeze().unwrap();
         }

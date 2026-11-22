@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use crate::projections::loss::{record_logical_loss, record_row_loss};
+use crate::projections::loss::{graph_subject, record_logical_loss, record_row_loss};
 use crate::projections::source_rows::{
     SourceAnnotation, SourceQuad, SourceReifier, source_identifier,
 };
@@ -383,32 +383,32 @@ impl<'a> Projector<'a> {
 
     fn record_placement_and_reifier_losses(&mut self) -> Result<(), ProjectionError> {
         for index in 0..self.named_graphs.len() {
-            self.record_named_graph_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED)?;
+            self.record_named_graph_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED);
             if self.named_graphs[index].contains_blank() {
-                self.record_named_graph_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
+                self.record_named_graph_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED);
             }
             if self.named_graphs[index].is_triple() {
-                self.record_named_graph_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
+                self.record_named_graph_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED);
             }
         }
         for index in 0..self.quads.len() {
             if self.quads[index].graph.is_some() {
-                self.record_quad_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED)?;
+                self.record_quad_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED);
             }
         }
         for index in 0..self.reifiers.len() {
             if self.reifiers[index].graph.is_some() {
-                self.record_reifier_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED)?;
+                self.record_reifier_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED);
             }
-            self.record_reifier_loss(index, LOSS_OBO_REIFIER_DROPPED)?;
-            self.record_reifier_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
+            self.record_reifier_loss(index, LOSS_OBO_REIFIER_DROPPED);
+            self.record_reifier_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED);
             if self.reifiers[index].reifier.contains_blank() {
-                self.record_reifier_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
+                self.record_reifier_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED);
             }
         }
         for index in 0..self.annotations.len() {
             if self.annotations[index].graph.is_some() {
-                self.record_annotation_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_OBO_NAMED_GRAPH_DROPPED);
             }
         }
         Ok(())
@@ -921,7 +921,7 @@ impl<'a> Projector<'a> {
             }
             let annotation = self.annotations[index].clone();
             let Some(value) = self.scalar_from_annotation(index)? else {
-                self.record_annotation_loss(index, LOSS_OBO_ANNOTATION_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_OBO_ANNOTATION_DROPPED);
                 self.annotation_handled[index] = true;
                 continue;
             };
@@ -1315,26 +1315,26 @@ impl<'a> Projector<'a> {
             }
             let quad = self.quads[index].clone();
             if quad.subject.is_triple() || quad.object.is_triple() {
-                self.record_quad_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
+                self.record_quad_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED);
             }
             if quad.subject.contains_blank() || quad.object.contains_blank() {
-                self.record_quad_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
+                self.record_quad_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED);
             }
-            self.record_quad_loss(index, LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED)?;
+            self.record_quad_loss(index, LOSS_OBO_NON_PROFILE_STATEMENT_DROPPED);
         }
         for index in 0..self.annotations.len() {
             if self.annotation_handled[index] {
                 continue;
             }
             if self.annotations[index].object.is_triple() {
-                self.record_annotation_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_OBO_TRIPLE_TERM_DROPPED);
             }
             if self.annotations[index].reifier.contains_blank()
                 || self.annotations[index].object.contains_blank()
             {
-                self.record_annotation_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED)?;
+                self.record_annotation_loss(index, LOSS_OBO_BLANK_IDENTITY_DROPPED);
             }
-            self.record_annotation_loss(index, LOSS_OBO_ANNOTATION_DROPPED)?;
+            self.record_annotation_loss(index, LOSS_OBO_ANNOTATION_DROPPED);
             self.annotation_handled[index] = true;
         }
         Ok(())
@@ -1354,7 +1354,7 @@ impl<'a> Projector<'a> {
                     || language.is_some()
                     || direction.is_some()
                 {
-                    self.record_quad_loss(index, LOSS_OBO_LITERAL_FIDELITY_WIDENED)?;
+                    self.record_quad_loss(index, LOSS_OBO_LITERAL_FIDELITY_WIDENED);
                 }
                 Ok(Some(lexical))
             }
@@ -1377,7 +1377,7 @@ impl<'a> Projector<'a> {
                     || language.is_some()
                     || direction.is_some()
                 {
-                    self.record_annotation_loss(index, LOSS_OBO_LITERAL_FIDELITY_WIDENED)?;
+                    self.record_annotation_loss(index, LOSS_OBO_LITERAL_FIDELITY_WIDENED);
                 }
                 Ok(Some(lexical))
             }
@@ -1503,42 +1503,28 @@ impl<'a> Projector<'a> {
         Ok(())
     }
 
-    fn record_quad_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
-        let subject = self.quad_location(index)?;
-        record_logical_loss(
-            &mut self.ledger,
-            &self.contract,
-            code,
-            "obo-graphs:quad",
-            subject,
-        );
-        Ok(())
-    }
-
-    fn record_named_graph_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_quad_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
             code,
-            "obo-graphs:named-graph",
-            "graph",
-            &self.named_graphs[index],
-        )
+            "obo-graphs:quad",
+            "quad",
+            &self.quads[index],
+        );
     }
 
-    fn record_reifier_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_named_graph_loss(&mut self, index: usize, code: &'static str) {
+        record_logical_loss(
+            &mut self.ledger,
+            &self.contract,
+            code,
+            "obo-graphs:named-graph",
+            graph_subject(&self.named_graphs[index]),
+        );
+    }
+
+    fn record_reifier_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
@@ -1546,14 +1532,10 @@ impl<'a> Projector<'a> {
             "obo-graphs:reifier",
             "reifier",
             &self.reifiers[index],
-        )
+        );
     }
 
-    fn record_annotation_loss(
-        &mut self,
-        index: usize,
-        code: &'static str,
-    ) -> Result<(), ProjectionError> {
+    fn record_annotation_loss(&mut self, index: usize, code: &'static str) {
         record_row_loss(
             &mut self.ledger,
             &self.contract,
@@ -1561,7 +1543,7 @@ impl<'a> Projector<'a> {
             "obo-graphs:annotation",
             "annotation",
             &self.annotations[index],
-        )
+        );
     }
 
     fn quad_location(&self, index: usize) -> Result<String, ProjectionError> {
@@ -2180,7 +2162,7 @@ mod tests {
                 .loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != purrdf_core::LossSubject::Absent)
         );
         assert_ledger_complete(
             &projected.loss_ledger,
@@ -2226,11 +2208,10 @@ mod tests {
         assert_ledger_complete(&projection.loss_ledger, &[LOSS_OBO_NAMED_GRAPH_DROPPED]);
         assert_eq!(projection.loss_ledger.entries().len(), 1);
         assert_eq!(
-            projection.loss_ledger.entries()[0]
-                .location
-                .as_ref()
-                .and_then(|location| location.logical.as_deref()),
-            Some("obo-graphs:named-graph")
+            projection.loss_ledger.entries()[0].site,
+            purrdf_core::LossSite::Stage {
+                name: "obo-graphs:named-graph".to_owned()
+            }
         );
     }
 

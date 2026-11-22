@@ -8,6 +8,147 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+## [5.0.0] - 2026-11-21
+
+- **Breaking: `MediumPlan` and `OperationModel` are `#[non_exhaustive]`.** A struct
+  literal of `MediumPlan` outside `purrdf-rdf` is replaced by `MediumPlan::undicted`
+  or `MediumPlan::dist_default` followed by assignment of the public fields; an
+  exhaustive `match` on `OperationModel` adds a wildcard arm. This makes room for
+  the rsyncable unit, window and long-distance matching of a plan and for a
+  coordinate-operation model the geodesy data may need, as additions. No field,
+  variant, constructor or emitted byte changed. In the workspace, the response
+  encoders of `purrdf-validate` refuse a model they have no encoding for with
+  `GeoError::Unsupported`.
+- **Breaking: `EvalError::Remote` and `EvalError::ServiceUnconfigured` carry the
+  endpoint and a typed `RemoteError`.** Both held a formatted `String`; they now
+  hold `{ endpoint, cause }`, `EvalError::remote` takes the endpoint and the
+  cause and chooses the variant from it. The structured
+  visitor reports `endpoint` and the nested `cause` fields by name. `Display` and
+  the diagnostic codes are unchanged. `RemoteError::NoSource` names an engine
+  given no remote query source, which `ServiceUnconfigured` previously carried
+  only as text.
+
+- **Behaviour change: a triple term that states no triple projects as a fresh
+  blank node no document label can name, on every path.** A triple term with
+  neither `tt` nor `rf`, a term whose `rf` names a reifier no `reifies` row binds
+  and a term that reaches itself state no triple, and the specification's third
+  resolution rule says a reader keeps each as a distinct term and a projection
+  renders it as a fresh blank node. `GtsFoldView`, `dataset_from_gts_graph`,
+  `flattened_dataset_from_gts_graph`, `import_gts_graph`, the streaming importers
+  (`import_gts_events` and its dictionary and blob forms) and
+  `export_gts_rdf_nquads_with_dictionary` project such a term, where the bridges,
+  importers and exporter refused the first two. The node lives in a blank-node
+  scope no document label reaches (`u32::MAX - 1`), so a document blank node labelled
+  `unbound_triple_N` is a different node; the earlier label in the document's own
+  scope was the same node. The projected identifier changes: a folded graph names
+  the node `unbound_triple_{id}` and a streamed file names it
+  `unbound_triple_{segment}_{id}`, each in that scope, and the N-Quads token of
+  the fold view and of the text exporter is the scoped escape
+  `_:purrdfesc4294967294_...` (the exporter's also names the segment). The fold
+  view's `nq_token` writes document blank nodes through the same encoder, so a
+  label that is not a valid N-Quads blank-node label or begins with `purrdfesc`
+  is now written escaped instead of verbatim. The streaming importers keep segment scopes at most
+  `u32::MAX - 2`, so a segment index of `u32::MAX - 2` is refused with
+  `gts-scope-limit` where it was admitted. Every other scope allocator (the import
+  merge, the builder's merge scopes, the per-source scopes of a quad-source freeze
+  and the event sink) also stops at `u32::MAX - 2`, and the import merge numbers
+  documents above the highest scope that is not reserved, so a graph holding a
+  projected unbound node still merges at low scopes. `ResolvedSink` gains the provided
+  method `intern_unbound_triple`, whose body interns the old label through
+  `intern_blank` for an implementor that does not override it; `EventEmitter`
+  gives each such term a scope of its own. The missing-reifier-binding codes and
+  `native-codec-unbound-triple-term`, `gts-unbound-triple-term` and
+  `rdf-ir-unbound-triple-term` remain defined for API compatibility and no public
+  input produces them. `purrdf_gts::model::Term::is_bare_triple` names the bare
+  case, and `ResolvedSink::err_unbound_triple` and `err_missing_reifier` stay
+  required methods that the resolver no longer calls.
+
+- **The byte-freeze guard covers the flat GTS vectors.** `check-corpus-frozen.py`
+  gains a flat root, which freezes the registered files directly inside one
+  directory and none of its subdirectories, and `vectors/` registers one: the 68
+  files of the 34 upstream vectors carried at its top level. The five vectors
+  this project generates (`25b`, `30` to `33`) are named in the registry and are
+  not frozen. A changed, missing or unregistered file among the frozen ones now
+  fails the guard.
+- **Breaking: loss entries record typed occurrences, and the runtime ledger is
+  schema version 2.** `LossEntry` replaces its `location: Option<Box<RdfLocation>>`
+  with three typed members: `site` (`LossSite`: unspecified, a document position,
+  a GTS anchor, or a named stage), `subject` (`LossSubject`: absent, a `LossTerm`
+  with its datatype, language and base direction, a source row by its kind and
+  the SHA-256 digest of its content, a resource by its kind and the identifier
+  its document assigns, a `LossGraphName` with a blank node's scope, a JSON
+  Pointer as its token list, or an XML location as element and attribute steps)
+  and `detail` (an ordered list of `LossDetail`, each a named count,
+  identifier, term or graph name).
+  Absence is an explicit variant, so no member's meaning depends on a prefix,
+  suffix or reserved value. Every producer records values it holds: counts,
+  segment head identifiers, graph names, terms, property keys, patterns and
+  paths are no longer formatted into `note`, which keeps only the code's static
+  explanation; `LossSubject::parse_pointer` refuses text that is not a JSON
+  Pointer; the CLI no longer
+  names an endpoint `unknown`; and a graph name that is neither an IRI nor a
+  blank node is refused rather than rendered with `Debug`. All of these types
+  implement `StructuredError`, and `LossEntry::presentation` renders prose from
+  the typed members. `LossLedger::render_json` writes `schema_version` 2 with
+  `site`, `subject` and `detail` members in place of the single `location`
+  string; the static matrices carry no occurrences and are unchanged. The
+  Python `ProjectionLoss.location` attribute is replaced by `site`, `subject`
+  and `detail` dictionaries (a row digest is `bytes`, and each detail has
+  `kind` `detail`), and the C and WebAssembly surfaces carry the same members
+  in the ledger JSON. `RdfLocation` and `RdfDiagnostic` are unchanged. The
+  migration guide gives the mapping.
+- **Behaviour change: a triple term that reaches itself states no triple, and its `reifies` row is kept.**
+  A term that is reachable from its own components, through `tt` or through the
+  first `reifies` row of the reifier id its `rf` names, is no longer
+  refused. A `k:3` term with neither `tt` nor `rf` states no triple, as the
+  specification's third resolution rule says; an absent `rf` is not read as the
+  term's own id. The GTS reader folds every such row with no diagnostic, where it
+  reported `DamagedFrame` and dropped the row. The term keeps an identity of its
+  own in the multi-segment union and the canonical writer, and the row still
+  projects. `purrdf_gts::resolution::SelfReaching::of` names these terms once per
+  graph and `Graph::resolved_triple_of` answers `None` for each; `Graph::triple_of`
+  keeps returning the declared components. Projections render the term as the
+  fresh blank node of an unbound triple term (`_:unbound_triple_{id}`), so
+  `dataset_from_gts_graph`, `flattened_dataset_from_gts_graph`, `import_gts_graph`
+  and `GtsFoldView` accept a graph they refused with `gts-self-reaching-term`. That
+  code remains for a literal whose datatype chain leads back to itself. A valid
+  file, whose `tt` names strictly smaller term ids and whose rows name no term
+  that reaches itself, folds, writes and projects as before.
+  The streaming importers (`import_gts_events` and its dictionary and blob
+  forms) and `export_gts_rdf_nquads_with_dictionary` decide the same set and
+  render the same blank node, and the canonical writer keeps the `tt` a
+  self-reaching term carries and orders its components before it.
+  `DictionaryError::Limit` with the resource `reifier-traversal-entries` is no
+  longer produced: the traversal it bounded no longer exists.
+- **Breaking: `PendingResolution` is `#[non_exhaustive]` and carries the
+  resolver's search state.** `segment_decode::PendingResolution` gains the public
+  field `component: ComponentState` and the constructor
+  `PendingResolution::new(term)`; an external `PendingResolution { .. }`
+  struct literal no longer compiles, which is deliberate: a literal could not set
+  the new field and a storage that forgot it would resolve a self-reaching
+  term wrongly. A `ResolutionStorage` implementation changes only where it builds
+  or rebuilds a record. Before, `PendingResolution { term, parent: None, next: 0,
+  active: false }`; now `PendingResolution::new(term)`, and an implementation that
+  persists a record outside memory stores `component.to_words()` (five `u64`
+  words) with the other fields and restores it with `ComponentState::from_words`,
+  returning exactly what it was given. A storage that returns a default value
+  instead is refused by the resolver with `rdf-ir-dangling-term-ref`. No
+  `ResolutionStorage` method is added. `ComponentState` is a new public type.
+- **Behaviour change: the GTS reader drops a `reifies` row whose reifier is a
+  literal or a quoted triple.** The row is diagnosed `PositionConstraint`;
+  4.0.2 kept it silently. A term whose `rf` names its own id is now a
+  `ForwardReference` and its `rf` reads as absent, as the format specification
+  requires for any `rf` at or past the term's id. See the migration guide.
+- **Behaviour change: a GTS blob whose payload cannot be a stream of its codec
+  is an opaque node.** A blob frame that declares its digest and whose `zstd`,
+  `zstd-rsyncable` or `gzip` payload fails a structural check at fold (frame
+  and block headers, a named dictionary, the gzip magic and trailer) folds as an
+  opaque node with `DamagedFrame` and stays out of the blob table; 4.0.2
+  admitted it and failed only when its bytes were requested. The check decodes
+  nothing. A payload with sound structure and corrupt content still folds and
+  fails on first request; `docs/CONFORMANCE.md` states that limit.
+  `codec::check_chain_structure` is a new public function.
+
 - **Breaking: `SERVICE` and `LOAD` share one caller-supplied HTTP exchange.**
   `HttpExchange` replaces `HttpTransport` and its POST-only `HttpRequest`. The
   request carries the method, target, ordered headers, body, timeout and stop
@@ -68,8 +209,8 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   The method hashes the population and the additive sum, so it is an accounting
   check and never identified a row set. The signature and the output bytes are
   unchanged, and the old name is removed with no alias. Replace each call with
-  `accounting_check`; `purrdf_hash::multiset::sorted_fingerprint` remains the
-  row-set identity.
+  `accounting_check`. The row-set identity is the new
+  `purrdf_hash::multiset::sorted_fingerprint`.
 - **Reading a GTS file into a dataset reports language tags folded to lower case.**
   A GTS file compares a language tag bytewise, so `"x"@EN-us` and `"x"@en-us` are two
   terms; a dataset folds the tag and holds one. `import_gts_events`,
@@ -87,13 +228,15 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   additive `Multiset256` sum, which a party choosing rows can make collide for
   different row sets. Each row family is now hashed in ascending digest order
   under its own versioned domain, through the new
-  `purrdf_hash::multiset::sorted_fingerprint`. Every signature stays. Values
+  `purrdf_hash::multiset::sorted_fingerprint`. The signatures of these functions
+  stay, except that the resident snapshot identity is now read through
+  `ContentIdentified::content_identity` (see the content-identity entry). Values
   move: content identities, execution receipts (`contentIdentity`,
   `executionIdentity`) and text generations recorded by 4.x stop matching, except
   that a segmented stack made only of image layers, with no removal or
   declaration owners and no resident head, keeps its 4.x snapshot identity and
   the receipts bound to it (see "Row-set identities" in `docs/MIGRATION-5.0.md`). `purrdf_text::source_fingerprint`
-  keeps its 4.x additive value and is deprecated. The first identity request
+  is removed. The first identity request
   of a dataset frozen without eager statistics now sorts its record digests in a
   scratch buffer, a text delta hashes the whole row directory, and a standalone
   surface delta sorts every source digest (about 9% more instructions at 2048
@@ -170,25 +313,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   caller that stored such normal forms holds the old spelling. A host letter
   that percent-decoding exposes is now lower-cased as well (`http://%41/` was
   `http://A/` and is `http://a/`), so the normal form is a fixed point.
-- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
-  IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
-  N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
-  `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
-  for every caller; the C1 controls stay raw. The canonical IRI writer escapes
-  exactly what `IRIREF` forbids, so DEL and the C1 controls ride raw; the
-  carrier-aware `iri_escape::*_for` functions name the wider XML set, which the
-  Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
-  (for the last, to keep the bytes of a SARIF `logicalLocation` stable).
-  `CANON_PROFILE_VERSION` moves from 3 to 4 and `CANON_CORPUS_DIGEST` moves with
-  the added vector. A stored 4.x digest of a dataset holding U+FFFE or U+FFFF in a
-  literal no longer recomputes with the retained `purrdf_core::rdfc12` functions,
-  because it was taken over a non-conforming spelling; every other stored digest
-  recomputes unchanged. The readers affected are the PACK version 1
-  `rdfc_digest`, `rdfc10-sha256` compaction certificates, PURREMB version 1
-  source digests and the embedded `stream:contentRefoldDigest`. The 5.0 digest is
-  over binary lines and does not move; the 5.0 document spells those characters
-  as escapes. The `nrl1-lines-sha256` compaction certificate digest, which is the
-  SHA-256 of the 5.0 document, follows its spelling and moves for such a dataset.
+- **Canonical N-Quads escapes for literals and IRIs.** RDF 1.2 N-Quads section 3
+  escapes characters in literals outside the XML 1.1 `Char` production. The 5.0
+  canonical document writes U+FFFE and U+FFFF in literals as `\uFFFE` and `\uFFFF`.
+  C1 controls in literals stay raw. U+1FFFE,
+  U+FDD0 and U+0085 keep their 4.0.2 literal spelling. The 5.0 canonical IRI
+  writer escapes the `IRIREF` exclusions, leaving DEL and C1 controls raw.
+  The N-Quads parser, dataset freeze, GTS import, pack dictionary reader and
+  columnar reader refuse these IRI characters with `iri-disallowed-char`.
+  The canonical spelling applies when a custom `DatasetView` supplies such an
+  IRI. U+00A0 keeps its 4.0.2 spelling. The Turtle emitter, native N-Triples
+  writer and SHACL path renderer continue to use the XML escape set.
+  The retained `purrdf_core::rdfc12` profile writes U+FFFE and U+FFFF raw in
+  literals and escapes DEL and C1 controls in IRIs. It preserves the 4.0.2
+  bytes, profile version 3 and corpus digest. This preserves recomputation of
+  stored 4.x digests, including PACK version 1 `rdfc_digest`,
+  `rdfc10-sha256` compaction certificates, PURREMB version 1 source digests
+  and `stream:contentRefoldDigest`. The 5.0 digest uses binary lines
+  independent of text escapes. The `nrl1-lines-sha256` compaction certificate
+  digest follows the 5.0 document's spelling.
 - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
@@ -209,8 +352,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   so a file that holds such a signature is refused there
   (`CompactRefusedError::FrameCose` or `DetachedCose`) where 4.0.2 carried the
   signature. The migration guide gives the bucket each case moves between.
-  `vectors/signed` carries the upstream signed corpus and `signed_corpus` grades
-  it, with nine named differences.
+  `vectors/signed` carries the upstream signed corpus. Its 68 `sigalg-*`
+  vectors state a protected-header grammar that version 1 of the GTS
+  specification does not contain, so they are outside the conformance
+  statement; `signed_corpus` lists the nine where the engine departs from them,
+  and `basic.json` agrees.
 - **Behaviour change: an unsupported signing algorithm is `Unverified`.**
   `verify_sig` and `verify_sig_with_key` return `SigStatus::Unverified` for a
   COSE_Sign1 whose declared `alg` this engine does not implement, where 4.0.2
@@ -288,7 +434,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   `execution_identity(&ExecutionSources)` under the new
   `execution-coordinates/v2` law, and refuses with the typed `ReceiptError`.
   Rule coordinates follow (`RuleCoordinates::execution_identity(&RuleSources)`,
-  `rule-execution/v2`, `RuleReceiptError`). Host receipts carry `runIdentity`
+  `rule-execution/v2`, `RuleReceiptError`); `RuleCoordinates::snapshot_identity`
+  and `RuleCoordinates::shapes_identity` are removed, and `execution_identity`
+  takes `&RuleSources` and returns `Result<Digest32, RuleReceiptError>` instead
+  of `Option<&Digest32>`. Host receipts carry `runIdentity`
   and `readsFocusGraph` and no longer carry `executionIdentity` or
   `snapshotIdentity` (rule receipts: `snapshotIdentity`, `shapesIdentity`,
   `executionIdentity`). The explicit request: the CLI's
@@ -299,10 +448,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   bind_execution_receipt, rule_execution_receipt_value_with_sources}` in
   Rust, where `bind_execution_receipt(receipt, &view)` takes a view that
   implements `ContentIdentified`, so a view without that capability cannot be
-  passed. Migration: pass the view the query read to `bind_execution_receipt`
-  (the hex-text entry point and `ReceiptBindError::ContentIdentity` are gone;
-  `ReceiptBindError<E>::Identity` carries the view's own typed `IdentityError`,
-  which must implement `StructuredError`); replace
+  passed. To bind a receipt, pass the view the query read to the new
+  `bind_execution_receipt`; its error `ReceiptBindError<E>::Identity` carries
+  the view's own typed `IdentityError`, which must implement `StructuredError`.
+  Migration: replace
   `DatasetView::snapshot_identity` with `ContentIdentified::content_identity`
   (an `Err`, not `Ok(None)`, where a view cannot certify its content, and no
   method at all on a view that never can); replace
