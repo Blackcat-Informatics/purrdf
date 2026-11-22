@@ -31,18 +31,25 @@ is a single coherent flow from `main`, using the version-coherence gate and the
 # 1. Bump all three version sources in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
-# 2. Regenerate the committed C-ABI header from the bumped crate version.
+# 2. Re-key the version-keyed WatDiv and LUBM pins in scripts/benchmark-acquire.py
+# (every `.purrdf-<version>` suffix in WORKLOAD_PINS) to the bumped version. The
+# self-test refuses a mismatch with Cargo.toml, so the lanes never report "no pin"
+# for the binary they built. Re-measure the answer counts under the new binary
+# rather than carrying the old values forward, and record the measurement.
+python3 scripts/benchmark-acquire.py --self-test
+
+# 3. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Complete the release notes, preserving existing migration guidance.
+# 4. Complete the release notes, preserving existing migration guidance.
 # Rename the Unreleased section to the bumped version and release date.
 # Use make changelog only for history-generated notes (see below).
 # Add the reviewed short summary at docs/releases/<version>.md.
 
-# 4. Review, then commit the bump, generated header, changelog and summary.
+# 5. Review, then commit the bump, re-keyed pins, generated header, changelog and summary.
 git add -A && git commit -m "chore(release): 0.2.2"
 
-# 5. From an up-to-date main, run every release gate, then push all three tags.
+# 6. From an up-to-date main, run every release gate, then push all three tags.
 make release-tags VERSION=0.2.2
 ```
 
