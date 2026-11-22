@@ -1,28 +1,14 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""Subprocess entrypoint: run rdflib's OWN tests against the purrdf shim.
+"""Run the vendored rdflib tests against the PurRDF shim in a child interpreter.
 
-This module is executed as ``python -m tests.rdflib_suite.runner`` (or via
-``runpy``) **in a child interpreter** by
-:mod:`tests.test_rdflib_suite`. It must never be imported by the parent pytest
-process, because it hijacks the ``rdflib`` import name.
+Use `python -m tests.rdflib_suite.runner` or execute this file. The child makes
+`import rdflib` resolve to the shadow and registers its submodules. The parent
+keeps the real rdflib oracle.
 
-What it does, in order:
-
-1. Prepends the ``python-rdflib-shadow`` distribution to ``sys.path`` and
-   imports :mod:`rdflib`. That triggers the shadow's ``__init__``, which
-   registers every ``purrdf.compat.rdflib.*`` submodule under the ``rdflib.*``
-   dotted names in :data:`sys.modules` (the "shadow mechanism"). So
-   the vendored rdflib tests, which ``import rdflib`` / ``from rdflib import …``,
-   transparently run on purrdf.
-2. Runs pytest over the verbatim-vendored rdflib test files in ``vendor/``.
-3. Applies the ``xfail_ledger.toml`` entries as **strict** xfails, so a ledgered
-   test that now passes (XPASS) fails the run — the ledger only shrinks. A stale
-   ledger key (naming a test that no longer collects) also fails the run.
-4. Prints a machine-readable scoreboard the parent test parses & asserts on.
-
-Exit code is pytest's own return code (0 == green: every test passed or is a
-known strict xfail, with zero XPASS / failure / error / stale-ledger entry).
+Vendored tests run unchanged under pytest with strict xfails. A failure, an
+XPASS, a stale ledger entry or too few test outcomes fails the run. The
+scoreboard exposes the measured counts to the parent.
 """
 
 from __future__ import annotations
@@ -59,6 +45,7 @@ class _LedgerPlugin:
         self._ledger = ledger
         self._matched: set[str] = set()
         self.stale: set[str] = set()
+        self.undersized = True
 
     def pytest_collection_modifyitems(
         self, config: pytest.Config, items: list[pytest.Item]
@@ -88,6 +75,14 @@ class _LedgerPlugin:
             f"ledger_total={len(self._ledger)} ledger_applied={len(self._matched)} "
             f"ledger_stale={len(self.stale)}"
         )
+        minimum_passed, minimum_total = 45, 70
+        self.undersized = passed < minimum_passed or passed + xfailed < minimum_total
+        if self.undersized:
+            terminalreporter.write_line(
+                f"VENDORED SUITE TOO SMALL ({passed} passed, {passed + xfailed} total). "
+                f"Require at least {minimum_passed} passes and {minimum_total} outcomes.",
+                red=True,
+            )
         if self.stale:
             terminalreporter.write_line(
                 "STALE LEDGER ENTRIES (no matching collected test): "
@@ -129,9 +124,8 @@ def main() -> int:
         *files,
     ]
     exit_code = pytest.main(args, plugins=[plugin])
-    if plugin.stale:
-        # Strict xfail already fails on XPASS; also fail on a stale ledger key.
-        return 4 if exit_code == 0 else int(exit_code)
+    if exit_code == 0 and (plugin.stale or plugin.undersized):
+        return 4
     return int(exit_code)
 
 

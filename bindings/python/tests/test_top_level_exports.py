@@ -27,23 +27,17 @@ _ENGINES = [
 ]
 
 
+def _import_export(dotted: str):
+    module = importlib.import_module(dotted)
+    package, _, name = dotted.rpartition(".")
+    assert getattr(importlib.import_module(package), name, None) is module, f"{dotted} attribute must match its import"
+    return module
+
+
 @pytest.mark.parametrize("dotted", _ENGINES)
 def test_engine_submodule_is_importable(dotted: str) -> None:
-    """`import purrdf.<engine>` resolves (not just attribute access)."""
-    module = importlib.import_module(dotted)
-    assert module is not None
-
-
-def test_attribute_access_matches_import() -> None:
-    """Attribute access and `import` yield the same submodule objects."""
-    import purrdf
-
-    assert importlib.import_module("purrdf.shapes") is purrdf.shapes
-    assert importlib.import_module("purrdf.shex") is purrdf.shex
-    assert importlib.import_module("purrdf.entail") is purrdf.entail
-    assert importlib.import_module("purrdf.retrieval") is purrdf.retrieval
-    assert importlib.import_module("purrdf.slice") is purrdf.slice
-    assert importlib.import_module("purrdf.gts") is purrdf.gts
+    """Import and attribute access resolve to the same engine module."""
+    _import_export(dotted)
 
 
 def test_shapes_is_canonical_name_shacl_is_alias() -> None:
@@ -51,7 +45,6 @@ def test_shapes_is_canonical_name_shacl_is_alias() -> None:
     import purrdf
 
     assert purrdf.shacl is purrdf.shapes
-    assert callable(purrdf.shapes.validate)
 
 
 def test_regime_entailment_is_not_shacl_rule_entailment() -> None:
@@ -67,31 +60,6 @@ def test_regime_entailment_is_not_shacl_rule_entailment() -> None:
     assert purrdf.entail is not purrdf.shapes.entail
     assert callable(purrdf.shapes.entail)
     assert not callable(purrdf.entail)
-
-
-def test_engines_expose_expected_surface() -> None:
-    """Each engine surfaces its primary entry points off the top-level name."""
-    import purrdf
-
-    assert hasattr(purrdf.shapes, "validate")
-    assert hasattr(purrdf.shapes, "Shapes")
-    assert hasattr(purrdf.shex, "validate")
-    assert hasattr(purrdf.entail, "materialize")
-    assert hasattr(purrdf.entail, "materialize_nt")
-    assert hasattr(purrdf.entail, "rules")
-    assert hasattr(purrdf.entail, "implemented_rules")
-    assert hasattr(purrdf.entail, "extensions")
-    assert hasattr(purrdf.entail, "Regime")
-    assert hasattr(purrdf.slice, "SliceCatalog")
-    assert hasattr(purrdf.gts, "gts_from_quads")
-    assert callable(purrdf.project)
-    assert callable(purrdf.project_artifacts)
-    assert callable(purrdf.lift)
-    assert hasattr(purrdf, "ProjectionPackage")
-    assert hasattr(purrdf, "ProjectionProgress")
-    assert hasattr(purrdf, "ProjectionStream")
-    assert hasattr(purrdf, "ProjectionLoss")
-    assert set(purrdf.gts.__all__) <= set(dir(purrdf.gts))
 
 
 def test_no_purrdf_native_leak_in_public_code() -> None:
@@ -111,14 +79,7 @@ def test_no_purrdf_native_leak_in_public_code() -> None:
 
 
 def test_stub_signatures_match_the_built_bindings() -> None:
-    """Check the complete book inventory against installed canonical stubs.
-
-    Python's AST retains classes, properties, overloads, aliases, annotations and
-    parameter kinds/defaults without a second custom signature parser. Discovery
-    covers every installed stub; duplicate or missing document blocks fail.
-    The native comparison additionally checks engine namespaces and the fold-view
-    class's PyO3 parameter names/default presence, with per-type vacuity guards.
-    """
+    """Verify installed stub exports, the complete book inventory and PyO3 signatures."""
     import ast
     import re
 
@@ -126,11 +87,47 @@ def test_stub_signatures_match_the_built_bindings() -> None:
 
     stub = Path(purrdf.__file__).with_name("__init__.pyi")
     text = stub.read_text(encoding="utf-8")
-    surface = ast.parse(text).body
-    declared_names = {node.name for node in surface if isinstance(node, (ast.ClassDef, ast.FunctionDef))}
-    declared_names.update(node.target.id for node in surface if isinstance(node, ast.AnnAssign))
-    declared_names.update(name.id for node in surface if isinstance(node, ast.Assign) for name in node.targets if isinstance(name, ast.Name))
-    assert set(purrdf.__all__) <= declared_names, "every public root export needs a canonical declaration"
+    def declarations(body):
+        named = {}
+        for node in body:
+            if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                named[node.name] = node
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                named[node.target.id] = node.value
+            elif isinstance(node, ast.Assign):
+                for name in node.targets:
+                    if isinstance(name, ast.Name):
+                        named[name.id] = node.value
+        return named
+
+    def check_exports(module, qualified_name, members, root_members, namespaces=()):
+        for name, declaration in members.items():
+            if name.startswith("_") or name in namespaces:
+                continue
+            seen = set()
+            while isinstance(declaration, ast.Name) and declaration.id in root_members:
+                assert declaration.id not in seen, f"cyclic stub alias for {qualified_name}.{name}"
+                seen.add(declaration.id)
+                declaration = root_members[declaration.id]
+            value = getattr(module, name, None)
+            if isinstance(declaration, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                assert callable(value), f"{qualified_name}.{name} is declared but not callable"
+            elif isinstance(declaration, ast.ClassDef):
+                if declaration.name in namespaces:
+                    assert value is getattr(module, declaration.name), f"{qualified_name}.{name} must alias {declaration.name}"
+                # TypedDict declarations describe the shape of returned dictionaries.
+                elif not any(ast.unparse(base) == "TypedDict" for base in declaration.bases):
+                    assert isinstance(value, type), f"{qualified_name}.{name} is declared but not a type"
+
+    surface = declarations(ast.parse(text).body)
+    assert set(purrdf.__all__) <= surface.keys(), "every public root export needs a canonical declaration"
+    namespaces = [dotted.rsplit(".", 1)[1] for dotted in _ENGINES]
+    check_exports(purrdf, "purrdf", surface, surface, namespaces)
+    for name in namespaces:
+        block = surface[name]
+        assert isinstance(block, ast.ClassDef), f"expected a stub namespace for purrdf.{name}"
+        check_exports(getattr(purrdf, name), f"purrdf.{name}", declarations(block.body), surface)
+    assert set(purrdf.gts.__all__) <= set(dir(purrdf.gts))
 
     reference = Path(__file__).resolve().parents[3] / "docs/book/src/reference/python-api-signatures.md"
     blocks = re.findall(
@@ -143,8 +140,12 @@ def test_stub_signatures_match_the_built_bindings() -> None:
     assert set(dict(blocks)) == set(canonical), "the book must cover every installed stub"
     for name, declaration in blocks:
         documented = ast.dump(ast.parse(declaration))
-        installed = ast.dump(ast.parse(canonical[name].read_text(encoding="utf-8")))
-        assert documented == installed, f"complete book signature inventory drifted from {name}"
+        installed = ast.parse(canonical[name].read_text(encoding="utf-8"))
+        assert documented == ast.dump(installed), f"complete book signature inventory drifted from {name}"
+        if name != "__init__.pyi":
+            qualified = "purrdf." + name.removesuffix(".pyi").replace("/", ".").removesuffix(".__init__")
+            members = declarations(installed.body)
+            check_exports(_import_export(qualified), qualified, members, members)
 
     def shape(params: str) -> list[str]:
         """Ordered `name` / `name=` tokens, annotations and default VALUES removed."""
@@ -188,8 +189,6 @@ def test_stub_signatures_match_the_built_bindings() -> None:
             )
             checked[engine] += 1
 
-    # A parser that silently matched nothing would make every assertion vacuous,
-    # and so would an engine whose block parsed to no comparable entry point.
     silent = sorted(engine for engine, count in checked.items() if count == 0)
     assert not silent, (
         f"no signature compared for {silent}: the stub block did not parse, or the "

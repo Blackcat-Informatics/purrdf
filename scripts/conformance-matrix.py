@@ -977,12 +977,9 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
 
 
 def _suite_py_compat(build: bool) -> SuiteResult:
-    """The whole Python binding pytest suite, compat-parity differential included.
+    """Run the first-party binding suite, including the rdflib differential.
 
-    Named for what it RUNS rather than for one of its parts: the command is
-    `pytest tests`, so the count covers every binding test — entailment, GTS,
-    projections, shapes — and not only the rdflib differential. A row labelled for
-    the differential alone reports a number that is not the differential's.
+    The vendored rdflib suite reports its own matrix row.
     """
     log = ""
     if build:
@@ -996,7 +993,8 @@ def _suite_py_compat(build: bool) -> SuiteResult:
                 failed=-1, detail="editable uv sync FAILED", ok=False, log=log,
             )
     rc, out = _run(
-        ["uv", "run", "--locked", "--group", "dev", "pytest", "tests", "-q"], _PY_DIR
+        ["uv", "run", "--locked", "--group", "dev", "pytest", "tests", "-q",
+         "--ignore=tests/test_rdflib_suite.py"], _PY_DIR
     )
     log += out
     passed = _int(re.search(r"(\d+) passed", out))
