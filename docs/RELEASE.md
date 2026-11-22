@@ -14,6 +14,8 @@ The release lane follows the `gmeow-gts` cargo release pattern:
 - every workspace crate version must match the tag version;
 - the workflow uses pinned actions and no dependency cache in the privileged
   publish job;
+- native verification, WebAssembly verification and audited artifact preparation
+  run concurrently. Native and WebAssembly jobs keep separate compiler caches;
 - crates are packaged before publication;
 - the release crate set is checked on `wasm32-unknown-unknown`;
 - each `.crate` package receives a GitHub build-provenance attestation;
@@ -324,11 +326,28 @@ git tag rust-v0.1.5
 git push origin rust-v0.1.5
 ```
 
-The workflow refuses before packaging if any release crate lacks its record
+The workflow refuses before publication if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
 registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
 functional crates in the declared dependency order and skips a version already
-present. A partially completed release resumes with `gh run rerun <run-id>`.
+present. Retry failed jobs with `gh run rerun <run-id> --failed`. The publish job
+uses the artifact from the successful preparation job in the same run. Its own
+time budget starts when publication begins.
+
+If an earlier tagged run completed verification and audit but stopped during
+publication, resume from its retained artifact. Use the original run ID, tag
+and stable Rust version reported by its install step:
+
+```sh
+gh workflow run release-cargo.yaml --ref main \
+  -f tag="$tag" -f source_run="$run_id" -f toolchain="$rust_version"
+```
+
+The workflow checks the original run against the current remote tag. It
+verifies the retained distribution and its provenance, then matches packages
+from the exact tagged checkout against the retained crate audit. The trusted
+publisher acquires its token after those checks. It continues in dependency
+order and publishes the GitHub Release after the full crate set is available.
 
 ## PyPI Release
 
