@@ -174,19 +174,26 @@ impl GraphInterner {
     }
 
     /// Whether `gts_id` is a triple term that states a triple: it does not reach
-    /// itself and carries `tt` or `rf`. Every other triple term states none
-    /// (§7.3) and interns as a blank node.
+    /// itself and carries `tt` or an `rf` some `reifies` row binds. Every other
+    /// triple term states none (§7.3) and interns as a blank node.
     fn states_triple(&self, gts_id: usize) -> bool {
         let term = &self.terms[gts_id];
-        term.kind == TermKind::Triple && !term.is_bare_triple() && !self.reaching.contains(gts_id)
+        term.kind == TermKind::Triple
+            && !self.reaching.contains(gts_id)
+            && (term.triple.is_some()
+                || term
+                    .reifier
+                    .is_some_and(|reifier| self.reifier_bindings.contains_key(&reifier)))
     }
 
     /// The blank node a triple term that states no triple stands for, named by
-    /// its own id so that it stays distinct from every other term.
+    /// its own id so that it stays distinct from every other term, in the scope
+    /// no document blank node has.
     fn intern_unbound_triple(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
+        let label = crate::gts_resolve::unbound_triple_label(None, gts_id).to_string();
         Ok(self
             .builder
-            .intern_blank(&format!("unbound_triple_{gts_id}"), FLATTENED_BLANK_SCOPE)?)
+            .intern_blank(&label, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE)?)
     }
 
     fn intern_literal(
@@ -656,7 +663,7 @@ mod tests {
         assert_eq!(
             String::from_utf8(bytes).expect("N-Quads are UTF-8"),
             "<http://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> \
-             <<( <http://example.org/p> <http://example.org/p> _:unbound_triple_2 )>> .\n"
+             <<( <http://example.org/p> <http://example.org/p> _:purrdfesc4294967294_unbound_00005Ftriple_00005F2 )>> .\n"
         );
     }
 

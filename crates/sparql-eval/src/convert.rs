@@ -62,7 +62,7 @@ pub(crate) fn named_node_to_workspace_value(
 /// enforces the query half of that reservation directly — a value at this scope is
 /// never promoted to a dataset term — so the separation does not rest on the
 /// dataset merely happening not to hold the label.
-pub const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u32::MAX);
+pub const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::blank_label::QUERY_BLANK_SCOPE;
 
 /// A literal term value, with the language tag lowercased to match the IR's C0.1
 /// interned identity (so a query literal resolves to the dataset's stored form).

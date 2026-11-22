@@ -1489,8 +1489,8 @@ class GtsRelationalRows(TypedDict):
 
 class GtsFoldViewNative:
     # A triple term that reaches itself states no triple (GTS-SPEC 7.3): the view's
-    # accessors render it as `_:unbound_triple_{id}` and its `reifies` rows stay
-    # visible, so no accessor walks its components without bound. Both constructors
+    # accessors render it as a blank node no document label spells and its `reifies`
+    # rows stay visible, so no accessor walks its components without bound. Both constructors
     # raise ValueError carrying `gts-self-reaching-term` when a literal's datatype
     # chain resolves through itself, which no walk could finish.
     #

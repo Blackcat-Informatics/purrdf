@@ -319,6 +319,44 @@ fn bridge_events_equal_offline_read() {
     assert_eq!(bridge.len(), 3, "fixture declares three quads");
 }
 
+/// A triple term that states no triple (GTS-SPEC 7.3) is a fresh blank node, so a
+/// document blank node labelled `unbound_triple_2` in the same segment must stay a
+/// different node, and a term whose `rf` has a row still resolves through it. The
+/// bridge gives the unbound node a scope of its own.
+fn an_unbound_triple_term_is_a_blank_node_apart_from_the_document_labels() {
+    let mut bare = Term::triple_term((0, 0, 0));
+    bare.triple = None;
+    let mut indirect = bare.clone();
+    indirect.reifier = Some(4);
+    let mut writer = Writer::new("purrdf-test");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"), // 0
+        Term::iri("https://example.org/p"), // 1
+        bare,                               // 2
+        Term::blank("unbound_triple_2"),    // 3
+        Term::iri("https://example.org/r"), // 4: a reifier with a row
+        indirect,                           // 5
+    ]);
+    writer.add_quads(&[(2, 1, 0, None), (3, 1, 0, None), (0, 1, 5, None)]);
+    writer.add_reifies(&[(4, (0, 1, 0), None)]);
+    let data = writer.into_bytes();
+
+    let mut sink = CollectSink::default();
+    stream_events(&data, ReadOptions::new(true, None), &mut sink).expect("the file streams");
+    let mut quads = sink.resolved_quads.clone();
+    quads.sort();
+    // Scope 1 is the segment's; the unbound node has a scope opened for it alone.
+    assert_eq!(
+        quads,
+        [
+            "<https://example.org/s> <https://example.org/p> \
+             <<<https://example.org/s> <https://example.org/p> <https://example.org/s>>> default",
+            "_:unbound_triple_0_2@2 <https://example.org/p> <https://example.org/s> default",
+            "_:unbound_triple_2@1 <https://example.org/p> <https://example.org/s> default",
+        ]
+    );
+}
+
 /// R7-exec2: the same blank label in two segments resolves to distinct scopes.
 fn per_segment_blank_scopes_are_distinct() {
     let mut a = Writer::new("generic");
@@ -1013,6 +1051,7 @@ fn bounded_memory_across_many_segments() {
 purrdf_testkit::harness_main!(
     bridge_events_equal_offline_read,
     per_segment_blank_scopes_are_distinct,
+    an_unbound_triple_term_is_a_blank_node_apart_from_the_document_labels,
     claimid_offset_index_single_pass,
     bridge_calls_finish_once,
     bridge_break_cancels_drive,

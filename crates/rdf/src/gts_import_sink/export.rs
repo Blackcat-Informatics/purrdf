@@ -141,16 +141,21 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
 
     fn kind(&mut self, key: TermKey) -> Result<Kind, RdfDiagnostic> {
         let term = self.term(key)?;
-        let (kind, bare) = (term.kind, term.is_bare_triple());
-        drop(term);
-        Ok(match kind {
+        Ok(match term.kind {
             TermKind::Iri => Kind::Iri,
             TermKind::Bnode => Kind::Blank,
             TermKind::Literal => Kind::Literal,
-            // A bare triple term, or one that reaches itself, states no triple
-            // and is the blank node an unbound triple term is.
-            TermKind::Triple if bare || self.reaches_itself(key)? => Kind::Blank,
-            TermKind::Triple => Kind::Triple,
+            TermKind::Triple => {
+                let stated = self.declared_components(key, &term)?.is_some();
+                drop(term);
+                // A triple term that states no triple (§7.3) is the blank node an
+                // unbound triple term is.
+                if stated && !self.reaches_itself(key)? {
+                    Kind::Triple
+                } else {
+                    Kind::Blank
+                }
+            }
         })
     }
 
@@ -233,14 +238,22 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
     }
 
     /// Write the blank node a triple term that states no triple stands for.
+    ///
+    /// The output is one N-Quads label space, so the label is the injective
+    /// `(label, scope)` encoding every document blank node here goes through, at
+    /// the scope no document blank node has: segment scopes stop short of
+    /// `UNBOUND_TRIPLE_SCOPE`. Distinct scopes make distinct pairs, so no label a
+    /// document spells yields this token (proof at `gts_resolve::blank_token`).
     fn write_unbound_triple(&mut self, key: TermKey) -> Result<(), RdfDiagnostic> {
+        super::segment_scope(key.segment)?;
         let baseline = self.memory.admitted_bytes();
-        let label = self
-            .memory
-            .format_with_progress(&format_args!("unbound_triple_{}", key.term))?;
+        let label = self.memory.format_with_progress(&format_args!(
+            "{}",
+            crate::gts_resolve::unbound_triple_label(Some(key.segment), key.term)
+        ))?;
         let encoded = purrdf_core::blank_label::encode_blank_label_with_memory(
             &label,
-            super::segment_scope(key.segment)?,
+            crate::gts_resolve::UNBOUND_TRIPLE_SCOPE,
             purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
             self.memory,
         )?;
@@ -367,15 +380,17 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                             .release_bytes(self.memory.admitted_bytes() - baseline)?;
                     }
                     TermKind::Triple => {
-                        // A bare triple term states no triple (§7.3): like one that
-                        // reaches itself, it is a fresh blank node.
-                        if term.is_bare_triple() || self.reaches_itself(key)? {
+                        // A triple term that states no triple (§7.3) is a fresh blank
+                        // node: no `tt`, no `rf` row, or one that reaches itself.
+                        let declared = self.declared_components(key, &term)?;
+                        let Some([s, p, o]) = declared else {
+                            self.write_unbound_triple(key)?;
+                            continue;
+                        };
+                        if self.reaches_itself(key)? {
                             self.write_unbound_triple(key)?;
                             continue;
                         }
-                        let Some([s, p, o]) = self.declared_components(key, &term)? else {
-                            return Err(self.metadata.err_unbound_triple(key.segment, key.term));
-                        };
                         let triple = (s.term, p.term, o.term);
                         self.output.push_str(term_syntax::TRIPLE_TERM_OPEN);
                         work.try_push_admitted(
