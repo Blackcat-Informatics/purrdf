@@ -762,7 +762,7 @@ class TransportTests(unittest.TestCase):
             / ".github/workflows/release-cargo.yaml"
         ).read_text()
         self.assertIn("python3 scripts/publish-github-release.py", workflow)
-        self.assertIn('--sha "$GITHUB_SHA"', workflow)
+        self.assertIn('--sha "$RELEASE_SHA"', workflow)
         self.assertNotIn("gh release create", workflow)
         self.assertNotIn("gh release upload", workflow)
         self.assertIn(

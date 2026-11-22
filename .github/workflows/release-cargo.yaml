@@ -15,9 +15,23 @@ on:
   push:
     tags:
       - 'rust-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing Rust release tag
+        required: true
+        type: string
+      source_run:
+        description: Original tagged Cargo workflow run ID
+        required: true
+        type: string
+      toolchain:
+        description: Stable Rust version used by the original run
+        required: true
+        type: string
 
 concurrency:
-  group: release-cargo-${{ github.ref }}
+  group: release-cargo-${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
   cancel-in-progress: false
 
 permissions:
@@ -35,18 +49,87 @@ env:
   CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
 
 jobs:
-  publish:
+  source:
+    name: Resolve release source
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 5
     permissions:
-      contents: write
-      id-token: write
-      attestations: write
+      actions: read
+      contents: read
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      sha: ${{ steps.source.outputs.sha }}
+      artifact_run: ${{ steps.source.outputs.artifact_run }}
+      toolchain: ${{ steps.source.outputs.toolchain }}
+    steps:
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        if: github.event_name == 'push'
+        with:
+          toolchain: stable
+      - name: Verify release source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          ARTIFACT_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.source_run || github.run_id }}
+          TOOLCHAIN: ${{ github.event_name == 'workflow_dispatch' && inputs.toolchain || 'stable' }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+$ || ! "$ARTIFACT_RUN" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::Supply a rust-v release tag and an Actions run ID."
+            exit 1
+          fi
+          release_sha=$GITHUB_SHA
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            if [[ ! "$TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Supply the exact stable Rust version from the tagged run."
+              exit 1
+            fi
+            release_sha=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN" |
+              jq -er --arg tag "$TAG" --arg repo "$GITHUB_REPOSITORY" '
+                select(.event == "push" and .head_branch == $tag and .status == "completed"
+                  and (.conclusion == "cancelled" or .conclusion == "failure")
+                  and .path == ".github/workflows/release-cargo.yaml"
+                  and .head_repository.full_name == $repo) | .head_sha')
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN/jobs?per_page=100" |
+              jq -e '
+                [.[].jobs[]] as $jobs |
+                def passed($name): any($jobs[]; .name == $name and .conclusion == "success");
+                (passed("Verify native workspace") and passed("Verify WebAssembly") and
+                 passed("Prepare audited artifacts")) or
+                any($jobs[]; .name == "publish" and
+                  any(.steps[]; .name == "Authenticate to crates.io (trusted publishing / OIDC)"
+                    and .conclusion == "success"))'
+          else
+            TOOLCHAIN=$(rustc -Vv | awk '$1 == "release:" {print $2}')
+          fi
+          ref="refs/tags/$TAG"
+          refs=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "$ref" "$ref^{}")
+          remote_sha=$(awk -v ref="$ref" '$2 == ref {direct=$1} $2 == ref "^{}" {peeled=$1}
+            END {print peeled ? peeled : direct}' <<< "$refs")
+          if [[ ! "$release_sha" =~ ^[a-f0-9]{40}$ || "$remote_sha" != "$release_sha" ||
+            ! "$TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::The release tag differs from the tagged workflow source."
+            exit 1
+          fi
+          printf 'tag=%s\nsha=%s\nartifact_run=%s\ntoolchain=%s\n' \
+            "$TAG" "$release_sha" "$ARTIFACT_RUN" "$TOOLCHAIN" >> "$GITHUB_OUTPUT"
+
+  native:
+    name: Verify native workspace
+    if: github.event_name == 'push'
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: ${{ needs.source.outputs.toolchain }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          ref: ${{ needs.source.outputs.sha }}
 
       # Nightly is named in rust-toolchain.toml for its sharper lint surface;
       # that buys nothing for an artifact a consumer installs, and shipping one
@@ -54,11 +137,12 @@ jobs:
       # uses no nightly features (the `msrv` CI job holds that floor at 1.98),
       # so stable always builds. See the workflow-level `env` above for why
       # RUSTUP_TOOLCHAIN, not this input, is what actually selects stable.
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+      - name: Install resolved stable Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component rustfmt
+      - name: Cache native compilation
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          toolchain: stable
-          targets: wasm32-unknown-unknown
+          key: cargo-release-native
 
       - name: Verify tag matches workspace crate versions
         run: |
@@ -92,17 +176,6 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: python3 scripts/check-release-notes.py --version "${VERSION#rust-v}"
 
-      # THE POINT OF NO RETURN IS THE PUBLISH LOOP, AND IT IS NOT ATOMIC.
-      # `cargo publish` runs once per crate, in dependency order, and cannot be undone.
-      # Every record must exist and be locked before the first irreversible
-      # functional upload. Isolated empty 0.0.0 packages create new records in
-      # advance; their Trusted Publisher entries are configured by the maintainer.
-      # Public trustpub_only proves the lock, not publisher-entry configuration.
-      - name: Preflight — every release crate already has a record locked to this lane
-        env:
-          PURRDF_RELEASE_VERSION: ${{ github.ref_name }}
-        run: bash scripts/check-crates-io-records.sh --require-all
-
       - name: Verify workspace
         run: |
           cargo fmt --all --check
@@ -119,6 +192,30 @@ jobs:
           # order of normal AND dev-dependencies — the second being what lets
           # the publish loop below VERIFY each crate against the registry.
           python3 scripts/check-publish-order.py
+          cargo test -p purrdf-gts --test transport --locked
+          cargo test -p purrdf-slice --locked
+
+  wasm:
+    name: Verify WebAssembly
+    if: github.event_name == 'push'
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      RUSTUP_TOOLCHAIN: ${{ needs.source.outputs.toolchain }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ needs.source.outputs.sha }}
+      - name: Install resolved stable Rust and WebAssembly target
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --target wasm32-unknown-unknown
+      - name: Cache WebAssembly compilation
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          key: cargo-release-wasm
+      - name: Verify release crates on WebAssembly
+        run: |
           # The wasm gate covers exactly the crates that get published — read
           # from the one release-set definition rather than a second copy.
           # shellcheck source=scripts/release-crates.sh
@@ -131,14 +228,30 @@ jobs:
           cargo build --locked --release --target wasm32-unknown-unknown \
             -p purrdf-wasm --lib
           test -s target/wasm32-unknown-unknown/release/purrdf_wasm.wasm
-          cargo test -p purrdf-gts --test transport --locked
-          cargo test -p purrdf-slice --locked
 
+  prepare:
+    name: Prepare audited artifacts
+    if: github.event_name == 'push'
+    needs: source
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RUSTUP_TOOLCHAIN: ${{ needs.source.outputs.toolchain }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ needs.source.outputs.sha }}
+      - name: Install resolved stable Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Package release crates
-        run: |
+        run: &package-release |
           set -euo pipefail
 
-          rm -rf target/package
           # `--no-verify` is LOAD-BEARING here and only here: every crate is
           # packaged before ANY is published, so a verification build of crate N
           # would have to resolve crate N-1 at this version from crates.io, where
@@ -181,6 +294,8 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: license-evidence-cargo-c
+          if-no-files-found: error
+          overwrite: true
           path: |
             target/license-evidence-cargo.json
             target/dist/purrdf-capi-*.tar.gz
@@ -220,6 +335,130 @@ jobs:
         with:
           name: sbom-purrdf-crates
           path: sbom-purrdf-crates.spdx.json
+          if-no-files-found: error
+          overwrite: true
+
+  publish:
+    name: Publish audited release
+    needs: [source, native, wasm, prepare]
+    if: >-
+      !cancelled() && needs.source.result == 'success' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (needs.native.result == 'success' && needs.wasm.result == 'success' &&
+        needs.prepare.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      actions: read
+      attestations: read
+      contents: write
+      id-token: write
+    env:
+      RELEASE_TAG: ${{ needs.source.outputs.tag }}
+      RELEASE_SHA: ${{ needs.source.outputs.sha }}
+      RUSTUP_TOOLCHAIN: ${{ needs.source.outputs.toolchain }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          ref: ${{ needs.source.outputs.sha }}
+      - name: Install resolved stable Rust
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Download and verify the audited distribution
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN: ${{ needs.source.outputs.artifact_run }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          metadata=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN/artifacts?name=license-evidence-cargo-c" |
+            jq -er --arg run "$ARTIFACT_RUN" --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" '
+              [.artifacts[] | select(.expired == false and .name == "license-evidence-cargo-c"
+                and (.workflow_run.id | tostring) == $run and .workflow_run.head_branch == $tag
+                and .workflow_run.head_sha == $sha)] |
+              if length == 1 then .[0] else error("Expected one audited release artifact") end |
+              [.id, .digest] | @tsv')
+          IFS=$'\t' read -r artifact_id digest <<< "$metadata"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ && "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]
+          archive="$RUNNER_TEMP/audited-release.zip"
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$archive"
+          printf '%s  %s\n' "${digest#sha256:}" "$archive" | sha256sum --strict --check -
+
+          version=${RELEASE_TAG#rust-v}
+          sdk="dist/purrdf-capi-$version-x86_64-unknown-linux-gnu"
+          lexicons="dist/purrdf-text-lexicons-$version.tar.gz"
+          earl=(dist/purrdf-shacl-earl.ttl dist/purrdf-shacl12-earl.ttl)
+          members=(license-evidence-cargo.json dist/SHA256SUMS "$sdk.license-receipt.json"
+            "$sdk.tar.gz" "$lexicons" "${earl[@]}")
+          actual=$(unzip -Z1 "$archive" | LC_ALL=C sort)
+          expected=$(printf '%s\n' "${members[@]}" | LC_ALL=C sort)
+          test "$actual" = "$expected"
+          unzip -q "$archive" -d target
+          python3 scripts/check-release-notes.py --version "$version" \
+            --checksum-output "$RUNNER_TEMP/release-checksums"
+          cmp target/dist/SHA256SUMS "$RUNNER_TEMP/release-checksums"
+          for asset in "$sdk.tar.gz" "$lexicons" "${earl[@]}"; do
+            gh attestation verify "target/$asset" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml" \
+              --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_SHA"
+          done
+
+      - name: Package release crates from the tagged source
+        run: *package-release
+
+      - name: Match crate archives to the retained audit
+        run: |
+          set -euo pipefail
+          source scripts/release-crates.sh
+          receipt=target/license-evidence-cargo.json
+          expected=$(printf '%s\n' "${PURRDF_RELEASE_CRATES[@]}" | LC_ALL=C sort)
+          actual=$(jq -er '.artifacts[].profile' "$receipt" | LC_ALL=C sort)
+          test "$actual" = "$expected"
+          jq -er --arg version "${RELEASE_TAG#rust-v}" '
+            if .schema == 1 and all(.artifacts[];
+              .status == "passed" and (.sha256 | test("^[a-f0-9]{64}$")) and
+              .artifact == (.profile + "-" + $version + ".crate"))
+            then .artifacts[] | "\(.sha256)  target/package/\(.artifact)"
+            else error("The retained crate audit is invalid")
+            end' "$receipt" | sha256sum --strict --check -
+
+      - name: Confirm release crate publishing locks
+        env:
+          PURRDF_RELEASE_VERSION: ${{ needs.source.outputs.tag }}
+        run: bash scripts/check-crates-io-records.sh --require-all
+
+      - name: Verify already published crates against the retained audit
+        env:
+          ALLOW_MISSING: 'true'
+        run: &verify-registry |
+          set -euo pipefail
+          source scripts/crates-io-api.sh
+          trap 'rm -- "$CRATES_IO_BODY"' EXIT
+          version=${RELEASE_TAG#rust-v}
+          agent=$(crates_io_user_agent "$version")
+          jq -er '.artifacts[] | [.profile, .sha256] | @tsv' target/license-evidence-cargo.json |
+            while IFS=$'\t' read -r crate checksum; do
+              state=$(crates_io_index_state "$crate" "$version" "$checksum" "$agent")
+              case "$state" in
+                present) ;;
+                missing)
+                  if [[ "${ALLOW_MISSING:-false}" != true ]]; then
+                    echo "::error::$crate $version is missing from the sparse index."
+                    exit 1
+                  fi
+                  ;;
+                *) echo "::error::$state"; exit 1 ;;
+              esac
+            done
+
+      - name: Recheck the remote tag before issuing a publication token
+        run: |
+          set -euo pipefail
+          ref="refs/tags/$RELEASE_TAG"
+          refs=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "$ref" "$ref^{}")
+          resolved=$(awk -v ref="$ref" '$2 == ref {direct=$1} $2 == ref "^{}" {peeled=$1}
+            END {print peeled ? peeled : direct}' <<< "$refs")
+          test "$resolved" = "$RELEASE_SHA"
 
       - name: Authenticate to crates.io (trusted publishing / OIDC)
         id: auth
@@ -251,19 +490,17 @@ jobs:
       # lock check proves token publishing is disabled, independently of whether
       # a matching publisher entry exists. Both settings must be configured.
       #
-      # Re-running: this workflow is tag-triggered only, so a stopped run is
-      # resumed with `gh run rerun <run-id>` (same tag, same SHA, same workflow
-      # file), not by re-pushing the tag.
+      # Re-run only the failed jobs to reuse successful preparation. A
+      # dispatch from main can also resume a completed run's audited tag.
       - name: Publish workspace crates to crates.io
         id: publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
-          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           # One definition of the release set, sourced by the script:
           # scripts/release-crates.sh (see also the wasm gate above).
-          bash scripts/publish-release-crates.sh "${VERSION#rust-v}"
+          bash scripts/publish-release-crates.sh "${RELEASE_TAG#rust-v}"
 
       - name: Require complete crates.io publication before creating the release
         if: steps.publish.outputs.complete != 'true'
@@ -271,11 +508,13 @@ jobs:
           echo "::error::The publisher did not confirm the complete release set. No GitHub Release will be created; inspect the publication and registry preflight results before rerunning."
           exit 1
 
+      - name: Verify the full registry release against the retained audit
+        run: *verify-registry
+
       - name: Verify C and lexicon assets on a draft, then publish the immutable GitHub Release
         if: steps.publish.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -283,5 +522,5 @@ jobs:
           # all seven assets, downloads and verifies every byte, then publishes.
           # Existing immutable releases are verified read-only against their
           # retained checksums, without comparing a different rebuild.
-          python3 scripts/publish-github-release.py --version "${VERSION#rust-v}" \
-            --repository "$GITHUB_REPOSITORY" --sha "$GITHUB_SHA"
+          python3 scripts/publish-github-release.py --version "${RELEASE_TAG#rust-v}" \
+            --repository "$GITHUB_REPOSITORY" --sha "$RELEASE_SHA"
