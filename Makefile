@@ -277,7 +277,7 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 test: node-prerequisite binaryen-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..5).
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..7).
 	@case "$(SHARD)" in \
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
@@ -285,10 +285,12 @@ test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|
 			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
 		integration-2) set -x; cargo test --workspace --locked --test '[e-j]*' ;; \
-		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
+		integration-3) set -x; cargo test --workspace --locked --test '[pq]*' ;; \
 		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
-		integration-5) set -x; cargo test --workspace --locked --test '[k-o]*' ;; \
-		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..5" >&2; exit 1 ;; \
+		integration-5) set -x; cargo test --workspace --locked --test '[k-mo]*' ;; \
+		integration-6) set -x; cargo test --workspace --locked --test 'r*' ;; \
+		integration-7) set -x; cargo test --workspace --locked --test 'n*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..7" >&2; exit 1 ;; \
 	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
