@@ -591,7 +591,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                     self.storage.checkpoint(1)?;
                     self.source.check_current()?;
                     let term_id = terms + offset;
-                    let anchor_entries = references.anchor(term_id).map_or(0usize, |rid| {
+                    let anchor_entries = references.anchor().map_or(0usize, |rid| {
                         1usize.saturating_add(usize::from(reifiers.anchors(rid).is_empty()))
                     });
                     let legacy = (references.kind == TermKind::Triple
@@ -670,7 +670,6 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                     // their rows; this selected operation makes no global claim.
                     Some(Ok(None) | Err(_)) | None => false,
                 };
-                let limits = self.source.limits();
                 self.binding_checkpoint(
                     reifiers
                         .retained_entries()
@@ -679,23 +678,14 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                         .saturating_add(diagnostics.len()),
                 )?;
                 let mut failure = None;
-                let (decoded, recursive) = {
-                    let remaining = limits.metadata_entries.saturating_sub(self.entries());
+                let decoded = {
                     let view = MetadataTerms {
                         dictionary: RefCell::new(&mut *self),
                         segment: key.segment,
                         prepared,
                         count: terms,
-                        traversal_limit: remaining,
                     };
-                    let decoded = decode_reifier_row(raw, &view, row_base, &mut failure);
-                    let recursive = match &decoded {
-                        RowDecode::Row((rid, triple, _)) => {
-                            reifiers.binding_is_recursive(&view, *rid, *triple)?
-                        }
-                        _ => false,
-                    };
-                    (decoded, recursive)
+                    decode_reifier_row(raw, &view, row_base, &mut failure)
                 };
                 let (rid, triple, graph_slot) = match decoded {
                     RowDecode::Skip => continue,
@@ -733,24 +723,10 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage>
                         .saturating_add(rebound.len())
                         .saturating_add(usize::from(is_rebound))
                         .saturating_add(diagnostics.len())
-                        .saturating_add(usize::from(
-                            (recursive && relevant) || (!recursive && previous.is_none()),
-                        )),
+                        .saturating_add(usize::from(previous.is_none())),
                 )?;
                 if is_rebound {
                     rebound.push((rid, item));
-                }
-                if recursive {
-                    if relevant {
-                        diagnostics.push(
-                            term_decode::TermDiagnostic::Fold(FoldError::RecursiveReifier {
-                                reifier: rid,
-                                triple,
-                            })
-                            .into_diagnostic(item),
-                        );
-                    }
-                    continue;
                 }
                 reifiers.record(&mut graph, (rid, triple, graph_slot), false);
             }
@@ -805,7 +781,6 @@ struct MetadataTerms<'a, R: Read + Seek, C, S> {
     segment: u64,
     prepared: usize,
     count: usize,
-    traversal_limit: usize,
 }
 fn dictionary_failure(cause: IndexedError) -> DictionaryError {
     match cause {
@@ -853,8 +828,5 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<AccessBinding>, S: TermStorage> 
             .copied()
             .map(Some)
             .ok_or(DictionaryError::Corrupt("prepared reference row is absent"))
-    }
-    fn traversal_limit(self) -> Option<usize> {
-        Some(self.traversal_limit)
     }
 }

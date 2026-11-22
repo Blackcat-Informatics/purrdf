@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! GTS (Graph Transport Substrate) format engine — `docs/GTS-SPEC.md` Draft v0.3.
+//! GTS (Graph Transport Substrate) format engine — the `gmeow-gts` `docs/GTS-SPEC.md` specification.
 //!
 //! A GTS file is a CBOR Sequence of one or more segments (#3.1), each an
 //! append-only log: a Header followed by frames chained by BLAKE3 content-id
@@ -96,6 +96,7 @@ mod reader_layout;
 mod reader_rows;
 mod reader_union;
 pub mod replication;
+pub mod resolution;
 mod rfc3339;
 pub mod segment_decode;
 pub mod stream;

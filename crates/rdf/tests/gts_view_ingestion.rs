@@ -824,11 +824,8 @@ fn emission_retains_native_writer_failure_and_dictionary_transform_operands() {
             .unwrap()
             .is::<purrdf_gts::writer::WriterError>()
     );
-    let plan = MediumPlan {
-        dicts: vec![("dictionary".to_owned(), vec![1])],
-        assignment: BTreeMap::new(),
-        zstd_level: None,
-    };
+    let mut plan = MediumPlan::undicted(None);
+    plan.dicts = vec![("dictionary".to_owned(), vec![1])];
     let error = emit(&plan).unwrap_err();
     let fields = inspect(&error);
     assert_eq!(fields.code, "gts-emit-dictionaries-transform");

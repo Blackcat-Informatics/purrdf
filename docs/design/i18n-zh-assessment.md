@@ -122,7 +122,7 @@ guide is **large**, and the runtime-string tier is **multi-release**.
 tokens that match an IRI, a prefixed name, or a SPARQL keyword. It is an upper
 bound: table cells and headings full of identifiers still count as prose, so
 the true translatable fraction is a few points lower on the reference-heavy
-pages (`crates/cli/README.md`, `docs/GTS-SPEC.md`).
+pages (`crates/cli/README.md`).
 
 The 24 crate READMEs are dominated by five: `cli` 7,317, `shapes` 3,517,
 `rdf-capi` 1,742, `entail` 1,627, `rdf` 1,539. The audience-priority crate
@@ -172,15 +172,12 @@ Reasoning & Transport, Interop, Project) and one nested entry
 
 | File | Words | Classification | Translate? |
 |---|---:|---|---|
-| `GTS-SPEC.md` | 21,175 | normative wire-format specification; governed in `gmeow-gts` | no — a translated normative spec is a separate governance decision, not a docs task |
 | `PURREMB.md` | 11,476 | binary-format specification for embedding companions (23 sections) | partially — scope, reader model, and the SPARQL-facing sections; the byte-layout sections stay English |
 | `CONFORMANCE.md` | 9,587 | user-facing scoreboard, machine-written block plus gated prose | **no** — link to it; see §3.4 |
 | `SPARQL-GOVERNOR-PROFILE.md` | 7,025 | user-facing profile (governors, budgets, refusals) | later phase; heavy coinage load |
 | `BENCHMARKS.md` | 5,969 | report of measurements | no — numbers, report-only |
-| `GTS-CONFORMANCE.md` | 3,495 | implementer-facing | no |
 | `RELEASE.md` | 2,475 | contributor-facing | no |
 | `RDF12-CANON-PROFILE.md` | 2,012 | user-facing profile | later phase |
-| `GTS-THIRD-PARTY-IMPLEMENTER-GUIDE.md` | 1,490 | implementer-facing | no |
 | `CUTOVER.md` | 1,376 | contributor-facing (downstream migration) | no |
 | `NPM-ECOSYSTEM.md` | 1,289 | generated probe report | no |
 | `COLUMNAR.md` | 867 | user-facing schema note | later phase |
@@ -754,7 +751,7 @@ crate; **multi-release** ≈ larger than any single crate here.
 | **3 — Python API guide** | a Chinese API guide hosted in the book, derived from the 5,171 `#`-comment words of `__init__.pyi` and the 19,336 rustdoc words behind `__doc__`; **not** a second `.pyi` — Python, pyright and mypy have no locale-selected stub or docstring, so a parallel doc page is the only mechanism, and it drifts from the stub unless the gate diffs the two signature lists | ≈ 24,500 source words | **large** |
 | **4 — remainder of the book** | `entailment.md`, `validation/{shacl,shex}.md`, `concepts/{projections,base-iris,jsonld,canonicalization,visualization}.md`, `datalog.md`, `gts.md`, `slices.md`, `interop/rdfjs.md`, `project/*`; `entailment-rules.md` via the gettext fallback; `docs/RDF12-CANON-PROFILE.md`, `docs/SPARQL-GOVERNOR-PROFILE.md`, `docs/COLUMNAR.md` | ≈ 27,000 | **large** |
 | **5 — runtime strings** | a locale mechanism for clap help (none exists upstream), `RdfDiagnostic.message` (139 sites, tests pin messages), `Display` impls (269 sites), JSDoc; downstream matchers in `gmeow-ontology` and the playground; wasm-size-neutral but every binding grows a locale switch | ≈ 45,000 code-embedded words | **multi-release** — recommend *against* for 0.14.0; ship instead a Chinese reference page for the 91 diagnostic codes (documentation, phase 1 or 2, **small**) |
-| **never** | rustdoc (873,106 words; docs.rs has no i18n); `GTS-SPEC.md` (normative, governed elsewhere); `CONFORMANCE.md` and `BENCHMARKS.md` (numbers); contributor docs | — | — |
+| **never** | rustdoc (873,106 words; docs.rs has no i18n); `CONFORMANCE.md` and `BENCHMARKS.md` (numbers); contributor docs | — | — |
 
 Phases 1 and 2 are what an AI developer reads before deciding to use the
 library; phase 0 is what stops phases 1 and 2 from rotting. Phase 4 before

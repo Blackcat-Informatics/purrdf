@@ -96,7 +96,7 @@ use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
 const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v6");
 /// Domain of the additive selected-source check value: the 4.x source
-/// fingerprint law, kept for [`source_fingerprint`] and the delta mismatch report.
+/// fingerprint law, kept for the delta mismatch report.
 const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v2");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`]: BLAKE3 over
 /// the sorted selected-row digests.
@@ -107,9 +107,9 @@ const TRIPLE_SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/so
 const TRIPLE_SOURCE_IDENTITY_DOMAIN: Domain = Domain::new(b"purrdf-text/triples/source/v3");
 
 mod source_digest;
-#[allow(deprecated, reason = "the 4.x public path stays reachable, deprecated")]
-pub use source_digest::source_fingerprint;
-use source_digest::{SourceDigest, row_directory, row_hashes, sorted_source_fingerprint};
+use source_digest::{
+    SourceDigest, SourceEntry, row_directory, row_hashes, sorted_source_fingerprint,
+};
 mod token_streams;
 use token_streams::TokenTable;
 pub(crate) use token_streams::{Slice, Table};
@@ -798,13 +798,13 @@ pub struct TextIndex<P: CorpusProfile = GraphLanguage> {
 
     /// The digest of the source rows walked.
     source_fingerprint: [u8; FINGERPRINT_BYTES],
-    /// Reversible additive source accounting: the drift check a delta is
-    /// validated against, not the source identity.
+    /// Reversible source accounting used in delta mismatch diagnostics.
     source_digest: SourceDigest,
-    /// The hash of every selected source row, token-less rows included, sorted,
-    /// with one entry per occurrence. A delta's removed rows are joined against
-    /// it exactly, and [`Self::source_fingerprint`] hashes it in this order.
-    row_directory: Table<[u8; 32]>,
+    /// Every selected source row's digest and subject, one entry per occurrence,
+    /// including token-less rows. The digest order supports exact removals and
+    /// [`Self::source_fingerprint`]. Subjects support independent probes when
+    /// a view has no versioned change feed.
+    row_directory: Table<SourceEntry>,
     /// Original source-owned observation for independently discovering changes.
     source_version: Option<purrdf_core::source::SourceVersion>,
     /// Which configured predicates the build's walk found a statement for.
@@ -904,17 +904,16 @@ impl<P: CorpusProfile> TextIndex<P> {
     {
         let (rows, coverage) = collect_rows(dataset, config)?;
         let version = dataset.source_version().map_err(TextError::source_read)?;
-        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
-        let source = SourceDigest::from_hashes(hashes.iter().copied());
-        let directory = row_directory(hashes)?;
         let (documents, dictionary) = analyze_rows(&rows, config)?;
+        let directory = row_directory(rows)?;
+        let digests = || directory.iter().map(|entry| entry.digest);
         let mut index = Self::assemble(
             config.clone(),
             documents,
             &dictionary,
             (
-                source,
-                sorted_source_fingerprint::<P>(directory.iter().copied()),
+                SourceDigest::from_hashes(digests()),
+                sorted_source_fingerprint::<P>(digests()),
             ),
             coverage,
             RankingProfile::single_field(),
@@ -945,17 +944,16 @@ impl<P: CorpusProfile> TextIndex<P> {
         }
         let (rows, coverage) = collect_rows(dataset, config)?;
         let version = dataset.source_version().map_err(TextError::source_read)?;
-        let hashes: Vec<[u8; 32]> = row_hashes(&rows).collect();
-        let source = SourceDigest::from_hashes(hashes.iter().copied());
-        let directory = row_directory(hashes)?;
         let (documents, dictionary) = analyze_rows(&rows, config)?;
+        let directory = row_directory(rows)?;
+        let digests = || directory.iter().map(|entry| entry.digest);
         let mut index = Self::assemble(
             config.clone(),
             documents,
             &dictionary,
             (
-                source,
-                sorted_source_fingerprint::<P>(directory.iter().copied()),
+                SourceDigest::from_hashes(digests()),
+                sorted_source_fingerprint::<P>(digests()),
             ),
             coverage,
             profile,
@@ -2400,11 +2398,37 @@ fn collect_selected_rows<D: DatasetView, P: CorpusProfile>(
 where
     D::ReadError: purrdf_hash::error::StructuredError,
 {
+    let mut rows = Vec::new();
+    let represented = visit_selected_rows(
+        dataset,
+        config,
+        subjects.map(|subjects| subjects.iter().copied()),
+        |row| {
+            rows.push(row);
+            Ok(())
+        },
+    )?;
+    rows.sort();
+    Ok((rows, represented))
+}
+
+/// Read both text-bearing layers through one selection and report each
+/// selected literal to its consumer as soon as its values resolve.
+fn visit_selected_rows<'a, D: DatasetView, P: CorpusProfile, V>(
+    dataset: &D,
+    config: &TextIndexConfig<P>,
+    subjects: Option<impl Iterator<Item = &'a TermValue>>,
+    mut visit: V,
+) -> Result<Vec<u128>, TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+    V: FnMut(SourceRow<P>) -> Result<(), TextError>,
+{
     if P::GRAPH_FREE && dataset.supports_named_graphs() {
         return Err(crate::configuration::ConfigurationRefusal::GraphFreeSource.into_error());
     }
     let Some(graph) = P::resolve(config.graph(), dataset).map_err(TextError::source_read)? else {
-        return Ok((Vec::new(), vec![0; config.predicates().len()]));
+        return Ok(vec![0; config.predicates().len()]);
     };
     let mut predicate_ids: Vec<(D::Id, &TermValue, usize)> =
         Vec::with_capacity(config.predicates().len());
@@ -2420,44 +2444,30 @@ where
         // No configured predicate is interned, so no statement in either layer
         // can carry one. Returning here rather than sweeping the annotation side
         // table to match every row against an empty id set.
-        return Ok((Vec::new(), vec![0; config.predicates().len()]));
+        return Ok(vec![0; config.predicates().len()]);
     }
 
-    let subject_ids = subjects
-        .map(|subjects| {
-            subjects
-                .iter()
-                .map(|subject| {
-                    dataset
-                        .term_id_by_value(subject)
-                        .map_err(TextError::source_read)
-                })
-                .filter_map(Result::transpose)
-                .collect::<Result<Vec<_>, _>>()
-        })
-        .transpose()?;
-
-    let mut rows = Vec::new();
     let mut represented = vec![0; config.predicates().len()];
 
     // Layer one: the asserted triple table.
-    let asserted_subjects = subject_ids
-        .iter()
-        .flat_map(|ids| ids.iter().copied())
-        .map(Some)
-        .chain(std::iter::once(None).filter(|_| subject_ids.is_none()));
-    for subject in asserted_subjects {
+    let asserted = |subject, represented: &mut [u128], visit: &mut V| -> Result<(), TextError> {
         for &(predicate_id, predicate, ordinal) in &predicate_ids {
             for quad in dataset.quads_for_pattern(subject, Some(predicate_id), None, graph) {
                 represented[ordinal] += 1;
-                push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)?;
+                if let Some(row) = source_row(dataset, quad.g, quad.s, predicate, quad.o)? {
+                    visit(row)?;
+                }
             }
         }
-    }
+        Ok(())
+    };
 
     // Layer two: the RDF 1.2 annotation side table, whose subject IS the
     // reifier. `quads_for_pattern` above cannot see these rows at all.
-    let mut annotation = |quad: purrdf_core::QuadIds<D::Id>| {
+    let annotation = |quad: purrdf_core::QuadIds<D::Id>,
+                      represented: &mut [u128],
+                      visit: &mut V|
+     -> Result<(), TextError> {
         if !graph.matches(quad.g) {
             return Ok(());
         }
@@ -2466,27 +2476,41 @@ where
             return Ok(());
         };
         represented[ordinal] += 1;
-        push_row(dataset, &mut rows, quad.g, quad.s, predicate, quad.o)
+        if let Some(row) = source_row(dataset, quad.g, quad.s, predicate, quad.o)? {
+            visit(row)?;
+        }
+        Ok(())
     };
-    if let Some(subjects) = subject_ids {
+    if let Some(subjects) = subjects {
         for subject in subjects {
+            let Some(subject) = dataset
+                .term_id_by_value(subject)
+                .map_err(TextError::source_read)?
+            else {
+                continue;
+            };
+            asserted(Some(subject), &mut represented, &mut visit)?;
             for (p, o, g) in dataset.annotations_of_with_graph(subject) {
-                annotation(purrdf_core::QuadIds {
-                    s: subject,
-                    p,
-                    o,
-                    g,
-                })?;
+                annotation(
+                    purrdf_core::QuadIds {
+                        s: subject,
+                        p,
+                        o,
+                        g,
+                    },
+                    &mut represented,
+                    &mut visit,
+                )?;
             }
         }
     } else {
+        asserted(None, &mut represented, &mut visit)?;
         for quad in dataset.annotation_quads() {
-            annotation(quad)?;
+            annotation(quad, &mut represented, &mut visit)?;
         }
     }
 
-    rows.sort();
-    Ok((rows, represented))
+    Ok(represented)
 }
 
 impl SourceCoverage {
@@ -2548,15 +2572,14 @@ fn holds_a_statement<D: DatasetView>(dataset: &D) -> bool {
         || dataset.annotation_quads().next().is_some()
 }
 
-/// Resolve one row's terms and append it, unless its object is not a literal.
-fn push_row<D: DatasetView, P: CorpusProfile>(
+/// Resolve the selected row's terms when its object is a literal.
+fn source_row<D: DatasetView, P: CorpusProfile>(
     dataset: &D,
-    rows: &mut Vec<SourceRow<P>>,
     graph: Option<D::Id>,
     subject: D::Id,
     predicate: &TermValue,
     object: D::Id,
-) -> Result<(), TextError>
+) -> Result<Option<SourceRow<P>>, TextError>
 where
     D::ReadError: purrdf_hash::error::StructuredError,
 {
@@ -2570,22 +2593,29 @@ where
         direction,
     } = resolve_value(dataset, object)?
     else {
-        return Ok(());
+        return Ok(None);
     };
     let graph = match graph {
         Some(id) => Some(resolve_value(dataset, id)?),
         None => None,
     };
-    rows.push(SourceRow {
+    Ok(Some(SourceRow {
         graph: P::retain_graph(graph)?,
         subject: resolve_value(dataset, subject)?,
-        predicate: predicate.clone(),
+        predicate: clone_source_term(predicate)?,
         datatype,
         lexical_form,
         language,
         direction,
-    });
-    Ok(())
+    }))
+}
+
+fn clone_source_term(term: &TermValue) -> Result<TermValue, TextError> {
+    term.try_clone().map_err(|_| {
+        TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
+            construct: "text source row term",
+        })
+    })
 }
 
 /// Resolve a dataset-local id to its dataset-independent [`TermValue`] through

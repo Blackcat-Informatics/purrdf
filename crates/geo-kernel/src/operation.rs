@@ -580,7 +580,12 @@ impl OperationPoint {
 }
 
 /// Original mathematical model; constants in interoperability laws are exact decimals.
+///
+/// The enum is `#[non_exhaustive]`: the set of models grows with the geodesy
+/// data, so a `match` outside this crate carries a wildcard arm that refuses
+/// a model it cannot handle with a typed error.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum OperationModel {
     /// Published rational/harmonic GCJ interoperability equations. Applicability is mandatory.
     GcjRationalHarmonicV1(Applicability),
@@ -639,6 +644,33 @@ pub enum OperationModel {
     Polynomial2dInverse(Box<Polynomial2dInverse>),
     /// All-root inverse on complete closed grid patches in explicit metre bounds.
     BilinearGridInverse(Box<BilinearGridInverse>),
+}
+
+impl OperationModel {
+    /// The stable name of this model's variant, without its parameters.
+    #[must_use]
+    pub const fn name(&self) -> &'static str {
+        match self {
+            Self::GcjRationalHarmonicV1(_) => "GcjRationalHarmonicV1",
+            Self::GcjRationalHarmonicInverseV1(_) => "GcjRationalHarmonicInverseV1",
+            Self::Bd09LlV1 => "Bd09LlV1",
+            Self::Bd09LlInverseV1 => "Bd09LlInverseV1",
+            Self::BaiduMercatorAnalyticV1 => "BaiduMercatorAnalyticV1",
+            Self::EllipsoidalMercator { .. } => "EllipsoidalMercator",
+            Self::WebMercator { .. } => "WebMercator",
+            Self::GeographicToGeocentric { .. } => "GeographicToGeocentric",
+            Self::MercatorToGeographic { .. } => "MercatorToGeographic",
+            Self::GeocentricToGeographic { .. } => "GeocentricToGeographic",
+            Self::TransverseMercator(_) => "TransverseMercator",
+            Self::TransverseMercatorInverse(_) => "TransverseMercatorInverse",
+            Self::Helmert(_) => "Helmert",
+            Self::Similarity2d(_) => "Similarity2d",
+            Self::Polynomial2d(_) => "Polynomial2d",
+            Self::BilinearGrid(_) => "BilinearGrid",
+            Self::Polynomial2dInverse(_) => "Polynomial2dInverse",
+            Self::BilinearGridInverse(_) => "BilinearGridInverse",
+        }
+    }
 }
 
 crate::context::retained::native_detached_enum!(OperationModel {

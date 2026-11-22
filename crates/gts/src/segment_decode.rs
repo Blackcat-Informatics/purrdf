@@ -65,12 +65,16 @@ use crate::model::{
 };
 use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
 
+/// The refusal role when a storage returns a continuation without the search
+/// state it was given.
+const STATE_DROPPED: &str = "resolution storage dropped component state";
+
 mod rows;
 use rows::Rows;
 mod storage;
 pub use storage::{
-    PendingResolution, ResidentResolutionStorage, ResolutionCounts, ResolutionStorage,
-    ResolutionTerm,
+    ComponentState, PendingResolution, ResidentResolutionStorage, ResolutionCounts,
+    ResolutionStorage, ResolutionTerm,
 };
 
 /// The emit target [`SegmentResolver`] drives once GTS segment-local ids have
@@ -110,6 +114,22 @@ pub trait ResolvedSink {
         gts_id: usize,
         label: &str,
     ) -> Result<Self::Id, Self::Error>;
+
+    /// Intern the blank node a triple term that states no triple stands for
+    /// (§7.3: no `tt`, no `rf` row, or a term that reaches itself), returning its
+    /// target id.
+    ///
+    /// The node is fresh: no blank-node label a document spells may denote it.
+    /// A target overrides this with a node outside every label scope a document
+    /// reaches. The provided body interns the label `unbound_triple_{gts_id}`
+    /// through [`Self::intern_blank`], which a document label can equal.
+    fn intern_unbound_triple(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+    ) -> Result<Self::Id, Self::Error> {
+        self.intern_blank(segment_index, gts_id, &format!("unbound_triple_{gts_id}"))
+    }
 
     /// Intern a resolved literal term, returning its target id. The datatype (if
     /// any) is already resolved to a target id; the target performs its own
@@ -188,12 +208,15 @@ pub trait ResolvedSink {
     /// Iterative resolution no longer calls it.
     fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
-    /// Build the error for a quoted-triple term that states neither its own
-    /// `(s, p, o)` nor a reifier id to resolve them through.
+    /// Legacy unbound-triple error factory, retained for source compatibility.
+    /// A triple term that states neither its own `(s, p, o)` nor a reifier id
+    /// interns as a blank node (§7.3), and resolution no longer calls it.
     fn err_unbound_triple(&self, segment_index: u64, gts_id: usize) -> Self::Error;
 
-    /// Build the error for a triple term whose reifier no `reifies` event ever
-    /// bound.
+    /// Legacy missing-reifier error factory, retained for source compatibility.
+    /// A triple term whose reifier no `reifies` event bound states no triple and
+    /// interns through [`Self::intern_unbound_triple`] (§7.3); resolution no
+    /// longer calls this.
     fn err_missing_reifier(&self, segment_index: u64, reifier: usize) -> Self::Error;
 
     /// Per-frame provenance passthrough (default no-op).
@@ -508,12 +531,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         if self.failed {
             return;
         }
-        let pending = PendingResolution {
-            term: Some(term),
-            parent: None,
-            next: 0,
-            active: false,
-        };
+        let pending = PendingResolution::new(Some(term));
         if let Err(error) = self.storage.set_pending(
             TermKey {
                 segment,
@@ -675,14 +693,40 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             else {
                 return Err(self.sink.err_dangling_term(segment_index, current, role));
             };
+            if held.component.is_unsettled()
+                && held
+                    .term
+                    .as_deref()
+                    .is_some_and(|term| term.kind == TermKind::Triple)
+            {
+                self.settle(segment_index, current)?;
+                held = self
+                    .storage
+                    .pending(key(current))
+                    .map_err(self.map_storage)?
+                    .ok_or_else(|| self.sink.err_dangling_term(segment_index, current, role))?;
+                if !held.component.is_settled() {
+                    return Err(self
+                        .sink
+                        .err_dangling_term(segment_index, current, STATE_DROPPED));
+                }
+            }
             let Some(term) = held.term.as_deref() else {
                 return Err(self.sink.err_dangling_term(segment_index, current, role));
             };
+            // A term that reaches itself, a bare triple term and a term whose
+            // `rf` names a reifier no `reifies` row binds state no triple (§7.3):
+            // each interns as the fresh blank node of an unbound term.
+            let degraded = held.component.degrades()
+                || (term.kind == TermKind::Triple
+                    && self
+                        .declared_components(segment_index, term.triple, term.reifier)?
+                        .is_none());
             let dependency = match term.kind {
                 TermKind::Literal if held.next == 0 => {
                     term.datatype.map(|id| (id, "literal datatype"))
                 }
-                TermKind::Triple if held.next < 3 => {
+                TermKind::Triple if held.next < 3 && !degraded => {
                     let (s, p, o) = self.triple_components(segment_index, current, term)?;
                     Some(match held.next {
                         0 => (s, "reified subject"),
@@ -731,7 +775,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             self.storage
                 .set_pending(key(current), held)
                 .map_err(self.map_storage)?;
-            let resolved = self.intern_raw_term(segment_index, current, term)?;
+            let resolved = self.intern_raw_term(segment_index, current, term, degraded)?;
             self.storage
                 .set_resolved(key(current), resolved)
                 .map_err(self.map_storage)?;
@@ -752,6 +796,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         segment_index: u64,
         gts_id: usize,
         term: ResolutionTerm,
+        degraded: bool,
     ) -> Result<S::Id, S::Error> {
         let our_id = match term.kind {
             TermKind::Iri => {
@@ -806,6 +851,12 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             // that id may now bind several triples, in which case its FIRST
             // binding is the one such a term can mean (the reader flags the
             // ambiguity as `ConflictingReifier`).
+            // A triple term that reaches itself, carries neither `tt` nor `rf`,
+            // or names a reifier with no row, states no triple (GTS-SPEC §7.3):
+            // it interns as the fresh blank node an unbound triple term is.
+            TermKind::Triple if degraded => {
+                self.sink.intern_unbound_triple(segment_index, gts_id)?
+            }
             TermKind::Triple => {
                 let (s, p, o) = self.triple_components(segment_index, gts_id, &term)?;
                 let (s, p, o) = (
@@ -820,25 +871,205 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     }
 
     /// Locate components without resolving them. Explicit components take
-    /// precedence; the first legacy reifier binding is a lookup, not a term edge.
+    /// precedence; otherwise the first binding of the reifier id its `rf` names
+    /// is a lookup, not a term edge. A bare term states no triple and interns as
+    /// a blank node, so the caller never asks for one; the unbound error is the
+    /// guard for a caller that does.
     fn triple_components(
         &mut self,
         segment_index: u64,
         gts_id: usize,
         term: &Term,
     ) -> Result<Triple3, S::Error> {
-        match (term.triple, term.reifier) {
-            (Some(components), _) => Ok(components),
-            (None, Some(reifier)) => self
-                .storage
-                .first_binding(TermKey {
-                    segment: segment_index,
-                    term: reifier,
-                })
-                .map_err(self.map_storage)?
-                .ok_or_else(|| self.sink.err_missing_reifier(segment_index, reifier)),
-            (None, None) => Err(self.sink.err_unbound_triple(segment_index, gts_id)),
+        match self.declared_components(segment_index, term.triple, term.reifier)? {
+            Some(components) => Ok(components),
+            None => Err(match term.reifier {
+                Some(reifier) => self.sink.err_missing_reifier(segment_index, reifier),
+                None => self.sink.err_unbound_triple(segment_index, gts_id),
+            }),
         }
+    }
+
+    /// The components a triple term declares: its own, else the first binding
+    /// of the reifier id its `rf` names; with neither it states no triple
+    /// (§7.1). This is the edge rule of `SelfReaching::of`.
+    fn declared_components(
+        &mut self,
+        segment_index: u64,
+        triple: Option<Triple3>,
+        reifier: Option<usize>,
+    ) -> Result<Option<Triple3>, S::Error> {
+        if triple.is_some() {
+            return Ok(triple);
+        }
+        let Some(reifier) = reifier else {
+            return Ok(None);
+        };
+        self.storage
+            .first_binding(TermKey {
+                segment: segment_index,
+                term: reifier,
+            })
+            .map_err(self.map_storage)
+    }
+
+    /// Decide, for every triple term reachable from `root` that no earlier
+    /// search decided, whether it reaches itself: a strongly connected search
+    /// (Tarjan, iterative) whose per-term state lives in the pending records.
+    ///
+    /// A term is settled with the search that visits it, so a term whose
+    /// pending record is gone or already settled is a leaf here: its component
+    /// was complete before this search began. Every member of a component of
+    /// more than one term, and every term that names itself, degrades. Only a
+    /// counter and the top of the search stack are held in memory.
+    fn settle(&mut self, segment_index: u64, root: usize) -> Result<(), S::Error> {
+        let key = |term| TermKey {
+            segment: segment_index,
+            term,
+        };
+        let mut counter = 0u64;
+        let mut top = None;
+        self.open_node(segment_index, root, None, &mut counter, &mut top)?;
+        let mut node = root;
+        loop {
+            let mut held = self
+                .storage
+                .pending(key(node))
+                .map_err(self.map_storage)?
+                .ok_or_else(|| {
+                    self.sink
+                        .err_dangling_term(segment_index, node, STATE_DROPPED)
+                })?;
+            let state = held.component;
+            if !state.is_open() {
+                return Err(self
+                    .sink
+                    .err_dangling_term(segment_index, node, STATE_DROPPED));
+            }
+            let (triple, reifier) = held
+                .term
+                .as_deref()
+                .map_or((None, None), |term| (term.triple, term.reifier));
+            let edges = self.declared_components(segment_index, triple, reifier)?;
+            if let Some(edges) = edges.filter(|_| state.cursor() < 3) {
+                let child = <[usize; 3]>::from(edges)[usize::from(state.cursor())];
+                held.component = state.advance();
+                if child == node {
+                    held.component = held.component.with_loop();
+                }
+                self.storage
+                    .set_pending(key(node), held)
+                    .map_err(self.map_storage)?;
+                if child == node {
+                    continue;
+                }
+                // A component that names no pending term, or a term that is not
+                // a triple term, has no components to follow.
+                let Some(held_child) =
+                    self.storage.pending(key(child)).map_err(self.map_storage)?
+                else {
+                    continue;
+                };
+                if held_child
+                    .term
+                    .as_deref()
+                    .is_none_or(|term| term.kind != TermKind::Triple)
+                {
+                    continue;
+                }
+                if held_child.component.is_unsettled() {
+                    self.open_node(segment_index, child, Some(node), &mut counter, &mut top)?;
+                    node = child;
+                } else if held_child.component.is_open() {
+                    let mut held = self
+                        .storage
+                        .pending(key(node))
+                        .map_err(self.map_storage)?
+                        .ok_or_else(|| {
+                            self.sink
+                                .err_dangling_term(segment_index, node, STATE_DROPPED)
+                        })?;
+                    let low = held.component.low().min(held_child.component.order());
+                    held.component = held.component.with_low(low);
+                    self.storage
+                        .set_pending(key(node), held)
+                        .map_err(self.map_storage)?;
+                }
+                continue;
+            }
+            // Every component is followed: the node closes its component when
+            // nothing below it reaches an older node on the search stack.
+            if state.low() == state.order() {
+                let degraded = top != Some(node) || state.loops();
+                let mut member = top;
+                while let Some(id) = member {
+                    let mut held = self
+                        .storage
+                        .pending(key(id))
+                        .map_err(self.map_storage)?
+                        .ok_or_else(|| {
+                            self.sink
+                                .err_dangling_term(segment_index, id, STATE_DROPPED)
+                        })?;
+                    member = held.component.below();
+                    held.component = held.component.settle(degraded);
+                    self.storage
+                        .set_pending(key(id), held)
+                        .map_err(self.map_storage)?;
+                    if id == node {
+                        break;
+                    }
+                }
+                top = member;
+            }
+            let Some(up) = state.up() else {
+                return Ok(());
+            };
+            let mut parent = self
+                .storage
+                .pending(key(up))
+                .map_err(self.map_storage)?
+                .ok_or_else(|| {
+                    self.sink
+                        .err_dangling_term(segment_index, up, STATE_DROPPED)
+                })?;
+            let low = parent.component.low().min(state.low());
+            parent.component = parent.component.with_low(low);
+            self.storage
+                .set_pending(key(up), parent)
+                .map_err(self.map_storage)?;
+            node = up;
+        }
+    }
+
+    /// Enter `node` into the running search.
+    fn open_node(
+        &mut self,
+        segment_index: u64,
+        node: usize,
+        up: Option<usize>,
+        counter: &mut u64,
+        top: &mut Option<usize>,
+    ) -> Result<(), S::Error> {
+        let key = TermKey {
+            segment: segment_index,
+            term: node,
+        };
+        let mut held = self
+            .storage
+            .pending(key)
+            .map_err(self.map_storage)?
+            .ok_or_else(|| {
+                self.sink
+                    .err_dangling_term(segment_index, node, STATE_DROPPED)
+            })?;
+        held.component = ComponentState::open(*counter, *top, up);
+        self.storage
+            .set_pending(key, held)
+            .map_err(self.map_storage)?;
+        *counter += 1;
+        *top = Some(node);
+        Ok(())
     }
 
     fn resolved_dependency(

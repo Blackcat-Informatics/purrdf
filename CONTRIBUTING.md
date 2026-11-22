@@ -87,14 +87,11 @@ Benches are **report-only** and never gate; PurRDF asserts no speedups (see
 `docs/BENCHMARKS.md`). They run weekly and on demand from
 `.github/workflows/benchmarks.yaml`, not on every push.
 
-`cargo bench --workspace` works. It did not until recently: `bindings/python`
-sets `test = false` on its lib because a PyO3 `extension-module` cannot link as
-an executable (it leaves the CPython API unresolved for the interpreter to supply
-at `dlopen` time), but `test = false` does **not** disable the auto-generated
-BENCH target — so `cargo bench --workspace` failed to link with ~70 undefined
-`pyo3-ffi` symbols while `cargo test --workspace` was green. It is now
-`bench = false` as well. CI never saw it because the benchmark workflow names
-crates individually.
+`cargo bench --workspace` works. `bindings/python` sets `test = false` and
+`bench = false` on its lib because a PyO3 `extension-module` cannot link as an
+executable (it leaves the CPython API unresolved for the interpreter to supply
+at `dlopen` time), and `test = false` does **not** disable the auto-generated
+BENCH target. The benchmark workflow names crates individually.
 
 `[profile.bench]` inherits `lto = "fat"` and `codegen-units = 1` from
 `[profile.release]`, so a full bench build is slow; naming the crate you care
@@ -131,7 +128,7 @@ and the `CITATION.cff` citation record share **one** workspace version and ship 
 lockstep — CI runs a version-coherence check that fails if the four sources
 disagree.
 
-**MSRV.** The supported floor is `rust-version` in `Cargo.toml` (currently **1.98**)
+**MSRV.** The supported floor is `rust-version` in `Cargo.toml` (**1.98**)
 on the **stable** channel, and CI enforces it with a dedicated MSRV job. That floor
 is what you build against as a consumer; it is unaffected by the toolchain
 contributors run. Raising the MSRV is a notable, changelog-recorded change that

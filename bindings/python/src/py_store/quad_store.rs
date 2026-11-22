@@ -293,10 +293,11 @@ impl PyQuadStore {
     /// CONSTRUCT/DESCRIBE, nothing for ASK),
     /// `max_intermediate_cells` the largest intermediate bag in `rows * columns`,
     /// `max_scratch_bytes` the per-query scratch arena, and `max_remote_requests`
-    /// federated requests. Every ceiling is **inclusive**: consumption equal to it is
-    /// admitted, and zero is a valid ceiling that trips on the first charged unit of
-    /// work. `cancel` takes a `CancellationToken` another thread can flip while this
-    /// call runs. `no_ceiling=True` declines all ceilings and accounting, retaining
+    /// host fetches (each `SERVICE` request and each fetch of a `LOAD`, the first fetch
+    /// and each redirect hop, counts one; a redirect the host follows itself is part of
+    /// its fetch). Every ceiling is **inclusive**: consumption equal to it is admitted,
+    /// and zero is a valid ceiling that trips on the first charged unit of work. `cancel` takes a `CancellationToken` another thread can flip
+    /// while this call runs. `no_ceiling=True` declines all ceilings and accounting, retaining
     /// deadline and cancellation signals; combining it with any resource cap raises
     /// `ValueError`, including a cap of zero.
     ///
@@ -946,7 +947,7 @@ impl PyQuadStore {
     /// The 64-hex content identity of this store's current content, the frozen
     /// snapshot every query reads: a digest of every row, computed on this call and
     /// never by a query. Equal content has an equal identity, so it binds a query's
-    /// receipt through `bind_execution_receipt` as long as the store has not changed
+    /// receipt through `QuadStore.bind_execution_receipt` as long as the store has not changed
     /// since that query.
     ///
     /// # Errors
@@ -957,6 +958,37 @@ impl PyQuadStore {
         py.detach(|| purrdf_core::ContentIdentified::content_identity(&*frozen))
             .map(|identity| identity.to_string())
             .map_err(|e| PyValueError::new_err(format!("content identity refused: {e}")))
+    }
+
+    /// `bind_execution_receipt(receipt_json)` → the receipt JSON with `contentIdentity`
+    /// and `executionIdentity` added, bound to this store's current content.
+    ///
+    /// A query's receipt carries the run identity only: no query hashes its store.
+    /// The store is frozen once and that snapshot supplies the content identity, so
+    /// the receipt binds to the content the call saw.
+    ///
+    /// # Errors
+    ///
+    /// `ValueError` if the store cannot be frozen, for a receipt that is not an
+    /// execution receipt, a run that cannot have an execution identity (it never
+    /// started, or called extension code without a certified implementation
+    /// identity), or a content identity the store refuses.
+    fn bind_execution_receipt(&self, py: Python<'_>, receipt_json: &str) -> PyResult<String> {
+        let frozen = self.freeze_snapshot(py)?;
+        py.detach(|| purrdf_validate::query::bind_execution_receipt(receipt_json, &*frozen))
+            .map_err(|error| match error {
+                purrdf_validate::query::ReceiptBindError::Identity(cause) => {
+                    // The store's own storage refusal keeps its native cause fields.
+                    let message = format!("content identity refused: {cause}");
+                    let diagnostic = purrdf_validate::native_error::diagnostic(
+                        "rdf-storage-refused",
+                        cause,
+                        Some(cause),
+                    );
+                    presentation::native_error_with_message(py, message, &diagnostic)
+                }
+                other => PyValueError::new_err(other.to_string()),
+            })
     }
 
     /// Iterate the store's quads (a snapshot taken at iteration time).

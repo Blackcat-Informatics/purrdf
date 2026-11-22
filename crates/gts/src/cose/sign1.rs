@@ -95,11 +95,20 @@ pub enum SigStatus {
 
 /// Structural/algorithm failure or a failed composite signing operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Sign1Error {
     /// Invalid envelope, duplicate/ambiguous headers or unsupported critical data.
     Malformed,
-    /// Protected alg is an integer, but not a supported signing algorithm.
+    /// The protected header names an algorithm this engine does not implement,
+    /// by an integer or by a text string (RFC 9052 section 3.1).
     UnsupportedAlgorithm,
+    /// The protected header bytes are not deterministically encoded (RFC 8949
+    /// section 4.2): a non-shortest integer or length, an indefinite-length
+    /// item or map keys out of bytewise order. Specification section 4 requires
+    /// every signed byte string to use that encoding, so no conforming writer
+    /// produces such a header; a valid signature over one is not tampering, but
+    /// it is not a signature the format admits.
+    NonCanonicalProtectedHeader,
     /// The native composite signing operation failed without an output.
     Composite(composite::Error),
 }
@@ -110,6 +119,9 @@ impl core::fmt::Display for Sign1Error {
             Self::UnsupportedAlgorithm => {
                 formatter.write_str("unsupported protected COSE signing algorithm")
             }
+            Self::NonCanonicalProtectedHeader => formatter.write_str(
+                "protected header is not deterministically encoded (RFC 8949 section 4.2)",
+            ),
             Self::Composite(error) => write!(formatter, "COSE composite signing: {error}"),
         }
     }
@@ -120,6 +132,7 @@ impl purrdf_hash::error::StructuredError for Sign1Error {
     purrdf_hash::error_visit! {
         Malformed => "gts-sign1-malformed" {},
         UnsupportedAlgorithm => "gts-sign1-unsupported-algorithm" {},
+        NonCanonicalProtectedHeader => "gts-sign1-noncanonical-protected-header" {},
         Composite(error) => "gts-sign1-composite-failure" { "cause" => Cause(error) },
     }
 }
@@ -256,10 +269,12 @@ pub fn sign_id(frame_id: &[u8], signing_key: &SigningKey, kid: &str) -> Vec<u8> 
         .expect("Ed25519 signing is infallible and requires no entropy")
 }
 
+/// Validate both header buckets. `Ok(None)` is a well-formed header declaring an
+/// algorithm this engine does not implement.
 fn validate_headers(
     protected: &[(Value, Value)],
     unprotected: &[(Value, Value)],
-) -> Result<Algorithm, Sign1Error> {
+) -> Result<Option<Algorithm>, Sign1Error> {
     let protected_labels = header_labels(protected).ok_or(Sign1Error::Malformed)?;
     let unprotected_labels = header_labels(unprotected).ok_or(Sign1Error::Malformed)?;
     // RFC 9052 §3 recommends rejecting cross-bucket ambiguity. GTS does so.
@@ -282,19 +297,65 @@ fn validate_headers(
             return Err(Sign1Error::Malformed);
         }
     }
-    let algorithm = header_value(protected, ALG)
-        .and_then(Value::as_integer)
-        .ok_or(Sign1Error::Malformed)?;
-    Algorithm::from_id(algorithm)
+    // RFC 9052 section 3.1 types `alg` as an integer or a text string. A text
+    // name is never one of the integer identifiers this engine implements.
+    match header_value(protected, ALG).ok_or(Sign1Error::Malformed)? {
+        Value::Text(_) => Ok(None),
+        value => match Algorithm::from_id(value.as_integer().ok_or(Sign1Error::Malformed)?) {
+            Ok(algorithm) => Ok(Some(algorithm)),
+            Err(Sign1Error::UnsupportedAlgorithm) => Ok(None),
+            Err(error) => Err(error),
+        },
+    }
 }
 
-/// Parse exactly one complete tagged-18 or untagged detached Sign1. Require
-/// four fields, protected supported integer alg, unique integer/text header
-/// labels, no cross-bucket ambiguity, understood protected critical labels,
-/// detached null payload, optional opaque byte-string kid and exact signature
-/// encoding. Absence does not prevent verification with a supplied key.
-/// Nested/wrong tags, COSE_Sign, attached payload and trailing input fail.
-pub fn parse_sign1(bytes: &[u8]) -> Result<Sign1, Sign1Error> {
+/// Specification section 4: the protected header is a hashed and signed byte
+/// string, so it uses Deterministic Encoding (RFC 8949 section 4.2): shortest-form
+/// integers and lengths, definite-length items and map keys in bytewise order.
+/// Neither the specification nor RFC 9052 bounds a header integer further, so
+/// any integer CBOR can encode is admitted.
+fn decode_protected_header(protected: &[u8]) -> Result<Value, Sign1Error> {
+    let decoded = cbor::decode_deterministic(protected, cbor::Limits::DEFAULT).map_err(
+        |error| match error.kind() {
+            cbor::DecodeErrorKind::NotDeterministic(_) => Sign1Error::NonCanonicalProtectedHeader,
+            _ => Sign1Error::Malformed,
+        },
+    )?;
+    decoded.as_map().ok_or(Sign1Error::Malformed)?;
+    Ok(decoded)
+}
+
+/// The structure of a detached Sign1 whose algorithm may be one this engine
+/// does not implement: everything except the algorithm-specific signature check.
+struct Envelope {
+    /// `None` when the header declares an algorithm this engine does not implement.
+    algorithm: Option<Algorithm>,
+    kid: Option<Vec<u8>>,
+    protected: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+impl Envelope {
+    /// The supported envelope, or [`Sign1Error::UnsupportedAlgorithm`], after the
+    /// exact signature-encoding check of the declared algorithm.
+    fn into_sign1(self) -> Result<Sign1, Sign1Error> {
+        let algorithm = self.algorithm.ok_or(Sign1Error::UnsupportedAlgorithm)?;
+        if self.signature.len() != algorithm.signature_length() {
+            return Err(Sign1Error::Malformed);
+        }
+        if algorithm == Algorithm::CompositeMlDsa65Ed25519 {
+            composite::Signature::from_bytes(&self.signature).map_err(|_| Sign1Error::Malformed)?;
+        }
+        Ok(Sign1 {
+            algorithm,
+            kid: self.kid,
+            protected: self.protected,
+            signature: self.signature,
+        })
+    }
+}
+
+fn parse_envelope(bytes: &[u8]) -> Result<Envelope, Sign1Error> {
     let mut value =
         cbor::decode(bytes, cbor::Limits::DEFAULT).map_err(|_| Sign1Error::Malformed)?;
     let body = match &mut value {
@@ -311,8 +372,7 @@ pub fn parse_sign1(bytes: &[u8]) -> Result<Sign1, Sign1Error> {
         return Err(Sign1Error::Malformed);
     }
     let protected = protected.into_bytes().map_err(|_| Sign1Error::Malformed)?;
-    let decoded =
-        cbor::decode(&protected, cbor::Limits::DEFAULT).map_err(|_| Sign1Error::Malformed)?;
+    let decoded = decode_protected_header(&protected)?;
     let protected_map = decoded.as_map().ok_or(Sign1Error::Malformed)?;
     let unprotected = unprotected.into_map().map_err(|_| Sign1Error::Malformed)?;
     let algorithm = validate_headers(protected_map, &unprotected)?;
@@ -321,20 +381,45 @@ pub fn parse_sign1(bytes: &[u8]) -> Result<Sign1, Sign1Error> {
     let kid = header_value(protected_map, KID)
         .or_else(|| header_value(&unprotected, KID))
         .map(|value| value.as_bytes().ok_or(Sign1Error::Malformed))
-        .transpose()?;
+        .transpose()?
+        .map(<[u8]>::to_vec);
     let signature = signature.into_bytes().map_err(|_| Sign1Error::Malformed)?;
-    if signature.len() != algorithm.signature_length() {
-        return Err(Sign1Error::Malformed);
-    }
-    if algorithm == Algorithm::CompositeMlDsa65Ed25519 {
-        composite::Signature::from_bytes(&signature).map_err(|_| Sign1Error::Malformed)?;
-    }
-    Ok(Sign1 {
+    Ok(Envelope {
         algorithm,
-        kid: kid.map(<[u8]>::to_vec),
+        kid,
         protected,
         signature,
     })
+}
+
+/// Parse exactly one complete tagged-18 or untagged detached Sign1.
+/// Require four fields, a deterministically encoded protected header with a
+/// supported integer alg, unique integer/text header labels, no cross-bucket
+/// ambiguity, understood protected critical labels, detached null payload,
+/// optional opaque byte-string kid and exact signature encoding. Absence of a
+/// kid does not prevent verification with a supplied key. Nested/wrong tags,
+/// COSE_Sign, attached payload and trailing input fail. A protected header
+/// that is not deterministically encoded is
+/// [`Sign1Error::NonCanonicalProtectedHeader`]; a declared algorithm this
+/// engine does not implement, named by an integer or a text string, is
+/// [`Sign1Error::UnsupportedAlgorithm`].
+pub fn parse_sign1(bytes: &[u8]) -> Result<Sign1, Sign1Error> {
+    parse_envelope(bytes)?.into_sign1()
+}
+
+/// Why a retained COSE_Sign1 is not a signature the format admits, or `None`
+/// when its structure is sound (whether it verifies is a separate question).
+/// A store that finds a signature `invalid` reads this to tell a header that is
+/// not deterministically encoded
+/// ([`Sign1Error::NonCanonicalProtectedHeader`]) from any other malformed
+/// envelope and from a signature that simply fails to verify. An envelope that
+/// declares an unsupported algorithm is structurally sound.
+#[must_use]
+pub fn signature_refusal(cose: &[u8]) -> Option<Sign1Error> {
+    match parse_envelope(cose).and_then(Envelope::into_sign1) {
+        Ok(_) | Err(Sign1Error::UnsupportedAlgorithm) => None,
+        Err(error) => Some(error),
+    }
 }
 
 /// Existing Ed25519 tuple convenience, using the sole strict parser. Composite
@@ -415,11 +500,24 @@ fn verify_resolved(
         let Some(cose) = &sig.cose else {
             continue;
         };
-        let parsed = parse_sign1(cose);
+        let envelope = parse_envelope(cose);
+        // An envelope that declares an algorithm this engine does not implement
+        // is structurally sound, so its kid is reported as for any other
+        // (RFC 9052 section 3.1: `kid` is independent of `alg`). A malformed
+        // envelope reports none.
+        let unsupported_kid = envelope
+            .as_ref()
+            .ok()
+            .filter(|envelope| envelope.algorithm.is_none())
+            .and_then(|envelope| envelope.kid.as_deref())
+            .and_then(|kid| core::str::from_utf8(kid).ok())
+            .map(str::to_string);
+        let parsed = envelope.and_then(Envelope::into_sign1);
         sig.kid = parsed
             .as_ref()
             .ok()
-            .and_then(|parsed| parsed.kid_text().map(str::to_string));
+            .and_then(|parsed| parsed.kid_text().map(str::to_string))
+            .or(unsupported_kid);
         sig.status = match parsed {
             Err(Sign1Error::UnsupportedAlgorithm) => "unverified",
             Err(_) => "invalid",

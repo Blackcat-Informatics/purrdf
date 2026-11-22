@@ -259,11 +259,10 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
             work,
         )?;
         self.diff_compacted_head(before, self.sessions.len() == 1, candidates, work)?;
-        if next.root() != self.sessions[0].source_root(&mut work.directory)? {
-            return Err(SegmentedError::Corrupt(
-                "compacted source directory disagrees with certified image",
-            ));
-        }
+        check_compacted_root(
+            next.root(),
+            self.sessions[0].source_root(&mut work.directory)?,
+        )?;
         Ok(next)
     }
 
@@ -1172,5 +1171,276 @@ impl<'snapshot> SegmentedStackQuery<'snapshot> {
             }
         }
         self.seal_version(prefixes, records, directory, storage)
+    }
+}
+
+fn check_compacted_root(
+    derived: Option<DirectoryNode>,
+    certified: Option<DirectoryNode>,
+) -> Result<(), SegmentedError> {
+    if derived == certified {
+        Ok(())
+    } else {
+        Err(SegmentedError::Corrupt(
+            "compacted source directory disagrees with certified image",
+        ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ops::Range;
+
+    use purrdf_lex::allocation::{Memory, Resident};
+
+    use super::*;
+    use crate::backend::TermFactory;
+    use crate::dataset_view::FallibleDatasetView;
+    use crate::ir::segmented::format::Header;
+    use crate::source::{additive_collision, with_asserted_record_fixture};
+    use crate::{
+        RdfDatasetBuilder, SegmentedBuildLimits, SegmentedImage, SegmentedLayer,
+        SegmentedLayerMetadata, SegmentedReadLimits, SegmentedResidentHead, SegmentedStack,
+        TermValue,
+    };
+
+    fn limits() -> SegmentedReadLimits {
+        SegmentedReadLimits::new(32_000_000, 8, 100_000, 100_000_000, 32)
+    }
+
+    fn subject(index: usize) -> TermValue {
+        TermValue::iri(format!("https://example.org/source-observation/{index}"))
+    }
+
+    fn predicate() -> TermValue {
+        TermValue::iri("https://example.org/p")
+    }
+
+    fn object() -> TermValue {
+        TermValue::iri("https://example.org/o")
+    }
+
+    fn collision_fixture(test: impl FnOnce()) {
+        let (left, right) = additive_collision();
+        let digests = [left[0], left[1], right[0], right[1]];
+        let entries = std::array::from_fn(|index| {
+            let row = SourceRowRef {
+                subject: &subject(index),
+                predicate: &predicate(),
+                object: &object(),
+                graph: None,
+            };
+            let digest = row.hashes(&mut Memory::new(&mut Resident)).unwrap()[0];
+            (digest, digests[index])
+        });
+        with_asserted_record_fixture(entries, test);
+    }
+
+    fn dataset(subjects: Range<usize>) -> Arc<RdfDataset> {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_value(&predicate()).unwrap();
+        let o = builder.intern_value(&object()).unwrap();
+        for index in subjects {
+            let s = builder.intern_value(&subject(index)).unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
+        }
+        builder.freeze().unwrap()
+    }
+
+    fn image(dataset: &RdfDataset, block_bytes: u32) -> SegmentedImage {
+        let limits = SegmentedBuildLimits::new(1024, 200_000, 1024, block_bytes, 4).unwrap();
+        SegmentedImage::from_native_fixture(dataset, limits).unwrap()
+    }
+
+    fn layer(image: &SegmentedImage, metadata: SegmentedLayerMetadata) -> Arc<SegmentedLayer> {
+        Arc::new(
+            SegmentedLayer::new(
+                Arc::new(image.provider()),
+                image.receipt().clone(),
+                metadata,
+            )
+            .unwrap(),
+        )
+    }
+
+    fn sealed(subjects: Range<usize>) -> Arc<SegmentedLayer> {
+        layer(
+            &image(&dataset(subjects), 512),
+            SegmentedLayerMetadata::default(),
+        )
+    }
+
+    fn snapshot(
+        layers: Vec<Arc<SegmentedLayer>>,
+        head: Option<SegmentedResidentHead>,
+    ) -> SegmentedStackSnapshot {
+        let mut stack = SegmentedStack::default();
+        stack.publish(layers, limits()).unwrap();
+        stack.set_head(head);
+        stack.snapshot().unwrap()
+    }
+
+    fn version(snapshot: &SegmentedStackSnapshot) -> SourceVersion {
+        snapshot
+            .query(limits())
+            .unwrap()
+            .capture_source_version()
+            .unwrap()
+    }
+
+    fn assert_baseline(
+        past: &SourceVersion,
+        next: &SegmentedStackSnapshot,
+        expected: &SegmentedStackSnapshot,
+    ) {
+        let baseline = next
+            .query(limits())
+            .unwrap()
+            .source_baseline(&past.0, &mut SourceChangeWork::default())
+            .unwrap();
+        assert!(Arc::ptr_eq(&baseline.snapshot.layers, &expected.layers));
+        assert_eq!(baseline.snapshot.head.is_some(), expected.head.is_some());
+    }
+
+    #[test]
+    fn layer_dedup_and_capture_distinguish_equal_accounting() {
+        collision_fixture(|| {
+            let left = sealed(0..2);
+            let right = sealed(2..4);
+            let equal_left = sealed(0..2);
+            let layers = snapshot(
+                vec![Arc::clone(&left), Arc::clone(&right), equal_left],
+                None,
+            );
+            let query = layers.query(limits()).unwrap();
+            let mut storage = QueryStorage::new(&query.operation).unwrap();
+            let (mut indices, _) = query
+                .source_directories(3, &mut storage, &mut SourceDifferenceWork::default())
+                .unwrap();
+            indices.sort_unstable();
+            assert_eq!(indices, [0, 1]);
+
+            let pair = version(&snapshot(vec![Arc::clone(&left), Arc::clone(&right)], None));
+            let left_version = version(&snapshot(vec![left], None));
+            let right_version = version(&snapshot(vec![right], None));
+            let union = version(&snapshot(vec![sealed(0..4)], None));
+            assert_eq!(left_version.0.records, right_version.0.records);
+            assert_eq!(pair.statement_count(), 4);
+            assert_eq!(pair.content_fingerprint(), union.content_fingerprint());
+        });
+    }
+
+    #[test]
+    fn capture_equal_layers_skips_the_second_directory_walk() {
+        let dataset = dataset(10..266);
+        let first = image(&dataset, 1024);
+        let equal = image(&dataset, 512);
+        assert_ne!(first.receipt().snapshot(), equal.receipt().snapshot());
+        let layers = snapshot(
+            vec![
+                layer(&first, SegmentedLayerMetadata::default()),
+                layer(&equal, SegmentedLayerMetadata::default()),
+            ],
+            None,
+        );
+        let query = layers.query(limits()).unwrap();
+        let captured = query.capture_source_version().unwrap();
+        assert_eq!(captured.statement_count(), 256);
+
+        let header = Header::decode(equal.bytes()).unwrap();
+        let width = u64::from(header.block_bytes);
+        let directory = header.effective_directory;
+        let range = directory.first * width..(directory.first + directory.blocks) * width;
+        let reads = query
+            .operation_status()
+            .evidence()
+            .with_requests(|requests| {
+                requests
+                    .iter()
+                    .filter(|request| {
+                        request.snapshot() == equal.receipt().snapshot()
+                            && range.contains(&request.position())
+                    })
+                    .count()
+            });
+        assert!(reads > 0 && (reads as u64) < directory.blocks);
+    }
+
+    #[test]
+    fn sealing_baseline_compares_addition_and_removal_roots() {
+        collision_fixture(|| {
+            let base = sealed(4..5);
+            let head = SegmentedResidentHead::new(dataset(0..2), SegmentedLayerMetadata::default())
+                .unwrap();
+            let old = snapshot(vec![Arc::clone(&base)], Some(head));
+            let past = version(&old);
+            let different = snapshot(vec![Arc::clone(&base), sealed(2..4)], None);
+            let equal = snapshot(vec![base, sealed(0..2)], None);
+            assert_baseline(&past, &different, &old);
+            assert_baseline(&past, &equal, &equal);
+
+            let base = sealed(0..4);
+            let empty = dataset(0..0);
+            let left = SegmentedLayerMetadata::new(Some(dataset(0..2)), None).unwrap();
+            let right = SegmentedLayerMetadata::new(Some(dataset(2..4)), None).unwrap();
+            let head = SegmentedResidentHead::new(Arc::clone(&empty), left.clone()).unwrap();
+            let old = snapshot(vec![Arc::clone(&base)], Some(head));
+            let past = version(&old);
+            let empty = image(&empty, 512);
+            let different = snapshot(vec![Arc::clone(&base), layer(&empty, right)], None);
+            let equal = snapshot(vec![base, layer(&empty, left)], None);
+            assert_baseline(&past, &different, &old);
+            assert_baseline(&past, &equal, &equal);
+        });
+    }
+
+    #[test]
+    fn full_and_prefix_compaction_select_the_baseline_by_members() {
+        collision_fixture(|| {
+            let head = SegmentedResidentHead::new(dataset(1..2), SegmentedLayerMetadata::default())
+                .unwrap();
+            let old = snapshot(vec![sealed(0..1)], Some(head));
+            let past = version(&old);
+            let different = snapshot(vec![sealed(2..4)], None);
+            let equal = snapshot(vec![sealed(0..2)], None);
+            assert_baseline(&past, &different, &old);
+            assert_baseline(&past, &equal, &equal);
+
+            let suffix = sealed(4..5);
+            let old = snapshot(vec![sealed(0..1), sealed(1..2), Arc::clone(&suffix)], None);
+            let past = version(&old);
+            let different = snapshot(vec![sealed(2..4), Arc::clone(&suffix)], None);
+            let equal = snapshot(vec![sealed(0..2), suffix], None);
+            assert_baseline(&past, &different, &old);
+            assert_baseline(&past, &equal, &equal);
+        });
+    }
+
+    #[test]
+    fn compaction_consistency_refuses_different_members_with_equal_accounting() {
+        collision_fixture(|| {
+            let left = snapshot(vec![sealed(0..2)], None);
+            let right = snapshot(vec![sealed(2..4)], None);
+            let equal = snapshot(vec![sealed(0..2)], None);
+            let derived = version(&left);
+            let peer = version(&right);
+            assert_eq!(derived.0.records, peer.0.records);
+
+            let actual_root = |snapshot: &SegmentedStackSnapshot| {
+                snapshot.query(limits()).unwrap().sessions[0]
+                    .source_root(&mut SourceDifferenceWork::default())
+                    .unwrap()
+            };
+            assert_eq!(
+                check_compacted_root(derived.0.content_node(), actual_root(&right)),
+                Err(SegmentedError::Corrupt(
+                    "compacted source directory disagrees with certified image"
+                ))
+            );
+            assert_eq!(
+                check_compacted_root(derived.0.content_node(), actual_root(&equal)),
+                Ok(())
+            );
+        });
     }
 }

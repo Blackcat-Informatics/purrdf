@@ -14,6 +14,8 @@ The release lane follows the `gmeow-gts` cargo release pattern:
 - every workspace crate version must match the tag version;
 - the workflow uses pinned actions and no dependency cache in the privileged
   publish job;
+- native verification, WebAssembly verification and audited artifact preparation
+  run concurrently. Native and WebAssembly jobs keep separate compiler caches;
 - crates are packaged before publication;
 - the release crate set is checked on `wasm32-unknown-unknown`;
 - each `.crate` package receives a GitHub build-provenance attestation;
@@ -31,18 +33,25 @@ is a single coherent flow from `main`, using the version-coherence gate and the
 # 1. Bump all three version sources in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
-# 2. Regenerate the committed C-ABI header from the bumped crate version.
+# 2. Re-key the version-keyed WatDiv and LUBM pins in scripts/benchmark-acquire.py
+# (every `.purrdf-<version>` suffix in WORKLOAD_PINS) to the bumped version. The
+# self-test refuses a mismatch with Cargo.toml, so the lanes never report "no pin"
+# for the binary they built. Re-measure the answer counts under the new binary
+# rather than carrying the old values forward, and record the measurement.
+python3 scripts/benchmark-acquire.py --self-test
+
+# 3. Regenerate the committed C-ABI header from the bumped crate version.
 make capi-header
 
-# 3. Complete the release notes, preserving existing migration guidance.
+# 4. Complete the release notes, preserving existing migration guidance.
 # Rename the Unreleased section to the bumped version and release date.
 # Use make changelog only for history-generated notes (see below).
 # Add the reviewed short summary at docs/releases/<version>.md.
 
-# 4. Review, then commit the bump, generated header, changelog and summary.
+# 5. Review, then commit the bump, re-keyed pins, generated header, changelog and summary.
 git add -A && git commit -m "chore(release): 0.2.2"
 
-# 5. From an up-to-date main, run every release gate, then push all three tags.
+# 6. From an up-to-date main, run every release gate, then push all three tags.
 make release-tags VERSION=0.2.2
 ```
 
@@ -200,79 +209,20 @@ first tagged run can publish the complete workspace in dependency order.
 
 ### Bootstrap: complete (ledger empty)
 
-All 40 release crates have crates.io records. On 2026-11-07, `purrdf-zstd`,
-`purrdf-geo-kernel`, `purrdf-mime`, `purrdf-toml`, `purrdf-yaml` and
-`purrdf-glob` received isolated, empty, dependency-free **0.0.0** versions.
-Native and WASM compilation, normal package verification and exact
-empty-source/license archive audits ran with the installed compiler before
-upload. The public registry confirmed each version. These packages expose no
-runtime API and contain no functional implementation.
+All 40 release crates have crates.io records, and each carries a Trusted
+Publisher entry and the *Require trusted publishing* lock. The strict public
+preflight verifies **Require trusted publishing** on every release record
+(`trustpub_only=true`). Publisher entries have no public read API; maintainer
+confirmation and registry locks are separate evidence. The release lane repeats
+the strict preflight before functional publication.
 
-On 2026-11-08, `purrdf-alloc-probe`, `purrdf-testkit` and
-`purrdf-conformance-kit` received the same empty **0.0.0** bootstrap records.
-Rust 1.98.1 verified native tests, WASM compilation and package archives before
-upload; exact source and license audits passed. The public registry confirmed
-all three versions. Their functional release is **4.0.1**.
+Each bootstrap record is an empty, dependency-free **0.0.0** version that
+exposes no runtime API. The bootstrap script never publishes a functional
+implementation and never token-republishes an existing record. After the
+functional release, yank the empty versions while retaining the records and
+publisher settings (step 6 above).
 
-Record creation and Trusted Publisher setup are complete. The maintainer
-confirmed the new publisher configuration on 2026-11-08, and the strict public
-preflight independently verified **Require trusted publishing** on all 40
-release records (`trustpub_only=true`). Publisher entries have no public read
-API; maintainer confirmation and registry locks are separate evidence. The
-release lane repeats the strict preflight before functional publication.
-
-### Established records
-
-The other release crates have crates.io records.
-`purrdf-hash`, `purrdf-stack`, `purrdf-lex`, `purrdf-jsonschema`, `purrdf-deflate`,
-`purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval` received isolated, empty,
-dependency-free **0.0.0** versions on 2026-10-01. Each upload was preceded by
-native/wasm checks, normal package verification and exact empty-source/license
-archive audits; the public registry subsequently confirmed every version.
-The bootstrap script never
-publishes a functional implementation or token-republishes an existing record.
-
-On 2026-10-01, the maintainer confirmed the matching Trusted Publisher entries
-were configured for the then-current release crates. The strict public preflight independently
-verified that all **31** records have **Require trusted publishing** enabled
-(`trustpub_only=true`), including the eight new records. Publisher entries have
-no public API; that confirmation is separate from the registry lock evidence.
-The release workflow repeats the record/lock preflight before any functional
-upload. After the functional versions are confirmed, yank the empty versions
-while retaining the records and publisher settings.
-
-`purrdf-markdown` and `purrdf-json` have **0.0.0** bootstrap records, created by
-token publication solely to configure Trusted Publishing. Those versions
-expose no runtime API; their functional release is **2.0.0**. With the records
-and publisher settings established, the trusted release lane publishes the
-already-bootstrapped crates in dependency order. The 0.0.0 versions can be
-yanked after the functional release, retaining the crate records and publisher
-settings.
-
-The crates that previously had no crates.io record — `purrdf-cdt`,
-`purrdf-text`, `purrdf-geo` — were bootstrapped during the 0.13.0 release:
-`purrdf-cdt` by a token publish at 0.13.0 once its dependencies were up, and
-`purrdf-text`/`purrdf-geo` as `0.0.0-bootstrap` placeholder records (their
-first real version is 1.0.0, published through Trusted Publishing like every
-sibling). All three carry a Trusted Publisher entry and the
-*Require trusted publishing* lock.
-
-#### The `0.0.0-bootstrap` placeholders — yanked
-
-`purrdf-text` and `purrdf-geo` each carried a `0.0.0-bootstrap` version: an
-empty lib published under deadline purely to create the crate record so Trusted
-Publishing could be enabled on it. Nothing ever resolved to them — `1.0.0` is
-`max_version` for both — but a version list is read by people, and a `0.0.0`
-release of a crate that never had one is a puzzle for every future reader.
-
-Both are now **yanked**, which hides them from resolution without deleting them:
-
-```sh
-cargo yank --version 0.0.0-bootstrap purrdf-text
-cargo yank --version 0.0.0-bootstrap purrdf-geo
-```
-
-Two things to carry forward if a future release ever needs this pattern again:
+### Yanking bootstrap placeholders
 
 * **Yank is a separate permission from publish.** A crate's required Trusted
   Publishing lock does not grant or deny
@@ -376,11 +326,28 @@ git tag rust-v0.1.5
 git push origin rust-v0.1.5
 ```
 
-The workflow refuses before packaging if any release crate lacks its record
+The workflow refuses before publication if any release crate lacks its record
 or publishing lock, or the bootstrap ledger has not been reconciled with the
 registry; see [bootstrap status](#bootstrap-complete-ledger-empty). It publishes
 functional crates in the declared dependency order and skips a version already
-present. A partially completed release resumes with `gh run rerun <run-id>`.
+present. Retry failed jobs with `gh run rerun <run-id> --failed`. The publish job
+uses the artifact from the successful preparation job in the same run. Its own
+time budget starts when publication begins.
+
+If an earlier tagged run completed verification and audit but stopped during
+publication, resume from its retained artifact. Use the original run ID, tag
+and stable Rust version reported by its install step:
+
+```sh
+gh workflow run release-cargo.yaml --ref main \
+  -f tag="$tag" -f source_run="$run_id" -f toolchain="$rust_version"
+```
+
+The workflow checks the original run against the current remote tag. It
+verifies the retained distribution and its provenance, then matches packages
+from the exact tagged checkout against the retained crate audit. The trusted
+publisher acquires its token after those checks. It continues in dependency
+order and publishes the GitHub Release after the full crate set is available.
 
 ## PyPI Release
 
@@ -422,8 +389,8 @@ does not authorize publication of the shadow project. Configure each as:
 | Workflow | `release-pypi.yaml` |
 | Environment | `(none)` |
 
-On 2026-10-01, the maintainer confirmed the separate `purrdf-rdflib` Trusted
-Publisher uses this repository, workflow and no-environment configuration.
+The separate `purrdf-rdflib` Trusted Publisher uses this repository, workflow
+and no-environment configuration.
 Publisher configuration confirmation and a successful OIDC upload are separate
 release receipts.
 

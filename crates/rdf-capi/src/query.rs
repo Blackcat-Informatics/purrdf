@@ -343,9 +343,10 @@ pub unsafe extern "C" fn purrdf_execution_receipt_bind(
                     "the execution receipt is not UTF-8",
                 )
             })?;
-            let bound = purrdf_validate::query::bind_execution_receipt(text, || {
-                purrdf_core::ContentIdentified::content_identity(PurrdfDataset::dataset(dataset))
-            })
+            let bound = purrdf_validate::query::bind_execution_receipt(
+                text,
+                PurrdfDataset::dataset(dataset),
+            )
             .map_err(|error| {
                 let status = match error {
                     purrdf_validate::query::ReceiptBindError::Refused(_)

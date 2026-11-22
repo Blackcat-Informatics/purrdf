@@ -226,7 +226,7 @@ mod tests {
         let second = dataset.project("lpg-csv", CONFIG).expect("project again");
         assert_eq!(first.archive, second.archive);
         assert_eq!(first.profile, "lpg-csv");
-        assert!(first.loss_ledger_json.contains("\"schema_version\": 1"));
+        assert!(first.loss_ledger_json.contains("\"schema_version\": 2"));
 
         let mut lifted = lift_projection(&first.archive, "lpg-csv", CONFIG).expect("lift");
         let lifted_dataset = lifted.take_dataset().expect("dataset");

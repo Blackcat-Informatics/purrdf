@@ -180,7 +180,7 @@ use crate::dataset_view::{
     ViewTermId, checkpointed_drain,
 };
 use purrdf_lex::term_syntax::{
-    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri, write_literal,
+    TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN, write_blank, write_iri_rdfc12_v3, write_literal_rdfc12_v3,
 };
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
@@ -248,7 +248,7 @@ pub const CANON_PROFILE_ID: &str = "purrdf-rdfc12";
 /// together: the first two say which algorithm was agreed, and this says which
 /// evidence was agreed to demonstrate it.
 pub const CANON_CORPUS_DIGEST: &str =
-    "b57bacfc3877e8db1500d0e9fe983aa3b7f463c312df0da1f6007337e019201d";
+    "b9f367a47ebbf389f76efddb083040dae77b1987f96709bebb8af9fdb5818d3d";
 
 /// The version of [`CANON_PROFILE_ID`] this build implements.
 ///
@@ -271,12 +271,14 @@ pub const CANON_CORPUS_DIGEST: &str =
 /// ceiling. Typed execution receipts bind the effective configuration and actual
 /// charged events; successful canonical bytes are unchanged.
 ///
-/// **v3 → v4**: the canonical form of RDF 1.2 N-Quads (section 3) writes U+FFFE
-/// and U+FFFF in a literal as `\uFFFE` and `\uFFFF`, since neither matches the XML
-/// 1.1 `Char` production. Canonical bytes, and so the digest, move only for a
-/// dataset holding one of those two characters in a literal; every other dataset
-/// canonicalizes to the bytes it did under v3.
-pub const CANON_PROFILE_VERSION: u32 = 4;
+/// Version 3 writes U+FFFE and U+FFFF in a literal raw
+/// ([`write_literal_rdfc12_v3`]), although the canonical form of RDF 1.2 N-Quads
+/// (section 3) writes them as `UCHAR`: the digests this profile recorded were
+/// taken over the raw bytes, and recomputing them is what the profile is kept
+/// for. It likewise writes DEL and the C1 controls in an IRI escaped
+/// ([`write_iri_rdfc12_v3`]), where the canonical form writes them raw. The
+/// default canonical document follows section 3.
+pub const CANON_PROFILE_VERSION: u32 = 3;
 
 /// The identifier of the RDFC-1.0 overlay presentation: the RDF 1.2 statement layer
 /// (reifiers, annotations) rendered through this profile's reserved sentinel IRIs
@@ -4091,7 +4093,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             order::REIFIES => RDF_REIFIES,
             _ => SENTINEL_ANNOTATION_GRAPH,
         };
-        memory.append_text(out, |out| write_iri(sentinel, out))?;
+        memory.append_text(out, |out| write_iri_rdfc12_v3(sentinel, out))?;
         memory.push_char(out, ' ')?;
         Ok(())
     }
@@ -4431,7 +4433,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         match guard.term() {
             TermRef::Iri(iri) => {
                 let before = out.len();
-                memory.append_text(out, |out| write_iri(iri, out))?;
+                memory.append_text(out, |out| write_iri_rdfc12_v3(iri, out))?;
                 // Every escape lengthens the text, so exactly `<` and `>` around
                 // the unchanged IRI means nothing was escaped.
                 let clean = out.len() - before == iri.len() + 2;
@@ -4465,7 +4467,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     unreachable!("literal datatype must be an IRI")
                 };
                 memory.append_text(out, |out| {
-                    write_literal(
+                    write_literal_rdfc12_v3(
                         &rendered,
                         dt,
                         language,
@@ -4623,7 +4625,7 @@ impl<D: DatasetView> Atoms<D> for TextAtoms<'_, '_, D> {
         iri: &'static str,
         memory: &mut Memory<'_, S>,
     ) -> Result<(), CanonError<D::ReadError>> {
-        memory.append_text(self.out, |out| write_iri(iri, out))?;
+        memory.append_text(self.out, |out| write_iri_rdfc12_v3(iri, out))?;
         Ok(())
     }
 
@@ -5843,7 +5845,7 @@ mod tests {
     #[test]
     fn the_profile_identity_and_the_reserved_namespace_are_consistent() {
         assert_eq!(CANON_PROFILE_ID, "purrdf-rdfc12");
-        assert_eq!(CANON_PROFILE_VERSION, 4);
+        assert_eq!(CANON_PROFILE_VERSION, 3);
         assert!(SENTINEL_REIFIES.starts_with(RESERVED_NAMESPACE));
         assert!(SENTINEL_ANNOTATION_GRAPH.starts_with(RESERVED_NAMESPACE));
     }
@@ -8225,7 +8227,7 @@ mod tests {
             complete.receipts()[0].configuration,
             SearchConfiguration::Rdfc {
                 output: CanonOutput::Blake3Digest,
-                profile_version: 4,
+                profile_version: 3,
                 ..
             }
         ));

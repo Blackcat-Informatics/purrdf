@@ -177,7 +177,8 @@ fn targets_without_an_empty_graph_spelling_report_each_dropped_graph() {
             "{target}: one entry per dropped empty graph; got:\n{ledger}"
         );
         assert!(
-            ledger.contains("<http://example.org/empty>") && ledger.contains("_:"),
+            ledger.contains("\"value\": \"http://example.org/empty\"")
+                && ledger.contains("\"kind\": \"blank\""),
             "{target}: each entry names its graph; got:\n{ledger}"
         );
         // Every target names itself and the registered pair renders the loss as

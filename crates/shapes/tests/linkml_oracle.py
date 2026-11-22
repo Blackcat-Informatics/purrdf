@@ -155,7 +155,7 @@ def _assert_reverse(payload: dict[str, Any], expected_shape_ids: list[str]) -> N
         raise AssertionError("reverse ledger contains a foreign target format")
     if not all(entry["intentional"] for entry in losses):
         raise AssertionError("reverse fixture contains an unregistered loss")
-    if not all(" subject=#/" in entry["location"] for entry in losses):
+    if not all(entry["subject"]["kind"] == "pointer" for entry in losses):
         raise AssertionError("reverse loss was not remapped to a native LinkML path")
 
 
@@ -469,7 +469,7 @@ def _assert_temporal(payload: dict[str, Any]) -> None:
     if not all(entry["intentional"] for entry in losses):
         raise AssertionError("temporal fixture contains an unregistered loss")
     holder_losses = [
-        entry for entry in losses if "subject=#/$defs/Holder/" in entry["location"]
+        entry for entry in losses if entry["subject"].get("tokens", [])[:2] == ["$defs", "Holder"] and len(entry["subject"]["tokens"]) > 2
     ]
     if holder_losses:
         raise AssertionError(f"temporal bounds recorded a loss: {holder_losses!r}")
@@ -534,7 +534,7 @@ def _assert_value_shapes(payload: dict[str, Any]) -> None:
     if not all(entry["intentional"] for entry in losses):
         raise AssertionError("value-shape fixture contains an unregistered loss")
     holder_losses = {
-        entry["code"] for entry in losses if "#/$defs/Holder" in entry["location"]
+        entry["code"] for entry in losses if entry["subject"].get("tokens", [])[:2] == ["$defs", "Holder"]
     }
     if holder_losses:
         raise AssertionError(f"value-shape fixture recorded {sorted(holder_losses)}")

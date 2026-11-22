@@ -51,7 +51,7 @@ CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
 
-.PHONY: help doctor metadata fmt hooks check test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest pytest-load conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt hooks check workspace-gate test-shard simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags w3c-earl test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest pytest-load conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-imports wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri geo-determinism geodtest
 
 # The changelog generator is pinned so the detailed CHANGELOG.md history stays
@@ -89,6 +89,13 @@ hooks: ## Install the pre-commit and pre-merge-commit hooks: the quick subset of
 	git config core.hooksPath .githooks
 
 check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
+	$(MAKE) workspace-gate
+	cargo test --workspace --locked --no-fail-fast
+	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
+	$(MAKE) wasm
+	$(MAKE) wasm-imports
+
+workspace-gate: ## Before a push: every check the hosted `workspace` job runs (fmt, clippy, build, hygiene), without the test suite.
 	cargo fmt --all --check
 	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -169,11 +176,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/watdiv-queries.py --offline-self-test
 	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
-	cargo test --workspace --locked --no-fail-fast
-	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
-	$(MAKE) wasm
-	$(MAKE) wasm-imports
 
 check-issue-refs: ## Reject issue-reference tokens (#NNN and tracker URLs) in comments, docs and corpora.
 	python3 scripts/check-issue-refs.py
@@ -274,7 +277,7 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 test: node-prerequisite binaryen-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..5).
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..7).
 	@case "$(SHARD)" in \
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
@@ -282,10 +285,12 @@ test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|
 			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
 		integration-2) set -x; cargo test --workspace --locked --test '[e-j]*' ;; \
-		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
+		integration-3) set -x; cargo test --workspace --locked --test '[pq]*' ;; \
 		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
-		integration-5) set -x; cargo test --workspace --locked --test '[k-o]*' ;; \
-		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..5" >&2; exit 1 ;; \
+		integration-5) set -x; cargo test --workspace --locked --test '[k-mo]*' ;; \
+		integration-6) set -x; cargo test --workspace --locked --test 'r*' ;; \
+		integration-7) set -x; cargo test --workspace --locked --test 'n*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..7" >&2; exit 1 ;; \
 	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
@@ -615,9 +620,13 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 # by hand. Only the LIBRARY is built here (this recipe passes `--lib`); the
 # `bench-corpus` binary is std-only — files, process arguments, an exit code —
 # and stays deliberately out of the wasm surface.
+.PHONY: wasm-release-with-import-probe wasm-scan-imports
+WASM_RELEASE_BUILD = bash -eu -o pipefail -c 'source scripts/release-crates.sh; packages=(); for crate in "$${PURRDF_RELEASE_CRATES[@]}"; do packages+=(-p "$$crate"); done; exec cargo build --locked --release --target wasm32-unknown-unknown --lib "$${packages[@]}" -p purrdf-bench "$$@"' --
+WASM_IMPORT_SCAN = cargo run -q --locked -p helper-census -- --wasm-imports "$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/examples/host_import_probe.wasm"
+
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
-		bash -eu -o pipefail -c 'source scripts/release-crates.sh; packages=(); for crate in "$${PURRDF_RELEASE_CRATES[@]}"; do packages+=(-p "$$crate"); done; exec cargo build --locked --release --target wasm32-unknown-unknown --lib "$${packages[@]}" -p purrdf-bench'; \
+		$(WASM_RELEASE_BUILD); \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	elif ! command -v rustup >/dev/null 2>&1; then \
@@ -629,6 +638,9 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
 
+wasm-release-with-import-probe:
+	$(WASM_RELEASE_BUILD) --example host_import_probe
+
 # A wasm32-unknown-unknown module built from the library crates runs where there
 # is no JavaScript host, so every import is one its embedder cannot provide. The
 # probe (crates/purrdf/examples/host_import_probe.rs) links the parser and the
@@ -638,12 +650,16 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 wasm-imports: ## Link the library crates as one bare wasm32 module and refuse any host import (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown -p purrdf --example host_import_probe \
-		&& cargo run -q --locked -p helper-census -- --wasm-imports "$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/examples/host_import_probe.wasm"; \
+		&& $(WASM_IMPORT_SCAN); \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	else \
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
+
+# Inspect the probe produced by the preceding release build.
+wasm-scan-imports:
+	$(WASM_IMPORT_SCAN)
 
 doctor: ## Report which build pins this machine actually enforces (never gates; run it when a gate SKIPs).
 	@# Every "SKIP" a gate prints is a claim that something was not checked, and the

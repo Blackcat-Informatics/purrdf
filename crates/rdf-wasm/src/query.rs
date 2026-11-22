@@ -236,38 +236,6 @@ enum QueryResultValue {
     Graph(Box<Dataset>),
 }
 
-/// `bindExecutionReceipt(receiptJson, contentIdentity)` → the receipt with
-/// `contentIdentity` and `executionIdentity` added.
-///
-/// A query's receipt carries the run identity only: no query hashes its dataset.
-/// `contentIdentity` is the value `Dataset.contentIdentity()` returned for the
-/// dataset the query read; binding it is the explicit request for an execution
-/// identity.
-///
-/// # Errors
-///
-/// `purrdf-wasm-options` for a receipt that is not an execution receipt or an
-/// identity that is not 64 hexadecimal digits; `purrdf-wasm-receipt` for a run
-/// that cannot have an execution identity (it never started, or called extension
-/// code without a certified implementation identity).
-#[wasm_bindgen(js_name = bindExecutionReceipt)]
-pub fn bind_execution_receipt(
-    receipt_json: &str,
-    content_identity: &str,
-) -> Result<String, JsValue> {
-    purrdf_validate::query::bind_execution_receipt_hex(receipt_json, content_identity).map_err(
-        |error| {
-            let code = match error {
-                purrdf_validate::query::ReceiptBindError::Refused(_) => {
-                    crate::operation::RECEIPT_CODE
-                }
-                _ => OPTIONS_CODE,
-            };
-            coded_error(&error.to_string(), code)
-        },
-    )
-}
-
 /// A serialized query document beside the native execution that produced it.
 #[wasm_bindgen]
 #[derive(Debug)]
@@ -1789,9 +1757,11 @@ impl QueryEngine {
     /// statements for CONSTRUCT/DESCRIBE — including RDF 1.2 reifier and annotation
     /// statements — and nothing for ASK), `max_intermediate_cells` the largest intermediate
     /// bag in `rows * columns`, `max_scratch_bytes` the per-query scratch arena, and
-    /// `max_remote_requests` federated requests. Every ceiling is **inclusive**:
-    /// consumption equal to it is admitted, and zero is a valid ceiling that trips on the
-    /// first charged unit of work.
+    /// `max_remote_requests` host fetches (each `SERVICE` request and each fetch of a
+    /// `LOAD`, the first fetch and each redirect hop, counts one; a redirect the host
+    /// follows itself is part of its fetch). Every ceiling is **inclusive**: consumption
+    /// equal to it is admitted, and zero is a valid ceiling that trips on the first
+    /// charged unit of work.
     ///
     /// **A tripped governor is an outcome, not a thrown error** — see the module header.
     ///

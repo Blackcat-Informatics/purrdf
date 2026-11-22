@@ -52,6 +52,11 @@
 //!   value, is written `\"`, so no run of three raw quotes and no quote next
 //!   to the closing `"""` is ever produced.
 //!
+//! One spelling is not a carrier: [`write_rdfc12_v3`] is the body as the
+//! retained canonicalization profile `purrdf-rdfc12` (version 3) wrote it,
+//! the `Canonical` escapes with U+FFFE and U+FFFF raw. Its digests were recorded
+//! over those bytes, so it keeps them.
+//!
 //! # The scan
 //!
 //! Each carrier has one chunked [`ByteClass`] kernel over the bytes that can
@@ -60,7 +65,8 @@
 //! [`Xml`](Carrier::Xml) and [`TurtleLong`](Carrier::TurtleLong) kernels also
 //! at `0xC2` (the C1 block). [`TurtleLong`](Carrier::TurtleLong) stops at `"`
 //! too. A lead byte is a candidate, not a verdict: the scalar there is decided
-//! before anything is emitted.
+//! before anything is emitted. [`write_rdfc12_v3`] scans with the
+//! `Canonical` kernel and lets the scalar behind `0xEF` ride raw.
 
 use std::borrow::Cow;
 
@@ -200,16 +206,37 @@ enum Escape {
     High(u8),
 }
 
-/// The escape for the scalar that begins at `bytes[at]` (a stop of `carrier`'s
-/// kernel) and the byte length it replaces, or `None` when the scalar rides
-/// raw and the scan goes on past the one byte.
+/// What a body is spelled for: a [`Carrier`], or the retained profile body of
+/// [`write_rdfc12_v3`], which scans with the [`Canonical`](Carrier::Canonical)
+/// kernel and lets U+FFFE and U+FFFF ride raw.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Spelling {
+    Carrier(Carrier),
+    Rdfc12V3,
+}
+
+impl Spelling {
+    /// The carrier whose kernel this spelling scans with.
+    const fn carrier(self) -> Carrier {
+        match self {
+            Self::Carrier(carrier) => carrier,
+            Self::Rdfc12V3 => Carrier::Canonical,
+        }
+    }
+}
+
+/// The escape for the scalar that begins at `bytes[at]` (a stop of
+/// `spelling`'s kernel) and the byte length it replaces, or `None` when the
+/// scalar rides raw and the scan goes on past the one byte.
 #[inline]
-fn escape_at(bytes: &[u8], at: usize, carrier: Carrier) -> Option<(Escape, usize)> {
+fn escape_at(bytes: &[u8], at: usize, spelling: Spelling) -> Option<(Escape, usize)> {
     let b = bytes[at];
     Some(match b {
         b'\\' => (Escape::Echar("\\\\"), 1),
         b'"' => {
-            if carrier == Carrier::TurtleLong && bytes.get(at + 1).is_some_and(|&n| n != b'"') {
+            if spelling == Spelling::Carrier(Carrier::TurtleLong)
+                && bytes.get(at + 1).is_some_and(|&n| n != b'"')
+            {
                 return None;
             }
             (Escape::Echar("\\\""), 1)
@@ -227,7 +254,9 @@ fn escape_at(bytes: &[u8], at: usize, carrier: Carrier) -> Option<(Escape, usize
         },
         NONCHAR_LEAD => match (bytes.get(at + 1), bytes.get(at + 2)) {
             // U+FFFE is `EF BF BE`, U+FFFF is `EF BF BF`.
-            (Some(0xBF), Some(&third @ (0xBE | 0xBF))) => (Escape::High(third + 0x40), 3),
+            (Some(0xBF), Some(&third @ (0xBE | 0xBF))) if spelling != Spelling::Rdfc12V3 => {
+                (Escape::High(third + 0x40), 3)
+            }
             _ => return None,
         },
         _ => return None,
@@ -263,17 +292,17 @@ fn finder(carrier: Carrier) -> fn(&[u8]) -> Option<usize> {
     }
 }
 
-/// Append `value[at..]` escaped for `carrier`; `value[run..at]` is a clean run
-/// not yet copied. `at` and `run` are char boundaries.
+/// Append `value[at..]` spelled for `spelling`; `value[run..at]` is a clean
+/// run not yet copied. `at` and `run` are char boundaries.
 fn write_from<W: TextOut + ?Sized>(
     value: &str,
     mut run: usize,
     mut at: usize,
-    carrier: Carrier,
+    spelling: Spelling,
     out: &mut W,
 ) {
     let bytes = value.as_bytes();
-    let find = finder(carrier);
+    let find = finder(spelling.carrier());
     while at < bytes.len() {
         let end = at.saturating_add(out.scan_limit().max(1)).min(bytes.len());
         if !out.checkpoint(end - at) {
@@ -284,7 +313,7 @@ fn write_from<W: TextOut + ?Sized>(
             continue;
         };
         let hit = at + offset;
-        match escape_at(bytes, hit, carrier) {
+        match escape_at(bytes, hit, spelling) {
             Some((escape, len)) => {
                 out.push_str(&value[run..hit]);
                 push_escape(escape, out);
@@ -322,7 +351,25 @@ fn write_from<W: TextOut + ?Sized>(
 /// assert_eq!(out, "one\ntwo \\\"\\\"\" end\\\"");
 /// ```
 pub fn write<W: TextOut + ?Sized>(value: &str, carrier: Carrier, out: &mut W) {
-    write_from(value, 0, 0, carrier, out);
+    write_from(value, 0, 0, Spelling::Carrier(carrier), out);
+}
+
+/// Append `value` as profile `purrdf-rdfc12` version 3 spells a literal body:
+/// the [`Canonical`](Carrier::Canonical) escapes with U+FFFE and U+FFFF raw.
+///
+/// That profile is the retained canonicalization whose digests earlier
+/// releases recorded, and a recorded digest recomputes only from the bytes it
+/// was taken over. Every other writer names a [`Carrier`].
+///
+/// ```
+/// use purrdf_lex::literal_escape::write_rdfc12_v3;
+///
+/// let mut out = String::new();
+/// write_rdfc12_v3("a\"\u{7f}\u{85}\u{fffe}\u{ffff}", &mut out);
+/// assert_eq!(out, "a\\\"\\u007F\u{85}\u{fffe}\u{ffff}");
+/// ```
+pub fn write_rdfc12_v3<W: TextOut + ?Sized>(value: &str, out: &mut W) {
+    write_from(value, 0, 0, Spelling::Rdfc12V3, out);
 }
 
 /// `value` escaped for `carrier`, borrowed when no scalar needs an escape.
@@ -344,9 +391,9 @@ pub fn escape(value: &str, carrier: Carrier) -> Cow<'_, str> {
     let mut at = 0;
     while let Some(offset) = find(&bytes[at..]) {
         let hit = at + offset;
-        if escape_at(bytes, hit, carrier).is_some() {
+        if escape_at(bytes, hit, Spelling::Carrier(carrier)).is_some() {
             let mut out = String::with_capacity(value.len() + 8);
-            write_from(value, 0, hit, carrier, &mut out);
+            write_from(value, 0, hit, Spelling::Carrier(carrier), &mut out);
             return Cow::Owned(out);
         }
         at = hit + 1;
@@ -358,7 +405,7 @@ pub fn escape(value: &str, carrier: Carrier) -> Cow<'_, str> {
 mod tests {
     use super::{
         CANONICAL_TABLE, Carrier, TURTLE_LONG_TABLE, XML_TABLE, escape, find_first_literal_escape,
-        write,
+        write, write_rdfc12_v3,
     };
     use purrdf_testkit::rng::SplitMix64;
     use std::borrow::Cow;
@@ -366,20 +413,21 @@ mod tests {
 
     const CARRIERS: [Carrier; 3] = [Carrier::Canonical, Carrier::Xml, Carrier::TurtleLong];
 
-    /// Whether `carrier` writes the scalar `c` as a `UCHAR` (never an ECHAR).
-    fn is_uchar_scalar(c: char, carrier: Carrier) -> bool {
+    /// Whether `carrier` writes the scalar `c` as a `UCHAR` (never an ECHAR);
+    /// `rdfc12_v3` asks the same of [`write_rdfc12_v3`], which passes
+    /// [`Carrier::Canonical`].
+    fn is_uchar_scalar(c: char, carrier: Carrier, rdfc12_v3: bool) -> bool {
         let v = u32::from(c);
         let control = v < 0x20 || v == 0x7F;
+        let nonchar = (v == 0xFFFE || v == 0xFFFF) && !rdfc12_v3;
         match carrier {
-            Carrier::Canonical => control || v == 0xFFFE || v == 0xFFFF,
-            Carrier::Xml | Carrier::TurtleLong => {
-                control || (0x80..=0x9F).contains(&v) || v == 0xFFFE || v == 0xFFFF
-            }
+            Carrier::Canonical => control || nonchar,
+            Carrier::Xml | Carrier::TurtleLong => control || (0x80..=0x9F).contains(&v) || nonchar,
         }
     }
 
     /// The per-scalar writer, kept as the oracle for the clean-run emitter.
-    fn reference(value: &str, carrier: Carrier) -> String {
+    fn reference(value: &str, carrier: Carrier, rdfc12_v3: bool) -> String {
         let mut out = String::new();
         let chars: Vec<char> = value.chars().collect();
         for (i, &c) in chars.iter().enumerate() {
@@ -399,7 +447,7 @@ mod tests {
                 '\t' => out.push_str("\\t"),
                 '\u{08}' => out.push_str("\\b"),
                 '\u{0C}' => out.push_str("\\f"),
-                c if is_uchar_scalar(c, carrier) => {
+                c if is_uchar_scalar(c, carrier, rdfc12_v3) => {
                     let _ = write!(out, "\\u{:04X}", u32::from(c));
                 }
                 c => out.push(c),
@@ -448,7 +496,7 @@ mod tests {
                 for (skip, _) in value.char_indices().take(3) {
                     let input = &value[skip..];
                     for carrier in CARRIERS {
-                        let expected = reference(input, carrier);
+                        let expected = reference(input, carrier, false);
                         let mut got = String::from("\"");
                         write(input, carrier, &mut got);
                         assert_eq!(&got[1..], expected, "{carrier:?} {input:?}");
@@ -465,6 +513,13 @@ mod tests {
                             }
                         }
                     }
+                    let mut got = String::from("\"");
+                    write_rdfc12_v3(input, &mut got);
+                    assert_eq!(
+                        &got[1..],
+                        reference(input, Carrier::Canonical, true),
+                        "rdfc12 v3 {input:?}"
+                    );
                     escaped_past_first_chunk += usize::from(
                         find_first_literal_escape(input.as_bytes()).is_some_and(|i| i >= 16),
                     );

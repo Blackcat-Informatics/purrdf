@@ -1293,8 +1293,8 @@ impl<S: Admission + ?Sized> SerInterner<'_, '_, '_, '_, S> {
     /// The walk follows a quoted triple's components with no depth bound and no
     /// visited set. It terminates because the term table it walks does: every
     /// producer of a [`SerGraph`] guarantees that, and the one that takes a
-    /// caller-supplied graph (`crate::gts::gts_to_ser`) proves it, refusing a
-    /// self-reaching table with `gts-self-reaching-term`. The IR's own acyclicity
+    /// caller-supplied graph (`crate::gts::gts_to_ser`) proves it, turning a
+    /// triple term that reaches itself into a blank node. The IR's own acyclicity
     /// check runs at `freeze()`, which is far too late to stop a walk around a cycle.
     fn intern(
         &self,
@@ -1443,25 +1443,29 @@ impl<S: Admission + ?Sized> SerInterner<'_, '_, '_, '_, S> {
                 ))
             }
             SerTermKind::Triple => {
-                let reifier_id = term.reifier.ok_or_else(|| {
-                    native_diagnostic(
-                        "native-codec-unbound-triple-term",
-                        &"GTS triple term has no reifier binding",
+                // A triple term that names no reifier, or one no `reifies` row
+                // binds, states no triple (GTS-SPEC §7.3): it is a fresh blank
+                // node, in the scope no document blank node has.
+                let binding = match term.reifier {
+                    Some(reifier_id) => self.graph.reifier_with_control(reifier_id, memory)?,
+                    None => None,
+                };
+                let Some((s, p, o)) = binding else {
+                    let label = memory.format_with_progress(&format_args!(
+                        "{}",
+                        crate::gts_resolve::unbound_triple_label(None, gts_id)
+                    ))?;
+                    let result = builder.intern_blank_with_memory(
+                        &label,
+                        crate::gts_resolve::UNBOUND_TRIPLE_SCOPE,
                         memory,
-                    )
-                })?;
-                let (s, p, o) = self
-                    .graph
-                    .reifier_with_control(reifier_id, memory)?
-                    .ok_or_else(|| {
-                        native_diagnostic(
-                            "native-codec-missing-reifier-binding",
-                            &format_args!(
-                                "GTS triple term references missing reifier {reifier_id}"
-                            ),
-                            memory,
-                        )
-                    })?;
+                    );
+                    let cleanup = memory.release_string(label);
+                    let id = result?;
+                    cleanup?;
+                    self.record_native(gts_id, id, memory)?;
+                    return Ok(Nested::Leaf(id));
+                };
                 Ok(Nested::Triple(s, p, o))
             }
         };

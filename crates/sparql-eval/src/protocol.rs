@@ -1296,8 +1296,8 @@ impl From<&EvalError> for FailureCode {
                 Some(UnsupportedKind::QuotedTripleTermVariable) => Self::QuotedTripleTermVariable,
                 Some(UnsupportedKind::HeldInUnconfigured) => Self::Evaluation,
             },
-            EvalError::Remote(_) => Self::ServiceFailed,
-            EvalError::ServiceUnconfigured(_) => Self::ServiceUnconfigured,
+            EvalError::Remote { .. } => Self::ServiceFailed,
+            EvalError::ServiceUnconfigured { .. } => Self::ServiceUnconfigured,
             EvalError::ServiceDenied(_) => Self::ServiceDenied,
             EvalError::ServiceHostDenied { .. } => Self::ServiceHostDenied,
             EvalError::ServiceHostFault { .. } => Self::HostFault,
@@ -1354,12 +1354,13 @@ impl From<&purrdf_core::TrippedGovernor> for FailureCode {
 impl From<&LoadError> for FailureCode {
     fn from(error: &LoadError) -> Self {
         match error {
-            LoadError::Transport(_) => Self::LoadFailed,
+            LoadError::Transport(_) | LoadError::OpaqueRedirect(_) => Self::LoadFailed,
             LoadError::Decode(_) => Self::LoadDecode,
             LoadError::Denied(_) => Self::LoadDenied,
             LoadError::HostDenied(_) => Self::LoadHostDenied,
             LoadError::Fault(_) => Self::LoadFault,
             LoadError::Governed(_) => Self::LoadStopped,
+            LoadError::Storage(_) => Self::Evaluation,
         }
     }
 }
@@ -1370,10 +1371,11 @@ impl From<&RemoteError> for FailureCode {
             RemoteError::SourceRead(_)
             | RemoteError::WorkspaceStopped
             | RemoteError::ExchangeIdExhausted => Self::Evaluation,
-            RemoteError::Transport(_) | RemoteError::Decode(_) | RemoteError::Disabled => {
-                Self::ServiceFailed
-            }
-            RemoteError::Unconfigured(_) => Self::ServiceUnconfigured,
+            RemoteError::Transport(_)
+            | RemoteError::Decode(_)
+            | RemoteError::Disabled
+            | RemoteError::OpaqueRedirect { .. } => Self::ServiceFailed,
+            RemoteError::Unconfigured(_) | RemoteError::NoSource => Self::ServiceUnconfigured,
             RemoteError::Denied(_) => Self::ServiceDenied,
             RemoteError::HostDenied { .. } => Self::ServiceHostDenied,
             RemoteError::HostFault { .. } => Self::HostFault,

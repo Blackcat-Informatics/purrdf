@@ -363,7 +363,7 @@ export interface PartialAnswers {
  * `runIdentity` binds the request, the clock, the seed and the environment; it is
  * `null` for a run that called extension code without a certified implementation
  * identity. No query hashes its dataset, so a receipt carries no content identity
- * until {@link bindExecutionReceipt} adds `contentIdentity` and `executionIdentity`.
+ * until {@link Dataset#bindExecutionReceipt} adds `contentIdentity` and `executionIdentity`.
  */
 export type ExecutionReceipt =
   | { readonly state: "not-started" }
@@ -375,20 +375,11 @@ export type ExecutionReceipt =
       readonly suppliedEntropySeed: boolean;
       readonly runIdentity: string | null;
       readonly readsFocusGraph: boolean;
-      /** Present only on a receipt {@link bindExecutionReceipt} returned. */
+      /** Present only on a receipt {@link Dataset#bindExecutionReceipt} returned. */
       readonly contentIdentity?: string;
-      /** Present only on a receipt {@link bindExecutionReceipt} returned. */
+      /** Present only on a receipt {@link Dataset#bindExecutionReceipt} returned. */
       readonly executionIdentity?: string;
     };
-
-/**
- * Bind a query's execution receipt to the content identity of the dataset it read,
- * as `Dataset#contentIdentity()` returned it: the receipt JSON with `contentIdentity`
- * and `executionIdentity` added. Throws with code `purrdf-wasm-options` for a
- * receipt that is not one or an identity that is not 64 hexadecimal digits, and
- * `purrdf-wasm-receipt` for a run that cannot have an execution identity.
- */
-export function bindExecutionReceipt(receiptJson: string, contentIdentity: string): string;
 
 export interface QueryOutcome {
   readonly executionReceipt: ExecutionReceipt;
@@ -873,9 +864,18 @@ export class Dataset implements Iterable<Quad> {
   /**
    * The 64-hex content identity of this dataset's current content, the snapshot every
    * query reads: a digest of every row, computed on this call and never by a query.
-   * Bind it to a query's receipt with {@link bindExecutionReceipt}.
+   * Bind it to a query's receipt with {@link Dataset#bindExecutionReceipt}.
    */
   contentIdentity(): string;
+  /**
+   * Bind a query's execution receipt to this dataset's current content: the receipt
+   * JSON with `contentIdentity` and `executionIdentity` added, from one frozen
+   * snapshot. Throws with code `purrdf-wasm-options` for a receipt that is not one,
+   * and `purrdf-wasm-receipt` for a run that cannot have an execution identity. A
+   * refusal of the dataset's own content identity throws as `contentIdentity()`
+   * throws it, with neither code.
+   */
+  bindExecutionReceipt(receiptJson: string): string;
   /**
    * Canonical N-Quads of the dataset (the canonical line
    * sequence of the nested-refinement labelling, with decimal blank-node
@@ -968,15 +968,74 @@ export type LiftProfile = Exclude<
   "csvw-terms" | "okf-terms" | "obo-graphs" | "skos" | "dcat-rdf" | "void"
 >;
 
+export type LossGraphName =
+  | { kind: "default" }
+  | { kind: "iri"; value: string }
+  | { kind: "blank"; label: string; scope: string | null };
+
+export type LossTerm =
+  | { kind: "iri"; value: string }
+  | { kind: "blank"; label: string; scope: string | null }
+  | {
+      kind: "literal";
+      lexical: string;
+      datatype: string;
+      language: string | null;
+      direction: "ltr" | "rtl" | null;
+    }
+  | { kind: "triple"; subject: LossTerm; predicate: LossTerm; object: LossTerm }
+  | { kind: "indexed"; index: number };
+
+export type LossSite =
+  | { kind: "unspecified" }
+  | { kind: "document"; path: string | null; line: number | null; column: number | null }
+  | {
+      kind: "gts";
+      segment: number | null;
+      frame: number | null;
+      term: number | null;
+      quad: number | null;
+      reifier: number | null;
+    }
+  | { kind: "stage"; name: string };
+
+export type LossSubject =
+  | { kind: "absent" }
+  | { kind: "term"; term: LossTerm }
+  /** A source row, by its kind and the lowercase hexadecimal SHA-256 digest of its content. */
+  | { kind: "row"; row_kind: string; digest: string }
+  | { kind: "resource"; resource_kind: string; identifier: string }
+  | { kind: "graph"; graph: LossGraphName }
+  | { kind: "pointer"; tokens: string[] }
+  | { kind: "path"; steps: LossPathStep[] };
+
+export type LossPathStep =
+  | { kind: "element"; name: string; position: number }
+  | { kind: "attribute"; name: string };
+
+export type LossDetailValue =
+  | { kind: "count"; count: number }
+  | { kind: "identifier"; identifier: string }
+  | { kind: "term"; term: LossTerm }
+  | { kind: "graph"; graph: LossGraphName };
+
+/**
+ * The parsed `lossLedgerJson`. Counts, positions, indexes and GTS ordinals are
+ * unsigned 64-bit integers in the JSON text: `JSON.parse` reads one above
+ * `Number.MAX_SAFE_INTEGER` inexactly, so read the text with a parser that keeps
+ * large integers when a value can exceed that bound.
+ */
 export interface ProjectionLossLedger {
-  schema_version: 1;
+  schema_version: 2;
   losses: Array<{
     code: string;
     from: string;
     to: string;
     intentional: boolean;
     note: string;
-    location?: string;
+    site: LossSite;
+    subject: LossSubject;
+    detail: Array<{ kind: "detail"; name: string; value: LossDetailValue }>;
   }>;
 }
 

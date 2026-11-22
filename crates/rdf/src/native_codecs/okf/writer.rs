@@ -10,9 +10,10 @@ use purrdf_lex::yaml;
 use super::reader::{extract_markdown_links, resolve_link_path};
 use super::{OkfBundle, OkfConfig, OkfError, decimal_lexical_from_f64, minted_document_iri};
 use crate::{
-    BlankScope, LossEntry, LossLedger, QuadIds, RdfDataset, RdfDatasetVisitor, RdfLocation,
-    RdfTextDirection, TermId, TermRef,
+    BlankScope, LossEntry, LossLedger, QuadIds, RdfDataset, RdfDatasetVisitor, RdfTextDirection,
+    TermId, TermRef,
 };
+use purrdf_core::{LossDetail, LossSite, LossSubject, LossTerm};
 
 use purrdf_xsd::datatype::XSD_BOOLEAN;
 use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
@@ -1043,11 +1044,14 @@ fn validate_yaml_fields(fields: &BTreeMap<String, YamlValue>, path: &str) -> Res
     Ok(())
 }
 
-fn term_subject(terms: &[OwnedTerm], subject: TermId) -> String {
+fn term_subject(terms: &[OwnedTerm], subject: TermId) -> LossTerm {
     match terms.get(subject.index()) {
-        Some(OwnedTerm::Iri(iri)) => iri.clone(),
-        Some(OwnedTerm::Blank { label, scope }) => format!("_:{}@{}", label, scope.ordinal()),
-        _ => format!("term#{}", subject.index()),
+        Some(OwnedTerm::Iri(iri)) => LossTerm::Iri(iri.clone()),
+        Some(OwnedTerm::Blank { label, scope }) => LossTerm::Blank {
+            label: label.clone(),
+            scope: Some(scope.ordinal().to_string()),
+        },
+        _ => LossTerm::Indexed(subject.index() as u64),
     }
 }
 
@@ -1056,7 +1060,7 @@ fn term_subject(terms: &[OwnedTerm], subject: TermId) -> String {
 fn record_writer_loss(
     ledger: &mut LossLedger,
     terms: &[OwnedTerm],
-    (kind, ordinal): (&str, usize),
+    (kind, ordinal): (&'static str, usize),
     subject: TermId,
     code: &'static str,
     note: &'static str,
@@ -1066,10 +1070,14 @@ fn record_writer_loss(
         from: Cow::Borrowed("rdf-1.2-dataset"),
         to: Cow::Borrowed("okf"),
         note: Cow::Borrowed(note),
-        location: Some(Box::new(
-            RdfLocation::logical(format!("okf-writer:{kind}:{ordinal}"))
-                .with_subject(term_subject(terms, subject)),
-        )),
+        site: LossSite::Stage {
+            name: "okf-writer".to_owned(),
+        },
+        subject: LossSubject::Term(term_subject(terms, subject)),
+        detail: vec![
+            LossDetail::identifier("event-kind", kind),
+            LossDetail::count("ordinal", ordinal as u64),
+        ],
     });
 }
 
@@ -1304,7 +1312,7 @@ mod tests {
                 .losses
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some()),
+                .all(|entry| entry.subject != LossSubject::Absent),
             "every runtime loss must identify its source row"
         );
         assert_eq!(outcome.documents, 1);

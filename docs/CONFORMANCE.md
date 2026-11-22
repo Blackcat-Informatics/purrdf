@@ -46,7 +46,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | --- | --- | ---: | ---: | ---: | ---: | :---: |
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 29 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
-| RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
+| RDF 1.2 canonicalization profile | purrdf-rdfc12 v3 (first-party) | 12 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0/1.1/1.2 evaluation (full corpus) | W3C `sparql10` + `sparql11` + `sparql12` + first-party | 1393 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0 unlisted vendored files | W3C data-r2 files no upstream manifest lists | 1 | 0 | 0 | 0 | GREEN |
@@ -73,14 +73,15 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft 2020-12 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2342 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft 2019-09 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2298 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
-| GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
+| GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 39 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 4289 | 4 | 4 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 1577 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The RDFLib row states the required scoreboard under native XSD string-subtype
 value equality, including seven explicit semantic differences checked by strict
-xfail. The Python binding row retains its last complete broad-suite snapshot. Contextual SPARQL
+xfail. The Python binding row counts the first-party suite, including its
+rdflib differential. Contextual SPARQL
 semantics are checked by the Rust `rdflib_contextual` target. Focused Python
 checks cover receiver dispatch, keyword extraction, term and result carriers,
 exceptions and shadow imports; their totals do not refresh the broad-suite rows.
@@ -149,8 +150,8 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | GeoSPARQL 1.1 determinism corpus | first-party, `purrdf_geo::determinism::CORPUS` | **20 / 20** geometries · 0 ledgered. Counts corpus geometries, not test functions. Their WKT/GeoJSON bytes, DE-9IM matrices, exact planar measures and IEEE encodings fold into the single `GOLDEN_DIGEST` in `crates/geo/tests/determinism.rs`; the conformance matrix compares the printed digest with that frozen source value. The polygon/mixed-collection length correction includes polygon boundaries and selects the greatest dimension-total; its deliberate byte change is documented beside the golden. This row grades deterministic planar output, not independent OGC semantic conformance or the geographic numerical corpus. No OGC GeoSPARQL conformance suite is vendored or claimed. The twelve first-party SHACL cases mirror the published validator using caller-selected `example.org` vocabulary; nine query-rewrite, nine scalar-function and four layout cases run separately in `make check`. The explicit carrier-only scalar adapter registers twelve construction/serialization refusals and checks representative named errors rather than plausible default answers. The standard geographic adapter additionally implements `transform`, `buffer` and `metricBuffer` through its selected operation/profile law; nine construction/serialization functions remain named hard errors. The neutral geographic kernel's numerical, geometry, cover, ownership and host cases are separate acceptance, not additional entries in this twenty-geometry row. Native digest execution, release WASM compilation and actual portable/SIMD geographic transcript execution are distinct checks (`make check`, `make wasm`, `make geo-determinism`). |
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
-| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4289** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
-| GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 1 ledgered divergence. `12-conflicting-reifier` binds one reifier id to two triples and carries no quoted-triple term; `rdf:reifies` is not a functional property, so both bindings are legitimate and this reader keeps both without complaint (two rows, no diagnostic) where the committed expectation still states the superseded single-binding reading (one row plus a `ConflictingReifier` diagnostic). The expectation encodes a premise the reader has shed, and the corpus is governed upstream in [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts) and never regenerated here, so the disagreement stands until it is corrected there. It is held to XPASS discipline in both directions: the ledgered vector must STILL disagree, and no unlisted vector may start disagreeing |
+| Python binding suite | first-party, compat differential vs rdflib 7.6 included | **1577** pass · 4 strict-xfail (ledgered in the rdflib differential) · 1 skipped. Counts the first-party binding suite, including entailment, GTS, projections and shapes. The vendored suite reports its own row. |
+| GTS transport | frozen cross-language vectors, `vectors/` | **39 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 0 ledgered divergences. The harness keeps its two-way discipline over an empty ledger: a vector listed as diverging must still disagree, and no unlisted vector may start disagreeing. The upstream corpus at `gmeow-gts` revision `cd123c2` holds 52 vectors and the engine agrees with 51. The one standing divergence is `13c-self-describing-triple-term`: two terms resolve to the same triple, specification sections 7.1 and 7.8 collapse identical value rows, and the vector keeps both quads. The engine follows the text, and the vector is not edited. `vectors/signed/` (`basic.json` and 68 `sigalg-*` vectors) is outside this statement: the `sigalg-*` vectors pin a protected-header grammar that version 1 of the specification does not contain, so they are not graded as conformance. `signed_corpus` still lists where the engine departs from them |
 
 ## Native YAML-LD Basic
 
@@ -240,8 +241,8 @@ The stage implements ordinary document expansion from the
 It preserves nested and repeated node objects, anonymous objects without minted
 identifiers, list order, indexes, graph/reverse/included structure and original
 JSON values, including `@json` payloads. RDF lexical conversion and node merging
-occur afterward. Standard unmapped-property dropping replaces the earlier
-undefined-property refusal. Unmapped index metadata succeeds structurally and
+occur afterward. Standard unmapped-property dropping applies; an undefined
+property is not refused. Unmapped index metadata succeeds structurally and
 is explicitly refused by RDF lowering; custom index mappings emit RDF properties.
 
 `JsonLdExpansionLimits::max_allocation_bytes` controls a new, separate native
@@ -342,8 +343,6 @@ cases `expanded_jsonld_and_yamlld_cli_bytes_are_frozen` and
 `configured_jsonld_cli_modes_registry_yaml_and_errors_share_one_schema` pin
 expanded output bytes and compare configured JSON-LD/YAML-LD canonical datasets.
 These are scoped implementation checks, not a complete conformance verdict.
-The complete upstream matrix for the pinned Basic draft and remaining
-deterministic semantic-output acceptance remain open.
 [Context and carrier documentation](book/src/concepts/jsonld.md#yaml-ld-semantic-translation)
 distinguishes standard Basic processing from the RDF 1.2 carrier additions.
 
@@ -515,9 +514,13 @@ distinguishes standard Basic processing from the RDF 1.2 carrier additions.
   resolution examples.
 - `bindings/python/tests/rdflib_suite/vendor/` — rdflib 7.6's own tests,
   vendored verbatim and run against the PurRDF drop-in.
-- `vectors/*.gts` + subdirs — the GTS conformance corpus shared byte-exact
-  with the other GTS engines (governed in
-  [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)).
+- `vectors/*.gts` + subdirs — the GTS conformance corpus (governed in
+  [`gmeow-gts`](https://github.com/Blackcat-Informatics/gmeow-gts)). The 68
+  files of the 34 upstream vectors at the top of `vectors/` are byte-identical
+  to the upstream corpus, shared byte-exact with the other GTS engines, and
+  byte-frozen (`scripts/conformance-frozen/vectors-flat.sha256`). The other ten
+  files, five vectors, are this project's own generated files and are not
+  frozen.
 
 ## Running them
 
@@ -561,7 +564,7 @@ A harness never skips silently. The four mechanisms:
    harness asserts each still fails. Fixing one without removing its entry
    breaks the build ("XPASS"), which keeps the ledger honest.
 3. **Trait skips (ShEx only)** — the mechanism to skip whole spec features by
-   their manifest trait tags, counted exactly. The trait-skip list is currently
+   their manifest trait tags, counted exactly. The trait-skip list is
    **empty**: imports and semantic actions are now fully validated, so nothing
    is skipped.
 4. **Monotone budget (ratchet)** — `scripts/conformance-baseline.json` records,
@@ -621,10 +624,10 @@ way the matrix stays honest:
   (`crates/sparql-conformance/suite/`, pinned commit `426c7df`) and every
   non-pass is a typed strict-xfail in `crates/sparql-conformance/src/xfail.rs`.
   The value-mismatch / property-path / update-semantics / cast / function /
-  reifier residuals described in earlier revisions are **resolved**: XSD casts,
+  reifier surfaces all pass: XSD casts,
   numeric/string functions, property paths, UPDATE semantics, `CONSTRUCT WHERE`,
   grouping, EXISTS-over-GRAPH-var, and the SPARQL 1.2 triple-term / reifier /
-  annotation surface (including graph-scoped reifiers) all pass. **All 7 W3C
+  annotation surface (including graph-scoped reifiers). **All 7 W3C
   `service` federation cases pass** (via the lateral SERVICE seam), and so do
   all 47 cases of the verbatim `aggregates` group. The SPARQL evaluation corpus
   has **0 ledgered xfails**. The
@@ -689,9 +692,7 @@ way the matrix stays honest:
      cases upstream, and the harness's `OWL2-DL-EXCLUDED` line reports what the
      other **220** did when the probe ran — **172 the tableau decided** (108
      consistent, 64 inconsistent), 0 that did not
-     terminate under a 40 s ceiling (an earlier measurement, before the tableau's
-     clausification and search refinement, found 30; every one of those now
-     resolves within the same ceiling), 25 withheld (20 reasoner, 5 parse),
+     terminate under a 40 s ceiling, 25 withheld (20 reasoner, 5 parse),
      and 23 with no RDF/XML premise. So the exclusion was payload-size triage,
      not a capability limit, and 262 / 262 is a score over a corpus rather than
      over what W3C published.
@@ -775,10 +776,9 @@ way the matrix stays honest:
      nested anonymous operand) and `webont-restriction-005` (a membership in an
      anonymous restriction).
 
-     Every class the ledger used to hold is closed, and **the rule table did not
-     change once**. `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are
+     The lanes do not change the rule table. `rules(Regime::OwlRl)` and `implemented(Regime::OwlRl)` are
      the same 78, `extensions(Regime::OwlRl)` is the one `ext-eq-diff-sym`, and
-     strict `Materialization::OwlRl` output is byte-for-byte what it was.
+     strict `Materialization::OwlRl` output is unaffected by the lanes.
      `purrdf_entail::entails()` reaches a conclusion seven ways, and five of the
      six are not matching:
 
@@ -827,8 +827,7 @@ way the matrix stays honest:
      `EntailmentWarrant` arm and its own checker, and every one of those
      checkers re-decides the claim without running a reasoner.
 
-     The one entry that used to be actionable is CLOSED, and closing it is why
-     the report has an `extension` line. `a owl:differentFrom b` entails
+     The report has an `extension` line for one conclusion outside the tables. `a owl:differentFrom b` entails
      `b owl:differentFrom a` — sound, and shaped exactly like `prp-symp`, yet
      not among the 78 rules because Table 4's `owl:differentFrom` rules only
      ever conclude `false`. PurRDF states it as `ext-eq-diff-sym`, in a rule
@@ -899,8 +898,8 @@ way the matrix stays honest:
   Its snapshot is `40231dfb97c5b606d22ae733947c0d14b4f45c07`, graded under the
   explicit `shacl-ed-2026-11-06` law. That law evaluates list-function arguments
   in the caller's scope before application, and shared run-once rules execute
-  once per focus node. The October law and compatibility defaults keep their
-  earlier behavior. Node-expression evaluation failures are graded as declared;
+  once per focus node. The October law and compatibility defaults retain their
+  own behavior. Node-expression evaluation failures are graded as declared;
   setup, processor and declaration failures cannot satisfy those expectations.
   The independent SPARQL Rules root remains at `4cd46986`, matching the supported
   2026-09-19 Working Draft; it is outside the SHACL EARL. Every negative Rules
@@ -1174,13 +1173,10 @@ coherent, costs a parse on every composite literal, and would change what
 canonicalization sees. Both readings are defensible; this is the one PurRDF
 ships today.
 
-**And exactly what it does not.** The mitigation was originally specified over
-upstream **negative-syntax** entries — "no negative-syntax entry contains the
-new production". Stated that way it is *vacuous*: all 658 entries the vendored
-SEP-0009 corpus declares are `mf:QueryEvaluationTest`, so upstream ships no
-negative-syntax CDT vector at all, and nothing it publishes could observe the
-divergence in either direction. The broader claim above is what is actually
-established, and it is the one worth having. What no test here does is compare
+**And exactly what it does not.** Upstream ships no negative-syntax CDT
+vector: all 658 entries the vendored SEP-0009 corpus declares are
+`mf:QueryEvaluationTest`, so nothing it publishes could observe the divergence
+in either direction. The broader claim above is what is established. What no test here does is compare
 PurRDF against another SEP-0009 implementation.
 
 ### SHACL-AF node expressions: normative surface vs. owned extensions
@@ -1224,6 +1220,48 @@ The node-expression kinds split into two tiers:
   entries cover the RDF 1.2 triple term rdflib has no counterpart for,
   registered custom SPARQL functions, `SERVICE` federation, and parse-time
   string-datatype collapse. See the two ledgers above for the per-test reasons.
+
+### GTS blob payloads: structure at fold, content on first request
+
+A blob frame that declares its digest folds without decoding its payload: the
+reader keeps the wire bytes and decodes them when the bytes or their size are
+first requested. At fold it checks the payload's structure against the first
+transform that would decode it, and a payload that fails becomes an opaque node
+with a `DamagedFrame` diagnostic, as specification section 7.5 requires of an
+undecodable payload. The check costs a walk of frame and block headers, never a
+decode:
+
+* `zstd` and `zstd-rsyncable`: every frame header is readable, every frame's
+  block headers reach a last block inside the payload, a declared content
+  checksum is present, and a dictionary id named by a frame header is the id of
+  the catalog's dictionary for that transform.
+* `gzip`: the payload begins with the gzip magic and is long enough for a header
+  and trailer.
+* Every other transform has no cheap structural check and stays lazy.
+
+A payload whose structure is sound but whose content is not, such as a corrupt
+block body, a wrong checksum or a wrong gzip length, still folds as a blob. The
+first request for its bytes or size returns the typed codec failure, never a
+panic. A blob without a declared digest is decoded at fold, because its digest
+is computed from the decoded bytes, so this limit does not apply to it.
+
+### GTS triple terms that state no triple: one identity per term
+
+Specification section 7.3 says a triple term that states no triple stays a
+distinct term and a projection renders it as a fresh blank node. Its equality
+rules also say a term that resolves to no triple "keeps the identity it had
+before this rule (one unresolvable-triple-term identity per scope)". The two
+sentences admit a reading in which every such term of a scope is one shared
+node. PurRDF follows the first: each term is its own node, because the third
+resolution rule says "distinct term" and the blank-node rules in section 7.1 say
+each anonymous term entry is a distinct blank node within its scope. A shared
+node would also merge two statements about different terms into one.
+
+The projected node is fresh: it lives in a blank-node scope no document label
+reaches, so a document blank node with the label `unbound_triple_N` is a
+different node. This holds on every projection path, and a term whose `rf`
+names a reifier no `reifies` row binds is projected the same way instead of
+being refused.
 
 ## Comparison caveats
 

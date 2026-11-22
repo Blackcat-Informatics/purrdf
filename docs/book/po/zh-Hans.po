@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-11-08T03:13:08-06:00\n"
+"POT-Creation-Date: 2026-11-21T15:17:54-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -36,7 +36,7 @@ msgstr "入门"
 #: src/SUMMARY.md:12 src/concepts/projections.md:451 src/concepts/jsonld.md:44
 #: src/sparql/querying.md:2276 src/validation/shacl.md:446
 #: src/validation/shacl.md:557 src/validation/shacl.md:592
-#: src/validation/shacl.md:1335 src/validation/shacl.md:1651
+#: src/validation/shacl.md:1336 src/validation/shacl.md:1652
 #: src/validation/shex.md:78 src/entailment.md:56 src/entailment.md:101
 msgid "Rust"
 msgstr "Rust"
@@ -45,8 +45,8 @@ msgstr "Rust"
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:572
 #: src/sparql/querying.md:2278 src/validation/shacl.md:448
 #: src/validation/shacl.md:554 src/validation/shacl.md:589
-#: src/validation/shacl.md:1511 src/validation/shacl.md:1610
-#: src/validation/shacl.md:1653 src/validation/shex.md:80 src/entailment.md:58
+#: src/validation/shacl.md:1512 src/validation/shacl.md:1611
+#: src/validation/shacl.md:1654 src/validation/shex.md:80 src/entailment.md:58
 #: src/entailment.md:103
 msgid "Python"
 msgstr "Python"
@@ -65,8 +65,8 @@ msgstr "JavaScript / WebAssembly"
 
 #: src/SUMMARY.md:17 src/concepts/projections.md:455 src/concepts/jsonld.md:612
 #: src/sparql/querying.md:2280 src/validation/shacl.md:556
-#: src/validation/shacl.md:591 src/validation/shacl.md:1612
-#: src/validation/shacl.md:1655 src/entailment.md:60 src/entailment.md:105
+#: src/validation/shacl.md:591 src/validation/shacl.md:1613
+#: src/validation/shacl.md:1656 src/entailment.md:60 src/entailment.md:105
 msgid "C"
 msgstr "C"
 
@@ -143,7 +143,7 @@ msgstr "SHACL"
 msgid "Prepared Shapes Products"
 msgstr "预备形状产物"
 
-#: src/SUMMARY.md:42 src/reference/python-api.md:505 src/validation/shex.md:6
+#: src/SUMMARY.md:42 src/reference/python-api.md:504 src/validation/shex.md:6
 msgid "ShEx"
 msgstr "ShEx"
 
@@ -761,8 +761,8 @@ msgstr "// 在驻留的 TermId 空间中构建数据集。\n"
 #: src/getting-started/rust.md:33 src/getting-started/python.md:40
 #: src/reference/python-api.md:84 src/reference/python-api.md:86
 #: src/reference/python-api.md:124 src/reference/python-api.md:145
-#: src/reference/python-api.md:636 src/concepts/canonicalization.md:67
-#: src/concepts/canonicalization.md:71 src/sparql/results.md:21
+#: src/reference/python-api.md:635 src/concepts/canonicalization.md:69
+#: src/concepts/canonicalization.md:73 src/sparql/results.md:21
 #: src/sparql/results.md:30 src/validation/shex.md:64 src/validation/shex.md:84
 #: src/gts.md:51
 msgid "\"https://example.org/alice\""
@@ -782,7 +782,7 @@ msgstr "\"http://xmlns.com/foaf/0.1/name\""
 
 #: src/getting-started/rust.md:37 src/reference/python-api.md:39
 #: src/reference/python-api.md:125 src/reference/python-api.md:185
-#: src/reference/python-api.md:638
+#: src/reference/python-api.md:637
 msgid "\"Alice\""
 msgstr "\"Alice\""
 
@@ -981,7 +981,7 @@ msgstr ""
 "原生验证引擎以顶层子模块的形式公开，与 Rust 的 `purrdf` 门面 crate（umbrella "
 "crate）保持同构——绝不直接经由内部的 `purrdf_native` 扩展模块："
 
-#: src/getting-started/python.md:37 src/validation/shacl.md:1587
+#: src/getting-started/python.md:37 src/validation/shacl.md:1588
 msgid "\"conforms\""
 msgstr "\"conforms\""
 
@@ -1625,20 +1625,25 @@ msgid ""
 "`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, "
 "`max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, "
 "`max_udf_depth`, `unlimited_udf_depth`, `no_ceiling` and `cancel` to the "
-"query options. Ceilings are inclusive. Omitted ceilings retain metering and "
-"the default UDF depth limit of 32. Set `max_udf_depth` to a finite logical "
-"invocation limit, or `unlimited_udf_depth=True` to remove it; supplying both "
-"is a typed conflict. `no_ceiling=True` declines accounting and resource "
-"caps, including UDF depth, retains deadline/cancellation, and conflicts with "
-"explicitly supplied finite caps."
+"query options. Ceilings are inclusive. `max_remote_requests` bounds host "
+"fetches, so each `SERVICE` request and each fetch of a `LOAD`, the first "
+"fetch and each redirect hop, counts one. A redirect the host follows itself "
+"is part of its fetch. Omitted ceilings retain metering and the default UDF "
+"depth limit of 32. Set `max_udf_depth` to a finite logical invocation limit, "
+"or `unlimited_udf_depth=True` to remove it; supplying both is a typed "
+"conflict. `no_ceiling=True` declines accounting and resource caps, including "
+"UDF depth, retains deadline/cancellation, and conflicts with explicitly "
+"supplied finite caps."
 msgstr ""
 "`query_governed` 在查询选项上增加 `fuel`、`deadline_ms`、`max_answers`、"
 "`max_intermediate_cells`、`max_scratch_bytes`、`max_remote_requests`、"
 "`max_udf_depth`、`unlimited_udf_depth`、`no_ceiling` 和 `cancel`。上限包含边"
-"界值。省略上限仍保留计量和默认的 UDF 深度上限 32。将 `max_udf_depth` 设为有限"
-"的逻辑调用深度上限，或用 `unlimited_udf_depth=True` 移除该上限；同时提供两者"
-"会产生带类型信息的冲突。`no_ceiling=True` 关闭核算和资源上限，包括 UDF 深度，"
-"但保留截止期限与取消；它与显式提供的有限上限冲突。"
+"界值。`max_remote_requests` 限制主机获取次数：每个 `SERVICE` 请求和 `LOAD` 的"
+"每次获取（首次获取和每次重定向跳转）各计一次。主机自行跟随的重定向属于其所在"
+"的那次获取。省略上限仍保留计量和默认的 UDF 深度上限 32。将 `max_udf_depth` 设"
+"为有限的逻辑调用深度上限，或用 `unlimited_udf_depth=True` 移除该上限；同时提"
+"供两者会产生带类型信息的冲突。`no_ceiling=True` 关闭核算和资源上限，包括 UDF "
+"深度，但保留截止期限与取消；它与显式提供的有限上限冲突。"
 
 #: src/reference/python-api.md:178
 msgid "\"SELECT ?s ?p ?o WHERE { ?s ?p ?o }\""
@@ -2068,7 +2073,7 @@ msgstr ""
 "回规范 N-Quads：即嵌套细化标注的规范行序列，空节点标签为十进制。它不是 W3C "
 "RDFC-1.0 文档，因此不得把它的摘要标记为 RDFC-1.0。"
 
-#: src/reference/python-api.md:353
+#: src/reference/python-api.md:352
 msgid ""
 "Both calls require an explicit `canonical_search`: `\"unlimited\"` or a "
 "canonical unsigned decimal `u64` string for a finite per-run limit. Both "
@@ -2086,7 +2091,7 @@ msgstr ""
 "`native_cause` 和 `native_cause_json` 保留其元数据。在把字节用作身份之前，请"
 "阅读[规范化章节](../concepts/canonicalization.md)。"
 
-#: src/reference/python-api.md:362
+#: src/reference/python-api.md:361
 msgid ""
 "The XSD helpers work on lexical strings and datatype IRIs: "
 "`xsd_value_compare` returns an order or `None` when unsupported, malformed "
@@ -2099,11 +2104,11 @@ msgstr ""
 "`xsd_decode_binary` 和 `xsd_normalize_whitespace` 返回其值或 `None`。不要先将"
 "精确十进制数或秒的小数部分转换为 Python `float`。"
 
-#: src/reference/python-api.md:368
+#: src/reference/python-api.md:367
 msgid "SPARQL Results and provenance"
 msgstr "SPARQL 结果与来源记录"
 
-#: src/reference/python-api.md:370
+#: src/reference/python-api.md:369
 msgid ""
 "`serialize_sparql_solutions` takes the ordered variable list and rows with "
 "one cell per variable, retaining `None` for unbound cells. "
@@ -2120,7 +2125,7 @@ msgstr ""
 "`(\"SELECT\", variables, rows)` 或 `(\"ASK\", boolean)`。这里没有 CSV 或 TSV "
 "原生读取器。"
 
-#: src/reference/python-api.md:378
+#: src/reference/python-api.md:377
 msgid ""
 "Provenance is additive and requires `provenance_namespace=(prefix, iri)`; "
 "`query_hash` supplies the caller's identity. `provenance_from_json` and "
@@ -2131,11 +2136,11 @@ msgstr ""
 "提供调用方的身份。`provenance_from_json` 和 `provenance_from_xml` 从该命名空"
 "间读回 `query_hash` 与 `engine`。没有来源记录时字段为 `None`，不会编造身份。"
 
-#: src/reference/python-api.md:383
+#: src/reference/python-api.md:382
 msgid "SHACL validation, preparation and rules"
 msgstr "SHACL 验证、预备与规则"
 
-#: src/reference/python-api.md:385
+#: src/reference/python-api.md:384
 msgid ""
 "Use `purrdf.shapes`; `purrdf.shacl` is the compatibility alias. The one-call "
 "`shapes.validate` takes Turtle shapes and N-Triples data and returns a "
@@ -2150,7 +2155,7 @@ msgstr ""
 "`validate_store` 直接读取 `Store` 或 `MutableDataset` 的原生快照，不经过文本"
 "往返。后续修改影响下一份报告，不改变已返回报告。"
 
-#: src/reference/python-api.md:392
+#: src/reference/python-api.md:391
 msgid ""
 "`ValidationReport` exposes `conforms`, `shapes_graph_well_formed`, "
 "`diagnostics` and `results`, plus `to_ntriples()` and `to_sarif()`. Result "
@@ -2168,7 +2173,7 @@ msgstr ""
 "略时使用 SHACL 默认的 Violation/Warning/Info 集合，不含 Debug 和 Trace。禁止"
 "集合为空或严重性不是 IRI 时会引发异常。"
 
-#: src/reference/python-api.md:401
+#: src/reference/python-api.md:400
 msgid ""
 "'''\n"
 "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
@@ -2186,15 +2191,15 @@ msgstr ""
 "    sh:property [ sh:path ex:name; sh:minCount 1 ] .\n"
 "'''"
 
-#: src/reference/python-api.md:414 src/reference/python-api.md:630
+#: src/reference/python-api.md:413 src/reference/python-api.md:629
 msgid "'<https://example.org/alice> <https://example.org/name> \"Alice\" .'"
 msgstr "'<https://example.org/alice> <https://example.org/name> \"Alice\" .'"
 
-#: src/reference/python-api.md:418
+#: src/reference/python-api.md:417
 msgid "Imports and execution environment"
 msgstr "导入与执行环境"
 
-#: src/reference/python-api.md:420
+#: src/reference/python-api.md:419
 msgid ""
 "Every shapes entry point resolves imports from the supplied ordered "
 "`imports` table of `(IRI, Turtle document)` pairs. It fetches nothing. "
@@ -2210,7 +2215,7 @@ msgstr ""
 "`sh:shapesGraph` 链接必须由手头材料解析。预备形状不能在数据到达时默默加入另一"
 "个链接图；未持有的链接会被拒绝。"
 
-#: src/reference/python-api.md:428
+#: src/reference/python-api.md:427
 msgid ""
 "`shapes_base` (or `Shapes(..., base=...)`) resolves relative shapes IRIs. "
 "`shapes_graph` names the graph read by SHACL-SPARQL through `$shapesGraph`; "
@@ -2228,7 +2233,7 @@ msgstr ""
 "定日期的规则用于分面和嵌入式 SPARQL。资源拒绝会引发异常，不会返回空报告或符合"
 "报告。"
 
-#: src/reference/python-api.md:436
+#: src/reference/python-api.md:435
 msgid ""
 "`Shapes.extension_usage` inspects declarations before validation: `sites` "
 "distinguishes calls from data predicates under the supplied namespaces and "
@@ -2245,11 +2250,11 @@ msgstr ""
 "误、强制诊断、已被取代的验证器、未执行的查询声明、导入锚定和确定性报告文本。"
 "两者都不是数据验证。"
 
-#: src/reference/python-api.md:444
+#: src/reference/python-api.md:443
 msgid "Prepared products and incremental reports"
 msgstr "预备产物与增量报告"
 
-#: src/reference/python-api.md:446
+#: src/reference/python-api.md:445
 msgid ""
 "`Shapes.prepare()` returns `PreparedShapes`; `to_product()` writes "
 "deterministic bytes. `shapes.pack_product()` combines parsing, preparation "
@@ -2274,7 +2279,7 @@ msgstr ""
 "本。`PreparedShapes.provenance()` 区分已解析、恢复后准入和恢复后重建的预备结"
 "果。"
 
-#: src/reference/python-api.md:458
+#: src/reference/python-api.md:457
 msgid ""
 "`PreparedShapes.validate_store_changes(store)` returns `ChangeValidation`. "
 "Read `bounded` before `report.conforms`: when true, the report covers "
@@ -2290,11 +2295,11 @@ msgstr ""
 "`focus_nodes` 为计数，否则为 `None`；`reason` 标识需要完整运行的构造。待处理"
 "修改由调用方上一次 `checkpoint` 决定；验证不重新定义该检查点。"
 
-#: src/reference/python-api.md:466
+#: src/reference/python-api.md:465
 msgid "Rules and node expressions"
 msgstr "规则与节点表达式"
 
-#: src/reference/python-api.md:468
+#: src/reference/python-api.md:467
 msgid ""
 "`shapes.entail` applies a shapes graph's default rule set and returns base "
 "plus inferred triples. It differs from `purrdf.entail.materialize`, which "
@@ -2315,7 +2320,7 @@ msgstr ""
 "本和分层。存储事实数、连接步数、生成词项数和生成轮数均由显式关键字参数限制；"
 "耗尽时引发对应限制的 `ValueError`。"
 
-#: src/reference/python-api.md:478
+#: src/reference/python-api.md:477
 msgid ""
 "`shapes.entail` and `shapes.apply_rules` accept keyword-only `now` and "
 "`entropy_seed`, including the SHACL and SRL rule sources and the `shacl` "
@@ -2333,7 +2338,7 @@ msgstr ""
 "负年份。种子为规则执行中的查询选择可重现的序列。重复相同的输入文档和坐标，会"
 "重复产生相同的推理输出。"
 
-#: src/reference/python-api.md:487
+#: src/reference/python-api.md:486
 msgid ""
 "These controls work with the default or an explicitly selected `xpath_regex` "
 "law. Coordinate decoding follows XPath selection and precedes document/"
@@ -2354,7 +2359,7 @@ msgstr ""
 "项不增加执行回执，也不扩展形状验证、节点表达式或独立的 `purrdf.entail` 机制 "
 "API。"
 
-#: src/reference/python-api.md:497
+#: src/reference/python-api.md:496
 msgid ""
 "`eval_node_expr` selects exactly one expression: a named IRI/blank label, a "
 "unique walk from `expr_at` through `expr_via`, or a one-root inline "
@@ -2372,7 +2377,7 @@ msgstr ""
 "断。完整契约见 [SHACL](../validation/shacl.md) 与[预备产物](../validation/"
 "shapes-products.md)。"
 
-#: src/reference/python-api.md:507
+#: src/reference/python-api.md:506
 msgid ""
 "`purrdf.shex.parse` converts ShExC or ShExJ into canonical ShExJ text. "
 "`shex.validate` takes a schema, data and a fixed shape map. Each `(node, "
@@ -2392,11 +2397,11 @@ msgstr ""
 "相对 IRI。被所选 XPath 规则拒绝的模式使该条目不符合；原生资源拒绝则对整个映射"
 "引发异常。参见 [ShEx](../validation/shex.md)。"
 
-#: src/reference/python-api.md:517
+#: src/reference/python-api.md:516
 msgid "Entailment, decisions and proofs"
 msgstr "蕴涵、判定与证明"
 
-#: src/reference/python-api.md:519
+#: src/reference/python-api.md:518
 msgid ""
 "`purrdf.entail.Regime` names `SIMPLE`, `RDF`, `RDFS`, `OWL_RL`, "
 "`OWL_DIRECT`, `RIF` and `D`; functions also accept the lowercase CLI "
@@ -2418,7 +2423,7 @@ msgstr ""
 "`implemented_rules` 和 `extensions` 分别提供规范规则表、已实现子集和具名非规"
 "范扩展。"
 
-#: src/reference/python-api.md:530
+#: src/reference/python-api.md:529
 msgid ""
 "Chase reports describe rule coverage; OWL Direct-Semantics services return "
 "decision certificates. An incomplete rule table differs from a decision that "
@@ -2427,93 +2432,93 @@ msgstr ""
 "chase 报告描述规则覆盖情况；OWL Direct-Semantics 服务返回判定证书。规则表不完"
 "整与判定耗尽工作上限是两回事。应解包证书并与答案一起保留。"
 
-#: src/reference/python-api.md:534
+#: src/reference/python-api.md:533
 msgid "Service"
 msgstr "服务"
 
-#: src/reference/python-api.md:534
+#: src/reference/python-api.md:533
 msgid "Question"
 msgstr "问题"
 
-#: src/reference/python-api.md:536
+#: src/reference/python-api.md:535
 msgid "`consistency`"
 msgstr "`consistency`"
 
-#: src/reference/python-api.md:536
+#: src/reference/python-api.md:535
 msgid "Whether the knowledge base has a model; false and unknown are distinct."
 msgstr "知识库是否存在模型；假与未知是不同结果。"
 
-#: src/reference/python-api.md:537
+#: src/reference/python-api.md:536
 msgid "`classify`"
 msgstr "`classify`"
 
-#: src/reference/python-api.md:537
+#: src/reference/python-api.md:536
 msgid ""
 "Named-class equivalence, transitive subsumption, direct edges and "
 "unsatisfiable classes."
 msgstr "具名类等价、传递包含、直接边和不可满足类。"
 
-#: src/reference/python-api.md:538
+#: src/reference/python-api.md:537
 msgid "`realize`"
 msgstr "`realize`"
 
-#: src/reference/python-api.md:538
+#: src/reference/python-api.md:537
 msgid "Entailed individual types and most-specific direct types."
 msgstr "蕴涵的个体类型，以及最具体的直接类型。"
 
-#: src/reference/python-api.md:539
+#: src/reference/python-api.md:538
 msgid "`instances`"
 msgstr "`instances`"
 
-#: src/reference/python-api.md:539
+#: src/reference/python-api.md:538
 msgid "Named instances of one class, supplied as an N-Triples term."
 msgstr "以 N-Triples 词项传入一个类，查询其具名实例。"
 
-#: src/reference/python-api.md:540
+#: src/reference/python-api.md:539
 msgid "`entails`"
 msgstr "`entails`"
 
-#: src/reference/python-api.md:540
+#: src/reference/python-api.md:539
 msgid ""
 "Whether one OWL RDF-mapping axiom is entailed; different from "
 "`graph_entails`."
 msgstr "是否蕴涵一个 OWL RDF 映射公理；不同于 `graph_entails`。"
 
-#: src/reference/python-api.md:541 src/validation/shapes-products.md:736
+#: src/reference/python-api.md:540 src/validation/shapes-products.md:736
 msgid "`profile`"
 msgstr "`profile`"
 
-#: src/reference/python-api.md:541
+#: src/reference/python-api.md:540
 msgid ""
 "Syntactic OWL profile certification and blockers, without decision search."
 msgstr "OWL 语法配置（profile）的认证与阻碍项，不执行判定搜索。"
 
-#: src/reference/python-api.md:542
+#: src/reference/python-api.md:541
 msgid "`extract_module`"
 msgstr "`extract_module`"
 
-#: src/reference/python-api.md:542
+#: src/reference/python-api.md:541
 msgid "A locality module for a seed signature under `bot`, `top` or `star`."
 msgstr "在 `bot`、`top` 或 `star` 下，为种子签名提取局部性模块。"
 
-#: src/reference/python-api.md:543
+#: src/reference/python-api.md:542
 msgid "`justify`"
 msgstr "`justify`"
 
-#: src/reference/python-api.md:543
+#: src/reference/python-api.md:542
 msgid ""
 "A sufficient minimal axiom subset, with sufficiency/minimality re-decided."
 msgstr "充分且极小的公理子集，并重新判定充分性与极小性。"
 
-#: src/reference/python-api.md:544
+#: src/reference/python-api.md:543
 msgid "`explain_conclusion`"
 msgstr "`explain_conclusion`"
 
-#: src/reference/python-api.md:544
+#: src/reference/python-api.md:543
 msgid "A checkable chase derivation, not a tableau justification."
 msgstr "可检查的 chase 推导，不是 tableau 论证。"
 
-#: src/reference/python-api.md:546
+#: src/reference/python-api.md:545
 msgid ""
 "`step_cap` and `work_cap` only narrow the decision engine's derived caps; "
 "zero selects its own cap, not zero work. Certificates report rounds, work, "
@@ -2528,7 +2533,7 @@ msgstr ""
 "预算耗尽为 `unknown`，不是否定定理。除 `consistency` 外，判定服务拒绝没有模型"
 "的本体，不会把空真蕴涵作为普通答案。未提及的类可以返回空实例答案，不必报错。"
 
-#: src/reference/python-api.md:554
+#: src/reference/python-api.md:553
 msgid ""
 "`entail.Reasoner` retains parsed data, lazily builds a knowledge base when "
 "needed and reuses both across corresponding service methods. Caps are fixed "
@@ -2547,7 +2552,7 @@ msgstr ""
 "记录的证明绝不会通过验证。空答案或空证书请求较弱的检查，报告会明确说明。论证"
 "与执行证明回答不同问题。"
 
-#: src/reference/python-api.md:564
+#: src/reference/python-api.md:563
 msgid ""
 "`certain_answers` asks for substitutions true in every model, not just "
 "matches in one closure. Predicate variables and variables inside triple "
@@ -2566,7 +2571,7 @@ msgstr ""
 "和前提 IRI，并拒绝签名无法表达所需输入的机制。字面量数据类型位置上的变量会被"
 "拒绝。"
 
-#: src/reference/python-api.md:573
+#: src/reference/python-api.md:572
 msgid ""
 "`Store.query_entailment_governed` has two phases. Stopped closure "
 "construction produces `EntailmentQueryOutcome.phase == \"closure-stopped\"`, "
@@ -2583,11 +2588,11 @@ msgstr ""
 "若 OWL Direct 闭包通过遍历暴露生成的存在见证，则以 `reasoning-closure-"
 "relation-witness` 拒绝。完整服务与证书语法见[蕴涵](../entailment.md)。"
 
-#: src/reference/python-api.md:581
+#: src/reference/python-api.md:580
 msgid "Geographic sessions"
 msgstr "地理会话"
 
-#: src/reference/python-api.md:583
+#: src/reference/python-api.md:582
 msgid ""
 "`purrdf.geo.GeoProfile` owns an immutable strict geographic profile; "
 "`to_json` returns its canonical version-one record with explicit limits. "
@@ -2601,7 +2606,7 @@ msgstr ""
 "略时选择标准 `CRS84` 配置。`profile()` 返回所选配置。查询、更新和预备方法通"
 "过 `geo` 接受相同选择。"
 
-#: src/reference/python-api.md:589
+#: src/reference/python-api.md:588
 msgid ""
 "`GeoSession.call` evaluates a strict scalar/batch JSON request; "
 "`point_index` constructs immutable native point buckets and returns "
@@ -2615,11 +2620,11 @@ msgstr ""
 "规范 JSON；操作性拒绝引发 `ValueError`。这些路径使用共享 Rust 编解码器，没有 "
 "Python 几何实现。参见 [GeoSPARQL](../sparql/geosparql.md)。"
 
-#: src/reference/python-api.md:596
+#: src/reference/python-api.md:595
 msgid "GTS containers and immutable datasets"
 msgstr "GTS 容器与不可变数据集"
 
-#: src/reference/python-api.md:598
+#: src/reference/python-api.md:597
 msgid ""
 "The GTS functions are available at the package root and grouped under "
 "`purrdf.gts`; the namespace aliases refer to the same operations and types. "
@@ -2632,7 +2637,7 @@ msgstr ""
 "`transform` 和 `base` 将 RDF 字节摄入快照。`snapshot_content_id_native` 读取"
 "对应快照身份。"
 
-#: src/reference/python-api.md:604
+#: src/reference/python-api.md:603
 msgid ""
 "`compile_gts_native` accepts the base document, optional RDF 1.2 layer, "
 "named graphs and their scopes, document/report blobs and slice artifacts. "
@@ -2647,7 +2652,7 @@ msgstr ""
 "节、媒体类型和表示；切片产物行还包含切片 IRI、名称、角色和逻辑路径。必须保留"
 "声明的元组位置，不能根据最后一项的类型猜测。"
 
-#: src/reference/python-api.md:611
+#: src/reference/python-api.md:610
 msgid ""
 "`compile_gts_with_report` returns `GtsCompileResult`, pairing "
 "`snapshot_bytes` with the ingestion receipt from that same parse and intern "
@@ -2668,7 +2673,7 @@ msgstr ""
 "明没有丢失声明。`feedback_bundle_native` 将报告 blob 附加到所提供的 RDF 输"
 "入。"
 
-#: src/reference/python-api.md:621
+#: src/reference/python-api.md:620
 msgid ""
 "`RdfDataset` owns a frozen parsed dataset. Its `quad_count`, `term_count` "
 "and length are inspection methods. `to_nquads` provides the canonical flat "
@@ -2684,18 +2689,22 @@ msgstr ""
 "`to_parquet_files` 导出同一个原生载体。字典的数值词项标识符只属于该所有者；跨"
 "独立数据集时应解析词项。"
 
-#: src/reference/python-api.md:638
+#: src/reference/python-api.md:637
 msgid "\"https://example.org/name\""
 msgstr "\"https://example.org/name\""
 
-#: src/reference/python-api.md:641
+#: src/reference/python-api.md:640
 msgid "Fold views and language selection"
 msgstr "折叠视图与语言选择"
 
-#: src/reference/python-api.md:643
+#: src/reference/python-api.md:642
+#, fuzzy
 msgid ""
 "`GtsFoldViewNative.from_bytes` reads a container; `from_parts` admits caller-"
-"supplied term, quad, reifier and annotation tables. Both refuse a term that "
+"supplied term, quad, reifier and annotation tables. A triple term that "
+"reaches itself states no triple and renders as a blank node no document "
+"label spells (`_:purrdfesc4294967294_unbound_00005Ftriple_00005F{id}`), "
+"while its `reifies` rows stay; both refuse a literal whose datatype chain "
 "reaches itself with `gts-self-reaching-term`, rather than exposing a "
 "renderer that recurses forever. `curie_prefixes` supplies the host's CURIE "
 "mappings; only the documented W3C namespaces are built in."
@@ -2705,7 +2714,7 @@ msgstr ""
 "能够到达自身的词项，不会暴露无限递归的渲染器。`curie_prefixes` 提供宿主的 "
 "CURIE 映射；只有文档列出的 W3C 命名空间是内置的。"
 
-#: src/reference/python-api.md:649
+#: src/reference/python-api.md:651
 msgid ""
 "The four count methods report table sizes. `term_tuple`, `is_iri`, "
 "`is_bnode`, `is_literal`, `iri`, `lex`, `lang`, `datatype`, `nq_token` and "
@@ -2723,7 +2732,7 @@ msgstr ""
 "`scope`。`reifiers` 和 `annotations` 返回各自的陈述层表。不要把其中的整数 ID "
 "与另一个独立构建视图的 ID 比较。"
 
-#: src/reference/python-api.md:657
+#: src/reference/python-api.md:659
 msgid ""
 "Omitted scope or `None` selects the default graph. `purrdf.GTS_ALL_SCOPE` "
 "selects all graphs; a named-graph IRI selects that graph, and an unknown IRI "
@@ -2732,7 +2741,7 @@ msgstr ""
 "省略作用域或传 `None` 时选择默认图。`purrdf.GTS_ALL_SCOPE` 选择所有图；命名"
 "图 IRI 选择该图，未知 IRI 没有匹配行。全图哨兵不是命名图 IRI。"
 
-#: src/reference/python-api.md:661
+#: src/reference/python-api.md:663
 msgid ""
 "`tag_map` and `available_languages` expose the view's language choices. "
 "`public_text` and `public_literal` select the public value; the "
@@ -2746,11 +2755,11 @@ msgstr ""
 "使用后备值。`public_texts` 返回请求的多个选择及该元数据。如果展示依赖于所请求"
 "译文是否实际存在，应保留语言和后备字段。"
 
-#: src/reference/python-api.md:668
+#: src/reference/python-api.md:670
 msgid "Relational and Parquet exports"
 msgstr "关系式与 Parquet 导出"
 
-#: src/reference/python-api.md:670
+#: src/reference/python-api.md:672
 msgid ""
 "`relational_rows` and `gts_relational_rows_from_bytes` return "
 "`GtsRelationalRows`: terms, quads, reifiers, annotations and blobs, with the "
@@ -2765,7 +2774,7 @@ msgstr ""
 "段。`ColumnarRows` 则携带原生 v1 结构和投影后的五表行，其按值排序的稠密标识符"
 "不必等于原始 GTS ID。"
 
-#: src/reference/python-api.md:677
+#: src/reference/python-api.md:679
 msgid ""
 "`gts_columnar_rows_from_bytes` returns that projection; "
 "`gts_columnar_parquet_from_bytes` and `RdfDataset.to_parquet_files` return "
@@ -2784,11 +2793,11 @@ msgstr ""
 "取器，不是写出器。参见 [GTS](../gts.md) 与[列式配置（profile）](https://"
 "github.com/Blackcat-Informatics/purrdf/blob/main/docs/COLUMNAR.md)。"
 
-#: src/reference/python-api.md:685
+#: src/reference/python-api.md:687
 msgid "Graph and tabular projection packages"
 msgstr "图与表格投影包"
 
-#: src/reference/python-api.md:687
+#: src/reference/python-api.md:689
 msgid ""
 "`project` takes RDF text/bytes, its `RdfFormat`, an explicit "
 "`ProjectionProfile` and strict configuration JSON. It returns "
@@ -2804,7 +2813,7 @@ msgstr ""
 "`source`、`target`、`note` 和可选 `location`；应检查记录，不要假定每种配置都"
 "能往返。可选 `assets` 输入属于包配置。"
 
-#: src/reference/python-api.md:694
+#: src/reference/python-api.md:696
 msgid ""
 "The profiles are `lpg-csv`, `neo4j-csv`, `open-cypher`, `graphml`, `csvw-"
 "exact`, `csvw-terms`, `okf-terms`, `obo-graphs`, `skos`, `croissant-1.1`, "
@@ -2820,7 +2829,7 @@ msgstr ""
 "`ProjectionLift.dataset` 和损失；把单向配置名传给 `lift` 不会使它变成双向配"
 "置。"
 
-#: src/reference/python-api.md:701
+#: src/reference/python-api.md:703
 msgid ""
 "For streamed LPG artifacts, `project_artifacts` invokes the artifact "
 "callback with `(event, path, chunk)`. The `ArtifactEvent` values delimit the "
@@ -2842,11 +2851,11 @@ msgstr ""
 "受数据的 SPARQL 关系声明。各配置的严格设置和往返契约见[投影](../concepts/"
 "projections.md)。"
 
-#: src/reference/python-api.md:712
+#: src/reference/python-api.md:714
 msgid "SSSOM mapping documents"
 msgstr "SSSOM 映射文档"
 
-#: src/reference/python-api.md:714
+#: src/reference/python-api.md:716
 msgid ""
 "`validate_sssom` returns `SssomDiagnostic` dictionaries containing severity, "
 "code, message, check and optional instance. A clean document yields `[]`; a "
@@ -2863,11 +2872,11 @@ msgstr ""
 "写出已解析的映射文档，`sssom_default_validation_types` 提供原生默认验证类型。"
 "这些是原生 SSSOM 编解码功能，不会导入外部 `sssom` 包。"
 
-#: src/reference/python-api.md:722
+#: src/reference/python-api.md:724
 msgid "Slice catalogs and ownership"
 msgstr "切片目录与所有权"
 
-#: src/reference/python-api.md:724
+#: src/reference/python-api.md:726
 msgid ""
 "`purrdf.slice.SliceCatalog.discover(root, namespace)` reads manifests using "
 "the caller's namespace. `records` contains `SliceRecord` values with "
@@ -2883,7 +2892,7 @@ msgstr ""
 "签、标题、层级、创建者和使用者。`ArtifactRecord` 提供角色、逻辑路径、媒体类"
 "型、原始摘要、语义摘要和内容。"
 
-#: src/reference/python-api.md:731
+#: src/reference/python-api.md:733
 msgid ""
 "`fix_deps()` returns `ManifestPatch` values with original and proposed text; "
 "the caller decides when to write those patches. `OwnershipAnalyzer` performs "
@@ -2901,11 +2910,11 @@ msgstr ""
 "`DependencyEdge`。这是清单与产物所有权，不是根据目录名推断。参见[切片](../"
 "slices.md)。"
 
-#: src/reference/python-api.md:740
+#: src/reference/python-api.md:742
 msgid "Ranked retrieval and exact fusion"
 msgstr "排序检索与精确融合"
 
-#: src/reference/python-api.md:742
+#: src/reference/python-api.md:744
 msgid ""
 "`purrdf.retrieval` exposes `plan`, `compile` and `search`, plus cold "
 "document checks and fusion-law design queries. `plan` executes nothing. It "
@@ -2921,7 +2930,7 @@ msgstr ""
 "整的计划、编译、执行和融合流程。Python 没有分别暴露 execute 与 fuse 的流句柄"
 "入口。"
 
-#: src/reference/python-api.md:749
+#: src/reference/python-api.md:751
 msgid ""
 "Text producers map a producer IRI to `(stratum, predicate, graph, "
 "analyzer)`. The analyzer requires its `lexicon` choice and declares the "
@@ -2940,7 +2949,7 @@ msgstr ""
 "异常。索引证明声明为 `(generation, incompleteness)`，保真度为 "
 "`(completeness, order)`；二者描述不同事实。"
 
-#: src/reference/python-api.md:758
+#: src/reference/python-api.md:760
 msgid ""
 "`knn_producers` and `hnsw_producers` register exact scan and approximate "
 "graph search over caller-supplied `(IRI, vector)` rows, seeded by an entity "
@@ -2963,7 +2972,7 @@ msgstr ""
 "供统计的 `source` 与 `revision`；基数和以百万分比整数表示的选择率是可选的。未"
 "知测量值为 `None`，不是零。"
 
-#: src/reference/python-api.md:770
+#: src/reference/python-api.md:772
 msgid ""
 "The request is a sequence of typed tuples; producer applicability is "
 "reported by planning, so writing a request kind does not invent a producer "
@@ -2972,27 +2981,27 @@ msgstr ""
 "请求是带类型元组的序列；生成方适用性由计划阶段报告，因此写出请求类型并不会为"
 "它自动创建生成方。"
 
-#: src/reference/python-api.md:773
+#: src/reference/python-api.md:775
 msgid "Kind"
 msgstr "种类"
 
-#: src/reference/python-api.md:773
+#: src/reference/python-api.md:775
 msgid "Tuple"
 msgstr "元组"
 
-#: src/reference/python-api.md:775
+#: src/reference/python-api.md:777
 msgid "Lexical"
 msgstr "词法"
 
-#: src/reference/python-api.md:775
+#: src/reference/python-api.md:777
 msgid "`(\"lexical\", text, language_or_none, predicate_or_none)`"
 msgstr "`(\"lexical\", text, language_or_none, predicate_or_none)`"
 
-#: src/reference/python-api.md:776
+#: src/reference/python-api.md:778
 msgid "Vector"
 msgstr "向量"
 
-#: src/reference/python-api.md:776
+#: src/reference/python-api.md:778
 msgid ""
 "`(\"vector\", components, metric, hint_or_none)`, with request metric "
 "`cosine`, `dot` or `euclidean`"
@@ -3000,40 +3009,40 @@ msgstr ""
 "`(\"vector\", components, metric, hint_or_none)`，请求度量为 `cosine`、`dot` "
 "或 `euclidean`"
 
-#: src/reference/python-api.md:777
+#: src/reference/python-api.md:779
 msgid "Spatial"
 msgstr "空间"
 
-#: src/reference/python-api.md:777
+#: src/reference/python-api.md:779
 msgid "`(\"spatial\", geometry, predicate, max_distance_raw_or_none)`"
 msgstr "`(\"spatial\", geometry, predicate, max_distance_raw_or_none)`"
 
-#: src/reference/python-api.md:778
+#: src/reference/python-api.md:780
 msgid "Temporal"
 msgstr "时间"
 
-#: src/reference/python-api.md:778
+#: src/reference/python-api.md:780
 msgid "`(\"temporal\", predicate, lower_or_none, upper_or_none)`"
 msgstr "`(\"temporal\", predicate, lower_or_none, upper_or_none)`"
 
-#: src/reference/python-api.md:779
+#: src/reference/python-api.md:781
 msgid "Numeric"
 msgstr "数值"
 
-#: src/reference/python-api.md:779
+#: src/reference/python-api.md:781
 msgid "`(\"numeric\", predicate, lower_raw_or_none, upper_raw_or_none)`"
 msgstr "`(\"numeric\", predicate, lower_raw_or_none, upper_raw_or_none)`"
 
-#: src/reference/python-api.md:780
+#: src/reference/python-api.md:782
 msgid "Entity"
 msgstr "实体"
 
-#: src/reference/python-api.md:780
+#: src/reference/python-api.md:782
 msgid ""
 "`(\"entity\", term)`, including an N-Triples IRI term for a vector-space seed"
 msgstr "`(\"entity\", term)`，包括用作向量空间种子的 N-Triples IRI 词项"
 
-#: src/reference/python-api.md:782
+#: src/reference/python-api.md:784
 msgid ""
 "Candidate domains are either unrestricted (`None`) or one distinct host "
 "domain tag. Empty or multiple distinct tags are refused; repeated copies of "
@@ -3047,7 +3056,7 @@ msgstr ""
 "把某个候选列在不相交域中，就属于错误；不能在分数认证后默默扩大声明。唯一流中"
 "重复的候选也会被拒绝。"
 
-#: src/reference/python-api.md:791
+#: src/reference/python-api.md:793
 msgid ""
 "'''\n"
 "<https://example.org/a> <https://example.org/note> \"the quick brown "
@@ -3061,72 +3070,72 @@ msgstr ""
 "<https://example.org/b> <https://example.org/note> \"a quick red fox\" .\n"
 "'''"
 
-#: src/reference/python-api.md:797
+#: src/reference/python-api.md:799
 msgid "\"lexical\""
 msgstr "\"lexical\""
 
-#: src/reference/python-api.md:797
+#: src/reference/python-api.md:799
 msgid "\"quick fox\""
 msgstr "\"quick fox\""
 
-#: src/reference/python-api.md:797 src/reference/python-api.md:801
+#: src/reference/python-api.md:799 src/reference/python-api.md:803
 #: src/sparql/full-text.md:80
 msgid "\"https://example.org/note\""
 msgstr "\"https://example.org/note\""
 
-#: src/reference/python-api.md:799 src/sparql/full-text.md:89
+#: src/reference/python-api.md:801 src/sparql/full-text.md:89
 msgid "\"https://example.org/pf/search\""
 msgstr "\"https://example.org/pf/search\""
 
-#: src/reference/python-api.md:800 src/reference/python-api.md:804
+#: src/reference/python-api.md:802 src/reference/python-api.md:806
 msgid "\"https://example.org/stratum/lexical\""
 msgstr "\"https://example.org/stratum/lexical\""
 
-#: src/reference/python-api.md:801
+#: src/reference/python-api.md:803
 msgid "\"any\""
 msgstr "\"any\""
 
-#: src/reference/python-api.md:801
+#: src/reference/python-api.md:803
 msgid "\"lexicon\""
 msgstr "\"lexicon\""
 
-#: src/reference/python-api.md:801
+#: src/reference/python-api.md:803
 msgid "\"empty\""
 msgstr "\"empty\""
 
-#: src/reference/python-api.md:805
+#: src/reference/python-api.md:807
 msgid "\"source\""
 msgstr "\"source\""
 
-#: src/reference/python-api.md:805
+#: src/reference/python-api.md:807
 msgid "\"host-statistics\""
 msgstr "\"host-statistics\""
 
-#: src/reference/python-api.md:805
+#: src/reference/python-api.md:807
 msgid "\"revision\""
 msgstr "\"revision\""
 
-#: src/reference/python-api.md:805
+#: src/reference/python-api.md:807
 msgid "\"r1\""
 msgstr "\"r1\""
 
-#: src/reference/python-api.md:806
+#: src/reference/python-api.md:808
 msgid "\"reciprocal_rank\""
 msgstr "\"reciprocal_rank\""
 
-#: src/reference/python-api.md:808 src/reference/python-api.md:809
+#: src/reference/python-api.md:810 src/reference/python-api.md:811
 msgid "\"rows\""
 msgstr "\"rows\""
 
-#: src/reference/python-api.md:809
+#: src/reference/python-api.md:811
 msgid "\"score\""
 msgstr "\"score\""
 
-#: src/reference/python-api.md:812
+#: src/reference/python-api.md:814
 msgid "Law, depths and document checks"
 msgstr "规则、深度与文档检查"
 
-#: src/reference/python-api.md:814
+#: src/reference/python-api.md:816
 msgid ""
 "Weights are Python integers in raw fixed-point units: `SCALE` is one whole "
 "unit and `SCALE_DIGITS` its exponent. Scores and contributions return exact "
@@ -3143,7 +3152,7 @@ msgstr ""
 "`weighted_reciprocal_rank` 对加权商只舍入一次。两者是不同的内容寻址规则。将原"
 "始权重 `1` 与按 `SCALE` 倍数表示的权重混用，会使权重比例改变该倍数。"
 
-#: src/reference/python-api.md:822
+#: src/reference/python-api.md:824
 msgid ""
 "`top_k` is also a planning input. Over disjoint candidate domains it can "
 "narrow reads while preserving the answer. A compiled unit's `depth` is the "
@@ -3159,7 +3168,7 @@ msgstr ""
 "声明行数，不是零。调用 `compile` 时，`weights`、`k` 和 `decay` 必须同时提供或"
 "同时省略；没有规则时不会编造排名分辨率声明。"
 
-#: src/reference/python-api.md:830
+#: src/reference/python-api.md:832
 msgid ""
 "`canonical_bytes` and `plan_id` identify a plan. `certify_plan` checks a "
 "received document's recorded depth derivations and consulted-statistics "
@@ -3173,7 +3182,7 @@ msgstr ""
 "的限制原因，不执行认证。对被拒文档应按 `retrieval.PlanDocumentError.refusal` "
 "分支。"
 
-#: src/reference/python-api.md:836
+#: src/reference/python-api.md:838
 msgid ""
 "The design-time queries are `weight_for_depth`, `class_width`, "
 "`deepest_rank_within_width` and `crossing_rank_at`. They ask respectively "
@@ -3191,11 +3200,11 @@ msgstr ""
 "果，不是测得的极大数。输入必须满足规则对正权重、排名、平滑参数和容差的约束。"
 "宽度容差查询遍历非单调曲线并持有 GIL，应在设计时使用，不放在热点循环中。"
 
-#: src/reference/python-api.md:845
+#: src/reference/python-api.md:847
 msgid "Reading ranking evidence"
 msgstr "读取排名证据"
 
-#: src/reference/python-api.md:847
+#: src/reference/python-api.md:849
 msgid ""
 "Keep the three identities: `plan_id` names the question and planning inputs, "
 "`profile_id` names the fusion law, and `evidence_id` names the answering "
@@ -3209,7 +3218,7 @@ msgstr ""
 "前深度；`observed_resolution` 报告已读取排名、碰撞、排除查找和物化行数。提前"
 "认证可使实际工作更少，但这不是对计划的修正。"
 
-#: src/reference/python-api.md:854
+#: src/reference/python-api.md:856
 msgid ""
 "Read each stratum's terminal `statuses` with its `fidelities`. `exhausted` "
 "means its search produced no more rows, not that a lossy search found every "
@@ -3225,7 +3234,7 @@ msgstr ""
 "接口的 `supplied_query_ended`、`execution_failed` 和 `terms_rejected`；不要将"
 "它们合并为空结果标志。"
 
-#: src/reference/python-api.md:861
+#: src/reference/python-api.md:863
 msgid ""
 "`attestations` records index generation and admitted incompleteness; "
 "`fidelities` independently records complete/lossy search and faithful/"
@@ -3237,7 +3246,7 @@ msgstr ""
 "搜索、忠实或扰动顺序，以及生成方自身的原因。未声明索引完整性不能证明覆盖整个"
 "语料。即使 HNSW 图由所提供向量精确构建，它仍是有损生成方。"
 
-#: src/reference/python-api.md:867
+#: src/reference/python-api.md:869
 msgid ""
 "`exactness` names deficit, inflation and unbounded strata. Missing "
 "candidates can move other candidates up in rank, so degraded evidence can "
@@ -3260,11 +3269,11 @@ msgstr ""
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/retrieval/"
 "README.md)。"
 
-#: src/reference/python-api.md:878
+#: src/reference/python-api.md:880
 msgid "Errors and boundary choices"
 msgstr "错误与边界选择"
 
-#: src/reference/python-api.md:880
+#: src/reference/python-api.md:882
 msgid ""
 "Invalid configuration, resource refusal, expression error and certified "
 "partial results are different outcomes. Preserve structured diagnostic "
@@ -3280,7 +3289,7 @@ msgstr ""
 "`PlanDocumentError.refusal` 分别是对应的稳定区分字段。不要解析本地化消息文本"
 "来判断结果是否完整。未绑定 SELECT 单元格既不是缺失列，也不一定是异常。"
 
-#: src/reference/python-api.md:888
+#: src/reference/python-api.md:890
 msgid ""
 "Use the [rdflib compatibility chapter](../interop/rdflib.md) when porting an "
 "rdflib consumer. `query_rdflib` accepts its named/default graph controls, "
@@ -3334,25 +3343,25 @@ msgstr "`__init__.pyi`"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'lpg-csv'"
 msgstr "'lpg-csv'"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'neo4j-csv'"
 msgstr "'neo4j-csv'"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'open-cypher'"
 msgstr "'open-cypher'"
 
 #: src/reference/python-api-signatures.md:49
 #: src/reference/python-api-signatures.md:50
-#: src/reference/python-api-signatures.md:162
+#: src/reference/python-api-signatures.md:170
 msgid "'graphml'"
 msgstr "'graphml'"
 
@@ -3434,111 +3443,111 @@ msgstr "'commit-package'"
 msgid "'abort-package'"
 msgstr "'abort-package'"
 
-#: src/reference/python-api-signatures.md:452
+#: src/reference/python-api-signatures.md:460
 msgid "'budget'"
 msgstr "'budget'"
 
-#: src/reference/python-api-signatures.md:452
+#: src/reference/python-api-signatures.md:460
 msgid "'stopped'"
 msgstr "'stopped'"
 
-#: src/reference/python-api-signatures.md:452
+#: src/reference/python-api-signatures.md:460
 msgid "'refused'"
 msgstr "'refused'"
 
-#: src/reference/python-api-signatures.md:452
-#: src/reference/python-api-signatures.md:453
+#: src/reference/python-api-signatures.md:460
+#: src/reference/python-api-signatures.md:461
 msgid "'unknown'"
 msgstr "'unknown'"
 
-#: src/reference/python-api-signatures.md:453
+#: src/reference/python-api-signatures.md:461
 msgid "'certain'"
 msgstr "'certain'"
 
-#: src/reference/python-api-signatures.md:453
+#: src/reference/python-api-signatures.md:461
 msgid "'at-most'"
 msgstr "'at-most'"
 
-#: src/reference/python-api-signatures.md:588
+#: src/reference/python-api-signatures.md:596
 msgid "'answered'"
 msgstr "'answered'"
 
-#: src/reference/python-api-signatures.md:588
+#: src/reference/python-api-signatures.md:596
 msgid "'closure-stopped'"
 msgstr "'closure-stopped'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'json'"
 msgstr "'json'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'srj'"
 msgstr "'srj'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'sparql-json'"
 msgstr "'sparql-json'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'application/sparql-results+json'"
 msgstr "'application/sparql-results+json'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'xml'"
 msgstr "'xml'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'sparql-xml'"
 msgstr "'sparql-xml'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'application/sparql-results+xml'"
 msgstr "'application/sparql-results+xml'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'csv'"
 msgstr "'csv'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'text/csv'"
 msgstr "'text/csv'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'tsv'"
 msgstr "'tsv'"
 
-#: src/reference/python-api-signatures.md:786
+#: src/reference/python-api-signatures.md:800
 msgid "'text/tab-separated-values'"
 msgstr "'text/tab-separated-values'"
 
-#: src/reference/python-api-signatures.md:839
+#: src/reference/python-api-signatures.md:853
 msgid ""
 "\"\"\"Expand original document bytes under a closed version-one request."
 "\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:843
+#: src/reference/python-api-signatures.md:857
 msgid ""
 "\"\"\"Compact source bytes using the explicit request output context.\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:847
+#: src/reference/python-api-signatures.md:861
 msgid ""
 "\"\"\"Flatten source bytes, optionally compacting under an output context."
 "\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:851
+#: src/reference/python-api-signatures.md:865
 msgid ""
 "\"\"\"Frame separate source and frame bytes under a closed version-one "
 "request.\"\"\""
 msgstr ""
 
-#: src/reference/python-api-signatures.md:1138
+#: src/reference/python-api-signatures.md:1152
 msgid "'unbounded'"
 msgstr "'unbounded'"
 
-#: src/reference/python-api-signatures.md:1217
+#: src/reference/python-api-signatures.md:1234
 msgid ""
 "\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
 "\"\"\""
@@ -3546,15 +3555,15 @@ msgstr ""
 "\"\"\"One fixed-shape-map verdict: the input `(node, shape)` echoed verbatim."
 "\"\"\""
 
-#: src/reference/python-api-signatures.md:1234
+#: src/reference/python-api-signatures.md:1251
 msgid "\"\"\"A SHACL validation report.\"\"\""
 msgstr "\"\"\"A SHACL validation report.\"\"\""
 
-#: src/reference/python-api-signatures.md:1259
+#: src/reference/python-api-signatures.md:1276
 msgid "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
 msgstr "\"\"\"Parsed SHACL shapes, reusable across many data graphs.\"\"\""
 
-#: src/reference/python-api-signatures.md:1277
+#: src/reference/python-api-signatures.md:1294
 msgid ""
 "\"\"\"A refusal from the prepared-shapes-product admission boundary.\n"
 "\n"
@@ -3574,7 +3583,7 @@ msgstr ""
 "    not parse was never admitted). Branch on it, never on `str(exc)`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1286
+#: src/reference/python-api-signatures.md:1303
 msgid ""
 "\"\"\"A shapes graph's `owl:imports` closure is not in hand, or the "
 "`imports` table\n"
@@ -3644,7 +3653,7 @@ msgstr ""
 "    `unheld-shapes-graph-link`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1314
+#: src/reference/python-api-signatures.md:1331
 msgid ""
 "\"\"\"An immutable shape preparation, reusable across data graphs and "
 "writable as\n"
@@ -3654,7 +3663,7 @@ msgstr ""
 "writable as\n"
 "    a prepared product.\"\"\""
 
-#: src/reference/python-api-signatures.md:1330
+#: src/reference/python-api-signatures.md:1347
 msgid ""
 "\"\"\"The outcome of `PreparedShapes.validate_store_changes`: the report, "
 "plus the\n"
@@ -3674,7 +3683,7 @@ msgstr ""
 "    question it answered. Read `bounded` first.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1354
+#: src/reference/python-api-signatures.md:1371
 msgid ""
 "\"\"\"A prepared product whose envelope is verified and whose self-"
 "description is\n"
@@ -3684,84 +3693,84 @@ msgstr ""
 "description is\n"
 "    decoded — but which has NOT been admitted.\"\"\""
 
-#: src/reference/python-api-signatures.md:1436
+#: src/reference/python-api-signatures.md:1453
 msgid "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
 msgstr ""
 "\"\"\"A SPARQL entailment regime (`purrdf.entail.Regime.OWL_RL`).\"\"\""
 
-#: src/reference/python-api-signatures.md:1785
+#: src/reference/python-api-signatures.md:1802
 msgid "'empty'"
 msgstr "'empty'"
 
-#: src/reference/python-api-signatures.md:1785
+#: src/reference/python-api-signatures.md:1802
 msgid "'baseline'"
 msgstr "'baseline'"
 
-#: src/reference/python-api-signatures.md:1785
+#: src/reference/python-api-signatures.md:1802
 msgid "'dictionary'"
 msgstr "'dictionary'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'preserve'"
 msgstr "'preserve'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'latin-greek-cyrillic'"
 msgstr "'latin-greek-cyrillic'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'latin-greek-cyrillic-arabic-hebrew'"
 msgstr "'latin-greek-cyrillic-arabic-hebrew'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'latin'"
 msgstr "'latin'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'greek'"
 msgstr "'greek'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'cyrillic'"
 msgstr "'cyrillic'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'hebrew'"
 msgstr "'hebrew'"
 
-#: src/reference/python-api-signatures.md:1789
+#: src/reference/python-api-signatures.md:1806
 msgid "'arabic'"
 msgstr "'arabic'"
 
-#: src/reference/python-api-signatures.md:1790
+#: src/reference/python-api-signatures.md:1807
 msgid "'none'"
 msgstr "'none'"
 
-#: src/reference/python-api-signatures.md:1790
+#: src/reference/python-api-signatures.md:1807
 msgid "'english'"
 msgstr "'english'"
 
-#: src/reference/python-api-signatures.md:1791
+#: src/reference/python-api-signatures.md:1808
 msgid "'plain'"
 msgstr "'plain'"
 
-#: src/reference/python-api-signatures.md:1791
+#: src/reference/python-api-signatures.md:1808
 msgid "'html-text'"
 msgstr "'html-text'"
 
-#: src/reference/python-api-signatures.md:1791
+#: src/reference/python-api-signatures.md:1808
 msgid "'html-attribute'"
 msgstr "'html-attribute'"
 
-#: src/reference/python-api-signatures.md:1794
+#: src/reference/python-api-signatures.md:1811
 msgid "'lexical'"
 msgstr "'lexical'"
 
-#: src/reference/python-api-signatures.md:1794
+#: src/reference/python-api-signatures.md:1811
 msgid "'han'"
 msgstr "'han'"
 
-#: src/reference/python-api-signatures.md:1806
+#: src/reference/python-api-signatures.md:1823
 msgid ""
 "\"\"\"A refusal from the plan-document boundary: `certify_plan`, "
 "`explain_depth`.\n"
@@ -3797,17 +3806,17 @@ msgstr ""
 "    `unconsulted-statistics-subject`. Branch on it, never on `str(exc)`.\n"
 "    \"\"\""
 
-#: src/reference/python-api-signatures.md:1833
-#: src/reference/python-api-signatures.md:1845
-#: src/reference/python-api-signatures.md:1849
+#: src/reference/python-api-signatures.md:1850
+#: src/reference/python-api-signatures.md:1862
+#: src/reference/python-api-signatures.md:1866
 msgid "'turtle'"
 msgstr "'turtle'"
 
-#: src/reference/python-api-signatures.md:1869
+#: src/reference/python-api-signatures.md:1886
 msgid "`geo.pyi`"
 msgstr "`geo.pyi`"
 
-#: src/reference/python-api-signatures.md:1876
+#: src/reference/python-api-signatures.md:1893
 msgid ""
 "\"\"\"Immutable strict native profile; omitted input selects standard "
 "CRS84.\"\"\""
@@ -3815,13 +3824,13 @@ msgstr ""
 "\"\"\"Immutable strict native profile; omitted input selects standard "
 "CRS84.\"\"\""
 
-#: src/reference/python-api-signatures.md:1885
+#: src/reference/python-api-signatures.md:1902
 msgid ""
 "\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
 msgstr ""
 "\"\"\"One Rust session over the strict version-one geographic records.\"\"\""
 
-#: src/reference/python-api-signatures.md:1891
+#: src/reference/python-api-signatures.md:1908
 msgid ""
 "\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
 "refusal.\"\"\""
@@ -3829,7 +3838,7 @@ msgstr ""
 "\"\"\"Return canonical semantic outcomes; raise ValueError on operational "
 "refusal.\"\"\""
 
-#: src/reference/python-api-signatures.md:1901
+#: src/reference/python-api-signatures.md:1918
 msgid ""
 "\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
 "\"\"\""
@@ -3837,7 +3846,7 @@ msgstr ""
 "\"\"\"Immutable ordered point buckets, constructed by GeoSession.point_index."
 "\"\"\""
 
-#: src/reference/python-api-signatures.md:1904
+#: src/reference/python-api-signatures.md:1921
 msgid ""
 "\"\"\"Search through the same native comparison law and refusal channel."
 "\"\"\""
@@ -5472,13 +5481,13 @@ msgstr "可承载"
 #: src/concepts/rdf12.md:76
 msgid ""
 "The GTS mapping of triple terms and `rdf:reifies` is formalized in the [GTS "
-"specification](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/"
-"GTS-SPEC.md), which pins its RDF 1.2 substrate to the 07 April 2026 W3C "
+"specification](https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/"
+"docs/GTS-SPEC.md), which pins its RDF 1.2 substrate to the 07 April 2026 W3C "
 "Candidate Recommendation Snapshot."
 msgstr ""
 "三元组项与 `rdf:reifies` 的 GTS 映射在 [GTS 规范](https://github.com/"
-"Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md)中形式化，该规范将其 "
-"RDF 1.2 基底固定在 2026 年 4 月 7 日的 W3C 候选推荐快照上。"
+"Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md)中形式化，该规范将"
+"其 RDF 1.2 基底固定在 2026 年 4 月 7 日的 W3C 候选推荐快照上。"
 
 #: src/concepts/visualization.md:8
 msgid ""
@@ -6909,8 +6918,8 @@ msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
 #: src/concepts/projections.md:449 src/sparql/querying.md:2274
 #: src/validation/shacl.md:444 src/validation/shacl.md:551
-#: src/validation/shacl.md:586 src/validation/shacl.md:1508
-#: src/validation/shacl.md:1607 src/validation/shacl.md:1649
+#: src/validation/shacl.md:586 src/validation/shacl.md:1509
+#: src/validation/shacl.md:1608 src/validation/shacl.md:1650
 #: src/validation/shex.md:76 src/entailment.md:54 src/entailment.md:99
 msgid "Host"
 msgstr "宿主"
@@ -6950,8 +6959,8 @@ msgstr "`lift_archive`"
 #: src/concepts/projections.md:452 src/concepts/jsonld.md:503
 #: src/sparql/querying.md:2277 src/validation/shacl.md:447
 #: src/validation/shacl.md:553 src/validation/shacl.md:588
-#: src/validation/shacl.md:1335 src/validation/shacl.md:1510
-#: src/validation/shacl.md:1609 src/validation/shacl.md:1652
+#: src/validation/shacl.md:1336 src/validation/shacl.md:1511
+#: src/validation/shacl.md:1610 src/validation/shacl.md:1653
 #: src/validation/shex.md:79 src/entailment.md:57 src/entailment.md:102
 msgid "CLI"
 msgstr "CLI"
@@ -7760,7 +7769,7 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:283 src/concepts/base-iris.md:263
-#: src/sparql/querying.md:2303 src/validation/shacl.md:1778
+#: src/sparql/querying.md:2303 src/validation/shacl.md:1779
 #: src/validation/shex.md:126 src/entailment.md:371
 msgid "Conformance"
 msgstr "一致性"
@@ -7779,7 +7788,7 @@ msgstr ""
 "purrdf/blob/main/docs/CONFORMANCE.md)。"
 
 #: src/concepts/codecs.md:290 src/sparql/results.md:119
-#: src/validation/shapes-products.md:985 src/gts.md:136 src/slices.md:104
+#: src/validation/shapes-products.md:985 src/gts.md:253 src/slices.md:104
 #: src/interop/rdflib.md:81 src/interop/rdfjs.md:119
 msgid "Related"
 msgstr "相关内容"
@@ -8020,9 +8029,9 @@ msgstr "传入基准，或文档自身必须携带基准"
 
 #: src/concepts/base-iris.md:53 src/sparql/querying.md:2279
 #: src/validation/shacl.md:449 src/validation/shacl.md:555
-#: src/validation/shacl.md:590 src/validation/shacl.md:1335
-#: src/validation/shacl.md:1512 src/validation/shacl.md:1611
-#: src/validation/shacl.md:1654
+#: src/validation/shacl.md:590 src/validation/shacl.md:1336
+#: src/validation/shacl.md:1513 src/validation/shacl.md:1612
+#: src/validation/shacl.md:1655
 msgid "WebAssembly"
 msgstr "WebAssembly"
 
@@ -8032,7 +8041,7 @@ msgid "as above"
 msgstr "同上"
 
 #: src/concepts/base-iris.md:54 src/validation/shacl.md:450
-#: src/validation/shacl.md:1335 src/validation/shacl.md:1513
+#: src/validation/shacl.md:1336 src/validation/shacl.md:1514
 msgid "C ABI"
 msgstr "C ABI"
 
@@ -8252,9 +8261,9 @@ msgstr ""
 #: src/concepts/base-iris.md:149 src/project/diagnostic-codes.md:36
 #: src/project/diagnostic-codes.md:50 src/project/diagnostic-codes.md:77
 #: src/project/diagnostic-codes.md:94 src/project/diagnostic-codes.md:105
-#: src/project/diagnostic-codes.md:126 src/project/diagnostic-codes.md:148
-#: src/project/diagnostic-codes.md:255 src/project/diagnostic-codes.md:268
-#: src/project/diagnostic-codes.md:278 src/project/diagnostic-codes.md:288
+#: src/project/diagnostic-codes.md:126 src/project/diagnostic-codes.md:149
+#: src/project/diagnostic-codes.md:257 src/project/diagnostic-codes.md:270
+#: src/project/diagnostic-codes.md:280 src/project/diagnostic-codes.md:290
 msgid "Code"
 msgstr "代码"
 
@@ -8685,8 +8694,8 @@ msgid ""
 msgstr ""
 "b\"<https://example.org/alice> <https://schema.org/name> \\\"Alice\\\" .\""
 
-#: src/concepts/jsonld.md:54 src/concepts/canonicalization.md:29
-#: src/concepts/canonicalization.md:30 src/concepts/canonicalization.md:66
+#: src/concepts/jsonld.md:54 src/concepts/canonicalization.md:31
+#: src/concepts/canonicalization.md:32 src/concepts/canonicalization.md:68
 #: src/entailment.md:32
 msgid "\"application/n-triples\""
 msgstr "\"application/n-triples\""
@@ -9949,10 +9958,6 @@ msgstr ""
 "出相同的字节。规范化是更强的性质：两个*不同的、彼此同构的内存数据集*——即在空"
 "节点重新标记意义下相同的图——会规范化为相同的字节。"
 
-#: src/concepts/canonicalization.md:13 src/project/conformance.md:39
-msgid "RDFC-1.0"
-msgstr "RDFC-1.0"
-
 #: src/concepts/canonicalization.md:13
 msgid "The canonical line sequence"
 msgstr "规范行序列"
@@ -9984,20 +9989,20 @@ msgstr ""
 "入口点是 `try_canonicalize`，它产出规范的空节点标签，并在上一层的 `purrdf-"
 "rdf` 中，基于冻结的 IR 产出规范的 N-Quads："
 
-#: src/concepts/canonicalization.md:29
+#: src/concepts/canonicalization.md:31
 msgid "b\"_:source <https://example.org/name> \\\"Alice\\\" .\""
 msgstr "b\"_:source <https://example.org/name> \\\"Alice\\\" .\""
 
-#: src/concepts/canonicalization.md:30
+#: src/concepts/canonicalization.md:32
 msgid "b\"_:renamed <https://example.org/name> \\\"Alice\\\" .\""
 msgstr "b\"_:renamed <https://example.org/name> \\\"Alice\\\" .\""
 
-#: src/concepts/canonicalization.md:31
+#: src/concepts/canonicalization.md:33
 msgid ""
 "// Canonical labels are stable across runs, hosts, and language bindings.\n"
 msgstr "// 规范标签在不同运行、不同宿主与不同语言绑定之间保持稳定。\n"
 
-#: src/concepts/canonicalization.md:37
+#: src/concepts/canonicalization.md:39
 msgid ""
 "The immutable `Canonicalized` result retains its source's owned storage "
 "reservation. Borrow its text with `nquads()`, its presentation with "
@@ -10009,7 +10014,7 @@ msgstr ""
 "本，通过 `presentation()` 读取表示，并通过 `label()` 或 `labels()` 借用标签。"
 "克隆共享载荷及其原始预留；该预留会一直保留到最后一个结果所有者被释放。"
 
-#: src/concepts/canonicalization.md:43
+#: src/concepts/canonicalization.md:45
 msgid ""
 "Use canonicalization when you need a content identity for a graph: hashing, "
 "signing, deduplication, or comparing datasets produced by different writers."
@@ -10031,11 +10036,11 @@ msgstr ""
 "量上限。有限策略限制的是标注引擎自身的工作量，超出该限制的运行会以 `limit` 结"
 "果被拒绝。"
 
-#: src/concepts/canonicalization.md:52
+#: src/concepts/canonicalization.md:54
 msgid "Native relabeling with source attribution"
 msgstr "带源归属的原生重新标记"
 
-#: src/concepts/canonicalization.md:54
+#: src/concepts/canonicalization.md:56
 msgid ""
 "Use `canonical_relabel` when the next stage consumes a native dataset. It "
 "keeps RDF 1.2 terms, reifiers, annotations, graph declarations and source "
@@ -10044,7 +10049,7 @@ msgstr ""
 "当下一阶段消费的是原生数据集时，使用 `canonical_relabel`。它保留 RDF 1.2 项、"
 "具体化节点、注解、图声明与源位置，而无须呈现并重新解析一份规范文档。"
 
-#: src/concepts/canonicalization.md:58
+#: src/concepts/canonicalization.md:60
 msgid ""
 "When a compiler or analyzer must associate source nodes with that result, "
 "use `canonical_relabel_with_mapping`. It records the actual term mapping "
@@ -10054,25 +10059,25 @@ msgstr ""
 "`canonical_relabel_with_mapping`。它在同一次重建中、经过一次规范标签搜索之"
 "后，记录实际的项映射："
 
-#: src/concepts/canonicalization.md:66
+#: src/concepts/canonicalization.md:68
 msgid "b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
 msgstr ""
 "b\"<https://example.org/alice> <https://example.org/knows> _:friend .\""
 
-#: src/concepts/canonicalization.md:67
+#: src/concepts/canonicalization.md:69
 msgid "\"source IRI not interned\""
 msgstr "\"source IRI not interned\""
 
-#: src/concepts/canonicalization.md:69
+#: src/concepts/canonicalization.md:71
 msgid "\"source node not retained\""
 msgstr "\"source node not retained\""
 
-#: src/concepts/canonicalization.md:71
+#: src/concepts/canonicalization.md:73
 msgid ""
 "// Associate source receipts and owner metadata with canonical_value here.\n"
 msgstr "// 在此把源回执与所有者元数据关联到 canonical_value。\n"
 
-#: src/concepts/canonicalization.md:78
+#: src/concepts/canonicalization.md:80
 msgid ""
 "`source_node` must belong to the exact input dataset; `output_node` belongs "
 "to this result. A same-index ID from another dataset cannot be detected. The "
@@ -10085,7 +10090,7 @@ msgstr ""
 "量数据类型、复合嵌入的空节点与已驻留的 IRI、具体化节点与注解项，以及空的命名"
 "图。被重写省略的未使用字典条目返回 `None`。"
 
-#: src/concepts/canonicalization.md:84
+#: src/concepts/canonicalization.md:86
 msgid ""
 "The map uses four bytes per source term, with constant-time lookup. The "
 "existing `canonical_relabel` API does not allocate it. The map is not a "
@@ -10133,7 +10138,7 @@ msgstr ""
 "(https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/RDF12-CANON-"
 "PROFILE.md)。"
 
-#: src/concepts/canonicalization.md:114
+#: src/concepts/canonicalization.md:108
 msgid "Isomorphism"
 msgstr "同构"
 
@@ -10154,11 +10159,11 @@ msgstr ""
 "测试框架中更方便的形式。例如，PurRDF 自己的一致性测试框架使用图同构来比较 "
 "SHACL Rules 的输出图与预期的推理图。"
 
-#: src/concepts/canonicalization.md:125
+#: src/concepts/canonicalization.md:119
 msgid "Diff"
 msgstr "Diff"
 
-#: src/concepts/canonicalization.md:127
+#: src/concepts/canonicalization.md:121
 msgid ""
 "`dataset_diff(a, b, control)` produces a structural diff between two frozen "
 "datasets, including an `isomorphic` verdict. For a human-facing review flow, "
@@ -10171,23 +10176,23 @@ msgstr ""
 "称 CBD（Symmetric-CBD）提取（\"describe\"）以及一个便于审阅的 Turtle 归一化"
 "器，从而使图的变更读起来就像代码变更。"
 
-#: src/concepts/canonicalization.md:133
+#: src/concepts/canonicalization.md:127
 msgid "Choosing the right tool"
 msgstr "选择合适的工具"
 
-#: src/concepts/canonicalization.md:135
+#: src/concepts/canonicalization.md:129
 msgid "Need"
 msgstr "需求"
 
-#: src/concepts/canonicalization.md:135
+#: src/concepts/canonicalization.md:129
 msgid "Use"
 msgstr "使用"
 
-#: src/concepts/canonicalization.md:137
+#: src/concepts/canonicalization.md:131
 msgid "Same dataset → same bytes"
 msgstr "同一数据集 → 相同字节"
 
-#: src/concepts/canonicalization.md:137
+#: src/concepts/canonicalization.md:131
 msgid "any native serializer (always true)"
 msgstr "任何原生序列化器（始终成立）"
 
@@ -10210,31 +10215,31 @@ msgstr "W3C RDFC-1.0 文档，或重新计算的 4.x 摘要"
 msgid "`purrdf_core::rdfc12`"
 msgstr "`purrdf_core::rdfc12`"
 
-#: src/concepts/canonicalization.md:140
+#: src/concepts/canonicalization.md:134
 msgid "\"Are these two datasets the same graph?\""
 msgstr "「这两个数据集是同一张图吗？」"
 
-#: src/concepts/canonicalization.md:140
+#: src/concepts/canonicalization.md:134
 msgid "`datasets_isomorphic`"
 msgstr "`datasets_isomorphic`"
 
-#: src/concepts/canonicalization.md:141
+#: src/concepts/canonicalization.md:135
 msgid "\"What changed between these datasets?\""
 msgstr "「这两个数据集之间有什么变化？」"
 
-#: src/concepts/canonicalization.md:141
+#: src/concepts/canonicalization.md:135
 msgid "`dataset_diff` + describe/normalize"
 msgstr "`dataset_diff` + describe/normalize"
 
-#: src/concepts/canonicalization.md:142
+#: src/concepts/canonicalization.md:136
 msgid "Content-addressed transport of a graph"
 msgstr "图的内容寻址传输"
 
-#: src/concepts/canonicalization.md:142
+#: src/concepts/canonicalization.md:136
 msgid "[GTS](../gts.md) (BLAKE3 content ids)"
 msgstr "[GTS](../gts.md)（BLAKE3 内容 id）"
 
-#: src/concepts/canonicalization.md:144
+#: src/concepts/canonicalization.md:138
 msgid ""
 "API details are on [docs.rs/purrdf-core](https://docs.rs/purrdf-core) (the "
 "`try_canonicalize`, `datasets_isomorphic`, and `dataset_diff` items) and "
@@ -10515,32 +10520,34 @@ msgid ""
 "endpoints are reached — down to per-service headers, credentials and "
 "capabilities (see [below](#per-service-context-the-serviceresolver-seam)). "
 "Where it stops: PurRDF ships no HTTP client (the exchange is an "
-"`HttpTransport` trait the Rust host implements). The CLI, Python and C "
-"surfaces install no resolver, and neither do the wasm package's synchronous "
-"methods, so a `SERVICE` or `LOAD` there fails by name unless written "
-"`SILENT`. The wasm package's asynchronous methods take host resolvers — "
-"JavaScript handlers the job suspends on through JSPI (see [Getting Started: "
-"JavaScript](../getting-started/javascript.md#asynchronous-queries-and-"
-"federation)). Federation is a host composition. All seven W3C `service` "
-"federation cases pass through this seam. The forwarded body is re-emitted "
-"through the deterministic serializer — the federation wire format — whose "
-"parse → serialize → re-parse fidelity is swept over the 823-item corpus "
-"(every vendored W3C and first-party query and update text, plus this book's "
-"own examples) with an empty exception ledger."
+"`HttpExchange` trait the Rust host implements, serving `SERVICE` and `LOAD` "
+"alike). The CLI, Python and C surfaces install no resolver, and neither do "
+"the wasm package's synchronous methods, so a `SERVICE` or `LOAD` there fails "
+"by name unless written `SILENT`. The wasm package's asynchronous methods "
+"take host resolvers — JavaScript handlers the job suspends on through JSPI "
+"(see [Getting Started: JavaScript](../getting-started/"
+"javascript.md#asynchronous-queries-and-federation)). Federation is a host "
+"composition. All seven W3C `service` federation cases pass through this "
+"seam. The forwarded body is re-emitted through the deterministic serializer "
+"— the federation wire format — whose parse → serialize → re-parse fidelity "
+"is swept over the 823-item corpus (every vendored W3C and first-party query "
+"and update text, plus this book's own examples) with an empty exception "
+"ledger."
 msgstr ""
 "**SERVICE 扩展点**——`SERVICE` 联邦查询通过一个**宿主可注入的 "
 "`ServiceResolver`** 求值：引擎本身不执行任何 I/O，因此联邦查询可以移植到 "
 "wasm，并由宿主决定如何（以及是否）到达远程端点——细到逐服务的请求头、凭据与能"
 "力（见[下文](#per-service-context-the-serviceresolver-seam)）。止步于何处："
-"PurRDF 不附带 HTTP 客户端（交换是一个由 Rust 宿主实现的 `HttpTransport` "
-"trait）。CLI、Python 与 C 接口不安装解析器，wasm 包的同步方法同样不安装，因此"
-"那里的 `SERVICE` 或 `LOAD` 会按名称失败，除非写了 `SILENT`。wasm 包的异步方法"
-"接受宿主提供的解析器——作业经由 JSPI 挂起、等待其应答的 JavaScript 处理函数"
-"（见[入门：JavaScript](../getting-started/javascript.md#asynchronous-queries-"
-"and-federation)）。联邦查询是宿主的组合。全部七个 W3C `service` 联邦查询用例"
-"都经由这个扩展点通过。被转发的主体经由确定性的序列化器重新输出——这就是联邦查"
-"询的线上格式——其解析 → 序列化 → 再解析的保真度在 823 项语料上做了扫描（每一个"
-"随库固化的 W3C 与第一方查询和更新文本，外加本书自己的示例），例外台账为空。"
+"PurRDF 不附带 HTTP 客户端（交换是一个由 Rust 宿主实现的 `HttpExchange` "
+"trait，同时服务于 `SERVICE` 与 `LOAD`）。CLI、Python 与 C 接口不安装解析器，"
+"wasm 包的同步方法同样不安装，因此那里的 `SERVICE` 或 `LOAD` 会按名称失败，除"
+"非写了 `SILENT`。wasm 包的异步方法接受宿主提供的解析器——作业经由 JSPI 挂起、"
+"等待其应答的 JavaScript 处理函数（见[入门：JavaScript](../getting-started/"
+"javascript.md#asynchronous-queries-and-federation)）。联邦查询是宿主的组合。"
+"全部七个 W3C `service` 联邦查询用例都经由这个扩展点通过。被转发的主体经由确定"
+"性的序列化器重新输出——这就是联邦查询的线上格式——其解析 → 序列化 → 再解析的保"
+"真度在 823 项语料上做了扫描（每一个随库固化的 W3C 与第一方查询和更新文本，外"
+"加本书自己的示例），例外台账为空。"
 
 #: src/sparql/querying.md:144
 msgid ""
@@ -12111,13 +12118,13 @@ msgid ""
 "the `SILENT` flag, the executing query's stop signal, and the intermediate-"
 "cell ceiling. Two implementations ship: `HttpRemoteQuerySource`, which "
 "builds and decodes SPARQL Protocol requests over a host-injected "
-"`HttpTransport`, and `InProcessServiceResolver`, which answers from datasets "
+"`HttpExchange`, and `InProcessServiceResolver`, which answers from datasets "
 "already in memory."
 msgstr ""
 "`SERVICE` 通过单一 trait `ServiceResolver` 应答，它以 `ServiceRequest` 的形式"
 "接收整个请求——端点、转发的查询文本、`SILENT` 标志、正在执行的查询的停止信号，"
 "以及中间单元格上限。随附两个实现：`HttpRemoteQuerySource`，它通过宿主注入的 "
-"`HttpTransport` 构建并解码 SPARQL Protocol 请求；以及 "
+"`HttpExchange` 构建并解码 SPARQL Protocol 请求；以及 "
 "`InProcessServiceResolver`，它从已在内存中的数据集作答。"
 
 #: src/sparql/querying.md:805
@@ -15255,7 +15262,7 @@ msgstr ""
 "`INSERT WHERE` 基本图模式自身没有 `GROUP BY`）——每个宿主的 `update` 入口都恰"
 "好通过这种嵌套子查询形态到达统计集。"
 
-#: src/sparql/querying.md:2251 src/validation/shacl.md:1633
+#: src/sparql/querying.md:2251 src/validation/shacl.md:1634
 #: src/validation/shex.md:68
 msgid "Dated XPath regex laws"
 msgstr "带日期的 XPath 正则法则"
@@ -15327,8 +15334,8 @@ msgid "Every host selects the law in its own spelling:"
 msgstr "每个宿主都以自己的写法选择法则："
 
 #: src/sparql/querying.md:2274 src/validation/shacl.md:551
-#: src/validation/shacl.md:586 src/validation/shacl.md:1607
-#: src/validation/shacl.md:1649 src/validation/shex.md:76
+#: src/validation/shacl.md:586 src/validation/shacl.md:1608
+#: src/validation/shacl.md:1650 src/validation/shex.md:76
 msgid "Spelling"
 msgstr "写法"
 
@@ -15515,6 +15522,25 @@ msgstr ""
 "`update_governed` 或 `update_governed_handle`。"
 
 #: src/sparql/querying.md:2345
+msgid ""
+"Every run prints its execution receipt on stderr as `purrdf-execution {...}"
+"`: the effective time and seed, which of them were supplied, the run "
+"identity (`runIdentity`, which binds the query, its parameters, these inputs "
+"and the evaluation environment) and whether a focus graph was read. No query "
+"hashes its dataset, so the receipt carries no content identity by default. "
+"`purrdf query --content-identity` asks for one: the receipt then also "
+"carries `contentIdentity`, a digest of every row of the data source, and "
+"`executionIdentity`, which binds the run to it. A run that calls extension "
+"code nothing certifies (`--aggregate-namespace`, `--path-relation`) has no "
+"run identity; with `--content-identity` it prints its receipt, writes no "
+"result and exits 2. The flag is refused beside `--entailment`, whose closure "
+"is not the data source. The C ABI (`purrdf_execution_receipt_bind`), the "
+"wasm package (`Dataset#contentIdentity`, `Dataset#bindExecutionReceipt`) and "
+"Python (`QuadStore.content_identity`, `QuadStore.bind_execution_receipt`) "
+"bind a returned receipt to the content identity of the dataset it read."
+msgstr ""
+
+#: src/sparql/querying.md:2361
 msgid ""
 "UPDATE remains transactional: a later-operation failure or governor trip "
 "publishes no mutation and the CLI writes no partial dataset. Existing "
@@ -17787,7 +17813,7 @@ msgstr ""
 msgid "\"https://example.org/more\""
 msgstr "\"https://example.org/more\""
 
-#: src/validation/shacl.md:496 src/validation/shacl.md:1438
+#: src/validation/shacl.md:496 src/validation/shacl.md:1439
 msgid "\"inferred\""
 msgstr "\"inferred\""
 
@@ -19234,20 +19260,20 @@ msgstr ""
 msgid ""
 "The Rust production path has no LinkML-toolkit dependency. `make linkml-"
 "oracle` uses the locked official LinkML 1.11.1 Python packages only as a "
-"differential oracle. "
-"It loads safe, lossy, and renamed fixtures through `SchemaDefinition` and "
-"`SchemaView`, regenerates JSON Schema, and verifies reverse predicates:"
+"differential oracle. It loads safe, lossy, and renamed fixtures through "
+"`SchemaDefinition` and `SchemaView`, regenerates JSON Schema, and verifies "
+"reverse predicates:"
 msgstr ""
-"Rust 生产路径不依赖 LinkML 工具包。`make linkml-oracle` 仅把锁定版本的官方 LinkML 1.11.1 "
-"Python 包用作差分判定依据（oracle）。它通过 `SchemaDefinition` 与 "
-"`SchemaView` 加载安全、有损与重命名的测试夹具，重新生成 JSON Schema，并验证反"
-"向谓词："
+"Rust 生产路径不依赖 LinkML 工具包。`make linkml-oracle` 仅把锁定版本的官方 "
+"LinkML 1.11.1 Python 包用作差分判定依据（oracle）。它通过 `SchemaDefinition` "
+"与 `SchemaView` 加载安全、有损与重命名的测试夹具，重新生成 JSON Schema，并验"
+"证反向谓词："
 
-#: src/validation/shacl.md:1193
+#: src/validation/shacl.md:1194
 msgid "TypeScript 7.0 projection"
 msgstr "TypeScript 7.0 投影"
 
-#: src/validation/shacl.md:1195
+#: src/validation/shacl.md:1196
 msgid ""
 "`emit_typescript` projects the same `CompiledSchema` into deterministic "
 "TypeScript 7.0 declarations. The caller supplies the package name and all "
@@ -19262,7 +19288,7 @@ msgstr ""
 "`json-schema` → `typescript-7.0` 损失台账；PurRDF 不为使用方发明任何标识或词"
 "汇表。"
 
-#: src/validation/shacl.md:1202
+#: src/validation/shacl.md:1203
 msgid ""
 "The fixed declaration dialect uses `strict` plus "
 "`exactOptionalPropertyTypes`. Type aliases preserve JSON primitives and "
@@ -19277,7 +19303,7 @@ msgstr ""
 "并集、交集、数组以及元组。不存在运行时枚举、可合并的接口、带品牌的伪验证器或 "
 "`any` 逃生口。无效关键字、开放/悬空引用以及名称冲突都会在输出字节之前失败。"
 
-#: src/validation/shacl.md:1210
+#: src/validation/shacl.md:1211
 msgid ""
 "Array length bounds are exact at any size. A tuple element states each "
 "position-specific item. A length beyond those positions is stated as an "
@@ -19303,7 +19329,7 @@ msgstr ""
 "100,000 个成员（TS2590）。作用于有限 `const` 或 `enum` 的数值关键字，会排除不"
 "满足它们的数字。"
 
-#: src/validation/shacl.md:1223
+#: src/validation/shacl.md:1224
 msgid ""
 "Runtime assertions outside TypeScript structural assignability are never "
 "silently erased: integer, numeric/string predicate, closure, pattern-"
@@ -19328,7 +19354,7 @@ msgstr ""
 "步即被拒绝。CI 用一个 draft 2020-12 验证器独立地对实例分类，并用锁定版本的 "
 "TypeScript 7.0.2 编译器编译生成的声明，包括新鲜字面量与经由变量的探针："
 
-#: src/validation/shacl.md:1240
+#: src/validation/shacl.md:1241
 msgid ""
 "The projection intentionally has no arbitrary TypeScript reader. TypeScript "
 "declarations do not define a unique runtime JSON acceptance relation, and "
@@ -19344,11 +19370,11 @@ msgstr ""
 "台账。TypeScript 只是开发期的判定依据（oracle）依赖；Rust 输出器/导入器不访问"
 "文件系统，并保持 wasm-clean。"
 
-#: src/validation/shacl.md:1248
+#: src/validation/shacl.md:1249
 msgid "GraphQL September 2025 projection"
 msgstr "GraphQL September 2025 投影"
 
-#: src/validation/shacl.md:1250
+#: src/validation/shacl.md:1251
 msgid ""
 "`emit_graphql` projects `CompiledSchema` into deterministic GraphQL "
 "September 2025 SDL. `GraphqlConfig` has no defaults: the caller supplies the "
@@ -19364,7 +19390,7 @@ msgstr ""
 "的 `name-map.json`、以带类型 Rust 数据表示的同一名称映射、一份带位置的 `json-"
 "schema` → `graphql-september-2025` 损失台账，以及生产用的值编解码器。"
 
-#: src/validation/shacl.md:1257
+#: src/validation/shacl.md:1258
 msgid ""
 "The SDL is deliberately a type-system fragment. PurRDF emits paired output "
 "`type` and input `input` objects, but no query, mutation, or subscription "
@@ -19376,7 +19402,7 @@ msgstr ""
 "`input` 对象，但不输出查询、变更或订阅根类型、解析器、分页规则、授权策略、联"
 "邦指令或其他应用行为。调用方把该片段与其自己的可执行模式组合起来。"
 
-#: src/validation/shacl.md:1263
+#: src/validation/shacl.md:1264
 msgid ""
 "The exact grammar includes GraphQL booleans, strings, numbers, the signed 32-"
 "bit `Int` domain, explicit nullability, finite JSON `const`/`enum` sets, "
@@ -19402,7 +19428,7 @@ msgstr ""
 "标量；字段与枚举符号在其 GraphQL 局部命名空间中检查。带类型/规范的名称映射保"
 "留源定义键、属性键以及有限的 JSON 值。"
 
-#: src/validation/shacl.md:1277
+#: src/validation/shacl.md:1278
 msgid ""
 "`GraphqlPackage::encode_input` maps source JSON keys and finite values to "
 "input field names and enum symbols, and wraps a union value in its "
@@ -19428,75 +19454,75 @@ msgstr ""
 "型/规范的映射、标识、所保留的源模式以及正向台账。任意的 GraphQL SDL 没有唯一"
 "的 JSON Schema 接受关系，不被接受为逆向格式。"
 
-#: src/validation/shacl.md:1290
+#: src/validation/shacl.md:1291
 msgid ""
 "GraphQL variable coercion differs from JSON Schema validation at these "
 "closed boundaries:"
 msgstr "GraphQL 变量强制转换与 JSON Schema 验证在以下封闭边界上存在差异："
 
-#: src/validation/shacl.md:1293
+#: src/validation/shacl.md:1294
 msgid "Boundary"
 msgstr "边界"
 
-#: src/validation/shacl.md:1293
+#: src/validation/shacl.md:1294
 msgid "Located loss families"
 msgstr "带位置的损失类别"
 
-#: src/validation/shacl.md:1295
+#: src/validation/shacl.md:1296
 msgid "object fields and names"
 msgstr "对象字段与名称"
 
-#: src/validation/shacl.md:1295
+#: src/validation/shacl.md:1296
 msgid "additional properties, pattern properties, property names/counts"
 msgstr "附加属性、模式属性、属性名/属性数量"
 
-#: src/validation/shacl.md:1296
+#: src/validation/shacl.md:1297
 msgid "requiredness and recursion"
 msgstr "是否必需与递归"
 
-#: src/validation/shacl.md:1296
+#: src/validation/shacl.md:1297
 msgid ""
 "nullable-presence widening, one deterministic recursive-input nullability "
 "relaxation"
 msgstr "可空存在性放宽，一处确定性的递归输入可空性放宽"
 
-#: src/validation/shacl.md:1297
+#: src/validation/shacl.md:1298
 msgid "lists"
 msgstr "列表"
 
-#: src/validation/shacl.md:1297
+#: src/validation/shacl.md:1298
 msgid ""
 "singleton coercion, cardinality, contains, uniqueness, tuples, unevaluated "
 "items"
 msgstr "单例强制转换、基数、contains、唯一性、元组、未求值项"
 
-#: src/validation/shacl.md:1298
+#: src/validation/shacl.md:1299
 msgid "scalar assertions"
 msgstr "标量断言"
 
-#: src/validation/shacl.md:1298
+#: src/validation/shacl.md:1299
 msgid "integer domain delegation, numeric predicates, string predicates"
 msgstr "整数值域委托、数值谓词、字符串谓词"
 
-#: src/validation/shacl.md:1299
+#: src/validation/shacl.md:1300
 msgid "applicators"
 msgstr "应用器（applicator）"
 
-#: src/validation/shacl.md:1299
+#: src/validation/shacl.md:1300
 msgid ""
 "conditionals, dependencies, intersections, overlapping and type-array "
 "unions, `oneOf`, negation"
 msgstr "条件、依赖、交集、重叠的并集与类型数组并集、`oneOf`、否定"
 
-#: src/validation/shacl.md:1300
+#: src/validation/shacl.md:1301
 msgid "runtime boundary"
 msgstr "运行时边界"
 
-#: src/validation/shacl.md:1300
+#: src/validation/shacl.md:1301
 msgid "custom-scalar and unknown-keyword validation delegation"
 msgstr "自定义标量与未知关键字的验证委托"
 
-#: src/validation/shacl.md:1302
+#: src/validation/shacl.md:1303
 msgid ""
 "The caller-named fallback scalar is declared but PurRDF does not invent its "
 "`parseValue`, `parseLiteral`, or serialization semantics. Every delegated "
@@ -19507,7 +19533,7 @@ msgstr ""
 "`parseLiteral` 或序列化语义。因此，每一处委托使用都会记入台账。损失条目携带稳"
 "定的代码与源 JSON Pointer 位置；精确的包台账为空。"
 
-#: src/validation/shacl.md:1307
+#: src/validation/shacl.md:1308
 msgid ""
 "Emission fails before returning bytes for invalid caller configuration, "
 "malformed schema keywords, `$id` rebasing, external/indirect/dangling "
@@ -19525,7 +19551,7 @@ msgstr ""
 "义数、每个对象的字段数或有限值数各 65,536；深度 128；每个 GraphQL 名称 255 字"
 "节。"
 
-#: src/validation/shacl.md:1315
+#: src/validation/shacl.md:1316
 msgid ""
 "The independent dev oracle classifies source values with `purrdf-"
 "jsonschema`, builds the SDL with locked official GraphQL.js 16.14.0, and "
@@ -19539,18 +19565,18 @@ msgstr ""
 "致，验证每个封闭的损失类别及其位置、名称映射与生产用编解码器，以及刻意损坏时"
 "的失败。每个有效值还会经由其输出类型返回，且 GraphQL.js 必须原样序列化它："
 
-#: src/validation/shacl.md:1326
+#: src/validation/shacl.md:1327
 msgid ""
 "GraphQL.js is dev-only. Emission and value translation remain filesystem-"
 "free, wasm-clean Rust."
 msgstr ""
 "GraphQL.js 仅用于开发。输出与值转换仍是不访问文件系统、wasm-clean 的 Rust。"
 
-#: src/validation/shacl.md:1329
+#: src/validation/shacl.md:1330
 msgid "Rules, node expressions and certifying a shapes graph"
 msgstr "规则、节点表达式与形状图认证"
 
-#: src/validation/shacl.md:1331
+#: src/validation/shacl.md:1332
 msgid ""
 "Four tools sit beside validation. Every host reaches the same library entry "
 "point, so the command line, Python, WebAssembly and C cannot disagree about "
@@ -19559,111 +19585,111 @@ msgstr ""
 "验证之外还有四个工具。每个宿主都到达同一个库入口点，因此命令行、Python、"
 "WebAssembly 与 C 在答案上不可能出现分歧。"
 
-#: src/validation/shacl.md:1335
+#: src/validation/shacl.md:1336
 msgid "Tool"
 msgstr "工具"
 
-#: src/validation/shacl.md:1335
+#: src/validation/shacl.md:1336
 msgid "Python (`purrdf.shapes`)"
 msgstr "Python（`purrdf.shapes`）"
 
-#: src/validation/shacl.md:1337
+#: src/validation/shacl.md:1338
 msgid "Run rules, write the inference graph"
 msgstr "运行规则，写出推理图"
 
-#: src/validation/shacl.md:1337
+#: src/validation/shacl.md:1338
 msgid "`purrdf_shapes::infer`, `srl::infer`"
 msgstr "`purrdf_shapes::infer`, `srl::infer`"
 
-#: src/validation/shacl.md:1337
+#: src/validation/shacl.md:1338
 msgid "`purrdf rules`"
 msgstr "`purrdf rules`"
 
-#: src/validation/shacl.md:1337
+#: src/validation/shacl.md:1338
 msgid "`apply_rules`"
 msgstr "`apply_rules`"
 
-#: src/validation/shacl.md:1337
+#: src/validation/shacl.md:1338
 msgid "`shaclApplyRules`"
 msgstr "`shaclApplyRules`"
 
-#: src/validation/shacl.md:1337
+#: src/validation/shacl.md:1338
 msgid "`purrdf_shacl_apply_rules`"
 msgstr "`purrdf_shacl_apply_rules`"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1339
 msgid "Check a SPARQL 1.2 RL rule set, run nothing"
 msgstr "检查 SPARQL 1.2 RL 规则集，不运行任何规则"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1339
 msgid "`srl::check`"
 msgstr "`srl::check`"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1339
 msgid "`purrdf rules --srl FILE --check`"
 msgstr "`purrdf rules --srl FILE --check`"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1339
 msgid "`check_rules`"
 msgstr "`check_rules`"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1339
 msgid "`shaclCheckRules`"
 msgstr "`shaclCheckRules`"
 
-#: src/validation/shacl.md:1338
+#: src/validation/shacl.md:1339
 msgid "`purrdf_shacl_check_rules`"
 msgstr "`purrdf_shacl_check_rules`"
 
-#: src/validation/shacl.md:1339
+#: src/validation/shacl.md:1340
 msgid "Evaluate one node expression"
 msgstr "对单个节点表达式求值"
 
-#: src/validation/shacl.md:1339
+#: src/validation/shacl.md:1340
 msgid "`free_expression::evaluate`"
 msgstr "`free_expression::evaluate`"
 
-#: src/validation/shacl.md:1339
+#: src/validation/shacl.md:1340
 msgid "`purrdf node-expr`"
 msgstr "`purrdf node-expr`"
 
-#: src/validation/shacl.md:1339
+#: src/validation/shacl.md:1340
 msgid "`eval_node_expr`"
 msgstr "`eval_node_expr`"
 
-#: src/validation/shacl.md:1339
+#: src/validation/shacl.md:1340
 msgid "`shaclEvalNodeExpr`"
 msgstr "`shaclEvalNodeExpr`"
 
-#: src/validation/shacl.md:1339
+#: src/validation/shacl.md:1340
 msgid "`purrdf_shacl_eval_node_expr`"
 msgstr "`purrdf_shacl_eval_node_expr`"
 
-#: src/validation/shacl.md:1340
+#: src/validation/shacl.md:1341
 msgid "Certify a shapes graph"
 msgstr "认证形状图"
 
-#: src/validation/shacl.md:1340
+#: src/validation/shacl.md:1341
 msgid "`lint::lint`"
 msgstr "`lint::lint`"
 
-#: src/validation/shacl.md:1340
+#: src/validation/shacl.md:1341
 msgid "`purrdf shapes lint`"
 msgstr "`purrdf shapes lint`"
 
-#: src/validation/shacl.md:1340
+#: src/validation/shacl.md:1341
 msgid "`lint_shapes`"
 msgstr "`lint_shapes`"
 
-#: src/validation/shacl.md:1340
+#: src/validation/shacl.md:1341
 msgid "`shaclLintShapes`"
 msgstr "`shaclLintShapes`"
 
-#: src/validation/shacl.md:1340
+#: src/validation/shacl.md:1341
 msgid "`purrdf_shacl_lint_shapes`"
 msgstr "`purrdf_shacl_lint_shapes`"
 
-#: src/validation/shacl.md:1342
+#: src/validation/shacl.md:1343
 msgid ""
 "**Rules.** The rule source is either a shapes graph, whose SHACL 1.2 rules "
 "run (its default rule set), or a SPARQL 1.2 RL rule set, but not both. The "
@@ -19681,7 +19707,7 @@ msgstr ""
 "后是 `  rule R`，以及规则体所匹配的每个事实各一行 `  premise S P O .`。"
 "SPARQL 1.2 RL 数据块中的三元组则改为 `  data-block`。"
 
-#: src/validation/shacl.md:1350
+#: src/validation/shacl.md:1351
 msgid ""
 "The CLI accepts independently optional `--now XSD_DATE_TIME` and `--entropy-"
 "seed U64` on `rules`, with either `--shapes` or `--srl` and with either "
@@ -19705,7 +19731,7 @@ msgstr ""
 "`--check` 同用。无效坐标在读取数据、规则或导入文件之前作为用法错误拒绝。证明"
 "文本和程序身份保留现有含义；它们不序列化这些输入，也不标识完整执行。"
 
-#: src/validation/shacl.md:1363
+#: src/validation/shacl.md:1364
 msgid ""
 "Every host takes the same four **rule-evaluation limits**, on both of its "
 "SHACL rules entry points: the rules run above and SHACL-AF entailment "
@@ -19732,7 +19758,7 @@ msgstr ""
 "shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, "
 "maxJoinSteps?)`。"
 
-#: src/validation/shacl.md:1374
+#: src/validation/shacl.md:1375
 msgid ""
 "The **term-generating round limit** bounds the evaluation rounds that infer "
 "a term the graph did not already hold. The default is 16384 rounds. A "
@@ -19743,7 +19769,7 @@ msgstr ""
 "轮。一个步进到 10,000 的计数器会完成。一个没有界的计数器每轮推出一个新项，同"
 "样受这一上限约束。"
 
-#: src/validation/shacl.md:1378
+#: src/validation/shacl.md:1379
 msgid ""
 "The **generated-term budget** bounds the terms inferred beyond the input's. "
 "The default is `max(65536, 4 × N)`, where `N` is the number of distinct "
@@ -19755,7 +19781,7 @@ msgstr ""
 "其中 `N` 是数据图（以及 SPARQL 1.2 RL 规则集的数据块）中不同项的数量。新项每"
 "次迭代都翻倍的规则集会在几次迭代之内达到该预算，远早于达到轮数上限。"
 
-#: src/validation/shacl.md:1383
+#: src/validation/shacl.md:1384
 msgid ""
 "The **stored-fact limit** bounds the facts the evaluation store holds when "
 "selected by the caller: the data graph, a rule set's data and every "
@@ -19764,7 +19790,7 @@ msgstr ""
 "调用方选择**存储事实上限**时，它约束求值存储所持有的事实：数据图、规则集的数"
 "据以及每一条推出的三元组。"
 
-#: src/validation/shacl.md:1385
+#: src/validation/shacl.md:1386
 msgid ""
 "The **join-step limit** bounds candidate solutions when selected by the "
 "caller. Credits are reserved before expansion; a refusal never returns a "
@@ -19773,7 +19799,7 @@ msgstr ""
 "调用方选择**连接步数上限**时，它约束候选解的数量。展开之前先预留额度；拒绝绝"
 "不返回被截断的模型。"
 
-#: src/validation/shacl.md:1388
+#: src/validation/shacl.md:1389
 msgid ""
 "Unstated fact and join limits impose no logical ceiling. Select finite "
 "limits independently of term-generation governors. Rule frontends expose no "
@@ -19784,7 +19810,7 @@ msgstr ""
 "限上限可独立于项生成的治理参数进行选择。规则前端不对项存储区容量施加逻辑上"
 "限，也不提供该设置。实际存储准入仍然适用。"
 
-#: src/validation/shacl.md:1392
+#: src/validation/shacl.md:1393
 msgid ""
 "A run past any limit is refused. The error names the limit, the numbers, the "
 "knob that raises it and, for the two term limits, the rules that inferred a "
@@ -19818,7 +19844,7 @@ msgstr ""
 "误信息从不称其为发散。声明的上限是精确的，而且上限只能拒绝：它所允许的运行，"
 "推出的内容与在任何更大上限下完全相同。"
 
-#: src/validation/shacl.md:1409
+#: src/validation/shacl.md:1410
 msgid ""
 "A shape rule (a rule linked to a shape, run once per focus node) is re-run "
 "each iteration only for the focus nodes whose answer can have changed: the "
@@ -19850,7 +19876,7 @@ msgstr ""
 "一次运行的代价，而不是按迄今为止的焦点节点数各运行一次。生成新项的轮数上限和"
 "新生成项预算用于约束发散。调用方选择的有限连接步数上限可能更早拒绝运行。"
 
-#: src/validation/shacl.md:1426
+#: src/validation/shacl.md:1427
 msgid ""
 "A global SPARQL rule whose query is a conjunctive pattern (triple patterns, "
 "`FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or "
@@ -19866,23 +19892,23 @@ msgstr ""
 "`BIND` 变量必须出现在每个模板三元组中，且模板不得含有空节点。否则，该规则仍像"
 "以前一样，作为作用于整个图的生产者运行。"
 
-#: src/validation/shacl.md:1438
+#: src/validation/shacl.md:1439
 msgid "# the inference graph, N-Triples\n"
 msgstr "# 推理图，N-Triples\n"
 
-#: src/validation/shacl.md:1439
+#: src/validation/shacl.md:1440
 msgid "\"proof\""
 msgstr "\"proof\""
 
-#: src/validation/shacl.md:1439
+#: src/validation/shacl.md:1440
 msgid "# the proof text\n"
 msgstr "# 证明文本\n"
 
-#: src/validation/shacl.md:1440
+#: src/validation/shacl.md:1441
 msgid "# SPARQL 1.2 RL\n"
 msgstr "# SPARQL 1.2 RL\n"
 
-#: src/validation/shacl.md:1443
+#: src/validation/shacl.md:1444
 msgid ""
 "**Checking a SPARQL 1.2 RL rule set.** A rule set can be checked without "
 "being run. The check applies the static checks up to a level, and each level "
@@ -19915,7 +19941,7 @@ msgstr ""
 "stratification」都是有效的，因此以 `syntax` 级别评分。其中十五个在完整检查中"
 "失败，由后面的阶段拒绝。"
 
-#: src/validation/shacl.md:1460
+#: src/validation/shacl.md:1461
 msgid ""
 "The `syntax` stage also holds a rule set to where it announces its version. "
 "SPARQL 1.2 RL §7.1 says \"The version announcement SHOULD be made early in "
@@ -19931,15 +19957,15 @@ msgstr ""
 "`syntax` 阶段被拒绝，并点名该句。规则集可以不宣告任何版本；在较早的 "
 "`VERSION` 之后出现的后续 `VERSION`，对文档中其后的部分而言仍是一条指令。"
 
-#: src/validation/shacl.md:1468
+#: src/validation/shacl.md:1469
 msgid "# every static check\n"
 msgstr "# 全部静态检查\n"
 
-#: src/validation/shacl.md:1469
+#: src/validation/shacl.md:1470
 msgid "# the grammar alone\n"
 msgstr "# 仅检查语法\n"
 
-#: src/validation/shacl.md:1472
+#: src/validation/shacl.md:1473
 msgid ""
 "**Node expressions.** One node expression of a shapes graph is evaluated "
 "against a focus node of a data graph, as SHACL 1.2 Node Expressions' "
@@ -19970,11 +19996,11 @@ msgstr ""
 "`purrdf_shacl_eval_node_expr` 则把 `diagnostic RULE SHAPE` 行写入非 NULL 的 "
 "`out_diagnostics`。"
 
-#: src/validation/shacl.md:1487
+#: src/validation/shacl.md:1488
 msgid "Every host names the expression in one of three ways:"
 msgstr "每个宿主都以下列三种方式之一指名表达式："
 
-#: src/validation/shacl.md:1489
+#: src/validation/shacl.md:1490
 msgid ""
 "**The node itself**: an IRI, or `_:label` for a blank node the shapes "
 "document labels. An IRI that is the subject of no triple is a constant "
@@ -19983,7 +20009,7 @@ msgstr ""
 "**节点本身**：一个 IRI，或以 `_:label` 表示形状文档所标注的空节点。不作为任何"
 "三元组主语的 IRI 是常量表达式，求值结果为其自身。"
 
-#: src/validation/shacl.md:1492
+#: src/validation/shacl.md:1493
 msgid ""
 "**A walk from a named node**: a start node and one or more predicates, "
 "followed in order. Each step must reach exactly one value; a step that "
@@ -20003,7 +20029,7 @@ msgstr ""
 "后 `sht:nodeExpr`。该套件全部 143 个节点表达式测试都以这种方式经由 `purrdf "
 "node-expr` 运行。"
 
-#: src/validation/shacl.md:1501
+#: src/validation/shacl.md:1502
 msgid ""
 "**Inline Turtle**: a Turtle document read under the shapes document's "
 "prefixes and base, where its own directives take precedence. It is merged "
@@ -20018,113 +20044,113 @@ msgstr ""
 "与形状文档的空节点保持分离。表达式是该文档唯一的根：作为某个三元组的主语、且"
 "不作为任何三元组宾语的那个空节点。没有根或有多个根的文档会被拒绝。"
 
-#: src/validation/shacl.md:1508
+#: src/validation/shacl.md:1509
 msgid "Node"
 msgstr "节点"
 
-#: src/validation/shacl.md:1508
+#: src/validation/shacl.md:1509
 msgid "Walk"
 msgstr "游走"
 
-#: src/validation/shacl.md:1508
+#: src/validation/shacl.md:1509
 msgid "Inline Turtle"
 msgstr "内联 Turtle"
 
-#: src/validation/shacl.md:1510
+#: src/validation/shacl.md:1511
 msgid "`--expr`"
 msgstr "`--expr`"
 
-#: src/validation/shacl.md:1510
+#: src/validation/shacl.md:1511
 msgid "`--expr-at NODE --expr-via PREDICATE…`"
 msgstr "`--expr-at NODE --expr-via PREDICATE…`"
 
-#: src/validation/shacl.md:1510
+#: src/validation/shacl.md:1511
 msgid "`--expr-turtle`, `--expr-turtle-file`"
 msgstr "`--expr-turtle`, `--expr-turtle-file`"
 
-#: src/validation/shacl.md:1511 src/validation/shacl.md:1512
-#: src/validation/shacl.md:1513
+#: src/validation/shacl.md:1512 src/validation/shacl.md:1513
+#: src/validation/shacl.md:1514
 msgid "`expr`"
 msgstr "`expr`"
 
-#: src/validation/shacl.md:1511
+#: src/validation/shacl.md:1512
 msgid "`expr_at=`, `expr_via=[…]`"
 msgstr "`expr_at=`, `expr_via=[…]`"
 
-#: src/validation/shacl.md:1511
+#: src/validation/shacl.md:1512
 msgid "`expr_turtle=`"
 msgstr "`expr_turtle=`"
 
-#: src/validation/shacl.md:1512
+#: src/validation/shacl.md:1513
 msgid "`exprAt`, `exprVia`"
 msgstr "`exprAt`, `exprVia`"
 
-#: src/validation/shacl.md:1512
+#: src/validation/shacl.md:1513
 msgid "`exprTurtle`"
 msgstr "`exprTurtle`"
 
-#: src/validation/shacl.md:1513
+#: src/validation/shacl.md:1514
 msgid "`expr_at`, `expr_via`, `expr_via_count`"
 msgstr "`expr_at`, `expr_via`, `expr_via_count`"
 
-#: src/validation/shacl.md:1513
+#: src/validation/shacl.md:1514
 msgid "`expr_turtle`"
 msgstr "`expr_turtle`"
 
-#: src/validation/shacl.md:1514
+#: src/validation/shacl.md:1515
 msgid "Rust (`purrdf_validate`)"
 msgstr "Rust（`purrdf_validate`）"
 
-#: src/validation/shacl.md:1514
+#: src/validation/shacl.md:1515
 msgid "`ExprSelector::Node`"
 msgstr "`ExprSelector::Node`"
 
-#: src/validation/shacl.md:1514
+#: src/validation/shacl.md:1515
 msgid "`ExprSelector::At`"
 msgstr "`ExprSelector::At`"
 
-#: src/validation/shacl.md:1514
+#: src/validation/shacl.md:1515
 msgid "`ExprSelector::Turtle`"
 msgstr "`ExprSelector::Turtle`"
 
-#: src/validation/shacl.md:1516
+#: src/validation/shacl.md:1517
 msgid "Naming none of the three, or more than one, is refused."
 msgstr "三者一个都不指名，或指名多于一个，都会被拒绝。"
 
-#: src/validation/shacl.md:1519
+#: src/validation/shacl.md:1520
 msgid "\"_:suffix\""
 msgstr "\"_:suffix\""
 
-#: src/validation/shacl.md:1520 src/validation/shacl.md:1521
-#: src/validation/shacl.md:1524
+#: src/validation/shacl.md:1521 src/validation/shacl.md:1522
+#: src/validation/shacl.md:1525
 msgid "\"http://example.org/a\""
 msgstr "\"http://example.org/a\""
 
-#: src/validation/shacl.md:1520
+#: src/validation/shacl.md:1521
 msgid "\"suffix\""
 msgstr "\"suffix\""
 
-#: src/validation/shacl.md:1520
+#: src/validation/shacl.md:1521
 msgid "'\"!\"'"
 msgstr "'\"!\"'"
 
-#: src/validation/shacl.md:1522
+#: src/validation/shacl.md:1523
 msgid "\"http://example.org/Label\""
 msgstr "\"http://example.org/Label\""
 
-#: src/validation/shacl.md:1523
+#: src/validation/shacl.md:1524
 msgid "\"http://www.w3.org/ns/shacl#values\""
 msgstr "\"http://www.w3.org/ns/shacl#values\""
 
-#: src/validation/shacl.md:1525
+#: src/validation/shacl.md:1526
 msgid "\"[ sh:path ex:name ] .\""
 msgstr "\"[ sh:path ex:name ] .\""
 
-#: src/validation/shacl.md:1529
+#: src/validation/shacl.md:1530
 msgid "'[ sh:path ex:name ] .'"
 msgstr "'[ sh:path ex:name ] .'"
 
-#: src/validation/shacl.md:1533
+#: src/validation/shacl.md:1534
 msgid ""
 "**Certifying a shapes graph.** Loading a shapes graph is the hot path: it "
 "refuses the first construct it cannot evaluate faithfully, and does not pay "
@@ -20135,11 +20161,11 @@ msgstr ""
 "不为依据 W3C `shacl-shacl.ttl` 验证该图付出代价。lint 按需付出这一代价一次，"
 "并报告七个部分："
 
-#: src/validation/shacl.md:1538
+#: src/validation/shacl.md:1539
 msgid "`load`: the loader's verdict, accepted or the refusal it raised."
 msgstr "`load`：加载器的裁决，即接受，或它抛出的拒绝。"
 
-#: src/validation/shacl.md:1539
+#: src/validation/shacl.md:1540
 msgid ""
 "`shacl-shacl`: every result of validating the shapes graph against the "
 "vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core "
@@ -20154,7 +20180,7 @@ msgstr ""
 "SHACL 1.2 Core 中是良构的，该结果会被标记为 `superseded`，不算作问题，但仅在"
 "加载器接受了该图时如此。"
 
-#: src/validation/shacl.md:1545
+#: src/validation/shacl.md:1546
 msgid ""
 "`functions`: which implementation every node-expression function call binds "
 "to — `native`, `custom`, `sparql-registered` or `host-extension`. For a "
@@ -20166,7 +20192,7 @@ msgstr ""
 "状图，即使图中声明了 `sh:SPARQLExprExpression`，`sh:sparqlExpr` 调用仍绑定为 "
 "`native`。"
 
-#: src/validation/shacl.md:1549
+#: src/validation/shacl.md:1550
 msgid ""
 "`validators`: every validator the shapes graph declares for a built-in "
 "constraint component, which the native implementation supersedes and never "
@@ -20175,7 +20201,7 @@ msgstr ""
 "`validators`：形状图为内置约束组件声明的每个验证器，这些验证器被原生实现取"
 "代，从不运行。这些行从不算作问题。"
 
-#: src/validation/shacl.md:1552
+#: src/validation/shacl.md:1553
 msgid ""
 "`unexecuted`: every query that violates a pre-binding restriction and that "
 "nothing runs: a validator of a built-in component, a validator no use of its "
@@ -20189,7 +20215,7 @@ msgstr ""
 "何形状实例化的 `sh:SPARQLTargetType`。加载会接受它们；它们在这里各计为一个问"
 "题。违反语法规则的声明从不列在这里，因为它会使加载失败。"
 
-#: src/validation/shacl.md:1558
+#: src/validation/shacl.md:1559
 msgid ""
 "`diagnostics`: every mandatory diagnostic, one `diagnostic RULE SHAPE` line "
 "per shape whose `sh:in` or `sh:xone` list is empty. `RULE` is the syntax "
@@ -20208,7 +20234,7 @@ msgstr ""
 "`shacl-shacl.ttl` 会就同一个空列表发出警告；该结果列出时标记为 `diagnosed "
 "RULE`，不会被重复计数。"
 
-#: src/validation/shacl.md:1566
+#: src/validation/shacl.md:1567
 msgid ""
 "`unanchored-imports`: every `owl:imports` triple of the closure that is not "
 "an import, because its subject is no anchor of its document (see "
@@ -20225,7 +20251,7 @@ msgstr ""
 "`sh:Info` 严重级别，报告使用了 `owl:imports` 却不带 `owl:Ontology` 类型的 "
 "`sh:DataGraph`。"
 
-#: src/validation/shacl.md:1574
+#: src/validation/shacl.md:1575
 msgid ""
 "A report is clean when the loader accepted the graph, every `shacl-shacl` "
 "result is superseded (an `sh:Info` result counts like any other), no "
@@ -20241,27 +20267,27 @@ msgstr ""
 "文本；[CLI 参考](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "crates/cli/README.md#shapes-lint)给出了示例。"
 
-#: src/validation/shacl.md:1581 src/validation/shapes-products.md:812
+#: src/validation/shacl.md:1582 src/validation/shapes-products.md:812
 msgid "From Python"
 msgstr "从 Python 调用"
 
-#: src/validation/shacl.md:1586
+#: src/validation/shacl.md:1587
 msgid "\"...\""
 msgstr "\"...\""
 
-#: src/validation/shacl.md:1587
+#: src/validation/shacl.md:1588
 msgid "# True / False\n"
 msgstr "# True / False\n"
 
-#: src/validation/shacl.md:1588
+#: src/validation/shacl.md:1589
 msgid "\"results\""
 msgstr "\"results\""
 
-#: src/validation/shacl.md:1588
+#: src/validation/shacl.md:1589
 msgid "# list of violation dicts\n"
 msgstr "# 违规字典列表\n"
 
-#: src/validation/shacl.md:1591
+#: src/validation/shacl.md:1592
 msgid ""
 "Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`, "
 "`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each "
@@ -20276,11 +20302,11 @@ msgstr ""
 "SPARQL 结果注解的结果还带有 `annotations`：一个元组列表，每个元组由一个属性 "
 "IRI 与一个采用 N-Triples 语法的值组成。"
 
-#: src/validation/shacl.md:1597
+#: src/validation/shacl.md:1598
 msgid "Dated SHACL laws"
 msgstr ""
 
-#: src/validation/shacl.md:1599
+#: src/validation/shacl.md:1600
 msgid ""
 "Unselected, SHACL validation runs under the compatibility law. A caller "
 "selects one exact, dated SHACL law by its stable id: `shacl-rec-2017-07-20` "
@@ -20291,31 +20317,31 @@ msgid ""
 "decodes the id once, exactly, through `purrdf_validate::complete_profile`."
 msgstr ""
 
-#: src/validation/shacl.md:1609
+#: src/validation/shacl.md:1610
 msgid ""
 "`--shacl-profile <ID>` on `validate`, with `--shapes`, `--shapes-product` (a "
 "prepared product stores no SHACL law, so the restore takes it from the "
 "request) or `--changes`"
 msgstr ""
 
-#: src/validation/shacl.md:1610
+#: src/validation/shacl.md:1611
 msgid "`shacl_profile=` on `shapes.validate` and the `Shapes` constructor"
 msgstr ""
 
-#: src/validation/shacl.md:1611
+#: src/validation/shacl.md:1612
 msgid ""
 "a trailing `shaclProfile` on `shaclValidateToSarif`; its asynchronous twin "
 "takes it in its options object"
 msgstr ""
 
-#: src/validation/shacl.md:1612
+#: src/validation/shacl.md:1613
 msgid ""
 "`shacl_profile` on `purrdf_shacl_validate_to_sarif_law`, which adds it to "
 "`purrdf_shacl_validate_to_sarif_xpath_regex` and changes no existing "
 "signature"
 msgstr ""
 
-#: src/validation/shacl.md:1618
+#: src/validation/shacl.md:1619
 msgid ""
 "An id that names no law, `shacl-ed-2026-10-17` among them, is refused with "
 "the `unsupported-profile` status, and no nearby edition is substituted. A "
@@ -20328,7 +20354,7 @@ msgid ""
 "the editor's draft validates it."
 msgstr ""
 
-#: src/validation/shacl.md:1627
+#: src/validation/shacl.md:1628
 msgid ""
 "A dated law carries its own XPath bundle (see [Dated XPath regex laws]"
 "(#dated-xpath-regex-laws)). Naming another XPath law beside it, such as `--"
@@ -20338,7 +20364,7 @@ msgid ""
 "law."
 msgstr ""
 
-#: src/validation/shacl.md:1635
+#: src/validation/shacl.md:1636
 msgid ""
 "`sh:pattern` with its `sh:flags`, and the `REGEX` and `REPLACE` of SHACL-"
 "SPARQL targets, constraints and SHACL-AF functions, run on the compatibility "
@@ -20365,7 +20391,7 @@ msgstr ""
 "表达式而言，它覆盖过滤形状的 `sh:pattern`，以及函数调用与基于 SPARQL 的表达式"
 "中的 `REGEX`/`REPLACE`。lint 不编译也不匹配任何模式，因此不接受法则。"
 
-#: src/validation/shacl.md:1651
+#: src/validation/shacl.md:1652
 msgid ""
 "`PreparedShapes::with_xpath_regex(profile, limits)`, which returns an "
 "`XPathPreparedShapes`, and the free "
@@ -20385,7 +20411,7 @@ msgstr ""
 "`apply_rules_to_ntriples` 与 `eval_node_expr`）接受 "
 "`xpath_regex::parse_profile` 返回的 profile"
 
-#: src/validation/shacl.md:1652
+#: src/validation/shacl.md:1653
 msgid ""
 "`--xpath-regex <NAME>` on `validate` (with `--shapes`, `--shapes-product` or "
 "`--changes`), `rules` and `node-expr`; `rules --check` refuses it and "
@@ -20395,7 +20421,7 @@ msgstr ""
 "`node-expr` 上的 `--xpath-regex <NAME>`；`rules --check` 拒绝该标志，`shapes "
 "lint` 不提供该标志"
 
-#: src/validation/shacl.md:1653
+#: src/validation/shacl.md:1654
 msgid ""
 "`xpath_regex=` on `shapes.validate`, `Shapes.validate_nt`, "
 "`Shapes.validate_store`, `PreparedShapes.validate_nt`, "
@@ -20407,7 +20433,7 @@ msgstr ""
 "`shapes.entail`、`shapes.apply_rules` 与 `shapes.eval_node_expr` 上的 "
 "`xpath_regex=`"
 
-#: src/validation/shacl.md:1654
+#: src/validation/shacl.md:1655
 msgid ""
 "a trailing `xpathRegex` on `shaclValidateToSarif`, "
 "`shaclValidateChangesToSarif`, the four `shaclProductValidateToSarif…` "
@@ -20419,7 +20445,7 @@ msgstr ""
 "`shaclEvalNodeExpr` 的尾随参数 `xpathRegex`；它们的异步孪生方法在选项对象中接"
 "受它"
 
-#: src/validation/shacl.md:1655
+#: src/validation/shacl.md:1656
 msgid ""
 "`regex_profile` on `purrdf_shacl_validate_to_sarif_xpath_regex`, "
 "`purrdf_shacl_validate_changes_to_sarif_xpath_regex`, "
@@ -20441,11 +20467,11 @@ msgstr ""
 "`purrdf_shacl_apply_rules_xpath_regex` 与 "
 "`purrdf_shacl_eval_node_expr_xpath_regex` 上的 `regex_profile`"
 
-#: src/validation/shacl.md:1661 src/validation/shex.md:85
+#: src/validation/shacl.md:1662 src/validation/shex.md:85
 msgid "\"xpath-3.1-2017-03-21\""
 msgstr "\"xpath-3.1-2017-03-21\""
 
-#: src/validation/shacl.md:1665
+#: src/validation/shacl.md:1666
 msgid ""
 "Names match exactly, so `xpath-3.1` is refused with a list of the accepted "
 "names. With no selection (no keyword, option or flag, or a NULL "
@@ -20458,7 +20484,7 @@ msgstr ""
 "行为与以往完全一样。预备形状产物无需重新打包，因为法则属于求值，而不属于预备"
 "好的形状。"
 
-#: src/validation/shacl.md:1671
+#: src/validation/shacl.md:1672
 msgid ""
 "A pattern or flag the selected law does not define is reported the way an "
 "invalid pattern always is: a result of the declaring shape. A selected law "
@@ -20474,11 +20500,11 @@ msgstr ""
 "codes.md#xpath-带日期的原生-xpath-正则表达式purrdf-core)失败，并且不写出任何"
 "报告、数据集或输出。资源拒绝绝不会变成判定为符合约束的图。"
 
-#: src/validation/shacl.md:1679
+#: src/validation/shacl.md:1680
 msgid "The report is a dataset"
 msgstr "报告是一个数据集"
 
-#: src/validation/shacl.md:1681
+#: src/validation/shacl.md:1682
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -20496,7 +20522,7 @@ msgstr ""
 "语法渲染报告时，需要先处理 `to_dataset()` 的结果，再把返回的数据集交给 "
 "`serialize_dataset`。这正是 `purrdf validate --format` 所做的。"
 
-#: src/validation/shacl.md:1690
+#: src/validation/shacl.md:1691
 msgid ""
 "A report carries blank nodes from two graphs: a focus node, a value and an "
 "annotation value come from the data graph, and a source shape from the "
@@ -20527,7 +20553,7 @@ msgstr ""
 "的 `results` 保留原始标签。报告所*生成*的空节点（报告节点、每条结果各一个、复"
 "杂 `sh:path` 的内部节点）与这两个标签空间都不相同。"
 
-#: src/validation/shacl.md:1706
+#: src/validation/shacl.md:1707
 msgid ""
 "Every report a validation produces also states `sh:shapesGraphWellFormed`. "
 "SHACL 1.2 Core §6.7.1.4 says a processor that checks the shapes graph "
@@ -20560,7 +20586,7 @@ msgstr ""
 "点名该规则 id 的问题。`ValidationReport::shapes_graph_well_formed` 携带该值，"
 "SARIF 运行则以 `properties.shaclShapesGraphWellFormed` 携带它。"
 
-#: src/validation/shacl.md:1721
+#: src/validation/shacl.md:1722
 msgid ""
 "Every run reports the same diagnostics, not only the lint. A validation "
 "report carries them in `ValidationReport::diagnostics` — one "
@@ -20612,11 +20638,11 @@ msgstr ""
 "间是统一的：规则与形状是两个独立字段——在 Python 中是字典键，在 WebAssembly 中"
 "是 getter——C 的输出行以相同顺序携带同样的两个字段，规则在前。"
 
-#: src/validation/shacl.md:1746
+#: src/validation/shacl.md:1747
 msgid "SARIF output"
 msgstr "SARIF 输出"
 
-#: src/validation/shacl.md:1748
+#: src/validation/shacl.md:1749
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -20629,7 +20655,7 @@ msgstr ""
 "析器诊断——渲染为可追溯到源位置、逐字节确定性的 SARIF 日志，供编辑器、CI 与代"
 "码扫描仪表板使用："
 
-#: src/validation/shacl.md:1757
+#: src/validation/shacl.md:1758
 msgid ""
 "r#\"\n"
 "    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
@@ -20649,7 +20675,7 @@ msgstr ""
 "      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
 "\"#"
 
-#: src/validation/shacl.md:1765
+#: src/validation/shacl.md:1766
 msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
@@ -20661,15 +20687,15 @@ msgstr ""
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
 "\"#"
 
-#: src/validation/shacl.md:1770
+#: src/validation/shacl.md:1771
 msgid "\"sarif produced\""
 msgstr "\"sarif produced\""
 
-#: src/validation/shacl.md:1771
+#: src/validation/shacl.md:1772
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr "\"\\\"version\\\": \\\"2.1.0\\\"\""
 
-#: src/validation/shacl.md:1774
+#: src/validation/shacl.md:1775
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
@@ -20697,11 +20723,11 @@ msgstr ""
 "形状图以及一组生成的变异体上，除已点名的用例外，它恰好在 `shacl-shacl.ttl` 报"
 "告违规时拒绝该图。参见[一致性与测试](../project/conformance.md)。"
 
-#: src/validation/shacl.md:1790
+#: src/validation/shacl.md:1791
 msgid "References"
 msgstr "参考文献"
 
-#: src/validation/shacl.md:1792
+#: src/validation/shacl.md:1793
 msgid ""
 "Shqiponja Ahmetaj, Iovka Boneva, Jan Hidders, Maxime Jakubowski, Jose-Emilio "
 "Labra-Gayo, Wim Martens, Filip Murlak, Cem Okulmus, Ognjen Savković, Mantas "
@@ -20717,7 +20743,7 @@ msgstr ""
 "2026_sheval_DMKG26.pdf).” 载于第 2 届 International Workshop on Data "
 "Management for Knowledge Graphs (DMKG 2026)，2026 年。"
 
-#: src/validation/shacl.md:1800
+#: src/validation/shacl.md:1801
 msgid ""
 "Shqiponja Ahmetaj, Iovka Boneva, Jan Hidders, Maxime Jakubowski, Jose-Emilio "
 "Labra-Gayo, Wim Martens, Fabio Mogavero, Filip Murlak, Cem Okulmus, Ognjen "
@@ -25855,13 +25881,14 @@ msgstr ""
 #: src/gts.md:13
 msgid ""
 "This chapter is a user-level tour. **The wire format itself is specified in "
-"[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/"
-"main/docs/GTS-SPEC.md)** — consult the spec for framing, fold semantics, "
-"registries, and conformance classes; nothing here supersedes it."
+"[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/"
+"main/docs/GTS-SPEC.md) in `gmeow-gts`** — consult the spec for framing, fold "
+"semantics, registries, and conformance classes; nothing here supersedes it."
 msgstr ""
-"本章是面向用户的导览。**线格式本身由 [`docs/GTS-SPEC.md`](https://github.com/"
-"Blackcat-Informatics/purrdf/blob/main/docs/GTS-SPEC.md) 规定**——分帧、折叠语"
-"义、注册表与一致性类别请查阅该规范；此处任何内容都不取代它。"
+"本章是面向用户的导览。**线格式本身由 `gmeow-gts` 中的 [`docs/GTS-SPEC.md`]"
+"(https://github.com/Blackcat-Informatics/gmeow-gts/blob/main/docs/GTS-"
+"SPEC.md) 规定**——分帧、折叠语义、注册表与一致性类别请查阅该规范；此处任何内容"
+"都不取代它。"
 
 #: src/gts.md:18
 msgid "The container model, at a high level"
@@ -25976,6 +26003,60 @@ msgstr ""
 "GTS 写出器与每个 PurRDF 序列化器受同一确定性不变量约束。"
 
 #: src/gts.md:75
+#, fuzzy
+msgid "Streaming a log to a sink"
+msgstr "流与接收器"
+
+#: src/gts.md:77
+msgid ""
+"`Writer` holds the whole log in memory. `writer::StreamWriter` frames the "
+"same bytes into a destination the caller supplies, one frame at a time: any "
+"`std::io::Write`, or a `FrameSink` (or a closure wrapped in `FnSink`) whose "
+"own error type comes back unchanged in `StreamError::Sink`. "
+"`StreamWriter::new` writes the header; each `add_frame_with_options` call "
+"encodes one frame, hands it to the sink and returns its id, so memory is "
+"bounded by the largest frame and not by the log. Both writers run one frame "
+"encoder, and for the same calls their bytes are identical."
+msgstr ""
+
+#: src/gts.md:86
+msgid ""
+"A long-lived log is a concatenation of segments, each a header and its "
+"frames. `bytes_written()` counts only what one writer has written: it starts "
+"at the header for `StreamWriter::new` and at zero for "
+"`StreamWriter::resume`, and is never an offset in the file. So record the "
+"file offset at which each writer starts, and after each frame that must "
+"survive keep `head()` and that starting offset plus `bytes_written()`. After "
+"a restart, cut the file back to that sum (not to `bytes_written()` alone, "
+"which would cut into earlier segments) and call `StreamWriter::resume` with "
+"the stored head and the header's catalog options: the chain continues with "
+"no earlier frame in memory. To start the next segment, put the previous "
+"segment's head in the new header's `meta`."
+msgstr ""
+
+#: src/gts.md:97
+msgid ""
+"Per frame, `add_frame_signing` chooses whether the installed Ed25519 signer "
+"signs it (`FrameSigning::Installed` or `Unsigned`), so a round can sign its "
+"last frame only; a signature never changes a frame id. Sealing takes the "
+"caller's nonce in `Encrypt0Options`. `add_frame_from_reader` reads a payload "
+"of a declared length from a reader: a clear payload is streamed in one pass, "
+"holding one 128 KiB chunk, while a transformed or sealed payload is read "
+"whole first, because its encoded length precedes it on the wire. A sealed "
+"payload longer than AES-GCM's plaintext limit (just under 64 GiB) panics, as "
+"it does in `Writer`."
+msgstr ""
+
+#: src/gts.md:107
+msgid ""
+"If the sink fails, or a streamed payload's reader fails, part of a frame may "
+"be in the destination: the writer refuses further frames, and `head()` and "
+"`bytes_written()` stay at the last whole frame. Cut the destination back to "
+"the offset at which this writer started plus `bytes_written()`, and resume "
+"from `head()`. `index` footers and composite signatures are not streamed."
+msgstr ""
+
+#: src/gts.md:113
 msgid ""
 "The `RdfDataset` import/export path lives one layer up: the umbrella crate's "
 "`gts` module combines the container engine with the RDF-level adapter "
@@ -25986,11 +26067,120 @@ msgstr ""
 "RDF 层适配器（快照组合、内容链校验）结合起来，因此面向 RDF 的 GTS 工作直接经"
 "由 `purrdf` 完成。"
 
-#: src/gts.md:80
+#: src/gts.md:118
+msgid "Indexed dictionary access"
+msgstr ""
+
+#: src/gts.md:120
+msgid ""
+"`purrdf_gts::reader::indexed` accepts a caller-owned `Read + Seek` source "
+"and caller-owned `TermStorage`. Construct an `IndexedInput`, bind it to the "
+"actual `DecodeCapabilities` and `LookupPolicy` in an `IndexedCatalog`, then "
+"retain that catalog and storage in an `IndexedDictionary`. Opening these "
+"owners does not scan the source. `get(TermKey)` discovers the requested "
+"segment and admits its selected dictionary block through the original term "
+"decoder. Its result contains the original admitted term lease and any "
+"selected-block diagnostics."
+msgstr ""
+
+#: src/gts.md:128
+msgid ""
+"The source callback must report authoritative current snapshot ownership, "
+"generation and length. Capability identity retains the same allocation as "
+"the actual key resolver; policy identity retains the actual immutable "
+"options and resource ceilings. Supply their `owner()` values in the "
+"callback's `AccessBinding`. Replacing source bytes, rotating keys or "
+"changing policy must change the corresponding owner or generation. These "
+"identities are checked before retained metadata and term-cache entries are "
+"used. Rewrapping an old store does not certify its previous bindings; warm "
+"reuse retains the verified dictionary owner itself. Warm results retain the "
+"original diagnostics."
+msgstr ""
+
+#: src/gts.md:138
+msgid ""
+"Cold discovery walks CBOR structure to locate the segment's latest index and "
+"legal tail. It checks every present offset, type or dictionary locator "
+"against observed frame boundaries and contributor coverage. Plain "
+"predecessor term counts and reference projections skip lexical bodies; "
+"transformed predecessors need their bounded decoder to establish those "
+"counts. Indirect quoted terms require a separate explicit "
+"`prepare_reference_access(segment)` call. Preparation authenticates all "
+"current-wire dictionary/snapshot contributors, including tails, one bounded "
+"encoded frame at a time. It can read every dictionary frame's bytes; it "
+"admits no raw terms, performs no RDF row fold and verifies no global trust "
+"policy. An unprepared indirect lookup returns `ReferencePreparationRequired` "
+"without poisoning the session, so the caller may prepare and retry."
+msgstr ""
+
+#: src/gts.md:150
+msgid ""
+"Preparation retains contributor intervals and numeric term-reference "
+"projections under the same combined metadata ceiling as catalogs and active "
+"resolution. Each contributor is projected once; transformed contributors use "
+"the original bounded payload decoder. Binding and cycle checks then read the "
+"retained projections with the original source-prefix visibility and snapshot "
+"rebasing. They do not rescan term bodies for every reifier row. Preparation "
+"can refuse when this retained metadata would exceed the caller's ceiling."
+msgstr ""
+
+#: src/gts.md:158
+msgid ""
+"Prepared indirect lookup inspects numeric reference projections and binding "
+"rows in source order, including later legacy ambiguity. Row-position and "
+"recursion checks use that metadata without loading unrelated raw term blocks "
+"or treating their unadmitted lexical defects as global diagnostics. Selected "
+"dictionary blocks are admitted through the original term decoder and retain "
+"every block diagnostic, including defects on other terms in that same block. "
+"RDF interning then follows the requested dependency closure. These "
+"operations can require more work than the selected block alone. Buffered "
+"prefetch may read unselected bytes, particularly for short adjacent values. "
+"`work()` reports actual source reads, bytes, seeks, identity checks, frame "
+"hashes and logical payload/capability decoder calls rather than an inferred "
+"selected-byte count. `reference_projections` counts source term projections "
+"visited during explicit preparation, including a visit refused by its "
+"metadata admission; reading the retained projections does not add visits. "
+"Encoded CBOR admission during preparation contributes its actual bytes and "
+"hashes; it is separate from the logical payload-decoder call counter."
+msgstr ""
+
+#: src/gts.md:175
+msgid ""
+"`purrdf_rdf::import_gts_indexed_term` resolves a selected term and its "
+"dependency closure through the authoritative RDF importer callbacks. It "
+"returns a native dataset handle and the term id owned by that handle. Each "
+"call uses fresh destination resolution state, so ids from separate returned "
+"owners must not be mixed. This operation does not import unrelated quad, "
+"reifier or annotation rows and never initiates reference preparation "
+"implicitly. Full import and N-Quads export remain explicit operations "
+"through the existing forward reader and dictionary-backed importer/exporter "
+"APIs."
+msgstr ""
+
+#: src/gts.md:184
+msgid ""
+"The frame byte ceilings and combined metadata ceiling cover the selected "
+"reader windows, catalog, verification records and active resolution state. "
+"Raw term allocations and escaped pins remain owned by caller storage; a "
+"lease reports its retained bytes. The native RDF result is separate caller-"
+"owned output. Metadata entry counts are not a process-memory bound."
+msgstr ""
+
+#: src/gts.md:190
+msgid ""
+"Selective frame hashes and index coverage do not certify unvisited payloads "
+"or global signatures. A requested `expected_head` produces "
+"`FullVerificationRequired`; use the existing full-reader options for "
+"explicit freshness verification. A footer without usable locators produces "
+"`IndexUnavailable`, with no implicit full-reader fallback. Signature and "
+"trust verification also remain explicit operations."
+msgstr ""
+
+#: src/gts.md:197
 msgid "Signing and encryption"
 msgstr "签名与加密"
 
-#: src/gts.md:82
+#: src/gts.md:199
 msgid ""
 "Frames can be signed and encrypted with **COSE**; OpenPGP-based checks and a "
 "trust-policy layer are also part of the engine. All cryptography is **pure "
@@ -26003,12 +26193,12 @@ msgstr ""
 "个引擎能保持 wasm 友好的原因。无法解密的加密帧在折叠中只是一个不透明节点：容"
 "器仍然可读。"
 
-#: src/gts.md:88
+#: src/gts.md:205
 msgid ""
 "Rust-library-only: compaction certificates, proofs and keyring verification"
 msgstr "仅限 Rust 库：压缩证书、证明与密钥环校验"
 
-#: src/gts.md:90
+#: src/gts.md:207
 msgid ""
 "Beyond reading, writing and folding, `purrdf-gts` and the umbrella's `gts` "
 "module carry a verification stack that no other surface reaches — not the "
@@ -26017,7 +26207,7 @@ msgstr ""
 "除读取、写入与折叠之外，`purrdf-gts` 与总括 crate 的 `gts` 模块还带有一套其他"
 "任何接口都无法到达的校验栈——CLI、Python、wasm 与 C 都不行："
 
-#: src/gts.md:94
+#: src/gts.md:211
 msgid ""
 "**Streamable compaction with a certificate** — `compact_streamable` rewrites "
 "an accretive log into one delivery-ordered segment (leading stream index, "
@@ -26033,7 +26223,7 @@ msgstr ""
 "压缩前与压缩后的容器折叠出逐字节相同的规范内容；校验器用其自身的密钥环从压缩"
 "前的字节重新计算。压缩从不改变内容，也不生成任何内容签名。"
 
-#: src/gts.md:102
+#: src/gts.md:219
 msgid ""
 "**Merkle mountain range proofs** — `mmr::{root, prove, verify_proof, "
 "prove_file}` (`gts-mmr-proof-v1`), and `verify_content_chain`, which walks "
@@ -26045,7 +26235,7 @@ msgstr ""
 "`verify_content_chain`，后者依次走过 COSE 签名 → 链头（head）重放 → 摘要包含"
 "性。不存在透明日志，也不存在签名检查点服务。"
 
-#: src/gts.md:106
+#: src/gts.md:223
 msgid ""
 "**OpenPGP transport keys** — armored Ed25519 certificates and unencrypted "
 "secret keys (`parse_transport_key`, `parse_secret_signing_key`) with "
@@ -26057,7 +26247,7 @@ msgstr ""
 "`verify_file_with_keyring` 支持轮换；其他算法、加密的密钥以及 v5/v6 数据包都"
 "会被拒绝，且不存在密钥环存储或吊销存储。"
 
-#: src/gts.md:111
+#: src/gts.md:228
 msgid ""
 "Native unit tests cover file media-type mapping and tar/PAX serialization "
 "and parsing. Frozen vectors and compaction/certification fixtures exercise "
@@ -26071,11 +26261,11 @@ msgstr ""
 "profile、嵌套的 GTS-in-blob 读取器、信任策略或 ULID 行为都已得到完整覆盖。上"
 "游 `gmeow-gts` 规范与冻结向量仍是线格式的权威。"
 
-#: src/gts.md:118
+#: src/gts.md:235
 msgid "Conformance vectors"
 msgstr "一致性向量"
 
-#: src/gts.md:120
+#: src/gts.md:237
 msgid ""
 "GTS conformance is defined against a **frozen, language-neutral vector "
 "corpus** (`vectors/` in the repository), shared **byte-exact** across the "
@@ -26089,11 +26279,11 @@ msgstr ""
 "生成或被「修复」——该格式由 [`gmeow-gts`](https://github.com/Blackcat-"
 "Informatics/gmeow-gts) 项目管理，规范与其他参考引擎也在那里。"
 
-#: src/gts.md:127
+#: src/gts.md:244
 msgid "The C ABI's star-layer round-trip"
 msgstr "C ABI 的 star 层往返（转换）"
 
-#: src/gts.md:129
+#: src/gts.md:246
 msgid ""
 "The GTS star-layer round-trip of a dataset containing quoted triples / "
 "reifier bindings succeeds through the kernel `to_gts` → `read_graph` → "
@@ -26107,20 +26297,21 @@ msgstr ""
 "`gts_star_roundtrip_preserves_the_statement_layer` 固定了这一点。参见[入门："
 "C](getting-started/c.md#gts-star-层往返)。"
 
-#: src/gts.md:138
+#: src/gts.md:255
 msgid ""
-"[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/"
-"main/docs/GTS-SPEC.md) — the normative wire format (version 0.9-draft, wire-"
-"format major 1)."
+"[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/gmeow-gts/blob/"
+"main/docs/GTS-SPEC.md) in `gmeow-gts` — the normative wire format (version "
+"1.0-rc1, wire-format major 1)."
 msgstr ""
-"[`docs/GTS-SPEC.md`](https://github.com/Blackcat-Informatics/purrdf/blob/"
-"main/docs/GTS-SPEC.md)——规范性的线格式（版本 0.9-draft，线格式主版本 1）。"
+"`gmeow-gts` 中的 [`docs/GTS-SPEC.md`](https://github.com/Blackcat-"
+"Informatics/gmeow-gts/blob/main/docs/GTS-SPEC.md)——规范性的线格式（版本 1.0-"
+"rc1，线格式主版本 1）。"
 
-#: src/gts.md:140
+#: src/gts.md:257
 msgid "[Slices, Mappings & Provenance](slices.md) — the RDF↔GTS loss ledger."
 msgstr "[切片、映射与溯源](slices.md)——RDF↔GTS 损失台账。"
 
-#: src/gts.md:141
+#: src/gts.md:258
 msgid ""
 "[Getting Started: Python](getting-started/python.md#gts-relational-rows) — "
 "reading a container back as relational rows."
@@ -27000,6 +27191,10 @@ msgstr ""
 "Frictionless Data Package v1 schema"
 
 #: src/project/conformance.md:39
+msgid "RDFC-1.0"
+msgstr "RDFC-1.0"
+
+#: src/project/conformance.md:39
 msgid "W3C rdf-canon fixtures"
 msgstr "W3C rdf-canon 测试夹具"
 
@@ -27072,12 +27267,9 @@ msgstr ""
 
 #: src/project/conformance.md:47
 msgid ""
-"frozen cross-language vectors — 38 of the 39 fold byte-exactly into their "
-"committed expectation, with the 39th a ledgered divergence from an upstream "
-"expectation this reader contradicts"
-msgstr ""
-"冻结的跨语言向量——39 个中有 38 个按字节精确折叠为其已提交的预期结果，第 39 个"
-"是一项入台账的分歧，所针对的上游预期结果与本读取器相矛盾"
+"frozen cross-language vectors — all 39 fold byte-exactly into their "
+"committed expectation"
+msgstr "冻结的跨语言向量——39 个全部按字节精确折叠为其已提交的预期结果"
 
 #: src/project/conformance.md:48
 msgid "rdflib drop-in"
@@ -27654,16 +27846,16 @@ msgid ""
 "The reusable development libraries `purrdf-alloc-probe`, `purrdf-testkit` "
 "and `purrdf-conformance-kit` are published with the suite. Their versioned "
 "registry dependencies remain in packaged manifests and are verified in "
-"dependency order. The checkout-bound `purrdf-shacl-conformance` is the "
-"remaining path-only, versionless development dependency stripped from "
-"published crates."
+"dependency order. The checkout-bound `purrdf-shacl-conformance` and host-"
+"only `helper-census` remain path-only, versionless development dependencies "
+"stripped from published crates."
 msgstr ""
 
-#: src/project/releases.md:114
+#: src/project/releases.md:115
 msgid "Cutting a release"
 msgstr "切出一个发布"
 
-#: src/project/releases.md:116
+#: src/project/releases.md:117
 msgid ""
 "Prepare the release bump on an isolated branch, using the `make` helpers to "
 "keep the three lanes aligned. Merge the reviewed release changes before "
@@ -27672,7 +27864,7 @@ msgstr ""
 "在隔离分支上准备版本递增，使用 `make` 辅助目标保持三个发布通道一致。先合并经"
 "过审阅的发布变更，再从干净且已同步的 `main` 创建标签："
 
-#: src/project/releases.md:120
+#: src/project/releases.md:121
 msgid ""
 "Rename the changelog's Unreleased section to the release version and date, "
 "and write the reviewed short summary at `docs/releases/<version>.md`. Use "
@@ -27682,40 +27874,40 @@ msgstr ""
 "<version>.md` 写入经过审阅的简短摘要。`make changelog` 仅用于依据提交历史生成"
 "的说明。"
 
-#: src/project/releases.md:125
+#: src/project/releases.md:126
 msgid ""
 "# 1. Bump the release versions in lockstep (fails unless they end up "
 "equal).\n"
 msgstr "# 1. 同步递增发布版本号（除非最终各版本号相等，否则失败）。\n"
 
-#: src/project/releases.md:127
+#: src/project/releases.md:128
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头文件。\n"
 
-#: src/project/releases.md:130
+#: src/project/releases.md:131
 msgid ""
 "# 3. Complete the changelog and reviewed summary, preserving migration "
 "guidance.\n"
 msgstr "# 3. 完善变更日志与经过审阅的摘要，保留迁移指导。\n"
 
-#: src/project/releases.md:132
+#: src/project/releases.md:133
 msgid ""
 "# 4. Stage only the reviewed bump, header, changelog and summary, then "
 "commit.\n"
 msgstr "# 4. 仅暂存经过审阅的版本递增、头文件、变更日志与摘要，然后提交。\n"
 
-#: src/project/releases.md:134
+#: src/project/releases.md:135
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:135
+#: src/project/releases.md:136
 msgid ""
 "# 5. After merging the release PR, use up-to-date main for the gated tag "
 "push.\n"
 msgstr "# 5. 合并发布 PR 后，在最新的 main 上执行带关卡的标签推送。\n"
 
-#: src/project/releases.md:140
+#: src/project/releases.md:141
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version and "
@@ -27729,19 +27921,19 @@ msgstr ""
 "`VERSION` 与工作树一致、完整的变更日志小节与通过验证且经过审阅的摘要均存在，"
 "且三个标签均未在本地或远程存在。随后它按以下顺序运行各项关卡："
 
-#: src/project/releases.md:147
+#: src/project/releases.md:148
 msgid "`make check`: the Rust and wasm workspace gate and repository hygiene."
 msgstr "`make check`：Rust 与 wasm 工作区关卡及仓库卫生检查。"
 
-#: src/project/releases.md:148
+#: src/project/releases.md:149
 msgid "`make capi-check`: the generated C-ABI/header check and linked C smoke."
 msgstr "`make capi-check`：生成的 C-ABI/头文件检查，以及链接后的 C 冒烟测试。"
 
-#: src/project/releases.md:149
+#: src/project/releases.md:150
 msgid "`make pytest`: the native Python binding suite."
 msgstr "`make pytest`：原生 Python 绑定测试套件。"
 
-#: src/project/releases.md:150
+#: src/project/releases.md:151
 msgid ""
 "`make python-release-check`: build and audit both Python wheel/sdist pairs, "
 "check them with the pinned publisher tools, and install them together."
@@ -27749,11 +27941,11 @@ msgstr ""
 "`make python-release-check`：构建并审计两个 Python 分发包各自的 wheel/sdist，"
 "使用固定版本的发布工具检查它们，并将它们一同安装。"
 
-#: src/project/releases.md:152
+#: src/project/releases.md:153
 msgid "`make wasm-pkg-test`: the optimized size-gated npm/wasm package tests."
 msgstr "`make wasm-pkg-test`：经过优化、带体积关卡的 npm/wasm 包测试。"
 
-#: src/project/releases.md:153
+#: src/project/releases.md:154
 msgid ""
 "`make capi-bundle`: build and audit the native C distribution, including "
 "recipient notices and relocated linked smoke."
@@ -27761,7 +27953,7 @@ msgstr ""
 "`make capi-bundle`：构建并审计原生 C 分发包，包括接收方许可声明与重定位后的链"
 "接冒烟测试。"
 
-#: src/project/releases.md:156
+#: src/project/releases.md:157
 msgid ""
 "Only after every surface passes does it recheck the clean synchronized state "
 "and atomically push the `rust-v`, `py-v`, and `npm-v` tags together. No tag "
@@ -27779,11 +27971,11 @@ msgstr ""
 "完整的变更日志。共享检查器会在打标签与发布之前验证精确的版本及 64 KiB 的 "
 "UTF-8 体积上限；发布说明不会被截断。"
 
-#: src/project/releases.md:164
+#: src/project/releases.md:165
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:166
+#: src/project/releases.md:167
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
@@ -27857,18 +28049,18 @@ msgstr ""
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:255
-#: src/project/diagnostic-codes.md:268 src/project/diagnostic-codes.md:278
-#: src/project/diagnostic-codes.md:288
+#: src/project/diagnostic-codes.md:149 src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:270 src/project/diagnostic-codes.md:280
+#: src/project/diagnostic-codes.md:290
 msgid "Meaning"
 msgstr "含义"
 
 #: src/project/diagnostic-codes.md:36 src/project/diagnostic-codes.md:50
 #: src/project/diagnostic-codes.md:77 src/project/diagnostic-codes.md:94
 #: src/project/diagnostic-codes.md:105 src/project/diagnostic-codes.md:126
-#: src/project/diagnostic-codes.md:148 src/project/diagnostic-codes.md:255
-#: src/project/diagnostic-codes.md:268 src/project/diagnostic-codes.md:278
-#: src/project/diagnostic-codes.md:288
+#: src/project/diagnostic-codes.md:149 src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:270 src/project/diagnostic-codes.md:280
+#: src/project/diagnostic-codes.md:290
 msgid "Remedy"
 msgstr "补救办法"
 
@@ -28153,7 +28345,7 @@ msgstr "`native-codec-invalid-direction`"
 msgid "A literal base direction other than `ltr` or `rtl` was given."
 msgstr "给出的字面量基础方向既不是 `ltr` 也不是 `rtl`。"
 
-#: src/project/diagnostic-codes.md:63 src/project/diagnostic-codes.md:133
+#: src/project/diagnostic-codes.md:63 src/project/diagnostic-codes.md:134
 msgid "Use `ltr` or `rtl`."
 msgstr "使用 `ltr` 或 `rtl`。"
 
@@ -28174,13 +28366,18 @@ msgstr "提供该 IRI。"
 msgid "`native-codec-missing-reifier-binding`"
 msgstr "`native-codec-missing-reifier-binding`"
 
-#: src/project/diagnostic-codes.md:65
-msgid "A triple term refers to a reifier that has no binding."
-msgstr "某个三元组项（triple term）引用了一个没有绑定的具体化节点（reifier）。"
+#: src/project/diagnostic-codes.md:65 src/project/diagnostic-codes.md:120
+#: src/project/diagnostic-codes.md:135
+msgid ""
+"Retained for API compatibility; no public input produces it. A triple term "
+"whose reifier has no binding projects as a fresh blank node."
+msgstr ""
 
-#: src/project/diagnostic-codes.md:65
-msgid "Bind the reifier before referring to it."
-msgstr "在引用具体化节点之前先绑定它。"
+#: src/project/diagnostic-codes.md:65 src/project/diagnostic-codes.md:69
+#: src/project/diagnostic-codes.md:120 src/project/diagnostic-codes.md:122
+#: src/project/diagnostic-codes.md:135 src/project/diagnostic-codes.md:136
+msgid "None."
+msgstr ""
 
 #: src/project/diagnostic-codes.md:66
 msgid "`native-codec-predicate-not-iri`"
@@ -28191,7 +28388,7 @@ msgid "A term in an IRI-only position (the predicate) is not an IRI."
 msgstr "只允许 IRI 的位置（谓词）上的项不是 IRI。"
 
 #: src/project/diagnostic-codes.md:66 src/project/diagnostic-codes.md:108
-#: src/project/diagnostic-codes.md:130 src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:130 src/project/diagnostic-codes.md:198
 msgid "Use an IRI predicate."
 msgstr "使用 IRI 谓词。"
 
@@ -28224,14 +28421,13 @@ msgstr "产生这些事件的流不一致；请重新生成该流。"
 msgid "`native-codec-unbound-triple-term`"
 msgstr "`native-codec-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:69
-msgid "A triple term names neither its components nor a reifier."
-msgstr "某个三元组项既未给出其组成部分，也未指明具体化节点。"
-
 #: src/project/diagnostic-codes.md:69 src/project/diagnostic-codes.md:122
-#: src/project/diagnostic-codes.md:135
-msgid "Give the triple term its components or a reifier."
-msgstr "为该三元组项给出其组成部分或具体化节点。"
+#: src/project/diagnostic-codes.md:136
+msgid ""
+"Retained for API compatibility; no public input produces it. A triple term "
+"that names neither its components nor a reifier projects as a fresh blank "
+"node."
+msgstr ""
 
 #: src/project/diagnostic-codes.md:71
 msgid ""
@@ -28494,7 +28690,7 @@ msgstr "`rdf-ir-triple-cycle`"
 msgid "A triple term contains itself, directly or through nesting."
 msgstr "某个三元组项直接或通过嵌套包含了它自身。"
 
-#: src/project/diagnostic-codes.md:114 src/project/diagnostic-codes.md:136
+#: src/project/diagnostic-codes.md:114 src/project/diagnostic-codes.md:137
 msgid "Remove the cycle."
 msgstr "消除该环。"
 
@@ -28507,7 +28703,7 @@ msgid "Triple-term nesting exceeds the builder's depth limit."
 msgstr "三元组项的嵌套超出了构建器的深度上限。"
 
 #: src/project/diagnostic-codes.md:115 src/project/diagnostic-codes.md:121
-#: src/project/diagnostic-codes.md:137 src/project/diagnostic-codes.md:144
+#: src/project/diagnostic-codes.md:138 src/project/diagnostic-codes.md:145
 msgid "Flatten the nesting."
 msgstr "将嵌套展平。"
 
@@ -28555,14 +28751,6 @@ msgstr "某个导入的字面量的数据类型解析为非 IRI。"
 msgid "`rdf-ir-missing-reifier-binding`"
 msgstr "`rdf-ir-missing-reifier-binding`"
 
-#: src/project/diagnostic-codes.md:120
-msgid "An imported triple term references a reifier with no recorded binding."
-msgstr "某个导入的三元组项引用了一个没有记录绑定的具体化节点。"
-
-#: src/project/diagnostic-codes.md:120 src/project/diagnostic-codes.md:134
-msgid "Bind the reifier in the container."
-msgstr "在容器中绑定该具体化节点。"
-
 #: src/project/diagnostic-codes.md:121
 msgid "`rdf-ir-term-nesting-limit`"
 msgstr "`rdf-ir-term-nesting-limit`"
@@ -28574,10 +28762,6 @@ msgstr "导入的三元组项嵌套超出了深度上限。"
 #: src/project/diagnostic-codes.md:122
 msgid "`rdf-ir-unbound-triple-term`"
 msgstr "`rdf-ir-unbound-triple-term`"
-
-#: src/project/diagnostic-codes.md:122
-msgid "An imported triple term names neither its components nor a reifier."
-msgstr "某个导入的三元组项既未给出其组成部分，也未指明具体化节点。"
 
 #: src/project/diagnostic-codes.md:124
 msgid "`gts-*` and `rdf-*` — GTS graph resolution, verification and writing"
@@ -28624,138 +28808,147 @@ msgid "A GTS literal carries a base direction but no language tag."
 msgstr "某个 GTS 字面量带有基础方向，却没有语言标签。"
 
 #: src/project/diagnostic-codes.md:133
+#, fuzzy
+msgid "`gts-scope-limit`"
+msgstr "`native-codec-limit`"
+
+#: src/project/diagnostic-codes.md:133
+msgid ""
+"The streaming importer ran out of blank-node scopes: a segment index of "
+"`u32::MAX - 2` or more has no scope, because the last two scopes are "
+"reserved for triple terms that state no triple and for queries."
+msgstr ""
+
+#: src/project/diagnostic-codes.md:133
+msgid "Split the container so that it has fewer segments."
+msgstr ""
+
+#: src/project/diagnostic-codes.md:134
 msgid "`gts-invalid-direction`"
 msgstr "`gts-invalid-direction`"
 
-#: src/project/diagnostic-codes.md:133
+#: src/project/diagnostic-codes.md:134
 msgid "A GTS literal base direction is neither `ltr` nor `rtl`."
 msgstr "某个 GTS 字面量的基础方向既不是 `ltr` 也不是 `rtl`。"
 
-#: src/project/diagnostic-codes.md:134
+#: src/project/diagnostic-codes.md:135
 msgid "`gts-missing-reifier-binding`"
 msgstr "`gts-missing-reifier-binding`"
 
-#: src/project/diagnostic-codes.md:134
-msgid "A GTS triple term references a reifier the graph does not bind."
-msgstr "某个 GTS 三元组项引用了一个该图未绑定的具体化节点。"
-
-#: src/project/diagnostic-codes.md:135
+#: src/project/diagnostic-codes.md:136
 msgid "`gts-unbound-triple-term`"
 msgstr "`gts-unbound-triple-term`"
 
-#: src/project/diagnostic-codes.md:135
-msgid "A GTS triple term names neither its own components nor a reifier."
-msgstr "某个 GTS 三元组项既未给出其自身的组成部分，也未指明具体化节点。"
-
-#: src/project/diagnostic-codes.md:136
+#: src/project/diagnostic-codes.md:137
 msgid "`gts-self-reaching-term`"
 msgstr "`gts-self-reaching-term`"
 
-#: src/project/diagnostic-codes.md:136
+#: src/project/diagnostic-codes.md:137
+#, fuzzy
 msgid ""
-"A GTS term resolves through itself, so no walk of its components can "
-"terminate."
+"A literal datatype chain resolves through itself, so no walk of its "
+"components can terminate."
 msgstr "某个 GTS 项经由其自身解析，因此对其组成部分的任何游走都无法终止。"
 
-#: src/project/diagnostic-codes.md:137
+#: src/project/diagnostic-codes.md:138
 msgid "`gts-term-nesting-limit`"
 msgstr "`gts-term-nesting-limit`"
 
-#: src/project/diagnostic-codes.md:137
+#: src/project/diagnostic-codes.md:138
 msgid "GTS term nesting exceeds the depth limit."
 msgstr "GTS 项嵌套超出了深度上限。"
 
-#: src/project/diagnostic-codes.md:138
+#: src/project/diagnostic-codes.md:139
 msgid "`gts-fold-diagnostic`"
 msgstr "`gts-fold-diagnostic`"
 
-#: src/project/diagnostic-codes.md:138
+#: src/project/diagnostic-codes.md:139
 msgid "The GTS fold reported one or more diagnostics."
 msgstr "GTS 折叠报告了一条或多条诊断。"
 
-#: src/project/diagnostic-codes.md:138
+#: src/project/diagnostic-codes.md:139
 msgid "Inspect the fold diagnostics listed in the detail."
 msgstr "检查详情中列出的折叠诊断。"
 
-#: src/project/diagnostic-codes.md:139
+#: src/project/diagnostic-codes.md:140
 msgid "`gts-verify-digest-inclusion`"
 msgstr "`gts-verify-digest-inclusion`"
 
-#: src/project/diagnostic-codes.md:139
+#: src/project/diagnostic-codes.md:140
 msgid "Content-addressed terms are not included in the verified chain."
 msgstr "内容寻址的 RDF 项未被包含在已验证的链中。"
 
-#: src/project/diagnostic-codes.md:139
+#: src/project/diagnostic-codes.md:140
 msgid "The container's chain does not cover its content; do not trust it."
 msgstr "该容器的链没有覆盖其内容；不要信任它。"
 
-#: src/project/diagnostic-codes.md:140
+#: src/project/diagnostic-codes.md:141
 msgid "`gts-verify-signature`"
 msgstr "`gts-verify-signature`"
 
-#: src/project/diagnostic-codes.md:140
+#: src/project/diagnostic-codes.md:141
 msgid "COSE signature verification failed."
 msgstr "COSE 签名验证失败。"
 
-#: src/project/diagnostic-codes.md:140
+#: src/project/diagnostic-codes.md:141
 msgid "Check the signing key and the container's integrity."
 msgstr "检查签名密钥与容器的完整性。"
 
-#: src/project/diagnostic-codes.md:141
+#: src/project/diagnostic-codes.md:142
 msgid "`gts-writer-codec`"
 msgstr "`gts-writer-codec`"
 
-#: src/project/diagnostic-codes.md:141
+#: src/project/diagnostic-codes.md:142
 msgid "The GTS writer's codec reported an error while writing."
 msgstr "GTS 写出器的编解码器在写出时报告了错误。"
 
-#: src/project/diagnostic-codes.md:141
+#: src/project/diagnostic-codes.md:142
 msgid "The codec's own error is in the message."
 msgstr "编解码器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:142
+#: src/project/diagnostic-codes.md:143
 msgid "`rdf-graph-name-not-node`"
 msgstr "`rdf-graph-name-not-node`"
 
-#: src/project/diagnostic-codes.md:142
+#: src/project/diagnostic-codes.md:143
 msgid ""
 "While building a GTS graph, a named-graph name is not an IRI or blank node."
 msgstr "在构建 GTS 图时，某个命名图的名称不是 IRI 或空节点。"
 
-#: src/project/diagnostic-codes.md:142
+#: src/project/diagnostic-codes.md:143
 msgid "Use an IRI or blank node graph name."
 msgstr "使用 IRI 或空节点作为图名。"
 
-#: src/project/diagnostic-codes.md:143
+#: src/project/diagnostic-codes.md:144
 msgid "`rdf-reifier-not-node`"
 msgstr "`rdf-reifier-not-node`"
 
-#: src/project/diagnostic-codes.md:143
+#: src/project/diagnostic-codes.md:144
 msgid ""
 "While building a GTS graph, an RDF 1.2 reifier is not an IRI or blank node."
 msgstr "在构建 GTS 图时，某个 RDF 1.2 具体化节点不是 IRI 或空节点。"
 
-#: src/project/diagnostic-codes.md:143
+#: src/project/diagnostic-codes.md:144
 msgid "Use an IRI or blank node reifier."
 msgstr "使用 IRI 或空节点作为具体化节点。"
 
-#: src/project/diagnostic-codes.md:144
+#: src/project/diagnostic-codes.md:145
 msgid "`rdf-term-nesting-limit`"
 msgstr "`rdf-term-nesting-limit`"
 
-#: src/project/diagnostic-codes.md:144
+#: src/project/diagnostic-codes.md:145
 msgid "RDF term nesting exceeded the depth limit while building a GTS graph."
 msgstr "在构建 GTS 图时，RDF 项嵌套超出了深度上限。"
 
-#: src/project/diagnostic-codes.md:146
+#: src/project/diagnostic-codes.md:147
 msgid "`native-sparql-*` — the SPARQL engine boundary (`purrdf-sparql-eval`)"
 msgstr "`native-sparql-*`——SPARQL 引擎边界（`purrdf-sparql-eval`）"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:151
 msgid "`native-sparql-query-parse`"
 msgstr "`native-sparql-query-parse`"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:151
 msgid ""
 "The query text does not parse under the SPARQL 1.1/1.2 grammar (including a "
 "malformed `VERSION` declaration; a well-formed but unrecognized version is "
@@ -28764,95 +28957,95 @@ msgstr ""
 "查询文本无法按 SPARQL 1.1/1.2 语法解析（包括格式错误的 `VERSION` 声明；格式正"
 "确但无法识别的版本属于 `native-sparql-unsupported`）。"
 
-#: src/project/diagnostic-codes.md:150
+#: src/project/diagnostic-codes.md:151
 msgid "Fix the query at the reported position."
 msgstr "在所报告的位置修正查询。"
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:152
 msgid "`native-sparql-update-parse`"
 msgstr "`native-sparql-update-parse`"
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:152
 msgid "The update request does not parse."
 msgstr "更新请求无法解析。"
 
-#: src/project/diagnostic-codes.md:151
+#: src/project/diagnostic-codes.md:152
 msgid "Fix the update at the reported position."
 msgstr "在所报告的位置修正更新。"
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:153
 msgid "`native-sparql-query-explain`"
 msgstr "`native-sparql-query-explain`"
 
-#: src/project/diagnostic-codes.md:152
+#: src/project/diagnostic-codes.md:153
 msgid ""
 "Evaluation under `--explain` failed; the evaluator's error is in the message."
 msgstr "在 `--explain` 下求值失败；求值器的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:152 src/project/diagnostic-codes.md:153
-#: src/project/diagnostic-codes.md:161 src/project/diagnostic-codes.md:192
+#: src/project/diagnostic-codes.md:153 src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:162 src/project/diagnostic-codes.md:194
 msgid "Address the underlying evaluation error."
 msgstr "处理底层的求值错误。"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:154
 msgid "`native-sparql-query-eval`"
 msgstr "`native-sparql-query-eval`"
 
-#: src/project/diagnostic-codes.md:153
+#: src/project/diagnostic-codes.md:154
 msgid ""
 "Query evaluation failed with an error no more specific code classifies; the "
 "evaluator's error is in the message."
 msgstr ""
 "查询求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:155
 msgid "`native-sparql-internal`"
 msgstr "`native-sparql-internal`"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:155
 msgid ""
 "An evaluator invariant was violated. The execution cannot produce a valid "
 "answer."
 msgstr "求值器的不变量遭到破坏。执行无法产生有效答案。"
 
-#: src/project/diagnostic-codes.md:154
+#: src/project/diagnostic-codes.md:155
 msgid ""
 "Report the failure with its query and input; it requires an engine repair."
 msgstr "报告此失败时请附上查询和输入；该问题需要修复引擎。"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:156
 msgid "`native-sparql-composite-bound`"
 msgstr "`native-sparql-composite-bound`"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:156
 msgid ""
 "Constructing a composite datatype value exceeded its element or lexical-byte "
 "resource bound."
 msgstr "构造复合数据类型值时超出了元素数量或词法字节的资源上限。"
 
-#: src/project/diagnostic-codes.md:155
+#: src/project/diagnostic-codes.md:156
 msgid "Reduce the value being constructed."
 msgstr "减小所构造的值。"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:157
 msgid "`native-sparql-float-environment`"
 msgstr "`native-sparql-float-environment`"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:157
 msgid ""
 "The calling thread's floating-point environment cannot preserve the distance "
 "arithmetic's specified IEEE-754 results."
 msgstr "调用线程的浮点环境无法保持距离运算规定的 IEEE-754 结果。"
 
-#: src/project/diagnostic-codes.md:156
+#: src/project/diagnostic-codes.md:157
 msgid "Evaluate on a thread with the supported floating-point environment."
 msgstr "在浮点环境受支持的线程上求值。"
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:158
 msgid "`native-sparql-function-operational`"
 msgstr "`native-sparql-function-operational`"
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:158
 msgid ""
 "A host function or relation failed during execution: an opaque returned "
 "error, a caught panic, a resource ceiling, or an invalid protocol response."
@@ -28860,17 +29053,17 @@ msgstr ""
 "宿主函数或关系在执行期间失败：返回不透明错误、捕获到 panic、达到资源上限，或"
 "收到无效的协议响应。"
 
-#: src/project/diagnostic-codes.md:157
+#: src/project/diagnostic-codes.md:158
 msgid ""
 "Repair the callee or adjust the resource limit; this cannot establish a "
 "validation verdict."
 msgstr "修复被调用方或调整资源上限；此类失败无法得出验证结论。"
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:159
 msgid "`native-sparql-source-read`"
 msgstr "`native-sparql-source-read`"
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:159
 msgid ""
 "Operational storage refused a forward/reverse lookup or complete row drain. "
 "The error is fatal, including inside `SERVICE SILENT`; no partial answer is "
@@ -28879,16 +29072,16 @@ msgstr ""
 "存储操作拒绝了正向/反向查找或完整的行迭代消费。这是致命错误，即使在 `SERVICE "
 "SILENT` 内也如此；不会发布部分答案。"
 
-#: src/project/diagnostic-codes.md:158
+#: src/project/diagnostic-codes.md:159
 msgid ""
 "Repair the source or adjust its explicit resource limits before retrying."
 msgstr "修复源或调整其明确的资源限制，然后再重试。"
 
-#: src/project/diagnostic-codes.md:159
+#: src/project/diagnostic-codes.md:160
 msgid "`native-sparql-workspace-unpriced`"
 msgstr "`native-sparql-workspace-unpriced`"
 
-#: src/project/diagnostic-codes.md:159
+#: src/project/diagnostic-codes.md:160
 msgid ""
 "An execution operation has no admitted working-memory owner, or a raw "
 "evaluator entry was called without the required reservation."
@@ -28896,7 +29089,7 @@ msgstr ""
 "某项执行操作没有经过准入的工作内存所有者，或调用原始求值器入口时未持有所需的"
 "预留。"
 
-#: src/project/diagnostic-codes.md:159
+#: src/project/diagnostic-codes.md:160
 msgid ""
 "Use an engine entry that carries the view's owned workspace admission; "
 "supply any missing host/provider workspace certificate."
@@ -28904,34 +29097,34 @@ msgstr ""
 "使用携带视图所提供的自有工作内存准入的引擎入口，并补全宿主或提供方所需的工作"
 "内存证明。"
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:161
 msgid "`native-sparql-workspace-bound-overflow`"
 msgstr "`native-sparql-workspace-bound-overflow`"
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:161
 msgid "Certified workspace arithmetic exceeds `u64`."
 msgstr "经过认证的工作内存上界计算超出了 `u64`。"
 
-#: src/project/diagnostic-codes.md:160
+#: src/project/diagnostic-codes.md:161
 msgid "Reduce the query's intermediate cardinality or pattern count."
 msgstr "降低查询的中间结果基数或模式数量。"
 
-#: src/project/diagnostic-codes.md:161
+#: src/project/diagnostic-codes.md:162
 msgid "`native-sparql-update-eval`"
 msgstr "`native-sparql-update-eval`"
 
-#: src/project/diagnostic-codes.md:161
+#: src/project/diagnostic-codes.md:162
 msgid ""
 "Update evaluation failed with an error no more specific code classifies; the "
 "evaluator's error is in the message."
 msgstr ""
 "更新求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:162
+#: src/project/diagnostic-codes.md:163
 msgid "`native-sparql-algebra`"
 msgstr "`native-sparql-algebra`"
 
-#: src/project/diagnostic-codes.md:162
+#: src/project/diagnostic-codes.md:163
 msgid ""
 "The query's algebra was refused before evaluation: `Query::validate` refused "
 "it, or a prepared plan needs replanning for the registries this evaluation "
@@ -28940,43 +29133,43 @@ msgstr ""
 "查询的代数在求值之前被拒绝：`Query::validate` 拒绝了它，或者某个预备好的计划"
 "需要针对本次求值提供的注册表重新规划。"
 
-#: src/project/diagnostic-codes.md:162
+#: src/project/diagnostic-codes.md:163
 msgid ""
 "Fix the query as the message says, or prepare the changed algebra before "
 "executing it."
 msgstr "按消息所说修正查询，或在执行之前预备改动后的代数。"
 
-#: src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:164
 msgid "`native-sparql-construct`"
 msgstr "`native-sparql-construct`"
 
-#: src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:164
 msgid "Typed graph building was handed a query that is not a `CONSTRUCT`."
 msgstr "类型化的图构建收到的查询不是 `CONSTRUCT`。"
 
-#: src/project/diagnostic-codes.md:163
+#: src/project/diagnostic-codes.md:164
 msgid "Build graphs from a `CONSTRUCT` query."
 msgstr "用 `CONSTRUCT` 查询构建图。"
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:165
 msgid "`native-sparql-execution-parameter`"
 msgstr "`native-sparql-execution-parameter`"
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:165
 msgid ""
 "A prepared execution was given a parameter name or slot it does not declare."
 msgstr "预备好的执行收到了它未声明的参数名或槽位。"
 
-#: src/project/diagnostic-codes.md:164
+#: src/project/diagnostic-codes.md:165
 msgid ""
 "Bind only the parameters the execution declares; the message lists them."
 msgstr "只绑定该执行所声明的参数；消息中列出了它们。"
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:166
 msgid "`native-sparql-relation-incomplete`"
 msgstr "`native-sparql-relation-incomplete`"
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:166
 msgid ""
 "A property-function relation answered from less than all of its data on an "
 "entry that has no evidence slot to label the short answer (the ungoverned "
@@ -28986,7 +29179,7 @@ msgstr ""
 "证据槽（不受管控的查询通道，以及 UPDATE）。消息会指名该关系及其自身给出的原"
 "因。"
 
-#: src/project/diagnostic-codes.md:165
+#: src/project/diagnostic-codes.md:166
 msgid ""
 "Run the query on a governed entry, whose receipt carries the relation's "
 "witness, or wait for the relation to be complete."
@@ -28994,11 +29187,11 @@ msgstr ""
 "在受 governor 管控的入口上运行查询——其回执携带该关系的见证——或等待该关系完"
 "整。"
 
-#: src/project/diagnostic-codes.md:166
+#: src/project/diagnostic-codes.md:167
 msgid "`native-sparql-property-function`"
 msgstr "`native-sparql-property-function`"
 
-#: src/project/diagnostic-codes.md:166
+#: src/project/diagnostic-codes.md:167
 msgid ""
 "The property-function seam refused the query: a predicate under a declared "
 "namespace has no registration, a call site's arity does not match the "
@@ -29009,17 +29202,17 @@ msgstr ""
 "有注册，某个调用点的元数与该关系不匹配，没有任何全序能用于某条链，或者一个预"
 "备好的计划正在一个与其预备时不同的注册表下求值。"
 
-#: src/project/diagnostic-codes.md:166
+#: src/project/diagnostic-codes.md:167
 msgid ""
 "Register the relation, correct the arity, or prepare and evaluate under the "
 "same registry."
 msgstr "注册该关系、更正元数，或在同一个注册表下预备并求值。"
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:168
 msgid "`native-sparql-aggregate-function`"
 msgstr "`native-sparql-aggregate-function`"
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:168
 msgid ""
 "The custom-aggregate seam refused the query: an `AGG(<iri>, …)` names no "
 "registered aggregate, or a prepared plan is being evaluated under a "
@@ -29028,16 +29221,16 @@ msgstr ""
 "自定义聚合扩展点拒绝了该查询：某个 `AGG(<iri>, …)` 没有指向任何已注册的聚合，"
 "或者一个预备好的计划正在另一个聚合注册表下求值。"
 
-#: src/project/diagnostic-codes.md:167
+#: src/project/diagnostic-codes.md:168
 msgid ""
 "Register the aggregate, or prepare and evaluate under the same registry."
 msgstr "注册该聚合，或在同一个注册表下预备并求值。"
 
-#: src/project/diagnostic-codes.md:168
+#: src/project/diagnostic-codes.md:169
 msgid "`native-sparql-custom-function`"
 msgstr "`native-sparql-custom-function`"
 
-#: src/project/diagnostic-codes.md:168
+#: src/project/diagnostic-codes.md:169
 msgid ""
 "A function or aggregate IRI resolved to no registered custom function, "
 "native function, or XSD constructor."
@@ -29045,15 +29238,15 @@ msgstr ""
 "某个函数或聚合 IRI 没有解析到任何已注册的自定义函数、原生函数或 XSD 构造函"
 "数。"
 
-#: src/project/diagnostic-codes.md:168
+#: src/project/diagnostic-codes.md:169
 msgid "Register the function under that IRI, or use a native one."
 msgstr "在该 IRI 下注册函数，或使用原生函数。"
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:170
 msgid "`native-sparql-quoted-triple-term-variable`"
 msgstr "`native-sparql-quoted-triple-term-variable`"
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:170
 msgid ""
 "A variable occupies a component of a quoted-triple term in a basic graph "
 "pattern or property path; structural triple-term matching is out of scope."
@@ -29061,31 +29254,31 @@ msgstr ""
 "在基本图模式或属性路径中，某个变量占据了引用三元组项的一个组成部分；结构化的"
 "三元组项匹配不在支持范围之内。"
 
-#: src/project/diagnostic-codes.md:169
+#: src/project/diagnostic-codes.md:170
 msgid ""
 "Bind the triple term as a whole, or match its components through the reifier "
 "surface."
 msgstr "把三元组项作为整体绑定，或通过具体化节点接口匹配其组成部分。"
 
-#: src/project/diagnostic-codes.md:170
+#: src/project/diagnostic-codes.md:171
 msgid "`native-sparql-heldin-unconfigured`"
 msgstr "`native-sparql-heldin-unconfigured`"
 
-#: src/project/diagnostic-codes.md:170
+#: src/project/diagnostic-codes.md:171
 msgid ""
 "`heldIn` was called with no caller-supplied standpoint-predicate "
 "configuration."
 msgstr "调用 `heldIn` 时没有调用方提供的 standpoint（立场）谓词配置。"
 
-#: src/project/diagnostic-codes.md:170
+#: src/project/diagnostic-codes.md:171
 msgid "Configure the standpoint predicates before using `heldIn`."
 msgstr "在使用 `heldIn` 之前先配置 standpoint 谓词。"
 
-#: src/project/diagnostic-codes.md:171
+#: src/project/diagnostic-codes.md:172
 msgid "`native-sparql-evaluation-stack-exhausted`"
 msgstr "`native-sparql-evaluation-stack-exhausted`"
 
-#: src/project/diagnostic-codes.md:171
+#: src/project/diagnostic-codes.md:172
 msgid ""
 "The request nests deeper than the stack of the thread evaluating it can "
 "hold: before its recursive passes run, the evaluator measures the whole "
@@ -29100,7 +29293,7 @@ msgstr ""
 "并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解析器已接受该请"
 "求，在更大的栈上同一请求可以得到应答。"
 
-#: src/project/diagnostic-codes.md:171
+#: src/project/diagnostic-codes.md:172
 msgid ""
 "Evaluate on a native thread spawned with more stack, or nest the request "
 "less deeply. In wasm both lanes run on stacks of the same size — an "
@@ -29112,11 +29305,11 @@ msgstr ""
 "运行在大小相同的栈上——异步作业的栈区域与模块自身的影子栈完全一样大——因此在那"
 "里的补救办法是减少嵌套深度，消息也不会给出其他办法。"
 
-#: src/project/diagnostic-codes.md:172
+#: src/project/diagnostic-codes.md:173
 msgid "`native-sparql-unsupported`"
 msgstr "`native-sparql-unsupported`"
 
-#: src/project/diagnostic-codes.md:172
+#: src/project/diagnostic-codes.md:173
 msgid ""
 "The request is well-formed but uses something this engine refuses to "
 "evaluate as written — for example a `SERVICE ?e` for which no solution names "
@@ -29129,15 +29322,15 @@ msgstr ""
 "`VERSION`。消息会指出具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 "
 "`400` 应答。"
 
-#: src/project/diagnostic-codes.md:172
+#: src/project/diagnostic-codes.md:173
 msgid "Rewrite the request as the message says."
 msgstr "按消息所述改写请求。"
 
-#: src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:174
 msgid "`native-sparql-host-stack-exhausted`"
 msgstr "`native-sparql-host-stack-exhausted`"
 
-#: src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:174
 msgid ""
 "wasm only: the request nests deeper than the JavaScript engine's own call "
 "stack holds. PurRDF keeps a fixed 640 KiB budget of that stack for "
@@ -29155,27 +29348,50 @@ msgstr ""
 "致。解析器在堆上分配的栈中处理嵌套；这些上限用于求值器准入。Cloudflare 适配器"
 "以 `400` 应答。"
 
-#: src/project/diagnostic-codes.md:173
+#: src/project/diagnostic-codes.md:174
 msgid "Nest the request less deeply."
 msgstr "减少请求的嵌套深度。"
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:175
+#, fuzzy
+msgid "`native-sparql-host-source-missing`"
+msgstr "`native-sparql-update-graph-missing`"
+
+#: src/project/diagnostic-codes.md:175
+msgid ""
+"The request left its query time or its entropy seed to the host, and the "
+"build has no source to read it from: a `wasm32-unknown-unknown` module that "
+"links the evaluator without the browser binding and has installed no host "
+"source. The evaluator imports nothing from a host, and it does not "
+"substitute a time or a seed. Native builds read the operating system and the "
+"`purrdf` npm package installs the JavaScript clock and entropy, so neither "
+"raises it."
+msgstr ""
+
+#: src/project/diagnostic-codes.md:175
+msgid ""
+"Supply the query time and the entropy seed with the request, or install a "
+"source once with `purrdf_sparql_eval::host_source::install`. The message "
+"names the missing input."
+msgstr ""
+
+#: src/project/diagnostic-codes.md:176
 msgid "`native-sparql-bnode-mint-prefix`"
 msgstr "`native-sparql-bnode-mint-prefix`"
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:176
 msgid "The blank-node mint prefix supplied in the options is invalid."
 msgstr "选项中提供的空节点生成前缀无效。"
 
-#: src/project/diagnostic-codes.md:174
+#: src/project/diagnostic-codes.md:176
 msgid "Supply a valid prefix."
 msgstr "提供一个有效的前缀。"
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:177
 msgid "`native-sparql-service-denied`"
 msgstr "`native-sparql-service-denied`"
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:177
 msgid ""
 "An installed `ServiceCatalog` withheld a capability from a `SERVICE` "
 "endpoint the request names — the endpoint has no profile, or its profile "
@@ -29190,16 +29406,16 @@ msgstr ""
 "接的单位元，并记录为一次被静默的 `denied` 调用。Cloudflare 适配器以 `403` 应"
 "答。"
 
-#: src/project/diagnostic-codes.md:175
+#: src/project/diagnostic-codes.md:177
 msgid ""
 "Grant the endpoint the capability in the catalog, or remove the `SERVICE`."
 msgstr "在目录中为该端点授予该能力，或去掉 `SERVICE`。"
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:178
 msgid "`native-sparql-service-host-denied`"
 msgstr "`native-sparql-service-host-denied`"
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:178
 msgid ""
 "The host's own service resolver refused a `SERVICE` request by its own "
 "policy, naming no catalog capability — for example a JavaScript "
@@ -29213,35 +29429,39 @@ msgstr ""
 "因此没有联系任何端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为"
 "一次被静默的 `host-denied` 调用。Cloudflare 适配器以 `403` 应答。"
 
-#: src/project/diagnostic-codes.md:176
+#: src/project/diagnostic-codes.md:178
 msgid "Allow the request in the host's policy, or remove the `SERVICE`."
 msgstr "在宿主策略中允许该请求，或去掉 `SERVICE`。"
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:179
 msgid "`native-sparql-service-failed`"
 msgstr "`native-sparql-service-failed`"
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:179
 msgid ""
 "A `SERVICE` endpoint was contacted and gave no usable answer: a transport "
-"failure, an HTTP error status, a redirect, a timeout of the resolver's own, "
-"or a body that does not decode. Under `SERVICE SILENT` the clause is the "
-"join identity instead, recorded as a silenced invocation. The Cloudflare "
-"adapter answers it with a `502`."
+"failure, an HTTP error status, a redirect (including an opaque redirect "
+"whose status and `Location` the host could not see, "
+"`RemoteError::OpaqueRedirect`), a timeout of the resolver's own, or a body "
+"that does not decode. Under `SERVICE SILENT` the clause is the join identity "
+"instead, recorded as a silenced invocation. The Cloudflare adapter answers "
+"it with a `502`."
 msgstr ""
 "已联系某个 `SERVICE` 端点，但它没有给出可用的应答：传输失败、HTTP 错误状态、"
-"重定向、解析器自身的超时，或无法解码的响应体。在 `SERVICE SILENT` 下该子句则"
-"是连接的单位元，并记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。"
+"重定向（包括宿主看不到其状态与 `Location` 的不透明重定向，即 "
+"`RemoteError::OpaqueRedirect`）、解析器自身的超时，或无法解码的响应体。在 "
+"`SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的调用。"
+"Cloudflare 适配器以 `502` 应答。"
 
-#: src/project/diagnostic-codes.md:177
+#: src/project/diagnostic-codes.md:179
 msgid "Make the endpoint reachable, or write `SERVICE SILENT`."
 msgstr "让该端点可达，或写作 `SERVICE SILENT`。"
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:180
 msgid "`native-sparql-service-unconfigured`"
 msgstr "`native-sparql-service-unconfigured`"
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:180
 msgid ""
 "No remote query source reaches a `SERVICE` endpoint the request names: none "
 "was configured, or the configured one answers that nothing it holds reaches "
@@ -29254,15 +29474,15 @@ msgstr ""
 "子句则是连接的单位元，并记录为一次被静默的 `unconfigured` 调用。Cloudflare 适"
 "配器以 `500` 应答。"
 
-#: src/project/diagnostic-codes.md:178
+#: src/project/diagnostic-codes.md:180
 msgid "Configure a source that reaches the endpoint, or remove the `SERVICE`."
 msgstr "配置一个能到达该端点的来源，或去掉 `SERVICE`。"
 
-#: src/project/diagnostic-codes.md:179
+#: src/project/diagnostic-codes.md:181
 msgid "`native-sparql-load-no-resolver`"
 msgstr "`native-sparql-load-no-resolver`"
 
-#: src/project/diagnostic-codes.md:179
+#: src/project/diagnostic-codes.md:181
 msgid ""
 "`LOAD <iri>` was requested but no `GraphResolver` host seam was provided. "
 "`LOAD SILENT` succeeds instead with nothing loaded, recorded as a silenced "
@@ -29271,15 +29491,15 @@ msgstr ""
 "请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。`LOAD SILENT` 则"
 "会成功返回、不加载任何内容，并记录为一次被静默的 `unconfigured` 调用。"
 
-#: src/project/diagnostic-codes.md:179
+#: src/project/diagnostic-codes.md:181
 msgid "Inject a resolver, or remove the `LOAD`."
 msgstr "注入一个解析器，或去掉该 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:182
 msgid "`native-sparql-load-denied`"
 msgstr "`native-sparql-load-denied`"
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:182
 msgid ""
 "An installed `ServiceCatalog` withheld a capability from the `LOAD` source "
 "(`LoadError::Denied`) — the source, or a location a redirect named, has no "
@@ -29294,16 +29514,16 @@ msgstr ""
 "`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的 `denied` 调"
 "用。Cloudflare 适配器以 `403` 应答。"
 
-#: src/project/diagnostic-codes.md:180
+#: src/project/diagnostic-codes.md:182
 msgid ""
 "Grant the source the missing capability in the catalog, or remove the `LOAD`."
 msgstr "在目录中为该来源授予缺少的能力，或去掉 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:181
+#: src/project/diagnostic-codes.md:183
 msgid "`native-sparql-load-host-denied`"
 msgstr "`native-sparql-load-host-denied`"
 
-#: src/project/diagnostic-codes.md:181
+#: src/project/diagnostic-codes.md:183
 msgid ""
 "The host's own `LOAD` resolver refused the source by its own policy, naming "
 "no catalog capability (`LoadError::HostDenied`) — for example a JavaScript "
@@ -29316,37 +29536,40 @@ msgstr ""
 "`{ kind: \"denied\" }`。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为"
 "一次被静默的 `host-denied` 调用。Cloudflare 适配器以 `403` 应答。"
 
-#: src/project/diagnostic-codes.md:181
+#: src/project/diagnostic-codes.md:183
 msgid "Allow the source in the host's policy, or remove the `LOAD`."
 msgstr "在宿主策略中允许该来源，或去掉 `LOAD`。"
 
-#: src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:184
 msgid "`native-sparql-load-failed`"
 msgstr "`native-sparql-load-failed`"
 
-#: src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:184
 msgid ""
 "A `GraphResolver` could not fetch the document (`LoadError::Transport`) — "
 "for example the wasm package's asynchronous `resolveLoad` answered `{ kind: "
-"\"transport\" }`, the fetch outlived its catalog profile's timeout, or it "
-"followed more than five redirects. `LOAD SILENT` succeeds instead with "
-"nothing loaded, recorded as a silenced invocation. The Cloudflare adapter "
-"answers it with a `502`."
+"\"transport\" }`, the fetch outlived its catalog profile's timeout, the host "
+"reported an opaque redirect whose status and `Location` it could not see "
+"(`LoadError::OpaqueRedirect`), or it followed more than five redirects. "
+"`LOAD SILENT` succeeds instead with nothing loaded, recorded as a silenced "
+"invocation. The Cloudflare adapter answers it with a `502`."
 msgstr ""
 "`GraphResolver` 无法抓取该文档（`LoadError::Transport`）——例如 wasm 包的异步 "
 "`resolveLoad` 应答了 `{ kind: \"transport\" }`、抓取超出了其目录 profile 的超"
-"时，或跟随了五次以上的重定向。`LOAD SILENT` 则会成功返回、不加载任何内容，并"
-"记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。"
+"时、宿主报告了其看不到状态与 `Location` 的不透明重定向"
+"（`LoadError::OpaqueRedirect`），或跟随了五次以上的重定向。`LOAD SILENT` 则会"
+"成功返回、不加载任何内容，并记录为一次被静默的调用。Cloudflare 适配器以 "
+"`502` 应答。"
 
-#: src/project/diagnostic-codes.md:182
+#: src/project/diagnostic-codes.md:184
 msgid "Make the source reachable, or write `LOAD SILENT`."
 msgstr "让该来源可达，或写作 `LOAD SILENT`。"
 
-#: src/project/diagnostic-codes.md:183
+#: src/project/diagnostic-codes.md:185
 msgid "`native-sparql-load-decode`"
 msgstr "`native-sparql-load-decode`"
 
-#: src/project/diagnostic-codes.md:183
+#: src/project/diagnostic-codes.md:185
 msgid ""
 "A `GraphResolver` fetched the document and could not parse it "
 "(`LoadError::Decode`) — for example the wasm package's asynchronous "
@@ -29360,16 +29583,16 @@ msgstr ""
 "所指名的语法。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默"
 "的调用。Cloudflare 适配器以 `502` 应答。"
 
-#: src/project/diagnostic-codes.md:183
+#: src/project/diagnostic-codes.md:185
 msgid ""
 "Serve a document in a syntax the resolver parses, or write `LOAD SILENT`."
 msgstr "以解析器能够解析的语法提供文档，或写作 `LOAD SILENT`。"
 
-#: src/project/diagnostic-codes.md:184
+#: src/project/diagnostic-codes.md:186
 msgid "`native-sparql-load-stopped`"
 msgstr "`native-sparql-load-stopped`"
 
-#: src/project/diagnostic-codes.md:184
+#: src/project/diagnostic-codes.md:186
 msgid ""
 "The request's own stop signal (a cancellation or the deadline) fired while a "
 "`LOAD` was awaited (`LoadError::Governed`). A governed request reports the "
@@ -29379,15 +29602,15 @@ msgstr ""
 "（`LoadError::Governed`）。受 governor 管控的请求报告的是 governor 触发，而不"
 "是这个代码，无论是否写了 `SILENT`。"
 
-#: src/project/diagnostic-codes.md:184
+#: src/project/diagnostic-codes.md:186
 msgid "Raise the deadline, or do not cancel the job."
 msgstr "放宽截止时间，或不要取消该作业。"
 
-#: src/project/diagnostic-codes.md:185
+#: src/project/diagnostic-codes.md:187
 msgid "`native-sparql-load-fault`"
 msgstr "`native-sparql-load-fault`"
 
-#: src/project/diagnostic-codes.md:185
+#: src/project/diagnostic-codes.md:187
 msgid ""
 "A `GraphResolver`'s handler faulted (`LoadError::Fault`) — for example the "
 "wasm package's asynchronous `resolveLoad` threw, rejected, answered with "
@@ -29403,7 +29626,7 @@ msgstr ""
 "载任何内容，并记录为一次被静默的 `fault` 调用。Cloudflare 适配器以经过清理的 "
 "`500` 应答，真正的原话以关联 id 写入其日志。"
 
-#: src/project/diagnostic-codes.md:185
+#: src/project/diagnostic-codes.md:187
 msgid ""
 "Return a document with its media type, a `Response`, a `Dataset`, a redirect "
 "or a typed failure — never throw."
@@ -29411,11 +29634,11 @@ msgstr ""
 "返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset`、一次重定向或一个带"
 "类型的失败——绝不要抛出异常。"
 
-#: src/project/diagnostic-codes.md:186
+#: src/project/diagnostic-codes.md:188
 msgid "`native-sparql-cancelled`"
 msgstr "`native-sparql-cancelled`"
 
-#: src/project/diagnostic-codes.md:186
+#: src/project/diagnostic-codes.md:188
 msgid ""
 "wasm asynchronous lane: an ungoverned operation was cancelled (its "
 "`AbortSignal` fired). A governed operation reports the trip on its outcome "
@@ -29424,15 +29647,15 @@ msgstr ""
 "wasm 异步通道：一个不受 governor 管控的操作被取消（其 `AbortSignal` 已触"
 "发）。受管控的操作则在其结果中报告这次触发。Cloudflare 适配器以 `503` 应答。"
 
-#: src/project/diagnostic-codes.md:186
+#: src/project/diagnostic-codes.md:188
 msgid "Do not cancel the operation."
 msgstr "不要取消该操作。"
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:189
 msgid "`native-sparql-deadline`"
 msgstr "`native-sparql-deadline`"
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:189
 msgid ""
 "wasm asynchronous lane: an ungoverned operation's deadline passed. The "
 "Cloudflare adapter answers it with a `503`."
@@ -29440,15 +29663,15 @@ msgstr ""
 "wasm 异步通道：一个不受 governor 管控的操作超过了截止时间。Cloudflare 适配器"
 "以 `503` 应答。"
 
-#: src/project/diagnostic-codes.md:187
+#: src/project/diagnostic-codes.md:189
 msgid "Raise the deadline."
 msgstr "放宽截止时间。"
 
-#: src/project/diagnostic-codes.md:188
+#: src/project/diagnostic-codes.md:190
 msgid "`native-sparql-not-acceptable`"
 msgstr "`native-sparql-not-acceptable`"
 
-#: src/project/diagnostic-codes.md:188
+#: src/project/diagnostic-codes.md:190
 msgid ""
 "wasm asynchronous lane: a negotiated query's result — a graph carrying named "
 "graphs — can be carried by no format the `Accept` header allows. The "
@@ -29458,15 +29681,15 @@ msgstr ""
 "头允许的格式能够承载。Cloudflare 适配器以 `406` 应答，并列出能够承载它的格"
 "式。"
 
-#: src/project/diagnostic-codes.md:188
+#: src/project/diagnostic-codes.md:190
 msgid "Accept TriG, N-Quads or JSON-LD."
 msgstr "接受 TriG、N-Quads 或 JSON-LD。"
 
-#: src/project/diagnostic-codes.md:189
+#: src/project/diagnostic-codes.md:191
 msgid "`native-sparql-update-in-flight`"
 msgstr "`native-sparql-update-in-flight`"
 
-#: src/project/diagnostic-codes.md:189
+#: src/project/diagnostic-codes.md:191
 msgid ""
 "wasm asynchronous lane: an asynchronous update of the same dataset is "
 "already in flight, or the dataset was mutated while the update ran, so the "
@@ -29477,15 +29700,15 @@ msgstr ""
 "修改，因此该更新被拒绝，而不是针对一个它从未见过的状态求值（或提交在其之"
 "上）。Cloudflare 适配器以 `409` 应答。"
 
-#: src/project/diagnostic-codes.md:189
+#: src/project/diagnostic-codes.md:191
 msgid "Await the first update, then send the next."
 msgstr "等待第一个更新完成，再发送下一个。"
 
-#: src/project/diagnostic-codes.md:190
+#: src/project/diagnostic-codes.md:192
 msgid "`native-sparql-host-fault`"
 msgstr "`native-sparql-host-fault`"
 
-#: src/project/diagnostic-codes.md:190
+#: src/project/diagnostic-codes.md:192
 msgid ""
 "The host, not the request and not an endpoint, failed: a `SERVICE` source's "
 "handler faulted (`EvalError::ServiceHostFault`) — for example a wasm "
@@ -29505,15 +29728,15 @@ msgstr ""
 "被破坏，或其栈帧覆写了其栈区域的金丝雀字。Cloudflare 适配器以经过清理的 "
 "`500` 应答，真正的原话以关联 id 写入其日志。"
 
-#: src/project/diagnostic-codes.md:190
+#: src/project/diagnostic-codes.md:192
 msgid "Fix the host handler."
 msgstr "修正宿主的处理函数。"
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:193
 msgid "`native-sparql-governor-ceiling`"
 msgstr "`native-sparql-governor-ceiling`"
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:193
 msgid ""
 "Protocol boundary: a deterministic governor ceiling stopped the operation — "
 "it was reached, or the planner's estimate already exceeded it. The "
@@ -29524,15 +29747,15 @@ msgstr ""
 "已经超出。操作的结果携带这次触发；这是宿主据以应答它的 problem 的 `code`"
 "（Cloudflare 适配器的 `422`）。"
 
-#: src/project/diagnostic-codes.md:191
+#: src/project/diagnostic-codes.md:193
 msgid "Raise the ceiling, or narrow the request."
 msgstr "提高上限，或收窄请求。"
 
-#: src/project/diagnostic-codes.md:192
+#: src/project/diagnostic-codes.md:194
 msgid "`native-sparql-evaluation`"
 msgstr "`native-sparql-evaluation`"
 
-#: src/project/diagnostic-codes.md:192
+#: src/project/diagnostic-codes.md:194
 msgid ""
 "Protocol boundary: the operation's evaluation failed with no more specific "
 "code; the problem's `code` a host answers it with."
@@ -29540,11 +29763,11 @@ msgstr ""
 "协议边界：操作的求值失败，且没有更具体的代码；这是宿主据以应答它的 problem "
 "的 `code`。"
 
-#: src/project/diagnostic-codes.md:193
+#: src/project/diagnostic-codes.md:195
 msgid "`native-sparql-update-bad-destination`"
 msgstr "`native-sparql-update-bad-destination`"
 
-#: src/project/diagnostic-codes.md:193
+#: src/project/diagnostic-codes.md:195
 msgid ""
 "An `ADD`/`MOVE`/`COPY`/`LOAD` destination is `NAMED` or `ALL`; it must be "
 "`DEFAULT` or a single named `GRAPH`."
@@ -29552,15 +29775,15 @@ msgstr ""
 "`ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；它必须是 `DEFAULT` 或单"
 "个命名的 `GRAPH`。"
 
-#: src/project/diagnostic-codes.md:193
+#: src/project/diagnostic-codes.md:195
 msgid "Name a single destination graph."
 msgstr "指定单个目标图。"
 
-#: src/project/diagnostic-codes.md:194
+#: src/project/diagnostic-codes.md:196
 msgid "`native-sparql-update-graph-missing`"
 msgstr "`native-sparql-update-graph-missing`"
 
-#: src/project/diagnostic-codes.md:194
+#: src/project/diagnostic-codes.md:196
 msgid ""
 "An UPDATE under the default `RememberEmpty` graph lifetime names an input "
 "graph that does not exist. `CLEAR`, `DROP`, `ADD`, `COPY` and `MOVE` refuse "
@@ -29572,60 +29795,60 @@ msgstr ""
 "`SILENT` 保持本次操作的状态不变。以自身为目标的 `COPY` 和 `MOVE` 无条件地不做"
 "任何操作。"
 
-#: src/project/diagnostic-codes.md:194
+#: src/project/diagnostic-codes.md:196
 msgid "Create or load the input graph, or use `SILENT`."
 msgstr "创建或加载输入图，或使用 `SILENT`。"
 
-#: src/project/diagnostic-codes.md:195
+#: src/project/diagnostic-codes.md:197
 msgid "`native-sparql-subst-iri`"
 msgstr "`native-sparql-subst-iri`"
 
-#: src/project/diagnostic-codes.md:195
+#: src/project/diagnostic-codes.md:197
 msgid "A substitution value is not a valid IRI."
 msgstr "某个替换值不是有效的 IRI。"
 
-#: src/project/diagnostic-codes.md:195
+#: src/project/diagnostic-codes.md:197
 msgid "Supply a valid IRI."
 msgstr "提供一个有效的 IRI。"
 
-#: src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:198
 msgid "`native-sparql-subst-triple-predicate`"
 msgstr "`native-sparql-subst-triple-predicate`"
 
-#: src/project/diagnostic-codes.md:196
+#: src/project/diagnostic-codes.md:198
 msgid "A substituted quoted triple has a predicate that is not an IRI."
 msgstr "某个被替换的引用三元组的谓词不是 IRI。"
 
-#: src/project/diagnostic-codes.md:197
+#: src/project/diagnostic-codes.md:199
 msgid "`native-sparql-subst-literal-datatype`"
 msgstr "`native-sparql-subst-literal-datatype`"
 
-#: src/project/diagnostic-codes.md:197
+#: src/project/diagnostic-codes.md:199
 msgid "A substituted literal's datatype is not an IRI."
 msgstr "被替换的字面量的数据类型不是 IRI。"
 
-#: src/project/diagnostic-codes.md:197
+#: src/project/diagnostic-codes.md:199
 msgid "Use an IRI datatype."
 msgstr "使用 IRI 数据类型。"
 
-#: src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:200
 msgid "`native-sparql-subst-langtag`"
 msgstr "`native-sparql-subst-langtag`"
 
-#: src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:200
 msgid ""
 "A pre-bound literal's language tag is not one the lexing profile accepts."
 msgstr "预绑定字面量的语言标签不是该词法 profile 所接受的。"
 
-#: src/project/diagnostic-codes.md:198
+#: src/project/diagnostic-codes.md:200
 msgid "Supply a well-formed language tag."
 msgstr "提供一个良构的语言标签。"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:201
 msgid "`native-sparql-xpath-operational`"
 msgstr "`native-sparql-xpath-operational`"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:201
 msgid ""
 "A selected dated XPath law failed operationally in a way that names no "
 "single `xpath-*` resource. The query is aborted and publishes no answer."
@@ -29633,15 +29856,15 @@ msgstr ""
 "所选的带日期 XPath 法则发生了运行层面的失败，且未指明单一的 `xpath-*` 资源。"
 "查询被中止，不发布任何答案。"
 
-#: src/project/diagnostic-codes.md:199
+#: src/project/diagnostic-codes.md:201
 msgid "Report the failure with its query and input."
 msgstr "报告此失败时请附上查询和输入。"
 
-#: src/project/diagnostic-codes.md:201
+#: src/project/diagnostic-codes.md:203
 msgid "`xpath-*` — dated native XPath regular expressions (`purrdf-core`)"
 msgstr "`xpath-*`——带日期的原生 XPath 正则表达式（`purrdf-core`）"
 
-#: src/project/diagnostic-codes.md:203
+#: src/project/diagnostic-codes.md:205
 msgid ""
 "These codes arise only when a caller selects a dated XPath law "
 "(`xpath-2.0-2010-12-14` or `xpath-3.1-2017-03-21`) for SPARQL `REGEX` and "
@@ -29662,7 +29885,7 @@ msgstr ""
 "（`Error::Allocation`）。每一行都给出了 `Limits::new()` 设定的生产上限；上限"
 "为零即完全扣留该资源。"
 
-#: src/project/diagnostic-codes.md:213
+#: src/project/diagnostic-codes.md:215
 msgid ""
 "Every `xpath-*` code is **operational**. It is never a syntax verdict and "
 "never a non-match: invalid flags (FORX0001), an invalid pattern (FORX0002), "
@@ -29682,7 +29905,7 @@ msgstr ""
 "值、`false` 的过滤结果或符合约束的图。C ABI 以 "
 "`PURRDF_STATUS_REGEX_RESOURCE_ERROR`（13）报告它。"
 
-#: src/project/diagnostic-codes.md:222
+#: src/project/diagnostic-codes.md:224
 msgid ""
 "The bounds apply to every pattern. Matching charges the work actually "
 "performed: character comparisons, choices, state copies, search advances and "
@@ -29694,7 +29917,7 @@ msgstr ""
 "制、搜索位置推进和替换输出。匹配器的一步没有通用的纳秒耗时；每字节一步或一到"
 "三步的范围都不能描述所有搜索。"
 
-#: src/project/diagnostic-codes.md:227
+#: src/project/diagnostic-codes.md:229
 msgid ""
 "Under a dated law, a finite maximum that the input cannot reach no longer "
 "creates distinct count states. Compatibility nullable bodies keep their "
@@ -29710,7 +29933,7 @@ msgstr ""
 "空串的大计数重复在边界比较保持不变时可以复用相对状态，并在接近边界时恢复精确"
 "计数。"
 
-#: src/project/diagnostic-codes.md:235
+#: src/project/diagnostic-codes.md:237
 msgid ""
 "Production-default tests cover four mebibytes of `^[\\s\\S]{0,10000000}$`, "
 "`^[^\\n]{0,10000000}$`, `^[^<>]{1,5000000}$`, `^[\\p{L} ]{1,5000000}$` and "
@@ -29734,7 +29957,7 @@ msgstr ""
 "作。`native_xpath_large` 基准组测量这些形式及其计数和输入大小阶梯，同时保留原"
 "有的字面量、分组和对抗性邻例。"
 
-#: src/project/diagnostic-codes.md:247
+#: src/project/diagnostic-codes.md:249
 msgid ""
 "Nested counted repetitions whose bodies can repeat empty still distinguish "
 "count combinations. On `aaab`, `((a?){3000}){3000}b` answers while `((a?)"
@@ -29751,11 +29974,11 @@ msgstr ""
 "其指数级探索（在四十个 `a` 上的 `^(a|aa)*c\\1$`）可能达到步数上限。这种拒绝是"
 "使操作失败的硬错误，不是 `false`、缺失的捕获或部分替换结果。"
 
-#: src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:259
 msgid "`xpath-pattern-bytes`"
 msgstr "`xpath-pattern-bytes`"
 
-#: src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:259
 msgid ""
 "`Resource::PatternBytes`: the pattern source has more UTF-8 bytes than the "
 "bound (64 KiB). The source is refused before parsing, whether or not its "
@@ -29764,15 +29987,15 @@ msgstr ""
 "`Resource::PatternBytes`：模式源文本的 UTF-8 字节数超过上限（64 KiB）。无论其"
 "语法是否有效，源文本都会在解析之前被拒绝。"
 
-#: src/project/diagnostic-codes.md:257
+#: src/project/diagnostic-codes.md:259
 msgid "Shorten the pattern."
 msgstr "缩短该模式。"
 
-#: src/project/diagnostic-codes.md:258
+#: src/project/diagnostic-codes.md:260
 msgid "`xpath-compile-steps`"
 msgstr "`xpath-compile-steps`"
 
-#: src/project/diagnostic-codes.md:258
+#: src/project/diagnostic-codes.md:260
 msgid ""
 "`Resource::CompileSteps`: compiling the pattern needs more compiler "
 "operations, scanned characters and set operations included, than the bound "
@@ -29781,41 +30004,41 @@ msgstr ""
 "`Resource::CompileSteps`：编译该模式所需的编译器操作（包括扫描的字符与集合运"
 "算）超过上限（4,000,000）。"
 
-#: src/project/diagnostic-codes.md:258
+#: src/project/diagnostic-codes.md:260
 msgid "Simplify the pattern, for example its character-class arithmetic."
 msgstr "简化该模式，例如其字符类运算。"
 
-#: src/project/diagnostic-codes.md:259
+#: src/project/diagnostic-codes.md:261
 msgid "`xpath-program-nodes`"
 msgstr "`xpath-program-nodes`"
 
-#: src/project/diagnostic-codes.md:259
+#: src/project/diagnostic-codes.md:261
 msgid ""
 "`Resource::ProgramNodes`: the compiled program needs more nodes than the "
 "bound (262,144)."
 msgstr ""
 "`Resource::ProgramNodes`：编译后的程序所需的节点数超过上限（262,144）。"
 
-#: src/project/diagnostic-codes.md:259 src/project/diagnostic-codes.md:260
+#: src/project/diagnostic-codes.md:261 src/project/diagnostic-codes.md:262
 msgid "Simplify the pattern or reduce its counted repetitions."
 msgstr "简化该模式，或减少其计数重复。"
 
-#: src/project/diagnostic-codes.md:260
+#: src/project/diagnostic-codes.md:262
 msgid "`xpath-compile-slots`"
 msgstr "`xpath-compile-slots`"
 
-#: src/project/diagnostic-codes.md:260
+#: src/project/diagnostic-codes.md:262
 msgid ""
 "`Resource::CompileSlots`: building the program needs more construction cells "
 "than the bound (2,097,152)."
 msgstr ""
 "`Resource::CompileSlots`：构建程序所需的构造单元数超过上限（2,097,152）。"
 
-#: src/project/diagnostic-codes.md:261
+#: src/project/diagnostic-codes.md:263
 msgid "`xpath-match-steps`"
 msgstr "`xpath-match-steps`"
 
-#: src/project/diagnostic-codes.md:261
+#: src/project/diagnostic-codes.md:263
 msgid ""
 "`Resource::MatchSteps`: actual matching, capture search or replacement work "
 "exceeds 250,000,000 operations. Large nonbinding maxima and eligible single-"
@@ -29828,32 +30051,32 @@ msgstr ""
 "数组合、状态闭包、反向引用和替换输出仍可能耗尽这一上限。不发布答案或部分替"
 "换。"
 
-#: src/project/diagnostic-codes.md:261
+#: src/project/diagnostic-codes.md:263
 msgid ""
 "Simplify the costly pattern structure, remove a backreference where its "
 "semantics are unnecessary, or process shorter input."
 msgstr "简化代价高的模式结构，在不需要其语义时移除反向引用，或处理更短的输入。"
 
-#: src/project/diagnostic-codes.md:262
+#: src/project/diagnostic-codes.md:264
 msgid "`xpath-match-states`"
 msgstr "`xpath-match-states`"
 
-#: src/project/diagnostic-codes.md:262
+#: src/project/diagnostic-codes.md:264
 msgid ""
 "`Resource::MatchStates`: matching needs more simultaneously pending "
 "alternative states than the bound (65,536)."
 msgstr ""
 "`Resource::MatchStates`：匹配所需的同时待定的备选状态数超过上限（65,536）。"
 
-#: src/project/diagnostic-codes.md:262
+#: src/project/diagnostic-codes.md:264
 msgid "Reduce the pattern's alternation and repetition."
 msgstr "减少该模式的选择分支与重复。"
 
-#: src/project/diagnostic-codes.md:263
+#: src/project/diagnostic-codes.md:265
 msgid "`xpath-match-slots`"
 msgstr "`xpath-match-slots`"
 
-#: src/project/diagnostic-codes.md:263
+#: src/project/diagnostic-codes.md:265
 msgid ""
 "`Resource::MatchSlots`: the live states, captures and continuations need "
 "more cells than the bound (1,048,576). Nested empty-capable repetitions can "
@@ -29862,32 +30085,32 @@ msgstr ""
 "`Resource::MatchSlots`：活动状态、捕获与续延所需的单元超过上限（1,048,576）。"
 "主体能匹配空串的嵌套重复是否达到该上限取决于其计数的组合。"
 
-#: src/project/diagnostic-codes.md:263
+#: src/project/diagnostic-codes.md:265
 msgid "Reduce the pattern's captures and repetition, or match shorter input."
 msgstr "减少该模式的捕获与重复，或匹配更短的输入。"
 
-#: src/project/diagnostic-codes.md:264
+#: src/project/diagnostic-codes.md:266
 msgid "`xpath-output-bytes`"
 msgstr "`xpath-output-bytes`"
 
-#: src/project/diagnostic-codes.md:264
+#: src/project/diagnostic-codes.md:266
 msgid "`Resource::OutputBytes`: `REPLACE` output exceeds the bound (64 MiB)."
 msgstr "`Resource::OutputBytes`：`REPLACE` 的输出超过上限（64 MiB）。"
 
-#: src/project/diagnostic-codes.md:264
+#: src/project/diagnostic-codes.md:266
 msgid "Replace over shorter input or with shorter replacement text."
 msgstr "在更短的输入上替换，或使用更短的替换文本。"
 
-#: src/project/diagnostic-codes.md:266
+#: src/project/diagnostic-codes.md:268
 msgid "`reasoning-*` — SPARQL under an entailment regime (`purrdf`)"
 msgstr ""
 "`reasoning-*`——在蕴涵机制（entailment regime）下执行的 SPARQL（`purrdf`）"
 
-#: src/project/diagnostic-codes.md:270
+#: src/project/diagnostic-codes.md:272
 msgid "`reasoning-closure-relation-witness`"
 msgstr "`reasoning-closure-relation-witness`"
 
-#: src/project/diagnostic-codes.md:270
+#: src/project/diagnostic-codes.md:272
 msgid ""
 "Property-function relations derived from the closure cannot be combined with "
 "an OWL Direct-Semantics run whose restricted chase minted existential "
@@ -29898,7 +30121,7 @@ msgstr ""
 "Direct-Semantics 运行组合使用：遍历闭包的关系可能返回一个生成的空节点，而该机"
 "制的作用域图并不包含它。"
 
-#: src/project/diagnostic-codes.md:270
+#: src/project/diagnostic-codes.md:272
 msgid ""
 "Query under a regime that mints no witnesses (`rdf`, `rdfs`, `owl-rl`, `d`, "
 "`rif`, `simple`), or drop the dataset-derived relations from the call."
@@ -29906,98 +30129,98 @@ msgstr ""
 "在不生成见证的机制（`rdf`、`rdfs`、`owl-rl`、`d`、`rif`、`simple`）下查询，或"
 "从该调用中去掉由数据集派生的关系。"
 
-#: src/project/diagnostic-codes.md:271
+#: src/project/diagnostic-codes.md:273
 msgid "`reasoning-closure-relation-rebuild`"
 msgstr "`reasoning-closure-relation-rebuild`"
 
-#: src/project/diagnostic-codes.md:271
+#: src/project/diagnostic-codes.md:273
 msgid "Rebuilding the property-function relations over the closure failed."
 msgstr "在推理闭包上重建属性函数关系失败。"
 
-#: src/project/diagnostic-codes.md:271
+#: src/project/diagnostic-codes.md:273
 msgid "The relation builder's own error is in the message."
 msgstr "关系构建器自身的错误包含在消息中。"
 
-#: src/project/diagnostic-codes.md:273
+#: src/project/diagnostic-codes.md:275
 msgid "`statements-*` — statement-metadata ingestion (`purrdf-rdf`)"
 msgstr "`statements-*`——陈述元数据的摄入（`purrdf-rdf`）"
 
-#: src/project/diagnostic-codes.md:275
+#: src/project/diagnostic-codes.md:277
 msgid ""
 "These arise when a document's `rdf:reifies` and `owl:Axiom` statements are "
 "read into the statement layer."
 msgstr ""
 "当把文档的 `rdf:reifies` 与 `owl:Axiom` 陈述读入陈述层时，会出现这些代码。"
 
-#: src/project/diagnostic-codes.md:280
+#: src/project/diagnostic-codes.md:282
 msgid "`statements-turtle-parse`"
 msgstr "`statements-turtle-parse`"
 
-#: src/project/diagnostic-codes.md:280
+#: src/project/diagnostic-codes.md:282
 msgid "The statement-metadata Turtle failed to parse."
 msgstr "陈述元数据 Turtle 解析失败。"
 
-#: src/project/diagnostic-codes.md:280
+#: src/project/diagnostic-codes.md:282
 msgid "Fix the Turtle."
 msgstr "修正该 Turtle。"
 
-#: src/project/diagnostic-codes.md:281
+#: src/project/diagnostic-codes.md:283
 msgid "`statements-non-iri`"
 msgstr "`statements-non-iri`"
 
-#: src/project/diagnostic-codes.md:281
+#: src/project/diagnostic-codes.md:283
 msgid "A term that must be an IRI in this context is not one."
 msgstr "在此上下文中必须是 IRI 的某个项不是 IRI。"
 
-#: src/project/diagnostic-codes.md:281
+#: src/project/diagnostic-codes.md:283
 msgid "Use an IRI."
 msgstr "使用 IRI。"
 
-#: src/project/diagnostic-codes.md:282
+#: src/project/diagnostic-codes.md:284
 msgid "`statements-reifies-non-triple`"
 msgstr "`statements-reifies-non-triple`"
 
-#: src/project/diagnostic-codes.md:282
+#: src/project/diagnostic-codes.md:284
 msgid "The object of `rdf:reifies` is not a triple term."
 msgstr "`rdf:reifies` 的宾语不是三元组项。"
 
-#: src/project/diagnostic-codes.md:282
+#: src/project/diagnostic-codes.md:284
 msgid "Reify a triple term."
 msgstr "对一个三元组项进行具体化。"
 
-#: src/project/diagnostic-codes.md:283
+#: src/project/diagnostic-codes.md:285
 msgid "`statements-malformed-axiom`"
 msgstr "`statements-malformed-axiom`"
 
-#: src/project/diagnostic-codes.md:283
+#: src/project/diagnostic-codes.md:285
 msgid "An `owl:Axiom` lacks its source, property or target."
 msgstr "某个 `owl:Axiom` 缺少其源、属性或目标。"
 
-#: src/project/diagnostic-codes.md:283
+#: src/project/diagnostic-codes.md:285
 msgid "Complete the axiom."
 msgstr "补全该公理。"
 
-#: src/project/diagnostic-codes.md:284
+#: src/project/diagnostic-codes.md:286
 msgid "`statements-conflicting-structural`"
 msgstr "`statements-conflicting-structural`"
 
-#: src/project/diagnostic-codes.md:284
+#: src/project/diagnostic-codes.md:286
 msgid "One subject carries two different values for a structural field."
 msgstr "同一个主语在某个结构字段上带有两个不同的值。"
 
-#: src/project/diagnostic-codes.md:284
+#: src/project/diagnostic-codes.md:286
 msgid "Keep one value."
 msgstr "只保留一个值。"
 
-#: src/project/diagnostic-codes.md:286
+#: src/project/diagnostic-codes.md:288
 msgid "Other single-code families"
 msgstr "其他单代码族"
 
-#: src/project/diagnostic-codes.md:290
+#: src/project/diagnostic-codes.md:292
 msgid "`sssom-tsv-parse`"
 msgstr "`sssom-tsv-parse`"
 
-#: src/project/diagnostic-codes.md:290
+#: src/project/diagnostic-codes.md:292
 msgid ""
 "An SSSOM TSV document is malformed: a missing or unreadable header row, a "
 "malformed `curie_map` entry or set comment, a malformed row, or a non-"
@@ -30006,15 +30229,15 @@ msgstr ""
 "某个 SSSOM TSV 文档格式错误：缺少表头行或表头行不可读、`curie_map` 条目或集合"
 "注释格式错误、某行格式错误，或置信度不是数值；位置信息指明所在行。"
 
-#: src/project/diagnostic-codes.md:290
+#: src/project/diagnostic-codes.md:292
 msgid "Fix the TSV at the reported line."
 msgstr "在所报告的行修正该 TSV。"
 
-#: src/project/diagnostic-codes.md:291
+#: src/project/diagnostic-codes.md:293
 msgid "`content-id-scheme`"
 msgstr "`content-id-scheme`"
 
-#: src/project/diagnostic-codes.md:291
+#: src/project/diagnostic-codes.md:293
 msgid ""
 "A content-id scheme prefix is invalid: empty, non-ASCII, or ending in a "
 "hexadecimal digit (which would make it ambiguous with the 64-hex-character "
@@ -30023,17 +30246,17 @@ msgstr ""
 "某个内容 id 的 scheme 前缀无效：为空、含非 ASCII 字符，或以十六进制数字结尾"
 "（这会使它与 64 个十六进制字符的尾部产生歧义）。"
 
-#: src/project/diagnostic-codes.md:291
+#: src/project/diagnostic-codes.md:293
 msgid ""
 "Choose a prefix that is non-empty ASCII and does not end in `0-9`, `a-f` or "
 "`A-F`."
 msgstr "选择一个非空、纯 ASCII 且不以 `0-9`、`a-f` 或 `A-F` 结尾的前缀。"
 
-#: src/project/diagnostic-codes.md:293
+#: src/project/diagnostic-codes.md:295
 msgid "Where the code reaches you"
 msgstr "代码在何处呈现给调用方"
 
-#: src/project/diagnostic-codes.md:295
+#: src/project/diagnostic-codes.md:297
 msgid ""
 "**Rust** — `RdfDiagnostic::code` on the returned error; its `Display` form "
 "is `<severity> <code>: <message>`."
@@ -30041,7 +30264,7 @@ msgstr ""
 "**Rust**——返回错误上的 `RdfDiagnostic::code`；其 `Display` 形式为 "
 "`<severity> <code>: <message>`。"
 
-#: src/project/diagnostic-codes.md:297
+#: src/project/diagnostic-codes.md:299
 msgid ""
 "**Python** — the `ValueError` message is that `Display` form (for example "
 "`error native-codec-parse: …`); an IRI failure is rendered as `<code>: "
@@ -30051,7 +30274,7 @@ msgstr ""
 "parse: …`）；IRI 失败则输出为 `<code>: <message>`（例如 `iri-relative-no-"
 "base: …`）。"
 
-#: src/project/diagnostic-codes.md:300
+#: src/project/diagnostic-codes.md:302
 msgid ""
 "**JavaScript** — the thrown `Error` message carries the same text, and its "
 "`code` property carries the code itself. The wasm package's own refusals "
@@ -30071,12 +30294,12 @@ msgstr ""
 "environment`（无法构建聚合注册表）、`purrdf-wasm-shacl` 与 `purrdf-wasm-"
 "shacl-product-refusal`（某个 SHACL 接口失败，或拒绝了一个预备好的产物）。"
 
-#: src/project/diagnostic-codes.md:309
+#: src/project/diagnostic-codes.md:311
 msgid ""
 "**C** — the error string returned through the C ABI carries the same text."
 msgstr "**C**——经由 C ABI 返回的错误字符串携带相同的文本。"
 
-#: src/project/diagnostic-codes.md:310
+#: src/project/diagnostic-codes.md:312
 msgid ""
 "**SARIF** — the `ruleId` of each result is the code, with a "
 "`reportingDescriptor` in the run's rule table ([`purrdf-validate`](https://"
@@ -30085,6 +30308,35 @@ msgstr ""
 "**SARIF**——每条结果的 `ruleId` 即该代码，并在本次运行的规则表中带有一个 "
 "`reportingDescriptor`（[`purrdf-validate`](https://docs.rs/purrdf-"
 "validate)）。"
+
+#~ msgid "A triple term refers to a reifier that has no binding."
+#~ msgstr ""
+#~ "某个三元组项（triple term）引用了一个没有绑定的具体化节点（reifier）。"
+
+#~ msgid "Bind the reifier before referring to it."
+#~ msgstr "在引用具体化节点之前先绑定它。"
+
+#~ msgid ""
+#~ "An imported triple term references a reifier with no recorded binding."
+#~ msgstr "某个导入的三元组项引用了一个没有记录绑定的具体化节点。"
+
+#~ msgid "Bind the reifier in the container."
+#~ msgstr "在容器中绑定该具体化节点。"
+
+#~ msgid "A GTS triple term references a reifier the graph does not bind."
+#~ msgstr "某个 GTS 三元组项引用了一个该图未绑定的具体化节点。"
+
+#~ msgid "A triple term names neither its components nor a reifier."
+#~ msgstr "某个三元组项既未给出其组成部分，也未指明具体化节点。"
+
+#~ msgid "Give the triple term its components or a reifier."
+#~ msgstr "为该三元组项给出其组成部分或具体化节点。"
+
+#~ msgid "An imported triple term names neither its components nor a reifier."
+#~ msgstr "某个导入的三元组项既未给出其组成部分，也未指明具体化节点。"
+
+#~ msgid "A GTS triple term names neither its own components nor a reifier."
+#~ msgstr "某个 GTS 三元组项既未给出其自身的组成部分，也未指明具体化节点。"
 
 #~ msgid ""
 #~ "Every functional version of every crate in the 37-crate release set is "

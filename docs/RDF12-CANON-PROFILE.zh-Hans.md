@@ -5,10 +5,12 @@
 
 [English](RDF12-CANON-PROFILE.md) | 简体中文
 
-**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 4 &nbsp;·&nbsp;
+**Profile 标识符：** `purrdf-rdfc12` &nbsp;·&nbsp; **Profile 版本：** 3 &nbsp;·&nbsp;
 **编辑：** Patrick Audley，Blackcat Informatics® Inc.
 
-**5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文为标识符和版本。若数据集的字面量含 U+FFFE 或 U+FFFF，则按版本 3 记录的摘要不再能重新计算，因为它基于不符合 RDF 1.2 N-Quads 规范形式的写法；其他已记录的摘要重新计算结果不变。受影响的读取方包括 PACK 版本 1 的 `rdfc_digest`、`rdfc10-sha256` 压缩证书、PURREMB 版本 1 的来源摘要，以及内嵌的 `stream:contentRefoldDigest`。
+**5.0 中的地位。** PurRDF 的默认规范输出不再是本 profile，而是嵌套细化标注的规范行序列（见[5.0 迁移指南](MIGRATION-5.0.md)）。本 profile 仍可通过 `purrdf_core::rdfc12` 调用，用于在读取侧重新计算 5.0 之前记录的全部摘要；下文为标识符和版本，所有已记录的摘要重新计算结果不变。重新计算本 profile 的读取方包括 PACK 版本 1 的 `rdfc_digest`、`rdfc10-sha256` 压缩证书、PURREMB 版本 1 的来源摘要，以及内嵌的 `stream:contentRefoldDigest`。
+
+本 profile 将字面量中的 U+FFFE 和 U+FFFF 原样写出。RDF 1.2 N-Quads 的规范形式（第 3 节）把这两个字符写为 `UCHAR`，因为它们都不符合 XML 1.1 `Char` 产生式，5.0 的规范文档遵循这一规定。本 profile 不这样做，因为它记录的摘要基于原样字节，而保留它正是为了重新计算这些摘要。本 profile 同样把 IRI 中的 DEL 和 C1 控制字符写为 `\u007F` 至 `\u009F` 的转义，而规范形式将它们原样写出，原因相同。版本仍为 3：每个数据集（包括调用方自己的 `DatasetView` 提供含此类 IRI 的数据集）的规范化结果都与版本 3 产生的字节相同，因此每个已记录的摘要都能重新计算。
 
 这两个值不仅写在文档里，也可从库中读取：`purrdf_core::rdfc12::CANON_PROFILE_ID` 和 `purrdf_core::rdfc12::CANON_PROFILE_VERSION`。使用方因此可以断言，实际链接的构建实现的正是自己固定的 profile。
 
@@ -228,10 +230,6 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 
 **不会**改变输出的变更，例如重构、加快搜索或使诊断消息更清晰，不递增版本。这样版本号才值得固定；如果每次发布都改变版本，它就不能向使用方传达任何信息。
 
-| 版本 | 变更 | 输出会改变的输入 |
-|---|---|---|
-| 4 | 字面量中的 U+FFFE 和 U+FFFF 写为 `\uFFFE` 和 `\uFFFF`（N-Quads 1.2 §3：不属于 XML 1.1 `Char` 的字符写为 `UCHAR`） | 字面量中含有这两个字符之一的数据集；其他数据集不变 |
-
 ## 8. 规范性测试向量语料
 
 语料位于 `vectors/rdf12-canon/`，并且已经**冻结**：每个载荷字节都由每次构建检查的 SHA-256 清单覆盖（`scripts/check-corpus-frozen.py`），所以静默修改期望结果会导致失败，而不是让检查通过。
@@ -247,7 +245,7 @@ RDFC 计费规则版本 1 对每次进入 n-degree 帧和每次排列尝试各�
 | 字段 | 来源 |
 |---|---|
 | profile 标识符 | `purrdf_core::rdfc12::CANON_PROFILE_ID` → `purrdf-rdfc12` |
-| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `4` |
+| profile 版本 | `purrdf_core::rdfc12::CANON_PROFILE_VERSION` → `3` |
 | 表示 | `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_ID`（→ `overlay`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_OVERLAY_VERSION` → `1`）或 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_ID`（→ `flat-assertion`，版本 `purrdf_core::rdfc12::CANON_PRESENTATION_FLAT_ASSERTION_VERSION` → `1`）（§3.3） |
 | 散列算法 | `CanonHash::Sha256` 或 `CanonHash::Sha384`（§2） |
 | 语料摘要 | `purrdf_core::rdfc12::CANON_CORPUS_DIGEST`（§8） |

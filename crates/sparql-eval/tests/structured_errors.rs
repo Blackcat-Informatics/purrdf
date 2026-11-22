@@ -251,14 +251,34 @@ fn admitted_diagnostics_borrow_original_text_and_clone_the_same_owner() {
     drop(report);
     let original: &(dyn std::error::Error + 'static) = copy.native_cause().unwrap();
     let original = original.downcast_ref::<EvalError>().unwrap();
-    let EvalError::ServiceUnconfigured(message) = original else {
+    let EvalError::ServiceUnconfigured { endpoint, cause } = original else {
         panic!("the actual query must retain its unconfigured-service refusal");
     };
-    let cause = Capture::read(&copy)
+    assert_eq!(endpoint, "https://example.org/unconfigured");
+    assert_eq!(cause, &RemoteError::NoSource);
+    let reported = Capture::read(&copy)
         .child("attachments")
         .child("native_cause");
-    assert_eq!(cause.code, "sparql-eval-service-unconfigured");
-    assert!(matches!(cause.field("message"), ErrorValue::Text(text) if text == message));
+    assert_eq!(reported.code, "sparql-eval-service-unconfigured");
+    assert!(matches!(reported.field("endpoint"), ErrorValue::Iri(iri) if iri == endpoint.as_str()));
+    let cause = reported.child("cause");
+    assert_eq!(cause.code, "service-no-source");
+
+    let failed = EvalError::remote(
+        "https://example.org/down",
+        RemoteError::Transport("connection refused".into()),
+    );
+    let reported = Capture::read(&failed);
+    assert_eq!(reported.code, "sparql-eval-remote");
+    assert!(
+        matches!(reported.field("endpoint"), ErrorValue::Iri(iri) if iri == "https://example.org/down")
+    );
+    let cause = reported.child("cause");
+    assert_eq!(cause.code, "service-transport");
+    assert!(matches!(
+        cause.field("message"),
+        ErrorValue::Message("connection refused")
+    ));
 
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let error = purrdf_sparql_eval::RetainedNativeFailure::error(

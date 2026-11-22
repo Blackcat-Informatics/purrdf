@@ -14,52 +14,89 @@
 //! shared by the production consuming and streaming importers.
 
 use purrdf_gts::model::{Graph, TermKind};
+use purrdf_gts::resolution::SelfReaching;
 
-use crate::{RdfDiagnostic, RdfTextDirection};
+use crate::{BlankScope, RdfDiagnostic, RdfTextDirection};
 #[cfg(test)]
 use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
+
+/// The blank-node scope of every triple term that states no triple (GTS-SPEC §7.3).
+///
+/// A document blank node lands in [`BlankScope::DEFAULT`] (a folded graph) or in the
+/// scope of its segment (`segment index + 1`, which the streaming importer keeps
+/// at most `u32::MAX - 2`), so no document label ever names a node of this scope: the
+/// projected node is fresh, as the specification requires, whatever labels the
+/// document uses. A label is only ever read together with its scope, so the same
+/// label spelled by the document and by the projection is two nodes.
+pub(crate) const UNBOUND_TRIPLE_SCOPE: BlankScope =
+    purrdf_core::blank_label::UNBOUND_TRIPLE_BLANK_SCOPE;
+
+/// The label of the node a triple term that states no triple projects as, inside
+/// [`UNBOUND_TRIPLE_SCOPE`]. A folded graph numbers its terms file-wide, so the term
+/// id alone names one; a streamed file numbers terms per segment, so it adds the
+/// segment.
+pub(crate) fn unbound_triple_label(segment: Option<u64>, term: usize) -> impl std::fmt::Display {
+    struct Label(Option<u64>, usize);
+    impl std::fmt::Display for Label {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0 {
+                Some(segment) => write!(f, "unbound_triple_{segment}_{}", self.1),
+                None => write!(f, "unbound_triple_{}", self.1),
+            }
+        }
+    }
+    Label(segment, term)
+}
+
+/// A blank-node token of one label space that holds document labels and the labels
+/// of unbound triple terms (the fold view's N-Quads tokens and the streaming text
+/// export): `(label, scope)` through [`encode_blank_label`], so the two kinds of node
+/// can never share a token.
+///
+/// Proof. `encode_blank_label` is injective over `(label, scope)` for a fixed
+/// alphabet. A document blank node is encoded at a scope other than
+/// [`UNBOUND_TRIPLE_SCOPE`] (the default scope, or a segment scope at most
+/// `u32::MAX - 2`), and a projected unbound triple term is encoded at
+/// [`UNBOUND_TRIPLE_SCOPE`]. Two nodes with distinct scopes are distinct pairs, so
+/// their tokens differ, whatever label the document spells.
+pub(crate) fn blank_token(label: &str, scope: BlankScope) -> std::borrow::Cow<'_, str> {
+    purrdf_core::blank_label::encode_blank_label(
+        label,
+        scope,
+        purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
+    )
+}
 
 /// The outgoing structural edges of one term: the ids it makes another walker
 /// resolve. Three is the maximum (a quoted triple's `(s, p, o)`); a literal
 /// contributes one (its datatype term) and an IRI or blank node none.
 type TermEdges = ([usize; 3], usize);
 
-/// Refuse a folded [`Graph`] whose term table lets a term reach ITSELF.
+/// The triple terms of `graph` that reach themselves, after proving that no other
+/// chain of the term table does.
 ///
 /// GTS-SPEC §7.3 makes termination normative for EVERY walk of a triple term's
-/// resolved components — the segment union and every projection or re-authoring
-/// pass alike. A term reaches another through exactly two edges, and both are
-/// followed recursively by this crate's walkers:
+/// resolved components. A triple term that is reachable from its own components
+/// states no triple: it keeps an identity of its own and projects as the fresh blank
+/// node an unbound triple term projects as, while every `reifies` row stays recorded.
+/// [`SelfReaching::of`] is the one definition of that set, and the walkers of this
+/// crate read components through
+/// [`Graph::resolved_triple_of`](purrdf_gts::model::Graph::resolved_triple_of) so
+/// each observes the same answer. An unbounded recursion in Rust overflows the stack,
+/// which **aborts the process**, so the set is found with an iterative search.
 ///
-/// * a quoted-triple term reaches its `(s, p, o)` through
-///   [`Graph::triple_of`](purrdf_gts::model::Graph::triple_of), which prefers the
-///   self-describing `tt` components and otherwise resolves the statement layer
-///   through the reifier id the term names — or, when it names none, through its
-///   OWN id (§7.1, a self-bound triple term may leave `rf` implicit);
-/// * a literal reaches its datatype term.
-///
-/// A cycle over those edges makes every such walk non-terminating, and an unbounded
-/// recursion in Rust overflows the stack, which **aborts the process** — it is not a
-/// catchable panic, so no binding can contain it. The GTS reader already refuses a
-/// `reifies` row that would close such a loop, which closes the wire route; a graph
-/// assembled by a caller (`GtsFoldView::new`, the Python `from_parts`, any consumer
-/// holding a `purrdf_gts::model::Graph`) carries no such guarantee, so it is checked
-/// HERE, once, at every boundary where one enters this crate.
-///
-/// This is the fold-time refusal §7.3 permits, taken in preference to guarding each
-/// walker: one O(terms + edges) pass paid once per graph, against a visited set or a
-/// depth counter threaded through every render, every serialization and every fold.
-/// The walk below is iterative — a recursive acyclicity check would abort on exactly
-/// the input it exists to reject.
+/// What remains after those terms stop contributing components is a literal whose
+/// datatype chain leads back to itself. A literal is not a triple term, so §7.3 does
+/// not degrade it, and every walker that resolves a datatype as a term of its own
+/// would never finish; that shape is refused.
 ///
 /// # Errors
 ///
-/// Returns `gts-self-reaching-term` naming the first term that reaches itself. An
+/// Returns `gts-self-reaching-term` naming the first term of such a chain. An
 /// out-of-range component id is NOT this check's business and is skipped: it names no
 /// term, so it closes no loop, and the resolvers report it under their own range codes
 /// (`gts-term-out-of-range`, `native-codec-term-out-of-range`) when they reach it.
-/// Reporting it here would put a range error under a misleading code.
-pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic> {
+pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<SelfReaching, RdfDiagnostic> {
     /// Never visited.
     const UNSEEN: u8 = 0;
     /// On the current DFS path — reaching it again is a cycle.
@@ -67,6 +104,7 @@ pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic>
     /// Fully explored and proven to terminate.
     const SETTLED: u8 = 2;
 
+    let reaching = SelfReaching::of(graph);
     let mut state = vec![UNSEEN; graph.terms.len()];
     // One frame per term on the current path: its id, its outgoing edges resolved
     // once, and how many of them have been followed.
@@ -77,7 +115,7 @@ pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic>
             continue;
         }
         state[root] = ON_PATH;
-        path.push((root, term_edges(graph, root), 0));
+        path.push((root, term_edges(graph, &reaching, root), 0));
         while let Some(frame) = path.last_mut() {
             let (tid, (edges, edge_count), cursor) = *frame;
             if cursor == edge_count {
@@ -101,18 +139,18 @@ pub(crate) fn ensure_terms_terminate(graph: &Graph) -> Result<(), RdfDiagnostic>
                 }
                 Some(_) => {
                     state[next] = ON_PATH;
-                    path.push((next, term_edges(graph, next), 0));
+                    path.push((next, term_edges(graph, &reaching, next), 0));
                 }
             }
         }
     }
-    Ok(())
+    Ok(reaching)
 }
 
 /// The term ids `term_id` makes a walker resolve, in the order the walkers follow
 /// them. This MUST mirror what those walkers actually read: an edge omitted here is
 /// a loop the check admits and the first walker then dies on.
-fn term_edges(graph: &Graph, term_id: usize) -> TermEdges {
+fn term_edges(graph: &Graph, reaching: &SelfReaching, term_id: usize) -> TermEdges {
     let Some(term) = graph.terms.get(term_id) else {
         return ([0; 3], 0);
     };
@@ -123,9 +161,9 @@ fn term_edges(graph: &Graph, term_id: usize) -> TermEdges {
             Some(datatype) => ([datatype, 0, 0], 1),
             None => ([0; 3], 0),
         },
-        // `Graph::triple_of` is the ONE place a folded quoted triple's components are
-        // resolved, so it is the one edge set that matters here.
-        TermKind::Triple => match graph.triple_of(term_id) {
+        // `Graph::resolved_triple_of` is the ONE place a folded quoted triple's
+        // components are resolved, so it is the one edge set that matters here.
+        TermKind::Triple => match graph.resolved_triple_of(term_id, reaching) {
             Some(triple) => (<[usize; 3]>::from(triple), 3),
             None => ([0; 3], 0),
         },
@@ -293,7 +331,11 @@ fn term_from_id_depth(
         TermKind::Triple => {
             // A self-describing triple term (wire `"tt"`) states its own
             // components; only the older indirect spelling routes through a
-            // reifier id, which `Graph::triple_of` resolves as a fallback.
+            // reifier id, which `Graph::triple_of` resolves as a fallback. A
+            // term with neither states no triple (§7.3) and is a blank node.
+            if term.is_bare_triple() {
+                return Ok(RdfTerm::blank_node(format!("unbound_triple_{term_id}")));
+            }
             let Some((s, p, o)) = graph.triple_of(term_id) else {
                 let (code, detail) = match term.reifier {
                     Some(reifier_id) => (

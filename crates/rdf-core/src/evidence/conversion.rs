@@ -126,7 +126,9 @@ mod tests {
             from: "trig".into(),
             to: "n-quads".into(),
             note: "target has no declaration-only named graph".into(),
-            location: None,
+            site: crate::LossSite::Unspecified,
+            subject: crate::LossSubject::Absent,
+            detail: Vec::new(),
         }
     }
 

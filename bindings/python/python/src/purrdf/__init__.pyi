@@ -102,7 +102,11 @@ class ProjectionLoss:
     @property
     def note(self) -> str: ...
     @property
-    def location(self) -> str | None: ...
+    def site(self) -> dict[str, Any]: ...
+    @property
+    def subject(self) -> dict[str, Any]: ...
+    @property
+    def detail(self) -> list[dict[str, Any]]: ...
 
 class ProjectionPackage:
     @property
@@ -951,6 +955,11 @@ class _QuadStore:
     # The 64-hex content identity of the current content, the snapshot every query
     # reads: a digest of every row, computed on this call and never by a query.
     def content_identity(self) -> str: ...
+    # A query's `execution_receipt_json` carries the run identity only. Bind it to the
+    # content of this store: the receipt with `contentIdentity` and `executionIdentity`
+    # added, from one frozen snapshot. Raises ValueError for a receipt that is not one,
+    # or a run that cannot have an execution identity.
+    def bind_execution_receipt(self, receipt_json: str) -> str: ...
     # INTERNAL cross-package protocol, not a caller surface: a capsule exposing a
     # frozen snapshot of this store by address, which `purrdf.shapes.Shapes`
     # (`purrdf_shapes`) calls BY STRING so the SHACL engine validates natively with no
@@ -1159,11 +1168,6 @@ def parse(
     input: bytes | str, format: RdfFormat, *, base: str | None = ...,
     input_options: str | None = ...
 ) -> list[Quad]: ...
-# A query's `execution_receipt_json` carries the run identity only. Bind it to the
-# `content_identity()` of the store it read: the receipt with `contentIdentity` and
-# `executionIdentity` added. Raises ValueError for a receipt that is not one, an
-# identity that is not 64 hex digits, or a run that cannot have an execution identity.
-def bind_execution_receipt(receipt_json: str, content_identity: str) -> str: ...
 @overload
 def serialize(
     input: QueryTriples | QueryQuads,
@@ -1484,13 +1488,11 @@ class GtsRelationalRows(TypedDict):
     blobs: list[_BlobExportRow]
 
 class GtsFoldViewNative:
-    # Both constructors raise ValueError carrying `gts-self-reaching-term` when the
-    # term table lets a term resolve through itself. The view's accessors walk a
-    # quoted triple's resolved components to the leaves, so such a term would recurse
-    # without bound and abort the process; the view refuses to EXIST rather than hand
-    # back an object whose every renderer is a process kill. `from_bytes` cannot
-    # normally hit it (the GTS reader refuses the row that closes the loop), but a
-    # term table assembled by the caller and handed to `from_parts` can.
+    # A triple term that reaches itself states no triple (GTS-SPEC 7.3): the view's
+    # accessors render it as a blank node no document label spells and its `reifies`
+    # rows stay visible, so no accessor walks its components without bound. Both constructors
+    # raise ValueError carrying `gts-self-reaching-term` when a literal's datatype
+    # chain resolves through itself, which no walk could finish.
     #
     # `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
     # consulted first; built in are only the W3C namespaces rdf, rdfs, owl, xsd

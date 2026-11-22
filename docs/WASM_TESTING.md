@@ -148,7 +148,7 @@ cases, and the assembled playground selects its named Worker case:
 
 | Exact case | Concrete host obligation |
 | --- | --- |
-| `synchronous coordinates cross every query export and package output` | Every synchronous wrapper and direct positional signature transports exact strings and unsigned seeds through wasm-bindgen; supplied seeds avoid the host entropy import; the receipt's run identity, `Dataset#contentIdentity` and `bindExecutionReceipt` cross the boundary, and a refused binding keeps its host code |
+| `synchronous coordinates cross every query export and package output` | Every synchronous wrapper and direct positional signature transports exact strings and unsigned seeds through wasm-bindgen; supplied seeds avoid the host entropy import; the receipt's run identity, `Dataset#contentIdentity` and `Dataset#bindExecutionReceipt` cross the boundary, and a refused binding keeps its host code |
 | `synchronous positional query coordinates reject lossy host values` | Every raw query export checks JavaScript strings and BigInt/number values through shared host readers; errors retain their host type/code |
 | `synchronous omitted coordinates use fresh independent host defaults` | Omitted and null controls reach actual host clock/entropy imports per execution; independently supplied inputs suppress only their own default |
 | `playground synchronous query messages forward exact coordinates and errors` | The assembled Worker's structured-clone message carries BigInts and exact strings into the synchronous package and returns host exceptions without mutating its dataset |
@@ -229,13 +229,10 @@ from their mixed targets rather than running the targets wholesale:
 | `governors.test.mjs` / `updateGoverned refuses maxAnswers rather than ignoring a ceiling the caller set` | The package forwards the unsupported host option and returns its named refusal |
 | `governors.test.mjs` / `a cancelled token stops an UPDATE as an outcome` | The host cancellation-token handle crosses the positional UPDATE boundary and returns the governed outcome |
 
-The 2026-10-23 audit examined every Makefile WASM invocation and the direct
-workflow, qualification-driver, runner, package and Worker entry points,
-regardless of origin. It removed 312 of 359 Makefile case executions, retaining
-47 executions across 23 scalar/SIMD invocations. Semantic-only WASM jobs in the
-segmented-storage, Datalog and entailment workflows were removed. Their native
-jobs and test bodies remain. Coordinate jobs retain the cases that run with no
-host source, where a default clock or entropy read is refused.
+Semantic-only WASM jobs do not run in the segmented-storage, Datalog and
+entailment workflows; their native jobs and test bodies carry them. Coordinate
+jobs run the cases that need no host source, where a default clock or entropy
+read is refused.
 
 Runner preflight exercises planted failure, rejected flags and sealed host
 imports. After preflight, `PURRDF_TEST_REQUIRE_EXACT=1` requires each named case

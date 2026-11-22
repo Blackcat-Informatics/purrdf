@@ -977,12 +977,9 @@ def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
 
 
 def _suite_py_compat(build: bool) -> SuiteResult:
-    """The whole Python binding pytest suite, compat-parity differential included.
+    """Run the first-party binding suite, including the rdflib differential.
 
-    Named for what it RUNS rather than for one of its parts: the command is
-    `pytest tests`, so the count covers every binding test — entailment, GTS,
-    projections, shapes — and not only the rdflib differential. A row labelled for
-    the differential alone reports a number that is not the differential's.
+    The vendored rdflib suite reports its own matrix row.
     """
     log = ""
     if build:
@@ -996,7 +993,8 @@ def _suite_py_compat(build: bool) -> SuiteResult:
                 failed=-1, detail="editable uv sync FAILED", ok=False, log=log,
             )
     rc, out = _run(
-        ["uv", "run", "--locked", "--group", "dev", "pytest", "tests", "-q"], _PY_DIR
+        ["uv", "run", "--locked", "--group", "dev", "pytest", "tests", "-q",
+         "--ignore=tests/test_rdflib_suite.py"], _PY_DIR
     )
     log += out
     passed = _int(re.search(r"(\d+) passed", out))
@@ -1126,7 +1124,7 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
             detail="65 vectors (64 eval + 1 negative), sharded",
         )),
         ("core", lambda: _suite_cargo(
-            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v2 (first-party)",
+            "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v3 (first-party)",
             ["cargo", "test", "-p", "purrdf-rdf", "--locked",
              "--test", "rdf12_canon_profile"],
             detail="19 goldens + 7 refusals, frozen and content-addressed",

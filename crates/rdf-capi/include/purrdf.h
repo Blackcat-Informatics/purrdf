@@ -8,9 +8,9 @@
 #pragma once
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
-#define PURRDF_MAJOR 4
+#define PURRDF_MAJOR 5
 #define PURRDF_MINOR 0
-#define PURRDF_PATCH 2
+#define PURRDF_PATCH 0
 
 
 #include <stdarg.h>
@@ -642,7 +642,9 @@ enum PurrdfGovernorFlag
      */
     PURRDF_GOVERNOR_FLAG_MAX_SCRATCH_BYTES = (1 << 3),
     /**
-     * Enforce `max_remote_requests`.
+     * Enforce `max_remote_requests`, which bounds host fetches: each `SERVICE` request
+     * and each fetch of a `LOAD`, the first fetch and each redirect hop, counts one. A
+     * redirect the host follows itself is part of its fetch.
      */
     PURRDF_GOVERNOR_FLAG_MAX_REMOTE_REQUESTS = (1 << 4),
     /**
@@ -1234,7 +1236,9 @@ typedef struct {
      */
     uint64_t max_scratch_bytes;
     /**
-     * Inclusive remote-request ceiling.
+     * Inclusive remote-request ceiling on host fetches: each `SERVICE` request and each
+     * fetch of a `LOAD`, the first fetch and each redirect hop, counts one. A redirect
+     * the host follows itself is part of its fetch.
      */
     uint64_t max_remote_requests;
     /**

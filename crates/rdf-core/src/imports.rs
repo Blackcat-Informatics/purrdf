@@ -984,6 +984,8 @@ impl ImportClosure {
         let mut b = RdfDatasetBuilder::new();
         copy_scoped(&mut b, graph, &mut ScopeMap::Identity)?;
         let mut next = u64::from(max_scope(graph)) + 1;
+        // `ScopeMap::map` refuses, with a typed capacity error, a scope the number
+        // would reach past `MAX_ALLOCATED_SCOPE`.
         for (_, document) in &self.documents {
             let mut rescope = ScopeMap::Fresh {
                 assigned: BTreeMap::new(),
@@ -1213,7 +1215,8 @@ fn term_positions(graph: &RdfDataset) -> impl Iterator<Item = TermId> + '_ {
         .chain(graph.named_graphs())
 }
 
-/// The highest blank-node scope `graph` uses, so merged documents can be placed above it.
+/// The highest non-reserved blank-node scope `graph` uses, so merged documents can be
+/// placed above it; a reserved scope (a projected unbound triple term) is ignored.
 fn max_scope(graph: &RdfDataset) -> u32 {
     term_positions(graph)
         .map(|id| scope_of(&graph.term_value(id)))
@@ -1226,7 +1229,9 @@ fn max_scope(graph: &RdfDataset) -> u32 {
 fn scope_of(term: &TermValue) -> u32 {
     let mut highest = 0;
     let ControlFlow::Continue(()) = term.visit_terms(|term| -> ControlFlow<Infallible> {
-        if let TermValue::Blank { scope, .. } = term {
+        if let TermValue::Blank { scope, .. } = term
+            && !crate::blank_label::is_reserved_scope(*scope)
+        {
             highest = highest.max(scope.ordinal());
         }
         ControlFlow::Continue(())
@@ -1262,14 +1267,10 @@ impl ScopeMap<'_> {
                 if let Some(&given) = assigned.get(&scope.ordinal()) {
                     return Ok(given);
                 }
-                use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
-                CapacityError::check(
-                    CapacitySpace::ImportBlankScopes,
-                    u128::from(**next),
-                    u128::from(u32::MAX),
+                let given = crate::blank_label::allocatable_scope(
+                    purrdf_lex::allocation::CapacitySpace::ImportBlankScopes,
+                    **next,
                 )?;
-                let given =
-                    BlankScope(u32::try_from(**next).map_err(|_| StorageError::SizeOverflow)?);
                 **next += 1;
                 assigned.insert(scope.ordinal(), given);
                 Ok(given)
@@ -1424,7 +1425,8 @@ mod tests {
         let imported = document("imported", "http://example.org/value", &[]);
         let mut map = ImportMap::default();
         map.try_insert(LIB, Arc::clone(&imported)).unwrap();
-        for scope in [u32::MAX, u32::MAX - 1] {
+        use crate::blank_label::{MAX_ALLOCATED_SCOPE, UNBOUND_TRIPLE_BLANK_SCOPE};
+        for scope in [MAX_ALLOCATED_SCOPE, UNBOUND_TRIPLE_BLANK_SCOPE.0, u32::MAX] {
             let mut builder = RdfDatasetBuilder::new();
             let subject = builder.intern_blank("original", BlankScope(scope)).unwrap();
             let predicate = builder.intern_iri("http://example.org/p").unwrap();
@@ -1434,23 +1436,22 @@ mod tests {
             let closure = map.closure_with_links(&original, &[LIB.to_owned(), LIB.to_owned()]);
             assert_eq!(closure.documents().len(), 1);
             for _ in 0..3 {
-                if scope == u32::MAX {
+                if scope == MAX_ALLOCATED_SCOPE {
                     let error = closure.merge(&original).unwrap_err();
                     assert_eq!(
                         error.storage_error(),
                         Some(StorageError::Capacity(CapacityError::new(
                             CapacitySpace::ImportBlankScopes,
-                            u128::from(u32::MAX) + 1,
-                            u128::from(u32::MAX)
+                            u128::from(MAX_ALLOCATED_SCOPE) + 1,
+                            u128::from(MAX_ALLOCATED_SCOPE)
                         )))
                     );
                 } else {
+                    // A node in a reserved scope (a projected unbound triple term)
+                    // does not push the import above it: the document merges at the
+                    // first scope, and the reserved node keeps its own.
                     let merged = closure.merge(&original).unwrap().unwrap();
-                    assert!(
-                        merged
-                            .term_id_by_blank("imported", BlankScope(u32::MAX))
-                            .is_some()
-                    );
+                    assert!(merged.term_id_by_blank("imported", BlankScope(1)).is_some());
                     assert!(
                         merged
                             .term_id_by_blank("original", BlankScope(scope))
@@ -1482,34 +1483,79 @@ mod tests {
             let closure = plain.closure_with_links(&original, &[LIB.to_owned()]);
             assert_eq!(closure.merge(&original).unwrap().unwrap().quad_count(), 2);
         }
+        // Two imports on a graph holding a reserved-scope node both merge, at the
+        // first two scopes; the neighbour without such a node numbers them the same.
+        let mut two = ImportMap::default();
+        two.try_insert(LIB, document("imported", "http://example.org/value", &[]))
+            .unwrap();
+        two.try_insert(
+            "http://example.org/other-library",
+            document("imported", "http://example.org/value2", &[]),
+        )
+        .unwrap();
+        for reserved_node in [true, false] {
+            let mut builder = RdfDatasetBuilder::new();
+            let scope = if reserved_node {
+                UNBOUND_TRIPLE_BLANK_SCOPE
+            } else {
+                BlankScope::DEFAULT
+            };
+            let subject = builder.intern_blank("original", scope).unwrap();
+            let predicate = builder.intern_iri("http://example.org/p").unwrap();
+            let object = builder.intern_iri("http://example.org/original").unwrap();
+            builder.push_quad(subject, predicate, object, None).unwrap();
+            let original = builder.freeze().unwrap();
+            let closure = two.closure_with_links(
+                &original,
+                &[
+                    LIB.to_owned(),
+                    "http://example.org/other-library".to_owned(),
+                ],
+            );
+            assert_eq!(closure.documents().len(), 2);
+            let merged = closure.merge(&original).unwrap().unwrap();
+            assert!(merged.term_id_by_blank("imported", BlankScope(1)).is_some());
+            assert!(merged.term_id_by_blank("imported", BlankScope(2)).is_some());
+            assert!(merged.term_id_by_blank("original", scope).is_some());
+        }
     }
 
     #[test]
     fn fresh_import_scope_last_slot_keeps_duplicate_and_prior_assignment() {
         use purrdf_lex::allocation::{CapacityError, CapacitySpace, StorageError};
-        let mut next = u64::from(u32::MAX);
+        let last = u64::from(crate::blank_label::MAX_ALLOCATED_SCOPE);
+        let mut next = last;
         let mut scopes = super::ScopeMap::Fresh {
             assigned: std::collections::BTreeMap::new(),
             next: &mut next,
         };
-        assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
+        assert_eq!(
+            scopes.map(BlankScope(4)).unwrap(),
+            BlankScope(crate::blank_label::MAX_ALLOCATED_SCOPE)
+        );
         for _ in 0..3 {
-            assert_eq!(scopes.map(BlankScope(4)).unwrap(), BlankScope(u32::MAX));
+            assert_eq!(
+                scopes.map(BlankScope(4)).unwrap(),
+                BlankScope(crate::blank_label::MAX_ALLOCATED_SCOPE)
+            );
             assert_eq!(
                 scopes.map(BlankScope(5)),
                 Err(StorageError::Capacity(CapacityError::new(
                     CapacitySpace::ImportBlankScopes,
-                    u128::from(u32::MAX) + 1,
-                    u128::from(u32::MAX)
+                    u128::from(last) + 1,
+                    u128::from(last)
                 )))
             );
         }
         let super::ScopeMap::Fresh { assigned, next } = scopes else {
             unreachable!()
         };
-        assert_eq!(*next, u64::from(u32::MAX) + 1);
+        assert_eq!(*next, last + 1);
         assert_eq!(assigned.len(), 1);
-        assert_eq!(assigned[&4], BlankScope(u32::MAX));
+        assert_eq!(
+            assigned[&4],
+            BlankScope(crate::blank_label::MAX_ALLOCATED_SCOPE)
+        );
     }
 
     /// The empty answer, spelled once for `assert_eq!`.

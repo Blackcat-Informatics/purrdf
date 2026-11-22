@@ -2516,7 +2516,7 @@ mod tests {
         )
         .expect_err("a failing endpoint fails a non-silent SERVICE");
         assert!(
-            matches!(&error, EvalError::Remote(m) if m.contains("http://example.org/down")),
+            matches!(&error, EvalError::Remote { endpoint, .. } if endpoint.contains("http://example.org/down")),
             "{error}"
         );
     }
@@ -2548,7 +2548,7 @@ mod tests {
         // Without SILENT the failing endpoint is an error.
         let source = Endpoints::default();
         let error = run(&source, &q(&only_down.replace("SILENT ", ""))).expect_err("fails");
-        assert!(matches!(error, EvalError::Remote(_)), "{error}");
+        assert!(matches!(error, EvalError::Remote { .. }), "{error}");
     }
 
     #[test]

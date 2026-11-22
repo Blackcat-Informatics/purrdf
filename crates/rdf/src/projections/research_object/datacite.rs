@@ -8,7 +8,9 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_PROFILE_FIELD_DROPPED, LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
-use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
+use purrdf_core::{
+    DatasetView, LossLedger, LossPathStep, LossSubject, research_object_to_rdf_loss_ledger,
+};
 use purrdf_lex::terminals::trim_ws;
 use purrdf_lex::xml::Node;
 
@@ -17,7 +19,7 @@ use super::super::{
     validate_absolute_iri,
 };
 use super::json::{
-    ResearchObjectPackageProjection, ResearchObjectReadOutcome, ensure_sound,
+    Member, ResearchObjectPackageProjection, ResearchObjectReadOutcome, ensure_sound,
     normalize_lifted_jsonld, record_loss, require_artifact,
 };
 use super::{
@@ -413,7 +415,6 @@ fn parse_datacite(
     record_unknown_attributes(
         root,
         &[(Some(config.xml_schema_instance_iri()), "schemaLocation")],
-        "/resource",
         contract,
         ledger,
     );
@@ -525,7 +526,7 @@ fn parse_datacite(
                 parser.mark_root_singleton(local)?;
                 descriptions = parser.parse_descriptions(child, &path)?;
             }
-            _ => parser.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &path),
+            _ => parser.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child),
         }
     }
 
@@ -605,8 +606,14 @@ impl DataCiteParser<'_> {
         Ok(())
     }
 
-    fn loss(&mut self, code: &'static str, path: &str) {
-        record_loss(self.ledger, self.contract, code, DATACITE_ARTIFACT, path);
+    fn loss(&mut self, code: &'static str, node: Node<'_, '_>) {
+        record_loss(
+            self.ledger,
+            self.contract,
+            code,
+            DATACITE_ARTIFACT,
+            (LossSubject::Path(node_path(node)), Vec::new()),
+        );
     }
 
     fn require_attribute(
@@ -635,7 +642,7 @@ impl DataCiteParser<'_> {
         path: &str,
         expected_attributes: &[(Option<&str>, &str)],
     ) -> Result<String, ProjectionError> {
-        record_unknown_attributes(node, expected_attributes, path, self.contract, self.ledger);
+        record_unknown_attributes(node, expected_attributes, self.contract, self.ledger);
         simple_element_text(node, path)
     }
 
@@ -694,7 +701,7 @@ impl DataCiteParser<'_> {
         node: Node<'_, '_>,
         path: &str,
     ) -> Result<Vec<String>, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut creators = Vec::new();
         for (index, child) in node.children().filter(Node::is_element).enumerate() {
             require_datacite_namespace(child, self.config)?;
@@ -702,10 +709,10 @@ impl DataCiteParser<'_> {
             if child.tag_name().name() == "creator" {
                 creators.push(self.parse_creator(child, &child_path)?);
             } else {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
             }
         }
-        record_order_loss(&creators, path, self.contract, self.ledger);
+        record_order_loss(&creators, node, self.contract, self.ledger);
         if creators.iter().collect::<BTreeSet<_>>().len() != creators.len() {
             return Err(ProjectionError::integrity(
                 "DataCite creators contain a duplicate agent identity",
@@ -716,7 +723,7 @@ impl DataCiteParser<'_> {
     }
 
     fn parse_creator(&mut self, node: Node<'_, '_>, path: &str) -> Result<String, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut name = None;
         let mut identifier = None;
         for child in node.children().filter(Node::is_element) {
@@ -753,7 +760,7 @@ impl DataCiteParser<'_> {
                     ))
                     .at_path(DATACITE_ARTIFACT));
                 }
-                _ => self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path),
+                _ => self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child),
             }
         }
         let name = name.ok_or_else(|| missing_datacite(&format!("{path}/creatorName")))?;
@@ -840,7 +847,7 @@ impl DataCiteParser<'_> {
         path: &str,
         expected_child_attributes: &[(Option<&str>, &str)],
     ) -> Result<Vec<ResearchText>, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut values = Vec::new();
         for (index, child) in node.children().filter(Node::is_element).enumerate() {
             require_datacite_namespace(child, self.config)?;
@@ -852,10 +859,10 @@ impl DataCiteParser<'_> {
                     expected_child_attributes,
                 )?);
             } else {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
             }
         }
-        record_order_loss(&values, path, self.contract, self.ledger);
+        record_order_loss(&values, node, self.contract, self.ledger);
         Ok(values)
     }
 
@@ -864,7 +871,7 @@ impl DataCiteParser<'_> {
         node: Node<'_, '_>,
         path: &str,
     ) -> Result<(Vec<ResearchText>, Vec<ResearchText>), ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut issued = Vec::new();
         let mut modified = Vec::new();
         let mut count = 0usize;
@@ -872,7 +879,7 @@ impl DataCiteParser<'_> {
             require_datacite_namespace(child, self.config)?;
             let child_path = format!("{path}/{}[{}]", child.tag_name().name(), index + 1);
             if child.tag_name().name() != "date" {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
                 continue;
             }
             count += 1;
@@ -893,7 +900,7 @@ impl DataCiteParser<'_> {
             }
         }
         if count > 1 {
-            self.loss(LOSS_RESEARCH_ORDER_DROPPED, path);
+            self.loss(LOSS_RESEARCH_ORDER_DROPPED, node);
         }
         Ok((issued, modified))
     }
@@ -903,13 +910,13 @@ impl DataCiteParser<'_> {
         node: Node<'_, '_>,
         path: &str,
     ) -> Result<Vec<ResearchValue>, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut values = Vec::new();
         for (index, child) in node.children().filter(Node::is_element).enumerate() {
             require_datacite_namespace(child, self.config)?;
             let child_path = format!("{path}/{}[{}]", child.tag_name().name(), index + 1);
             if child.tag_name().name() != "alternateIdentifier" {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
                 continue;
             }
             self.require_attribute(
@@ -928,7 +935,7 @@ impl DataCiteParser<'_> {
                     .iri(super::ResearchRole::XsdString),
             )?);
         }
-        record_order_loss(&values, path, self.contract, self.ledger);
+        record_order_loss(&values, node, self.contract, self.ledger);
         Ok(values)
     }
 
@@ -937,14 +944,14 @@ impl DataCiteParser<'_> {
         node: Node<'_, '_>,
         path: &str,
     ) -> Result<RelatedEntities, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut related = RelatedEntities::default();
         let mut count = 0usize;
         for (index, child) in node.children().filter(Node::is_element).enumerate() {
             require_datacite_namespace(child, self.config)?;
             let child_path = format!("{path}/{}[{}]", child.tag_name().name(), index + 1);
             if child.tag_name().name() != "relatedIdentifier" {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
                 continue;
             }
             count += 1;
@@ -988,7 +995,7 @@ impl DataCiteParser<'_> {
             }
         }
         if count > 1 {
-            self.loss(LOSS_RESEARCH_ORDER_DROPPED, path);
+            self.loss(LOSS_RESEARCH_ORDER_DROPPED, node);
         }
         reject_related_duplicates(&related)?;
         Ok(related)
@@ -999,20 +1006,20 @@ impl DataCiteParser<'_> {
         node: Node<'_, '_>,
         path: &str,
     ) -> Result<Vec<ResearchValue>, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut rights = Vec::new();
         for (index, child) in node.children().filter(Node::is_element).enumerate() {
             require_datacite_namespace(child, self.config)?;
             let child_path = format!("{path}/{}[{}]", child.tag_name().name(), index + 1);
             if child.tag_name().name() != "rights" {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
                 continue;
             }
             let lexical = self.parse_research_text(child, &child_path, &[(None, "rightsURI")])?;
             if let Some(iri) = child.attribute("rightsURI") {
                 validate_absolute_iri(iri, "DataCite rights IRI")?;
                 if lexical.value != iri {
-                    self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, &child_path);
+                    self.loss(LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED, child);
                 }
                 rights.push(ResearchValue::Iri {
                     value: iri.to_owned(),
@@ -1021,7 +1028,7 @@ impl DataCiteParser<'_> {
                 rights.push(ResearchValue::Text(lexical));
             }
         }
-        record_order_loss(&rights, path, self.contract, self.ledger);
+        record_order_loss(&rights, node, self.contract, self.ledger);
         Ok(rights)
     }
 
@@ -1030,13 +1037,13 @@ impl DataCiteParser<'_> {
         node: Node<'_, '_>,
         path: &str,
     ) -> Result<Vec<ResearchText>, ProjectionError> {
-        record_unknown_attributes(node, &[], path, self.contract, self.ledger);
+        record_unknown_attributes(node, &[], self.contract, self.ledger);
         let mut values = Vec::new();
         for (index, child) in node.children().filter(Node::is_element).enumerate() {
             require_datacite_namespace(child, self.config)?;
             let child_path = format!("{path}/{}[{}]", child.tag_name().name(), index + 1);
             if child.tag_name().name() != "description" {
-                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, &child_path);
+                self.loss(LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED, child);
                 continue;
             }
             self.require_attribute(
@@ -1051,7 +1058,7 @@ impl DataCiteParser<'_> {
                 &[(None, "descriptionType")],
             )?);
         }
-        record_order_loss(&values, path, self.contract, self.ledger);
+        record_order_loss(&values, node, self.contract, self.ledger);
         Ok(values)
     }
 }
@@ -1187,7 +1194,6 @@ fn require_datacite_namespace(
 fn record_unknown_attributes(
     node: Node<'_, '_>,
     expected: &[(Option<&str>, &str)],
-    path: &str,
     contract: &LossLedger,
     ledger: &mut LossLedger,
 ) {
@@ -1201,7 +1207,17 @@ fn record_unknown_attributes(
                 contract,
                 LOSS_RESEARCH_UNKNOWN_MEMBER_DROPPED,
                 DATACITE_ARTIFACT,
-                &format!("{path}/@{}", attribute.name()),
+                (
+                    LossSubject::Path(
+                        node_path(node)
+                            .into_iter()
+                            .chain([LossPathStep::Attribute {
+                                name: attribute.name().to_owned(),
+                            }])
+                            .collect(),
+                    ),
+                    Vec::new(),
+                ),
             );
         }
     }
@@ -1230,16 +1246,38 @@ fn simple_element_text(node: Node<'_, '_>, path: &str) -> Result<String, Project
     Ok(value)
 }
 
-fn record_order_loss<T>(values: &[T], path: &str, contract: &LossLedger, ledger: &mut LossLedger) {
+fn record_order_loss<T>(
+    values: &[T],
+    node: Node<'_, '_>,
+    contract: &LossLedger,
+    ledger: &mut LossLedger,
+) {
     if values.len() > 1 {
         record_loss(
             ledger,
             contract,
             LOSS_RESEARCH_ORDER_DROPPED,
             DATACITE_ARTIFACT,
-            path,
+            (LossSubject::Path(node_path(node)), Vec::new()),
         );
     }
+}
+
+/// The path of an element from the document's root element: each element's
+/// local name and its 1-based position among its parent's element children.
+fn node_path(node: Node<'_, '_>) -> Vec<LossPathStep> {
+    let mut steps: Vec<LossPathStep> = node
+        .ancestors()
+        .filter(Node::is_element)
+        .map(|element| LossPathStep::Element {
+            name: element.tag_name().name().to_owned(),
+            position: core::iter::successors(Some(element), Node::prev_sibling)
+                .filter(Node::is_element)
+                .count() as u64,
+        })
+        .collect();
+    steps.reverse();
+    steps
 }
 
 fn missing_datacite(name: &str) -> ProjectionError {
@@ -1324,7 +1362,13 @@ fn write_datacite(
 
     output.line(1, "<titles>")?;
     for title in &dataset.titles {
-        record_text_fidelity(title, config, ledger, &contract, "dataset:title");
+        record_text_fidelity(
+            title,
+            config,
+            ledger,
+            &contract,
+            Member::new(&dataset.id, "title"),
+        );
         output.line(2, &text_element("title", title, &[])?)?;
     }
     output.line(1, "</titles>")?;
@@ -1334,12 +1378,12 @@ fn write_datacite(
         .copied()
         .ok_or_else(|| ProjectionError::integrity("missing DataCite publisher agent"))?;
     write_publisher(&mut output, publisher, config, ledger, &contract)?;
-    for publisher_id in dataset.publishers.iter().skip(1) {
+    for index in 1..dataset.publishers.len() {
         write_loss(
             ledger,
             &contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            publisher_id,
+            Member::new(&dataset.id, "publisher").at(index),
         );
     }
     output.line(
@@ -1361,7 +1405,13 @@ fn write_datacite(
     if !dataset.keywords.is_empty() {
         output.line(1, "<subjects>")?;
         for keyword in &dataset.keywords {
-            record_text_fidelity(keyword, config, ledger, &contract, "dataset:keyword");
+            record_text_fidelity(
+                keyword,
+                config,
+                ledger,
+                &contract,
+                Member::new(&dataset.id, "keyword"),
+            );
             output.line(2, &text_element("subject", keyword, &[])?)?;
         }
         output.line(1, "</subjects>")?;
@@ -1370,7 +1420,13 @@ fn write_datacite(
     if !dataset.issued.is_empty() || !dataset.modified.is_empty() {
         output.line(1, "<dates>")?;
         for value in &dataset.issued {
-            record_text_fidelity(value, config, ledger, &contract, "dataset:issued");
+            record_text_fidelity(
+                value,
+                config,
+                ledger,
+                &contract,
+                Member::new(&dataset.id, "issued"),
+            );
             output.line(
                 2,
                 &text_element(
@@ -1381,7 +1437,13 @@ fn write_datacite(
             )?;
         }
         for value in &dataset.modified {
-            record_text_fidelity(value, config, ledger, &contract, "dataset:modified");
+            record_text_fidelity(
+                value,
+                config,
+                ledger,
+                &contract,
+                Member::new(&dataset.id, "modified"),
+            );
             output.line(
                 2,
                 &text_element(
@@ -1427,18 +1489,24 @@ fn write_datacite(
     }
 
     if let Some(version) = dataset.versions.first() {
-        record_text_fidelity(version, config, ledger, &contract, "dataset:version");
+        record_text_fidelity(
+            version,
+            config,
+            ledger,
+            &contract,
+            Member::new(&dataset.id, "version"),
+        );
         output.line(
             1,
             &format!("<version>{}</version>", escape_xml_text(&version.value)?),
         )?;
     }
-    for version in dataset.versions.iter().skip(1) {
+    for index in 1..dataset.versions.len() {
         write_loss(
             ledger,
             &contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &version.value,
+            Member::new(&dataset.id, "version").at(index),
         );
     }
     if !dataset.licenses.is_empty() {
@@ -1454,7 +1522,13 @@ fn write_datacite(
                     ),
                 )?,
                 ResearchValue::Text(value) => {
-                    record_text_fidelity(value, config, ledger, &contract, "dataset:license");
+                    record_text_fidelity(
+                        value,
+                        config,
+                        ledger,
+                        &contract,
+                        Member::new(&dataset.id, "license"),
+                    );
                     output.line(2, &text_element("rights", value, &[])?)?;
                 }
             }
@@ -1469,7 +1543,7 @@ fn write_datacite(
                 config,
                 ledger,
                 &contract,
-                "dataset:description",
+                Member::new(&dataset.id, "description"),
             );
             output.line(
                 2,
@@ -1496,7 +1570,7 @@ fn write_datacite(
                 ledger,
                 &contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                &agent.id,
+                Member::entity(&agent.id),
             );
         }
     }
@@ -1513,13 +1587,19 @@ fn write_creator(
     let name = agent.names.first().ok_or_else(|| {
         ProjectionError::integrity(format!("DataCite creator `{}` requires a name", agent.id))
     })?;
-    record_text_fidelity(name, config, ledger, contract, &agent.id);
+    record_text_fidelity(
+        name,
+        config,
+        ledger,
+        contract,
+        Member::new(&agent.id, "name").at(0),
+    );
     if agent.names.len() > 1 {
         write_loss(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &agent.id,
+            Member::entity(&agent.id),
         );
     }
     output.line(2, "<creator>")?;
@@ -1553,13 +1633,19 @@ fn write_publisher(
     let name = agent.names.first().ok_or_else(|| {
         ProjectionError::integrity(format!("DataCite publisher `{}` requires a name", agent.id))
     })?;
-    record_text_fidelity(name, config, ledger, contract, &agent.id);
+    record_text_fidelity(
+        name,
+        config,
+        ledger,
+        contract,
+        Member::new(&agent.id, "name").at(0),
+    );
     if agent.names.len() > 1 {
         write_loss(
             ledger,
             contract,
             LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-            &agent.id,
+            Member::entity(&agent.id),
         );
     }
     output.line(
@@ -1623,7 +1709,7 @@ fn collect_related<'a>(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                resource_id,
+                Member::entity(resource_id),
             );
         }
     }
@@ -1640,7 +1726,7 @@ fn collect_related<'a>(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                activity_id,
+                Member::entity(activity_id),
             );
         }
     }
@@ -1657,7 +1743,7 @@ fn collect_related<'a>(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                record_set_id,
+                Member::entity(record_set_id),
             );
         }
     }
@@ -1667,7 +1753,7 @@ fn collect_related<'a>(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                &resource.id,
+                Member::entity(&resource.id),
             );
         }
     }
@@ -1677,7 +1763,7 @@ fn collect_related<'a>(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                &activity.id,
+                Member::entity(&activity.id),
             );
         }
     }
@@ -1687,7 +1773,7 @@ fn collect_related<'a>(
                 ledger,
                 contract,
                 LOSS_RESEARCH_PROFILE_FIELD_DROPPED,
-                &record_set.id,
+                Member::entity(&record_set.id),
             );
         }
     }
@@ -1762,7 +1848,7 @@ fn record_text_fidelity(
     config: &DataCiteConfig,
     ledger: &mut LossLedger,
     contract: &LossLedger,
-    subject: &str,
+    subject: Member<'_>,
 ) {
     let roles = config.common().roles();
     let faithful_datatype = if value.direction.is_some() {
@@ -1773,17 +1859,29 @@ fn record_text_fidelity(
         roles.iri(super::ResearchRole::XsdString)
     };
     if value.direction.is_some() || value.datatype != faithful_datatype {
-        write_loss(
+        record_loss(
             ledger,
             contract,
             LOSS_RESEARCH_LITERAL_FIDELITY_DROPPED,
-            subject,
+            DATACITE_ARTIFACT,
+            subject.occurrence(Some(value)),
         );
     }
 }
 
-fn write_loss(ledger: &mut LossLedger, contract: &LossLedger, code: &'static str, subject: &str) {
-    record_loss(ledger, contract, code, DATACITE_ARTIFACT, subject);
+fn write_loss(
+    ledger: &mut LossLedger,
+    contract: &LossLedger,
+    code: &'static str,
+    subject: Member<'_>,
+) {
+    record_loss(
+        ledger,
+        contract,
+        code,
+        DATACITE_ARTIFACT,
+        subject.occurrence(None),
+    );
 }
 
 struct XmlOutput {
@@ -1910,7 +2008,7 @@ mod tests {
             read.loss_ledger
                 .entries()
                 .iter()
-                .all(|entry| entry.location.is_some())
+                .all(|entry| entry.subject != LossSubject::Absent)
         );
 
         let projected = project_datacite(&read.dataset, &config).expect("project fixture");

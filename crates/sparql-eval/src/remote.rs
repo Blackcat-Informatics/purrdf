@@ -131,6 +131,12 @@ pub enum RemoteError {
     /// Without `SILENT` this is [`EvalError::ServiceUnconfigured`], the same error as
     /// evaluating a `SERVICE` with no source at all.
     Unconfigured(String),
+    /// The engine was given no remote query source at all, so there was nowhere to
+    /// send the request. Raised by the engine itself, never by a resolver.
+    ///
+    /// Without `SILENT` this is [`EvalError::ServiceUnconfigured`], the same error as
+    /// a source answering [`Self::Unconfigured`].
+    NoSource,
     /// A [`ServiceResolver`] refused the service because its per-service policy withheld
     /// a capability — see [`crate::service`].
     ///
@@ -208,6 +214,16 @@ pub enum RemoteError {
     /// The asynchronous host cannot allocate another logical exchange identifier.
     /// This execution failure is never swallowed by `SERVICE SILENT`.
     ExchangeIdExhausted,
+    /// The endpoint redirected the request and the host could not see the redirect's
+    /// status or `Location`: a browser's opaque-redirect response
+    /// ([`HttpOutcome::OpaqueRedirect`](crate::remote_http::HttpOutcome::OpaqueRedirect)).
+    /// A `SERVICE` never follows a redirect, and this one cannot even be described, so it
+    /// is refused. A failure of the invocation: `SERVICE SILENT` absorbs it, recorded as
+    /// [`SilencedKind::Transport`](purrdf_core::SilencedKind::Transport).
+    OpaqueRedirect {
+        /// The service IRI whose request was redirected.
+        endpoint: String,
+    },
 }
 
 impl purrdf_hash::error::StructuredError for RemoteError {
@@ -216,6 +232,7 @@ impl purrdf_hash::error::StructuredError for RemoteError {
         Decode(message) => "service-decode" { "message" => Message(message) },
         Disabled => "service-disabled" {},
         Unconfigured(message) => "service-unconfigured" { "message" => Message(message) },
+        NoSource => "service-no-source" {},
         Denied(error) => "service-denied" { "cause" => Cause(error) },
         HostDenied { endpoint, message } => "service-host-denied" {
             "endpoint" => Iri(endpoint), "message" => Message(message),
@@ -232,6 +249,7 @@ impl purrdf_hash::error::StructuredError for RemoteError {
         SourceRead(message) => "service-source-read" { "message" => Text(message) },
         WorkspaceStopped => "service-workspace-stopped" {},
         ExchangeIdExhausted => "service-exchange-id-exhausted" {},
+        OpaqueRedirect { endpoint } => "service-opaque-redirect" { "endpoint" => Iri(endpoint) },
     }
 }
 
@@ -242,6 +260,7 @@ impl core::fmt::Display for RemoteError {
             Self::Decode(m) => write!(f, "decode: {m}"),
             Self::Disabled => write!(f, "federation disabled"),
             Self::Unconfigured(m) => write!(f, "{m}"),
+            Self::NoSource => write!(f, "no remote query source configured"),
             Self::Denied(denial) => write!(f, "denied: {denial}"),
             Self::HostDenied { endpoint, message } => {
                 write!(f, "<{endpoint}>: the host denied the request: {message}")
@@ -265,11 +284,29 @@ impl core::fmt::Display for RemoteError {
             Self::SourceRead(message) => write!(f, "dataset read failed: {message}"),
             Self::WorkspaceStopped => EvalError::WorkspaceStopped.fmt(f),
             Self::ExchangeIdExhausted => EvalError::ExchangeIdExhausted.fmt(f),
+            Self::OpaqueRedirect { endpoint } => write!(
+                f,
+                "<{endpoint}>: refused an opaque redirect; the host could not see its status \
+                 or Location"
+            ),
         }
     }
 }
 
 impl std::error::Error for RemoteError {}
+
+/// The one spelling of the message for a `SERVICE` that had no remote query source.
+pub(crate) struct NoSourceText<'a>(pub(crate) &'a str);
+
+impl core::fmt::Display for NoSourceText<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "no remote query source configured for SERVICE <{}>",
+            self.0
+        )
+    }
+}
 
 purrdf_lex::variant_from!(RemoteError { Denied(ServiceDenial) });
 
@@ -710,21 +747,7 @@ impl RetainedServiceFailure {
         if self.error.payload.storage.is_bounded() || self.error.payload.control.is_bounded() {
             return EvalError::RetainedServiceFailure(self);
         }
-        let endpoint = self.endpoint.as_str();
-        match self.error.error().clone() {
-            RemoteError::Denied(denial) => EvalError::ServiceDenied(denial),
-            RemoteError::HostDenied { endpoint, message } => {
-                EvalError::ServiceHostDenied { endpoint, message }
-            }
-            RemoteError::HostFault { endpoint, message } => {
-                EvalError::ServiceHostFault { endpoint, message }
-            }
-            RemoteError::SourceRead(message) => EvalError::SourceRead(message),
-            RemoteError::Unconfigured(message) => {
-                EvalError::ServiceUnconfigured(format!("SERVICE <{endpoint}>: {message}"))
-            }
-            other => EvalError::remote(format!("SERVICE <{endpoint}>: {other}")),
-        }
+        EvalError::remote(self.endpoint.as_str(), self.error.error().clone())
     }
     /// Borrow the original invocation error without detaching its owner.
     #[must_use]
@@ -750,7 +773,9 @@ impl RetainedServiceFailure {
         match self.error.error() {
             RemoteError::Decode(_) => purrdf_core::SilencedKind::Decode,
             RemoteError::Disabled => purrdf_core::SilencedKind::Disabled,
-            RemoteError::Unconfigured(_) => purrdf_core::SilencedKind::Unconfigured,
+            RemoteError::Unconfigured(_) | RemoteError::NoSource => {
+                purrdf_core::SilencedKind::Unconfigured
+            }
             RemoteError::Denied(_) => purrdf_core::SilencedKind::Denied,
             RemoteError::HostDenied { .. } => purrdf_core::SilencedKind::HostDenied,
             RemoteError::HostFault { .. } => purrdf_core::SilencedKind::Fault,
@@ -774,6 +799,11 @@ impl fmt::Display for RetainedServiceFailure {
                 f,
                 "SERVICE federation error: SERVICE <{}>: {message}",
                 self.endpoint.as_str()
+            ),
+            RemoteError::NoSource => write!(
+                f,
+                "SERVICE federation error: {}",
+                NoSourceText(self.endpoint.as_str())
             ),
             RemoteError::SourceRead(message) => write!(f, "dataset read failed: {message}"),
             other => write!(
@@ -1756,7 +1786,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     use purrdf_core::SilencedKind;
     let workspace = ctx.growth.clone();
     let Some(source) = ctx.remote else {
-        let message = format_args!("no remote query source configured for SERVICE <{endpoint}>");
+        let message = NoSourceText(endpoint);
         let error = if workspace.is_bounded() {
             EvalError::RetainedDiagnostic(crate::RetainedDiagnostic::render(
                 EvalError::SERVICE_UNCONFIGURED_CODE,
@@ -1764,7 +1794,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
                 &workspace,
             )?)
         } else {
-            EvalError::ServiceUnconfigured(message.to_string())
+            EvalError::remote(endpoint, RemoteError::NoSource)
         };
         return failed_invocation(
             endpoint,
@@ -2591,7 +2621,10 @@ mod tests {
     use super::*;
     use crate::NativeSparqlEngine;
     use crate::governor::WallDeadline;
-    use crate::remote_http::{HttpRemoteQuerySource, HttpRequest};
+    use crate::remote_http::{
+        HttpExchangeRequest, HttpFailure, HttpOutcome, HttpRemoteQuerySource, HttpResponse,
+        HttpStatus,
+    };
     use crate::service::InProcessServiceResolver;
     use purrdf_core::{
         BlankScope, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlEngine, SparqlRequest,
@@ -2604,6 +2637,21 @@ mod tests {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
+
+    /// A host that answers each exchange with `answer`'s body as a `200` response.
+    fn answer_with(
+        answer: impl for<'a> Fn(HttpExchangeRequest<'a>) -> Result<Vec<u8>, HttpFailure>,
+    ) -> impl for<'a> Fn(HttpExchangeRequest<'a>) -> Result<HttpOutcome, HttpFailure> {
+        move |request| {
+            answer(request)
+                .map(|body| HttpOutcome::Response(HttpResponse::new(HttpStatus::OK, body)))
+        }
+    }
+
+    /// The SPARQL query text a `SERVICE` exchange carries as its body.
+    fn query_text<'a>(request: &HttpExchangeRequest<'a>) -> &'a str {
+        std::str::from_utf8(request.body).expect("a SERVICE body is the query text")
+    }
 
     /// `:a :knows :x`, `:a :knows :y` (the local graph).
     fn local() -> Arc<RdfDataset> {
@@ -2905,7 +2953,7 @@ mod tests {
         // The neighbour: the same clause without SILENT is the unconfigured error.
         let (result, silenced) = run_recorded(&local(), None, &query.replace("SILENT ", ""));
         assert!(
-            matches!(result, Err(EvalError::ServiceUnconfigured(_))),
+            matches!(result, Err(EvalError::ServiceUnconfigured { .. })),
             "{result:?}"
         );
         assert_eq!(kinds(&silenced), Vec::<(String, &str)>::new());
@@ -3095,9 +3143,20 @@ mod tests {
             let error = result.expect_err(name);
             match name {
                 "unconfigured" => {
+                    let EvalError::ServiceUnconfigured { endpoint, cause } = &error else {
+                        panic!("{error:?}");
+                    };
+                    assert_eq!(endpoint, "http://example.org/unconfigured");
+                    assert!(matches!(cause, RemoteError::Unconfigured(_)), "{cause:?}");
+                    // The text a caller read before the payload was typed.
+                    assert_eq!(
+                        error.to_string(),
+                        "SERVICE federation error: SERVICE <http://example.org/unconfigured>: no handler"
+                    );
                     assert!(
-                        matches!(error, EvalError::ServiceUnconfigured(_)),
-                        "{error:?}"
+                        std::error::Error::source(&error).is_some_and(|source| source
+                            .downcast_ref::<RemoteError>()
+                            == Some(cause))
                     );
                 }
                 "denied" => assert!(matches!(error, EvalError::ServiceDenied(_)), "{error:?}"),
@@ -3107,7 +3166,32 @@ mod tests {
                         "{error:?}"
                     );
                 }
-                _ => assert!(matches!(error, EvalError::Remote(_)), "{error:?}"),
+                _ => {
+                    let EvalError::Remote { endpoint, cause } = &error else {
+                        panic!("{error:?}");
+                    };
+                    assert_eq!(endpoint, &format!("http://example.org/{name}"));
+                    let text = match name {
+                        "transport" => "transport: connection refused",
+                        "decode" => "decode: not a results document",
+                        _ => "federation disabled",
+                    };
+                    assert_eq!(
+                        error.to_string(),
+                        format!("SERVICE federation error: SERVICE <{endpoint}>: {text}")
+                    );
+                    assert!(
+                        std::error::Error::source(&error).is_some_and(|source| source
+                            .downcast_ref::<RemoteError>()
+                            == Some(cause))
+                    );
+                    let expected = match name {
+                        "transport" => matches!(cause, RemoteError::Transport(_)),
+                        "decode" => matches!(cause, RemoteError::Decode(_)),
+                        _ => matches!(cause, RemoteError::Disabled),
+                    };
+                    assert!(expected, "{name}: {cause:?}");
+                }
             }
             assert_eq!(
                 kinds(&silenced),
@@ -3180,22 +3264,24 @@ mod tests {
              LATERAL { ?e <http://example.org/f> ?f } }",
         ];
         for body in bodies {
-            let answering = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
-                assert!(
-                    request.query_text.contains("LATERAL {"),
-                    "the LATERAL clause must reach the endpoint verbatim: {}",
-                    request.query_text
-                );
-                Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
+            let answering =
+                HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
+                    assert!(
+                        query_text(&request).contains("LATERAL {"),
+                        "the LATERAL clause must reach the endpoint verbatim: {}",
+                        query_text(&request)
+                    );
+                    Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
                     {"n":{"type":"literal","value":"X"}}
                 ]}}"#
-                    .to_vec())
-            });
-            let rejecting = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
-                Err(RemoteError::Transport(
-                    "400: LATERAL is not supported".to_owned(),
-                ))
-            });
+                        .to_vec())
+                }));
+            let rejecting =
+                HttpRemoteQuerySource::new(answer_with(|_request: HttpExchangeRequest<'_>| {
+                    Err(HttpFailure::Transport(
+                        "400: LATERAL is not supported".to_owned(),
+                    ))
+                }));
             let silent = format!(
                 "SELECT ?n WHERE {{ SERVICE SILENT <http://example.org/ep> {{ {body} }} }}"
             );
@@ -3219,7 +3305,7 @@ mod tests {
             let (result, _) =
                 run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
             assert!(
-                matches!(result, Err(EvalError::Remote(_))),
+                matches!(result, Err(EvalError::Remote { .. })),
                 "{body}: {result:?}"
             );
         }
@@ -3238,18 +3324,18 @@ mod tests {
         // Jena's own extension, and a Jena-backed (or otherwise LATERAL-capable)
         // endpoint answers it.
         let posts = AtomicUsize::new(0);
-        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+        let source = HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
             posts.fetch_add(1, Ordering::Relaxed);
             assert!(
-                request.query_text.contains("LATERAL {"),
+                query_text(&request).contains("LATERAL {"),
                 "the LATERAL clause must reach the endpoint verbatim: {}",
-                request.query_text
+                query_text(&request)
             );
             Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
                 {"n":{"type":"literal","value":"X"}}
             ]}}"#
                 .to_vec())
-        });
+        }));
         let result = run_with_source(
             &local(),
             &source,
@@ -3275,18 +3361,18 @@ mod tests {
         // account, and that failure already surfaces as an honest `EvalError::Remote`
         // rather than a silent wrong answer.
         let posts = AtomicUsize::new(0);
-        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+        let source = HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
             posts.fetch_add(1, Ordering::Relaxed);
             assert!(
-                request.query_text.contains("http://example.org/customFn"),
+                query_text(&request).contains("http://example.org/customFn"),
                 "the custom function call must reach the endpoint verbatim: {}",
-                request.query_text
+                query_text(&request)
             );
             Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
                 {"n":{"type":"literal","value":"X"}}
             ]}}"#
                 .to_vec())
-        });
+        }));
         let result = run_with_source(
             &local(),
             &source,
@@ -3312,20 +3398,22 @@ mod tests {
             "FILTER(<http://example.org/customFn>(?n) > 0)",
             "FILTER(CONCAT(<http://example.org/customFn>(?n), \"a\") = \"Xa\")",
         ] {
-            let answering = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
-                assert!(
-                    request.query_text.contains("http://example.org/customFn"),
-                    "{}",
-                    request.query_text
-                );
-                Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
+            let answering =
+                HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
+                    assert!(
+                        query_text(&request).contains("http://example.org/customFn"),
+                        "{}",
+                        query_text(&request)
+                    );
+                    Ok(br#"{"head":{"vars":["n"]},"results":{"bindings":[
                     {"n":{"type":"literal","value":"X"}}
                 ]}}"#
-                    .to_vec())
-            });
-            let rejecting = HttpRemoteQuerySource::new(|_request: HttpRequest<'_>| {
-                Err(RemoteError::Transport("400: unknown function".to_owned()))
-            });
+                        .to_vec())
+                }));
+            let rejecting =
+                HttpRemoteQuerySource::new(answer_with(|_request: HttpExchangeRequest<'_>| {
+                    Err(HttpFailure::Transport("400: unknown function".to_owned()))
+                }));
             let silent = format!(
                 "SELECT ?n WHERE {{ SERVICE SILENT <http://example.org/ep> {{ \
                  ?s <http://example.org/name> ?n . {filter} }} }}"
@@ -3347,7 +3435,10 @@ mod tests {
             );
             let (result, _) =
                 run_recorded(&local(), Some(&rejecting), &silent.replace("SILENT ", ""));
-            assert!(matches!(result, Err(EvalError::Remote(_))), "{result:?}");
+            assert!(
+                matches!(result, Err(EvalError::Remote { .. })),
+                "{result:?}"
+            );
         }
     }
 
@@ -3387,7 +3478,7 @@ mod tests {
              SERVICE <http://example.org/missing> { ?o <http://example.org/name> ?n } }",
         )
         .unwrap_err();
-        assert!(matches!(err, EvalError::Remote(_)), "got {err:?}");
+        assert!(matches!(err, EvalError::Remote { .. }), "got {err:?}");
     }
 
     // ── LATERAL variable-endpoint SERVICE forwarding counts ───────────────────
@@ -3731,14 +3822,14 @@ mod tests {
         // …and the seam refuses on its own account, not merely the evaluator around it: a
         // source handed an already-latched signal never reaches its transport.
         let posts = AtomicUsize::new(0);
-        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+        let source = HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
             assert!(
                 request.stop.is_some(),
                 "the signal must travel with the call"
             );
             posts.fetch_add(1, Ordering::Relaxed);
             Ok(Vec::new())
-        });
+        }));
         let err = source
             .resolve(
                 ServiceRequest::new(&format!("{EX}sparql"), "SELECT * WHERE { ?s ?p ?o }")
@@ -4002,15 +4093,15 @@ mod tests {
         // that degrades to the join identity: a silent wrong answer.
         let posts = AtomicUsize::new(0);
         let captured = Mutex::new(String::new());
-        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+        let source = HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
             posts.fetch_add(1, Ordering::Relaxed);
-            *captured.lock().expect("lock") = request.query_text.to_owned();
+            *captured.lock().expect("lock") = query_text(&request).to_owned();
             Ok(br#"{"head":{"vars":["x","bn"]},"results":{"bindings":[
                 {"x":{"type":"uri","value":"http://example.org/remoteX"},
                  "bn":{"type":"uri","value":"http://example.org/notOurBlank"}}
             ]}}"#
                 .to_vec())
-        });
+        }));
         let result = run_with_source(
             &local_with_blank(),
             &source,
@@ -4045,11 +4136,11 @@ mod tests {
         // sanitizer targets blank-node cells only, not every injected restriction.
         let posts = AtomicUsize::new(0);
         let captured = Mutex::new(String::new());
-        let source = HttpRemoteQuerySource::new(|request: HttpRequest<'_>| {
+        let source = HttpRemoteQuerySource::new(answer_with(|request: HttpExchangeRequest<'_>| {
             posts.fetch_add(1, Ordering::Relaxed);
-            *captured.lock().expect("lock") = request.query_text.to_owned();
+            *captured.lock().expect("lock") = query_text(&request).to_owned();
             Ok(br#"{"head":{"vars":["x"]},"results":{"bindings":[]}}"#.to_vec())
-        });
+        }));
         let _ = run_with_source(
             &local_with_iri(),
             &source,

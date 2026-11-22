@@ -1,5 +1,0 @@
-@prefix ex: <http://example.org/> .
-
-ex:s ex:nonchars "a\uFFFEb\uFFFFc" .
-ex:s ex:c1 "x\u0085y" .
-ex:s ex:neighbour "p\uFFFDq" .

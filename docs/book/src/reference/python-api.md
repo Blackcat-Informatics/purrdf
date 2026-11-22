@@ -172,7 +172,7 @@ decoding. Successful updates retain the existing literal reconciliation.
 
 ## Governors and incomplete answers
 
-`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, `max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, `max_udf_depth`, `unlimited_udf_depth`, `no_ceiling` and `cancel` to the query options. Ceilings are inclusive. Omitted ceilings retain metering and the default UDF depth limit of 32. Set `max_udf_depth` to a finite logical invocation limit, or `unlimited_udf_depth=True` to remove it; supplying both is a typed conflict. `no_ceiling=True` declines accounting and resource caps, including UDF depth, retains deadline/cancellation, and conflicts with explicitly supplied finite caps.
+`query_governed` adds `fuel`, `deadline_ms`, `max_answers`, `max_intermediate_cells`, `max_scratch_bytes`, `max_remote_requests`, `max_udf_depth`, `unlimited_udf_depth`, `no_ceiling` and `cancel` to the query options. Ceilings are inclusive. `max_remote_requests` bounds host fetches, so each `SERVICE` request and each fetch of a `LOAD`, the first fetch and each redirect hop, counts one. A redirect the host follows itself is part of its fetch. Omitted ceilings retain metering and the default UDF depth limit of 32. Set `max_udf_depth` to a finite logical invocation limit, or `unlimited_udf_depth=True` to remove it; supplying both is a typed conflict. `no_ceiling=True` declines accounting and resource caps, including UDF depth, retains deadline/cancellation, and conflicts with explicitly supplied finite caps.
 
 ```python
 stopped = store.query_governed("SELECT ?s ?p ?o WHERE { ?s ?p ?o }", fuel=0)
@@ -641,8 +641,11 @@ assert view.public_text(alice_id, "https://example.org/name") == "Alice"
 
 `GtsFoldViewNative.from_bytes` reads a container;
 `from_parts` admits caller-supplied term, quad, reifier and annotation tables.
-Both refuse a term that reaches itself with `gts-self-reaching-term`, rather
-than exposing a renderer that recurses forever. `curie_prefixes` supplies
+A triple term that reaches itself states no triple and renders as a blank
+node no document label spells (`_:purrdfesc4294967294_unbound_00005Ftriple_00005F{id}`),
+while its `reifies` rows stay; both refuse a literal
+whose datatype chain reaches itself with `gts-self-reaching-term`, rather than
+exposing a renderer that recurses forever. `curie_prefixes` supplies
 the host's CURIE mappings; only the documented W3C namespaces are built in.
 
 The four count methods report table sizes. `term_tuple`, `is_iri`, `is_bnode`,

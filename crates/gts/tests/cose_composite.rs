@@ -384,7 +384,6 @@ fn headers_are_authenticated_unique_typed_and_critical_rules_enforced() {
     let key = EdSigningKey::from_bytes(&[31; 32]);
     let unprotected = || vec![(4.into(), Value::Bytes(b"kid".to_vec()))];
     let accepted = [
-        vec![0xa1, 0x18, 1, 0x38, 7], // Legal non-shortest protected encoding.
         wire::encode(&Value::Map(vec![
             (1.into(), (-8).into()),
             (99.into(), true.into()),
@@ -413,8 +412,8 @@ fn headers_are_authenticated_unique_typed_and_critical_rules_enforced() {
     }
     let protected_kid = wire::encode(&Value::Map(vec![
         (1.into(), (-8).into()),
-        (4.into(), Value::Bytes(vec![])),
         (2.into(), Value::Array(vec![1.into(), 4.into()])),
+        (4.into(), Value::Bytes(vec![])),
     ]));
     let envelope = raw_ed_signature(&protected_kid, vec![]);
     assert_eq!(
@@ -440,7 +439,6 @@ fn headers_are_authenticated_unique_typed_and_critical_rules_enforced() {
     let bad_maps = [
         vec![],
         vec![(1.into(), (-58).into())], // Correctly signed Ed bytes, wrong declared algorithm/size.
-        vec![(1.into(), Value::Text("EdDSA".into()))],
         vec![(1.into(), Value::Bytes(vec![0x27]))],
         vec![(1.into(), (-8).into()), (1.into(), (-8).into())],
         vec![

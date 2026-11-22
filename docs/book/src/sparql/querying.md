@@ -127,8 +127,8 @@ including declarations made by earlier operations.
   remote endpoints are reached — down to per-service headers, credentials and
   capabilities (see
   [below](#per-service-context-the-serviceresolver-seam)). Where it stops:
-  PurRDF ships no HTTP client (the exchange is an `HttpTransport` trait the
-  Rust host implements). The CLI, Python and C surfaces install no resolver,
+  PurRDF ships no HTTP client (the exchange is an `HttpExchange` trait the
+  Rust host implements, serving `SERVICE` and `LOAD` alike). The CLI, Python and C surfaces install no resolver,
   and neither do the wasm package's synchronous methods, so a `SERVICE` or
   `LOAD` there fails by name unless written `SILENT`. The wasm package's asynchronous
   methods take host resolvers — JavaScript handlers the job suspends on
@@ -799,7 +799,7 @@ binds `?g` — `{ SERVICE ?g { … } ?s ex:endpoint ?g }` — while an `OPTIONAL
 whole request as a `ServiceRequest` — endpoint, forwarded query text, the
 `SILENT` flag, the executing query's stop signal, and the intermediate-cell
 ceiling. Two implementations ship: `HttpRemoteQuerySource`, which builds and
-decodes SPARQL Protocol requests over a host-injected `HttpTransport`, and
+decodes SPARQL Protocol requests over a host-injected `HttpExchange`, and
 `InProcessServiceResolver`, which answers from datasets already in memory.
 
 Everything a resolver needs to know about an *individual* service — extra
@@ -2354,8 +2354,8 @@ nothing certifies (`--aggregate-namespace`, `--path-relation`) has no run
 identity; with `--content-identity` it prints its receipt, writes no result and
 exits 2. The flag is refused beside `--entailment`, whose closure is not the
 data source. The C ABI (`purrdf_execution_receipt_bind`), the wasm package
-(`Dataset#contentIdentity`, `bindExecutionReceipt`) and Python
-(`QuadStore.content_identity`, `purrdf.bind_execution_receipt`) bind a returned
+(`Dataset#contentIdentity`, `Dataset#bindExecutionReceipt`) and Python
+(`QuadStore.content_identity`, `QuadStore.bind_execution_receipt`) bind a returned
 receipt to the content identity of the dataset it read.
 
 UPDATE remains transactional: a later-operation failure or governor trip

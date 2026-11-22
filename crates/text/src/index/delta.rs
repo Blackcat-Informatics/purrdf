@@ -7,13 +7,14 @@ use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
 use purrdf_core::source::{SourceFamily, SourceSide, SourceVersion, SourceVisit};
-use purrdf_core::{GraphSelector, StatisticsStream};
+use purrdf_core::{FastMap, GraphSelector, StatisticsStream, TermValue};
 use purrdf_hash::multiset::Multiset256;
 
-use super::source_digest::{row_hashes, sorted_source_fingerprint};
+use super::source_digest::{observed_hash, row_hashes, sorted_source_fingerprint, try_row_hash};
 use super::{
-    CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceRow, TextIndex,
-    analyze_rows, collect_rows, collect_subject_rows,
+    CorpusProfile, DatasetView, Document, SourceCoverage, SourceDigest, SourceEntry, SourceRow,
+    TextIndex, analyze_rows, clone_source_term, collect_rows, collect_subject_rows,
+    visit_selected_rows,
 };
 use super::{StoredToken, Table, share_buffer};
 use crate::surface::postings::{Joined, join_by};
@@ -25,7 +26,9 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// Both asserted and annotation literal rows participate, including their
     /// multiplicity across layers. Nonliteral statements update source coverage.
     ///
-    /// Reversing the supplied delta must recover this index's source identity.
+    /// Applying the supplied delta must recover exactly the next source's
+    /// selected literal rows. Versioned views verify the net changes. Other
+    /// views use their independent literal population and subject probes.
     /// Only changed documents are analyzed. Retained token buffers are shared
     /// through a persistent positional table; private term addresses stay stable
     /// while public token ordinals follow the canonical dictionary order.
@@ -33,9 +36,9 @@ impl<P: CorpusProfile> TextIndex<P> {
     ///
     /// This consumes the index; clone it first to retain an older snapshot.
     /// Cloning shares document, lexical, partition, side-index, character and
-    /// surface storage. Independent source observations and subject probes
-    /// replace a complete next-source collection. Surface edits retain source
-    /// evidence and update only affected term, membership and posting paths.
+    /// surface storage. Subject probes use the view's indexes where available.
+    /// Surface edits retain source evidence and update only affected term,
+    /// membership and posting paths.
     ///
     /// # Errors
     /// Refuses inconsistent deltas before changing index tables. Preserves
@@ -54,8 +57,10 @@ impl<P: CorpusProfile> TextIndex<P> {
     {
         let (additions, added_coverage) = collect_rows(added, &self.config)?;
         let (removals, removed_coverage) = collect_rows(removed, &self.config)?;
-        let (observed_source, observed_coverage, version) = next
-            .checked_read(|next| self.observe_source(next))
+        let added_hashes: Vec<[u8; 32]> = row_hashes(&additions).collect();
+        let removed_hashes: Vec<[u8; 32]> = row_hashes(&removals).collect();
+        let observed = next
+            .checked_read(|next| self.observe_source(next, &added_hashes, &removed_hashes))
             .map_err(TextError::source_read)??;
         let subjects = additions
             .iter()
@@ -63,24 +68,43 @@ impl<P: CorpusProfile> TextIndex<P> {
             .map(|row| &row.subject)
             .collect();
         let rows = collect_subject_rows(next, &self.config, &subjects)?;
-        let added_hashes: Vec<[u8; 32]> = row_hashes(&additions).collect();
-        let removed_hashes: Vec<[u8; 32]> = row_hashes(&removals).collect();
-        let directory = self.directory_after(&added_hashes, &removed_hashes)?;
-        let source = validate_delta(
-            &rows,
-            &additions,
-            &added_hashes,
-            &removed_hashes,
-            self.source_digest,
-            observed_source,
-        )?;
+        let directory = self.directory_after(&additions, &added_hashes, &removed_hashes)?;
+        validate_additions(&rows, &additions)?;
+        let (matches, version) = match observed.evidence {
+            SourceEvidence::Versioned { matches, version } => (matches, Some(version)),
+            SourceEvidence::Population => (
+                matches_source(
+                    next,
+                    &self.config,
+                    &directory,
+                    observed.accounting.population(),
+                )?,
+                None,
+            ),
+        };
+        if !matches {
+            let reconstructed =
+                reverse_accounting(observed.accounting, &added_hashes, &removed_hashes)?;
+            return Err(TextDeltaError::SourceMismatch {
+                expected: self.source_digest.check_value::<P>(),
+                actual: reconstructed.check_value::<P>(),
+            });
+        }
+        let mut source = self.source_digest;
+        for hash in removed_hashes {
+            source.remove_hash(hash);
+        }
+        for hash in added_hashes {
+            source.insert_hash(hash);
+        }
         let coverage = self.coverage.with_delta(
             &self.config,
             &added_coverage,
             &removed_coverage,
-            &observed_coverage,
+            &observed.coverage,
         )?;
-        let source_fingerprint = sorted_source_fingerprint::<P>(directory.iter().copied());
+        let source_fingerprint =
+            sorted_source_fingerprint::<P>(directory.iter().map(|entry| entry.digest));
         if source_fingerprint == self.source_fingerprint {
             self.coverage = coverage;
             self.row_directory = directory;
@@ -126,26 +150,33 @@ impl<P: CorpusProfile> TextIndex<P> {
     /// the additive digest and populations say. Token-less rows are held too.
     fn directory_after(
         &self,
+        additions: &[SourceRow<P>],
         added: &[[u8; 32]],
         removed: &[[u8; 32]],
-    ) -> Result<Table<[u8; 32]>, TextDeltaError> {
+    ) -> Result<Table<SourceEntry>, TextDeltaError> {
         let mut directory = self.row_directory.clone();
         for (ordinal, hash) in removed.iter().enumerate() {
-            let Ok(at) = directory.binary_search_by(|held| held.cmp(hash)) else {
+            let Ok(at) = directory.binary_search_by(|held| held.digest.cmp(hash)) else {
                 return Err(TextDeltaError::UnheldRemoval { ordinal });
             };
             directory = directory.remove(at)?;
         }
-        for hash in added {
-            let at = directory.partition_point(|held| held < hash);
-            directory = directory.insert(at, *hash)?;
+        for (row, &hash) in additions.iter().zip(added) {
+            let at = directory.partition_point(|held| held.digest < hash);
+            let subject = clone_source_term(&row.subject)?;
+            directory = directory.insert(at, SourceEntry::new(hash, subject)?)?;
         }
         Ok(directory)
     }
 
-    /// Obtain next-source evidence independently of the requested additions and
-    /// removals. Neither branch enumerates the complete next source.
-    fn observe_source<D: DatasetView>(&self, next: &D) -> Result<ObservedSource, TextDeltaError>
+    /// Read independent changes and coverage, or exact population metadata
+    /// when a view does not expose its transition.
+    fn observe_source<D: DatasetView>(
+        &self,
+        next: &D,
+        added: &[[u8; 32]],
+        removed: &[[u8; 32]],
+    ) -> Result<ObservedSource, TextDeltaError>
     where
         D::ReadError: purrdf_hash::error::StructuredError,
     {
@@ -155,8 +186,8 @@ impl<P: CorpusProfile> TextIndex<P> {
                 .into());
         }
         if let Some(previous) = &self.source_version {
-            let mut digest = self.source_digest;
             let mut counts = self.coverage.represented.clone();
+            let mut changes = SourceChanges::new(self.source_digest, added, removed)?;
             let observed = next
                 .visit_source_changes(previous, |side, family, row| {
                     if family != SourceFamily::Statements
@@ -177,7 +208,13 @@ impl<P: CorpusProfile> TextIndex<P> {
                         ));
                     };
                     counts[ordinal] = count;
-                    match digest.observe::<P>(side, row) {
+                    let accounting = observed_hash::<P>(row).and_then(|hash| {
+                        let Some(hash) = hash else {
+                            return Ok(());
+                        };
+                        changes.observe(side, hash)
+                    });
+                    match accounting {
                         Ok(()) => ControlFlow::Continue(()),
                         Err(error) => ControlFlow::Break(error),
                     }
@@ -190,7 +227,14 @@ impl<P: CorpusProfile> TextIndex<P> {
                         &self.config,
                         counts,
                     );
-                    return Ok((digest, coverage, Some(version)));
+                    return Ok(ObservedSource {
+                        accounting: changes.accounting,
+                        coverage,
+                        evidence: SourceEvidence::Versioned {
+                            matches: changes.matches(),
+                            version,
+                        },
+                    });
                 }
                 SourceVisit::Stopped(error) => return Err(error.into()),
                 SourceVisit::Unavailable => {}
@@ -226,11 +270,11 @@ impl<P: CorpusProfile> TextIndex<P> {
                 }
             }
         }
-        Ok((
-            SourceDigest::from_state(digest),
-            SourceCoverage::of_counts(count != 0, &self.config, counts),
-            None,
-        ))
+        Ok(ObservedSource {
+            accounting: SourceDigest::from_state(digest),
+            coverage: SourceCoverage::of_counts(count != 0, &self.config, counts),
+            evidence: SourceEvidence::Population,
+        })
     }
 
     fn merge_changed(
@@ -412,7 +456,123 @@ impl<P: CorpusProfile> TextIndex<P> {
     }
 }
 
-type ObservedSource = (SourceDigest, SourceCoverage, Option<SourceVersion>);
+struct ObservedSource {
+    accounting: SourceDigest,
+    coverage: SourceCoverage,
+    evidence: SourceEvidence,
+}
+
+enum SourceEvidence {
+    Versioned {
+        matches: bool,
+        version: SourceVersion,
+    },
+    Population,
+}
+
+/// The proposed net literal changes with the independent changes subtracted.
+/// Accounting is retained for diagnostics after the completed observation.
+struct SourceChanges {
+    difference: FastMap<[u8; 32], i128>,
+    accounting: SourceDigest,
+}
+
+impl SourceChanges {
+    fn new(
+        accounting: SourceDigest,
+        added: &[[u8; 32]],
+        removed: &[[u8; 32]],
+    ) -> Result<Self, TextError> {
+        let mut difference = FastMap::default();
+        for &hash in added {
+            change_count(&mut difference, hash, 1)?;
+        }
+        for &hash in removed {
+            change_count(&mut difference, hash, -1)?;
+        }
+        Ok(Self {
+            difference,
+            accounting,
+        })
+    }
+
+    fn observe(&mut self, side: SourceSide, hash: [u8; 32]) -> Result<(), TextError> {
+        let reverse = match side {
+            SourceSide::Previous => 1,
+            SourceSide::Next => -1,
+        };
+        change_count(&mut self.difference, hash, reverse)?;
+        self.accounting.observe(side, hash)
+    }
+
+    fn matches(&self) -> bool {
+        self.difference.is_empty()
+    }
+}
+
+/// Count net occurrence changes by digest. Cancelling changes leave no entry.
+fn change_count(
+    changes: &mut FastMap<[u8; 32], i128>,
+    hash: [u8; 32],
+    amount: i128,
+) -> Result<(), TextError> {
+    if let Some(count) = changes.get_mut(&hash) {
+        *count = count
+            .checked_add(amount)
+            .ok_or_else(|| TextError::data("text source change count overflow"))?;
+        if *count == 0 {
+            changes.remove(&hash);
+        }
+    } else {
+        changes.try_reserve(1).map_err(|_| {
+            TextError::Capacity(crate::query_workspace::CapacityFailure::Allocator {
+                construct: "text source delta",
+            })
+        })?;
+        changes.insert(hash, amount);
+    }
+    Ok(())
+}
+
+/// The population and the matching occurrences at all expected subjects
+/// account for every selected literal. A hidden subject would add an
+/// occurrence to that independently maintained population.
+fn matches_source<D: DatasetView, P: CorpusProfile>(
+    dataset: &D,
+    config: &super::TextIndexConfig<P>,
+    directory: &Table<SourceEntry>,
+    population: u128,
+) -> Result<bool, TextError>
+where
+    D::ReadError: purrdf_hash::error::StructuredError,
+{
+    if directory.len() as u128 != population {
+        return Ok(false);
+    }
+    let mut subjects = super::token_streams::handles(directory.len())?;
+    subjects.extend(directory.iter().map(|entry| &*entry.subject));
+    subjects.sort_unstable();
+    subjects.dedup();
+    let mut hashes = super::token_streams::handles(directory.len())?;
+    let mut extra = false;
+    dataset
+        .checked_read(|dataset| {
+            visit_selected_rows(dataset, config, Some(subjects.into_iter()), |row| {
+                if hashes.len() == directory.len() {
+                    extra = true;
+                } else {
+                    hashes.push(try_row_hash(&row)?);
+                }
+                Ok(())
+            })
+        })
+        .map_err(TextError::source_read)??;
+    hashes.sort_unstable();
+    Ok(!extra
+        && hashes
+            .into_iter()
+            .eq(directory.iter().map(|entry| entry.digest)))
+}
 
 fn finish_read<D: DatasetView>(source: &D) -> Result<(), TextError>
 where
@@ -423,7 +583,7 @@ where
 
 fn selected_graph<P: CorpusProfile>(
     config: &super::TextIndexConfig<P>,
-    graph: Option<&purrdf_core::TermValue>,
+    graph: Option<&TermValue>,
 ) -> bool {
     match P::selector(config.graph()) {
         None | Some(GraphSelector::Any) => true,
@@ -475,20 +635,15 @@ impl SourceCoverage {
 
 type DocumentIdentity<'a, P> = (
     &'a <P as CorpusProfile>::Graph,
-    &'a purrdf_core::TermValue,
+    &'a TermValue,
     &'a Option<String>,
 );
 
-/// Check added-row membership against the independently read next source, then
-/// reverse its multiset summary without corpus-sized temporary reference tables.
-fn validate_delta<P: CorpusProfile>(
+/// Check exact added-row membership against independently read next rows.
+fn validate_additions<P: CorpusProfile>(
     rows: &[SourceRow<P>],
     added: &[SourceRow<P>],
-    added_hashes: &[[u8; 32]],
-    removed_hashes: &[[u8; 32]],
-    mut expected: SourceDigest,
-    mut prior: SourceDigest,
-) -> Result<SourceDigest, TextDeltaError> {
+) -> Result<(), TextDeltaError> {
     for row in join_by(rows.iter().enumerate(), added.iter().enumerate(), |a, b| {
         a.1.cmp(b.1)
     }) {
@@ -497,32 +652,29 @@ fn validate_delta<P: CorpusProfile>(
             Joined::Right((ordinal, _)) => return Err(TextDeltaError::MissingAddition { ordinal }),
         }
     }
+    Ok(())
+}
+
+/// Reconstruct the original accounting operand for a diagnostic. Exact row
+/// evidence has already established the mismatch.
+fn reverse_accounting(
+    mut prior: SourceDigest,
+    added_hashes: &[[u8; 32]],
+    removed_hashes: &[[u8; 32]],
+) -> Result<SourceDigest, TextError> {
     for &hash in added_hashes {
-        prior.remove_hash(hash);
+        prior.observe(SourceSide::Previous, hash)?;
     }
     for &hash in removed_hashes {
-        prior.insert_hash(hash);
+        prior.observe(SourceSide::Next, hash)?;
     }
-    if expected != prior {
-        return Err(TextDeltaError::SourceMismatch {
-            expected: expected.check_value::<P>(),
-            actual: prior.check_value::<P>(),
-        });
-    }
-    for &hash in removed_hashes {
-        expected.remove_hash(hash);
-    }
-    for &hash in added_hashes {
-        expected.insert_hash(hash);
-    }
-    Ok(expected)
+    Ok(prior)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Analyzer, GraphFree, GraphSelector, TextIndexConfig};
-    use purrdf_core::TermValue;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
     use std::sync::Arc;
 
@@ -570,8 +722,16 @@ mod tests {
     fn assert_fresh<P: CorpusProfile>(actual: &TextIndex<P>, fresh: &TextIndex<P>) {
         assert_eq!(actual.source_digest, fresh.source_digest);
         assert_eq!(
-            actual.row_directory.iter().collect::<Vec<_>>(),
-            fresh.row_directory.iter().collect::<Vec<_>>()
+            actual
+                .row_directory
+                .iter()
+                .map(|row| (row.digest, &*row.subject))
+                .collect::<Vec<_>>(),
+            fresh
+                .row_directory
+                .iter()
+                .map(|row| (row.digest, &*row.subject))
+                .collect::<Vec<_>>()
         );
         assert_eq!(actual.source_fingerprint, fresh.source_fingerprint);
         assert_eq!(actual.fingerprint, fresh.fingerprint);
@@ -1100,6 +1260,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn versioned_delta_distinguishes_equal_accounting_from_matching_row_changes() {
+        let hash = |seed| *purrdf_hash::blake3::hash(&[seed]).as_bytes();
+        let removed = [hash(1), hash(2)];
+        let before = SourceDigest::from_hashes(removed);
+        let first = hash(3);
+        let mut balance = Multiset256::default();
+        for digest in removed {
+            balance.insert(digest).unwrap();
+        }
+        balance.remove(first).unwrap();
+        let added = [first, *balance.sum()];
+        assert!(removed.iter().all(|digest| !added.contains(digest)));
+
+        let mut omitted = SourceChanges::new(before, &[], &[]).unwrap();
+        let mut matching = SourceChanges::new(before, &added, &removed).unwrap();
+        for change in [&mut omitted, &mut matching] {
+            for digest in removed {
+                change.observe(SourceSide::Previous, digest).unwrap();
+            }
+            for digest in added {
+                change.observe(SourceSide::Next, digest).unwrap();
+            }
+            assert_eq!(change.accounting, before);
+        }
+        assert!(!omitted.matches());
+        assert!(matching.matches());
+    }
+
     /// The additive source digest and the populations cannot show that a
     /// removed row was indexed. Forge an index whose recorded digest and
     /// population already include a row it never held: the sums and the
@@ -1119,7 +1308,7 @@ mod tests {
             &TextIndex::from_dataset(&*after, &config()).unwrap(),
         );
 
-        let (no_rows, no_coverage) = collect_rows(&*dataset(&[]), &config()).unwrap();
+        let (_, no_coverage) = collect_rows(&*dataset(&[]), &config()).unwrap();
         for row in [
             ("urn:absent", "", None, None, false),
             ("urn:s", "", None, None, false),
@@ -1133,15 +1322,16 @@ mod tests {
             let mut forged = genuine.clone();
             forged.source_digest.insert(&rows[0]);
             forged.coverage.represented[0] += 1;
-            validate_delta(
-                &[],
-                &no_rows,
-                &[],
-                &row_hashes(&rows).collect::<Vec<_>>(),
+            assert_eq!(
+                reverse_accounting(
+                    genuine.source_digest,
+                    &[],
+                    &row_hashes(&rows).collect::<Vec<_>>(),
+                )
+                .unwrap(),
                 forged.source_digest,
-                genuine.source_digest,
-            )
-            .expect("the forged digest balances the delta");
+                "the forged accounting balances the delta"
+            );
             forged
                 .coverage
                 .with_delta(&config(), &no_coverage, &coverage, &genuine.coverage)

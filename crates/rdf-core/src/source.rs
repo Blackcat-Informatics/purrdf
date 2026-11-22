@@ -72,6 +72,18 @@ pub(crate) fn sort_digests<S: Admission + ?Sized>(
 
 pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 32]) -> [u8; 32] {
     use crate::ir::statistics::Relation;
+    #[cfg(test)]
+    if matches!(relation, Relation::Asserted)
+        && let Some(digest) = ASSERTED_RECORD_FIXTURE.with(|fixture| {
+            fixture.get().and_then(|entries| {
+                entries
+                    .into_iter()
+                    .find_map(|(input, digest)| (input == row).then_some(digest))
+            })
+        })
+    {
+        return digest;
+    }
     let mut record = [0; size_of::<u64>() + RECORD.as_bytes().len() + 1 + 32];
     let mut offset = 0;
     frame_le_with(RECORD.as_bytes(), &mut |bytes| {
@@ -87,6 +99,29 @@ pub(crate) fn record_hash(relation: crate::ir::statistics::Relation, row: [u8; 3
     };
     record[offset + 1..].copy_from_slice(&row);
     *purrdf_hash::blake3::hash(&record).as_bytes()
+}
+
+#[cfg(test)]
+type AssertedRecordFixture = [([u8; 32], [u8; 32]); 4];
+
+#[cfg(test)]
+std::thread_local! {
+    static ASSERTED_RECORD_FIXTURE: std::cell::Cell<Option<AssertedRecordFixture>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Substitute record digests for four asserted rows during one native test.
+/// Building, certifying and reading the images share the same fixture.
+#[cfg(test)]
+pub(crate) fn with_asserted_record_fixture(entries: AssertedRecordFixture, test: impl FnOnce()) {
+    struct Restore(Option<AssertedRecordFixture>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            ASSERTED_RECORD_FIXTURE.set(self.0);
+        }
+    }
+    let _restore = Restore(ASSERTED_RECORD_FIXTURE.replace(Some(entries)));
+    test();
 }
 
 /// Borrowed statement values supplied by a source owner. No field outlives its

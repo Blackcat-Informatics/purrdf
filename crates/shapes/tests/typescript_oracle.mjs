@@ -225,12 +225,11 @@ function compileFixture(name, fixture, directory) {
 }
 
 function lossSubject(entry) {
-  const marker = " subject=";
-  const start = entry.location?.indexOf(marker);
-  if (start === undefined || start < 0) {
-    throw new Error(`loss ${entry.code} has no logical subject: ${entry.location}`);
+  const subject = entry.subject;
+  if (subject?.kind !== "pointer") {
+    throw new Error(`loss ${entry.code} has no pointer subject: ${JSON.stringify(subject)}`);
   }
-  return entry.location.slice(start + marker.length);
+  return `#${subject.tokens.map((t) => `/${t.replaceAll("~", "~0").replaceAll("/", "~1")}`).join("")}`;
 }
 
 function lossKey(loss) {
