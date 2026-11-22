@@ -728,10 +728,12 @@ flushed register as the neighbour.
 The probe runs on every resolve, which is once per scan, search, lookup, rebuild, pair
 call site or rayon worker's share of a batch, never once per pair: the handle is `Copy`,
 and a loop on one thread passes the one it holds.
-A resolve is a handful of operations and no allocation. The `cross-arch` CI job checks the kernels on
-i686, armv7, riscv64, powerpc64le, s390x and loongarch64 and executes the distance,
-kNN and HNSW suites on i686, and `cross-arch-riscv64` executes them on riscv64 under
-emulation; on both no register is read and the probe alone decides.
+A resolve is a handful of operations and no allocation. The `cross-arch` check
+requires both architecture jobs to pass. `cross-arch-i686` type-checks the kernels
+on `i686`, `armv7`, `riscv64`, `powerpc64le`, `s390x` and `loongarch64`, and runs the
+distance, kNN and HNSW suites on `i686`. `cross-arch-i586` exercises x87 arithmetic.
+The `cross-arch-riscv64` job runs the distance, kNN and HNSW suites under emulation.
+On `i686` and `riscv64` the probe alone decides whether the environment is suitable.
 
 ---
 

@@ -1089,10 +1089,9 @@ jobs:
   # Neither has a named reassociated path, so both execute the reassociated arithmetic
   # along its portable one, against its error bound, and i686 runs the HNSW unit tests
   # that decode and refuse an image recorded on that path.
-  cross-arch:
+  cross-arch-i686:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
-    # Six cold check graphs, the i686 test build and the i586 (x87) test build.
     timeout-minutes: 90
     steps:
       - name: Checkout
@@ -1104,7 +1103,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
-          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu, x86_64-pc-windows-gnu
+          targets: i686-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu, x86_64-pc-windows-gnu
 
       - name: Install the i686 C library
         run: |
@@ -1153,6 +1152,27 @@ jobs:
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-geo --test determinism
 
+  cross-arch-i586:
+    if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: i586-unknown-linux-gnu
+
+      - name: Install the 32-bit C library
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-multilib
+
       # i586 has no SSE2, so every binary64 and binary32 operation runs on the x87,
       # which rounds to its register precision and again on every store. Every
       # result-affecting operation in the workspace computes through `purrdf_xsd::ieee`,
@@ -1186,6 +1206,19 @@ jobs:
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --test certified_numerical
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo-kernel --test cells_determinism --test geo_determinism
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-geo --test determinism
+
+  # Keep one check for the independent architecture suites.
+  cross-arch:
+    needs: [cross-arch-i686, cross-arch-i586]
+    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require both architecture suites to succeed
+        env:
+          I686_RESULT: ${{ needs.cross-arch-i686.result }}
+          I586_RESULT: ${{ needs.cross-arch-i586.result }}
+        run: test "$I686_RESULT" = success && test "$I586_RESULT" = success
 
   # Type-checking the Windows path cannot verify CreateFileW access rights or
   # timestamp resolution. Exercise file, directory, hardlink, and read-only
