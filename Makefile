@@ -620,9 +620,13 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 # by hand. Only the LIBRARY is built here (this recipe passes `--lib`); the
 # `bench-corpus` binary is std-only — files, process arguments, an exit code —
 # and stays deliberately out of the wasm surface.
+.PHONY: wasm-release-with-import-probe wasm-scan-imports
+WASM_RELEASE_BUILD = bash -eu -o pipefail -c 'source scripts/release-crates.sh; packages=(); for crate in "$${PURRDF_RELEASE_CRATES[@]}"; do packages+=(-p "$$crate"); done; exec cargo build --locked --release --target wasm32-unknown-unknown --lib "$${packages[@]}" -p purrdf-bench "$$@"' --
+WASM_IMPORT_SCAN = cargo run -q --locked -p helper-census -- --wasm-imports "$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/examples/host_import_probe.wasm"
+
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
-		bash -eu -o pipefail -c 'source scripts/release-crates.sh; packages=(); for crate in "$${PURRDF_RELEASE_CRATES[@]}"; do packages+=(-p "$$crate"); done; exec cargo build --locked --release --target wasm32-unknown-unknown --lib "$${packages[@]}" -p purrdf-bench'; \
+		$(WASM_RELEASE_BUILD); \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	elif ! command -v rustup >/dev/null 2>&1; then \
@@ -634,6 +638,9 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
 
+wasm-release-with-import-probe:
+	$(WASM_RELEASE_BUILD) --example host_import_probe
+
 # A wasm32-unknown-unknown module built from the library crates runs where there
 # is no JavaScript host, so every import is one its embedder cannot provide. The
 # probe (crates/purrdf/examples/host_import_probe.rs) links the parser and the
@@ -643,12 +650,16 @@ wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if ta
 wasm-imports: ## Link the library crates as one bare wasm32 module and refuse any host import (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown -p purrdf --example host_import_probe \
-		&& cargo run -q --locked -p helper-census -- --wasm-imports "$(CARGO_TARGET_DIR)/wasm32-unknown-unknown/release/examples/host_import_probe.wasm"; \
+		&& $(WASM_IMPORT_SCAN); \
 	elif [ -n "$${CI:-}" ]; then \
 		echo "FAIL: wasm32-unknown-unknown target absent in CI"; exit 1; \
 	else \
 		echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 	fi
+
+# Inspect the probe produced by the preceding release build.
+wasm-scan-imports:
+	$(WASM_IMPORT_SCAN)
 
 doctor: ## Report which build pins this machine actually enforces (never gates; run it when a gate SKIPs).
 	@# Every "SKIP" a gate prints is a claim that something was not checked, and the
