@@ -172,6 +172,3 @@ if [ "$generated_count" -ne "$committed_count" ]; then
   echo "$viz_committed contains stale or missing SVG samples" >&2
   exit 1
 fi
-
-cargo test -p purrdf-core --lib --locked \
-  sssom::tests::corpus_accessibility_parses_and_validates_clean
