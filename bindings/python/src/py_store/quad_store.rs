@@ -99,17 +99,18 @@ pub struct PyQuadStore {
 /// state is read. A Python object cannot satisfy this boundary by implementing a
 /// method with the right spelling or by constructing a named capsule.
 pub(crate) fn validation_snapshot(data: &Bound<'_, PyAny>) -> PyResult<Arc<RdfDataset>> {
-    let store = data.extract::<PyRef<'_, PyQuadStore>>().map_err(|_| {
+    if !data.is_instance_of::<PyQuadStore>() {
         let type_name = data.get_type().name().map_or_else(
             |_| "Python object".into(),
             |name| name.to_string_lossy().into_owned(),
         );
-        PyTypeError::new_err(format!(
+        return Err(PyTypeError::new_err(format!(
             "validate_store: a {type_name} is not a purrdf.Store or \
              purrdf.MutableDataset; pass one of those native quad containers, or call \
              validate_nt for a document held as text"
-        ))
-    })?;
+        )));
+    }
+    let store = data.extract::<PyRef<'_, PyQuadStore>>()?;
     let snapshot = store.freeze_snapshot(data.py());
     drop(store);
     snapshot
