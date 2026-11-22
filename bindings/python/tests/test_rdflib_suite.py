@@ -57,10 +57,8 @@ def _run_suite() -> tuple[int, str, dict[str, int]]:
 def test_rdflib_conformance_gate() -> None:
     """rdflib's own vendored tests pass against the shim modulo the ledger.
 
-    GREEN == returncode 0: every vendored test passed or is a known strict xfail;
-    any real failure, any XPASS (a ledgered test that started passing), any
-    collection error, or any stale ledger key turns this RED and shrinks/edits
-    the ledger.
+    Every case must pass or match a strict xfail. The runner also rejects
+    collection errors, stale ledger keys and coverage below the minimum.
     """
     returncode, output, board = _run_suite()
     assert board, f"could not find scoreboard in runner output:\n{output}"
@@ -85,16 +83,3 @@ def test_rdflib_conformance_gate() -> None:
         f"{output}"
     )
     assert returncode == 0, f"conformance gate is RED (rc={returncode}):\n{output}"
-
-
-def test_conformance_suite_is_substantial() -> None:
-    """Guard against the gate silently shrinking to a trivial suite.
-
-    A green gate is only meaningful if it actually exercises a broad slice of
-    rdflib's public API. Assert a floor on the number of vendored test outcomes.
-    """
-    _returncode, output, board = _run_suite()
-    assert board, f"could not find scoreboard in runner output:\n{output}"
-    total = board["passed"] + board["xfailed"]
-    assert total >= 70, f"vendored suite unexpectedly small ({total} outcomes)"
-    assert board["passed"] >= 45, f"too few genuine passes ({board['passed']})"
