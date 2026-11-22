@@ -1,0 +1,19 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 952a9afc2dad1ad703540968087495d166db8b73
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1465
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1465
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 16191f7351a7098cad2051b60bfae80f5f8cc633
+GhpRsq-Head-Ref: paudley/1408-wasm-ci-job-has-no-margin-under-its-25
+GhpRsq-Head-OID: 952a9afc2dad1ad703540968087495d166db8b73
+GhpRsq-Result-Tree: f248439a39af1af67053e2426d7f18fd12004d8a
+GhpRsq-Result-Commit: 7f1267ff9973a0400c55c0da6bdda4ece0a1a5b9
+GhpRsq-Parent-Hashes: 952a9afc2dad1ad703540968087495d166db8b73
+GhpRsq-Squash-Notes-SHA256: 9b956c2b08612e7c201649ea7bd9f7ccc319d360193bc7d65795ebe07376351f
+GhpRsq-Defect-Class: none
+GhpRsq-Stage-Evidence: none
