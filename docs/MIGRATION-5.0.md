@@ -21,13 +21,12 @@ digests before opening a 4.x artifact.
 - The canonical digest is the 32-byte BLAKE3 digest of the line sequence, not
   SHA-256 of N-Quads text. It moves for every dataset, including datasets with no
   blank node.
-- RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. The 4.x
-  algorithm (the `purrdf-rdfc12` overlay and its flat form) stays callable as the
-  read-side recompute of stored 4.x digests (profile version 3), and every
-  stored 4.x digest recomputes unchanged, except one of a dataset holding U+007F
-  or U+0080 to U+009F in an IRI (see "Stored digests"). No writer records a 4.x
-  digest in a new artifact. A GTS compaction certificate names the function that recorded its
-  refold digests (see "Containers").
+- RDFC-1.0 stays a named entry point and the W3C suite passes unchanged. Use the
+  retained `purrdf-rdfc12` overlay or flat form to recompute stored 4.x digests
+  with profile version 3. Both forms preserve their 4.0.2 output bytes, including
+  DEL and C1 escapes in custom-view IRIs (see "Stored digests"). A GTS
+  compaction certificate names the function that
+  recorded its refold digests (see "Containers").
 - The search bound is a limit on the walk of the specification (section 8.3), a
   function of the input as given and of the bound, so every engine refuses the
   same inputs with the same fields. Refusal is the labelling's typed `limit`
@@ -336,8 +335,7 @@ identifier too, and the quads of the first row also change order.
 A consumer that stores a canonical digest as an identifier does the following:
 
 1. Keep the stored 4.x value only as a 4.x value. Recompute it with
-   `purrdf_rdf::rdfc12` to check it, except for a dataset the preceding
-   sections name.
+   `purrdf_rdf::rdfc12` to check it.
 2. Recompute every identifier the consumer keys on from the data, through the
    default entry points. The 5.0 value is never equal to the 4.0.2 value of the
    same dataset, so no stored identifier maps to a new one without the data.
@@ -544,9 +542,8 @@ behaviour.
 
 These items are no longer exported from the root of `purrdf_core`, `purrdf_rdf`
 or `purrdf`. Each keeps its name, signature and 4.x behaviour under
-`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`), except that U+007F and U+0080 to
-U+009F in an IRI are written raw (profile version 3; see "Stored digests"). A caller that wants the 5.0
-canonical output uses the default-family item in the third column, which is
+`purrdf_core::rdfc12` (also `purrdf_rdf::rdfc12`). For 5.0 canonical output,
+use the default-family item in the third column, which is
 exported from the crate root. Two of the functions below keep the name of a
 default-family function: `purrdf_core::try_canonicalize` and
 `purrdf_core::ir::try_canonicalize` run the labelling, while

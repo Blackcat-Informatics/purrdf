@@ -313,36 +313,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   caller that stored such normal forms holds the old spelling. A host letter
   that percent-decoding exposes is now lower-cased as well (`http://%41/` was
   `http://A/` and is `http://a/`), so the normal form is a fixed point.
-- **U+FFFE and U+FFFF are written as `UCHAR` in canonical lines; the canonical
-  IRI escape set is the `IRIREF` exclusions.** The canonical form of RDF 1.2
-  N-Quads (section 3) writes a character outside the XML 1.1 `Char` production as
-  `\uFFFE` or `\uFFFF`. `Carrier::Canonical` and `term_syntax::write_literal` do so
-  for every caller but one, where 4.0.2 wrote both raw; the C1 controls stay raw.
-  Other literal characters keep their 4.0.2 spelling, among them U+1FFFE, U+FDD0
-  and U+0085. The canonical IRI writer escapes exactly what `IRIREF` forbids; an
-  IRI holding U+00A0 is spelled as in 4.0.2. `term_syntax::write_iri`,
-  `write_term_value` and the retained `purrdf_core::rdfc12` functions write
-  U+007F and U+0080 to U+009F in an IRI raw, where 4.0.2 wrote them as `\u007F`
-  and `\u0080` to `\u009F`. The library's own IRI parser refuses these
-  characters in both versions: `freeze` after `intern_iri`, the GTS import
-  functions, the pack dictionary reader and the columnar reader (through `freeze`) each refuse them with
-  `iri-disallowed-char`. The difference reaches only an IRI that a caller's own
-  implementation of the open `DatasetView` trait supplies. The carrier-aware `iri_escape::*_for` functions name the
-  wider XML set, which the
-  Turtle emitter, the native N-Triples writer and the SHACL path renderer keep
-  (for the last, to keep the bytes of a SARIF `logicalLocation` stable). The one
-  exception is the retained `purrdf_core::rdfc12` path, which writes U+FFFE and
-  U+FFFF raw through the new `literal_escape::write_rdfc12_v3` and
-  `term_syntax::write_literal_rdfc12_v3`, and DEL and the C1 controls in an IRI
-  escaped through the new `term_syntax::write_iri_rdfc12_v3` (the `Xml` carrier,
-  the one escaper body): its bytes, `CANON_PROFILE_VERSION` (3)
-  and `CANON_CORPUS_DIGEST` are those of 4.0.2, so every stored 4.x digest
-  recomputes, including the PACK version 1 `rdfc_digest`, `rdfc10-sha256`
-  compaction certificates, PURREMB version 1 source digests and the embedded
-  `stream:contentRefoldDigest`. The 5.0 digest is over binary lines and does not
-  move; the 5.0 document spells those characters as escapes. The
-  `nrl1-lines-sha256` compaction certificate digest, which is the SHA-256 of the
-  5.0 document, follows its spelling and moves for such a dataset.
+- **Canonical N-Quads escapes for literals and IRIs.** RDF 1.2 N-Quads section 3
+  escapes characters in literals outside the XML 1.1 `Char` production. The 5.0
+  canonical document writes U+FFFE and U+FFFF in literals as `\uFFFE` and `\uFFFF`.
+  C1 controls in literals stay raw. U+1FFFE,
+  U+FDD0 and U+0085 keep their 4.0.2 literal spelling. The 5.0 canonical IRI
+  writer escapes the `IRIREF` exclusions, leaving DEL and C1 controls raw.
+  The N-Quads parser, dataset freeze, GTS import, pack dictionary reader and
+  columnar reader refuse these IRI characters with `iri-disallowed-char`.
+  The canonical spelling applies when a custom `DatasetView` supplies such an
+  IRI. U+00A0 keeps its 4.0.2 spelling. The Turtle emitter, native N-Triples
+  writer and SHACL path renderer continue to use the XML escape set.
+  The retained `purrdf_core::rdfc12` profile writes U+FFFE and U+FFFF raw in
+  literals and escapes DEL and C1 controls in IRIs. It preserves the 4.0.2
+  bytes, profile version 3 and corpus digest. This preserves recomputation of
+  stored 4.x digests, including PACK version 1 `rdfc_digest`,
+  `rdfc10-sha256` compaction certificates, PURREMB version 1 source digests
+  and `stream:contentRefoldDigest`. The 5.0 digest uses binary lines
+  independent of text escapes. The `nrl1-lines-sha256` compaction certificate
+  digest follows the 5.0 document's spelling.
 - **SRL inference applies never-derive declarations.** `InferOptions::with_never_derive_declarations`
   admits the executed SRL program against the declarations before it compiles,
   so a rule that derives a protected predicate is refused as
