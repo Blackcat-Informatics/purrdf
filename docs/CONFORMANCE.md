@@ -46,7 +46,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | --- | --- | ---: | ---: | ---: | ---: | :---: |
 | IRI (RFC 3987 / RFC 3986 resolution) | W3C IRI + RFC vectors | 29 | 0 | 0 | 0 | GREEN |
 | RDFC-1.0 canonicalization | W3C rdf-canon | 6 | 0 | 0 | 0 | GREEN |
-| RDF 1.2 canonicalization profile | purrdf-rdfc12 v2 (first-party) | 12 | 0 | 0 | 0 | GREEN |
+| RDF 1.2 canonicalization profile | purrdf-rdfc12 v3 (first-party) | 12 | 0 | 0 | 0 | GREEN |
 | Syntax codecs (Turtle/TriG/NT/NQ/RDF-XML) | W3C rdf-tests | 264 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0/1.1/1.2 evaluation (full corpus) | W3C `sparql10` + `sparql11` + `sparql12` + first-party | 1393 | 0 | 0 | 0 | GREEN |
 | SPARQL 1.0 unlisted vendored files | W3C data-r2 files no upstream manifest lists | 1 | 0 | 0 | 0 | GREEN |
@@ -150,7 +150,7 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
 | Python binding suite | first-party, compat differential vs rdflib 7.6 included | **4289** pass · 4 strict-xfail (ledgered; last complete broad-suite snapshot) · 1 skipped. The count is the WHOLE binding suite — entailment, GTS, projections, shapes — not the rdflib differential alone; the 4 ledgered entries are that differential's |
-| GTS transport | frozen cross-language vectors, `vectors/` | **39 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 0 ledgered divergences. The harness keeps its two-way discipline over an empty ledger: a vector listed as diverging must still disagree, and no unlisted vector may start disagreeing |
+| GTS transport | frozen cross-language vectors, `vectors/` | **39 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 0 ledgered divergences. The harness keeps its two-way discipline over an empty ledger: a vector listed as diverging must still disagree, and no unlisted vector may start disagreeing. The upstream corpus at `gmeow-gts` revision `cd123c2` holds 52 vectors and the engine agrees with 51. The one standing divergence is `13c-self-describing-triple-term`: two terms resolve to the same triple, specification sections 7.1 and 7.8 collapse identical value rows, and the vector keeps both quads. The engine follows the text, and the vector is not edited. `vectors/signed/` (`basic.json` and 68 `sigalg-*` vectors) is outside this statement: the `sigalg-*` vectors pin a protected-header grammar that version 1 of the specification does not contain, so they are not graded as conformance. `signed_corpus` still lists where the engine departs from them |
 
 ## Native YAML-LD Basic
 
