@@ -97,6 +97,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: "Effective-directory copied-key counter guarded by cfg(test); absent from the shipped WASM package.",
     },
     ThreadLocal {
+        file: "crates/rdf-core/src/source.rs",
+        name: "ASSERTED_RECORD_FIXTURE",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/text/src/index.rs",
         name: "DIGEST_BYTES",
         safety: Safety::NotCompiledIn,
