@@ -156,10 +156,37 @@ pub fn import_gts_inline_for_export(
     bytes: &[u8],
     limits: GtsBlobLimits,
 ) -> Result<GtsInlineExport, RdfDiagnostic> {
+    import_gts_inline_for_export_impl(bytes, limits, None)
+}
+
+/// Admit every inline payload under blob and whole-read ceilings.
+///
+/// # Errors
+/// Preserves the ordinary export failures and returns the first whole-read
+/// resource refusal without a partial export.
+pub fn import_gts_inline_for_export_with_read_limits(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    read_limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<GtsInlineExport, RdfDiagnostic> {
+    import_gts_inline_for_export_impl(bytes, limits, Some(read_limits))
+}
+
+fn import_gts_inline_for_export_impl(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    read_limits: Option<purrdf_gts::reader::GtsReadLimits>,
+) -> Result<GtsInlineExport, RdfDiagnostic> {
     let mut collector = BlobCollector::new(&[], limits)?;
     collector.export = Some(Vec::new());
-    let (bundle, collector) =
-        crate::gts_import_sink::import_with_collector(bytes, Some(collector))?;
+    let (bundle, collector) = match read_limits {
+        Some(read_limits) => crate::gts_import_sink::import_with_collector_limits(
+            bytes,
+            Some(collector),
+            read_limits,
+        ),
+        None => crate::gts_import_sink::import_with_collector(bytes, Some(collector)),
+    }?;
     let collector = collector.ok_or_else(|| {
         RdfDiagnostic::error(
             "rdf-ir-gts-import-internal",
@@ -183,11 +210,40 @@ pub fn import_gts_inline_to(
     limits: GtsBlobLimits,
     stager: &mut dyn GtsBlobStager,
 ) -> Result<GtsInlineExport<GtsStagedPayload>, RdfDiagnostic> {
+    import_gts_inline_to_impl(bytes, limits, stager, None)
+}
+
+/// Stage admitted inline blobs under blob and whole-read ceilings.
+///
+/// # Errors
+/// Preserves staging failures and returns the first whole-read refusal without
+/// committing a partial import.
+pub fn import_gts_inline_to_with_read_limits(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    stager: &mut dyn GtsBlobStager,
+    read_limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<GtsInlineExport<GtsStagedPayload>, RdfDiagnostic> {
+    import_gts_inline_to_impl(bytes, limits, stager, Some(read_limits))
+}
+
+fn import_gts_inline_to_impl(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    stager: &mut dyn GtsBlobStager,
+    read_limits: Option<purrdf_gts::reader::GtsReadLimits>,
+) -> Result<GtsInlineExport<GtsStagedPayload>, RdfDiagnostic> {
     let mut collector = BlobCollector::new(&[], limits)?;
     collector.export = Some(Vec::new());
     collector.stager = Some(stager);
-    let (bundle, collector) =
-        crate::gts_import_sink::import_with_collector(bytes, Some(collector))?;
+    let (bundle, collector) = match read_limits {
+        Some(read_limits) => crate::gts_import_sink::import_with_collector_limits(
+            bytes,
+            Some(collector),
+            read_limits,
+        ),
+        None => crate::gts_import_sink::import_with_collector(bytes, Some(collector)),
+    }?;
     let collector = collector.ok_or_else(|| {
         RdfDiagnostic::error(
             "rdf-ir-gts-import-internal",

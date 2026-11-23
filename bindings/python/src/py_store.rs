@@ -59,14 +59,14 @@ mod xsd;
 
 pub(crate) use env::query_coordinates;
 pub(crate) use io::{PyRdfFormat, parse_quads};
+pub(crate) use quad_store::validation_snapshot;
 pub(crate) use query::PyCancellationToken;
 /// The mutable quad store itself, re-exported for the SHACL surface.
 ///
 /// `purrdf.shapes`'s incremental lane takes a `Store` and reads the copy-on-write
 /// DELTA out of it (see [`store::PyStore::change_snapshot`]), which it cannot do
-/// through the Python object protocol: a delta is a Rust view over this store's own
-/// interners, not something expressible as a capsule of a frozen snapshot the way
-/// `_store_capsule` is.
+/// through a Python object protocol: a delta is a Rust view over this store's own
+/// interners.
 pub(crate) use store::PyStore;
 
 use pyo3::prelude::*;

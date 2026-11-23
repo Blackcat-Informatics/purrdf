@@ -4,7 +4,10 @@
 use super::{Digest, Fields, GEOMETRY_ONE, Geometry, ParityClaim, ParityHistory, ParityTable};
 use crate::v2::link::frame_hasher;
 use crate::v2::payload::payload_digest;
-use crate::v2::{FRAME_FIELDS, FRAME_KIND, FrameType, PayloadBudget, PayloadRefusal};
+use crate::v2::{
+    FRAME_FIELDS, FRAME_KIND, FrameType, Item, PayloadBudget, PayloadRefusal, ReadFailure,
+};
+use purrdf_lex::cbor::DecodeErrorKind;
 
 pub(in crate::v2) struct ParityResumption<'a> {
     pub(in crate::v2) length: usize,
@@ -77,10 +80,24 @@ impl ParityHistory {
         &self,
         bytes: &'a [u8],
         budget: &mut PayloadBudget,
-    ) -> Result<Option<ParityResumption<'a>>, u64> {
+        nesting_depth: Option<usize>,
+    ) -> Result<Option<ParityResumption<'a>>, ReadFailure> {
         let Some(candidate) = Candidate::read(bytes, self) else {
             return Ok(None);
         };
+        if let Some(limit) = nesting_depth {
+            match Item::first_with_depth(&bytes[..candidate.length], limit) {
+                Ok(Some(item)) if item.bytes().len() == candidate.length => {}
+                Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
+                    return Err(ReadFailure::ItemDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    });
+                }
+                Ok(_) | Err(_) => return Ok(None),
+            }
+        }
         let mut hasher = frame_hasher(candidate.claim.anchor);
         hasher.update(candidate.identity);
         if hasher.finalize().as_bytes() != candidate.identifier {
@@ -88,7 +105,11 @@ impl ParityHistory {
         }
         match budget.charge_parity_candidate(candidate.payload.len() as u64) {
             Ok(()) => {}
-            Err(PayloadRefusal::TotalDecoded(count)) => return Err(count),
+            Err(PayloadRefusal::TotalDecoded(count)) => {
+                return Err(ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
+                    count,
+                )));
+            }
             Err(_) => return Ok(None),
         }
         if &payload_digest(candidate.payload) != candidate.digest {

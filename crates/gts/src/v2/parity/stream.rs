@@ -207,6 +207,7 @@ impl<'a> ParityStream<'a> {
         findings: &mut Vec<ParityFinding>,
         repaired: &mut Option<Vec<u8>>,
         budget: &mut PayloadBudget,
+        nesting_depth: Option<usize>,
     ) -> Result<(), ReadFailure> {
         use ParityFindingKind as Kind;
         let mut protected_end = self.opener_length;
@@ -251,6 +252,7 @@ impl<'a> ParityStream<'a> {
             items: &self.items,
             opener: self.opener,
             registry: self.registry,
+            nesting_depth,
         }
         .verify(&mut candidates, budget)?;
         for candidate in candidates {

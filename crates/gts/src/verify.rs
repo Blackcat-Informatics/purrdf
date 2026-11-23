@@ -249,6 +249,17 @@ pub fn verify_file(data: &[u8]) -> VerificationResult {
     verify_file_with_options(data, &VerifyOptions::new())
 }
 
+/// Verify a GTS file with strict defaults after whole-read admission.
+///
+/// # Errors
+/// Returns the first resource refusal without a partial verification result.
+pub fn verify_file_with_limits(
+    data: &[u8],
+    limits: crate::reader::GtsReadLimits,
+) -> Result<VerificationResult, crate::reader::GtsReadLimitError> {
+    verify_file_with_options_and_limits(data, &VerifyOptions::new(), limits)
+}
+
 /// Verify a GTS file's embedded signatures with explicit options.
 pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> VerificationResult {
     let mut errors = Vec::new();
@@ -343,6 +354,19 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
     result
 }
 
+/// Verify embedded signatures under options and whole-read ceilings.
+///
+/// # Errors
+/// Returns the first resource refusal without a partial verification result.
+pub fn verify_file_with_options_and_limits(
+    data: &[u8],
+    options: &VerifyOptions,
+    limits: crate::reader::GtsReadLimits,
+) -> Result<VerificationResult, crate::reader::GtsReadLimitError> {
+    crate::reader::check_read_limits(data, crate::reader::ReadOptions::new(true, None), limits)?;
+    Ok(verify_file_with_options(data, options))
+}
+
 /// Verify a GTS file's embedded signatures against a rotation-capable keyring.
 ///
 /// Every COSE `kid` present in the folded signatures is resolved independently
@@ -356,6 +380,19 @@ pub fn verify_file_with_keyring<K: SignatureKeyring + ?Sized>(
 ) -> VerificationResult {
     let options = VerifyOptions::default();
     verify_graph_with_keyring(read(data, true, None), keyring, &options)
+}
+
+/// Verify signatures against a keyring under whole-read ceilings.
+///
+/// # Errors
+/// Returns the first resource refusal without a partial verification result.
+pub fn verify_file_with_keyring_and_limits<K: SignatureKeyring + ?Sized>(
+    data: &[u8],
+    keyring: &K,
+    limits: crate::reader::GtsReadLimits,
+) -> Result<VerificationResult, crate::reader::GtsReadLimitError> {
+    crate::reader::check_read_limits(data, crate::reader::ReadOptions::new(true, None), limits)?;
+    Ok(verify_file_with_keyring(data, keyring))
 }
 
 fn verify_graph_with_keyring<K: SignatureKeyring + ?Sized>(

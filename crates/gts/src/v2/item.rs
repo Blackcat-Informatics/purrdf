@@ -69,13 +69,26 @@ impl<'a> Item<'a> {
         Self::first_examined(bytes).0
     }
 
+    /// Delimit the first item under a caller-owned structural depth ceiling.
+    pub(super) fn first_with_depth(
+        bytes: &'a [u8],
+        max_depth: usize,
+    ) -> Result<Option<Self>, StructuralError> {
+        Self::first_examined_with_depth(bytes, max_depth).0
+    }
+
     pub(super) fn first_examined(
         bytes: &'a [u8],
     ) -> (Result<Option<Self>, StructuralError>, usize) {
+        Self::first_examined_with_depth(bytes, bytes.len())
+    }
+
+    pub(super) fn first_examined_with_depth(
+        bytes: &'a [u8],
+        max_depth: usize,
+    ) -> (Result<Option<Self>, StructuralError>, usize) {
         let mut source = Cursor::new(bytes);
-        let limits = Limits {
-            max_depth: bytes.len(),
-        };
+        let limits = Limits { max_depth };
         let result = StructuralRange::scan(&mut source, 0, bytes.len() as u64, limits);
         let examined = source.position() as usize;
         (

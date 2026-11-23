@@ -730,3 +730,28 @@ where
         Ok(value) => cleanup.map(|()| value),
     }
 }
+
+/// Stream the RDF projection after whole-read admission.
+///
+/// The immutable input is preflighted before dictionary, drain or memory
+/// mutation, so a resource refusal publishes no output.
+///
+/// # Errors
+/// Returns the first whole-read refusal followed by the ordinary export errors.
+pub fn export_gts_rdf_nquads_with_dictionary_and_limits<D, A: Admission + ?Sized>(
+    bytes: &[u8],
+    limits: purrdf_gts::reader::GtsReadLimits,
+    dictionary: &mut dyn TermStorage,
+    resolution: &mut D,
+    replay: [Box<dyn ReplayStorage>; 3],
+    drain: &mut dyn ByteDrain,
+    memory: &mut Memory<'_, A>,
+) -> Result<GtsTextExport, RdfDiagnostic>
+where
+    D: ResolutionStorage<TermKey>,
+    D::Error: purrdf_hash::error::NativeError + 'static,
+{
+    purrdf_gts::reader::check_read_limits(bytes, ReadOptions::new(true, None), limits)
+        .map_err(crate::gts_core::read_limit_failure)?;
+    export_gts_rdf_nquads_with_dictionary(bytes, dictionary, resolution, replay, drain, memory)
+}

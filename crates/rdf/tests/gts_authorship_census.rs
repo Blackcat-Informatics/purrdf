@@ -16,9 +16,10 @@
 //!
 //!   RULE 1 — `Writer`'s public constructor set is exactly
 //!            `{new, deterministic, with_layout, with_options}` (header-MINTING)
-//!            plus `{appending}` (segment-CONTINUING, mints no header and so
-//!            makes no authoring choices — it adopts the ones already on the
-//!            wire). A fifth minting constructor must be added here on purpose.
+//!            plus `{appending, appending_with_limits}` (segment-CONTINUING,
+//!            mint no header and so make no authoring choices — they adopt the
+//!            ones already on the wire). A fifth minting constructor must be
+//!            added here on purpose.
 //!
 //!   RULE 2 — the set of `(file, enclosing fn)` production call sites of those
 //!            four minting constructors is exactly [`AUTHORSHIP_SITES`]. This is
@@ -44,10 +45,11 @@ use syn::visit::{self, Visit};
 /// decide the pack's `WriterOptions` (dictionaries, declared level, layout).
 const MINTING_CONSTRUCTORS: [&str; 4] = ["new", "deterministic", "with_layout", "with_options"];
 
-/// The `Writer` constructors that do NOT mint a header. `appending` continues an
-/// existing segment and adopts the catalog/dictionaries already on the wire, so
-/// it makes no authoring choice and is deliberately outside the census.
-const CONTINUING_CONSTRUCTORS: [&str; 1] = ["appending"];
+/// The `Writer` constructors that do NOT mint a header. The appending
+/// constructors continue an existing segment and adopt the catalog/dictionaries
+/// already on the wire, so they make no authoring choice and are deliberately
+/// outside the census.
+const CONTINUING_CONSTRUCTORS: [&str; 2] = ["appending", "appending_with_limits"];
 
 /// THE CENSUS: every production `(file, enclosing fn)` that mints a GTS header.
 ///
@@ -58,13 +60,14 @@ const CONTINUING_CONSTRUCTORS: [&str; 1] = ["appending"];
 /// The three general-purpose PUBLIC authoring facades a consumer is expected to
 /// reach for are `purrdf_rdf::gts_write::{to_writer, to_gts}` (RDF dataset →
 /// GTS; `to_gts` delegates to `to_writer`, so only the latter is a direct site)
-/// and `purrdf_gts::compact::compact_streamable` (§10.1 repack). The remaining
-/// rows are narrower producers — a bundle emitter, an archive packer, an example
-/// store, and the frozen-vector fixtures — each of which is still a way to mint
-/// a header and so still belongs in the census.
+/// and `purrdf_gts::compact::compact_streamable` (§10.1 repack), which delegates
+/// to the directly censused `compact_streamable_impl`. The remaining rows are
+/// narrower producers — a bundle emitter, an archive packer, an example store,
+/// and the frozen-vector fixtures — each of which is still a way to mint a
+/// header and so still belongs in the census.
 const AUTHORSHIP_SITES: [(&str, &str); 9] = [
     // §10.1 streamable compaction: authors a pack under a `DictPlan`.
-    ("crates/gts/src/compact.rs", "compact_streamable"),
+    ("crates/gts/src/compact.rs", "compact_streamable_impl"),
     // The append-only agent-memory example store (mints the header once, then
     // continues that segment through `Writer::appending`).
     ("crates/gts/src/examples/agent_memory.rs", "writer"),
@@ -604,7 +607,7 @@ fn every_production_gts_authorship_site_is_in_the_census() {
 #[test]
 fn the_public_authoring_facades_are_present_and_named() {
     assert!(AUTHORSHIP_SITES.contains(&("crates/rdf/src/gts_write.rs", "to_writer")));
-    assert!(AUTHORSHIP_SITES.contains(&("crates/gts/src/compact.rs", "compact_streamable")));
+    assert!(AUTHORSHIP_SITES.contains(&("crates/gts/src/compact.rs", "compact_streamable_impl")));
     let source = std::fs::read_to_string(workspace_root!().join("crates/rdf/src/gts_write.rs"))
         .expect("gts_write.rs");
     let parsed = syn::parse_file(&source).expect("valid Rust");
@@ -621,16 +624,50 @@ fn the_public_authoring_facades_are_present_and_named() {
             _ => None,
         })
         .expect("to_gts remains a public facade");
-    struct Delegates(bool);
-    impl<'ast> Visit<'ast> for Delegates {
+    struct DelegatesTo<'a> {
+        target: &'a str,
+        found: bool,
+    }
+    impl<'ast> Visit<'ast> for DelegatesTo<'_> {
         fn visit_expr_call(&mut self, call: &'ast syn::ExprCall) {
-            self.0 |= matches!(call.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident("to_writer"));
+            self.found |= matches!(call.func.as_ref(), syn::Expr::Path(path) if path.path.is_ident(self.target));
             visit::visit_expr_call(self, call);
         }
     }
-    let mut delegates = Delegates(false);
+    let mut delegates = DelegatesTo {
+        target: "to_writer",
+        found: false,
+    };
     delegates.visit_block(&function.block);
-    assert!(delegates.0, "to_gts must author through to_writer");
+    assert!(delegates.found, "to_gts must author through to_writer");
+
+    let source = std::fs::read_to_string(workspace_root!().join("crates/gts/src/compact.rs"))
+        .expect("compact.rs");
+    let parsed = syn::parse_file(&source).expect("valid Rust");
+    for facade in ["compact_streamable", "compact_streamable_with_limits"] {
+        let function = parsed
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::Item::Fn(function)
+                    if function.sig.ident == facade
+                        && matches!(function.vis, syn::Visibility::Public(_)) =>
+                {
+                    Some(function)
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{facade} remains a public facade"));
+        let mut delegates = DelegatesTo {
+            target: "compact_streamable_impl",
+            found: false,
+        };
+        delegates.visit_block(&function.block);
+        assert!(
+            delegates.found,
+            "{facade} must author through compact_streamable_impl"
+        );
+    }
 }
 
 mod detector_self_tests {

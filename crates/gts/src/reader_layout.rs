@@ -55,6 +55,9 @@ pub(crate) fn layout_check(
             }
             .with_native_cause(LayoutError::MissingFooter),
         );
+        if sink.as_deref().is_some_and(|sink| !sink.continue_reading()) {
+            return StreamableInfo::default();
+        }
         return StreamableInfo {
             claimed: true,
             covered: 0,
@@ -99,6 +102,9 @@ pub(crate) fn layout_check(
                     .cloned(),
             }),
         );
+        if sink.as_deref().is_some_and(|sink| !sink.continue_reading()) {
+            return StreamableInfo::default();
+        }
     }
     for (blob_abs, digest, described) in blob_events {
         let blob_rel = blob_abs - index_offset;
@@ -121,6 +127,9 @@ pub(crate) fn layout_check(
                     covered: count,
                 }),
             );
+            if sink.as_deref().is_some_and(|sink| !sink.continue_reading()) {
+                return StreamableInfo::default();
+            }
         }
     }
     StreamableInfo {
@@ -194,6 +203,66 @@ pub(crate) fn check_index_mmr(
                 }
                 .with_native_cause(error),
             );
+            if sink.as_deref().is_some_and(|sink| !sink.continue_reading()) {
+                return;
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IndexRecord, check_index_mmr, layout_check};
+    use crate::model::Graph;
+    use crate::reader::StreamingSink;
+
+    #[derive(Default)]
+    struct CancelOnDiagnostic(usize);
+
+    impl StreamingSink for CancelOnDiagnostic {
+        fn continue_reading(&self) -> bool {
+            self.0 == 0
+        }
+
+        fn diagnostic(&mut self, _diagnostic: &crate::model::Diagnostic) {
+            self.0 += 1;
+        }
+    }
+
+    #[test]
+    fn index_and_layout_diagnostic_loops_stop_at_cancellation() {
+        let records = [0_u64, 1].map(|abs_index| IndexRecord {
+            abs_index,
+            count: 0,
+            head: Vec::new(),
+            mmr: Some(Vec::new()),
+        });
+        let mut graph = Graph::default();
+        let mut sink = CancelOnDiagnostic::default();
+        let mut sink_slot: Option<&mut dyn StreamingSink> = Some(&mut sink);
+        check_index_mmr(&mut graph, &records, &[], 0, &mut sink_slot);
+        assert_eq!(sink.0, 1);
+
+        let header = vec![("layout".into(), "streamable".into())];
+        let frame_ids = vec![vec![1], vec![2], vec![3]];
+        let index = [IndexRecord {
+            abs_index: 3,
+            count: 2,
+            head: frame_ids[1].clone(),
+            mmr: None,
+        }];
+        let blobs = vec![(1, "one".to_owned(), false), (2, "two".to_owned(), false)];
+        let mut sink = CancelOnDiagnostic::default();
+        let mut sink_slot: Option<&mut dyn StreamingSink> = Some(&mut sink);
+        layout_check(
+            &mut graph,
+            &header,
+            &index,
+            &blobs,
+            &frame_ids,
+            0,
+            &mut sink_slot,
+        );
+        assert_eq!(sink.0, 1);
     }
 }

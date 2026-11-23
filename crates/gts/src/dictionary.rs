@@ -13,6 +13,7 @@ use purrdf_hash::error::IoFailure;
 use purrdf_lex::allocation::{SharedOwned, StorageError};
 
 use crate::model::{Term, Triple3};
+use crate::wire::TornAppendError;
 
 mod spill;
 pub use spill::{DictionaryResidence, ResidentTermStorage, SpillPolicy, SpillingDictionary};
@@ -67,6 +68,13 @@ pub enum DictionaryError {
     Io(IoFailure),
     /// Original integrity or decode failure in previously admitted replay bytes.
     Replay(purrdf_lex::cbor::DecodeError),
+    /// An item decode failed and the subsequent tail-admission drain also failed.
+    Tail {
+        /// Original item-boundary failure, including its absolute start offset.
+        torn: Box<TornAppendError>,
+        /// Later host failure while checking the remaining input.
+        drain: IoFailure,
+    },
     /// An admitted dictionary entry is absent from caller storage.
     Missing(TermKey),
     /// Explicitly bounded live workspace could not admit the next operation.
@@ -90,6 +98,9 @@ impl fmt::Display for DictionaryError {
             Self::Storage(cause) => cause.fmt(f),
             Self::Io(cause) => cause.fmt(f),
             Self::Replay(cause) => cause.fmt(f),
+            Self::Tail { torn, drain } => {
+                write!(f, "{torn}; remaining input could not be checked: {drain}")
+            }
             Self::Missing(key) => write!(
                 f,
                 "dictionary entry {} in segment {} is missing",
@@ -114,6 +125,7 @@ impl std::error::Error for DictionaryError {
             Self::Storage(cause) => Some(cause),
             Self::Io(cause) => Some(cause),
             Self::Replay(cause) => Some(cause),
+            Self::Tail { torn, .. } => Some(torn.as_ref()),
             _ => None,
         }
     }
@@ -124,6 +136,9 @@ impl purrdf_hash::error::StructuredError for DictionaryError {
         Storage(cause) => "gts-dictionary-storage" { "cause" => Cause(cause) },
         Io(cause) => "gts-dictionary-io" { "cause" => Cause(cause) },
         Replay(cause) => "gts-dictionary-replay" { "cause" => Cause(cause) },
+        Tail { torn, drain } => "gts-dictionary-tail" {
+            "torn" => Cause(torn.as_ref()), "drain" => Cause(drain)
+        },
         Missing(key) => "gts-dictionary-missing" {
             "segment" => Unsigned(u128::from(key.segment)),
             "term" => Unsigned(key.term as u128)

@@ -29,7 +29,7 @@ use purrdf_gts::reader;
 use purrdf_gts::verify::verify_file;
 use purrdf_gts::wire::digest_label;
 
-use crate::gts_core::diagnostics_to_error;
+use crate::gts_core::{diagnostics_to_error, read_limit_failure};
 use crate::{RdfDataset, RdfDiagnostic};
 
 mod error;
@@ -94,9 +94,44 @@ pub fn verify_content_chain(
     gts_bytes: &[u8],
     expected_head: &[u8],
 ) -> Result<ContentChainVerification, RdfDiagnostic> {
+    verify_content_chain_impl(dataset, gts_bytes, expected_head, None)
+}
+
+/// Verify a content chain under an explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal or ordinary verification diagnostic
+/// without a partial verification result.
+pub fn verify_content_chain_with_limits(
+    dataset: &RdfDataset,
+    gts_bytes: &[u8],
+    expected_head: &[u8],
+    limits: reader::GtsReadLimits,
+) -> Result<ContentChainVerification, RdfDiagnostic> {
+    verify_content_chain_impl(dataset, gts_bytes, expected_head, Some(limits))
+}
+
+fn verify_content_chain_impl(
+    dataset: &RdfDataset,
+    gts_bytes: &[u8],
+    expected_head: &[u8],
+    limits: Option<reader::GtsReadLimits>,
+) -> Result<ContentChainVerification, RdfDiagnostic> {
+    let mut remaining_work = limits.map_or(usize::MAX, |limits| limits.work);
     // 1. COSE signatures: resolve the embedded transport key and verify every
     //    signed frame. `ok` is false whenever any error was recorded.
-    let verification = verify_file(gts_bytes);
+    let verification = match limits {
+        Some(limits) => {
+            admit_chain_stage(
+                gts_bytes,
+                reader::ReadOptions::new(true, None),
+                limits,
+                &mut remaining_work,
+            )?;
+            verify_file(gts_bytes)
+        }
+        None => verify_file(gts_bytes),
+    };
     if !verification.ok {
         let detail = if verification.errors.is_empty() {
             "signature verification did not succeed".to_owned()
@@ -124,7 +159,14 @@ pub fn verify_content_chain(
 
     // 2. Expected-head chain replay: fold every segment and enforce the head.
     //    Any reader diagnostic (including a head mismatch) is a hard failure.
-    let graph = reader::read(gts_bytes, true, Some(expected_head));
+    let graph = match limits {
+        Some(limits) => {
+            let options = reader::ReadOptions::new(true, Some(expected_head));
+            admit_chain_stage(gts_bytes, options, limits, &mut remaining_work)?;
+            reader::read(gts_bytes, true, Some(expected_head))
+        }
+        None => reader::read(gts_bytes, true, Some(expected_head)),
+    };
     if !graph.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&graph));
     }
@@ -154,7 +196,19 @@ pub fn verify_content_chain(
             digests_included += 1;
             continue;
         }
-        match prove_file(gts_bytes, digest.as_bytes()).and_then(|proof| verify_proof(&proof)) {
+        let proof = match limits {
+            Some(limits) => {
+                admit_chain_stage(
+                    gts_bytes,
+                    reader::ReadOptions::new(true, None),
+                    limits,
+                    &mut remaining_work,
+                )?;
+                prove_file(gts_bytes, digest.as_bytes())
+            }
+            None => prove_file(gts_bytes, digest.as_bytes()),
+        };
+        match proof.and_then(|proof| verify_proof(&proof)) {
             Ok(()) => digests_included += 1,
             Err(cause) => missing.push(MissingDigest {
                 term: term_id,
@@ -188,6 +242,26 @@ pub fn verify_content_chain(
     })
 }
 
+/// Admit one complete-file phase against the work left to this composite call.
+///
+/// The byte, item and row ceilings describe the artifact and therefore remain
+/// unchanged across phases. Work describes what this invocation performs, so
+/// every signature fold, expected-head replay and MMR proof consumes from one
+/// shared remainder.
+fn admit_chain_stage(
+    data: &[u8],
+    options: reader::ReadOptions<'_>,
+    limits: reader::GtsReadLimits,
+    remaining_work: &mut usize,
+) -> Result<(), RdfDiagnostic> {
+    let mut stage_limits = limits;
+    stage_limits.work = *remaining_work;
+    let usage =
+        reader::check_read_limits(data, options, stage_limits).map_err(read_limit_failure)?;
+    *remaining_work = remaining_work.saturating_sub(usage.work);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -199,7 +273,7 @@ mod tests {
     use purrdf_gts::writer::Writer;
     use purrdf_lex::cbor::Value;
 
-    use super::{RdfDataset, verify_content_chain};
+    use super::{RdfDataset, verify_content_chain, verify_content_chain_with_limits};
 
     const KID: &str = "did:example:test";
     const BLOB_PAYLOAD: &[u8] = b"content-addressed payload for the GTS verify bridge";
@@ -269,15 +343,51 @@ mod tests {
         (bytes, head, blob_frame_id)
     }
 
+    /// Build a signed GTS file whose one MMR index covers two distinct blob
+    /// frame ids.
+    fn build_file_with_two_indexed_blobs() -> (Vec<u8>, Vec<u8>, [Vec<u8>; 2]) {
+        let mut writer = Writer::new("purrdf.gts");
+        let (signing_key, kid) = parse_secret_signing_key(&secret_armor(), Some(KID))
+            .expect("parse fixture secret key")
+            .into_parts();
+        writer.sign_with(signing_key, &kid);
+        writer.add_meta(Value::Map(vec![(
+            Value::Text("gts:transportKey".to_owned()),
+            Value::Map(vec![
+                (Value::Text("kid".to_owned()), Value::Text(kid)),
+                (Value::Text("gpg".to_owned()), Value::Text(public_armor())),
+            ]),
+        )]));
+        let first = writer.add_blob(BLOB_PAYLOAD, Some("text/plain"), Some("first"));
+        let second = writer.add_blob(
+            b"a second indexed payload",
+            Some("text/plain"),
+            Some("second"),
+        );
+        writer.add_index_with_mmr();
+        let bytes = writer.to_bytes();
+        let head = writer.head().to_vec();
+        (bytes, head, [first, second])
+    }
+
     /// Freeze a content-addressing dataset that references `content_iri` as the
     /// subject of a single quad.
     fn dataset_referencing(content_iri: &str) -> Arc<RdfDataset> {
+        dataset_referencing_many(&[content_iri])
+    }
+
+    fn dataset_referencing_many(content_iris: &[&str]) -> Arc<RdfDataset> {
         let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
         let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let s = builder.intern_iri(content_iri).unwrap();
+        let subjects = content_iris
+            .iter()
+            .map(|content_iri| builder.intern_iri(content_iri).unwrap())
+            .collect::<Vec<_>>();
         let p = builder.intern_iri("https://example.org/p").unwrap();
         let o = builder.intern_literal(RdfLiteral::simple("o")).unwrap();
-        builder.push_quad(s, p, o, None).unwrap();
+        for subject in subjects {
+            builder.push_quad(subject, p, o, None).unwrap();
+        }
         builder.freeze().expect("freeze content-addressing dataset")
     }
 
@@ -297,6 +407,58 @@ mod tests {
             result.signatures_valid >= 1,
             "at least one COSE signature was cryptographically valid"
         );
+    }
+
+    #[test]
+    fn bounded_verification_refuses_before_any_chain_result() {
+        let (bytes, head) = build_file(true);
+        let dataset = dataset_referencing(&digest_str(BLOB_PAYLOAD));
+        let mut limits = purrdf_gts::reader::GtsReadLimits::UNBOUNDED;
+        limits.encoded_input_bytes = bytes.len() - 1;
+        let error = verify_content_chain_with_limits(&dataset, &bytes, &head, limits)
+            .expect_err("the adjacent input excess is refused");
+        assert_eq!(error.code, "rdf-ir-gts-read-limit");
+    }
+
+    #[test]
+    fn bounded_verification_shares_work_across_mmr_proofs() {
+        let (bytes, head, frame_ids) = build_file_with_two_indexed_blobs();
+        let content_ids = [digest_label(&frame_ids[0]), digest_label(&frame_ids[1])];
+        let dataset = dataset_referencing_many(&[content_ids[0].as_str(), content_ids[1].as_str()]);
+        let mut bounded_probe = purrdf_gts::reader::GtsReadLimits::UNBOUNDED;
+        // Any finite work ceiling eagerly validates declared blobs. Measure
+        // that bounded production path rather than the trusted-input shortcut.
+        bounded_probe.work = usize::MAX - 1;
+        let ordinary = purrdf_gts::reader::check_read_limits(
+            &bytes,
+            purrdf_gts::reader::ReadOptions::new(true, None),
+            bounded_probe,
+        )
+        .expect("ordinary phase usage");
+        let replay = purrdf_gts::reader::check_read_limits(
+            &bytes,
+            purrdf_gts::reader::ReadOptions::new(true, Some(&head)),
+            bounded_probe,
+        )
+        .expect("expected-head phase usage");
+
+        let mut limits = bounded_probe;
+        limits.work = ordinary
+            .work
+            .checked_mul(2)
+            .and_then(|work| work.checked_add(replay.work))
+            .expect("fixture work fits");
+        let error = verify_content_chain_with_limits(&dataset, &bytes, &head, limits)
+            .expect_err("a second proof cannot reset the exhausted work budget");
+        assert_eq!(error.code, "rdf-ir-gts-read-limit");
+
+        limits.work = limits
+            .work
+            .checked_add(ordinary.work)
+            .expect("adjacent admitted work fits");
+        let result = verify_content_chain_with_limits(&dataset, &bytes, &head, limits)
+            .expect("one additional whole-file phase admits the second proof");
+        assert_eq!(result.digests_included, 2);
     }
 
     #[test]

@@ -5,13 +5,15 @@
 
 use core::num::NonZeroU64;
 
+use purrdf_gts::reader::GtsReadResource;
 use purrdf_gts::v2::{
-    ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
-    Line, Lineage, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage,
-    PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError,
-    SegmentWriter, Term, ValueName, read, write_header,
+    ContentError, DetectionCapacity, FrameField, FramingDamage, IndexStorageItem,
+    IndexStorageProblem, Item, ItemKind, Line, Lineage, MalformedReason, ParityFindingKind,
+    ParityRepairFailure, PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure,
+    ReadGraph, ReadLimits, SegmentWriteError, SegmentWriter, Term, ValueName, read,
+    read_with_limits, write_header,
 };
-use purrdf_lex::cbor::head;
+use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
 fn second(bytes: &[u8]) -> RdfGraph<'_> {
     let ReadGraph::Second(graph) = read(bytes, ReadCapacity::default()).unwrap() else {
@@ -381,6 +383,39 @@ fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
     assert!(graph.index_checks.is_empty());
     assert_eq!(graph.repaired.as_deref(), Some(intact.as_slice()));
 
+    let mut limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = 3;
+    let ReadGraph::Second(graph) = read_with_limits(&damaged, limits).unwrap() else {
+        panic!("the bounded reader admits the parity candidate at its structural depth");
+    };
+    assert_eq!(graph.parity_recoveries.len(), 1);
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(&damaged, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 3,
+            limit: 2,
+            ..
+        }
+    ));
+
+    let decoy_depth = 8;
+    let mut decoy = vec![0x8b];
+    decoy.extend(std::iter::repeat_n(0x81, decoy_depth));
+    decoy.push(0);
+    let mut with_decoy = damaged[..=index_offset].to_vec();
+    with_decoy.extend_from_slice(&decoy);
+    with_decoy.extend_from_slice(&damaged[index_offset + 1..]);
+    limits.second_generation_nesting_depth = 3;
+    let ReadGraph::Second(graph) = read_with_limits(&with_decoy, limits).unwrap() else {
+        panic!("a non-parity decoy must not preempt the later parity candidate");
+    };
+    assert_eq!(
+        graph.parity_recoveries[0].offset,
+        parity_offset + decoy.len()
+    );
+
     let mut capacity = ReadCapacity::default();
     for limit in [588, 589] {
         capacity.payload.decoded_bytes_per_read = limit;
@@ -502,6 +537,23 @@ fn recovery_accepts_whichever_valid_candidate_is_earlier() {
         panic!("expected the earlier resync opener to end the lost region");
     };
     assert_eq!(opener.offset, index + 1);
+
+    let mut limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = 3;
+    let ReadGraph::Second(graph) = read_with_limits(&resync_first, limits).unwrap() else {
+        panic!("the bounded reader admits the later resync opener at its structural depth");
+    };
+    assert_eq!(graph.resynchronizations[0].offset, index + 1);
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(&resync_first, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 3,
+            limit: 2,
+            ..
+        }
+    ));
 
     damaged.extend(resync_opener_at(u16::try_from(intact.len()).unwrap()));
     let graph = second(&damaged);
@@ -637,6 +689,281 @@ fn legacy_opener_delegates_the_entire_input() {
         format!("{:?}", actual.diagnostics),
         format!("{:?}", expected.diagnostics)
     );
+
+    let mut limits = ReadLimits::default();
+    limits.second_generation.items = 0;
+    limits.first_generation.encoded_input_bytes = bytes.len();
+    assert!(matches!(
+        read_with_limits(bytes, limits).unwrap(),
+        ReadGraph::First(_)
+    ));
+    limits.first_generation.encoded_input_bytes -= 1;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    let ReadFailure::FirstGenerationCapacity(refusal) = error.failure else {
+        panic!("expected the generation 1 input-byte capacity refusal");
+    };
+    assert_eq!(
+        (
+            refusal.resource,
+            refusal.required,
+            refusal.limit,
+            refusal.usage.encoded_input_bytes,
+        ),
+        (
+            GtsReadResource::EncodedInputBytes,
+            bytes.len(),
+            bytes.len() - 1,
+            bytes.len(),
+        )
+    );
+}
+
+#[test]
+fn generation_detection_bounds_opener_bytes_work_and_depth() {
+    let bytes = include_bytes!("fixtures/v2/P9/reader__first-and-second.bin");
+    let opener_bytes = Item::first(bytes).unwrap().unwrap().bytes().len();
+    let mut limits = ReadLimits::default();
+    limits.detection.encoded_opener_bytes = opener_bytes;
+    limits.detection.work = usize::MAX;
+    assert!(matches!(
+        read_with_limits(bytes, limits).unwrap(),
+        ReadGraph::First(_)
+    ));
+
+    limits.detection.encoded_opener_bytes -= 1;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionBytes { required, limit, .. }
+            if required == opener_bytes && limit == opener_bytes - 1
+    ));
+    limits.detection.encoded_opener_bytes = 0;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionBytes {
+            required: 1,
+            limit: 0,
+            ..
+        }
+    ));
+
+    let mut tagged_opener = vec![0xd9, 0xd9, 0xf7, 0xa2, 0x61, b'a', 0x58, 0x40];
+    tagged_opener.extend(std::iter::repeat_n(0, 64));
+    tagged_opener.extend_from_slice(&[0x61, b'v', 0x01]);
+    let tagged_work = tagged_opener.len() * DetectionCapacity::OPENER_WORK_PER_BYTE;
+    limits.detection.encoded_opener_bytes = usize::MAX;
+    limits.detection.work = tagged_work;
+    assert!(matches!(
+        read_with_limits(&tagged_opener, limits).unwrap(),
+        ReadGraph::First(_)
+    ));
+    limits.detection.work -= 1;
+    let error = read_with_limits(&tagged_opener, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork { required, limit, .. }
+            if required == tagged_work && limit == tagged_work - 1
+    ));
+    limits.detection.work = 0;
+    let error = read_with_limits(&tagged_opener, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork {
+            required: 1,
+            limit: 0,
+            ..
+        }
+    ));
+
+    let nested_arrays = 4;
+    let exact_depth = nested_arrays + 1;
+    let mut deep_opener = vec![0xa2, 0x61, b'a'];
+    deep_opener.extend(std::iter::repeat_n(0x81, nested_arrays));
+    deep_opener.extend_from_slice(&[0x00, 0x61, b'v', 0x01]);
+    limits.detection.encoded_opener_bytes = usize::MAX;
+    limits.detection.work = usize::MAX;
+    limits.detection.nesting_depth = exact_depth;
+    assert!(matches!(
+        read_with_limits(&deep_opener, limits).unwrap(),
+        ReadGraph::First(_)
+    ));
+    limits.detection.nesting_depth -= 1;
+    let error = read_with_limits(&deep_opener, limits).unwrap_err();
+    assert!(matches!(
+        &error.failure,
+        ReadFailure::DetectionDepth { required, limit, .. }
+            if *required == exact_depth && *limit == exact_depth - 1
+    ));
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the native structural depth refusal remains inspectable");
+    assert_eq!(
+        cause.kind(),
+        DecodeErrorKind::Depth {
+            limit: exact_depth - 1
+        }
+    );
+    limits.detection.nesting_depth = 0;
+    let error = read_with_limits(&deep_opener, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionDepth {
+            required: 1,
+            limit: 0,
+            ..
+        }
+    ));
+
+    let recovered = include_bytes!("fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
+    limits.detection.nesting_depth = 2;
+    assert!(matches!(
+        read_with_limits(recovered, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.detection.nesting_depth = 1;
+    let error = read_with_limits(recovered, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionDepth {
+            required: 2,
+            limit: 1,
+            ..
+        }
+    ));
+
+    limits.detection.nesting_depth = 2;
+    limits.second_generation_nesting_depth = 1;
+    let error = read_with_limits(recovered, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 2,
+            limit: 1,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn bounded_recovery_and_body_framing_apply_their_nesting_limits() {
+    let source = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
+    let opener_len = Item::first(source).unwrap().unwrap().bytes().len();
+    let held_len = Item::first(&source[opener_len..])
+        .unwrap()
+        .unwrap()
+        .bytes()
+        .len();
+    let held_depth = held_len - 1;
+    let mut deep_held = vec![0x81; held_depth];
+    deep_held.push(0);
+    let mut damaged = source.to_vec();
+    damaged[opener_len..opener_len + held_len].copy_from_slice(&deep_held);
+
+    let mut limits = ReadLimits::default();
+    limits.detection.nesting_depth = held_depth;
+    assert!(matches!(
+        read_with_limits(source, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    let error = read_with_limits(&damaged, limits).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::BrokenLink));
+    limits.detection.nesting_depth -= 1;
+    let error = read_with_limits(&damaged, limits).unwrap_err();
+    assert!(matches!(
+        &error.failure,
+        ReadFailure::DetectionDepth { required, limit, .. }
+            if *required == held_depth && *limit == held_depth - 1
+    ));
+
+    let mut body = include_bytes!("fixtures/v2/P1/header-minimal.bin").to_vec();
+    let body_depth = 8;
+    body.extend(std::iter::repeat_n(0x81, body_depth));
+    body.push(0);
+    limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = body_depth;
+    assert!(matches!(
+        read_with_limits(&body, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(&body, limits).unwrap_err();
+    assert!(matches!(
+        &error.failure,
+        ReadFailure::ItemDepth { required, limit, .. }
+            if *required == body_depth && *limit == body_depth - 1
+    ));
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the native item depth refusal remains inspectable");
+    assert_eq!(
+        cause.kind(),
+        DecodeErrorKind::Depth {
+            limit: body_depth - 1
+        }
+    );
+
+    let opener = include_bytes!("fixtures/v2/P1/header-minimal.bin");
+    limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = 2;
+    assert!(matches!(
+        read_with_limits(opener, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(opener, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 2,
+            limit: 1,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn bounded_framing_reports_the_item_start_and_retains_the_native_offset() {
+    let opener = include_bytes!("fixtures/v2/P1/header-minimal.bin");
+    let mut valid = opener.to_vec();
+    valid.extend_from_slice(&[0x82, 0x00, 0x00]);
+    assert!(matches!(
+        read_with_limits(&valid, ReadLimits::default()).unwrap(),
+        ReadGraph::Second(_)
+    ));
+
+    let mut malformed = opener.to_vec();
+    malformed.extend_from_slice(&[0x82, 0x00, 0xff]);
+    let error = read_with_limits(&malformed, ReadLimits::default()).unwrap_err();
+    assert_eq!(error.offset, opener.len());
+    let ReadFailure::Framing(cause) = &error.failure else {
+        panic!("the malformed body item must retain its framing refusal");
+    };
+    assert_eq!(cause.offset(), 2);
+}
+
+#[test]
+fn a_partial_recovery_scan_does_not_exhaust_the_larger_detection_window() {
+    let bytes = [0x00, 0x00, 0x00];
+    let mut limits = ReadLimits::default();
+    limits.detection.encoded_opener_bytes = 2;
+    limits.detection.work = usize::MAX;
+    let error = read_with_limits(&bytes, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::Generation(purrdf_gts::v2::Generation::Unrecognized)
+    ));
+
+    limits.detection.encoded_opener_bytes = 1;
+    let error = read_with_limits(&bytes, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionBytes {
+            required: 2,
+            limit: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -690,33 +1017,111 @@ fn scanned_openers_preserve_the_difference_between_torn_and_undelimitable_prefix
 #[test]
 fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     let bytes = include_bytes!("fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
-    let mut capacity = ReadCapacity {
-        items: 1,
-        ..ReadCapacity::default()
-    };
-    let error = read(bytes, capacity).unwrap_err();
+    let mut limits = ReadLimits::default();
+    limits.second_generation.items = 1;
+    let error = read_with_limits(bytes, limits).unwrap_err();
     assert_eq!(error.offset, 0);
     assert!(matches!(error.failure, ReadFailure::Framing(_)));
 
-    capacity.items = 4;
-    capacity.payload.decoded_bytes_per_read = 4095;
-    let error = read(bytes, capacity).unwrap_err();
+    // Detection consumed its whole work budget, but the item limit prevents
+    // the bounded scanner from running, so the original refusal still wins.
+    limits.detection.work = 1;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::Framing(_)));
+
+    // Once scanning is admitted, the same empty recovery window is genuinely
+    // exhausted and reports its typed work refusal with the framing cause.
+    limits.second_generation.items = 2;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(
+        &error.failure,
+        ReadFailure::DetectionWork {
+            required,
+            limit: 1,
+            ..
+        } if *required == 1 + DetectionCapacity::RECOVERY_WORK_PER_BYTE
+    ));
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the exhausted empty window retains its malformed framing cause");
+    assert!(matches!(cause.kind(), DecodeErrorKind::Malformed(_)));
+
+    limits = ReadLimits::default();
+    limits.second_generation.items = 4;
+    limits.second_generation.payload.decoded_bytes_per_read = 4095;
+    let error = read_with_limits(bytes, limits).unwrap_err();
     assert_eq!(error.offset, 2);
     assert!(matches!(
         error.failure,
         ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4096))
     ));
 
+    limits.second_generation.payload = ReadCapacity::default().payload;
+    let opener_end = 2 + Item::first(&bytes[2..]).unwrap().unwrap().bytes().len();
+    limits.detection.encoded_opener_bytes = opener_end;
+    limits.detection.work = usize::MAX;
+    assert!(matches!(
+        read_with_limits(bytes, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.detection.encoded_opener_bytes -= 1;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(
+        &error.failure,
+        ReadFailure::DetectionBytes { required, limit, .. }
+            if *required == opener_end && *limit == opener_end - 1
+    ));
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the malformed opener remains the recovery refusal's source");
+    assert!(matches!(cause.kind(), DecodeErrorKind::Malformed(_)));
+
+    let recovery_work = 1 + DetectionCapacity::recovery_work(opener_end);
+    limits.detection.encoded_opener_bytes = usize::MAX;
+    limits.detection.work = recovery_work;
+    assert!(matches!(
+        read_with_limits(bytes, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.detection.work -= 1;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork { required, limit, .. }
+            if required == recovery_work && limit == recovery_work - 1
+    ));
+    limits.detection = ReadLimits::default().detection;
+
     // The complete failing opener plus its two held frames reach capacity
     // before the candidate can be tested or charged.
     let complete = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
-    capacity.items = 3;
-    let error = read(complete, capacity).unwrap_err();
+    let complete_opener = Item::first(complete).unwrap().unwrap();
+    let candidate_end = 10 + Item::first(&complete[10..]).unwrap().unwrap().bytes().len();
+    let complete_work = complete_opener.bytes().len() * DetectionCapacity::OPENER_WORK_PER_BYTE
+        + DetectionCapacity::recovery_work(candidate_end);
+    limits.second_generation.items = 6;
+    limits.detection.encoded_opener_bytes = usize::MAX;
+    limits.detection.work = complete_work;
+    assert!(matches!(
+        read_with_limits(complete, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.detection.work -= 1;
+    let error = read_with_limits(complete, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork { required, limit, .. }
+            if required == complete_work && limit == complete_work - 1
+    ));
+    limits.detection = ReadLimits::default().detection;
+
+    limits.second_generation.items = 3;
+    let error = read_with_limits(complete, limits).unwrap_err();
     assert_eq!(error.offset, 0);
     assert!(matches!(error.failure, ReadFailure::Wire(_)));
 
-    capacity.items = 2;
-    let error = read(complete, capacity).unwrap_err();
+    limits.second_generation.items = 2;
+    let error = read_with_limits(complete, limits).unwrap_err();
     assert_eq!(error.offset, 177);
     assert!(matches!(error.failure, ReadFailure::ItemCapacity(2)));
 
@@ -725,9 +1130,9 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     let incomplete = include_bytes!(
         "fixtures/v2/P1/resync-incomplete-item-not-counted.first-item-incomplete.bin"
     );
-    capacity.payload = ReadCapacity::default().payload;
-    capacity.items = 1;
-    let error = read(incomplete, capacity).unwrap_err();
+    limits.second_generation.payload = ReadCapacity::default().payload;
+    limits.second_generation.items = 1;
+    let error = read_with_limits(incomplete, limits).unwrap_err();
     assert_eq!(error.offset, 264);
     assert!(matches!(error.failure, ReadFailure::ItemCapacity(1)));
 }
@@ -735,6 +1140,15 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
 #[test]
 fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
     let bytes = include_bytes!("fixtures/v2/P1/resync-item-limit-region.whole.bin");
+    let opener_bytes = Item::first(bytes).unwrap().unwrap().bytes().len();
+    let mut limits = ReadLimits::default();
+    limits.detection.encoded_opener_bytes = opener_bytes;
+    limits.detection.work = opener_bytes * DetectionCapacity::OPENER_WORK_PER_BYTE;
+    assert!(matches!(
+        read_with_limits(bytes, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+
     let mut capacity = ReadCapacity {
         items: 3,
         ..ReadCapacity::default()
@@ -1008,6 +1422,19 @@ fn the_item_limit_applies_before_framing_an_opener() {
     };
     let bytes = include_bytes!("fixtures/v2/P1/header-minimal.bin");
     assert!(matches!(read(bytes, capacity), Ok(ReadGraph::Second(_))));
+
+    let mut limits = ReadLimits::default();
+    limits.second_generation.items = 0;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::ItemCapacity(0)));
+
+    let mut invalid = bytes.to_vec();
+    invalid[0] = 0x88;
+    invalid.push(0xf6);
+    let error = read_with_limits(&invalid, ReadLimits::default()).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::Wire(_)));
+    let error = read_with_limits(&invalid, limits).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::ItemCapacity(0)));
 }
 
 #[test]

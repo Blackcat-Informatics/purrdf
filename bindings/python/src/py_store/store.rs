@@ -11,8 +11,8 @@
 //! `purrdf-core` IR. Mutation (`add` / `remove`
 //! / `load`) edits the COW delta; `query` freezes a snapshot and runs the native
 //! `NativeSparqlEngine`; `update` runs the engine's COW-atomic UPDATE. The
-//! `_store_capsule` hands `purrdf_shapes` / `purrdf_validate` a stable
-//! `Arc<RdfDataset>` snapshot under the `c"purrdf-validation-dataset"` capsule name.
+//! SHACL validation extracts the exact native quad-store base and freezes its
+//! `Arc<RdfDataset>` snapshot without exposing a pointer through Python.
 
 use purrdf_core::ir::MutableDataset;
 use pyo3::exceptions::{PyTypeError, PyValueError};
@@ -36,7 +36,7 @@ use crate::{
 
 /// An in-memory RDF 1.2 quad store with SPARQL (`Store`).
 ///
-/// The query, UPDATE, iteration and validation-capsule surface is the
+/// The query, UPDATE, iteration and native-validation surface is the
 /// [`PyQuadStore`] base class's, shared with `MutableDataset`.
 /// The keyword-only `remember_empty_graphs=True` selects native remembered
 /// graph slots by default; false selects row-driven lifetime. Checkpoint and

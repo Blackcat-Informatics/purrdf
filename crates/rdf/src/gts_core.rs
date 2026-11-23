@@ -293,6 +293,47 @@ pub fn read_graph(bytes: &[u8], allow_segments: bool) -> Result<Graph, RdfDiagno
     }
 }
 
+/// Fold GTS bytes under an explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first reader resource refusal or ordinary GTS diagnostic. A
+/// resource refusal returns no partial graph.
+pub fn read_graph_with_limits(
+    bytes: &[u8],
+    allow_segments: bool,
+    limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<Graph, RdfDiagnostic> {
+    let graph = purrdf_gts::reader::read_with_limits(
+        bytes,
+        purrdf_gts::reader::ReadOptions::new(allow_segments, None),
+        limits,
+    )
+    .map_err(read_limit_failure)?;
+    if graph.diagnostics.is_empty() {
+        Ok(graph)
+    } else {
+        Err(diagnostics_to_error(&graph))
+    }
+}
+
+pub(crate) fn read_limit_failure(error: purrdf_gts::reader::GtsReadLimitError) -> RdfDiagnostic {
+    let result = (|| {
+        let cause = purrdf_gts::model::retain_native_cause(error)?;
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
+        RdfDiagnostic::try_error_with_memory(
+            "rdf-ir-gts-read-limit",
+            &"GTS read resource limit exceeded",
+            &mut memory,
+        )?
+        .with_native_cause(cause, &mut memory)
+    })();
+    match result {
+        Ok(error) => error,
+        Err(error) => error.into(),
+    }
+}
+
 /// Fold all GTS segments into a graph and fail on any reader diagnostic.
 pub fn read_all_segments(bytes: &[u8]) -> Result<Graph, RdfDiagnostic> {
     read_graph(bytes, true)

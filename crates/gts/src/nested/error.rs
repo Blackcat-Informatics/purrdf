@@ -17,6 +17,10 @@ pub(super) enum NestedError {
         digest: String,
         cause: CodecError,
     },
+    DecodeStream {
+        digest: String,
+        cause: purrdf_hash::error::IoFailure,
+    },
     DecodedSize {
         digest: String,
         actual: usize,
@@ -37,6 +41,9 @@ impl core::fmt::Display for NestedError {
             Self::Decode { digest, cause } => {
                 write!(f, "nested GTS blob {digest} decode failed: {cause:?}")
             }
+            Self::DecodeStream { digest, cause } => {
+                write!(f, "nested GTS blob {digest} decode failed: {cause}")
+            }
             Self::DecodedSize {
                 digest,
                 actual,
@@ -52,12 +59,16 @@ impl core::fmt::Display for NestedError {
     }
 }
 
-purrdf_lex::error_source!(NestedError => { Self::Decode { cause, .. } => cause });
+purrdf_lex::error_source!(NestedError => {
+    Self::Decode { cause, .. } => cause,
+    Self::DecodeStream { cause, .. } => cause,
+});
 
 impl purrdf_hash::error::StructuredError for NestedError {
     purrdf_hash::error_visit! {
         Depth { digest, depth, limit } => "gts-nested-depth" { "digest" => Text(digest), "depth" => Unsigned(*depth as u128), "limit" => Unsigned(*limit as u128) },
         Decode { digest, cause } => "gts-nested-decode" { "digest" => Text(digest), "cause" => Cause(cause) },
+        DecodeStream { digest, cause } => "gts-nested-decode-stream" { "digest" => Text(digest), "cause" => Cause(cause) },
         DecodedSize { digest, actual, remaining } => "gts-nested-decoded-size" { "digest" => Text(digest), "actual" => ByteCount(*actual as u128), "remaining" => ByteCount(*remaining as u128) },
         Unreadable { digest, diagnostics } => "gts-nested-unreadable" { "digest" => Text(digest), "diagnostics" => List(diagnostics.iter().map(|diagnostic| ErrorValue::Cause(diagnostic))) },
     }

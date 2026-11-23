@@ -18,7 +18,7 @@
 use std::os::raw::c_char;
 
 use purrdf_core::RdfLookaside;
-use purrdf_rs::gts::read_graph;
+use purrdf_rs::gts::{read_graph, read_graph_with_limits, reader::GtsReadLimits};
 use purrdf_rs::gts_write::to_gts;
 use purrdf_rs::import_gts_graph;
 
@@ -28,6 +28,67 @@ use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
 use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
+
+/// C-ABI whole-read limits for hostile GTS input.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PurrdfGtsReadLimits {
+    /// Complete encoded input bytes.
+    pub encoded_input_bytes: u64,
+    /// CBOR sequence item count.
+    pub items: u64,
+    /// Encoded bytes in one header or frame.
+    pub encoded_frame_bytes: u64,
+    /// Decoded bytes in one non-blob payload.
+    pub decoded_frame_bytes: u64,
+    /// Decoded bytes in one blob payload.
+    pub decoded_blob_bytes: u64,
+    /// Aggregate decoded payload bytes.
+    pub total_decoded_bytes: u64,
+    /// Accepted term rows.
+    pub terms: u64,
+    /// Accepted RDF and suppression rows.
+    pub rows: u64,
+    /// Retained reader metadata entries.
+    pub metadata_entries: u64,
+    /// Reader diagnostics.
+    pub diagnostics: u64,
+    /// Measurable reader work events.
+    pub work: u64,
+}
+
+impl PurrdfGtsReadLimits {
+    const DEFAULT: Self = Self {
+        encoded_input_bytes: GtsReadLimits::DEFAULT.encoded_input_bytes as u64,
+        items: GtsReadLimits::DEFAULT.items as u64,
+        encoded_frame_bytes: GtsReadLimits::DEFAULT.encoded_frame_bytes as u64,
+        decoded_frame_bytes: GtsReadLimits::DEFAULT.decoded_frame_bytes as u64,
+        decoded_blob_bytes: GtsReadLimits::DEFAULT.decoded_blob_bytes as u64,
+        total_decoded_bytes: GtsReadLimits::DEFAULT.total_decoded_bytes as u64,
+        terms: GtsReadLimits::DEFAULT.terms as u64,
+        rows: GtsReadLimits::DEFAULT.rows as u64,
+        metadata_entries: GtsReadLimits::DEFAULT.metadata_entries as u64,
+        diagnostics: GtsReadLimits::DEFAULT.diagnostics as u64,
+        work: GtsReadLimits::DEFAULT.work as u64,
+    };
+}
+
+/// Initialize `*out` with the finite limits for hostile input.
+///
+/// # Safety
+/// `out` must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_gts_read_limits_init(out: *mut PurrdfGtsReadLimits) -> i32 {
+    unsafe {
+        ffi_guard!(PurrdfStatus::Panic as i32, {
+            if out.is_null() {
+                return PurrdfStatus::NullPointer as i32;
+            }
+            *out = PurrdfGtsReadLimits::DEFAULT;
+            PurrdfStatus::Ok as i32
+        })
+    }
+}
 
 /// Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
 /// caller-owned handle (free with `purrdf_dataset_free`).
@@ -56,20 +117,87 @@ pub unsafe extern "C" fn purrdf_from_gts(
                 ));
             }
             let slice = std::slice::from_raw_parts(bytes, len);
-            // The canonical fold-back: read the GTS container into a graph, then
-            // import the graph into the IR. `import_gts_graph` resolves `to_gts`'s
-            // reifier bindings (including forward references), so the RDF-1.2
-            // statement layer survives the round-trip.
-            let graph = read_graph(slice, true).map_err(|diagnostic| {
-                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
-            })?;
-            let bundle = import_gts_graph(graph).map_err(|diagnostic| {
-                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
-            })?;
-            *out_dataset = into_handle(PurrdfDataset::new(bundle.dataset));
+            *out_dataset = into_handle(read_gts_dataset(slice, None)?);
             Ok(PurrdfStatus::Ok)
         })
     }
+}
+
+/// Read a GTS container under caller-selected whole-read limits.
+///
+/// `limits == NULL` selects finite hostile-input defaults. The legacy
+/// [`purrdf_from_gts`] entry point retains its unbounded v4 contract.
+/// Zero is a valid inclusive ceiling in every field.
+///
+/// # Safety
+/// `bytes` must be valid for `len` bytes; non-null `limits` and the out-params
+/// must be readable/writable respectively.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_from_gts_with_limits(
+    bytes: *const u8,
+    len: usize,
+    limits: *const PurrdfGtsReadLimits,
+    out_dataset: *mut *mut PurrdfDataset,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if bytes.is_null() || out_dataset.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_from_gts_with_limits",
+                ));
+            }
+            let slice = std::slice::from_raw_parts(bytes, len);
+            let limits = limits
+                .as_ref()
+                .map(native_limits)
+                .transpose()?
+                .unwrap_or(GtsReadLimits::DEFAULT);
+            *out_dataset = into_handle(read_gts_dataset(slice, Some(limits))?);
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+fn read_gts_dataset(
+    bytes: &[u8],
+    limits: Option<GtsReadLimits>,
+) -> Result<PurrdfDataset, PurrdfError> {
+    // The canonical fold-back: read the GTS container into a graph, then import
+    // it into the IR. `import_gts_graph` resolves forward reifier bindings.
+    let graph = match limits {
+        Some(limits) => read_graph_with_limits(bytes, true, limits),
+        None => read_graph(bytes, true),
+    }
+    .map_err(|diagnostic| PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic))?;
+    let bundle = import_gts_graph(graph)
+        .map_err(|diagnostic| PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic))?;
+    Ok(PurrdfDataset::new(bundle.dataset))
+}
+
+fn native_limits(limits: &PurrdfGtsReadLimits) -> Result<GtsReadLimits, PurrdfError> {
+    let convert = |name: &str, value: u64| {
+        usize::try_from(value).map_err(|_| {
+            PurrdfError::new(
+                PurrdfStatus::InvalidArgument,
+                format!("GTS read limit {name} does not fit this host"),
+            )
+        })
+    };
+    Ok(GtsReadLimits {
+        encoded_input_bytes: convert("encoded_input_bytes", limits.encoded_input_bytes)?,
+        items: convert("items", limits.items)?,
+        encoded_frame_bytes: convert("encoded_frame_bytes", limits.encoded_frame_bytes)?,
+        decoded_frame_bytes: convert("decoded_frame_bytes", limits.decoded_frame_bytes)?,
+        decoded_blob_bytes: convert("decoded_blob_bytes", limits.decoded_blob_bytes)?,
+        total_decoded_bytes: convert("total_decoded_bytes", limits.total_decoded_bytes)?,
+        terms: convert("terms", limits.terms)?,
+        rows: convert("rows", limits.rows)?,
+        metadata_entries: convert("metadata_entries", limits.metadata_entries)?,
+        diagnostics: convert("diagnostics", limits.diagnostics)?,
+        work: convert("work", limits.work)?,
+    })
 }
 
 /// Write a frozen dataset to canonical GTS container bytes under `profile`

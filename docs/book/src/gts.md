@@ -17,7 +17,18 @@ classes; nothing here supersedes it.
 
 ## Generation 2 RDF graph transport
 
-Use `purrdf_gts::v2::read` for generation detection and strict graph reading.
+Use `purrdf_gts::v2::read_with_limits` with a finite `ReadLimits` for untrusted
+generation detection and strict graph reading. Its `detection` field bounds
+opener bytes, nesting, structural work and damaged-prefix recovery before any
+generation is selected. The `first_generation` field carries the complete
+`GtsReadLimits` contract into a generation 1 delegation, while
+`second_generation` holds the established `ReadCapacity` for generation 2
+payloads, formed text, rebuilt values and item count.
+`second_generation_nesting_depth` bounds structural nesting in every
+generation 2 item. Large datasets raise the applicable finite ceilings; the
+nesting ceiling is independent of dataset size. The existing `read` entry
+point preserves its trusted-input compatibility behavior.
+
 Generation 1 input goes to the legacy reader and returns its graph and
 diagnostics. Generation 2 input returns resolved RDF lines, typed values and
 blob declarations. The reader interprets headers, resync openers at item
@@ -105,6 +116,19 @@ writes the header; each `add_frame_with_options` call encodes one frame, hands
 it to the sink and returns its id, so memory is bounded by the largest frame
 and not by the log. Both writers run one frame encoder, and for the same calls
 their bytes are identical.
+
+Bounded readers apply one cumulative `GtsReadLimits` contract. Slice entry
+points first admit the complete CBOR sequence envelope, then preflight decoded
+events before returning a materialized result. A transformed frame in that
+preflight can retain up to the selected `decoded_frame_bytes` ceiling even when
+the delivery sink supplies replay storage. Memory-constrained or
+larger-than-heap consumers use `read_to_sink_from_reader_with_limits`, supply
+`StreamingSink::frame_scratch`, treat events as provisional, and commit them
+only after the function returns `Ok` **and** the returned diagnostics confirm
+the complete log was accepted. A torn log or an expected-head mismatch rejects
+the provisional events even though it is not a resource refusal. Large datasets
+raise the applicable finite ceilings; they do not need the unbounded
+trusted-input contract.
 
 A long-lived log is a concatenation of segments, each a header and its frames.
 `bytes_written()` counts only what one writer has written: it starts at the

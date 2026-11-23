@@ -118,6 +118,9 @@ pub fn header_id(header: &[(Value, Value)]) -> Vec<u8> {
     hash_excluding(header, &["id"])
 }
 
+/// Decoded sequence items paired with an optional terminal marker or error.
+pub type ItemSequence<T> = (Vec<(usize, Value)>, Option<T>);
+
 /// Decode a CBOR Sequence into `(byte_offset, item)` pairs plus a torn marker.
 ///
 /// Detects a torn append (a partial trailing item) by position: at an item
@@ -126,8 +129,20 @@ pub fn header_id(header: &[(Value, Value)]) -> Vec<u8> {
 /// returned regardless, so a reader can fold the intact prefix. The second
 /// element is `None` for a clean end, or the byte offset of the incomplete
 /// trailing item.
-pub fn iter_items(data: &[u8]) -> (Vec<(usize, Value)>, Option<usize>) {
+pub fn iter_items(data: &[u8]) -> ItemSequence<usize> {
     purrdf_lex::cbor::decode_sequence(data, Limits::DEFAULT)
+}
+
+/// Decode a CBOR sequence after whole-read admission.
+///
+/// # Errors
+/// Returns the first resource refusal without a partial item vector.
+pub fn iter_items_with_limits(
+    data: &[u8],
+    limits: crate::reader::GtsReadLimits,
+) -> Result<ItemSequence<usize>, crate::reader::GtsReadLimitError> {
+    crate::reader::check_read_limits(data, crate::reader::ReadOptions::new(true, None), limits)?;
+    Ok(iter_items(data))
 }
 
 /// Original decode failure at a GTS sequence item boundary.
@@ -156,13 +171,25 @@ impl purrdf_hash::error::StructuredError for TornAppendError {
 }
 
 /// Decode through the same CBOR parser while retaining the original refusal.
-pub fn iter_items_with_error(data: &[u8]) -> (Vec<(usize, Value)>, Option<TornAppendError>) {
+pub fn iter_items_with_error(data: &[u8]) -> ItemSequence<TornAppendError> {
     let decoded = purrdf_lex::cbor::decode_sequence_checked(data, Limits::DEFAULT);
     let failure = decoded.failure.map(|failure| TornAppendError {
         offset: failure.offset as u64,
         cause: failure.cause,
     });
     (decoded.items, failure)
+}
+
+/// Decode a CBOR sequence with its native torn error after whole-read admission.
+///
+/// # Errors
+/// Returns the first resource refusal without a partial item vector.
+pub fn iter_items_with_error_and_limits(
+    data: &[u8],
+    limits: crate::reader::GtsReadLimits,
+) -> Result<ItemSequence<TornAppendError>, crate::reader::GtsReadLimitError> {
+    crate::reader::check_read_limits(data, crate::reader::ReadOptions::new(true, None), limits)?;
+    Ok(iter_items_with_error(data))
 }
 
 /// Return the Header map, unwrapping the optional self-describe tag (§3).

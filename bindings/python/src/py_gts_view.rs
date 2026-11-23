@@ -31,6 +31,109 @@ type PyReifierRow = (usize, (usize, usize, usize), Option<usize>);
 /// graph slot is the one described on [`PyReifierRow`].
 type PyAnnotationRow = (usize, usize, usize, Option<usize>);
 
+/// Whole-read limits selected explicitly for hostile GTS input.
+///
+/// Omitting `read_limits` from a byte reader preserves the unbounded v4
+/// contract. Pass `GtsReadLimits()` for hostile input, tune its ceilings for
+/// large admitted datasets, and use `unbounded()` only for trusted artifacts.
+#[pyclass(name = "GtsReadLimits", frozen)]
+#[derive(Clone, Copy, Debug)]
+pub struct PyGtsReadLimits {
+    pub(crate) inner: purrdf_gts::reader::GtsReadLimits,
+}
+
+#[pymethods]
+impl PyGtsReadLimits {
+    #[new]
+    #[pyo3(signature = (*, encoded_input_bytes=None, items=None, encoded_frame_bytes=None, decoded_frame_bytes=None, decoded_blob_bytes=None, total_decoded_bytes=None, terms=None, rows=None, metadata_entries=None, diagnostics=None, work=None))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the binding mirrors the one native read-limit record"
+    )]
+    fn new(
+        encoded_input_bytes: Option<usize>,
+        items: Option<usize>,
+        encoded_frame_bytes: Option<usize>,
+        decoded_frame_bytes: Option<usize>,
+        decoded_blob_bytes: Option<usize>,
+        total_decoded_bytes: Option<usize>,
+        terms: Option<usize>,
+        rows: Option<usize>,
+        metadata_entries: Option<usize>,
+        diagnostics: Option<usize>,
+        work: Option<usize>,
+    ) -> Self {
+        let defaults = purrdf_gts::reader::GtsReadLimits::DEFAULT;
+        Self {
+            inner: purrdf_gts::reader::GtsReadLimits {
+                encoded_input_bytes: encoded_input_bytes.unwrap_or(defaults.encoded_input_bytes),
+                items: items.unwrap_or(defaults.items),
+                encoded_frame_bytes: encoded_frame_bytes.unwrap_or(defaults.encoded_frame_bytes),
+                decoded_frame_bytes: decoded_frame_bytes.unwrap_or(defaults.decoded_frame_bytes),
+                decoded_blob_bytes: decoded_blob_bytes.unwrap_or(defaults.decoded_blob_bytes),
+                total_decoded_bytes: total_decoded_bytes.unwrap_or(defaults.total_decoded_bytes),
+                terms: terms.unwrap_or(defaults.terms),
+                rows: rows.unwrap_or(defaults.rows),
+                metadata_entries: metadata_entries.unwrap_or(defaults.metadata_entries),
+                diagnostics: diagnostics.unwrap_or(defaults.diagnostics),
+                work: work.unwrap_or(defaults.work),
+            },
+        }
+    }
+
+    #[staticmethod]
+    fn unbounded() -> Self {
+        Self {
+            inner: purrdf_gts::reader::GtsReadLimits::UNBOUNDED,
+        }
+    }
+
+    #[getter]
+    const fn encoded_input_bytes(&self) -> usize {
+        self.inner.encoded_input_bytes
+    }
+    #[getter]
+    const fn items(&self) -> usize {
+        self.inner.items
+    }
+    #[getter]
+    const fn encoded_frame_bytes(&self) -> usize {
+        self.inner.encoded_frame_bytes
+    }
+    #[getter]
+    const fn decoded_frame_bytes(&self) -> usize {
+        self.inner.decoded_frame_bytes
+    }
+    #[getter]
+    const fn decoded_blob_bytes(&self) -> usize {
+        self.inner.decoded_blob_bytes
+    }
+    #[getter]
+    const fn total_decoded_bytes(&self) -> usize {
+        self.inner.total_decoded_bytes
+    }
+    #[getter]
+    const fn terms(&self) -> usize {
+        self.inner.terms
+    }
+    #[getter]
+    const fn rows(&self) -> usize {
+        self.inner.rows
+    }
+    #[getter]
+    const fn metadata_entries(&self) -> usize {
+        self.inner.metadata_entries
+    }
+    #[getter]
+    const fn diagnostics(&self) -> usize {
+        self.inner.diagnostics
+    }
+    #[getter]
+    const fn work(&self) -> usize {
+        self.inner.work
+    }
+}
+
 #[pyclass(name = "GtsFoldViewNative")]
 #[derive(Debug)]
 pub struct PyGtsFoldView {
@@ -43,16 +146,21 @@ impl PyGtsFoldView {
     /// `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
     /// highest priority first; the view builds in only the W3C namespaces.
     #[staticmethod]
-    #[pyo3(signature = (data, curie_prefixes = Vec::new()))]
+    #[pyo3(signature = (data, curie_prefixes = Vec::new(), *, read_limits = None))]
     fn from_bytes(
         py: Python<'_>,
         data: &[u8],
         curie_prefixes: Vec<(String, String)>,
+        read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
     ) -> PyResult<Self> {
+        let read_limits = read_limits.as_ref().map(|limits| limits.inner);
         // A fold diagnostic is an error here exactly as in every other byte consumer:
         // a damaged file never becomes an empty or partial view.
         let graph = py
-            .detach(|| purrdf::gts::read_graph(data, true))
+            .detach(|| match read_limits {
+                Some(limits) => purrdf::gts::read_graph_with_limits(data, true, limits),
+                None => purrdf::gts::read_graph(data, true),
+            })
             .map_err(|diagnostic| native_error(py, &diagnostic))?;
         py.detach(|| {
             Ok(Self {
@@ -311,12 +419,22 @@ impl PyGtsFoldView {
 }
 
 #[pyfunction]
+#[pyo3(signature = (data, *, read_limits = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts optional Python borrows by value"
+)]
 fn gts_relational_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<Bound<'py, PyDict>> {
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let graph = py
-        .detach(|| purrdf::gts::read_graph(data, true))
+        .detach(|| match read_limits {
+            Some(limits) => purrdf::gts::read_graph_with_limits(data, true, limits),
+            None => purrdf::gts::read_graph(data, true),
+        })
         .map_err(|diagnostic| native_error(py, &diagnostic))?;
     let (rows, directions) = py
         .detach(|| {
@@ -387,6 +505,7 @@ pub(crate) fn columnar_parquet_dict<'py>(
 }
 
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyGtsReadLimits>()?;
     m.add_class::<PyGtsFoldView>()?;
     m.add("GTS_ALL_SCOPE", ALL_SCOPE)?;
     m.add_function(wrap_pyfunction!(gts_relational_rows_from_bytes, m)?)?;

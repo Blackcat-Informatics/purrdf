@@ -5,7 +5,8 @@
 
 use super::{
     BLOB_BUDGET_DIAGNOSTIC, BlobContent, BlobPayload, BlobRefusalKind, FoldError, Folder,
-    PayloadCause, PayloadError, Read, TermIdBase, Value, ValueRef, cbor, digest_label,
+    PayloadCause, PayloadError, Read, StreamingSink, TermIdBase, Value, ValueRef, cbor,
+    digest_label,
 };
 
 /// Mark host replay failures at their boundary, leaving codec/source failures
@@ -71,8 +72,61 @@ impl Folder<'_, '_, '_> {
             .ok_or(PayloadError::Damaged(PayloadCause::TransformedNotBytes))?;
         let codecs = super::payload::resolve_codecs(&self.catalog, ids)?;
         let limit = self.decode_limit(false).unwrap_or(usize::MAX);
-        let mut source = crate::codec::decode_chain_reader(&codecs, bytes, limit)?;
-        let spooled = cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT)?;
+        let work_limit = self
+            .sink
+            .as_deref()
+            .and_then(StreamingSink::transform_work_limit)
+            .unwrap_or(usize::MAX);
+        let (mut source, transform_work) = match crate::codec::decode_chain_reader_with_work_limit(
+            &codecs, bytes, limit, work_limit,
+        ) {
+            Ok(source) => source,
+            Err(error) => {
+                let cause = PayloadError::from(error.cause);
+                let accounted = self.account_transform_work(error.work.total())?;
+                if !error.work.refused() {
+                    if accounted {
+                        self.report_accounted_decoded_refusal(false, &cause);
+                    } else {
+                        self.report_decoded_refusal(false, &cause);
+                    }
+                }
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
+                }
+                return Err(cause);
+            }
+        };
+        let spooled = match cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT) {
+            Ok(spooled) => spooled,
+            Err(error) => {
+                let cause = PayloadError::from(error);
+                let accounted = self.account_transform_work(transform_work.total())?;
+                if !transform_work.refused() {
+                    if accounted {
+                        self.report_accounted_decoded_refusal(false, &cause);
+                    } else {
+                        self.report_decoded_refusal(false, &cause);
+                    }
+                }
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
+                }
+                return Err(cause);
+            }
+        };
+        let decoded_len = spooled.item().encoded_len();
+        let accounted = self.account_transform_work(transform_work.total())?;
+        if let Some(sink) = self.sink.as_deref_mut() {
+            if accounted {
+                sink.decoded_payload_accounted(false, decoded_len);
+            } else {
+                sink.decoded_payload(false, decoded_len);
+            }
+            if !sink.continue_reading() {
+                return Ok(());
+            }
+        }
         let mut replay = cbor::ReplayBuffer::new(scratch)?;
         self.h_snapshot_range(spooled.item(), &mut replay, index)
             .map_err(|error| match error {
@@ -81,6 +135,9 @@ impl Folder<'_, '_, '_> {
                 }
                 error => error,
             })?;
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         spooled.verify(&mut replay).map_err(|cause| {
             if stored {
                 PayloadError::Dictionary(crate::dictionary::DictionaryError::Replay(cause))
@@ -88,6 +145,9 @@ impl Folder<'_, '_, '_> {
                 cause.into()
             }
         })?;
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         replay.into_inner().finish()?;
         Ok(())
     }
@@ -107,6 +167,9 @@ impl Folder<'_, '_, '_> {
             ["terms", "quads", "reifies", "annot", "blobs", "meta"],
         )?;
         for (kind, field) in [(0, terms), (1, quads), (2, reifies), (3, annot)] {
+            if !self.sink_accepting() {
+                return Ok(());
+            }
             let Some(field) = field else {
                 continue;
             };
@@ -118,6 +181,9 @@ impl Folder<'_, '_, '_> {
                 continue;
             };
             while let Some(row) = rows.next(replay)? {
+                if !self.sink_accepting() {
+                    return Ok(());
+                }
                 let value = row.decode(replay)?;
                 match kind {
                     0 => self.h_term_row(&value, index, base)?,
@@ -126,13 +192,22 @@ impl Folder<'_, '_, '_> {
                     3 => self.h_annotation_row(ValueRef::Owned(&value), index, base)?,
                     _ => unreachable!("the snapshot row phases are a fixed native list"),
                 }
+                if !self.sink_accepting() {
+                    return Ok(());
+                }
             }
         }
         if let Some(blobs) = blobs
             && let Some(mut entries) = blobs.map(replay)?
         {
-            let ceiling = self.decode_limit(true);
+            let ceiling = self
+                .sink
+                .as_deref()
+                .and_then(StreamingSink::embedded_blob_limit);
             while let Some((_, value)) = entries.next(replay)? {
+                if !self.sink_accepting() {
+                    return Ok(());
+                }
                 let Some(mut bytes) = value.byte_reader(replay)? else {
                     continue;
                 };
@@ -156,6 +231,12 @@ impl Folder<'_, '_, '_> {
                 if let Some(limit) = ceiling
                     && length > limit
                 {
+                    if let Some(sink) = self.sink.as_deref_mut() {
+                        sink.embedded_blob_refused(length, limit);
+                        if !sink.continue_reading() {
+                            return Ok(());
+                        }
+                    }
                     let error = PayloadError::Budget(PayloadCause::SnapshotBlobLimit {
                         actual: length,
                         limit,
@@ -169,13 +250,25 @@ impl Folder<'_, '_, '_> {
                         length,
                         &detail,
                     );
+                    if !self.sink_accepting() {
+                        return Ok(());
+                    }
                     self.diag_native(
                         error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                         error,
                         detail,
                         index,
                     );
+                    if !self.sink_accepting() {
+                        return Ok(());
+                    }
                     continue;
+                }
+                if let Some(sink) = self.sink.as_deref_mut() {
+                    sink.embedded_blob(length);
+                    if !sink.continue_reading() {
+                        return Ok(());
+                    }
                 }
                 let mut bytes = value
                     .byte_reader(replay)?
@@ -183,6 +276,9 @@ impl Folder<'_, '_, '_> {
                 if let Some(sink) = self.sink.as_deref_mut() {
                     let metadata = self.blob_meta_index.get(&self.g.blob_meta, &digest);
                     sink.blob(self.segment_index, &digest, metadata);
+                    if !sink.continue_reading() {
+                        return Ok(());
+                    }
                     sink.blob_payload(BlobPayload {
                         segment_index: self.segment_index,
                         digest: &digest,
@@ -197,6 +293,9 @@ impl Folder<'_, '_, '_> {
                         encoded_len: length,
                         codecs: &[],
                     });
+                    if !sink.continue_reading() {
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -204,11 +303,25 @@ impl Folder<'_, '_, '_> {
             && let Some(mut entries) = meta.map(replay)?
         {
             while let Some((key, value)) = entries.next(replay)? {
+                if !self.sink_accepting() {
+                    return Ok(());
+                }
                 let key = key.decode(replay)?;
                 let key = key
                     .as_text()
                     .map_or_else(|| format!("{key:?}"), str::to_owned);
+                if !self.g.meta.iter().any(|(existing, _)| existing == &key)
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.metadata_entries(1);
+                    if !sink.continue_reading() {
+                        return Ok(());
+                    }
+                }
                 self.g.set_meta(key, value.decode(replay)?);
+                if !self.sink_accepting() {
+                    return Ok(());
+                }
             }
         }
         Ok(())
