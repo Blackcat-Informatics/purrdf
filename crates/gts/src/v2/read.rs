@@ -432,12 +432,6 @@ pub fn read_with_limits(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_
 
 fn read_bounded(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
     let capacity = limits.second_generation;
-    if capacity.items == 0 && !bytes.is_empty() {
-        return Err(ReadError {
-            offset: 0,
-            failure: ReadFailure::ItemCapacity(0),
-        });
-    }
     let mut detection_work = 0;
     let (opener, generation) = match detect_opener(bytes, limits.detection, &mut detection_work) {
         Ok(Some(detected)) => detected,
@@ -472,9 +466,14 @@ fn read_bounded(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadE
             offset: 0,
             failure: ReadFailure::FirstGenerationCapacity(error),
         }),
-        Generation::Second => GraphReader::new(bytes, capacity, Some(limits.detection), None)
-            .read_first(opener, generation)
-            .map(ReadGraph::Second),
+        Generation::Second => GraphReader::new(
+            bytes,
+            capacity,
+            Some(limits.detection),
+            Some(detection_work),
+        )
+        .read_first(opener, generation)
+        .map(ReadGraph::Second),
         Generation::Unrecognized => GraphReader::new(
             bytes,
             capacity,
@@ -741,6 +740,7 @@ impl<'a> GraphReader<'a> {
         self.initial_scan = None;
         self.initial_end = None;
         self.initial_refusal = None;
+        self.initial_exhausted = false;
     }
 
     fn detection_exhausted(&self) -> bool {
@@ -766,14 +766,17 @@ impl<'a> GraphReader<'a> {
     }
 
     fn read_first(
-        self,
+        mut self,
         opener: Item<'a>,
         generation: Generation,
     ) -> Result<RdfGraph<'a>, ReadError> {
         let end = opener.bytes().len();
         let failure = if generation == Generation::Second {
             match decode_opener(opener) {
-                Ok(header) => return self.read_opened(header, 0, end),
+                Ok(header) => {
+                    self.finish_detection();
+                    return self.read_opened(header, 0, end);
+                }
                 Err(failure) => failure,
             }
         } else {

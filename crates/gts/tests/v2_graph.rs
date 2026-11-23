@@ -641,6 +641,7 @@ fn legacy_opener_delegates_the_entire_input() {
     );
 
     let mut limits = ReadLimits::default();
+    limits.second_generation.items = 0;
     limits.first_generation.encoded_input_bytes = bytes.len();
     assert!(matches!(
         read_with_limits(bytes, limits).unwrap(),
@@ -918,6 +919,26 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     // The complete failing opener plus its two held frames reach capacity
     // before the candidate can be tested or charged.
     let complete = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
+    let complete_opener = Item::first(complete).unwrap().unwrap();
+    let candidate_end = 10 + Item::first(&complete[10..]).unwrap().unwrap().bytes().len();
+    let complete_work = complete_opener.bytes().len() * DetectionCapacity::OPENER_WORK_PER_BYTE
+        + DetectionCapacity::recovery_work(candidate_end);
+    limits.second_generation.items = 6;
+    limits.detection.encoded_opener_bytes = usize::MAX;
+    limits.detection.work = complete_work;
+    assert!(matches!(
+        read_with_limits(complete, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.detection.work -= 1;
+    let error = read_with_limits(complete, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork { required, limit, .. }
+            if required == complete_work && limit == complete_work - 1
+    ));
+    limits.detection = ReadLimits::default().detection;
+
     limits.second_generation.items = 3;
     let error = read_with_limits(complete, limits).unwrap_err();
     assert_eq!(error.offset, 0);
@@ -943,6 +964,15 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
 #[test]
 fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
     let bytes = include_bytes!("fixtures/v2/P1/resync-item-limit-region.whole.bin");
+    let opener_bytes = Item::first(bytes).unwrap().unwrap().bytes().len();
+    let mut limits = ReadLimits::default();
+    limits.detection.encoded_opener_bytes = opener_bytes;
+    limits.detection.work = opener_bytes * DetectionCapacity::OPENER_WORK_PER_BYTE;
+    assert!(matches!(
+        read_with_limits(bytes, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+
     let mut capacity = ReadCapacity {
         items: 3,
         ..ReadCapacity::default()
@@ -1216,6 +1246,11 @@ fn the_item_limit_applies_before_framing_an_opener() {
     };
     let bytes = include_bytes!("fixtures/v2/P1/header-minimal.bin");
     assert!(matches!(read(bytes, capacity), Ok(ReadGraph::Second(_))));
+
+    let mut limits = ReadLimits::default();
+    limits.second_generation.items = 0;
+    let error = read_with_limits(bytes, limits).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::ItemCapacity(0)));
 }
 
 #[test]
