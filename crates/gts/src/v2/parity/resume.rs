@@ -3,7 +3,7 @@
 
 use super::{Digest, Fields, GEOMETRY_ONE, Geometry, ParityClaim, ParityHistory, ParityTable};
 use crate::v2::link::frame_hasher;
-use crate::v2::payload::payload_digest;
+use crate::v2::payload::{CandidateRefusal, payload_digest};
 use crate::v2::{FRAME_FIELDS, FRAME_KIND, FrameType, PayloadBudget, PayloadRefusal};
 
 pub(in crate::v2) struct ParityResumption<'a> {
@@ -76,8 +76,9 @@ impl ParityHistory {
     pub(in crate::v2) fn scan_at<'a>(
         &self,
         bytes: &'a [u8],
+        offset: usize,
         budget: &mut PayloadBudget,
-    ) -> Result<Option<ParityResumption<'a>>, u64> {
+    ) -> Result<Option<ParityResumption<'a>>, CandidateRefusal> {
         let Some(candidate) = Candidate::read(bytes, self) else {
             return Ok(None);
         };
@@ -88,7 +89,13 @@ impl ParityHistory {
         }
         match budget.charge_parity_candidate(candidate.payload.len() as u64) {
             Ok(()) => {}
-            Err(PayloadRefusal::TotalDecoded(count)) => return Err(count),
+            Err(PayloadRefusal::TotalDecoded(requested_total)) => {
+                return Err(CandidateRefusal {
+                    offset,
+                    length: candidate.length,
+                    requested_total,
+                });
+            }
             Err(_) => return Ok(None),
         }
         if &payload_digest(candidate.payload) != candidate.digest {

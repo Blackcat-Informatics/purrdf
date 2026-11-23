@@ -118,6 +118,23 @@ fn a_locator_names_the_closing_index_even_if_it_does_not_verify() {
             ));
         } else {
             assert!(matches!(index.prefix, Err(ReadFailure::BrokenLink)));
+            let mut capacity = ReadCapacity::default();
+            capacity.payload.decoded_bytes_per_read = 90;
+            let ReadGraph::Second(graph) = read(&changed, capacity).unwrap() else {
+                panic!("expected both checks of the broken index");
+            };
+            assert!(matches!(
+                graph.index_checks[0].prefix,
+                Err(ReadFailure::BrokenLink)
+            ));
+            assert!(graph.frame_failures.iter().any(|error| {
+                error.offset == index_offset
+                    && matches!(
+                        error.failure,
+                        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(206))
+                    )
+            }));
+            assert_eq!(graph.index_storage_findings, []);
         }
     }
 }
@@ -316,6 +333,37 @@ fn a_tail_can_overlap_a_preceding_segments_retained_parity_frame() {
     let mut expected = intact.to_vec();
     expected.push(0);
     assert_eq!(graph.repaired.as_deref(), Some(expected.as_slice()));
+
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_read = 589;
+    for suffix in [&[0][..], &[0x82, 0x03, 0x01]] {
+        input.truncate(intact.len());
+        input.extend_from_slice(suffix);
+        let ReadGraph::Second(graph) = read(&input, capacity).unwrap() else {
+            panic!("expected the retained parity item after the opener was refused");
+        };
+        let refusal = graph.recovery_refusal.unwrap();
+        assert_eq!(
+            (
+                refusal.segment,
+                refusal.position,
+                refusal.offset,
+                refusal.length,
+                refusal.requested_total,
+            ),
+            (0, 4, start, 4096, 4685)
+        );
+        assert_eq!(graph.resynchronizations, []);
+        if suffix.len() == 3 {
+            let [finding] = graph.index_storage_findings.as_slice() else {
+                panic!("expected the complete malformed locator to retain its class");
+            };
+            assert_eq!(finding.offset, intact.len());
+            assert_eq!(finding.item, IndexStorageItem::Locator);
+            assert!(matches!(finding.problem, IndexStorageProblem::Malformed(_)));
+            assert_eq!(graph.opaque_items.len(), 0);
+        }
+    }
 }
 
 #[test]
@@ -582,17 +630,39 @@ fn parity_recovery_uses_the_resync_opener_and_counts_each_region_as_one_item() {
 
     let mut capacity = ReadCapacity::default();
     capacity.payload.decoded_bytes_per_read = 462;
-    let refusal = read(incomplete, capacity).unwrap_err();
-    assert_eq!(refusal.offset, 586);
-    assert!(matches!(
-        refusal.failure,
-        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(463))
-    ));
+    let ReadGraph::Second(graph) = read(incomplete, capacity).unwrap() else {
+        panic!("expected the checked prefix after the parity candidate was refused");
+    };
+    let refusal = graph.recovery_refusal.unwrap();
+    let length = Item::first(&incomplete[586..])
+        .unwrap()
+        .unwrap()
+        .bytes()
+        .len();
+    assert_eq!(
+        (
+            refusal.segment,
+            refusal.position,
+            refusal.offset,
+            refusal.length,
+            refusal.requested_total
+        ),
+        (1, 1, 586, length, 463)
+    );
+    assert_eq!(
+        graph.framing_tail,
+        Some(FramingDamage::TornTail {
+            offset: 274,
+            length: incomplete.len() - 274,
+        })
+    );
+    assert_eq!(graph.parity_recoveries, []);
     capacity.payload.decoded_bytes_per_read = 463;
-    assert!(matches!(
-        read(incomplete, capacity),
-        Ok(ReadGraph::Second(_))
-    ));
+    let ReadGraph::Second(graph) = read(incomplete, capacity).unwrap() else {
+        panic!("expected the candidate to pass at the budget boundary");
+    };
+    assert!(graph.recovery_refusal.is_none());
+    assert_eq!(graph.parity_recoveries.len(), 1);
 }
 
 #[test]
@@ -882,9 +952,35 @@ fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
     assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
 
     capacity.payload.decoded_bytes_per_read = 4143;
-    let refused = read(bytes, capacity).unwrap_err();
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the result with a refused row payload");
+    };
+    assert!(graph.recovery_refusal.is_none());
+    assert_eq!(graph.resynchronizations.len(), 1);
+    let [refused] = graph.frame_failures.as_slice() else {
+        panic!("expected one payload refusal");
+    };
     assert!(matches!(
         refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4144))
+    ));
+
+    let offset = refused.offset;
+    let item = Item::first(&bytes[offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let signature_start = offset + item.bytes().len() - frame.field(FrameField::Signatures).len();
+    let mut broken = bytes.to_vec();
+    broken[signature_start - 1] ^= 1;
+    let ReadGraph::Second(graph) = read(&broken, capacity).unwrap() else {
+        panic!("expected both checks of the broken row frame");
+    };
+    let [link, payload] = graph.frame_failures.as_slice() else {
+        panic!("expected independent link and payload findings");
+    };
+    assert_eq!((link.offset, payload.offset), (offset, offset));
+    assert!(matches!(link.failure, ReadFailure::BrokenLink));
+    assert!(matches!(
+        payload.failure,
         ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4144))
     ));
 }
@@ -950,19 +1046,45 @@ fn a_complete_failed_frame_charges_its_payload_before_scanning() {
     assert_eq!(resumed.offset, 370);
 
     capacity.payload.decoded_bytes_per_read = 4113;
-    let refused = read(bytes, capacity).unwrap_err();
-    assert_eq!(refused.offset, 370);
-    assert!(matches!(
-        refused.failure,
-        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4114))
-    ));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the complete items after the refused candidate");
+    };
+    let refused = graph.recovery_refusal.unwrap();
+    assert_eq!(
+        (
+            refused.segment,
+            refused.position,
+            refused.offset,
+            refused.length,
+            refused.requested_total
+        ),
+        (0, 2, 370, 4096, 4114)
+    );
+    assert_eq!(graph.resynchronizations, []);
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .any(|error| { error.offset == 114 && matches!(error.failure, ReadFailure::Wire(_)) })
+    );
+    assert!(graph.frame_failures.iter().any(|error| matches!(
+        error.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(_))
+    )));
 
     // The failed frame and both held items reach the item limit at EOF.
     // The candidate is never charged and the original failure survives.
     capacity.items = 5;
-    let refused = read(bytes, capacity).unwrap_err();
-    assert_eq!(refused.offset, 114);
-    assert!(matches!(refused.failure, ReadFailure::Wire(_)));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the complete items at the exact item limit");
+    };
+    assert!(graph.recovery_refusal.is_none());
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .any(|error| { error.offset == 114 && matches!(error.failure, ReadFailure::Wire(_)) })
+    );
 }
 
 #[test]
@@ -979,12 +1101,45 @@ fn a_replaced_healing_witness_leaves_the_previous_frame_broken() {
 
     // When the scan cannot admit the new opener, the witness remains.
     capacity.payload.decoded_bytes_per_read = 4114;
-    let refused = read(bytes, capacity).unwrap_err();
-    assert_eq!(refused.offset, 316);
-    assert!(matches!(
-        refused.failure,
-        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4184))
-    ));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the retained healing witness after the refusal");
+    };
+    let refused = graph.recovery_refusal.unwrap();
+    assert_eq!(
+        (
+            refused.segment,
+            refused.position,
+            refused.offset,
+            refused.length,
+            refused.requested_total
+        ),
+        (0, 3, 316, 4096, 4184)
+    );
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .all(|failure| failure.offset != 114)
+    );
+    let [healed] = graph.blobs.as_slice() else {
+        panic!(
+            "expected the healed blob to fold, failures: {:?}",
+            graph.frame_failures
+        );
+    };
+    assert_eq!(healed.bytes.as_ref(), b"xx");
+    let [witness] = graph.frame_failures.as_slice() else {
+        panic!("expected the witness's signature grammar finding");
+    };
+    assert_eq!(witness.offset, 231);
+    assert!(
+        matches!(
+            witness.failure,
+            ReadFailure::Wire(error)
+                if error.reason == MalformedReason::WrongType && error.offset == 186
+        ),
+        "{witness:?}"
+    );
 }
 
 #[test]

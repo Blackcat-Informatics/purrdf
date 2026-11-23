@@ -37,6 +37,13 @@ pub struct PayloadBudget {
     refused: bool,
 }
 
+#[derive(Clone, Copy)]
+pub(super) struct CandidateRefusal {
+    pub(super) offset: usize,
+    pub(super) length: usize,
+    pub(super) requested_total: u64,
+}
+
 impl PayloadBudget {
     /// Begin a read with the supplied byte limits.
     #[must_use]

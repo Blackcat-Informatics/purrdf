@@ -180,6 +180,8 @@ pub enum IndexStorageProblem {
     ClaimMismatch,
     /// The item is out of order or repeated within its segment.
     Misplaced,
+    /// A placed item breaks its wire grammar.
+    Malformed(WireError),
 }
 
 /// A diagnostic for an offsets item or locator read in segment order.
@@ -198,7 +200,7 @@ struct StorageClaim {
     offset: usize,
     position: usize,
     item: IndexStorageItem,
-    matches: bool,
+    claim: Result<bool, WireError>,
 }
 
 #[derive(Default)]
@@ -222,7 +224,7 @@ impl StorageIndex {
         offset: usize,
         position: usize,
         item: IndexStorageItem,
-        matches: bool,
+        claim: Result<bool, WireError>,
     ) -> Result<(), TryReserveError> {
         push(
             &mut self.claims,
@@ -230,7 +232,7 @@ impl StorageIndex {
                 offset,
                 position,
                 item,
-                matches,
+                claim,
             },
         )
     }
@@ -262,10 +264,12 @@ impl StorageIndex {
             };
             let problem = if !placed {
                 IndexStorageProblem::Misplaced
-            } else if !claim.matches {
-                IndexStorageProblem::ClaimMismatch
             } else {
-                continue;
+                match claim.claim {
+                    Ok(true) => continue,
+                    Ok(false) => IndexStorageProblem::ClaimMismatch,
+                    Err(error) => IndexStorageProblem::Malformed(error),
+                }
             };
             push(
                 findings,

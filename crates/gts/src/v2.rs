@@ -43,7 +43,7 @@ pub use rdf::{
 };
 pub use read::{
     ExternalBlob, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph, ReadCapacity,
-    ReadError, ReadFailure, ReadGraph, Resynchronization, VerifiedBlob, read,
+    ReadError, ReadFailure, ReadGraph, RecoveryRefusal, Resynchronization, VerifiedBlob, read,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
