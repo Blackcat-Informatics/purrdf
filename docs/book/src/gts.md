@@ -90,8 +90,11 @@ preflight can retain up to the selected `decoded_frame_bytes` ceiling even when
 the delivery sink supplies replay storage. Memory-constrained or
 larger-than-heap consumers use `read_to_sink_from_reader_with_limits`, supply
 `StreamingSink::frame_scratch`, treat events as provisional, and commit them
-only after the function returns `Ok`. Large datasets raise the applicable
-finite ceilings; they do not need the unbounded trusted-input contract.
+only after the function returns `Ok` **and** the returned diagnostics confirm
+the complete log was accepted. A torn log or an expected-head mismatch rejects
+the provisional events even though it is not a resource refusal. Large datasets
+raise the applicable finite ceilings; they do not need the unbounded
+trusted-input contract.
 
 A long-lived log is a concatenation of segments, each a header and its frames.
 `bytes_written()` counts only what one writer has written: it starts at the

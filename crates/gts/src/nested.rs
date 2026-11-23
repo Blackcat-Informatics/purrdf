@@ -152,41 +152,41 @@ fn visit_with_limits(
             continue;
         };
         let remaining_work = limits.read.work.saturating_sub(usage.work);
-        let measurement_limit = limits.read.decoded_blob_bytes.min(remaining_work);
-        let measured = match measure_nested_entry(entry, measurement_limit, remaining_work) {
-            Ok(measured) => measured,
-            Err(MeasureError::Work { required }) => {
-                let required = usage.work.saturating_add(required);
-                let mut refused_usage = *usage;
-                refused_usage.work = required;
-                return Err(crate::reader::GtsReadLimitError {
-                    resource: crate::reader::GtsReadResource::Work,
-                    required,
-                    limit: limits.read.work,
-                    usage: refused_usage,
-                });
-            }
-            Err(MeasureError::Codec { cause, work }) => {
-                charge_nested_work(usage, limits.read, work)?;
-                let error = NestedError::DecodeStream {
-                    digest,
-                    cause: cause.into(),
-                };
-                push_nested_diagnostic(
-                    &mut graph,
-                    usage,
-                    limits.read,
-                    Diagnostic {
-                        cause: None,
-                        code: "DamagedFrame".to_owned(),
-                        detail: error.to_string(),
-                        frame_index: None,
-                    }
-                    .with_native_cause(error),
-                )?;
-                continue;
-            }
-        };
+        let measured =
+            match measure_nested_entry(entry, limits.read.decoded_blob_bytes, remaining_work) {
+                Ok(measured) => measured,
+                Err(MeasureError::Work { required }) => {
+                    let required = usage.work.saturating_add(required);
+                    let mut refused_usage = *usage;
+                    refused_usage.work = required;
+                    return Err(crate::reader::GtsReadLimitError {
+                        resource: crate::reader::GtsReadResource::Work,
+                        required,
+                        limit: limits.read.work,
+                        usage: refused_usage,
+                    });
+                }
+                Err(MeasureError::Codec { cause, work }) => {
+                    charge_nested_work(usage, limits.read, work)?;
+                    let error = NestedError::DecodeStream {
+                        digest,
+                        cause: cause.into(),
+                    };
+                    push_nested_diagnostic(
+                        &mut graph,
+                        usage,
+                        limits.read,
+                        Diagnostic {
+                            cause: None,
+                            code: "DamagedFrame".to_owned(),
+                            detail: error.to_string(),
+                            frame_index: None,
+                        }
+                        .with_native_cause(error),
+                    )?;
+                    continue;
+                }
+            };
         let decoded_len = measured.decoded;
         charge_nested_work(usage, limits.read, measured.work)?;
         let required_nested = nested_decoded.saturating_add(decoded_len);
@@ -302,6 +302,9 @@ fn measure_nested_entry(
     use std::io::Read as _;
 
     match entry {
+        BlobEntry::Bytes(bytes) if bytes.len() > work_limit => Err(MeasureError::Work {
+            required: bytes.len(),
+        }),
         BlobEntry::Bytes(bytes) if bytes.len() > decoded_limit => Err(MeasureError::Codec {
             cause: purrdf_hash::error::io_error(
                 std::io::ErrorKind::InvalidData,

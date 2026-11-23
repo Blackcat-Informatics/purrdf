@@ -269,6 +269,12 @@ pub trait ResolvedSink {
     /// a genuinely dangling reference. `role` names the referencing position.
     fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> Self::Error;
 
+    /// Build the error returned by selected-term resolution when the consumer
+    /// cancels before the requested term itself is complete.
+    fn err_cancelled_resolution(&self, segment_index: u64, gts_id: usize) -> Self::Error {
+        self.err_dangling_term(segment_index, gts_id, "resolution cancelled")
+    }
+
     /// Legacy structural-depth error factory, retained for source compatibility.
     /// Iterative resolution no longer calls it.
     fn err_nesting_limit(&self, segment_index: u64, gts_id: usize) -> Self::Error;
@@ -395,6 +401,11 @@ pub struct SegmentResolver<
     /// A consumer cancellation is terminal even when it carries no error.
     cancelled: std::cell::Cell<bool>,
     failed: bool,
+}
+
+enum ResolveOutcome<Id> {
+    Resolved(Id),
+    Cancelled,
 }
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> std::fmt::Debug for SegmentResolver<S, D> {
@@ -550,13 +561,20 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// must use fresh resolution state rather than reuse another sink's ids.
     ///
     /// # Errors
-    /// Returns the original storage, consumer, missing-reference or active-cycle
-    /// failure. A failed selection poisons this resolver before another call.
+    /// Returns the original storage, consumer, cancellation, missing-reference
+    /// or active-cycle failure. A failed selection poisons this resolver before
+    /// another call.
     pub fn resolve_selected(&mut self, key: TermKey) -> Result<S::Id, S::Error> {
         if self.failed {
             return Err(self.previous_failure(key));
         }
-        let result = self.resolve_term(key.segment, key.term, "selected term");
+        let result = match self.resolve_term(key.segment, key.term, "selected term") {
+            Ok(ResolveOutcome::Resolved(id)) => Ok(id),
+            Ok(ResolveOutcome::Cancelled) => {
+                Err(self.sink.err_cancelled_resolution(key.segment, key.term))
+            }
+            Err(error) => Err(error),
+        };
         if result.is_err() {
             self.failed = true;
         }
@@ -664,7 +682,12 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 if !self.consumer_accepting() {
                     return Ok(());
                 }
-                self.resolve_term(segment_index, gts_id, "term")?;
+                if matches!(
+                    self.resolve_term(segment_index, gts_id, "term")?,
+                    ResolveOutcome::Cancelled
+                ) {
+                    return Ok(());
+                }
                 previous = Some(gts_id);
             }
         }
@@ -676,12 +699,26 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                     return Ok(());
                 }
                 let (segment, [s, p, o], g) = row.map_err(|error| self.row_failure(error))?;
-                let s = self.resolve_term(segment, s, "quad subject")?;
-                let p = self.resolve_term(segment, p, "quad predicate")?;
-                let o = self.resolve_term(segment, o, "quad object")?;
-                let g = g
-                    .map(|id| self.resolve_term(segment, id, "quad graph name"))
-                    .transpose()?;
+                let ResolveOutcome::Resolved(s) = self.resolve_term(segment, s, "quad subject")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(p) =
+                    self.resolve_term(segment, p, "quad predicate")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(o) = self.resolve_term(segment, o, "quad object")?
+                else {
+                    return Ok(());
+                };
+                let g = match g {
+                    Some(id) => match self.resolve_term(segment, id, "quad graph name")? {
+                        ResolveOutcome::Resolved(id) => Some(id),
+                        ResolveOutcome::Cancelled => return Ok(()),
+                    },
+                    None => None,
+                };
                 self.sink.push_quad(segment, s, p, o, g)?;
                 if !self.consumer_accepting() {
                     return Ok(());
@@ -700,13 +737,33 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 }
                 let (segment, [reifier, s, p, o], g) =
                     row.map_err(|error| self.row_failure(error))?;
-                let reifier = self.resolve_term(segment, reifier, "reifier")?;
-                let s = self.resolve_term(segment, s, "reified subject")?;
-                let p = self.resolve_term(segment, p, "reified predicate")?;
-                let o = self.resolve_term(segment, o, "reified object")?;
-                let g = g
-                    .map(|id| self.resolve_term(segment, id, "reifier graph name"))
-                    .transpose()?;
+                let ResolveOutcome::Resolved(reifier) =
+                    self.resolve_term(segment, reifier, "reifier")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(s) =
+                    self.resolve_term(segment, s, "reified subject")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(p) =
+                    self.resolve_term(segment, p, "reified predicate")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(o) =
+                    self.resolve_term(segment, o, "reified object")?
+                else {
+                    return Ok(());
+                };
+                let g = match g {
+                    Some(id) => match self.resolve_term(segment, id, "reifier graph name")? {
+                        ResolveOutcome::Resolved(id) => Some(id),
+                        ResolveOutcome::Cancelled => return Ok(()),
+                    },
+                    None => None,
+                };
                 self.sink.push_reifier(segment, reifier, s, p, o, g)?;
                 if !self.consumer_accepting() {
                     return Ok(());
@@ -724,12 +781,28 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                     return Ok(());
                 }
                 let (segment, [r, p, v], g) = row.map_err(|error| self.row_failure(error))?;
-                let r = self.resolve_term(segment, r, "annotation reifier")?;
-                let p = self.resolve_term(segment, p, "annotation predicate")?;
-                let v = self.resolve_term(segment, v, "annotation object")?;
-                let g = g
-                    .map(|id| self.resolve_term(segment, id, "annotation graph name"))
-                    .transpose()?;
+                let ResolveOutcome::Resolved(r) =
+                    self.resolve_term(segment, r, "annotation reifier")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(p) =
+                    self.resolve_term(segment, p, "annotation predicate")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(v) =
+                    self.resolve_term(segment, v, "annotation object")?
+                else {
+                    return Ok(());
+                };
+                let g = match g {
+                    Some(id) => match self.resolve_term(segment, id, "annotation graph name")? {
+                        ResolveOutcome::Resolved(id) => Some(id),
+                        ResolveOutcome::Cancelled => return Ok(()),
+                    },
+                    None => None,
+                };
                 self.sink.push_annotation(segment, r, p, v, g)?;
                 if !self.consumer_accepting() {
                     return Ok(());
@@ -766,7 +839,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         segment_index: u64,
         gts_id: usize,
         role: &str,
-    ) -> Result<S::Id, S::Error> {
+    ) -> Result<ResolveOutcome<S::Id>, S::Error> {
         let key = |term| TermKey {
             segment: segment_index,
             term,
@@ -776,7 +849,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             .resolved(key(gts_id))
             .map_err(self.map_storage)?
         {
-            return Ok(id);
+            return Ok(ResolveOutcome::Resolved(id));
         }
         let Some(mut root) = self
             .storage
@@ -891,12 +964,12 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 .remove_pending(key(current))
                 .map_err(self.map_storage)?;
             if !self.consumer_accepting() {
-                return Ok(resolved);
+                return Ok(ResolveOutcome::Cancelled);
             }
             if let Some(parent) = parent {
                 current = parent;
             } else {
-                return Ok(resolved);
+                return Ok(ResolveOutcome::Resolved(resolved));
             }
         }
     }

@@ -514,7 +514,13 @@ pub(crate) fn decode_chain_with_decrypt_bounded_observed<E>(
     mut map_error: impl FnMut(CodecError) -> E,
 ) -> Result<Vec<u8>, E> {
     let mut current = Cow::Borrowed(data);
+    let has_real_transform = chain
+        .iter()
+        .any(|codec| codec.name != "identity" || codec.cls == "encrypt");
     for codec in chain.iter().rev() {
+        if codec.name == "identity" && codec.cls != "encrypt" && has_real_transform {
+            continue;
+        }
         let stage_limit = admit(None)?;
         let produced = if codec.cls == "encrypt" {
             let decoded = match decrypt {
@@ -564,6 +570,10 @@ mod tests {
         assert_eq!(decode_chain_bounded(&[], b"", 0).unwrap(), b"");
         assert!(decode_chain_bounded(&[], b"x", 0).is_err());
         assert!(decode_chain_bounded(&[Codec::new("identity", "encode")], b"x", 0).is_err());
+        assert_eq!(
+            decode_chain_bounded(&[Codec::new("identity", "encode")], b"x", 1).unwrap(),
+            b"x"
+        );
         let raw = b"x";
         let encoded = encode_chain(&["gzip".into(), "gzip".into()], raw).unwrap();
         // Final output fits; the larger inner gzip stream exceeds this bound.
@@ -590,6 +600,40 @@ mod tests {
             .unwrap(),
             raw
         );
+    }
+
+    #[test]
+    fn identities_adjacent_to_a_transform_do_not_consume_its_work_boundary() {
+        let raw = b"x".to_vec();
+        for names in [["identity", "gzip"], ["gzip", "identity"]] {
+            let names = names.map(str::to_owned);
+            let encoded = encode_chain(&names, &raw).unwrap();
+            assert!(encoded.len() > raw.len());
+            let codecs = names.map(|name| {
+                let cls = if name == "identity" {
+                    "encode"
+                } else {
+                    "compress"
+                };
+                Codec::new(name, cls)
+            });
+            let remaining = std::cell::Cell::new(raw.len());
+            let decoded = decode_chain_with_decrypt_bounded_observed(
+                &codecs,
+                &encoded,
+                None,
+                |produced| {
+                    if let Some(bytes) = produced {
+                        remaining.set(remaining.get().saturating_sub(bytes));
+                    }
+                    Ok::<_, CodecError>(remaining.get())
+                },
+                core::convert::identity,
+            )
+            .expect("identity is work-neutral beside an admitted real transform");
+            assert_eq!(decoded, raw);
+            assert_eq!(remaining.get(), 0);
+        }
     }
 
     #[test]

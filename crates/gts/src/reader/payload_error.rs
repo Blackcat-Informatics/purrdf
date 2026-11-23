@@ -253,7 +253,7 @@ impl purrdf_hash::error::StructuredError for PayloadCause {
         BlobNotBytes => "gts-payload-blob-not-bytes" {},
         BlobMissingIdentity => "gts-payload-blob-missing-identity" {},
         Cbor(error) => "gts-payload-cbor" { "cause" => Cause(error) },
-        DecodedCbor { actual, cause } => "gts-payload-decoded-cbor" {
+        DecodedCbor { actual, cause } => "gts-payload-cbor" {
             "actual" => ByteCount(*actual as u128), "cause" => Cause(cause),
         },
         EncodedBlobLimit { actual, limit } => "gts-payload-encoded-blob-limit" {

@@ -72,25 +72,51 @@ impl Folder<'_, '_, '_> {
             .ok_or(PayloadError::Damaged(PayloadCause::TransformedNotBytes))?;
         let codecs = super::payload::resolve_codecs(&self.catalog, ids)?;
         let limit = self.decode_limit(false).unwrap_or(usize::MAX);
-        let mut source = match crate::codec::decode_chain_reader(&codecs, bytes, limit) {
+        let work_limit = self
+            .sink
+            .as_deref()
+            .and_then(StreamingSink::transform_work_limit)
+            .unwrap_or(usize::MAX);
+        let (mut source, transform_work) = match crate::codec::decode_chain_reader_with_work_limit(
+            &codecs, bytes, limit, work_limit,
+        ) {
             Ok(source) => source,
             Err(error) => {
-                let error = PayloadError::from(error);
-                self.report_decoded_refusal(false, &error);
-                return Err(error);
+                let cause = PayloadError::from(error.cause);
+                let accounted = self.account_transform_work(error.work.total())?;
+                if !error.work.refused() {
+                    if accounted {
+                        self.report_accounted_decoded_refusal(false, &cause);
+                    } else {
+                        self.report_decoded_refusal(false, &cause);
+                    }
+                }
+                return Err(cause);
             }
         };
         let spooled = match cbor::spool_item(&mut source, &mut *scratch, cbor::Limits::DEFAULT) {
             Ok(spooled) => spooled,
             Err(error) => {
-                let error = PayloadError::from(error);
-                self.report_decoded_refusal(false, &error);
-                return Err(error);
+                let cause = PayloadError::from(error);
+                let accounted = self.account_transform_work(transform_work.total())?;
+                if !transform_work.refused() {
+                    if accounted {
+                        self.report_accounted_decoded_refusal(false, &cause);
+                    } else {
+                        self.report_decoded_refusal(false, &cause);
+                    }
+                }
+                return Err(cause);
             }
         };
         let decoded_len = spooled.item().encoded_len();
+        let accounted = self.account_transform_work(transform_work.total())?;
         if let Some(sink) = self.sink.as_deref_mut() {
-            sink.decoded_payload(false, decoded_len);
+            if accounted {
+                sink.decoded_payload_accounted(false, decoded_len);
+            } else {
+                sink.decoded_payload(false, decoded_len);
+            }
             if !sink.continue_reading() {
                 return Ok(());
             }
