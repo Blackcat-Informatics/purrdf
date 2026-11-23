@@ -6,8 +6,8 @@
 use std::io::{self, Write};
 
 use purrdf_gts::v2::{
-    FrameType, Header, Item, LinkState, PayloadBudget, PayloadCapacity, SegmentVerifier,
-    SegmentWriteError, SegmentWriter,
+    FrameField, FrameType, Header, Item, LinkState, PayloadBudget, PayloadCapacity,
+    SegmentVerifier, SegmentWriteError, SegmentWriter,
 };
 
 const CAPACITY: PayloadCapacity = PayloadCapacity {
@@ -94,13 +94,28 @@ fn a_well_formed_signature_still_damages_the_parity_envelope() {
             .unwrap()
             .expect("the fixture contains a signed parity frame");
         tail = &tail[item.bytes().len()..];
-        let checked = verifier
-            .check(&item.frame().unwrap().unwrap(), None, &mut budget)
-            .unwrap();
+        let predecessor = *verifier.head();
+        let frame = item.frame().unwrap().unwrap();
+        let checked = verifier.check(&frame, None, &mut budget).unwrap();
         if checked.frame.frame_type.and_then(FrameType::from_code) == Some(FrameType::Parity) {
             assert_eq!(checked.frame.link.state, LinkState::Linked);
             assert_eq!(checked.frame.malformed, None);
             assert!(checked.frame.parity_envelope_damaged);
+            assert!(
+                !item
+                    .passes_framing_test(Some((header.registry_version(), &predecessor)), None)
+                    .unwrap()
+            );
+            let signature_offset = item.bytes().len() - frame.field(FrameField::Signatures).len();
+            let mut unsigned = item.bytes()[..signature_offset].to_vec();
+            unsigned.push(0x80);
+            assert!(
+                Item::first(&unsigned)
+                    .unwrap()
+                    .unwrap()
+                    .passes_framing_test(Some((header.registry_version(), &predecessor)), None)
+                    .unwrap()
+            );
             break;
         }
     }

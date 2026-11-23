@@ -204,19 +204,35 @@ enum Storage<'a> {
     Unknown(u64),
 }
 
+pub(super) struct PayloadWire<'a> {
+    fields: Result<DecodedFields<'a>, WireError>,
+    stored: Option<(NonZeroU64, &'a [u8; STORED_CHECK_LENGTH], &'a [u8])>,
+    forbidden: Option<WireError>,
+}
+
+struct DecodedFields<'a> {
+    length: u64,
+    digest: &'a [u8; DIGEST_LENGTH],
+    storage: Storage<'a>,
+    payload: &'a [u8],
+}
+
+impl PayloadWire<'_> {
+    pub(super) fn grammar_error(&self) -> Option<WireError> {
+        self.forbidden
+            .or_else(|| self.fields.as_ref().err().copied())
+    }
+}
+
 impl<'a> FrameEnvelope<'a> {
-    pub(super) fn check_payload(
-        &self,
-        registry: NonZeroU64,
-        budget: &mut PayloadBudget,
-    ) -> Result<PayloadCheck<'a>, PayloadResourceError> {
-        let decoded = self.read_field(FrameField::DecodedLength).uint();
+    pub(super) fn payload_wire(&self, registry: NonZeroU64) -> PayloadWire<'a> {
+        let length = self.read_field(FrameField::DecodedLength).uint();
         let digest = self
             .read_field(FrameField::PayloadDigest)
             .fixed_bytes::<DIGEST_LENGTH>();
         let storage = read_storage(&mut self.read_field(FrameField::Storage), registry);
         let payload = self.read_field(FrameField::Payload).bytes();
-        let mut malformed = (decoded == Ok(0)
+        let forbidden = (length == Ok(0)
             && digest.is_ok()
             && matches!(storage.as_ref(), Ok(Storage::Compressed { .. })))
         .then(|| {
@@ -232,25 +248,51 @@ impl<'a> FrameEnvelope<'a> {
                 .zip(payload.as_ref().ok())
                 .and_then(|(storage, payload)| {
                     if let Storage::Compressed { codec, check } = *storage {
-                        Some(check_stored(codec, check, payload))
+                        Some((codec, check, *payload))
                     } else {
                         None
                     }
                 });
-        let (decoded, digest, storage, payload) = match (decoded, digest, storage, payload) {
-            (Ok(decoded), Ok(digest), Ok(storage), Ok(payload)) => {
-                (decoded, digest, storage, payload)
-            }
+        let fields = match (length, digest, storage, payload) {
+            (Ok(length), Ok(digest), Ok(storage), Ok(payload)) => Ok(DecodedFields {
+                length,
+                digest,
+                storage,
+                payload,
+            }),
             (Err(error), ..)
             | (_, Err(error), ..)
             | (_, _, Err(error), _)
-            | (_, _, _, Err(error)) => {
-                return Ok(PayloadCheck {
-                    stored,
-                    malformed: malformed.or(Some(error)),
-                    state: PayloadState::Damaged(PayloadDamage::Malformed),
-                });
-            }
+            | (_, _, _, Err(error)) => Err(error),
+        };
+        PayloadWire {
+            fields,
+            stored,
+            forbidden,
+        }
+    }
+
+    pub(super) fn check_payload(
+        &self,
+        wire: PayloadWire<'a>,
+        budget: &mut PayloadBudget,
+    ) -> Result<PayloadCheck<'a>, PayloadResourceError> {
+        let mut malformed = wire.grammar_error();
+        let stored = wire
+            .stored
+            .map(|(codec, check, payload)| check_stored(codec, check, payload));
+        let Ok(DecodedFields {
+            length: decoded,
+            digest,
+            storage,
+            payload,
+        }) = wire.fields
+        else {
+            return Ok(PayloadCheck {
+                stored,
+                malformed,
+                state: PayloadState::Damaged(PayloadDamage::Malformed),
+            });
         };
         let lengths = [
             payload.len() as u64,

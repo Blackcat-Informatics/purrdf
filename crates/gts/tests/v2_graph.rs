@@ -6,8 +6,9 @@
 use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
-    ContentError, FrameField, Item, ItemKind, Line, MalformedReason, RdfGraph, ReadCapacity,
-    ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
+    ContentError, FrameField, Item, ItemKind, Line, MalformedReason, PayloadRefusal, RdfGraph,
+    ReadCapacity, ReadFailure, ReadGraph, RecoveredPrefix, SegmentWriteError, SegmentWriter, Term,
+    ValueName, read,
 };
 use purrdf_lex::cbor::head;
 
@@ -32,6 +33,83 @@ fn legacy_opener_delegates_the_entire_input() {
         format!("{:?}", actual.diagnostics),
         format!("{:?}", expected.diagnostics)
     );
+}
+
+#[test]
+fn scanned_openers_preserve_the_difference_between_torn_and_undelimitable_prefixes() {
+    let foreign = include_bytes!("fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
+    let torn = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
+    for (bytes, prefix, items) in [
+        (
+            foreign.as_slice(),
+            RecoveredPrefix::Undelimitable { length: 2 },
+            4,
+        ),
+        (torn.as_slice(), RecoveredPrefix::TornTail { length: 10 }, 6),
+    ] {
+        let capacity = ReadCapacity {
+            items,
+            ..ReadCapacity::default()
+        };
+        let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+            panic!("the scanned opener identifies a generation 2 file");
+        };
+        assert_eq!(graph.recovered_prefix, Some(prefix));
+        assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
+        let capacity = ReadCapacity {
+            items: items - 1,
+            ..capacity
+        };
+        assert!(matches!(
+            read(bytes, capacity).unwrap_err().failure,
+            ReadFailure::ItemCapacity(_)
+        ));
+    }
+}
+
+#[test]
+fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
+    let mut capacity = ReadCapacity {
+        items: 1,
+        ..ReadCapacity::default()
+    };
+    let error = read(bytes, capacity).unwrap_err();
+    assert_eq!(error.offset, 0);
+    assert!(matches!(error.failure, ReadFailure::Framing(_)));
+
+    capacity.items = 4;
+    capacity.payload.decoded_bytes_per_read = 4095;
+    let error = read(bytes, capacity).unwrap_err();
+    assert_eq!(error.offset, 2);
+    assert!(matches!(
+        error.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4096))
+    ));
+
+    // The complete failing opener plus its two held frames reach capacity
+    // before the candidate can be tested or charged.
+    let complete = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
+    capacity.items = 3;
+    let error = read(complete, capacity).unwrap_err();
+    assert_eq!(error.offset, 0);
+    assert!(matches!(error.failure, ReadFailure::Wire(_)));
+
+    capacity.items = 2;
+    let error = read(complete, capacity).unwrap_err();
+    assert_eq!(error.offset, 177);
+    assert!(matches!(error.failure, ReadFailure::ItemCapacity(2)));
+
+    // An incomplete first item occupies no slot. The accepted opener
+    // fills the one available slot, so the first following item is unread.
+    let incomplete = include_bytes!(
+        "fixtures/v2/P1/resync-incomplete-item-not-counted.first-item-incomplete.bin"
+    );
+    capacity.payload = ReadCapacity::default().payload;
+    capacity.items = 1;
+    let error = read(incomplete, capacity).unwrap_err();
+    assert_eq!(error.offset, 264);
+    assert!(matches!(error.failure, ReadFailure::ItemCapacity(1)));
 }
 
 #[test]

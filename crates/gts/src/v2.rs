@@ -35,7 +35,8 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, VerifiedBlob, read,
+    ExternalBlob, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveredPrefix,
+    VerifiedBlob, read,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
@@ -78,3 +79,4 @@ const RESYNC_KIND: u64 = 5;
 const REGISTRY_VERSION: u64 = 1;
 const BLAKE3_256: u64 = 1;
 const DIGEST_LENGTH: usize = 32;
+const RESYNC_MAX_BYTES: usize = 4096;

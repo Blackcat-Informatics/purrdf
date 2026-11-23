@@ -111,6 +111,58 @@ fn first(bytes: &[u8]) -> Item<'_> {
 }
 
 #[test]
+fn framing_test_checks_shape_before_content_values_or_codecs() {
+    let bytes = include_bytes!("fixtures/v2/P1/framing-test-content-value.bin");
+    let opener = first(bytes);
+    let header = Header::decode(opener).unwrap();
+    let mut head = header.identifier().unwrap();
+    let mut tail = &bytes[opener.bytes().len()..];
+    while !tail.is_empty() {
+        let item = first(tail);
+        assert!(
+            item.passes_framing_test(Some((header.registry_version(), &head)), None)
+                .unwrap()
+        );
+        let link = item.frame().unwrap().unwrap().check_link(&head, None);
+        head = link.effective_identifier.unwrap();
+        tail = &tail[item.bytes().len()..];
+    }
+
+    let bytes = include_bytes!("fixtures/v2/P1/zstd-header-differs.checksum-flag.bin");
+    let opener = first(bytes);
+    let header = Header::decode(opener).unwrap();
+    let frame = first(&bytes[opener.bytes().len()..]);
+    assert!(
+        frame
+            .passes_framing_test(
+                Some((header.registry_version(), &header.identifier().unwrap())),
+                None
+            )
+            .unwrap()
+    );
+}
+
+#[test]
+fn framing_test_checks_closing_item_grammar_and_version_one_classification() {
+    let link = Some((NonZeroU64::MIN, &[0; 32]));
+    let newer = Some((NonZeroU64::new(2).unwrap(), &[0; 32]));
+    let unknown = first(&[0x81, 6]);
+    assert!(!unknown.passes_framing_test(link, None).unwrap());
+    assert!(unknown.passes_framing_test(newer, None).unwrap());
+    assert!(unknown.passes_framing_test(None, None).unwrap());
+
+    let locator = first(&[0x82, 3, 0x1b, 0, 0, 0, 0, 0, 0, 0, 0]);
+    assert!(locator.passes_framing_test(link, None).unwrap());
+    let short_locator = first(&[0x82, 3, 0]);
+    assert!(!short_locator.passes_framing_test(link, None).unwrap());
+    assert!(short_locator.passes_framing_test(None, None).unwrap());
+    let offsets = first(&[0x82, 4, 0x81, 0]);
+    assert!(offsets.passes_framing_test(link, None).unwrap());
+    let ill_typed_offsets = first(&[0x82, 4, 0x81, 0xf4]);
+    assert!(!ill_typed_offsets.passes_framing_test(link, None).unwrap());
+}
+
+#[test]
 fn header_bytes_and_identifier_match_the_v2_corpus() {
     let mut bytes = Vec::new();
     write_header(&mut bytes, None, Some(CanonicalForm::V1), None).expect("write a header");

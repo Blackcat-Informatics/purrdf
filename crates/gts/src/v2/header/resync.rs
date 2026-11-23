@@ -9,10 +9,10 @@ use purrdf_lex::cbor::head;
 use super::{HEADER_CONTEXT, Header, read_digest, read_lineage, read_profile, read_registry_hash};
 use crate::v2::fields::Fields;
 use crate::v2::{
-    BLAKE3_256, GENERATION, Item, MalformedReason, PayloadBudget, RESYNC_KIND, WireError,
+    BLAKE3_256, GENERATION, Item, MalformedReason, PayloadBudget, RESYNC_KIND, RESYNC_MAX_BYTES,
+    WireError,
 };
 
-const MAX_BYTES: usize = 4096;
 const MAX_MARKS: u64 = 64;
 const PATTERN: &[u8; 20] = &[
     0x8b, 0x05, 0x02, 0x50, 0xfc, 0xf3, 0xeb, 0x32, 0xa2, 0xf0, 0x26, 0x7d, 0xd1, 0x6a, 0x53, 0xf0,
@@ -120,7 +120,10 @@ impl<'a> ResyncScan<'a> {
             }
             let offset = start + relative;
             self.next = offset + 1;
-            let bytes = &self.bytes[offset..offset.saturating_add(MAX_BYTES).min(self.bytes.len())];
+            let bytes = &self.bytes[offset
+                ..offset
+                    .saturating_add(RESYNC_MAX_BYTES)
+                    .min(self.bytes.len())];
             let Ok(prefix) = ResyncPrefix::read(bytes, true) else {
                 continue;
             };
@@ -128,7 +131,7 @@ impl<'a> ResyncScan<'a> {
                 continue;
             }
             budget
-                .charge_resync(MAX_BYTES as u64)
+                .charge_resync(RESYNC_MAX_BYTES as u64)
                 .map_err(|requested_total| ResyncRefusal {
                     offset,
                     requested_total,
@@ -151,10 +154,12 @@ impl<'a> ResyncScan<'a> {
 impl<'a> Header<'a> {
     pub(in crate::v2) fn decode_resync(item: Item<'a>) -> Result<Self, WireError> {
         let bytes = item.bytes();
-        let limit = WireError::new(MalformedReason::OutOfRange, MAX_BYTES);
+        let limit = WireError::new(MalformedReason::OutOfRange, RESYNC_MAX_BYTES);
         let decoded = ResyncPrefix::read(bytes, false).and_then(|prefix| prefix.read_tail(bytes));
         match decoded {
-            Err(error) if bytes.len() > MAX_BYTES && error.offset >= MAX_BYTES => Err(limit),
+            Err(error) if bytes.len() > RESYNC_MAX_BYTES && error.offset >= RESYNC_MAX_BYTES => {
+                Err(limit)
+            }
             result => result.map(|(header, _, _)| header),
         }
     }
@@ -204,8 +209,11 @@ impl<'a> ResyncPrefix<'a> {
         let identifier_offset = self.fields.offset();
         let stored = read_digest(&mut self.fields, holds_hash)?;
         let len = self.fields.offset();
-        if len > MAX_BYTES {
-            return Err(WireError::new(MalformedReason::OutOfRange, MAX_BYTES));
+        if len > RESYNC_MAX_BYTES {
+            return Err(WireError::new(
+                MalformedReason::OutOfRange,
+                RESYNC_MAX_BYTES,
+            ));
         }
         self.header.identifier = holds_hash.then(|| {
             let mut hasher = Hasher::new_derive_key(HEADER_CONTEXT);
@@ -222,8 +230,11 @@ fn read_marks(fields: &mut Fields<'_>) -> Result<(), WireError> {
     let mut previous: Option<&[u8]> = None;
     for index in 0..count {
         let offset = fields.offset();
-        if offset >= MAX_BYTES {
-            return Err(WireError::new(MalformedReason::OutOfRange, MAX_BYTES));
+        if offset >= RESYNC_MAX_BYTES {
+            return Err(WireError::new(
+                MalformedReason::OutOfRange,
+                RESYNC_MAX_BYTES,
+            ));
         }
         let mut shape = *fields;
         let length = shape.array()?;
@@ -245,7 +256,7 @@ fn read_marks(fields: &mut Fields<'_>) -> Result<(), WireError> {
                 return Err(WireError::new(MalformedReason::UnorderedOrRepeated, offset));
             }
         }
-        fields.closed_value_until(MAX_BYTES)?;
+        fields.closed_value_until(RESYNC_MAX_BYTES)?;
         previous = Some(&remaining[..fields.offset() - offset]);
     }
     Ok(())

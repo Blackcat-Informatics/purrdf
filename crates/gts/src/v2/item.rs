@@ -9,8 +9,8 @@ use purrdf_lex::cbor::{Limits, StructuralError, StructuralRange, head};
 use super::fields::Fields;
 use super::frame::FrameEnvelope;
 use super::{
-    FRAME_FIELDS, FRAME_KIND, GENERATION, HEADER_KIND, MalformedReason, REGISTRY_VERSION,
-    RESYNC_KIND, WireError,
+    DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, GENERATION, HEADER_KIND, Header, MalformedReason,
+    REGISTRY_VERSION, RESYNC_KIND, WireError,
 };
 
 const LOCATOR_KIND: u64 = 3;
@@ -134,6 +134,49 @@ impl<'a> Item<'a> {
             kind if registry_version.get() > REGISTRY_VERSION => Ok(ItemKind::Unknown(kind)),
             _ => Err(MalformedReason::UnregisteredValue),
         }
+    }
+
+    /// Decide whether this complete item passes the P1 §6.7 framing test.
+    ///
+    /// A readable segment supplies its declared registry and effective
+    /// predecessor. Pass `None` for an unreadable opener or unavailable
+    /// links. A witness stands directly after this item. If recovery discards
+    /// the witness, check the frame again with no witness. This test reads
+    /// envelope fields and links without decoding payloads or checking claims.
+    ///
+    /// # Errors
+    /// Returns a native structural failure while locating frame fields.
+    pub fn passes_framing_test(
+        self,
+        segment: Option<(NonZeroU64, &[u8; DIGEST_LENGTH])>,
+        witness: Option<&FrameEnvelope<'a>>,
+    ) -> Result<bool, StructuralError> {
+        let registry = segment.map_or(NonZeroU64::MAX, |(registry, _)| registry);
+        let Ok(kind) = self.classify(registry) else {
+            return Ok(false);
+        };
+        match (kind, segment) {
+            (ItemKind::Header, _) => Ok(Header::decode(self).is_ok()),
+            (ItemKind::Resync, _) => Ok(Header::decode_resync(self).is_ok()),
+            (ItemKind::Frame, Some((registry, predecessor))) => Ok(self
+                .frame()?
+                .is_some_and(|frame| frame.passes_framing_test(predecessor, witness, registry))),
+            (ItemKind::Offsets, Some(_)) => Ok(self.check_offsets_grammar().is_ok()),
+            (ItemKind::Locator, Some(_)) => {
+                Ok(self.bytes.len() == 11 && self.bytes.starts_with(&[0x82, 0x03, 0x1b]))
+            }
+            _ => Ok(true),
+        }
+    }
+
+    fn check_offsets_grammar(self) -> Result<(), WireError> {
+        let mut fields = Fields::new(self.bytes);
+        fields.record(2)?;
+        fields.fixed_uint(OFFSETS_KIND, MalformedReason::WrongType)?;
+        for _ in 0..fields.array()? {
+            fields.uint()?;
+        }
+        Ok(())
     }
 
     /// Locate the fields of a complete P1 §3.1 frame envelope.

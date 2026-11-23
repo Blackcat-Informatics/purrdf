@@ -4,8 +4,9 @@
 use core::num::NonZeroU64;
 
 use super::fields::{Fields, OptionShape};
+use super::payload::PayloadWire;
 use super::{
-    BLAKE3_256, CommitClaim, DIGEST_LENGTH, FRAME_FIELDS, LinkCheck, MalformedReason,
+    BLAKE3_256, CommitClaim, DIGEST_LENGTH, FRAME_FIELDS, LinkCheck, LinkState, MalformedReason,
     PayloadBudget, PayloadCheck, PayloadResourceError, REGISTRY_VERSION, WireError,
 };
 
@@ -151,6 +152,15 @@ pub struct FrameEnvelope<'a> {
     ends: [usize; FRAME_FIELDS],
 }
 
+struct FrameWire<'a> {
+    frame_type: Option<u64>,
+    unknown_type: Option<UnknownFrameType>,
+    link: LinkCheck,
+    payload: PayloadWire<'a>,
+    malformed: Option<WireError>,
+    parity_envelope_damaged: bool,
+}
+
 impl<'a> FrameEnvelope<'a> {
     pub(super) const fn new(bytes: &'a [u8], ends: [usize; FRAME_FIELDS]) -> Self {
         Self { bytes, ends }
@@ -191,6 +201,52 @@ impl<'a> FrameEnvelope<'a> {
         registry: NonZeroU64,
         budget: &mut PayloadBudget,
     ) -> Result<FrameCheck<'a>, PayloadResourceError> {
+        let wire = self.check_wire(predecessor, witness, registry);
+        let payload = self.check_payload(wire.payload, budget)?;
+        let known = wire.frame_type.and_then(FrameType::from_code);
+        let mut malformed = wire
+            .malformed
+            .or_else(|| self.check_type_length(known))
+            .or(payload.malformed);
+        let mut commit_claim = None;
+        if known == Some(FrameType::Commit)
+            && malformed.is_none()
+            && budget.admits_content(self.field(FrameField::Content).len() as u64)
+        {
+            match read_commit_claim(&mut self.read_field(FrameField::Content)) {
+                Ok(claim) => commit_claim = Some(claim),
+                Err(error) => malformed = Some(error),
+            }
+        }
+        Ok(FrameCheck {
+            frame_type: wire.frame_type,
+            unknown_type: wire.unknown_type,
+            link: wire.link,
+            payload,
+            malformed,
+            commit_claim,
+            parity_envelope_damaged: wire.parity_envelope_damaged,
+        })
+    }
+
+    pub(super) fn passes_framing_test(
+        &self,
+        predecessor: &[u8; DIGEST_LENGTH],
+        witness: Option<&Self>,
+        registry: NonZeroU64,
+    ) -> bool {
+        let wire = self.check_wire(predecessor, witness, registry);
+        wire.malformed.is_none()
+            && !wire.parity_envelope_damaged
+            && wire.link.state != LinkState::Broken
+    }
+
+    fn check_wire(
+        &self,
+        predecessor: &[u8; DIGEST_LENGTH],
+        witness: Option<&Self>,
+        registry: NonZeroU64,
+    ) -> FrameWire<'a> {
         let frame_type = self.read_field(FrameField::FrameType).uint();
         let critical = self.read_field(FrameField::Critical).boolean();
         let transparent = self.read_field(FrameField::Transparent).boolean();
@@ -208,42 +264,25 @@ impl<'a> FrameEnvelope<'a> {
         };
         let signature_error = self.check_signatures(registry).err();
         let link = self.check_link(predecessor, witness);
-        let payload = self.check_payload(registry, budget)?;
-        let mut malformed = outer
+        let payload = self.payload_wire(registry);
+        let malformed = outer
             .err()
             .or(link.identity_error)
-            .or_else(|| {
-                payload
-                    .malformed
-                    .filter(|error| error.reason != MalformedReason::CodecConstraint)
-            })
+            .or_else(|| payload.grammar_error())
             .or(link.identifier_error)
-            .or(signature_error)
-            .or_else(|| self.check_type_length(known))
-            .or(payload.malformed);
-        let mut commit_claim = None;
-        if known == Some(FrameType::Commit)
-            && malformed.is_none()
-            && budget.admits_content(self.field(FrameField::Content).len() as u64)
-        {
-            match read_commit_claim(&mut self.read_field(FrameField::Content)) {
-                Ok(claim) => commit_claim = Some(claim),
-                Err(error) => malformed = Some(error),
-            }
-        }
+            .or(signature_error);
         let parity_envelope_damaged = known == Some(FrameType::Parity)
             && (malformed.is_some()
                 || self.field(FrameField::Storage) != [0x81, 1]
                 || self.field(FrameField::Signatures) != [0x80]);
-        Ok(FrameCheck {
+        FrameWire {
             frame_type: frame_type.ok(),
             unknown_type,
             link,
             payload,
             malformed,
-            commit_claim,
             parity_envelope_damaged,
-        })
+        }
     }
 
     fn check_outer_fields(
