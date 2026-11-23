@@ -268,6 +268,57 @@ fn the_graph_reader_admits_a_closing_index_before_parity() {
 }
 
 #[test]
+fn an_unrecoverable_tail_preserves_the_checked_prefix_and_its_repairs() {
+    let damaged = include_bytes!("fixtures/v2/P5/parity-damaged-shard.bin");
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let offset = damaged.len();
+    for (tail, expected) in [
+        ([0x8b, 0x02], FramingDamage::TornTail { offset, length: 2 }),
+        (
+            [0xff, 0x00],
+            FramingDamage::Undelimitable { offset, length: 2 },
+        ),
+    ] {
+        let input = [damaged.as_slice(), tail.as_slice()].concat();
+        let graph = second(&input);
+        assert_eq!(graph.framing_tail, Some(expected));
+        assert_eq!(graph.blobs.len(), 1);
+        assert_eq!(graph.parity_recoveries, []);
+        let repaired = [intact.as_slice(), tail.as_slice()].concat();
+        assert_eq!(graph.repaired.as_deref(), Some(repaired.as_slice()));
+    }
+}
+
+#[test]
+fn a_tail_can_overlap_a_preceding_segments_retained_parity_frame() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let opener_offset = 970_u16;
+    let opener = resync_opener_at(opener_offset);
+    let start = usize::from(opener_offset);
+    let end = start + opener.len();
+    let mut input = intact.to_vec();
+    input[start..end].copy_from_slice(&opener);
+    input[end] = 0xff;
+    input.push(0);
+
+    let graph = second(&input);
+    let [resync] = graph.resynchronizations.as_slice() else {
+        panic!("expected the opener embedded in the retained parity frame");
+    };
+    assert_eq!(resync.offset, start);
+    assert_eq!(
+        graph.framing_tail,
+        Some(FramingDamage::Undelimitable {
+            offset: end,
+            length: input.len() - end,
+        })
+    );
+    let mut expected = intact.to_vec();
+    expected.push(0);
+    assert_eq!(graph.repaired.as_deref(), Some(expected.as_slice()));
+}
+
+#[test]
 fn repaired_data_requires_rechecking_its_frame_with_the_shared_budget() {
     let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
     let mut damaged = intact.to_vec();
@@ -483,7 +534,10 @@ fn parity_recovery_uses_the_resync_opener_and_counts_each_region_as_one_item() {
     let undelimitable =
         include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.undelimitable.bin");
     let mut repaired = None;
-    for bytes in [incomplete.as_slice(), undelimitable.as_slice()] {
+    for (bytes, torn) in [
+        (incomplete.as_slice(), true),
+        (undelimitable.as_slice(), false),
+    ] {
         let mut capacity = ReadCapacity {
             items: 6,
             ..ReadCapacity::default()
@@ -512,10 +566,18 @@ fn parity_recovery_uses_the_resync_opener_and_counts_each_region_as_one_item() {
         assert_eq!(repaired.get_or_insert_with(|| output.clone()), &output);
 
         capacity.items -= 1;
-        assert!(matches!(
-            read(bytes, capacity).unwrap_err().failure,
-            ReadFailure::Framing(_)
-        ));
+        let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+            panic!("expected the checked prefix at the item limit");
+        };
+        let offset = 274;
+        let length = bytes.len() - offset;
+        let tail = if torn {
+            FramingDamage::TornTail { offset, length }
+        } else {
+            FramingDamage::Undelimitable { offset, length }
+        };
+        assert_eq!(graph.framing_tail, Some(tail));
+        assert_eq!(graph.parity_recoveries, []);
     }
 
     let mut capacity = ReadCapacity::default();
@@ -787,9 +849,17 @@ fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
         ..ReadCapacity::default()
     };
     capacity.payload.decoded_bytes_per_read = 17;
-    let error = read(bytes, capacity).unwrap_err();
-    assert_eq!(error.offset, 114);
-    assert!(matches!(error.failure, ReadFailure::Framing(_)));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the checked prefix at the item limit");
+    };
+    assert_eq!(graph.resynchronizations, []);
+    assert_eq!(
+        graph.framing_tail,
+        Some(FramingDamage::Undelimitable {
+            offset: 114,
+            length: bytes.len() - 114
+        })
+    );
 
     // The segment before the damage spends 17 bytes. The scan adds
     // another 4,096 and the resumed terms and row frames add 31.

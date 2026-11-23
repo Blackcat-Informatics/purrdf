@@ -64,6 +64,10 @@ impl Default for ReadCapacity {
 /// A GTS file decoded into the graph model of its generation.
 #[derive(Debug)]
 #[non_exhaustive]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the public variants return their graph by value without an extra allocation"
+)]
 pub enum ReadGraph<'a> {
     /// The legacy reader's original result, including its diagnostics.
     First(Graph),
@@ -93,6 +97,8 @@ pub struct RdfGraph<'a> {
     pub resynchronizations: Vec<Resynchronization>,
     /// Damaged regions ended by verified parity frames, in file order.
     pub parity_recoveries: Vec<ParityRecovery>,
+    /// Trailing bytes of the input with no accepted recovery point in the final segment.
+    pub framing_tail: Option<FramingDamage>,
     /// Commits that cannot verify the ordinary prefix across a parity recovery.
     pub interrupted_commits: Vec<(usize, CommitCheck)>,
     /// Parity diagnostics and repair outcomes, followed by each segment's tail.
@@ -137,7 +143,7 @@ pub struct ParityRecovery {
     pub detached: bool,
 }
 
-/// The extent and kind of bytes skipped when resynchronizing.
+/// The extent and kind of a framing break in the input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FramingDamage {
@@ -278,6 +284,8 @@ impl std::error::Error for ReadError {
 /// framing test or opening generation recognition. A verified parity frame
 /// can resume a readable segment after undelimitable bytes. Broken frames
 /// retain their original link findings even when the reader recovers.
+/// If the final segment ends inside or outside the item grammar, the reader
+/// returns the checked prefix and the extent of the trailing bytes.
 /// Parity findings describe the supplied bytes before any repair.
 /// Indexes report comparisons against the observed prefix and never supply
 /// graph content.
@@ -327,6 +335,19 @@ fn delimit(bytes: &[u8], offset: usize) -> Result<Option<Item<'_>>, ReadError> {
         offset,
         failure: ReadFailure::Framing(error),
     })
+}
+
+fn framing_damage(error: &ReadError, end: usize) -> Option<FramingDamage> {
+    let ReadFailure::Framing(cause) = &error.failure else {
+        return None;
+    };
+    let offset = error.offset;
+    let length = end - offset;
+    match cause.kind() {
+        DecodeErrorKind::Truncated => Some(FramingDamage::TornTail { offset, length }),
+        DecodeErrorKind::Malformed(_) => Some(FramingDamage::Undelimitable { offset, length }),
+        _ => None,
+    }
 }
 
 struct Segment<'a> {
@@ -634,18 +655,10 @@ impl<'a> GraphReader<'a> {
     ) -> Result<Segment<'a>, ReadError> {
         let offset = original.offset;
         let damage = if candidate.offset > offset {
-            let length = candidate.offset - offset;
             let Err(prefix) = delimit(&self.bytes[..candidate.offset], offset) else {
                 return Err(original);
             };
-            let ReadFailure::Framing(error) = &prefix.failure else {
-                return Err(prefix);
-            };
-            Some(match error.kind() {
-                DecodeErrorKind::Truncated => FramingDamage::TornTail { offset, length },
-                DecodeErrorKind::Malformed(_) => FramingDamage::Undelimitable { offset, length },
-                _ => return Err(prefix),
-            })
+            Some(framing_damage(&prefix, candidate.offset).ok_or(prefix)?)
         } else {
             None
         };
@@ -773,13 +786,7 @@ impl<'a> GraphReader<'a> {
         loop {
             let item = match items.take(&mut self, offset) {
                 Ok(Some(item)) => item,
-                Ok(None) => {
-                    self.finish_segment(&mut segment, offset)?;
-                    self.graph
-                        .frame_failures
-                        .sort_unstable_by_key(|error| error.offset);
-                    return Ok(self.graph);
-                }
+                Ok(None) => break,
                 Err(error) => {
                     match self.scan_recovery(
                         &error,
@@ -806,7 +813,11 @@ impl<'a> GraphReader<'a> {
                                 &mut segment,
                             )?;
                         }
-                        None => return Err(error),
+                        None => {
+                            self.graph.framing_tail =
+                                Some(framing_damage(&error, self.bytes.len()).ok_or(error)?);
+                            break;
+                        }
                     }
                     items = HeldItems::default();
                     continue;
@@ -884,6 +895,11 @@ impl<'a> GraphReader<'a> {
             previous_start = offset;
             offset = end;
         }
+        self.finish_segment(&mut segment, offset)?;
+        self.graph
+            .frame_failures
+            .sort_unstable_by_key(|error| error.offset);
+        Ok(self.graph)
     }
 
     fn finish_segment(
