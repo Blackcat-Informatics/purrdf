@@ -2051,16 +2051,15 @@ pub(crate) fn assemble(
         })
         .collect();
     lines.sort();
-    let mut message = Vec::new();
-    message.extend_from_slice(&(lines.len() as u64).to_be_bytes());
+    let mut digest = purrdf_hash::blake3::Hasher::new_derive_key(LINES_CONTEXT.as_str());
+    digest.update(&(lines.len() as u64).to_be_bytes());
     for line in &lines {
-        message.extend_from_slice(line);
+        digest.update(line);
     }
-    let digest = digest_of(LINES_CONTEXT, &message);
     let labelled = Labelled {
         placements,
         lines,
-        digest,
+        digest: *digest.finalize().as_bytes(),
         components,
         record,
         diagnostic: failures,
