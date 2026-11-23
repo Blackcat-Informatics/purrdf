@@ -17,12 +17,13 @@ use purrdf_lex::cbor::{DecodeErrorKind, StructuralError};
 use super::frame::FrameWire;
 use super::index::{IndexContent, StorageIndex};
 use super::parity::{ParityResumption, ParityStream};
+use super::rdf::RowScope;
 use super::{
     CommitCheck, ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget,
     FrameCheck, FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
     IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason, ParityCheck,
     ParityFinding, ParitySolveError, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
-    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings,
+    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, Row, RowFindings,
     SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore,
     WireError,
 };
@@ -84,7 +85,7 @@ pub struct RdfGraph<'a> {
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
-    /// Damaged payloads and rows held by unreadable term definitions.
+    /// Broken links, damaged payloads and rows held by unreadable terms.
     pub frame_failures: Vec<ReadError>,
     /// Complete items that could not be classified in their segment.
     pub opaque_items: Vec<ReadError>,
@@ -275,8 +276,8 @@ impl std::error::Error for ReadError {
 /// content interpretation prevents a complete graph projection.
 /// The reader can recover at a verified resync opener after failure of the
 /// framing test or opening generation recognition. A verified parity frame
-/// can resume a readable segment after undelimitable bytes. An ordinary frame
-/// whose healing witness is discarded prevents a complete graph projection.
+/// can resume a readable segment after undelimitable bytes. Broken frames
+/// retain their original link findings even when the reader recovers.
 /// Parity findings describe the supplied bytes before any repair.
 /// Indexes report comparisons against the observed prefix and never supply
 /// graph content.
@@ -337,6 +338,7 @@ struct Segment<'a> {
     parity: ParityStream<'a>,
     index_storage: StorageIndex,
     index_content: IndexContent,
+    pending_rows: Vec<PendingRows>,
 }
 
 enum Unit<'a> {
@@ -352,7 +354,13 @@ struct GraphFrame<'a> {
 
 struct FailedItem<'a> {
     failure: ReadFailure,
-    accelerator: Option<GraphFrame<'a>>,
+    retained_frame: Option<GraphFrame<'a>>,
+}
+
+struct PendingRows {
+    offset: usize,
+    scope: RowScope,
+    rows: Vec<Row>,
 }
 
 enum Recovery<'a> {
@@ -766,7 +774,10 @@ impl<'a> GraphReader<'a> {
             let item = match items.take(&mut self, offset) {
                 Ok(Some(item)) => item,
                 Ok(None) => {
-                    self.finish_segment(&segment, offset)?;
+                    self.finish_segment(&mut segment, offset)?;
+                    self.graph
+                        .frame_failures
+                        .sort_unstable_by_key(|error| error.offset);
                     return Ok(self.graph);
                 }
                 Err(error) => {
@@ -835,11 +846,11 @@ impl<'a> GraphReader<'a> {
                 if !matches!(candidate, Ok(Some(_))) {
                     self.deliver_held(held.take(), &mut segment)?;
                 }
-                if let Some(accelerator) = failed.accelerator
+                if let Some(frame) = failed.retained_frame
                     && (matches!(candidate, Ok(None))
                         || matches!(&candidate, Err(error) if matches!(error.failure, ReadFailure::ItemCapacity(_))))
                 {
-                    self.deliver_frame(accelerator, &mut segment)?;
+                    self.deliver_frame(frame, &mut segment)?;
                     previous_start = offset;
                     offset = end;
                     continue;
@@ -859,21 +870,9 @@ impl<'a> GraphReader<'a> {
                 };
                 if let Some(mut frame) = held.take() {
                     // The accepted opener replaces this frame's only witness.
-                    if frame.checked.frame_type.and_then(FrameType::from_code)
-                        != Some(FrameType::Index)
-                    {
-                        let failure = frame
-                            .checked
-                            .malformed
-                            .map_or(ReadFailure::BrokenLink, ReadFailure::Wire);
-                        return Err(ReadError {
-                            offset: frame.offset,
-                            failure,
-                        });
-                    }
                     let link = &mut frame.checked.link;
                     link.state = LinkState::Broken;
-                    link.effective_identifier = link.stored_identifier;
+                    link.effective_identifier = link.stored_identifier.or(link.computed_identifier);
                     self.deliver_frame(frame, &mut segment)?;
                 }
                 previous_start = candidate.offset;
@@ -887,7 +886,12 @@ impl<'a> GraphReader<'a> {
         }
     }
 
-    fn finish_segment(&mut self, segment: &Segment<'a>, offset: usize) -> Result<(), ReadError> {
+    fn finish_segment(
+        &mut self,
+        segment: &mut Segment<'a>,
+        offset: usize,
+    ) -> Result<(), ReadError> {
+        self.flush_rows(segment, false)?;
         let read_error = |error: std::collections::TryReserveError| ReadError {
             offset,
             failure: error.into(),
@@ -1048,14 +1052,22 @@ impl<'a> GraphReader<'a> {
                     let failed = if let Some(kind @ (FrameType::Index | FrameType::Parity)) = kind {
                         FailedItem {
                             failure: ReadFailure::Frame(kind),
-                            accelerator: Some(frame),
+                            retained_frame: Some(frame),
+                        }
+                    } else if frame.checked.link.state == LinkState::Broken {
+                        FailedItem {
+                            failure: frame
+                                .checked
+                                .malformed
+                                .map_or(ReadFailure::BrokenLink, ReadFailure::Wire),
+                            retained_frame: Some(frame),
                         }
                     } else {
                         FailedItem {
                             failure: admit_checked(frame.checked)
                                 .err()
                                 .unwrap_or(ReadFailure::MissingContent),
-                            accelerator: None,
+                            retained_frame: None,
                         }
                     };
                     return Ok(Some(failed));
@@ -1100,7 +1112,7 @@ impl<'a> GraphReader<'a> {
             ItemCheck::FramingFailure(failure) => {
                 return Ok(Some(FailedItem {
                     failure,
-                    accelerator: None,
+                    retained_frame: None,
                 }));
             }
         }
@@ -1128,8 +1140,13 @@ impl<'a> GraphReader<'a> {
             envelope,
             checked,
         } = frame;
-        self.observe_frame(envelope, checked, offset, segment)
-            .map_err(|failure| ReadError { offset, failure })
+        if self
+            .observe_frame(envelope, checked, offset, segment)
+            .map_err(|failure| ReadError { offset, failure })?
+        {
+            self.flush_rows(segment, true)?;
+        }
+        Ok(())
     }
 
     fn observe_frame(
@@ -1138,16 +1155,16 @@ impl<'a> GraphReader<'a> {
         checked: FrameCheck<'a>,
         offset: usize,
         segment: &mut Segment<'a>,
-    ) -> Result<(), ReadFailure> {
+    ) -> Result<bool, ReadFailure> {
         let kind = checked.frame_type.and_then(FrameType::from_code);
         let accelerator = matches!(kind, Some(FrameType::Index | FrameType::Parity));
-        let damaged_payload = !accelerator
-            && checked
-                .malformed
-                .is_none_or(|error| error.reason == MalformedReason::CodecConstraint)
-            && checked.link.state != LinkState::Broken
+        let broken = checked.link.state == LinkState::Broken;
+        let damaged_payload = checked
+            .malformed
+            .is_none_or(|error| error.reason == MalformedReason::CodecConstraint)
             && matches!(checked.payload.state, PayloadState::Damaged(_));
-        let checked = if accelerator || damaged_payload {
+        let opaque = !accelerator && (broken || damaged_payload);
+        let checked = if accelerator || opaque {
             checked
         } else {
             admit_checked(checked)?
@@ -1161,6 +1178,7 @@ impl<'a> GraphReader<'a> {
             .verifier
             .accept_checked(&frame, checked, &self.payload, Some(&segment.index_content))
             .map_err(ReadFailure::Segment)?;
+        let committed = checked.commit.is_some_and(|commit| commit.valid);
         if !frame.transparent() {
             let wire = &checked.frame;
             let passes = wire.malformed.is_none()
@@ -1181,7 +1199,10 @@ impl<'a> GraphReader<'a> {
                 .parity
                 .other_item(offset..offset + frame.bytes().len())?;
         }
-        if damaged_payload {
+        if broken && !frame.transparent() {
+            segment.dictionary.mark_broken_link();
+        }
+        if opaque {
             segment.index_content.opaque_frame(kind);
             if let Some(reservation) = &checked.terms {
                 segment
@@ -1193,13 +1214,12 @@ impl<'a> GraphReader<'a> {
                 &mut self.graph.frame_failures,
                 ReadError {
                     offset,
-                    failure: checked.frame.malformed.map_or_else(
-                        || payload_failure(checked.frame.payload.state),
-                        ReadFailure::Wire,
-                    ),
+                    failure: admit_checked(checked.frame)
+                        .err()
+                        .ok_or(ReadFailure::MissingContent)?,
                 },
             )?;
-            return Ok(());
+            return Ok(committed);
         }
         let kind = kind.ok_or(ReadFailure::MissingContent)?;
         match kind {
@@ -1263,7 +1283,9 @@ impl<'a> GraphReader<'a> {
                     segment,
                 )?;
             }
-            FrameType::Commit if checked.commit.is_some_and(|commit| commit.valid) => {}
+            FrameType::Commit if committed => {
+                return Ok(true);
+            }
             FrameType::Commit
                 if segment.verifier.incomplete_prefix() && checked.commit.is_some() =>
             {
@@ -1288,7 +1310,7 @@ impl<'a> GraphReader<'a> {
             }
             kind => return Err(ReadFailure::Frame(kind)),
         }
-        Ok(())
+        Ok(false)
     }
 
     fn observe_rows(
@@ -1310,15 +1332,58 @@ impl<'a> GraphReader<'a> {
         if decoded.declared_order_violated {
             super::fields::push(&mut self.graph.row_order_violations, offset)?;
         }
-        let findings = segment
+        segment
             .dictionary
-            .fold_rows(&mut self.graph.rdf, &decoded)
+            .check_annotations(&decoded.rows)
             .map_err(|error| match error {
                 FoldError::RepeatedAnnotation => ReadFailure::Content(
                     WireError::new(MalformedReason::UnorderedOrRepeated, 0).into(),
                 ),
                 error => ReadFailure::Fold(error),
             })?;
+        let scope = segment.dictionary.row_scope();
+        if scope.waits_for_commit() || !segment.pending_rows.is_empty() {
+            return super::fields::push(
+                &mut segment.pending_rows,
+                PendingRows {
+                    offset,
+                    scope,
+                    rows: decoded.rows,
+                },
+            )
+            .map_err(ReadFailure::from);
+        }
+        self.fold_rows(&segment.dictionary, &decoded.rows, scope, offset)
+    }
+
+    fn flush_rows(&mut self, segment: &mut Segment<'_>, committed: bool) -> Result<(), ReadError> {
+        for PendingRows {
+            offset,
+            scope,
+            rows,
+        } in segment.pending_rows.drain(..)
+        {
+            let scope = if committed {
+                scope.below_commit()
+            } else {
+                scope
+            };
+            self.fold_rows(&segment.dictionary, &rows, scope, offset)
+                .map_err(|failure| ReadError { offset, failure })?;
+        }
+        Ok(())
+    }
+
+    fn fold_rows(
+        &mut self,
+        dictionary: &SegmentDictionary,
+        rows: &[Row],
+        scope: RowScope,
+        offset: usize,
+    ) -> Result<(), ReadFailure> {
+        let findings = dictionary
+            .fold_scoped_rows(&mut self.graph.rdf, rows, scope)
+            .map_err(ReadFailure::Fold)?;
         if findings.forward_reference || findings.position_constraint {
             return Err(ReadFailure::Rows(findings));
         }
@@ -1419,6 +1484,7 @@ fn segment_from_header<'a>(
         units: FastMap::default(),
         index_storage: StorageIndex::default(),
         index_content: IndexContent::default(),
+        pending_rows: Vec::new(),
         parity: ParityStream::new(extent, identifier, registry)?,
     })
 }

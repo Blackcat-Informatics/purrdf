@@ -899,9 +899,13 @@ fn a_complete_failed_frame_charges_its_payload_before_scanning() {
 fn a_replaced_healing_witness_leaves_the_previous_frame_broken() {
     let bytes = include_bytes!("fixtures/v2/P1/resync-heal-witness-removed.ample-whole.bin");
     let mut capacity = ReadCapacity::default();
-    let broken = read(bytes, capacity).unwrap_err();
+    let graph = second(bytes);
+    let [broken] = graph.frame_failures.as_slice() else {
+        panic!("expected the replaced witness to leave one broken frame");
+    };
     assert_eq!(broken.offset, 114);
     assert!(matches!(broken.failure, ReadFailure::BrokenLink));
+    assert_eq!(graph.resynchronizations.len(), 1);
 
     // When the scan cannot admit the new opener, the witness remains.
     capacity.payload.decoded_bytes_per_read = 4114;
@@ -911,6 +915,80 @@ fn a_replaced_healing_witness_leaves_the_previous_frame_broken() {
         refused.failure,
         ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4184))
     ));
+}
+
+#[test]
+fn a_later_commit_exempts_rows_from_the_broken_link_rule() {
+    let intact = include_bytes!("fixtures/v2/P3/broken-link-commit-ends.whole.bin");
+    let committed = second(intact);
+    let no_commit = second(include_bytes!(
+        "fixtures/v2/P3/broken-link-commit-ends.no-commit.bin"
+    ));
+    let doubt_stays = second(include_bytes!(
+        "fixtures/v2/P3/broken-link-commit-doubt-stays.whole.bin"
+    ));
+    assert!(!committed.rdf.has_held_rows());
+    assert_eq!(committed.rdf.lines().count(), 3);
+    assert!(no_commit.rdf.has_held_rows());
+    assert_eq!(no_commit.rdf.lines().count(), 1);
+    assert!(doubt_stays.rdf.has_held_rows());
+    assert_eq!(doubt_stays.rdf.lines().count(), 2);
+    assert!(doubt_stays.frame_failures.iter().any(|failure| {
+        failure.offset == 402
+            && matches!(&failure.failure, ReadFailure::Rows(findings) if findings.opaque_term)
+    }));
+    for graph in [&committed, &no_commit, &doubt_stays] {
+        assert!(
+            graph
+                .frame_failures
+                .iter()
+                .any(|failure| matches!(failure.failure, ReadFailure::BrokenLink))
+        );
+    }
+
+    // A commit's count and range root can hold even if its empty payload's
+    // digest is wrong. Recompute its link after changing the payload digest.
+    let last_quad_offset = 399;
+    let last_quad = Item::first(&intact[last_quad_offset..]).unwrap().unwrap();
+    let commit_offset = last_quad_offset + last_quad.bytes().len();
+    let quad = last_quad.frame().unwrap().unwrap();
+    let mut identifier = quad.field(FrameField::Identifier);
+    let predecessor = head::read_bytes(&mut identifier)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let commit = Item::first(&intact[commit_offset..])
+        .unwrap()
+        .unwrap()
+        .frame()
+        .unwrap()
+        .unwrap();
+    let digest = commit.field(FrameField::PayloadDigest);
+    let digest_end = digest.as_ptr().addr() - intact.as_ptr().addr() + digest.len();
+    let mut wrong_payload = intact.to_vec();
+    wrong_payload[digest_end - 1] ^= 1;
+    let changed = Item::first(&wrong_payload[commit_offset..])
+        .unwrap()
+        .unwrap()
+        .frame()
+        .unwrap()
+        .unwrap();
+    let identifier = changed
+        .check_link(predecessor, None)
+        .computed_identifier
+        .unwrap();
+    let identifier_end = wrong_payload.len() - 1;
+    wrong_payload[identifier_end - identifier.len()..identifier_end].copy_from_slice(&identifier);
+    let graph = second(&wrong_payload);
+    assert!(!graph.rdf.has_held_rows());
+    assert_eq!(graph.rdf.lines().count(), 3);
+    assert!(graph.frame_failures.iter().any(|failure| {
+        failure.offset == commit_offset
+            && matches!(
+                &failure.failure,
+                ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+            )
+    }));
 }
 
 #[test]

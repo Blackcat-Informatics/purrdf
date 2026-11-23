@@ -9,6 +9,7 @@ mod lines;
 mod terms;
 mod values;
 
+pub(super) use dictionary::RowScope;
 pub use dictionary::{DefinitionFindings, RowDisposition, RowFindings, SegmentDictionary};
 pub use lines::{Line, RdfFold};
 pub use terms::{LiteralDirection, LiteralValue, Term, TermId};

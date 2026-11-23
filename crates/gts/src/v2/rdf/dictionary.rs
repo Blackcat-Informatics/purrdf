@@ -50,6 +50,27 @@ pub struct RowFindings {
     pub position_constraint: bool,
 }
 
+/// The dictionary constraints at the original position of a row frame.
+#[derive(Clone, Copy)]
+pub(in crate::v2) struct RowScope {
+    next: u128,
+    broken_prefix: u128,
+    in_doubt: bool,
+}
+
+impl RowScope {
+    pub(in crate::v2) const fn waits_for_commit(self) -> bool {
+        self.broken_prefix != 0 && !self.in_doubt
+    }
+
+    pub(in crate::v2) const fn below_commit(self) -> Self {
+        Self {
+            broken_prefix: 0,
+            ..self
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Run {
     end: u128,
@@ -107,8 +128,7 @@ impl SegmentDictionary {
 
     /// Apply the dictionary rule for an ordinary broken link at this position.
     ///
-    /// Apply it before observing the broken frame's own reservation. A
-    /// whole-file reader applies the commit exception before calling this.
+    /// Apply it before observing the broken frame's own reservation.
     pub const fn mark_broken_link(&mut self) {
         self.broken_prefix = self.next;
     }
@@ -364,17 +384,29 @@ impl SegmentDictionary {
     /// Resolve one row before applying line union.
     #[must_use]
     pub fn resolve_row(&self, row: Row) -> RowDisposition {
+        self.resolve_scoped_row(row, self.row_scope())
+    }
+
+    pub(in crate::v2) const fn row_scope(&self) -> RowScope {
+        RowScope {
+            next: self.next,
+            broken_prefix: self.broken_prefix,
+            in_doubt: self.in_doubt,
+        }
+    }
+
+    fn resolve_scoped_row(&self, row: Row, scope: RowScope) -> RowDisposition {
         let references = row_references(row);
         if references
             .iter()
             .flatten()
-            .any(|(id, _)| u128::from(*id) >= self.next)
+            .any(|(id, _)| u128::from(*id) >= scope.next)
         {
             return RowDisposition::ForwardReference;
         }
-        if self.in_doubt
+        if scope.in_doubt
             || references.iter().flatten().any(|(id, _)| {
-                u128::from(*id) < self.broken_prefix || self.readable_term(*id).is_none()
+                u128::from(*id) < scope.broken_prefix || self.readable_term(*id).is_none()
             })
         {
             return RowDisposition::Held;
@@ -413,13 +445,22 @@ impl SegmentDictionary {
         fold: &mut RdfFold,
         decoded: &DecodedRows,
     ) -> Result<RowFindings, FoldError> {
-        if matches!(decoded.rows.first(), Some(Row::Annotation(..))) {
-            self.check_annotations(&decoded.rows)?;
-        }
+        self.check_annotations(&decoded.rows)?;
+        self.fold_scoped_rows(fold, &decoded.rows, self.row_scope())
+    }
+
+    pub(in crate::v2) fn fold_scoped_rows(
+        &self,
+        fold: &mut RdfFold,
+        rows: &[Row],
+        scope: RowScope,
+    ) -> Result<RowFindings, FoldError> {
         let mut findings = RowFindings::default();
         let mut lines = Vec::new();
-        for &row in &decoded.rows {
-            match self.resolve_row(row) {
+        for &row in rows {
+            // Earlier reservations and readable IDs are immutable. The scope
+            // excludes every definition that arrived after this frame.
+            match self.resolve_scoped_row(row, scope) {
                 RowDisposition::Accepted(line) => {
                     for (id, _) in row_references(row).into_iter().flatten() {
                         let term = self
@@ -441,7 +482,10 @@ impl SegmentDictionary {
         Ok(findings)
     }
 
-    fn check_annotations(&self, rows: &[Row]) -> Result<(), FoldError> {
+    pub(in crate::v2) fn check_annotations(&self, rows: &[Row]) -> Result<(), FoldError> {
+        if !matches!(rows.first(), Some(Row::Annotation(..))) {
+            return Ok(());
+        }
         let mut keys = FastSet::default();
         keys.try_reserve(rows.len())?;
         for &row in rows {
