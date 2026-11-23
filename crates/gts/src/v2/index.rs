@@ -5,7 +5,6 @@ use core::num::NonZeroU64;
 use std::collections::TryReserveError;
 
 use super::fields::{Fields, OptionShape, push};
-use super::rows::graph_name;
 use super::terms::read_enum;
 use super::{
     ContentError, DIGEST_LENGTH, FrameCheck, FrameEnvelope, FrameField, FrameType, LinkState,
@@ -15,10 +14,15 @@ use super::{
 type Digest = [u8; DIGEST_LENGTH];
 const LAST_FRAME_TYPE: u64 = FrameType::Parity as u64;
 
+mod content;
+
+pub(super) use content::IndexContent;
+use content::{check_graph_directory, check_pack_members};
+
 /// Comparisons of an index's claims with the observed ordinary prefix.
 ///
-/// Each result is independent. The directory, statistics, content digest
-/// and pack member claims require additional fold evidence.
+/// Each result is independent. Statistics and the content digest require
+/// labelling the segment's fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct IndexPrefixCheck {
@@ -28,6 +32,12 @@ pub struct IndexPrefixCheck {
     pub root_matches: bool,
     /// The declared runs match the maximal runs of frame types.
     pub type_runs_match: bool,
+    /// The graph directory matches the written rows of the covered frames.
+    /// Absent when the covered row payloads were unavailable.
+    pub graph_directory_matches: Option<bool>,
+    /// The pack-member locations match the covered pack directories.
+    /// Absent when the covered pack payloads were unavailable.
+    pub pack_members_match: Option<bool>,
 }
 
 #[derive(Debug, Default)]
@@ -59,6 +69,7 @@ impl TypeRuns {
         registry: NonZeroU64,
         head: &Digest,
         range: &Range,
+        content: Option<&IndexContent>,
     ) -> Option<Result<IndexPrefixCheck, ContentError>> {
         if checked.malformed.is_some() || checked.link.state == LinkState::Broken {
             return None;
@@ -66,7 +77,7 @@ impl TypeRuns {
         let PayloadState::Verified(payload) = &checked.payload.state else {
             return None;
         };
-        Some(self.check(frame, payload, registry, head, range))
+        Some(self.check(frame, payload, registry, head, range, content))
     }
 
     fn check(
@@ -76,21 +87,24 @@ impl TypeRuns {
         registry: NonZeroU64,
         head: &Digest,
         range: &Range,
+        content: Option<&IndexContent>,
     ) -> Result<IndexPrefixCheck, ContentError> {
         let (count, claimed_head) = frame.read_field(FrameField::Content).count_and_digest()?;
         let mut fields = Fields::new(payload);
         fields.record(6)?;
         let type_runs_match = self.compare(&mut fields, registry)?;
-        check_graph_directory(&mut fields, registry)?;
+        let graph_directory_matches = check_graph_directory(&mut fields, registry, content)?;
         check_statistics(&mut fields)?;
         let root = fields.fixed_bytes::<DIGEST_LENGTH>()?;
         check_content_digest(&mut fields, registry)?;
-        check_pack_members(&mut fields)?;
+        let pack_members_match = check_pack_members(&mut fields, content)?;
         fields.finish()?;
         Ok(IndexPrefixCheck {
             head_matches: count == range.count().get() - 1 && claimed_head == head,
             root_matches: *root == range.root(),
             type_runs_match,
+            graph_directory_matches,
+            pack_members_match,
         })
     }
 
@@ -112,24 +126,6 @@ impl TypeRuns {
         }
         Ok(matches)
     }
-}
-
-fn check_graph_directory(
-    fields: &mut Fields<'_>,
-    registry: NonZeroU64,
-) -> Result<(), ContentError> {
-    for _ in 0..fields.array()? {
-        fields.record(2)?;
-        graph_name(fields, registry)?;
-        for _ in 0..fields.array()? {
-            fields.record(4)?;
-            read_enum(fields, LAST_FRAME_TYPE, registry)?;
-            fields.uint()?;
-            fields.uint()?;
-            fields.uint()?;
-        }
-    }
-    Ok(())
 }
 
 fn check_statistics(fields: &mut Fields<'_>) -> Result<(), WireError> {
@@ -162,16 +158,6 @@ fn check_content_digest(fields: &mut Fields<'_>, registry: NonZeroU64) -> Result
         OptionShape::Unknown { tag_offset, .. } => {
             return Err(WireError::new(MalformedReason::UnregisteredValue, tag_offset).into());
         }
-    }
-    Ok(())
-}
-
-fn check_pack_members(fields: &mut Fields<'_>) -> Result<(), WireError> {
-    for _ in 0..fields.array()? {
-        fields.record(3)?;
-        fields.fixed_bytes::<DIGEST_LENGTH>()?;
-        fields.uint()?;
-        fields.uint()?;
     }
     Ok(())
 }

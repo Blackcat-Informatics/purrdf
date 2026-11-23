@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError};
 
 use super::frame::FrameWire;
-use super::index::StorageIndex;
+use super::index::{IndexContent, StorageIndex};
 use super::parity::{ParityResumption, ParityStream};
 use super::{
     CommitCheck, ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget,
@@ -336,6 +336,7 @@ struct Segment<'a> {
     units: FastMap<[u8; 32], Unit<'a>>,
     parity: ParityStream<'a>,
     index_storage: StorageIndex,
+    index_content: IndexContent,
 }
 
 enum Unit<'a> {
@@ -1155,9 +1156,10 @@ impl<'a> GraphReader<'a> {
         {
             super::fields::push(&mut self.graph.stored_digest_mismatches, offset)?;
         }
+        let position = segment.verifier.ordinary_count();
         let mut checked = segment
             .verifier
-            .accept_checked(&frame, checked, &self.payload)
+            .accept_checked(&frame, checked, &self.payload, Some(&segment.index_content))
             .map_err(ReadFailure::Segment)?;
         if !frame.transparent() {
             let wire = &checked.frame;
@@ -1180,6 +1182,7 @@ impl<'a> GraphReader<'a> {
                 .other_item(offset..offset + frame.bytes().len())?;
         }
         if damaged_payload {
+            segment.index_content.opaque_frame(kind);
             if let Some(reservation) = &checked.terms {
                 segment
                     .dictionary
@@ -1243,7 +1246,7 @@ impl<'a> GraphReader<'a> {
             | FrameType::ReifierBindings
             | FrameType::Annotations
             | FrameType::EmptyGraphs => {
-                self.observe_rows(checked, offset, segment)?;
+                self.observe_rows(checked, offset, position, segment)?;
             }
             FrameType::Blob
             | FrameType::Chunk
@@ -1256,6 +1259,7 @@ impl<'a> GraphReader<'a> {
                     kind,
                     frame.read_field(FrameField::Content),
                     bytes,
+                    position,
                     segment,
                 )?;
             }
@@ -1291,6 +1295,7 @@ impl<'a> GraphReader<'a> {
         &mut self,
         checked: super::SegmentFrame<'_>,
         offset: usize,
+        position: u64,
         segment: &mut Segment<'_>,
     ) -> Result<(), ReadFailure> {
         if let Some(Err(error)) = checked.rows {
@@ -1301,6 +1306,7 @@ impl<'a> GraphReader<'a> {
             .decode_rows(&checked)
             .ok_or(ReadFailure::MissingContent)?
             .map_err(ReadFailure::Content)?;
+        segment.index_content.record_rows(&decoded.rows, position)?;
         if decoded.declared_order_violated {
             super::fields::push(&mut self.graph.row_order_violations, offset)?;
         }
@@ -1412,6 +1418,7 @@ fn segment_from_header<'a>(
         file_ordinal,
         units: FastMap::default(),
         index_storage: StorageIndex::default(),
+        index_content: IndexContent::default(),
         parity: ParityStream::new(extent, identifier, registry)?,
     })
 }

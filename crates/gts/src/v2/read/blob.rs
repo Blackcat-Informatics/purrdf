@@ -141,6 +141,7 @@ impl<'a> GraphReader<'a> {
         kind: FrameType,
         mut content: Fields<'a>,
         bytes: Cow<'a, [u8]>,
+        position: u64,
         segment: &mut Segment<'a>,
     ) -> Result<(), ReadFailure> {
         match kind {
@@ -165,10 +166,12 @@ impl<'a> GraphReader<'a> {
             }
             FrameType::Pack => match bytes {
                 Cow::Borrowed(bytes) => {
-                    self.read_pack(content, bytes, segment, |unit| Ok(Cow::Borrowed(unit)))?;
+                    self.read_pack(content, bytes, position, segment, |unit| {
+                        Ok(Cow::Borrowed(unit))
+                    })?;
                 }
                 Cow::Owned(bytes) => {
-                    self.read_pack(content, &bytes, segment, copy_unit)?;
+                    self.read_pack(content, &bytes, position, segment, copy_unit)?;
                 }
             },
             FrameType::External => self.external(content)?,
@@ -280,6 +283,7 @@ impl<'a> GraphReader<'a> {
         &mut self,
         mut content: Fields<'_>,
         bytes: &'p [u8],
+        position: u64,
         segment: &mut Segment<'a>,
         retain: impl Fn(&'p [u8]) -> Result<Cow<'a, [u8]>, ReadFailure>,
     ) -> Result<(), ReadFailure> {
@@ -293,9 +297,12 @@ impl<'a> GraphReader<'a> {
         }
         let members = pack.members()?;
         let mut units = FastMap::default();
-        for member in &members {
+        for (member_index, member) in members.iter().enumerate() {
             if let Member::Unit(unit, bytes) = member {
                 unit.verify(bytes)?;
+                segment
+                    .index_content
+                    .record_unit(unit.digest, position, member_index)?;
                 units.try_reserve(1)?;
                 units.entry(unit.digest).or_insert(*bytes);
             }

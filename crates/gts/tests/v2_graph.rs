@@ -51,6 +51,49 @@ fn offsets_and_locators_compare_against_the_walked_sequence() {
 }
 
 #[test]
+fn index_content_claims_compare_against_their_covered_rows_and_members() {
+    let intact = include_bytes!("fixtures/v2/P5/index-intact.bin");
+    let pack = include_bytes!("fixtures/v2/P7/idx-unit-pack.bin");
+    for (bytes, directory, members) in [
+        (intact.as_slice(), true, true),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.graph_directory.bin").as_slice(),
+            false,
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.pack_members.bin").as_slice(),
+            true,
+            false,
+        ),
+        (pack.as_slice(), true, true),
+    ] {
+        let graph = second(bytes);
+        let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+        assert_eq!(
+            (prefix.graph_directory_matches, prefix.pack_members_match),
+            (Some(directory), Some(members))
+        );
+    }
+
+    let (_, damaged_pack) = damage_first_payload(pack);
+    let graph = second(&damaged_pack);
+    let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+    assert_eq!(
+        (prefix.graph_directory_matches, prefix.pack_members_match),
+        (Some(true), None)
+    );
+
+    let damaged_rows = damage_payload_at(intact, 152);
+    let graph = second(&damaged_rows);
+    let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+    assert_eq!(
+        (prefix.graph_directory_matches, prefix.pack_members_match),
+        (None, Some(true))
+    );
+}
+
+#[test]
 fn a_locator_names_the_closing_index_even_if_it_does_not_verify() {
     let bytes = include_bytes!("fixtures/v2/P5/index-intact.bin");
     let index_offset = 468;
@@ -344,6 +387,10 @@ fn a_complete_opaque_item_puts_the_dictionary_in_doubt_after_the_scan() {
 
 fn damage_first_payload(intact: &[u8]) -> (usize, Vec<u8>) {
     let offset = Item::first(intact).unwrap().unwrap().bytes().len();
+    (offset, damage_payload_at(intact, offset))
+}
+
+fn damage_payload_at(intact: &[u8], offset: usize) -> Vec<u8> {
     let frame = Item::first(&intact[offset..])
         .unwrap()
         .unwrap()
@@ -354,7 +401,7 @@ fn damage_first_payload(intact: &[u8]) -> (usize, Vec<u8>) {
     let last_payload_byte = payload.as_ptr().addr() - intact.as_ptr().addr() + payload.len() - 1;
     let mut damaged = intact.to_vec();
     damaged[last_payload_byte] ^= 1;
-    (offset, damaged)
+    damaged
 }
 
 #[test]
