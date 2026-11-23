@@ -3,10 +3,12 @@
 
 //! Signature precedence, coverage and trust through the generation 2 reader.
 
-use purrdf_ed25519::EncodedVerificationError;
+use purrdf_ed25519::{EncodedVerificationError, SigningKey};
+use purrdf_gts::cose::{SigningKeyRef, composite};
 use purrdf_gts::v2::{
-    Authenticity, HeldKey, ReadCapacity, ReadGraph, SignatureInputs, SignatureInvalid,
-    SignatureStatus, SignatureUnverified, read, read_with_signature_inputs,
+    Authenticity, HeldKey, ReadCapacity, ReadGraph, SegmentWriteError, SegmentWriter,
+    SignatureInputs, SignatureInvalid, SignatureStatus, SignatureUnverified, SignatureWriteError,
+    read, read_with_signature_inputs,
 };
 use purrdf_hash::hex;
 use purrdf_lex::{cbor, json};
@@ -237,4 +239,99 @@ fn an_unsigned_index_leaves_a_fully_authenticated_segment_authenticated() {
     let summary = &graph.segment_authentication[0];
     assert_eq!(summary.authenticity, Authenticity::Authenticated);
     assert_eq!(summary.authenticated_frames, 5);
+}
+
+#[test]
+fn a_signed_commit_matches_the_wire_vector_after_refusing_duplicate_keys() {
+    let expected = include_bytes!("fixtures/v2/P6/ed25519-honest.bin");
+    let seed = core::array::from_fn(|index| u8::try_from(index).unwrap());
+    let key = SigningKey::from_bytes(&seed);
+    let signer = SigningKeyRef::Ed25519(&key);
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"F1", None).unwrap();
+    let previous = *writer.head().unwrap();
+    assert!(matches!(
+        writer.add_signed_commit(&[signer, signer]),
+        Err(SegmentWriteError::Signature(
+            SignatureWriteError::DuplicateKey { algorithm: 1, .. }
+        ))
+    ));
+    assert_eq!(writer.head(), Some(&previous));
+    writer.add_signed_commit(&[signer]).unwrap();
+    assert_eq!(writer.into_inner(), expected.as_slice());
+
+    let mut partial = vec![0; expected.len() - 1];
+    let mut writer = SegmentWriter::new(partial.as_mut_slice()).unwrap();
+    writer.add_blob(b"F1", None).unwrap();
+    assert!(matches!(
+        writer.add_signed_commit(&[signer]),
+        Err(SegmentWriteError::Io(_))
+    ));
+    assert!(writer.head().is_none());
+    assert!(matches!(
+        writer.add_commit(),
+        Err(SegmentWriteError::IncompleteFrame)
+    ));
+    assert_eq!(partial, expected[..expected.len() - 1]);
+}
+
+#[test]
+fn a_composite_and_classical_commit_signature_use_one_subject_each_in_wire_order() {
+    let classical = SigningKey::from_bytes(&[3; 32]);
+    let mut seed = [7; composite::SECRET_KEY_LENGTH];
+    seed[32..].fill(9);
+    let hybrid = composite::SigningKey::from_bytes(&seed).unwrap();
+    let mut signers = [
+        SigningKeyRef::Composite(&hybrid),
+        SigningKeyRef::Ed25519(&classical),
+    ];
+    let write = |signers: &[SigningKeyRef<'_>]| {
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"signed content", None).unwrap();
+        writer.add_signed_commit(signers).unwrap();
+        writer.into_inner()
+    };
+    let bytes = write(&signers);
+    signers.reverse();
+    assert_eq!(write(&signers), bytes);
+
+    let ReadGraph::Second(unverified) = read(&bytes, ReadCapacity::default()).unwrap() else {
+        panic!("the writer emits a generation 2 segment");
+    };
+    let [ed_signature, composite_signature] = unverified.signatures[0].checks.as_slice() else {
+        panic!("expected both signature records");
+    };
+    assert_eq!(
+        (ed_signature.algorithm, composite_signature.algorithm),
+        (1, 2)
+    );
+    let public_ed = classical.verifying_key().to_bytes();
+    let public_hybrid = hybrid.verifying_key().to_bytes();
+    let inputs = SignatureInputs::new(
+        vec![ed_signature.key_id, composite_signature.key_id],
+        vec![
+            HeldKey {
+                key_id: ed_signature.key_id,
+                algorithm: 1,
+                public_key: &public_ed,
+            },
+            HeldKey {
+                key_id: composite_signature.key_id,
+                algorithm: 2,
+                public_key: &public_hybrid,
+            },
+        ],
+    );
+    let ReadGraph::Second(verified) =
+        read_with_signature_inputs(&bytes, ReadCapacity::default(), &inputs).unwrap()
+    else {
+        panic!("the writer emits a generation 2 segment");
+    };
+    assert!(
+        verified.signatures[0]
+            .checks
+            .iter()
+            .all(|check| { check.authenticated && check.status == SignatureStatus::Valid })
+    );
+    assert_eq!(verified.segment_authentication[0].authenticated_frames, 2);
 }

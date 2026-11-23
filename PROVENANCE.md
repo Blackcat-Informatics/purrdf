@@ -129,8 +129,9 @@ at `c646f9d98be7ff31ceb0cb96695ee5ccc75db04a`. The whole-blob writer,
 range commitments and signature envelope grammar follow [P4](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P4.md),
 [P5](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P5.md)
 and [P6](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P6.md)
-at the same revision. Signature verification uses the P6 key identifier,
-signed subject, failure order, coverage and caller trust rules. Term
+at the same revision. Signature verification and deterministic commit signing
+use the P6 key identifier, signed subject, failure order, coverage and caller
+trust rules. Term
 reservations, dictionary payloads, row
 columns and RDF resolution follow [P3](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P3.md).
 Chunked writing uses the fixed gear table and cut rule of P4, and recipe

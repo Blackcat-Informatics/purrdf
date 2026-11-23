@@ -16,8 +16,8 @@ use super::fields::Fields;
 use super::{DIGEST_LENGTH, MalformedReason, REGISTRY_VERSION, WireError};
 
 type Digest = [u8; DIGEST_LENGTH];
-const ED25519: u64 = 1;
-const COMPOSITE: u64 = 2;
+pub(super) const ED25519: u64 = 1;
+pub(super) const COMPOSITE: u64 = 2;
 
 /// The claimed identity, algorithm and public bytes of a caller-held key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,13 +75,22 @@ impl<'a> SignatureInputs<'a> {
         header: &Digest,
         frame: &Digest,
     ) -> Result<SignatureStatus, mldsa65::Error> {
+        Self::verify_held(&self.held, record, header, frame)
+    }
+
+    pub(super) fn verify_held(
+        held: &[HeldKey<'_>],
+        record: &SignatureRecord<'_>,
+        header: &Digest,
+        frame: &Digest,
+    ) -> Result<SignatureStatus, mldsa65::Error> {
         use SignatureStatus as Status;
 
         if !matches!(record.algorithm, ED25519 | COMPOSITE) {
             return Ok(Status::Unverified(SignatureUnverified::UnknownAlgorithm));
         }
-        let first = self.held.partition_point(|key| key.key_id < *record.key_id);
-        let mut named = self.held[first..]
+        let first = held.partition_point(|key| key.key_id < *record.key_id);
+        let mut named = held[first..]
             .iter()
             .take_while(|key| key.key_id == *record.key_id)
             .peekable();
@@ -291,7 +300,7 @@ impl<'a> SignatureRecord<'a> {
     }
 }
 
-fn key_identifier(algorithm: u64, public_key: &[u8]) -> Digest {
+pub(super) fn key_identifier(algorithm: u64, public_key: &[u8]) -> Digest {
     let mut hash = Hasher::new_derive_key("gts2 key id");
     hash.update(&[0x82]);
     hash_head(&mut hash, head::UNSIGNED, algorithm);
@@ -299,7 +308,12 @@ fn key_identifier(algorithm: u64, public_key: &[u8]) -> Digest {
     *hash.finalize().as_bytes()
 }
 
-fn signature_message(algorithm: u64, key_id: &Digest, header: &Digest, frame: &Digest) -> Digest {
+pub(super) fn signature_message(
+    algorithm: u64,
+    key_id: &Digest,
+    header: &Digest,
+    frame: &Digest,
+) -> Digest {
     let mut hash = Hasher::new_derive_key("gts2 signature subject");
     hash.update(&[0x84]);
     hash_head(&mut hash, head::UNSIGNED, algorithm);

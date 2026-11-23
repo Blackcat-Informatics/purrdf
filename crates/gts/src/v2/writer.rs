@@ -21,6 +21,9 @@ use super::{
 
 mod blob;
 mod rdf;
+mod signature;
+
+pub use signature::SignatureWriteError;
 
 type Digest = [u8; DIGEST_LENGTH];
 
@@ -40,6 +43,8 @@ pub enum SegmentWriteError {
     IncompleteFold,
     /// A value declaration needs at least one nonempty unit.
     EmptyValue,
+    /// The signature list could not be prepared.
+    Signature(SignatureWriteError),
 }
 
 impl fmt::Display for SegmentWriteError {
@@ -53,6 +58,7 @@ impl fmt::Display for SegmentWriteError {
                 f.write_str("GTS v2 RDF fold contains held rows or an overflowing multiplicity")
             }
             Self::EmptyValue => f.write_str("GTS v2 value declarations require a nonempty value"),
+            Self::Signature(error) => error.fmt(f),
         }
     }
 }
@@ -62,6 +68,7 @@ impl std::error::Error for SegmentWriteError {
         match self {
             Self::Io(error) => Some(error),
             Self::RangeFull(error) => Some(error),
+            Self::Signature(error) => Some(error),
             Self::IncompleteFrame
             | Self::DictionaryFull
             | Self::IncompleteFold
@@ -78,6 +85,7 @@ impl purrdf_hash::error::StructuredError for SegmentWriteError {
         DictionaryFull => "gts-v2-dictionary-full" {},
         IncompleteFold => "gts-v2-incomplete-fold" {},
         EmptyValue => "gts-v2-empty-value-declaration" {},
+        Signature(cause) => "gts-v2-signature-write" { "cause" => Cause(cause) },
     }
 }
 
@@ -92,6 +100,7 @@ impl From<io::Error> for SegmentWriteError {
 pub struct SegmentWriter<W> {
     sink: W,
     head: Option<Digest>,
+    opener: Digest,
     range: Range,
     term_base: u128,
     parity: Option<Box<Recorder>>,
@@ -139,6 +148,7 @@ impl<W: Write> SegmentWriter<W> {
         Ok(Self {
             sink,
             head: Some(head),
+            opener: head,
             range: Range::new(&head),
             term_base: 0,
             parity,
@@ -207,9 +217,7 @@ impl<W: Write> SegmentWriter<W> {
         let count = self.range.count().get() - 1;
         let root = self.range.root();
         self.append(FrameType::Commit, &[], |output| {
-            head::write_head(output, head::ARRAY, 2)?;
-            head::write_head(output, head::UNSIGNED, count)?;
-            head::write_bytes(output, &root)
+            write_commit_content(output, count, &root)
         })
     }
 
@@ -226,19 +234,30 @@ impl<W: Write> SegmentWriter<W> {
         payload: &[u8],
         content: impl FnOnce(&mut HashingWriter<'_, RecordingWriter<'_, W>>) -> io::Result<()>,
     ) -> Result<Digest, SegmentWriteError> {
+        self.append_with(|sink, predecessor| {
+            write_frame(sink, predecessor, frame_type, payload, content)
+        })
+    }
+
+    fn append_head(&self) -> Result<Digest, SegmentWriteError> {
         if self.range.count().get() == u64::MAX {
             return Err(SegmentWriteError::RangeFull(RangeFull));
         }
-        let predecessor = self.head.take().ok_or(SegmentWriteError::IncompleteFrame)?;
-        let identifier = write_frame(
+        self.head.ok_or(SegmentWriteError::IncompleteFrame)
+    }
+
+    fn append_with(
+        &mut self,
+        write: impl FnOnce(&mut RecordingWriter<'_, W>, &Digest) -> io::Result<Digest>,
+    ) -> Result<Digest, SegmentWriteError> {
+        let predecessor = self.append_head()?;
+        self.head = None;
+        let identifier = write(
             &mut RecordingWriter {
                 sink: &mut self.sink,
                 recorder: self.parity.as_deref_mut(),
             },
             &predecessor,
-            frame_type,
-            payload,
-            content,
         )?;
         if let Some(parity) = &mut self.parity {
             for span in parity.drain() {
@@ -266,7 +285,25 @@ impl<W: Write> SegmentWriter<W> {
     }
 }
 
+fn write_commit_content(output: &mut impl Write, count: u64, root: &Digest) -> io::Result<()> {
+    head::write_head(output, head::ARRAY, 2)?;
+    head::write_head(output, head::UNSIGNED, count)?;
+    head::write_bytes(output, root)
+}
+
 fn write_frame<W: Write>(
+    sink: &mut W,
+    predecessor: &Digest,
+    frame_type: FrameType,
+    payload: &[u8],
+    content: impl FnOnce(&mut HashingWriter<'_, W>) -> io::Result<()>,
+) -> io::Result<Digest> {
+    let identifier = write_frame_body(sink, predecessor, frame_type, payload, content)?;
+    head::write_head(sink, head::ARRAY, 0)?;
+    Ok(identifier)
+}
+
+fn write_frame_body<W: Write>(
     sink: &mut W,
     predecessor: &Digest,
     frame_type: FrameType,
@@ -295,8 +332,22 @@ fn write_frame<W: Write>(
     head::write_head(sink, head::UNSIGNED, 1)?;
     head::write_bytes(sink, payload)?;
     head::write_bytes(sink, &identifier)?;
-    head::write_head(sink, head::ARRAY, 0)?;
     Ok(identifier)
+}
+
+#[derive(Default)]
+struct Buffer(Vec<u8>);
+
+impl Write for Buffer {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.try_reserve(bytes.len()).map_err(io::Error::other)?;
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 struct HashingWriter<'a, W> {

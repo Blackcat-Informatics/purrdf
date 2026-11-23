@@ -5,7 +5,7 @@ use std::io::{self, Write};
 
 use purrdf_lex::cbor::head::{self, write_bytes, write_text};
 
-use super::{FrameType, SegmentWriteError, SegmentWriter};
+use super::{Buffer, FrameType, SegmentWriteError, SegmentWriter};
 use crate::FastMap;
 use crate::v2::{Line, LiteralDirection, LiteralValue, RdfFold, Term, TermId, TermOrder};
 
@@ -463,19 +463,4 @@ fn int(output: &mut impl Write, value: i128) -> io::Result<()> {
     };
     let argument = u64::try_from(magnitude).map_err(io::Error::other)?;
     head::write_head(output, format, argument)
-}
-
-#[derive(Default)]
-struct Buffer(Vec<u8>);
-
-impl Write for Buffer {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.try_reserve(bytes.len()).map_err(io::Error::other)?;
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }
