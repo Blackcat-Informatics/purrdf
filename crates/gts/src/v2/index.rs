@@ -176,16 +176,6 @@ fn check_pack_members(fields: &mut Fields<'_>) -> Result<(), WireError> {
     Ok(())
 }
 
-/// The prefix check of an index encountered during a graph read.
-#[derive(Debug)]
-#[non_exhaustive]
-pub struct GraphIndexCheck {
-    /// Physical offset of the index frame.
-    pub offset: usize,
-    /// Verified-prefix comparisons or a grammar failure in the index.
-    pub prefix: Result<IndexPrefixCheck, ContentError>,
-}
-
 /// An accelerator item outside the frame chain and parity stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

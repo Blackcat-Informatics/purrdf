@@ -7,8 +7,8 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
     ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
-    Line, MalformedReason, ParityFindingKind, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure,
-    ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
+    Line, MalformedReason, ParityFindingKind, PayloadDamage, PayloadRefusal, RdfGraph,
+    ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
 };
 use purrdf_lex::cbor::head;
 
@@ -46,6 +46,35 @@ fn offsets_and_locators_compare_against_the_walked_sequence() {
             (finding.offset, finding.item, finding.problem),
             (offset, kind, IndexStorageProblem::ClaimMismatch)
         );
+    }
+}
+
+#[test]
+fn a_locator_names_the_closing_index_even_if_it_does_not_verify() {
+    let bytes = include_bytes!("fixtures/v2/P5/index-intact.bin");
+    let index_offset = 468;
+    let item = Item::first(&bytes[index_offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let signatures_start =
+        index_offset + item.bytes().len() - frame.field(FrameField::Signatures).len();
+    let identifier_start = signatures_start - frame.field(FrameField::Identifier).len();
+    for position in [identifier_start - 1, signatures_start - 1] {
+        let mut changed = bytes.to_vec();
+        changed[position] ^= 1;
+        let graph = second(&changed);
+        assert_eq!(graph.index_storage_findings, []);
+        let [index] = graph.index_checks.as_slice() else {
+            panic!("expected one index verification failure");
+        };
+        assert_eq!(index.offset, index_offset);
+        if position < identifier_start {
+            assert!(matches!(
+                index.prefix,
+                Err(ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest))
+            ));
+        } else {
+            assert!(matches!(index.prefix, Err(ReadFailure::BrokenLink)));
+        }
     }
 }
 
@@ -107,6 +136,38 @@ fn a_later_commit_or_repeated_locator_invalidates_the_hints() {
             ])
     );
     assert_eq!(graph.resynchronizations, []);
+}
+
+#[test]
+fn a_resync_opener_that_displaces_an_index_witness_leaves_a_broken_index() {
+    let source = include_bytes!("fixtures/v2/P1/resync-cosigned-not-scanned.bin");
+    let mut opener = source[542..608].to_vec();
+    // Move the embedded opener into the parity witness's final field, so
+    // the witness is a complete item whose signature grammar fails.
+    let offset = 642_u16;
+    assert_eq!(opener[26..29], [0x19, 0x02, 0x1e]);
+    opener[27..29].copy_from_slice(&offset.to_be_bytes());
+    let identifier = opener.len() - 32;
+    let mut hash = purrdf_hash::blake3::Hasher::new_derive_key("gts2 header");
+    hash.update(&[0x8a]);
+    hash.update(&opener[1..identifier - 2]);
+    opener[identifier..].copy_from_slice(hash.finalize().as_bytes());
+
+    let mut changed = source[..usize::from(offset)].to_vec();
+    changed[420] ^= 1;
+    changed[546] ^= 1;
+    changed.extend_from_slice(&opener);
+
+    let graph = second(&changed);
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("expected the index retained before the scanned opener");
+    };
+    assert_eq!(index.offset, 209);
+    assert!(matches!(index.prefix, Err(ReadFailure::BrokenLink)));
+    let [resync] = graph.resynchronizations.as_slice() else {
+        panic!("expected the opener inside the discarded witness");
+    };
+    assert_eq!(resync.offset, usize::from(offset));
 }
 
 #[test]
