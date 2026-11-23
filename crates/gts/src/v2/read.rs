@@ -319,7 +319,7 @@ impl<'a> GraphReader<'a> {
             .classify(core::num::NonZeroU64::MIN)
             .map_err(ReadFailure::Classification)?;
         match kind {
-            ItemKind::Header => *segment = start_segment(item, Some(segment))?,
+            ItemKind::Header | ItemKind::Resync => *segment = start_segment(item, Some(segment))?,
             ItemKind::Frame => {
                 let frame = item
                     .frame()
@@ -497,10 +497,11 @@ fn start_segment<'a>(
     let kind = opener
         .classify(core::num::NonZeroU64::MIN)
         .map_err(ReadFailure::Classification)?;
-    if kind != ItemKind::Header {
-        return Err(ReadFailure::Item(kind));
-    }
-    let header = Header::decode(opener).map_err(ReadFailure::Wire)?;
+    let header = match kind {
+        ItemKind::Header => Header::decode(opener).map_err(ReadFailure::Wire)?,
+        ItemKind::Resync => Header::decode_resync(opener).map_err(ReadFailure::Wire)?,
+        _ => return Err(ReadFailure::Item(kind)),
+    };
     let registry = header.registry_version();
     if registry.get() != super::REGISTRY_VERSION {
         return Err(ReadFailure::Registry(registry.get()));

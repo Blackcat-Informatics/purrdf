@@ -113,6 +113,10 @@ impl<'a> Fields<'a> {
         self.length - self.tail.len()
     }
 
+    pub(super) const fn remaining(&self) -> &'a [u8] {
+        self.tail
+    }
+
     fn argument(&mut self, expected: u8) -> Result<u64, WireError> {
         let offset = self.offset();
         let (major, argument) = self.typed_argument()?;
@@ -276,8 +280,7 @@ impl<'a> Fields<'a> {
 
     pub(super) fn text(&mut self) -> Result<&'a str, WireError> {
         let offset = self.offset();
-        core::str::from_utf8(self.string(head::TEXT)?)
-            .map_err(|_| WireError::new(MalformedReason::WrongType, offset))
+        checked_text(self.string(head::TEXT)?, offset)
     }
 
     fn string(&mut self, major: u8) -> Result<&'a [u8], WireError> {
@@ -292,6 +295,10 @@ impl<'a> Fields<'a> {
 
     /// Check one structurally framed value whose position declares no type.
     pub(super) fn closed_value(&mut self) -> Result<(), WireError> {
+        self.closed_value_until(usize::MAX)
+    }
+
+    pub(super) fn closed_value_until(&mut self, limit: usize) -> Result<(), WireError> {
         // Arrays are the only containers, and all children have the same
         // grammar. Counting remaining values preserves lexical order
         // without allocating a stack. Each array consumes at least one byte
@@ -300,6 +307,9 @@ impl<'a> Fields<'a> {
         while remaining != 0 {
             remaining -= 1;
             let offset = self.offset();
+            if offset >= limit {
+                return Err(WireError::new(MalformedReason::OutOfRange, limit));
+            }
             let [first, tail @ ..] = self.tail else {
                 return Err(WireError::new(MalformedReason::WrongLength, offset));
             };
@@ -307,11 +317,14 @@ impl<'a> Fields<'a> {
                 major @ (0 | 1) => {
                     self.argument(major)?;
                 }
-                head::BYTES => {
-                    self.bytes()?;
-                }
-                head::TEXT => {
-                    self.text()?;
+                major @ (head::BYTES | head::TEXT) => {
+                    let bytes = self.string(major)?;
+                    if major == head::TEXT {
+                        checked_text(bytes, offset)?;
+                    }
+                    if self.offset() > limit {
+                        return Err(WireError::new(MalformedReason::OutOfRange, limit));
+                    }
                 }
                 head::ARRAY => {
                     remaining += u128::from(self.array()?);
@@ -323,6 +336,13 @@ impl<'a> Fields<'a> {
                 }
             }
         }
+        if self.offset() > limit {
+            return Err(WireError::new(MalformedReason::OutOfRange, limit));
+        }
         Ok(())
     }
+}
+
+fn checked_text(bytes: &[u8], offset: usize) -> Result<&str, WireError> {
+    core::str::from_utf8(bytes).map_err(|_| WireError::new(MalformedReason::WrongType, offset))
 }

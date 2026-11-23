@@ -131,7 +131,8 @@ range commitments and signature envelope grammar follow [P4](https://github.com/
 and [P6](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P6.md)
 at the same revision. Term reservations, dictionary payloads, row
 columns and RDF resolution follow [P3](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P3.md).
-Recipe and value reconstruction use the unit scope defined in P4.
+Chunked writing uses the fixed gear table and cut rule of P4, and recipe
+and value reconstruction use its unit scope.
 The graph reader takes the file capacity limits from [P7](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P7.md)
 and delegates generation 1 inputs as specified in [P9](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P9.md).
 The binary fixtures in `crates/gts/tests/fixtures/v2`

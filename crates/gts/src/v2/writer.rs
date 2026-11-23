@@ -17,6 +17,7 @@ use super::{
     write_header,
 };
 
+mod blob;
 mod rdf;
 
 type Digest = [u8; DIGEST_LENGTH];
@@ -35,6 +36,8 @@ pub enum SegmentWriteError {
     DictionaryFull,
     /// The supplied fold contains held rows or an overflowing multiplicity.
     IncompleteFold,
+    /// A value declaration needs at least one nonempty unit.
+    EmptyValue,
 }
 
 impl fmt::Display for SegmentWriteError {
@@ -47,6 +50,7 @@ impl fmt::Display for SegmentWriteError {
             Self::IncompleteFold => {
                 f.write_str("GTS v2 RDF fold contains held rows or an overflowing multiplicity")
             }
+            Self::EmptyValue => f.write_str("GTS v2 value declarations require a nonempty value"),
         }
     }
 }
@@ -56,7 +60,10 @@ impl std::error::Error for SegmentWriteError {
         match self {
             Self::Io(error) => Some(error),
             Self::RangeFull(error) => Some(error),
-            Self::IncompleteFrame | Self::DictionaryFull | Self::IncompleteFold => None,
+            Self::IncompleteFrame
+            | Self::DictionaryFull
+            | Self::IncompleteFold
+            | Self::EmptyValue => None,
         }
     }
 }
@@ -68,6 +75,7 @@ impl purrdf_hash::error::StructuredError for SegmentWriteError {
         RangeFull(cause) => "gts-v2-segment-range-full" { "cause" => Cause(cause) },
         DictionaryFull => "gts-v2-dictionary-full" {},
         IncompleteFold => "gts-v2-incomplete-fold" {},
+        EmptyValue => "gts-v2-empty-value-declaration" {},
     }
 }
 

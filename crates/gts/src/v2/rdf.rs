@@ -98,11 +98,7 @@ impl std::error::Error for FoldError {
     }
 }
 
-impl From<TryReserveError> for FoldError {
-    fn from(error: TryReserveError) -> Self {
-        Self::Resource(error)
-    }
-}
+purrdf_lex::variant_from!(FoldError { Resource(TryReserveError) });
 
 impl purrdf_hash::error::StructuredError for FoldError {
     purrdf_hash::error_visit! {

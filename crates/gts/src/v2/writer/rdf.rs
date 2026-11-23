@@ -49,7 +49,9 @@ impl<W: Write> SegmentWriter<W> {
 
     fn write_terms(&mut self, fold: &RdfFold, base: u64) -> Result<(), SegmentWriteError> {
         let mut values = FastMap::default();
-        reserve_map(&mut values, fold.values().len())?;
+        values
+            .try_reserve(fold.values().len())
+            .map_err(io::Error::other)?;
         values.extend(fold.values().iter().map(|(id, value)| (id.index(), value)));
         let mut terms = fold.terms().enumerate().map(|(index, term)| {
             values
@@ -57,7 +59,9 @@ impl<W: Write> SegmentWriter<W> {
                 .map_or(Definition::Term(term), |value| Definition::Value(value))
         });
         let mut batch = Vec::new();
-        reserve(&mut batch, FRAME_ROWS.min(terms.len()))?;
+        batch
+            .try_reserve(FRAME_ROWS.min(terms.len()))
+            .map_err(io::Error::other)?;
         let mut written = 0;
         loop {
             batch.extend(terms.by_ref().take(FRAME_ROWS));
@@ -117,7 +121,7 @@ impl<W: Write> SegmentWriter<W> {
             let mut batch = Vec::new();
             loop {
                 for row in rows.by_ref().take(FRAME_ROWS) {
-                    reserve(&mut batch, 1)?;
+                    batch.try_reserve(1).map_err(io::Error::other)?;
                     batch.push(row);
                 }
                 if batch.is_empty() {
@@ -232,8 +236,8 @@ impl<'a> Languages<'a> {
             return Ok(index);
         }
         let index = self.ordered.len() as u64;
-        reserve_map(&mut self.index, 1)?;
-        reserve(&mut self.ordered, 1)?;
+        self.index.try_reserve(1).map_err(io::Error::other)?;
+        self.ordered.try_reserve(1).map_err(io::Error::other)?;
         self.index.insert(language, index);
         self.ordered.push(language);
         Ok(index)
@@ -324,7 +328,7 @@ fn write_literal_block<'a>(
     for term in terms {
         let code = match term {
             Definition::Term(Term::Typed { datatype, .. }) => {
-                reserve(&mut datatypes, 1)?;
+                datatypes.try_reserve(1).map_err(io::Error::other)?;
                 datatypes.push(wire_id(base, *datatype));
                 1
             }
@@ -333,7 +337,7 @@ fn write_literal_block<'a>(
                 direction,
                 ..
             }) => {
-                reserve(&mut indexes, 1)?;
+                indexes.try_reserve(1).map_err(io::Error::other)?;
                 indexes.push(languages.intern(language)?);
                 match direction {
                     None => 2,
@@ -466,7 +470,7 @@ struct Buffer(Vec<u8>);
 
 impl Write for Buffer {
     fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        reserve(&mut self.0, bytes.len())?;
+        self.0.try_reserve(bytes.len()).map_err(io::Error::other)?;
         self.0.extend_from_slice(bytes);
         Ok(bytes.len())
     }
@@ -474,15 +478,4 @@ impl Write for Buffer {
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
     }
-}
-
-fn reserve<T>(values: &mut Vec<T>, count: usize) -> io::Result<()> {
-    values.try_reserve(count).map_err(io::Error::other)
-}
-
-fn reserve_map<K: core::hash::Hash + Eq, V>(
-    values: &mut FastMap<K, V>,
-    count: usize,
-) -> io::Result<()> {
-    values.try_reserve(count).map_err(io::Error::other)
 }

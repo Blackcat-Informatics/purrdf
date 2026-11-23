@@ -13,6 +13,8 @@ use super::{
 
 pub(super) const HEADER_CONTEXT: &str = "gts2 header";
 
+mod resync;
+
 /// P2 profile codes for authored headers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -76,27 +78,12 @@ impl<'a> Header<'a> {
         reader.record(7)?;
         reader.fixed_uint(HEADER_KIND, MalformedReason::WrongType)?;
         reader.fixed_uint(GENERATION, MalformedReason::OutOfRange)?;
-        let registry_version = reader.positive(MalformedReason::OutOfRange)?;
-        let hash_algorithm = reader.registry_value(registry_version, BLAKE3_256)?;
+        let (registry_version, hash_algorithm, profile) = read_registry_profile(&mut reader)?;
         let holds_hash = hash_algorithm.get() == BLAKE3_256;
-        let profile =
-            reader.option(|reader| reader.positive(MalformedReason::UnregisteredValue))?;
         let canonical = reader.option(|reader| {
             reader.registry_value(registry_version, u64::from(CanonicalForm::V1 as u8))
         })?;
-        let lineage = reader.option(|reader| {
-            reader.record(2)?;
-            let offset = reader.offset();
-            let previous_head = reader.bytes()?;
-            if holds_hash && previous_head.len() != DIGEST_LENGTH {
-                return Err(WireError::new(MalformedReason::WrongLength, offset));
-            }
-            let ordinal = reader.positive(MalformedReason::OutOfRange)?;
-            Ok(Lineage {
-                previous_head,
-                ordinal,
-            })
-        })?;
+        let lineage = read_lineage(&mut reader, holds_hash)?;
         Ok(Self {
             registry_version,
             hash_algorithm,
@@ -143,6 +130,39 @@ impl<'a> Header<'a> {
     pub const fn identifier(self) -> Option<[u8; DIGEST_LENGTH]> {
         self.identifier
     }
+}
+
+fn read_registry_profile(
+    fields: &mut Fields<'_>,
+) -> Result<(NonZeroU64, NonZeroU64, Option<NonZeroU64>), WireError> {
+    let registry = fields.positive(MalformedReason::OutOfRange)?;
+    let algorithm = fields.registry_value(registry, BLAKE3_256)?;
+    let profile = fields.option(|fields| fields.positive(MalformedReason::UnregisteredValue))?;
+    Ok((registry, algorithm, profile))
+}
+
+fn read_digest<'a>(fields: &mut Fields<'a>, holds_hash: bool) -> Result<&'a [u8], WireError> {
+    let offset = fields.offset();
+    let bytes = fields.bytes()?;
+    if holds_hash && bytes.len() != DIGEST_LENGTH {
+        return Err(WireError::new(MalformedReason::WrongLength, offset));
+    }
+    Ok(bytes)
+}
+
+fn read_lineage<'a>(
+    fields: &mut Fields<'a>,
+    holds_hash: bool,
+) -> Result<Option<Lineage<&'a [u8]>>, WireError> {
+    fields.option(|fields| {
+        fields.record(2)?;
+        let previous_head = read_digest(fields, holds_hash)?;
+        let ordinal = fields.positive(MalformedReason::OutOfRange)?;
+        Ok(Lineage {
+            previous_head,
+            ordinal,
+        })
+    })
 }
 
 /// Write one deterministic registry version 1 header.

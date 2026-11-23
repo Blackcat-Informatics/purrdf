@@ -86,11 +86,7 @@ impl From<WireError> for ContentError {
     }
 }
 
-impl From<TryReserveError> for ContentError {
-    fn from(error: TryReserveError) -> Self {
-        Self::Resource(error)
-    }
-}
+purrdf_lex::variant_from!(ContentError { Resource(TryReserveError) });
 
 impl purrdf_hash::error::StructuredError for ContentError {
     purrdf_hash::error_visit! {

@@ -3,10 +3,13 @@
 
 //! Generation dispatch and the GTS v2 RDF graph entry points.
 
+use core::num::NonZeroU64;
+
 use purrdf_gts::v2::{
-    ContentError, FrameField, Item, Line, MalformedReason, RdfGraph, ReadCapacity, ReadFailure,
-    ReadGraph, SegmentWriter, Term, read,
+    ContentError, FrameField, Item, ItemKind, Line, MalformedReason, RdfGraph, ReadCapacity,
+    ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
 };
+use purrdf_lex::cbor::head;
 
 fn second(bytes: &[u8]) -> RdfGraph<'_> {
     let ReadGraph::Second(graph) = read(bytes, ReadCapacity::default()).unwrap() else {
@@ -205,4 +208,131 @@ fn external_blobs_round_trip_as_declarations() {
     };
     assert_eq!(actual.name, expected.name);
     assert_eq!(actual.media_type, expected.media_type);
+}
+
+#[test]
+fn authored_blob_recipes_use_the_specification_cut_points() {
+    let source = include_bytes!("fixtures/v2/P4/chunker-cut-loose.bin");
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    let expected = writer
+        .add_chunked_blob(source, Some("application/octet-stream"))
+        .unwrap();
+    let before = writer.head().copied();
+    assert!(matches!(
+        writer.add_value(&[]),
+        Err(SegmentWriteError::EmptyValue)
+    ));
+    assert_eq!(writer.head().copied(), before);
+    let value = writer.add_value(b"lexical value").unwrap();
+    assert_eq!(value, ValueName::of(b"lexical value"));
+    writer.add_commit().unwrap();
+    let bytes = writer.into_inner();
+    let mut items = bytes.as_slice();
+    let mut lengths = Vec::new();
+    while let Some(item) = Item::first(items).unwrap() {
+        items = &items[item.bytes().len()..];
+        if let Some(frame) = item.frame().unwrap()
+            && frame.field(FrameField::FrameType) == [8]
+        {
+            let mut length = frame.field(FrameField::DecodedLength);
+            lengths.push(head::read_argument(&mut length, head::UNSIGNED).unwrap());
+        }
+    }
+    assert_eq!(
+        lengths,
+        [81_019, 71_750, 18_295, 69_586, 77_918, 68_321, 13_111, 13]
+    );
+    let graph = second(&bytes);
+    let [blob] = graph.blobs.as_slice() else {
+        panic!("the recipe declares one blob");
+    };
+    assert_eq!(blob.name, expected);
+    assert_eq!(blob.media_type.as_deref(), Some("application/octet-stream"));
+    assert_eq!(&*blob.bytes, source);
+}
+
+#[test]
+fn walked_resync_uses_the_computed_identifier_for_frame_links() {
+    let source = include_bytes!("fixtures/v2/P1/resync-chain.with-frames.bin");
+    let mut offset = 0;
+    let resync_len = loop {
+        let item = Item::first(&source[offset..]).unwrap().unwrap();
+        if item.classify(NonZeroU64::MIN) == Ok(ItemKind::Resync) {
+            break item.bytes().len();
+        }
+        offset += item.bytes().len();
+    };
+    let rows = second(source).rdf.lines().count();
+    assert!(rows > 0);
+
+    let mut changed = source.to_vec();
+    changed[offset + resync_len - 1] ^= 1;
+    assert_eq!(second(&changed).rdf.lines().count(), rows);
+
+    changed[offset + 4] ^= 1;
+    let error = read(&changed, ReadCapacity::default()).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::Wire(wire) if wire.reason == MalformedReason::OutOfRange
+    ));
+}
+
+#[test]
+fn walked_resync_checks_mark_order_and_grammar_before_the_byte_limit() {
+    for (bytes, reason) in [
+        (
+            include_bytes!("fixtures/v2/P1/marks-cut-inside-mark.at-4094.bin").as_slice(),
+            MalformedReason::NotDeterministic,
+        ),
+        (
+            include_bytes!("fixtures/v2/P1/marks-cut-inside-mark.at-4097.bin").as_slice(),
+            MalformedReason::OutOfRange,
+        ),
+        (
+            include_bytes!("fixtures/v2/P1/marks-order-at-one-byte.order-before-deeper-head.bin")
+                .as_slice(),
+            MalformedReason::UnorderedOrRepeated,
+        ),
+        (
+            include_bytes!("fixtures/v2/P1/marks-order-at-one-byte.head-before-order.bin")
+                .as_slice(),
+            MalformedReason::NotDeterministic,
+        ),
+    ] {
+        let error = read(bytes, ReadCapacity::default()).unwrap_err();
+        assert!(
+            matches!(error.failure, ReadFailure::Wire(wire) if wire.reason == reason),
+            "{error:?}"
+        );
+    }
+}
+
+#[test]
+fn a_duplicate_resync_mark_is_reported_at_its_start() {
+    let marker = purrdf_hash::blake3::derive_key("gts2 header", &[0x81, 5]);
+    let mut opener = vec![0x8b, 5, 2];
+    head::write_bytes(&mut opener, &marker[..16]).unwrap();
+    opener.extend([1, 1, 0x81, 1, 0x81, 1, 0, 0x81, 1]);
+    let mut mark = vec![0x82, 9];
+    head::write_bytes(&mut mark, &[0; 2060]).unwrap();
+
+    let build = |count| {
+        let mut bytes = opener.clone();
+        head::write_head(&mut bytes, head::ARRAY, count).unwrap();
+        for _ in 0..count {
+            bytes.extend(&mark);
+        }
+        head::write_bytes(&mut bytes, &[0; 32]).unwrap();
+        bytes
+    };
+    assert!(matches!(
+        read(&build(1), ReadCapacity::default()),
+        Ok(ReadGraph::Second(_))
+    ));
+
+    let bytes = build(2);
+    let err = read(&bytes, ReadCapacity::default()).unwrap_err();
+    assert!(matches!(err.failure, ReadFailure::Wire(wire)
+        if wire.reason == MalformedReason::UnorderedOrRepeated
+            && wire.offset == opener.len() + 1 + mark.len()));
 }
