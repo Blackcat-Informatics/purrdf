@@ -23,9 +23,11 @@ opener bytes, nesting, structural work and damaged-prefix recovery before any
 generation is selected. The `first_generation` field carries the complete
 `GtsReadLimits` contract into a generation 1 delegation, while
 `second_generation` holds the established `ReadCapacity` for generation 2
-payloads, formed text, rebuilt values and item count. Large datasets raise the
-applicable finite ceilings. The existing `read` entry point preserves its
-trusted-input compatibility behavior.
+payloads, formed text, rebuilt values and item count.
+`second_generation_nesting_depth` bounds structural nesting in every
+generation 2 item. Large datasets raise the applicable finite ceilings; the
+nesting ceiling is independent of dataset size. The existing `read` entry
+point preserves its trusted-input compatibility behavior.
 
 Generation 1 input goes to the legacy reader and returns its graph and
 diagnostics. Generation 2 input returns resolved RDF lines, typed values and
