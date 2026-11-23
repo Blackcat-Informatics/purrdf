@@ -141,8 +141,13 @@ impl StreamingSink for CancelAtTornDiagnostic {
     }
 
     fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
-        if diagnostic.code == "TornAppendError" {
+        if matches!(
+            diagnostic.code.as_str(),
+            "TornAppendError" | "TailDrainError"
+        ) {
             self.diagnostics += 1;
+        }
+        if diagnostic.code == "TornAppendError" {
             self.cancelled = true;
         }
     }
