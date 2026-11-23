@@ -3861,18 +3861,16 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
     sink: &mut dyn StreamingSink,
 ) -> Result<StreamingReadResult, DictionaryError> {
     let dictionary_limits = dictionary.limits()?;
-    let read_limits = limits_for_sink(read_limits, sink);
+    let mut read_limits = limits_for_sink(read_limits, sink);
+    read_limits.encoded_frame_bytes = read_limits
+        .encoded_frame_bytes
+        .min(dictionary_limits.encoded_frame_bytes);
     let input_maximum = u64::try_from(read_limits.encoded_input_bytes).unwrap_or(u64::MAX);
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
         address_exhausted: None,
-        maximum: Some(
-            dictionary_limits
-                .encoded_frame_bytes
-                .min(read_limits.encoded_frame_bytes)
-                .min(sink.encoded_frame_limit().unwrap_or(usize::MAX)),
-        ),
+        maximum: Some(read_limits.encoded_frame_bytes),
         input_maximum: Some(input_maximum),
     };
     let mut limiter = read_limits::ReadLimiter::new(sink, read_limits, 0);

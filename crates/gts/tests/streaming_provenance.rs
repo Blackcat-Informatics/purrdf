@@ -258,6 +258,7 @@ struct StoredTerms {
     epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
     advance_epoch: Option<Arc<std::sync::atomic::AtomicBool>>,
     bind_refusal: Option<&'static str>,
+    encoded_frame_limit: Option<usize>,
     commits: usize,
 }
 
@@ -275,7 +276,7 @@ impl TermStorage for StoredTerms {
     }
     fn limits(&mut self) -> Result<purrdf_gts::dictionary::DictionaryLimits, DictionaryError> {
         Ok(purrdf_gts::dictionary::DictionaryLimits {
-            encoded_frame_bytes: 4096,
+            encoded_frame_bytes: self.encoded_frame_limit.unwrap_or(4096),
             decoded_frame_bytes: 4096,
             metadata_entries: 4096,
         })
@@ -483,7 +484,10 @@ fn bounded_dictionary_tail_admission_precedes_commit() {
     let first = three_frame_fixture();
     let second_header = Writer::new("generic").into_bytes();
     let mut second = Writer::new("generic");
-    second.add_terms(&[Term::iri("https://example.org/tail")]);
+    second.add_terms(&[Term::iri(format!(
+        "https://example.org/{}",
+        "x".repeat(8192)
+    ))]);
     let mut prefix = first.clone();
     prefix.extend(second_header);
     let mut complete = first;
@@ -510,27 +514,35 @@ fn bounded_dictionary_tail_admission_precedes_commit() {
     ));
     assert_eq!(refused.commits, 0);
 
-    let mut frame_refused = StoredTerms::default();
-    let mut frame_limited = GtsReadLimits::UNBOUNDED;
-    frame_limited.encoded_frame_bytes = 1;
+    let (items, torn) = purrdf_gts::wire::iter_items(&complete);
+    assert!(torn.is_none());
+    let tail_frame_bytes = complete.len() - items.last().expect("the tail frame exists").0;
+    let mut frame_refused = StoredTerms {
+        encoded_frame_limit: Some(tail_frame_bytes - 1),
+        ..StoredTerms::default()
+    };
     let error = read_to_sink_from_reader_with_dictionary_and_limits(
         std::io::Cursor::new(&complete),
         options,
-        frame_limited,
+        GtsReadLimits::UNBOUNDED,
         &mut frame_refused,
         &mut OrderingSink::default(),
     )
-    .expect_err("an oversized streaming frame is a typed dictionary refusal");
+    .expect_err("the oversized tail frame is a typed dictionary refusal");
     assert!(matches!(
         error,
         DictionaryError::Limit {
             resource: "encoded-frame-bytes",
-            ..
-        }
+            required,
+            limit,
+        } if required == tail_frame_bytes && limit == tail_frame_bytes - 1
     ));
     assert_eq!(frame_refused.commits, 0);
 
-    let mut exact = StoredTerms::default();
+    let mut exact = StoredTerms {
+        encoded_frame_limit: Some(tail_frame_bytes),
+        ..StoredTerms::default()
+    };
     let mut exact_limits = GtsReadLimits::UNBOUNDED;
     exact_limits.encoded_input_bytes = complete.len();
     read_to_sink_from_reader_with_dictionary_and_limits(
