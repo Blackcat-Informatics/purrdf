@@ -420,6 +420,18 @@ pub trait StreamingSink {
     fn metadata_entries(&mut self, _additional: usize) {}
     /// Admit measurable allocation/copy work before retaining derived bytes.
     fn work(&mut self, _units: usize) {}
+    /// Admit bytes produced by one real transform stage.
+    fn transform_work(&mut self, units: usize) {
+        self.work(units);
+    }
+    /// Report a decoded payload whose transform-stage work was already admitted.
+    fn decoded_payload_accounted(&mut self, blob: bool, bytes: usize) {
+        self.decoded_payload(blob, bytes);
+    }
+    /// Remaining transform work a decoder may perform before its next callback.
+    fn transform_work_limit(&self) -> Option<usize> {
+        None
+    }
     /// Optional complete encoded-input bound for streaming readers.
     fn encoded_input_limit(&self) -> Option<usize> {
         None
@@ -644,6 +656,39 @@ struct Folder<'g, 's, 'k> {
     reifier_index: ReifierIndex,
 }
 
+struct TransformAdmission<'a, 's> {
+    sink: &'a mut Option<&'s mut dyn StreamingSink>,
+    stored_limit: Option<usize>,
+    blob: bool,
+    transformed: bool,
+}
+
+impl payload::TransformAdmission for TransformAdmission<'_, '_> {
+    fn limit(&self) -> Option<usize> {
+        let sink_limit = self.sink.as_deref().and_then(|sink| {
+            if self.blob {
+                sink.blob_decode_limit()
+            } else {
+                sink.frame_decode_limit()
+            }
+        });
+        match (sink_limit, self.stored_limit) {
+            (Some(limit), Some(stored)) => Some(limit.min(stored)),
+            (None, Some(stored)) => Some(stored),
+            (limit, None) => limit,
+        }
+    }
+
+    fn produced(&mut self, bytes: usize) -> bool {
+        self.transformed = true;
+        let Some(sink) = self.sink.as_deref_mut() else {
+            return true;
+        };
+        sink.transform_work(bytes);
+        sink.continue_reading()
+    }
+}
+
 impl Folder<'_, '_, '_> {
     fn sink_accepting(&self) -> bool {
         self.sink
@@ -832,34 +877,52 @@ impl Folder<'_, '_, '_> {
         blob: bool,
         data: Option<ValueRef<'frame>>,
     ) -> Result<Payload<'frame>, PayloadError> {
-        let payload = match (payload::PayloadContext {
-            catalog: &self.catalog,
-            content_key: self.content_key,
-        })
-        .decode(
-            frame,
-            blob,
-            data,
-            || self.decode_limit(blob),
-            || {
-                self.sink
-                    .as_deref()
-                    .and_then(StreamingSink::blob_encoded_limit)
-            },
-        ) {
+        let encoded_blob_limit = self
+            .sink
+            .as_deref()
+            .and_then(StreamingSink::blob_encoded_limit);
+        let stored_limit = self
+            .stored_terms
+            .map(|terms| terms.limits().decoded_frame_bytes);
+        let (decoded, transformed) = {
+            let mut admission = TransformAdmission {
+                sink: &mut self.sink,
+                stored_limit,
+                blob,
+                transformed: false,
+            };
+            let decoded = (payload::PayloadContext {
+                catalog: &self.catalog,
+                content_key: self.content_key,
+            })
+            .decode(frame, blob, data, &mut admission, || encoded_blob_limit);
+            (decoded, admission.transformed)
+        };
+        let payload = match decoded {
             Ok(payload) => payload,
             Err(error) => {
+                if error.is_cancelled() {
+                    return Err(error);
+                }
                 if let Some(actual) = error.decoded_extent()
                     && let Some(sink) = self.sink.as_deref_mut()
                 {
-                    sink.decoded_payload(blob, actual);
+                    if transformed {
+                        sink.decoded_payload_accounted(blob, actual);
+                    } else {
+                        sink.decoded_payload(blob, actual);
+                    }
                 }
                 self.report_decoded_refusal(blob, &error);
                 return Err(error);
             }
         };
         if let Some(sink) = self.sink.as_deref_mut() {
-            sink.decoded_payload(blob, payload.decoded_len());
+            if transformed {
+                sink.decoded_payload_accounted(blob, payload.decoded_len());
+            } else {
+                sink.decoded_payload(blob, payload.decoded_len());
+            }
         }
         Ok(payload)
     }
@@ -946,6 +1009,9 @@ impl Folder<'_, '_, '_> {
         index: u64,
         error: PayloadError,
     ) {
+        if error.is_cancelled() {
+            return;
+        }
         if let PayloadError::Dictionary(error) = error {
             self.dictionary_failure = Some(error);
             return;
@@ -1531,7 +1597,14 @@ impl Folder<'_, '_, '_> {
             self.report_decoded_refusal(true, &error);
             return Err(error);
         }
-        let mut reader = match crate::codec::decode_chain_reader(codecs, bytes, limit) {
+        let work_limit = self
+            .sink
+            .as_deref()
+            .and_then(StreamingSink::transform_work_limit)
+            .unwrap_or(usize::MAX);
+        let (mut reader, transform_work) = match crate::codec::decode_chain_reader_with_work_limit(
+            codecs, bytes, limit, work_limit,
+        ) {
             Ok(reader) => reader,
             Err(error) => {
                 let error = PayloadError::from(error);
@@ -1547,8 +1620,18 @@ impl Folder<'_, '_, '_> {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Ok(count) => count,
                 Err(error) => {
+                    if transform_work.total() > 0
+                        && let Some(sink) = self.sink.as_deref_mut()
+                    {
+                        sink.transform_work(transform_work.total());
+                        if !sink.continue_reading() {
+                            return Err(PayloadError::Cancelled);
+                        }
+                    }
                     let error = PayloadError::from(error);
-                    self.report_decoded_refusal(true, &error);
+                    if !transform_work.refused() {
+                        self.report_decoded_refusal(true, &error);
+                    }
                     return Err(error);
                 }
             };
@@ -1559,7 +1642,15 @@ impl Folder<'_, '_, '_> {
             hash.update(&scratch[..count]);
         }
         if let Some(sink) = self.sink.as_deref_mut() {
-            sink.decoded_payload(true, decoded_len);
+            if transform_work.total() > 0 {
+                sink.transform_work(transform_work.total());
+                if !sink.continue_reading() {
+                    return Err(PayloadError::Cancelled);
+                }
+                sink.decoded_payload_accounted(true, decoded_len);
+            } else {
+                sink.decoded_payload(true, decoded_len);
+            }
         }
         Ok(digest_label(hash.finalize().as_bytes()))
     }
@@ -1863,10 +1954,17 @@ fn catalog_copy_work(header: &[(Value, Value)]) -> usize {
     };
     raw.iter()
         .filter_map(|(_, entry)| match entry {
-            Value::Map(fields) => match map_get(fields, "dct") {
-                Some(Value::Text(name)) => dict_table.get(name.as_str()).map(|bytes| bytes.len()),
-                _ => None,
-            },
+            Value::Map(fields) => {
+                let name = text_or(map_get(fields, "name"), "").len();
+                let class = text_or(map_get(fields, "cls"), "encode").len();
+                let dictionary = match map_get(fields, "dct") {
+                    Some(Value::Text(name)) => {
+                        dict_table.get(name.as_str()).map_or(0, |bytes| bytes.len())
+                    }
+                    _ => 0,
+                };
+                Some(name.saturating_add(class).saturating_add(dictionary))
+            }
             _ => None,
         })
         .fold(0usize, usize::saturating_add)
@@ -1875,8 +1973,13 @@ fn catalog_copy_work(header: &[(Value, Value)]) -> usize {
 fn codec_copy_work(catalog: &FastMap<i128, Codec>, ids: &[Value]) -> usize {
     ids.iter()
         .filter_map(|id| as_i128(id).and_then(|id| catalog.get(&id)))
-        .filter_map(|codec| codec.dct.as_ref())
-        .map(Vec::len)
+        .map(|codec| {
+            codec
+                .name
+                .len()
+                .saturating_add(codec.cls.len())
+                .saturating_add(codec.dct.as_ref().map_or(0, Vec::len))
+        })
         .fold(0usize, usize::saturating_add)
 }
 
@@ -3206,10 +3309,16 @@ impl ActiveStreamingSegment {
                     reifier_index: std::mem::take(&mut self.reifier_index),
                 };
                 folder.report_ambiguous_reifiers()?;
+                if !folder.sink_accepting() {
+                    return Ok(());
+                }
             }
             self.g.segment_heads.push(self.expected_prev);
             if let Some(head) = self.g.segment_heads.last() {
                 sink.segment_head(self.segment_index, head);
+                if !sink.continue_reading() {
+                    return Ok(());
+                }
             }
             let seg_meta = std::mem::take(&mut self.g.meta);
             self.g.segment_meta.push(seg_meta);
@@ -3224,6 +3333,12 @@ impl ActiveStreamingSegment {
                 self.index_offset,
                 &mut sink_slot,
             );
+            if sink_slot
+                .as_deref()
+                .is_some_and(|sink| !sink.continue_reading())
+            {
+                return Ok(());
+            }
             let info = layout_check(
                 &mut self.g,
                 &self.header,
@@ -3233,11 +3348,20 @@ impl ActiveStreamingSegment {
                 self.index_offset,
                 &mut sink_slot,
             );
+            if sink_slot
+                .as_deref()
+                .is_some_and(|sink| !sink.continue_reading())
+            {
+                return Ok(());
+            }
             self.g.segment_streamable.push(info);
             if let Some(sink) = sink_slot
                 && let Some(info) = self.g.segment_streamable.last()
             {
                 sink.streamable_layout(self.segment_index, info);
+                if !sink.continue_reading() {
+                    return Ok(());
+                }
             }
         }
         absorb_segment_result(result, &mut self.g);
@@ -3495,6 +3619,10 @@ fn read_items_stored(
                                 .as_mut()
                                 .map(|store| &mut **store as &mut dyn TermStorage),
                         )?;
+                        if !sink.continue_reading() {
+                            cancelled = true;
+                            return Ok(result);
+                        }
                         push_result_diagnostic(
                             &mut result,
                             sink,
@@ -3519,6 +3647,10 @@ fn read_items_stored(
                             .as_mut()
                             .map(|store| &mut **store as &mut dyn TermStorage),
                     )?;
+                    if !sink.continue_reading() {
+                        cancelled = true;
+                        return Ok(result);
+                    }
                     completed_meta_entries = completed_meta_entries
                         .saturating_add(result.segment_meta.last().map_or(0, Vec::len));
                 } else if item_index != 0 {
@@ -3662,6 +3794,10 @@ fn read_items_stored(
                     .as_mut()
                     .map(|store| &mut **store as &mut dyn TermStorage),
             )?;
+            if !sink.continue_reading() {
+                cancelled = true;
+                return Ok(result);
+            }
         }
 
         if let Some(expected) = options.expected_head {
@@ -3681,6 +3817,10 @@ fn read_items_stored(
                         expected: expected.to_vec(),
                     }),
                 );
+                if !sink.continue_reading() {
+                    cancelled = true;
+                    return Ok(result);
+                }
             }
         }
         if let Some(error) = torn_cause {
@@ -3695,6 +3835,10 @@ fn read_items_stored(
                 }
                 .with_native_cause(error),
             );
+            if !sink.continue_reading() {
+                cancelled = true;
+                return Ok(result);
+            }
         }
         let required = result
             .segment_meta

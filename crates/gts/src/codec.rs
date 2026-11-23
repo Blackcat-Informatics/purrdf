@@ -14,6 +14,7 @@ pub use error::{CodecError, CodecFailure, CodecUnavailable};
 
 mod stream;
 pub use stream::decode_chain_reader;
+pub(crate) use stream::decode_chain_reader_with_work_limit;
 
 use purrdf_zstd::decoding::{ContentChecksum, FrameDecoder, errors::FrameDecoderError};
 use purrdf_zstd::encoding::{
@@ -462,6 +463,8 @@ pub fn decode_chain_bounded(
 /// A caller-supplied encrypt-class transform resolver.
 pub type Decryptor<'a> = dyn Fn(&Codec, &[u8]) -> Result<Vec<u8>, CodecError> + 'a;
 
+type BoundedDecryptor<'a> = dyn Fn(&Codec, &[u8], usize) -> Result<Vec<u8>, CodecError> + 'a;
+
 /// Reverse a resolved codec chain, handing encrypt-class transforms to `decrypt`.
 pub fn decode_chain_with_decrypt(
     chain: &[Codec],
@@ -481,29 +484,73 @@ pub(crate) fn decode_chain_with_decrypt_bounded(
     decrypt: Option<&Decryptor<'_>>,
     limit: usize,
 ) -> Result<Vec<u8>, CodecError> {
+    let bounded_decrypt = |codec: &Codec, data: &[u8], _limit: usize| match decrypt {
+        Some(decrypt) => decrypt(codec, data),
+        None => Err(CodecError::Unavailable {
+            reason: "missing-key",
+            detail: CodecUnavailable::MissingKey(codec.name.clone()),
+        }),
+    };
+    decode_chain_with_decrypt_bounded_observed(
+        chain,
+        data,
+        Some(&bounded_decrypt),
+        |_| Ok(limit),
+        core::convert::identity,
+    )
+}
+
+/// Reverse a chain while admitting every owned transform output.
+///
+/// The limit is read before each transform so a cumulative work limiter can
+/// reduce the next stage's ceiling after observing the previous one. The
+/// observer runs for every real transform, including the final transform, but
+/// not for identity steps that retain the existing buffer.
+pub(crate) fn decode_chain_with_decrypt_bounded_observed<E>(
+    chain: &[Codec],
+    data: &[u8],
+    decrypt: Option<&BoundedDecryptor<'_>>,
+    mut admit: impl FnMut(Option<usize>) -> Result<usize, E>,
+    mut map_error: impl FnMut(CodecError) -> E,
+) -> Result<Vec<u8>, E> {
     let mut current = Cow::Borrowed(data);
     for codec in chain.iter().rev() {
-        if codec.cls == "encrypt" {
-            current = Cow::Owned(match decrypt {
-                Some(decrypt) => decrypt(codec, current.as_ref())?,
+        let stage_limit = admit(None)?;
+        let produced = if codec.cls == "encrypt" {
+            let decoded = match decrypt {
+                Some(decrypt) => {
+                    decrypt(codec, current.as_ref(), stage_limit).map_err(&mut map_error)?
+                }
                 None => {
-                    return Err(CodecError::Unavailable {
+                    return Err(map_error(CodecError::Unavailable {
                         reason: "missing-key",
                         detail: CodecUnavailable::MissingKey(codec.name.clone()),
-                    });
+                    }));
                 }
-            });
-        } else if let Cow::Owned(decoded) = decode_one(codec, current.as_ref(), limit)? {
-            // `identity` returns a borrow of `current`; leave `current` untouched
-            // instead of copying the payload once per identity step.
+            };
             current = Cow::Owned(decoded);
+            true
+        } else {
+            match decode_one(codec, current.as_ref(), stage_limit).map_err(&mut map_error)? {
+                Cow::Owned(decoded) => {
+                    current = Cow::Owned(decoded);
+                    true
+                }
+                Cow::Borrowed(_) => false,
+            }
+        };
+        if current.len() > stage_limit {
+            return Err(map_error(decoded_limit(stage_limit)));
         }
-        if current.len() > limit {
-            return Err(decoded_limit(limit));
+        if produced {
+            admit(Some(current.len()))?;
         }
     }
-    if current.len() > limit {
-        return Err(decoded_limit(limit));
+    if chain.is_empty() {
+        let final_limit = admit(None)?;
+        if current.len() > final_limit {
+            return Err(map_error(decoded_limit(final_limit)));
+        }
     }
     Ok(current.into_owned())
 }

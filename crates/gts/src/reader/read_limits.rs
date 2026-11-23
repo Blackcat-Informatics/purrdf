@@ -340,6 +340,37 @@ impl<'a> ReadLimiter<'a> {
         self.usage.rows = required;
         self.charge_work(1) || self.trip(GtsReadResource::Rows, required, self.limits.rows)
     }
+
+    fn count_decoded(&mut self, blob: bool, bytes: usize, charge_work: bool) -> bool {
+        if blob {
+            self.usage.largest_decoded_blob_bytes =
+                self.usage.largest_decoded_blob_bytes.max(bytes);
+        } else {
+            self.usage.largest_decoded_frame_bytes =
+                self.usage.largest_decoded_frame_bytes.max(bytes);
+        }
+        let required = self.usage.total_decoded_bytes.saturating_add(bytes);
+        self.usage.total_decoded_bytes = required;
+        (charge_work && self.charge_work(bytes))
+            || self.trip(
+                if blob {
+                    GtsReadResource::DecodedBlobBytes
+                } else {
+                    GtsReadResource::DecodedFrameBytes
+                },
+                bytes,
+                if blob {
+                    self.limits.decoded_blob_bytes
+                } else {
+                    self.limits.decoded_frame_bytes
+                },
+            )
+            || self.trip(
+                GtsReadResource::TotalDecodedBytes,
+                required,
+                self.limits.total_decoded_bytes,
+            )
+    }
 }
 
 impl StreamingSink for ReadLimiter<'_> {
@@ -392,38 +423,29 @@ impl StreamingSink for ReadLimiter<'_> {
     }
 
     fn decoded_payload(&mut self, blob: bool, bytes: usize) {
-        if blob {
-            self.usage.largest_decoded_blob_bytes =
-                self.usage.largest_decoded_blob_bytes.max(bytes);
-        } else {
-            self.usage.largest_decoded_frame_bytes =
-                self.usage.largest_decoded_frame_bytes.max(bytes);
-        }
-        let required = self.usage.total_decoded_bytes.saturating_add(bytes);
-        self.usage.total_decoded_bytes = required;
-        if self.charge_work(bytes)
-            || self.trip(
-                if blob {
-                    GtsReadResource::DecodedBlobBytes
-                } else {
-                    GtsReadResource::DecodedFrameBytes
-                },
-                bytes,
-                if blob {
-                    self.limits.decoded_blob_bytes
-                } else {
-                    self.limits.decoded_frame_bytes
-                },
-            )
-            || self.trip(
-                GtsReadResource::TotalDecodedBytes,
-                required,
-                self.limits.total_decoded_bytes,
-            )
-        {
+        if self.count_decoded(blob, bytes, true) {
             return;
         }
         self.inner.decoded_payload(blob, bytes);
+    }
+
+    fn transform_work(&mut self, units: usize) {
+        if !self.charge_work(units) {
+            self.inner.transform_work(units);
+        }
+    }
+
+    fn decoded_payload_accounted(&mut self, blob: bool, bytes: usize) {
+        if self.count_decoded(blob, bytes, false) {
+            return;
+        }
+        self.inner.decoded_payload_accounted(blob, bytes);
+    }
+
+    fn transform_work_limit(&self) -> Option<usize> {
+        let remaining = self.limits.work.saturating_sub(self.usage.work);
+        let limit = remaining.min(self.inner.transform_work_limit().unwrap_or(usize::MAX));
+        (limit != usize::MAX).then_some(limit)
     }
 
     fn decoded_payload_refused(&mut self, blob: bool, required: usize, limit: usize) {

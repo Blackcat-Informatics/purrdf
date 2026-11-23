@@ -275,6 +275,11 @@ pub enum RawReadError {
         /// Maximum source bytes, independent of buffer capacity.
         maximum: usize,
     },
+    /// Encoded GTS transport contained more source bytes than admitted.
+    GtsTransportLimit {
+        /// Maximum encoded transport bytes before decoder construction.
+        maximum: usize,
+    },
     /// Decoded GTS transport contained more bytes than the caller admitted.
     DecodedLimit {
         /// Maximum decoded bytes, independent of buffer capacity.
@@ -288,6 +293,10 @@ impl std::fmt::Display for RawReadError {
             Self::Transport(cause) => cause.fmt(out),
             Self::Storage(cause) => cause.fmt(out),
             Self::Limit { maximum } => write!(out, "raw input exceeds {maximum} bytes"),
+            Self::GtsTransportLimit { maximum } => write!(
+                out,
+                "encoded GTS transport input requires more than {maximum} bytes"
+            ),
             Self::DecodedLimit { maximum } => {
                 write!(out, "decoded GTS input exceeds {maximum} bytes")
             }
@@ -300,7 +309,7 @@ impl std::error::Error for RawReadError {
             Self::Io(cause) => Some(cause),
             Self::Transport(cause) => Some(cause),
             Self::Storage(cause) => Some(cause),
-            Self::Limit { .. } | Self::DecodedLimit { .. } => None,
+            Self::Limit { .. } | Self::GtsTransportLimit { .. } | Self::DecodedLimit { .. } => None,
         }
     }
 }
@@ -310,6 +319,7 @@ impl purrdf_hash::error::StructuredError for RawReadError {
         Transport(cause) => "raw-input-transport" { "cause" => Cause(cause) },
         Storage(cause) => "raw-input-storage" { "cause" => Cause(cause) },
         Limit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
+        GtsTransportLimit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
         DecodedLimit { maximum } => "decoded-gts-input-limit" { "maximum" => ByteCount(*maximum as u128) },
     }
 }
@@ -336,7 +346,15 @@ fn read_stream_bounded(
         let requested = remaining.saturating_add(1).min(chunk.len());
         let read = match input.read(&mut chunk[..requested]) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            other => other.map_err(RawReadError::Io)?,
+            Err(error) => {
+                if let Some(limit) = gts_transport_input_limit(&error) {
+                    return Err(RawReadError::GtsTransportLimit {
+                        maximum: limit.maximum,
+                    });
+                }
+                return Err(RawReadError::Io(error));
+            }
+            Ok(read) => read,
         };
         if read == 0 {
             return Ok(bytes);
@@ -348,6 +366,26 @@ fn read_stream_bounded(
             .extend(&mut bytes, chunk[..read].iter().copied())
             .map_err(RawReadError::Storage)?;
     }
+}
+
+fn gts_transport_input_limit<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a GtsTransportInputLimit> {
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if let Some(limit) = cause.downcast_ref::<GtsTransportInputLimit>() {
+            return Some(limit);
+        }
+        if let Some(limit) = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .and_then(|inner| inner.downcast_ref::<GtsTransportInputLimit>())
+        {
+            return Some(limit);
+        }
+        current = cause.source();
+    }
+    None
 }
 
 /// The RFC-8089 `file://` IRI of a filesystem input — the document's **retrieval IRI**.
@@ -683,6 +721,23 @@ struct LimitedGtsTransport<R> {
     maximum: usize,
 }
 
+#[derive(Debug)]
+struct GtsTransportInputLimit {
+    maximum: usize,
+}
+
+impl std::fmt::Display for GtsTransportInputLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "encoded GTS transport input requires more than {} bytes",
+            self.maximum
+        )
+    }
+}
+
+impl std::error::Error for GtsTransportInputLimit {}
+
 impl<R> LimitedGtsTransport<R> {
     const fn new(inner: R, maximum: usize) -> Self {
         Self {
@@ -711,10 +766,9 @@ impl<R: Read> Read for LimitedGtsTransport<R> {
                 Ok(_) => {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidData,
-                        format!(
-                            "encoded GTS transport input requires more than {} bytes",
-                            self.maximum
-                        ),
+                        GtsTransportInputLimit {
+                            maximum: self.maximum,
+                        },
                     ));
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
@@ -1062,5 +1116,38 @@ mod retrieval_tests {
                 .to_string(),
             format!("{}: {error}; pass --base explicitly", display_path(path))
         );
+    }
+}
+
+#[cfg(test)]
+mod transport_limit_tests {
+    use super::{LimitedGtsTransport, RawReadError, read_stream_bounded};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    #[test]
+    fn gts_transport_limit_retains_its_structured_resource_and_maximum() {
+        let exact = LimitedGtsTransport::new(std::io::Cursor::new(b"abc"), 3);
+        assert_eq!(
+            read_stream_bounded(exact, 16, |maximum| RawReadError::DecodedLimit { maximum })
+                .expect("the exact encoded transport input remains valid"),
+            b"abc"
+        );
+
+        let adjacent = LimitedGtsTransport::new(std::io::Cursor::new(b"abcd"), 3);
+        let error = read_stream_bounded(adjacent, 16, |maximum| RawReadError::DecodedLimit {
+            maximum,
+        })
+        .expect_err("the adjacent encoded transport byte is refused");
+        assert!(matches!(
+            error,
+            RawReadError::GtsTransportLimit { maximum: 3 }
+        ));
+        let captured = Capture::read(&error);
+        assert_eq!(captured.code, "raw-input-limit");
+        assert!(matches!(
+            captured.field("maximum"),
+            ErrorValue::ByteCount(3)
+        ));
     }
 }

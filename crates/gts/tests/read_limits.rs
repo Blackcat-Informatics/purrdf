@@ -481,6 +481,24 @@ fn nested_multistage_materialization_uses_the_declared_stage_limit() {
     let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), adjacent)
         .expect_err("the adjacent intermediate-stage excess is refused");
     assert_eq!(error.resource, GtsReadResource::DecodedBlobBytes);
+
+    let (_, root_usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("measure work before nested traversal");
+    let mut cumulative = exact;
+    cumulative.work = root_usage
+        .work
+        .saturating_add(1)
+        .saturating_add(intermediate_len)
+        .saturating_add(child.len())
+        .saturating_sub(1);
+    let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), cumulative)
+        .expect_err("cumulative stage work is distinct from the per-stage byte ceiling");
+    assert_eq!(error.resource, GtsReadResource::Work);
 }
 
 #[test]
@@ -821,6 +839,68 @@ fn frame_cancellation_precedes_payload_decode() {
     assert_eq!(sink.decoded_payloads, 0);
 }
 
+#[derive(Default)]
+struct CancelAtSegmentHead {
+    cancelled: bool,
+    layouts: usize,
+}
+
+impl StreamingSink for CancelAtSegmentHead {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn segment_head(&mut self, _segment_index: u64, _head: &[u8]) {
+        self.cancelled = true;
+    }
+
+    fn streamable_layout(
+        &mut self,
+        _segment_index: u64,
+        _info: &purrdf_gts::model::StreamableInfo,
+    ) {
+        self.layouts += 1;
+    }
+}
+
+#[test]
+fn segment_head_cancellation_stops_finalization_callbacks() {
+    let bytes = rdf_bytes();
+    let mut sink = CancelAtSegmentHead::default();
+    let result = read_to_sink_with_options(&bytes, ReadOptions::default(), &mut sink);
+    assert!(sink.cancelled);
+    assert_eq!(sink.layouts, 0);
+    assert_eq!(result.segment_heads.len(), 0);
+}
+
+#[derive(Default)]
+struct CancelAtFinalDiagnostic {
+    cancelled: bool,
+    codes: Vec<String>,
+}
+
+impl StreamingSink for CancelAtFinalDiagnostic {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.codes.push(diagnostic.code.clone());
+        self.cancelled = true;
+    }
+}
+
+#[test]
+fn final_diagnostic_cancellation_prevents_later_diagnostics() {
+    let mut bytes = rdf_bytes();
+    bytes.push(0xff);
+    let expected = [0_u8; 32];
+    let mut sink = CancelAtFinalDiagnostic::default();
+    let options = ReadOptions::new(false, Some(&expected));
+    read_to_sink_with_options(&bytes, options, &mut sink);
+    assert_eq!(sink.codes, ["TruncatedLog"]);
+}
+
 #[test]
 fn malformed_transformed_payloads_charge_decoded_bytes() {
     let mut writer = Writer::new("generic");
@@ -844,6 +924,33 @@ fn malformed_transformed_payloads_charge_decoded_bytes() {
     .expect_err("the second malformed decoded payload exceeds the aggregate contract");
     assert_eq!(error.resource, GtsReadResource::TotalDecodedBytes);
     assert_eq!(error.required, 129);
+}
+
+#[test]
+fn every_transform_stage_participates_in_the_work_boundary() {
+    let raw: Vec<u8> = (0_u8..=255).cycle().take(32 * 1024).collect();
+    let mut writer = Writer::new("generic");
+    writer
+        .add_frame_with_options(
+            "blob",
+            FrameOptions {
+                raw: Some(raw.clone()),
+                transform: vec!["gzip".into(), "gzip".into()],
+                ..FrameOptions::default()
+            },
+        )
+        .expect("small two-stage transformed blob");
+    let bytes = writer.into_bytes();
+    let (_, usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("the explicit unbounded contract measures every transform stage");
+    assert_eq!(usage.largest_decoded_blob_bytes, raw.len());
+    assert!(usage.work > bytes.len().saturating_add(raw.len()));
+    assert_boundary(&bytes, GtsReadResource::Work, usage.work);
 }
 
 #[test]
@@ -885,5 +992,58 @@ fn repeated_catalog_dictionary_copies_are_admitted_as_work() {
     )
     .expect("the explicit unbounded contract admits catalog copies");
     assert!(usage.work >= bytes.len().saturating_add(4 * 1024));
+    assert_boundary(&bytes, GtsReadResource::Work, usage.work);
+}
+
+#[test]
+fn repeated_codec_strings_are_admitted_before_chain_cloning() {
+    let codec_name = "codec".repeat(1024);
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "generic".into()),
+        (
+            "cat".into(),
+            Value::Map(vec![(
+                Value::Integer(0.into()),
+                Value::Map(vec![
+                    ("name".into(), codec_name.clone().into()),
+                    ("cls".into(), "compress".into()),
+                ]),
+            )]),
+        ),
+    ];
+    let header_id = purrdf_gts::wire::header_id(&header);
+    header.push(("id".into(), Value::Bytes(header_id.clone())));
+    let mut frame = vec![
+        ("t".into(), "unknown".into()),
+        ("prev".into(), Value::Bytes(header_id)),
+        (
+            "x".into(),
+            Value::Array((0..4).map(|_| Value::Integer(0.into())).collect()),
+        ),
+        ("d".into(), Value::Bytes(Vec::new())),
+    ];
+    frame.push((
+        "id".into(),
+        Value::Bytes(purrdf_gts::wire::content_id(&frame)),
+    ));
+    let mut bytes =
+        purrdf_gts::wire::canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))));
+    bytes.extend(purrdf_gts::wire::canonical(&Value::Map(frame)));
+
+    let (_, usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("the explicit unbounded contract admits repeated codec strings");
+    assert!(
+        usage.work
+            >= bytes
+                .len()
+                .saturating_add(codec_name.len().saturating_mul(5))
+    );
     assert_boundary(&bytes, GtsReadResource::Work, usage.work);
 }

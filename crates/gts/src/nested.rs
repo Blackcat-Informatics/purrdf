@@ -7,7 +7,7 @@ use crate::FastSet;
 
 use purrdf_lex::cbor::Value;
 
-use crate::model::{Diagnostic, Graph};
+use crate::model::{BlobEntry, Diagnostic, Graph};
 use crate::reader::read;
 use crate::wire::map_get;
 
@@ -153,9 +153,20 @@ fn visit_with_limits(
         };
         let remaining_work = limits.read.work.saturating_sub(usage.work);
         let measurement_limit = limits.read.decoded_blob_bytes.min(remaining_work);
-        let decoded_len = match entry.decoded_len_bounded(measurement_limit) {
-            Ok(len) => len,
-            Err(cause) => {
+        let measured = match measure_nested_entry(entry, measurement_limit, remaining_work) {
+            Ok(measured) => measured,
+            Err(MeasureError::Work { required }) => {
+                let required = usage.work.saturating_add(required);
+                let mut refused_usage = *usage;
+                refused_usage.work = required;
+                return Err(crate::reader::GtsReadLimitError {
+                    resource: crate::reader::GtsReadResource::Work,
+                    required,
+                    limit: limits.read.work,
+                    usage: refused_usage,
+                });
+            }
+            Err(MeasureError::Codec(cause)) => {
                 if measurement_limit == remaining_work
                     && remaining_work < limits.read.decoded_blob_bytes
                     && error_is_codec_limit(&cause)
@@ -189,7 +200,8 @@ fn visit_with_limits(
                 continue;
             }
         };
-        charge_nested_work(usage, limits.read, decoded_len)?;
+        let decoded_len = measured.decoded;
+        charge_nested_work(usage, limits.read, measured.work)?;
         let required_nested = nested_decoded.saturating_add(decoded_len);
         if required_nested > limits.decoded_bytes {
             return Err(crate::reader::GtsReadLimitError {
@@ -211,11 +223,10 @@ fn visit_with_limits(
                 usage: refused_usage,
             });
         }
-        charge_nested_work(usage, limits.read, decoded_len)?;
-        let bytes = match graph.blob_bytes_cloned_bounded(&digest, limits.read.decoded_blob_bytes) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => continue,
-            Err(cause) => {
+        let bytes = match materialize_nested_entry(entry, limits.read, usage) {
+            Ok(bytes) => bytes,
+            Err(MaterializeError::Limit(error)) => return Err(error),
+            Err(MaterializeError::Codec(cause)) => {
                 let error = NestedError::Decode { digest, cause };
                 push_nested_diagnostic(
                     &mut graph,
@@ -284,6 +295,130 @@ fn visit_with_limits(
         subgraphs.push((digest, child));
     }
     Ok(graph)
+}
+
+struct MeasuredEntry {
+    decoded: usize,
+    work: usize,
+}
+
+enum MeasureError {
+    Codec(std::io::Error),
+    Work { required: usize },
+}
+
+fn measure_nested_entry(
+    entry: &BlobEntry,
+    decoded_limit: usize,
+    work_limit: usize,
+) -> Result<MeasuredEntry, MeasureError> {
+    use std::io::Read as _;
+
+    match entry {
+        BlobEntry::Bytes(bytes) if bytes.len() > decoded_limit => {
+            Err(MeasureError::Codec(purrdf_hash::error::io_error(
+                std::io::ErrorKind::InvalidData,
+                crate::codec::CodecError::Limit {
+                    limit: decoded_limit,
+                },
+            )))
+        }
+        BlobEntry::Bytes(bytes) => Ok(MeasuredEntry {
+            decoded: bytes.len(),
+            work: bytes.len(),
+        }),
+        BlobEntry::Lazy { raw, chain } => {
+            let (mut reader, work) = crate::codec::decode_chain_reader_with_work_limit(
+                chain,
+                std::io::Cursor::new(raw.as_slice()),
+                decoded_limit,
+                work_limit,
+            )
+            .map_err(MeasureError::Codec)?;
+            let mut scratch = [0; 8192];
+            let mut decoded = 0usize;
+            loop {
+                match reader.read(&mut scratch) {
+                    Ok(0) => {
+                        return Ok(MeasuredEntry {
+                            decoded,
+                            work: if work.total() == 0 {
+                                decoded
+                            } else {
+                                work.total()
+                            },
+                        });
+                    }
+                    Ok(count) => decoded = decoded.saturating_add(count),
+                    Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(_error) if work.refused() => {
+                        return Err(MeasureError::Work {
+                            required: work.total(),
+                        });
+                    }
+                    Err(error) => return Err(MeasureError::Codec(error)),
+                }
+            }
+        }
+    }
+}
+
+enum MaterializeError {
+    Codec(crate::codec::CodecError),
+    Limit(crate::reader::GtsReadLimitError),
+}
+
+fn materialize_nested_entry(
+    entry: &BlobEntry,
+    limits: crate::reader::GtsReadLimits,
+    usage: &mut crate::reader::GtsReadUsage,
+) -> Result<Vec<u8>, MaterializeError> {
+    match entry {
+        BlobEntry::Bytes(bytes) => {
+            charge_nested_work(usage, limits, bytes.len()).map_err(MaterializeError::Limit)?;
+            Ok(bytes.clone())
+        }
+        BlobEntry::Lazy { raw, chain } => {
+            let transformed = chain.iter().any(|codec| codec.name != "identity");
+            let decoded = match crate::codec::decode_chain_with_decrypt_bounded_observed(
+                chain,
+                raw,
+                None,
+                |produced| {
+                    if let Some(bytes) = produced {
+                        charge_nested_work(usage, limits, bytes)
+                            .map_err(MaterializeError::Limit)?;
+                    }
+                    Ok(limits
+                        .decoded_blob_bytes
+                        .min(limits.work.saturating_sub(usage.work)))
+                },
+                MaterializeError::Codec,
+            ) {
+                Err(MaterializeError::Codec(cause))
+                    if error_is_codec_limit(&cause)
+                        && limits.work.saturating_sub(usage.work) < limits.decoded_blob_bytes =>
+                {
+                    let remaining = limits.work.saturating_sub(usage.work);
+                    let required = usage.work.saturating_add(remaining.saturating_add(1));
+                    let mut refused_usage = *usage;
+                    refused_usage.work = required;
+                    return Err(MaterializeError::Limit(crate::reader::GtsReadLimitError {
+                        resource: crate::reader::GtsReadResource::Work,
+                        required,
+                        limit: limits.work,
+                        usage: refused_usage,
+                    }));
+                }
+                outcome => outcome?,
+            };
+            if !transformed {
+                charge_nested_work(usage, limits, decoded.len())
+                    .map_err(MaterializeError::Limit)?;
+            }
+            Ok(decoded)
+        }
+    }
 }
 
 fn error_is_codec_limit(error: &(dyn std::error::Error + 'static)) -> bool {

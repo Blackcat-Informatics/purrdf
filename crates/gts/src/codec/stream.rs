@@ -3,7 +3,11 @@
 
 //! Window-bounded decoding through the existing native transform engines.
 
-use std::io::{self, Read};
+use std::{
+    cell::Cell,
+    io::{self, Read},
+    rc::Rc,
+};
 
 use super::{Codec, CodecError, CodecUnavailable};
 
@@ -11,6 +15,46 @@ struct Limited<R> {
     inner: R,
     remaining: usize,
     limit: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct DecodeWork {
+    total: Rc<Cell<usize>>,
+    limit: usize,
+}
+
+impl DecodeWork {
+    pub(crate) fn total(&self) -> usize {
+        self.total.get()
+    }
+
+    pub(crate) fn refused(&self) -> bool {
+        self.total.get() > self.limit
+    }
+}
+
+struct WorkLimited<R> {
+    inner: R,
+    work: DecodeWork,
+}
+
+impl<R: Read> Read for WorkLimited<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.work.limit.saturating_sub(self.work.total.get());
+        let width = output.len().min(remaining.saturating_add(1));
+        let read = self.inner.read(&mut output[..width])?;
+        let required = self.work.total.get().saturating_add(read);
+        self.work.total.set(required);
+        if required > self.work.limit {
+            return Err(purrdf_hash::error::io_error(
+                io::ErrorKind::InvalidData,
+                CodecError::Limit {
+                    limit: self.work.limit,
+                },
+            ));
+        }
+        Ok(read)
+    }
 }
 
 impl<R: Read> Read for Limited<R> {
@@ -38,6 +82,29 @@ pub fn decode_chain_reader<'a>(
     source: impl Read + 'a,
     limit: usize,
 ) -> io::Result<Box<dyn Read + 'a>> {
+    decode_chain_reader_impl(chain, source, limit, None).map(|(reader, _)| reader)
+}
+
+pub(crate) fn decode_chain_reader_with_work_limit<'a>(
+    chain: &[Codec],
+    source: impl Read + 'a,
+    limit: usize,
+    work_limit: usize,
+) -> io::Result<(Box<dyn Read + 'a>, DecodeWork)> {
+    let work = DecodeWork {
+        total: Rc::new(Cell::new(0)),
+        limit: work_limit,
+    };
+    let (reader, _) = decode_chain_reader_impl(chain, source, limit, Some(work.clone()))?;
+    Ok((reader, work))
+}
+
+fn decode_chain_reader_impl<'a>(
+    chain: &[Codec],
+    source: impl Read + 'a,
+    limit: usize,
+    work: Option<DecodeWork>,
+) -> io::Result<(Box<dyn Read + 'a>, Option<DecodeWork>)> {
     let mut reader: Box<dyn Read + 'a> = Box::new(source);
     for (index, codec) in chain.iter().rev().enumerate() {
         reader = match codec.name.as_str() {
@@ -71,6 +138,14 @@ pub fn decode_chain_reader<'a>(
             remaining: limit,
             limit,
         });
+        if codec.name != "identity"
+            && let Some(work) = work.as_ref()
+        {
+            reader = Box::new(WorkLimited {
+                inner: reader,
+                work: work.clone(),
+            });
+        }
     }
     if chain.is_empty() {
         reader = Box::new(Limited {
@@ -79,7 +154,7 @@ pub fn decode_chain_reader<'a>(
             limit,
         });
     }
-    Ok(reader)
+    Ok((reader, work))
 }
 
 fn drain(source: &mut dyn Read) -> io::Result<()> {

@@ -7,7 +7,7 @@ use super::{
     ContentKeyResolver, FastMap, Payload, PayloadCause, PayloadError, Value, ValueRef, as_i128,
     cbor, decrypt_codec, map_get,
 };
-use crate::codec::{Codec, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded};
+use crate::codec::{Codec, decode_chain_with_decrypt_bounded_observed};
 use purrdf_lex::cbor::EncodedItem;
 use std::borrow::Cow;
 
@@ -35,13 +35,39 @@ pub(super) struct PayloadContext<'a, 'k> {
     pub(super) catalog: &'a FastMap<i128, Codec>,
     pub(super) content_key: Option<&'k ContentKeyResolver<'k>>,
 }
+
+pub(super) trait TransformAdmission {
+    fn limit(&self) -> Option<usize>;
+    fn produced(&mut self, bytes: usize) -> bool;
+}
+
+pub(super) struct FixedTransformAdmission {
+    limit: usize,
+}
+
+impl FixedTransformAdmission {
+    pub(super) const fn new(limit: usize) -> Self {
+        Self { limit }
+    }
+}
+
+impl TransformAdmission for FixedTransformAdmission {
+    fn limit(&self) -> Option<usize> {
+        Some(self.limit)
+    }
+
+    fn produced(&mut self, _bytes: usize) -> bool {
+        true
+    }
+}
+
 impl PayloadContext<'_, '_> {
     pub(super) fn decode<'frame>(
         &self,
         frame: &'frame [(Value, Value)],
         blob: bool,
         data: Option<ValueRef<'frame>>,
-        decoded_limit: impl FnOnce() -> Option<usize>,
+        admission: &mut dyn TransformAdmission,
         encoded_blob_limit: impl FnOnce() -> Option<usize>,
     ) -> Result<Payload<'frame>, PayloadError> {
         let d = data;
@@ -50,7 +76,7 @@ impl PayloadContext<'_, '_> {
             .transpose()
             .map(Option::flatten)
             .map_err(|cause| PayloadError::Damaged(PayloadCause::Cbor(cause)))?;
-        let limit = decoded_limit();
+        let limit = admission.limit();
         if blob
             && let Some(bytes) = bytes.as_deref()
             && let Some(limit) = encoded_blob_limit()
@@ -72,14 +98,38 @@ impl PayloadContext<'_, '_> {
             // the frame ceiling, which is what keeps an embedded snapshot blob
             // map from decoding without limit.
             let decoded = if let Some(content_key) = self.content_key {
-                let limit = limit.unwrap_or(usize::MAX);
-                let decrypt =
-                    |codec: &Codec, data: &[u8]| decrypt_codec(codec, data, content_key, limit);
-                decode_chain_with_decrypt_bounded(&chain, db, Some(&decrypt), limit)?
-            } else if let Some(limit) = limit {
-                decode_chain_bounded(&chain, db, limit)?
+                let decrypt = |codec: &Codec, data: &[u8], limit: usize| {
+                    decrypt_codec(codec, data, content_key, limit)
+                };
+                decode_chain_with_decrypt_bounded_observed(
+                    &chain,
+                    db,
+                    Some(&decrypt),
+                    |produced| {
+                        if let Some(bytes) = produced
+                            && !admission.produced(bytes)
+                        {
+                            return Err(PayloadError::Cancelled);
+                        }
+                        Ok(admission.limit().unwrap_or(usize::MAX))
+                    },
+                    PayloadError::from,
+                )?
             } else {
-                decode_chain(&chain, db)?
+                decode_chain_with_decrypt_bounded_observed(
+                    &chain,
+                    db,
+                    None,
+                    |produced| {
+                        if let Some(bytes) = produced
+                            && !admission.produced(bytes)
+                        {
+                            return Err(PayloadError::Cancelled);
+                        }
+                        Ok(admission.limit().unwrap_or(usize::MAX))
+                    },
+                    PayloadError::from,
+                )?
             };
             if blob {
                 return Ok(Payload::Blob(Cow::Owned(decoded)));

@@ -9,6 +9,7 @@ use purrdf_lex::cbor::{DecodeError, Value};
 
 #[derive(Debug)]
 pub(super) enum PayloadError {
+    Cancelled,
     Unavailable {
         reason: &'static str,
         detail: PayloadCause,
@@ -99,6 +100,9 @@ fn classified(
 }
 
 impl PayloadError {
+    pub(super) const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
     pub(super) fn decoded_extent(&self) -> Option<usize> {
         match self {
             Self::Damaged(PayloadCause::DecodedCbor { actual, .. }) => Some(*actual),
@@ -144,6 +148,7 @@ impl PayloadError {
 
     pub(super) fn opaque_reason(&self) -> &'static str {
         match self {
+            Self::Cancelled => "cancelled",
             Self::Unavailable { reason, .. } => reason,
             Self::Damaged(_) => "damaged",
             Self::Budget(_) => "over-budget",
@@ -153,6 +158,7 @@ impl PayloadError {
 
     pub(super) fn diagnostic_code(&self, budget_code: &'static str) -> &'static str {
         match self {
+            Self::Cancelled => "Cancelled",
             Self::Unavailable { reason, .. } => super::diag_code_for(reason),
             Self::Damaged(_) => "DamagedFrame",
             Self::Budget(_) => budget_code,
@@ -162,6 +168,7 @@ impl PayloadError {
 
     pub(super) fn diagnostic_detail(&self) -> String {
         match self {
+            Self::Cancelled => "payload decode cancelled".to_owned(),
             Self::Damaged(_) => format!("payload decode failed: {self}"),
             Self::Unavailable { .. } | Self::Budget(_) | Self::Dictionary(_) => self.to_string(),
         }
@@ -171,6 +178,7 @@ impl PayloadError {
 impl fmt::Display for PayloadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("payload decode cancelled"),
             Self::Unavailable { detail, .. } | Self::Damaged(detail) | Self::Budget(detail) => {
                 detail.fmt(f)
             }
@@ -181,12 +189,13 @@ impl fmt::Display for PayloadError {
 
 impl std::error::Error for PayloadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(match self {
+        match self {
+            Self::Cancelled => None,
             Self::Unavailable { detail, .. } | Self::Damaged(detail) | Self::Budget(detail) => {
-                detail
+                Some(detail)
             }
-            Self::Dictionary(cause) => cause,
-        })
+            Self::Dictionary(cause) => Some(cause),
+        }
     }
 }
 
@@ -225,6 +234,7 @@ purrdf_lex::error_source!(PayloadCause => {
 
 impl purrdf_hash::error::StructuredError for PayloadError {
     purrdf_hash::error_visit! {
+        Cancelled => "gts-payload-cancelled" {},
         Unavailable { reason, detail } => "gts-payload-unavailable" {
             "reason" => Code(reason), "detail" => Cause(detail),
         },
