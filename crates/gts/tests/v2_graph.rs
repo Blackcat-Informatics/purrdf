@@ -7,10 +7,10 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
     ContentError, FileEnd, FrameField, FramingDamage, Header, IndexStorageItem,
-    IndexStorageProblem, Item, ItemKind, Line, Lineage, MalformedReason, ParityFindingKind,
-    ParityRepairFailure, PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure,
-    ReadGraph, SegmentWriteError, SegmentWriter, SignatureStatus, SignatureUnverified, Term,
-    UnknownFrameType, ValueName, read, write_header,
+    IndexStorageProblem, Item, ItemKind, Line, Lineage, LineageFinding, MalformedReason,
+    ParityFindingKind, ParityRepairFailure, PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity,
+    ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, SignatureStatus, SignatureUnverified,
+    Term, UnknownFrameType, ValueName, read, write_header,
 };
 use purrdf_lex::cbor::head;
 
@@ -31,6 +31,124 @@ fn relink_frame(bytes: &mut [u8], predecessor: &[u8; 32]) -> [u8; 32] {
     let end = item.bytes().len() - frame.field(FrameField::Signatures).len();
     bytes[end - identifier.len()..end].copy_from_slice(&identifier);
     identifier
+}
+
+#[test]
+fn unreadable_openers_and_unavailable_hashes_delimit_their_own_segments() {
+    let malformed = include_bytes!("fixtures/v2/P1/header-outcome-unreadable-first.bin");
+    let unavailable = include_bytes!("fixtures/v2/P1/lineage-previous-links-unavailable.bin");
+    let first = Item::first(unavailable).unwrap().unwrap();
+    let opener_end = first.bytes().len();
+    let supported = &unavailable[opener_end..];
+
+    let version = NonZeroU64::new(2).unwrap();
+    for (opener, unavailable_hash) in [(malformed.as_slice(), false), (first.bytes(), true)] {
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"skipped blob", None).unwrap();
+        let written = writer.into_inner();
+        let written_opener = Item::first(&written).unwrap().unwrap();
+        let mut bytes = opener.to_vec();
+        bytes.extend_from_slice(&written[written_opener.bytes().len()..]);
+        bytes.push(0);
+        bytes.extend_from_slice(supported);
+        let graph = second(&bytes);
+
+        let [segment] = graph.skipped_segments.as_slice() else {
+            panic!("expected one skipped segment");
+        };
+        assert_eq!(
+            (segment.ordinal, segment.opener.offset, segment.items),
+            (0, 0, 3)
+        );
+        assert_eq!(graph.segment_authentication[0].segment, 1);
+        assert_eq!(graph.blobs.len(), 0);
+        assert_eq!(graph.frame_failures.len(), 0);
+        assert_eq!(graph.opaque_items.len(), 0);
+        assert_eq!(graph.lineage_findings, [] as [(usize, LineageFinding); 0]);
+        assert_eq!(graph.end, FileEnd::NoCommit);
+        if unavailable_hash {
+            assert_eq!(graph.unsupported_registries, [(0, version)]);
+        } else {
+            assert_eq!(graph.unsupported_registries, [] as [(usize, NonZeroU64); 0]);
+        }
+        let error = graph.into_complete_rdf().unwrap_err();
+        assert_eq!(error.offset, 0);
+        if unavailable_hash {
+            assert!(matches!(error.failure, ReadFailure::UnavailableHash(code) if code.get() == 9));
+        } else {
+            assert!(matches!(
+                error.failure,
+                ReadFailure::Wire(wire) if wire.reason == MalformedReason::UnregisteredValue
+            ));
+        }
+    }
+
+    let graph = second(include_bytes!(
+        "fixtures/v2/P1/links-unavailable-lineage-not-compared.bin"
+    ));
+    assert_eq!(graph.rdf.lines().count(), 1);
+    assert_eq!(graph.skipped_segments[0].ordinal, 1);
+    assert_eq!(graph.lineage_findings, [] as [(usize, LineageFinding); 0]);
+    assert_eq!(graph.end, FileEnd::NoCommit);
+
+    let valid = include_bytes!("fixtures/v2/P1/header-minimal.bin");
+    let mut bytes = valid.to_vec();
+    bytes.extend_from_slice(first.bytes());
+    assert_eq!(
+        second(&bytes).lineage_findings,
+        [(valid.len(), LineageFinding::Begins)]
+    );
+}
+
+#[test]
+fn skipped_segments_count_only_the_retained_undelimitable_regions() {
+    let unavailable = include_bytes!("fixtures/v2/P1/lineage-previous-links-unavailable.bin");
+    let opener = Item::first(unavailable).unwrap().unwrap();
+    let clean = include_bytes!("fixtures/v2/P1/resync-isolation-links-unavailable.clean-300.bin");
+    let mut prefix = opener.bytes().to_vec();
+    prefix.extend([0x82, 6]);
+    head::write_bytes(&mut prefix, &[0; 273]).unwrap();
+    assert_eq!(prefix.len(), 289);
+
+    let mut clean_item = [0; 11];
+    clean_item[..3].copy_from_slice(&[0x82, 6, 0x48]);
+    // This string is torn at the join and rejects the array that follows.
+    let mut torn = [0x40; 11];
+    torn[0] = 0x5f;
+    for (region, items, damage) in [
+        (clean_item, 3, None),
+        (
+            [0xff; 11],
+            3,
+            Some(FramingDamage::Undelimitable {
+                offset: 289,
+                length: 11,
+            }),
+        ),
+        (
+            torn,
+            2,
+            Some(FramingDamage::TornTail {
+                offset: 289,
+                length: 11,
+            }),
+        ),
+    ] {
+        let mut bytes = prefix.clone();
+        bytes.extend(region);
+        bytes.extend_from_slice(&clean[300..]);
+        let graph = second(&bytes);
+        assert_eq!(graph.skipped_segments[0].items, items);
+        assert_eq!(graph.rdf.lines().count(), 1);
+        assert_eq!(
+            graph.resynchronizations.len(),
+            usize::from(damage.is_some())
+        );
+        if let Some(resumed) = graph.resynchronizations.first() {
+            assert_eq!(resumed.offset, 300);
+            assert_eq!(resumed.damage, damage);
+        }
+    }
 }
 
 #[test]
@@ -896,12 +1014,13 @@ fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
             }),
         )
         .unwrap();
-        let result = read(&next_segment, ReadCapacity::default());
-        if valid {
-            assert!(matches!(result, Ok(ReadGraph::Second(_))));
-        } else {
-            assert!(matches!(result.unwrap_err().failure, ReadFailure::Lineage));
-        }
+        let graph = second(&next_segment);
+        let finding = graph
+            .lineage_findings
+            .iter()
+            .find(|(offset, _)| *offset == damaged.len())
+            .map(|(_, finding)| *finding);
+        assert_eq!(finding, (!valid).then_some(LineageFinding::HeadMismatch));
     }
 }
 
@@ -1216,11 +1335,33 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
         ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4096))
     ));
 
-    // The complete failing opener plus its two held frames reach capacity
-    // before the candidate can be tested or charged.
     let complete = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
+    let ReadGraph::Second(graph) = read(complete, capacity).unwrap() else {
+        panic!("expected the first malformed opener to survive the refusal");
+    };
+    assert_eq!(graph.skipped_segments[0].items, 3);
+    let refusal = graph.recovery_refusal.unwrap();
+    assert_eq!(
+        (
+            refusal.segment,
+            refusal.position,
+            refusal.offset,
+            refusal.requested_total
+        ),
+        (0, 0, 10, 4096)
+    );
+    assert!(matches!(
+        graph.into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Wire(_)
+    ));
+
+    // With three slots, the opener and its held frames fill capacity.
     capacity.items = 3;
-    let error = read(complete, capacity).unwrap_err();
+    let ReadGraph::Second(graph) = read(complete, capacity).unwrap() else {
+        panic!("expected a skipped generation 2 segment");
+    };
+    assert_eq!(graph.skipped_segments[0].items, 3);
+    let error = graph.into_complete_rdf().unwrap_err();
     assert_eq!(error.offset, 0);
     assert!(matches!(error.failure, ReadFailure::Wire(_)));
 
@@ -1854,7 +1995,7 @@ fn walked_resync_uses_the_computed_identifier_for_frame_links() {
     assert_eq!(second(&changed).rdf.lines().count(), rows);
 
     changed[offset + 4] ^= 1;
-    let error = read(&changed, ReadCapacity::default()).unwrap_err();
+    let error = second(&changed).into_complete_rdf().unwrap_err();
     assert!(matches!(
         error.failure,
         ReadFailure::Wire(wire) if wire.reason == MalformedReason::OutOfRange
@@ -1883,7 +2024,7 @@ fn walked_resync_checks_mark_order_and_grammar_before_the_byte_limit() {
             MalformedReason::NotDeterministic,
         ),
     ] {
-        let error = read(bytes, ReadCapacity::default()).unwrap_err();
+        let error = second(bytes).into_complete_rdf().unwrap_err();
         assert!(
             matches!(error.failure, ReadFailure::Wire(wire) if wire.reason == reason),
             "{error:?}"
@@ -1915,7 +2056,7 @@ fn a_duplicate_resync_mark_is_reported_at_its_start() {
     ));
 
     let bytes = build(2);
-    let err = read(&bytes, ReadCapacity::default()).unwrap_err();
+    let err = second(&bytes).into_complete_rdf().unwrap_err();
     assert!(matches!(err.failure, ReadFailure::Wire(wire)
         if wire.reason == MalformedReason::UnorderedOrRepeated
             && wire.offset == opener.len() + 1 + mark.len()));

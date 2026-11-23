@@ -29,6 +29,7 @@ impl StructuredError for ReadFailure {
         Classification(reason) => "gts-v2-read-classification" { "reason" => Code(reason.code()) },
         Wire(cause) => "gts-v2-read-wire" { "cause" => Cause(cause) },
         Registry(version) => "gts-v2-read-registry" { "version" => Unsigned(u128::from(*version)) },
+        UnavailableHash(algorithm) => "gts-v2-read-unavailable-hash" { "algorithm" => Unsigned(u128::from(algorithm.get())) },
         Lineage => "gts-v2-read-lineage" {},
         Item(kind) => "gts-v2-read-item" { "kind" => Record(kind) },
         Frame(kind) => "gts-v2-read-frame" { "type" => Unsigned(u128::from(*kind as u8)) },

@@ -43,9 +43,9 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, FileEnd, FrameSignatures, FramingDamage, GraphIndexCheck, ParityRecovery,
-    RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveryRefusal, Resynchronization,
-    VerifiedBlob, read, read_with_signature_inputs,
+    ExternalBlob, FileEnd, FrameSignatures, FramingDamage, GraphIndexCheck, LineageFinding,
+    ParityRecovery, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveryRefusal,
+    Resynchronization, SkippedSegment, VerifiedBlob, read, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
