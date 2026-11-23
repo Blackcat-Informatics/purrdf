@@ -31,7 +31,9 @@ pub use rdf::{
     DefinitionFindings, FoldError, Line, LiteralDirection, LiteralValue, RdfFold, RowDisposition,
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
-pub use read::{RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, VerifiedBlob, read};
+pub use read::{
+    ExternalBlob, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, VerifiedBlob, read,
+};
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
 pub use terms::{

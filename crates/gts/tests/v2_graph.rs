@@ -153,3 +153,56 @@ fn the_item_limit_applies_before_framing_an_opener() {
     let bytes = include_bytes!("fixtures/v2/P1/header-minimal.bin");
     assert!(matches!(read(bytes, capacity), Ok(ReadGraph::Second(_))));
 }
+
+#[test]
+fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
+    let compressed = second(include_bytes!(
+        "fixtures/v2/P4/pack-compressed.one-frame.bin"
+    ));
+    assert!(compressed.blobs.is_empty());
+
+    let earlier = second(include_bytes!(
+        "fixtures/v2/P4/rebuild-unit-after-recipe.units-first.bin"
+    ));
+    assert_eq!(earlier.blobs.len(), 1);
+    for bytes in [
+        include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-first.bin").as_slice(),
+        include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-last.bin").as_slice(),
+    ] {
+        let packed = second(bytes);
+        assert_eq!(packed.blobs.len(), 1);
+        assert_eq!(packed.blobs[0].name, earlier.blobs[0].name);
+        assert_eq!(packed.blobs[0].bytes, earlier.blobs[0].bytes);
+    }
+    let later = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.recipe-first.bin");
+    let error = read(later, ReadCapacity::default()).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::MissingUnit(_)));
+
+    let malformed = include_bytes!("fixtures/v2/P4/pack-recipe-trailing-count.bin");
+    let error = read(malformed, ReadCapacity::default()).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::Wire(wire) if wire.reason == MalformedReason::WrongLength
+    ));
+}
+
+#[test]
+fn external_blobs_round_trip_as_declarations() {
+    let source = second(include_bytes!("fixtures/v2/P4/external-ok.bin"));
+    let [expected] = source.external_blobs.as_slice() else {
+        panic!("the fixture contains one external declaration");
+    };
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer
+        .add_external_blob(expected.name, expected.media_type)
+        .unwrap();
+    writer.add_commit().unwrap();
+    let bytes = writer.into_inner();
+    let decoded = second(&bytes);
+    assert!(decoded.blobs.is_empty());
+    let [actual] = decoded.external_blobs.as_slice() else {
+        panic!("the writer emits one external declaration");
+    };
+    assert_eq!(actual.name, expected.name);
+    assert_eq!(actual.media_type, expected.media_type);
+}

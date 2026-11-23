@@ -11,7 +11,6 @@ use std::borrow::Cow;
 
 use purrdf_lex::cbor::StructuralError;
 
-use super::fields::Fields;
 use super::{
     ContentError, DefinitionFindings, FoldError, FormedBudget, FrameEnvelope, FrameField,
     FrameType, Generation, Header, Item, ItemKind, LinkState, MalformedReason, PayloadBudget,
@@ -20,6 +19,10 @@ use super::{
     WireError,
 };
 use crate::{FastMap, model::Graph};
+
+mod blob;
+
+pub use blob::ExternalBlob;
 
 /// Limits for materializing an RDF graph from a GTS v2 file.
 #[derive(Clone, Copy, Debug)]
@@ -55,11 +58,11 @@ impl Default for ReadCapacity {
 pub enum ReadGraph<'a> {
     /// The legacy reader's original result, including its diagnostics.
     First(Graph),
-    /// The resolved GTS v2 RDF lines and verified blobs.
+    /// The resolved GTS v2 RDF lines and blob declarations.
     Second(RdfGraph<'a>),
 }
 
-/// The RDF and embedded-blob projection of a verified generation 2 file.
+/// The RDF and blob declaration projection of a generation 2 file.
 #[derive(Debug, Default)]
 #[non_exhaustive]
 pub struct RdfGraph<'a> {
@@ -67,6 +70,8 @@ pub struct RdfGraph<'a> {
     pub rdf: RdfFold,
     /// Verified blob declarations in file order.
     pub blobs: Vec<VerifiedBlob<'a>>,
+    /// References to named blobs declared without inline bytes.
+    pub external_blobs: Vec<ExternalBlob<'a>>,
     /// File offsets of row frames whose declared order differs from their rows.
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
@@ -80,7 +85,7 @@ pub struct VerifiedBlob<'a> {
     /// Blob identity and length.
     pub name: ValueName,
     /// Media type from the declaration.
-    pub media_type: Option<&'a str>,
+    pub media_type: Option<Cow<'a, str>>,
     /// Verified payload, borrowed for plain storage.
     pub bytes: Cow<'a, [u8]>,
 }
@@ -138,7 +143,7 @@ pub enum ReadFailure {
     Rows(RowFindings),
     /// The annotation multiplicity is wider than the wire format.
     AnnotationWidth,
-    /// The declared blob identity disagrees with its decoded bytes.
+    /// The declared unit or blob identity disagrees with its decoded bytes.
     BlobDigest,
     /// No verified unit was available to a recipe entry.
     MissingUnit(ValueName),
@@ -401,15 +406,19 @@ impl<'a> GraphReader<'a> {
             | FrameType::EmptyGraphs => {
                 self.observe_rows(checked, offset, segment)?;
             }
-            FrameType::Blob | FrameType::Chunk | FrameType::Recipe | FrameType::Value => {
+            FrameType::Blob
+            | FrameType::Chunk
+            | FrameType::Recipe
+            | FrameType::Value
+            | FrameType::External
+            | FrameType::Pack => {
                 let bytes = verified_payload(checked.frame.payload.state)?;
-                let mut fields = frame.read_field(FrameField::Content);
-                match kind {
-                    FrameType::Blob | FrameType::Chunk => {
-                        self.store_unit(kind, &mut fields, bytes, segment)?;
-                    }
-                    _ => self.rebuild(kind, &mut fields, &bytes, segment)?,
-                }
+                self.observe_blob_frame(
+                    kind,
+                    frame.read_field(FrameField::Content),
+                    bytes,
+                    segment,
+                )?;
             }
             FrameType::Commit if checked.commit.is_some_and(|commit| commit.valid) => {}
             FrameType::Commit => return Err(ReadFailure::Commit),
@@ -452,107 +461,6 @@ impl<'a> GraphReader<'a> {
         }
         Ok(())
     }
-
-    fn store_unit(
-        &mut self,
-        kind: FrameType,
-        fields: &mut Fields<'a>,
-        bytes: Cow<'a, [u8]>,
-        segment: &mut Segment<'a>,
-    ) -> Result<(), ReadFailure> {
-        let blob = kind == FrameType::Blob;
-        fields.record(if blob { 2 } else { 1 })?;
-        let digest = fields.fixed_bytes::<32>()?;
-        let media_type = if blob {
-            fields.option(Fields::text)?
-        } else {
-            None
-        };
-        let name = ValueName::of(&bytes);
-        if name.digest != *digest {
-            return Err(ReadFailure::BlobDigest);
-        }
-        segment.units.try_reserve(1)?;
-        let unit = if blob {
-            let index = self.graph.blobs.len();
-            self.store_blob(VerifiedBlob {
-                name,
-                media_type,
-                bytes,
-            })?;
-            Unit::Blob(index)
-        } else {
-            Unit::Chunk(bytes)
-        };
-        segment.units.entry(*digest).or_insert(unit);
-        Ok(())
-    }
-
-    fn rebuild(
-        &mut self,
-        kind: FrameType,
-        content: &mut Fields<'a>,
-        bytes: &[u8],
-        segment: &Segment<'a>,
-    ) -> Result<(), ReadFailure> {
-        let recipe = kind == FrameType::Recipe;
-        content.record(if recipe { 4 } else { 3 })?;
-        let digest = *content.fixed_bytes()?;
-        let length = content.uint()?;
-        let name = ValueName { digest, length };
-        let media_type = if recipe {
-            content.option(Fields::text)?
-        } else {
-            None
-        };
-        let offset = content.offset();
-        let entry_count = content.uint()?;
-        if entry_count < 1 + u64::from(recipe) {
-            return Err(WireError::new(MalformedReason::OutOfRange, offset).into());
-        }
-        let entries = recipe_entries(bytes, entry_count, length)?;
-        self.rebuilt_remaining = self
-            .rebuilt_remaining
-            .checked_sub(length)
-            .ok_or(ReadFailure::RebuildCapacity(name))?;
-        let mut output = Vec::new();
-        for entry in entries {
-            let unit = segment
-                .units
-                .get(&entry.digest)
-                .ok_or(ReadFailure::MissingUnit(entry))?;
-            let bytes = match unit {
-                Unit::Blob(index) => self.graph.blobs[*index].bytes.as_ref(),
-                Unit::Chunk(bytes) => bytes.as_ref(),
-            };
-            if bytes.len() as u64 != entry.length {
-                return Err(ReadFailure::UnitLength(entry));
-            }
-            output.try_reserve(bytes.len())?;
-            output.extend_from_slice(bytes);
-        }
-        if recipe {
-            if ValueName::of(&output) != name {
-                return Err(ReadFailure::BlobDigest);
-            }
-            self.store_blob(VerifiedBlob {
-                name,
-                media_type,
-                bytes: Cow::Owned(output),
-            })?;
-        } else {
-            self.values
-                .record(name, Some(output))
-                .map_err(ReadFailure::Fold)?;
-        }
-        Ok(())
-    }
-
-    fn store_blob(&mut self, blob: VerifiedBlob<'a>) -> Result<(), ReadFailure> {
-        self.graph.blobs.try_reserve(1)?;
-        self.graph.blobs.push(blob);
-        Ok(())
-    }
 }
 
 fn verified_payload(state: PayloadState<'_>) -> Result<Cow<'_, [u8]>, ReadFailure> {
@@ -568,38 +476,6 @@ fn payload_failure(state: PayloadState<'_>) -> ReadFailure {
         PayloadState::Unchecked(reason) => ReadFailure::PayloadRefusal(reason),
         PayloadState::Verified(_) => ReadFailure::MissingContent,
     }
-}
-
-fn recipe_entries(bytes: &[u8], declared: u64, length: u64) -> Result<Vec<ValueName>, ReadFailure> {
-    let mut fields = Fields::new(bytes);
-    let count = fields.array()?;
-    let mut entries = Vec::new();
-    let mut offsets = Vec::new();
-    for _ in 0..count {
-        fields.record(2)?;
-        let digest = *fields.fixed_bytes()?;
-        let offset = fields.offset();
-        let length = fields.uint()?;
-        super::fields::push(&mut entries, ValueName { digest, length })?;
-        super::fields::push(&mut offsets, offset)?;
-    }
-    fields.finish()?;
-    if count != declared {
-        return Err(WireError::new(MalformedReason::InconsistentCounts, 0).into());
-    }
-    if let Some(index) = entries.iter().position(|name| name.length == 0) {
-        return Err(WireError::new(MalformedReason::OutOfRange, offsets[index]).into());
-    }
-    let mut total = 0_u64;
-    for (entry, offset) in entries.iter().zip(offsets) {
-        total = total
-            .checked_add(entry.length)
-            .ok_or_else(|| WireError::new(MalformedReason::OutOfRange, offset))?;
-    }
-    if total != length {
-        return Err(WireError::new(MalformedReason::InconsistentCounts, 0).into());
-    }
-    Ok(entries)
 }
 
 impl From<WireError> for ReadFailure {

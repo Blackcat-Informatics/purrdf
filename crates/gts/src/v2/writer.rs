@@ -12,7 +12,10 @@ use super::header::HEADER_CONTEXT;
 use super::link::frame_hasher;
 use super::payload::payload_digest;
 use super::rdf::unit_digest;
-use super::{DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, FrameType, Range, RangeFull, write_header};
+use super::{
+    BLAKE3_256, DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, FrameType, Range, RangeFull, ValueName,
+    write_header,
+};
 
 mod rdf;
 
@@ -138,6 +141,28 @@ impl<W: Write> SegmentWriter<W> {
             write_option(output, media_type, head::write_text)
         })?;
         Ok(digest)
+    }
+
+    /// Append a blob declaration whose bytes are supplied outside this frame.
+    ///
+    /// The name must describe the external bytes. Returns the new frame
+    /// identifier.
+    ///
+    /// # Errors
+    /// Returns a range or sink error. A sink error prevents further appends.
+    pub fn add_external_blob(
+        &mut self,
+        name: ValueName,
+        media_type: Option<&str>,
+    ) -> Result<Digest, SegmentWriteError> {
+        self.append(FrameType::External, &[], |output| {
+            head::write_head(output, head::ARRAY, 3)?;
+            head::write_head(output, head::ARRAY, 2)?;
+            head::write_head(output, head::UNSIGNED, BLAKE3_256)?;
+            head::write_bytes(output, &name.digest)?;
+            head::write_head(output, head::UNSIGNED, name.length)?;
+            write_option(output, media_type, head::write_text)
+        })
     }
 
     /// Commit the prefix through the current head and return the new frame identifier.
