@@ -309,7 +309,7 @@ impl<B: BufferBackend> DecodeBuffer<B> {
     /// Read `fill_length` bytes from `read` directly into the ringbuffer's
     /// free slots. Used by the Raw block path (upstream commit `29a56160`)
     /// so the decoder doesn't need a 128 KB stack scratch buffer to stage
-    /// each chunk before pushing it. Mirrors `push`'s
+    /// each chunk before pushing it. Mirrors `try_push`'s
     /// `total_output_counter` bookkeeping — only after the read succeeds,
     /// so an EOF/IO error leaves the counter (and `tail`) unchanged.
     pub(crate) fn extend_from_reader<R: Read>(
@@ -322,14 +322,8 @@ impl<B: BufferBackend> DecodeBuffer<B> {
         Ok(())
     }
 
-    #[inline]
-    pub(crate) fn push(&mut self, data: &[u8]) {
-        self.buffer.extend(data);
-        self.total_output_counter += data.len() as u64;
-    }
-
     /// Add `n` to the cumulative produced-byte counter for output produced
-    /// outside `push` / `repeat` — namely the inline `exec_sequence_inline`
+    /// outside `try_push` / `repeat` — namely the inline `exec_sequence_inline`
     /// path, which writes through the backend directly and so bypasses the
     /// counter those methods maintain. Called by the sequence dispatch only
     /// for backends whose `INLINE_EXEC_MAINTAINS_OUTPUT_COUNTER` is `true`
@@ -340,14 +334,7 @@ impl<B: BufferBackend> DecodeBuffer<B> {
         self.total_output_counter += n;
     }
 
-    /// Fallible variant of [`Self::push`]. Returns `Err(BackendOverflow)`
-    /// when the underlying backend's `try_extend` rejects the write
-    /// (only possible on fixed-capacity backends like
-    /// `UserSliceBackend`). Used by the Raw block fast path on the
-    /// direct-decode pipeline so a malformed Raw block whose declared
-    /// `Block_Size` exceeds the caller's output slice surfaces as a
-    /// structured error instead of panicking. Compressed-block
-    /// sequence execution is a follow-up.
+    /// Append bytes and preserve a fixed-capacity backend's overflow error.
     #[inline(always)]
     pub(crate) fn try_push(
         &mut self,

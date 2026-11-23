@@ -20,6 +20,9 @@ use purrdf_lex::cbor::Value;
 use crate::ir::RdfDataset;
 use crate::{RdfDiagnostic, RdfLookaside, RdfMetadataValue};
 
+mod generation_two;
+pub use generation_two::write_gts_v2;
+
 /// Convert a frozen [`RdfDataset`] into a canonical GTS [`Writer`].
 ///
 /// `lookaside` carries the out-of-band envelope material (GTS metadata,
@@ -331,6 +334,47 @@ mod tests {
             "purrdf-test",
             "<https://example.org/s> <https://example.org/p> <https://example.org/o> .",
         );
+    }
+
+    #[test]
+    fn generation_two_writer_orders_triple_dependencies_and_preserves_empty_graphs() {
+        use purrdf_gts::v2::{Line, ReadCapacity, ReadGraph, Term, read};
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_blank("same", crate::BlankScope(1)).unwrap();
+        let p = builder.intern_iri("https://example.org/p").unwrap();
+        let future_object = TermId::from_index(3).unwrap();
+        let triple = builder.intern_triple(s, p, future_object).unwrap();
+        let o = builder.intern_blank("same", crate::BlankScope(2)).unwrap();
+        let graph = builder.intern_iri("https://example.org/empty").unwrap();
+        assert_eq!(o, future_object);
+        builder.push_quad(s, p, triple, None).unwrap();
+        builder.declare_named_graph(graph).unwrap();
+        let dataset = builder.freeze().unwrap();
+        let mut bytes = Vec::new();
+        write_gts_v2(&dataset, &mut bytes).unwrap();
+        let ReadGraph::Second(graph) = read(&bytes, ReadCapacity::default()).unwrap() else {
+            panic!("the writer emits generation 2");
+        };
+        let mut lines = graph.rdf.lines();
+        let Some(Line::Quad([s, _, triple], None)) = lines.next() else {
+            panic!("the writer emits one quad");
+        };
+        let Some(Term::Triple([triple_subject, _, o])) = graph.rdf.term(triple) else {
+            panic!("the object is a triple term");
+        };
+        let o = *o;
+        assert_eq!(s, *triple_subject);
+        assert_ne!(s, o);
+        assert!(matches!(graph.rdf.term(s), Some(Term::Blank { .. })));
+        assert!(matches!(graph.rdf.term(o), Some(Term::Blank { .. })));
+        let Some(Line::EmptyGraph(name)) = lines.next() else {
+            panic!("the writer emits the empty named graph");
+        };
+        assert!(matches!(
+            graph.rdf.term(name),
+            Some(Term::Iri(iri)) if iri == "https://example.org/empty"
+        ));
+        assert!(lines.next().is_none());
     }
 
     #[test]
