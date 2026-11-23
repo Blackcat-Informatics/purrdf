@@ -1100,7 +1100,8 @@ fn invalid_codec_after_a_valid_transform_charges_the_drained_work() {
     header.push(("id".into(), Value::Bytes(previous.clone())));
     let mut bytes =
         purrdf_gts::wire::canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))));
-    for _ in 0..2 {
+    let mut single_frame_len = 0usize;
+    for position in 0..2 {
         let mut frame = vec![
             ("t".into(), "blob".into()),
             ("prev".into(), Value::Bytes(previous)),
@@ -1113,6 +1114,9 @@ fn invalid_codec_after_a_valid_transform_charges_the_drained_work() {
         previous = purrdf_gts::wire::content_id(&frame);
         frame.push(("id".into(), Value::Bytes(previous.clone())));
         bytes.extend(purrdf_gts::wire::canonical(&Value::Map(frame)));
+        if position == 0 {
+            single_frame_len = bytes.len();
+        }
     }
 
     let (_, usage) = read_to_sink_with_limits(
@@ -1127,11 +1131,13 @@ fn invalid_codec_after_a_valid_transform_charges_the_drained_work() {
 
     let mut exact = GtsReadLimits::UNBOUNDED;
     exact.decoded_blob_bytes = raw.len();
-    let (_, admitted) = read_to_sink_with_limits(&bytes, ReadOptions::default(), exact, &mut Null)
-        .expect("the exact drained stage boundary remains valid");
+    let single_frame = &bytes[..single_frame_len];
+    let (_, admitted) =
+        read_to_sink_with_limits(single_frame, ReadOptions::default(), exact, &mut Null)
+            .expect("the exact drained stage boundary remains valid");
     let mut adjacent = exact;
     adjacent.decoded_blob_bytes -= 1;
-    let error = read_to_sink_with_limits(&bytes, ReadOptions::default(), adjacent, &mut Null)
+    let error = read_to_sink_with_limits(single_frame, ReadOptions::default(), adjacent, &mut Null)
         .expect_err("the adjacent drain byte is refused before the unknown outer codec");
     assert_eq!(error.resource, GtsReadResource::DecodedBlobBytes);
     assert_eq!(error.required, raw.len());
