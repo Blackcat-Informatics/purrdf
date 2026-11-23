@@ -1482,6 +1482,51 @@ class GtsRelationalRows(TypedDict):
     annotations: list[_AnnotationRow]
     blobs: list[_BlobExportRow]
 
+# GTS byte APIs preserve their v4 unbounded behavior when `read_limits` is
+# omitted or `None`. Pass `GtsReadLimits()` for hostile input, customize its
+# ceilings for large admitted datasets, and use `unbounded()` only for trusted
+# artifacts.
+class GtsReadLimits:
+    def __init__(
+        self,
+        *,
+        encoded_input_bytes: int | None = ...,
+        items: int | None = ...,
+        encoded_frame_bytes: int | None = ...,
+        decoded_frame_bytes: int | None = ...,
+        decoded_blob_bytes: int | None = ...,
+        total_decoded_bytes: int | None = ...,
+        terms: int | None = ...,
+        rows: int | None = ...,
+        metadata_entries: int | None = ...,
+        diagnostics: int | None = ...,
+        work: int | None = ...,
+    ) -> None: ...
+    @staticmethod
+    def unbounded() -> GtsReadLimits: ...
+    @property
+    def encoded_input_bytes(self) -> int: ...
+    @property
+    def items(self) -> int: ...
+    @property
+    def encoded_frame_bytes(self) -> int: ...
+    @property
+    def decoded_frame_bytes(self) -> int: ...
+    @property
+    def decoded_blob_bytes(self) -> int: ...
+    @property
+    def total_decoded_bytes(self) -> int: ...
+    @property
+    def terms(self) -> int: ...
+    @property
+    def rows(self) -> int: ...
+    @property
+    def metadata_entries(self) -> int: ...
+    @property
+    def diagnostics(self) -> int: ...
+    @property
+    def work(self) -> int: ...
+
 class GtsFoldViewNative:
     # A triple term that reaches itself states no triple (GTS-SPEC 7.3): the view's
     # accessors render it as a blank node no document label spells and its `reifies`
@@ -1495,7 +1540,10 @@ class GtsFoldViewNative:
     # the caller supplies its prefix.
     @staticmethod
     def from_bytes(
-        data: bytes, curie_prefixes: list[tuple[str, str]] = ...
+        data: bytes,
+        curie_prefixes: list[tuple[str, str]] = ...,
+        *,
+        read_limits: GtsReadLimits | None = ...,
     ) -> GtsFoldViewNative: ...
     @staticmethod
     def from_parts(
@@ -1565,7 +1613,9 @@ class GtsFoldViewNative:
     ) -> list[tuple[str, str | None, bool]]: ...
     def relational_rows(self) -> GtsRelationalRows: ...
 
-def gts_relational_rows_from_bytes(data: bytes) -> GtsRelationalRows: ...
+def gts_relational_rows_from_bytes(
+    data: bytes, *, read_limits: GtsReadLimits | None = ...
+) -> GtsRelationalRows: ...
 
 class ColumnarRows(TypedDict):
     schema: dict[str, list[tuple[str, str, bool]]]
@@ -1670,21 +1720,39 @@ class GtsExportResult:
 _GtsBlobPolicy: TypeAlias = GtsBlobLimits | TypingLiteral["unbounded"]
 
 def gts_columnar_rows_from_bytes(
-    data: bytes, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> tuple[ColumnarRows, GtsBlobExportReport]: ...
 def gts_columnar_parquet_from_bytes(
-    data: bytes, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> tuple[dict[str, bytes], GtsBlobExportReport]: ...
 
 # Writers use the canonical native v1 schema, with its own dense value-order ids.
 def gts_to_sqlite(
-    data: bytes, path: str, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    path: str,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> GtsExportResult: ...
 def gts_to_duckdb(
-    data: bytes, path: str, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    path: str,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> GtsExportResult: ...
 def gts_to_parquet(
-    data: bytes, out_dir: str, *, blob_limits: _GtsBlobPolicy
+    data: bytes,
+    out_dir: str,
+    *,
+    blob_limits: _GtsBlobPolicy,
+    read_limits: GtsReadLimits | None = ...,
 ) -> GtsExportResult: ...
 
 # A Python handle to a frozen, immutable RDF 1.2 dataset.
@@ -2852,6 +2920,7 @@ _gts_to_duckdb = gts_to_duckdb
 _gts_to_parquet = gts_to_parquet
 _RdfDataset = RdfDataset
 _GtsFoldViewNative = GtsFoldViewNative
+_GtsReadLimits = GtsReadLimits
 
 _gts_GtsBlobLimits = GtsBlobLimits
 _gts_GtsBlobUsage = GtsBlobUsage
@@ -2860,6 +2929,7 @@ _gts_GtsBlobExportReport = GtsBlobExportReport
 _gts_GtsExportResult = GtsExportResult
 
 class gts:
+    GtsReadLimits = _GtsReadLimits
     GtsBlobLimits = _gts_GtsBlobLimits
     GtsBlobUsage = _gts_GtsBlobUsage
     GtsBlobOmission = _gts_GtsBlobOmission

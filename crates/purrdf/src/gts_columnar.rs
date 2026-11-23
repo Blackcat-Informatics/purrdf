@@ -118,7 +118,33 @@ pub fn prepare_gts_columnar(
     bytes: &[u8],
     limits: GtsBlobLimits,
 ) -> Result<GtsColumnarSource, GtsColumnarError> {
-    let mut export = purrdf_rdf::import_gts_inline_for_export(bytes, limits)?;
+    prepare_gts_columnar_impl(bytes, limits, None)
+}
+
+/// Prepare a columnar export under blob and whole-read ceilings.
+///
+/// # Errors
+/// Preserves the ordinary columnar failures and returns the first whole-read
+/// refusal without a partial source.
+pub fn prepare_gts_columnar_with_read_limits(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    read_limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<GtsColumnarSource, GtsColumnarError> {
+    prepare_gts_columnar_impl(bytes, limits, Some(read_limits))
+}
+
+fn prepare_gts_columnar_impl(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    read_limits: Option<purrdf_gts::reader::GtsReadLimits>,
+) -> Result<GtsColumnarSource, GtsColumnarError> {
+    let mut export = match read_limits {
+        Some(read_limits) => {
+            purrdf_rdf::import_gts_inline_for_export_with_read_limits(bytes, limits, read_limits)
+        }
+        None => purrdf_rdf::import_gts_inline_for_export(bytes, limits),
+    }?;
     let read_losses = export.take_read_losses();
     let (dataset, imported, omissions, usage) = export.into_parts();
     let mut resident = Resident;
@@ -154,7 +180,35 @@ pub fn prepare_gts_columnar_to(
     limits: GtsBlobLimits,
     sink: &mut dyn purrdf_rdf::GtsBlobStager,
 ) -> Result<GtsStagedColumnarSource, GtsColumnarError> {
-    let mut export = purrdf_rdf::import_gts_inline_to(bytes, limits, sink)?;
+    prepare_gts_columnar_to_impl(bytes, limits, sink, None)
+}
+
+/// Prepare a staged columnar export under blob and whole-read ceilings.
+///
+/// # Errors
+/// Preserves staging failures and returns the first whole-read refusal without
+/// committing a partial source.
+pub fn prepare_gts_columnar_to_with_read_limits(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    sink: &mut dyn purrdf_rdf::GtsBlobStager,
+    read_limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<GtsStagedColumnarSource, GtsColumnarError> {
+    prepare_gts_columnar_to_impl(bytes, limits, sink, Some(read_limits))
+}
+
+fn prepare_gts_columnar_to_impl(
+    bytes: &[u8],
+    limits: GtsBlobLimits,
+    sink: &mut dyn purrdf_rdf::GtsBlobStager,
+    read_limits: Option<purrdf_gts::reader::GtsReadLimits>,
+) -> Result<GtsStagedColumnarSource, GtsColumnarError> {
+    let mut export = match read_limits {
+        Some(read_limits) => {
+            purrdf_rdf::import_gts_inline_to_with_read_limits(bytes, limits, sink, read_limits)
+        }
+        None => purrdf_rdf::import_gts_inline_to(bytes, limits, sink),
+    }?;
     let read_losses = export.take_read_losses();
     let (dataset, mut blobs, omissions, usage) = export.into_parts();
     blobs.sort_unstable_by_key(|blob| blob.bytes.sha256);

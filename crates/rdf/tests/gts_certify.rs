@@ -25,8 +25,9 @@ use purrdf_lex::cbor::Value;
 use purrdf_rdf::CanonError;
 use purrdf_rdf::gts_certify::{
     CertificateCborError, CertifyError, CompactionCertificate, RefoldCanon, VersionedCertificate,
-    compact_and_certify, compact_and_certify_versioned, compose, compose_versioned,
-    effective_digest, refold_digest, refold_digest_with, verify_compaction, verify_compaction_with,
+    compact_and_certify, compact_and_certify_versioned, compact_and_certify_with_limits, compose,
+    compose_versioned, effective_digest, refold_digest, refold_digest_with, verify_compaction,
+    verify_compaction_with, verify_compaction_with_limits,
 };
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -212,6 +213,40 @@ fn faithful_repack_verifies_all_ok() {
         "the signed source carries detached signatures, so a root is bound"
     );
     assert_eq!(cert.packaging_kids, vec!["pack".to_string()]);
+}
+
+#[test]
+fn bounded_certification_facades_refuse_adjacent_input_excess() {
+    let source = source_with_content(1, "author", 5, None);
+    let mut limits = purrdf_gts::reader::GtsReadLimits::UNBOUNDED;
+    limits.encoded_input_bytes = source.len() - 1;
+    let authoring = compact_and_certify_with_limits(
+        &source,
+        DictPlan::undicted(),
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_owned()),
+        limits,
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
+    )
+    .expect_err("bounded authoring refuses the adjacent source excess");
+    assert!(matches!(
+        authoring,
+        CertifyError::Dataset(ref diagnostic) if diagnostic.code == "rdf-ir-gts-read-limit"
+    ));
+
+    let verification = verify_compaction_with_limits(
+        &source,
+        &source,
+        limits,
+        &keyring(&[("author", 1)]),
+        &mut purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None),
+    )
+    .expect_err("bounded verification refuses the adjacent source excess");
+    assert!(matches!(
+        verification,
+        CertifyError::Dataset(ref diagnostic) if diagnostic.code == "rdf-ir-gts-read-limit"
+    ));
 }
 
 #[test]

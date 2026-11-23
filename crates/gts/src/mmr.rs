@@ -960,6 +960,21 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, ProofErr
     })
 }
 
+/// Create a detached proof after whole-read admission.
+///
+/// # Errors
+/// Returns the first resource refusal or ordinary proof failure without a
+/// partial proof.
+pub fn prove_file_with_limits(
+    data: &[u8],
+    target_frame_id: &[u8],
+    limits: crate::reader::GtsReadLimits,
+) -> Result<Proof, ProofError> {
+    crate::reader::check_read_limits(data, crate::reader::ReadOptions::new(true, None), limits)
+        .map_err(ProofError::ReadLimit)?;
+    prove_file(data, target_frame_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

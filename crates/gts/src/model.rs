@@ -18,7 +18,7 @@ use std::vec;
 
 use purrdf_lex::cbor::Value;
 
-use crate::codec::{Codec, CodecError, decode_chain};
+use crate::codec::{Codec, CodecError, decode_chain, decode_chain_bounded};
 
 /// Well-known `rdf:dirLangString` datatype IRI implied by a base direction (§7.1).
 pub use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
@@ -649,6 +649,61 @@ impl BlobEntry {
         }
     }
 
+    /// Decode and cache this entry without allowing any transform stage to
+    /// exceed `limit` bytes.
+    ///
+    /// # Errors
+    /// Returns the native codec refusal, including a limit refusal before a
+    /// larger decoded buffer is retained.
+    pub fn decode_bounded(&mut self, limit: usize) -> Result<&[u8], CodecError> {
+        match self {
+            Self::Bytes(bytes) if bytes.len() > limit => return Err(CodecError::Limit { limit }),
+            Self::Lazy { raw, chain } => {
+                let decoded = decode_chain_bounded(chain, raw, limit)?;
+                *self = Self::Bytes(decoded);
+            }
+            Self::Bytes(_) => {}
+        }
+        match self {
+            Self::Bytes(bytes) => Ok(bytes),
+            Self::Lazy { .. } => unreachable!("lazy entry was decoded above"),
+        }
+    }
+
+    /// Measure decoded bytes without retaining a decoded buffer.
+    ///
+    /// # Errors
+    /// Returns the native streaming codec failure, including a limit refusal
+    /// after reading at most one byte beyond `limit`.
+    pub fn decoded_len_bounded(&self, limit: usize) -> std::io::Result<usize> {
+        match self {
+            Self::Bytes(bytes) if bytes.len() > limit => Err(purrdf_hash::error::io_error(
+                std::io::ErrorKind::InvalidData,
+                CodecError::Limit { limit },
+            )),
+            Self::Bytes(bytes) => Ok(bytes.len()),
+            Self::Lazy { raw, chain } => {
+                use std::io::Read as _;
+
+                let mut reader = crate::codec::decode_chain_reader(
+                    chain,
+                    std::io::Cursor::new(raw.as_slice()),
+                    limit,
+                )?;
+                let mut scratch = [0; 8192];
+                let mut decoded = 0usize;
+                loop {
+                    match reader.read(&mut scratch) {
+                        Ok(0) => return Ok(decoded),
+                        Ok(count) => decoded = decoded.saturating_add(count),
+                        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+        }
+    }
+
     /// Return decoded bytes without mutating the entry.
     pub fn decoded_bytes(&self) -> Result<Cow<'_, [u8]>, CodecError> {
         match self {
@@ -891,6 +946,24 @@ impl Graph {
     /// Look up a blob and return decoded owned bytes.
     pub fn blob_bytes_cloned(&mut self, digest: &str) -> Result<Option<Vec<u8>>, CodecError> {
         Ok(self.blob_bytes(digest)?.map(<[u8]>::to_vec))
+    }
+
+    /// Look up a blob and return decoded owned bytes under a retained-byte ceiling.
+    ///
+    /// # Errors
+    /// Returns the native codec refusal, including a limit refusal before a
+    /// larger decoded buffer is retained.
+    pub fn blob_bytes_cloned_bounded(
+        &mut self,
+        digest: &str,
+        limit: usize,
+    ) -> Result<Option<Vec<u8>>, CodecError> {
+        match purrdf_lex::assoc::get_mut(&mut self.blobs, digest) {
+            Some(entry) => entry
+                .decode_bounded(limit)
+                .map(|bytes| Some(bytes.to_vec())),
+            None => Ok(None),
+        }
     }
 
     /// Return every blob as decoded owned bytes, preserving insertion order.

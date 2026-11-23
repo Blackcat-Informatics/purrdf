@@ -24,12 +24,12 @@
 //!    [`purrdf_gts::mmr::verify_proof`]. The cheap blob/segment-head
 //!    membership test runs first; the MMR proof is only attempted on a miss.
 
-use purrdf_gts::mmr::{prove_file, verify_proof};
+use purrdf_gts::mmr::{prove_file, prove_file_with_limits, verify_proof};
 use purrdf_gts::reader;
-use purrdf_gts::verify::verify_file;
+use purrdf_gts::verify::{verify_file, verify_file_with_limits};
 use purrdf_gts::wire::digest_label;
 
-use crate::gts_core::diagnostics_to_error;
+use crate::gts_core::{diagnostics_to_error, read_limit_failure};
 use crate::{RdfDataset, RdfDiagnostic};
 
 mod error;
@@ -94,9 +94,35 @@ pub fn verify_content_chain(
     gts_bytes: &[u8],
     expected_head: &[u8],
 ) -> Result<ContentChainVerification, RdfDiagnostic> {
+    verify_content_chain_impl(dataset, gts_bytes, expected_head, None)
+}
+
+/// Verify a content chain under an explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal or ordinary verification diagnostic
+/// without a partial verification result.
+pub fn verify_content_chain_with_limits(
+    dataset: &RdfDataset,
+    gts_bytes: &[u8],
+    expected_head: &[u8],
+    limits: reader::GtsReadLimits,
+) -> Result<ContentChainVerification, RdfDiagnostic> {
+    verify_content_chain_impl(dataset, gts_bytes, expected_head, Some(limits))
+}
+
+fn verify_content_chain_impl(
+    dataset: &RdfDataset,
+    gts_bytes: &[u8],
+    expected_head: &[u8],
+    limits: Option<reader::GtsReadLimits>,
+) -> Result<ContentChainVerification, RdfDiagnostic> {
     // 1. COSE signatures: resolve the embedded transport key and verify every
     //    signed frame. `ok` is false whenever any error was recorded.
-    let verification = verify_file(gts_bytes);
+    let verification = match limits {
+        Some(limits) => verify_file_with_limits(gts_bytes, limits).map_err(read_limit_failure)?,
+        None => verify_file(gts_bytes),
+    };
     if !verification.ok {
         let detail = if verification.errors.is_empty() {
             "signature verification did not succeed".to_owned()
@@ -124,7 +150,15 @@ pub fn verify_content_chain(
 
     // 2. Expected-head chain replay: fold every segment and enforce the head.
     //    Any reader diagnostic (including a head mismatch) is a hard failure.
-    let graph = reader::read(gts_bytes, true, Some(expected_head));
+    let graph = match limits {
+        Some(limits) => reader::read_with_limits(
+            gts_bytes,
+            reader::ReadOptions::new(true, Some(expected_head)),
+            limits,
+        )
+        .map_err(read_limit_failure)?,
+        None => reader::read(gts_bytes, true, Some(expected_head)),
+    };
     if !graph.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&graph));
     }
@@ -154,7 +188,11 @@ pub fn verify_content_chain(
             digests_included += 1;
             continue;
         }
-        match prove_file(gts_bytes, digest.as_bytes()).and_then(|proof| verify_proof(&proof)) {
+        let proof = match limits {
+            Some(limits) => prove_file_with_limits(gts_bytes, digest.as_bytes(), limits),
+            None => prove_file(gts_bytes, digest.as_bytes()),
+        };
+        match proof.and_then(|proof| verify_proof(&proof)) {
             Ok(()) => digests_included += 1,
             Err(cause) => missing.push(MissingDigest {
                 term: term_id,
@@ -199,7 +237,7 @@ mod tests {
     use purrdf_gts::writer::Writer;
     use purrdf_lex::cbor::Value;
 
-    use super::{RdfDataset, verify_content_chain};
+    use super::{RdfDataset, verify_content_chain, verify_content_chain_with_limits};
 
     const KID: &str = "did:example:test";
     const BLOB_PAYLOAD: &[u8] = b"content-addressed payload for the GTS verify bridge";
@@ -297,6 +335,17 @@ mod tests {
             result.signatures_valid >= 1,
             "at least one COSE signature was cryptographically valid"
         );
+    }
+
+    #[test]
+    fn bounded_verification_refuses_before_any_chain_result() {
+        let (bytes, head) = build_file(true);
+        let dataset = dataset_referencing(&digest_str(BLOB_PAYLOAD));
+        let mut limits = purrdf_gts::reader::GtsReadLimits::UNBOUNDED;
+        limits.encoded_input_bytes = bytes.len() - 1;
+        let error = verify_content_chain_with_limits(&dataset, &bytes, &head, limits)
+            .expect_err("the adjacent input excess is refused");
+        assert_eq!(error.code, "rdf-ir-gts-read-limit");
     }
 
     #[test]

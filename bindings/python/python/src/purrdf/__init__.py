@@ -66,6 +66,7 @@ _gts.__doc__ = (
 # The GTS entry points are registered natively onto the root `rdf` module; gather
 # them under `purrdf.gts` for discoverability. Names absent at runtime are skipped.
 _GTS_EXPORTS = (
+    "GtsReadLimits",
     "GtsBlobLimits",
     "GtsBlobUsage",
     "GtsBlobOmission",

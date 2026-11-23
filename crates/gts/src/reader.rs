@@ -31,6 +31,9 @@ mod payload;
 mod payload_error;
 use payload_error::{PayloadCause, PayloadError};
 
+mod read_limits;
+pub use read_limits::{GtsReadLimitError, GtsReadLimits, GtsReadResource, GtsReadUsage};
+
 mod reifier_index;
 use reifier_index::ReifierIndex;
 
@@ -393,6 +396,36 @@ pub struct BlobRefusal<'a> {
 /// project rows into a table can usually consume the segment-local ids directly
 /// with the segment index as the scope.
 pub trait StreamingSink {
+    /// Whether the reader should deliver another event.
+    ///
+    /// A false result stops before the active segment is finalized. This is the
+    /// cancellation seam used by whole-read admission: a refused drive cannot
+    /// publish a partial dataset through end-of-segment callbacks.
+    fn continue_reading(&self) -> bool {
+        true
+    }
+    /// One complete CBOR sequence item, before it is processed.
+    fn item(&mut self, _encoded_bytes: usize) {}
+    /// Encoded item parsing stopped before allocation at the first excess byte.
+    fn encoded_frame_refused(&mut self, _required: usize, _limit: usize) {}
+    /// Streaming input crossed its complete encoded-byte ceiling.
+    fn encoded_input_refused(&mut self, _required: usize, _limit: usize) {}
+    /// One payload's exact decoded extent after bounded decoding succeeds.
+    fn decoded_payload(&mut self, _blob: bool, _bytes: usize) {}
+    /// A bounded decoder stopped at the first byte beyond its effective limit.
+    fn decoded_payload_refused(&mut self, _blob: bool, _required: usize, _limit: usize) {}
+    /// Current aggregate retained reader metadata entries.
+    fn retained_metadata(&mut self, _entries: usize) {}
+    /// Admit new retained metadata entries before they are stored.
+    fn metadata_entries(&mut self, _additional: usize) {}
+    /// Optional complete encoded-input bound for streaming readers.
+    fn encoded_input_limit(&self) -> Option<usize> {
+        None
+    }
+    /// Optional encoded bound for each header or frame.
+    fn encoded_frame_limit(&self) -> Option<usize> {
+        None
+    }
     /// Supply provisional replay storage for bounded transformed-frame decoding.
     /// A supplied failure is fatal; it never selects resident fallback storage.
     fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn cbor::ReplayStorage>>> {
@@ -458,6 +491,17 @@ pub trait StreamingSink {
     fn blob_decode_limit(&self) -> Option<usize> {
         None
     }
+    /// Decoded bound for a blob already contained in an admitted snapshot.
+    ///
+    /// Aggregate decoded bytes already include the enclosing snapshot, so this
+    /// bound applies only the per-blob ceiling and any inner sink constraint.
+    fn embedded_blob_limit(&self) -> Option<usize> {
+        self.blob_decode_limit()
+    }
+    /// One embedded blob already included in the enclosing snapshot charge.
+    fn embedded_blob(&mut self, _bytes: usize) {}
+    /// An embedded blob exceeded its per-blob ceiling.
+    fn embedded_blob_refused(&mut self, _required: usize, _limit: usize) {}
     /// Optional bound for decoding an ordinary (non-blob) frame's payload.
     ///
     /// A `snapshot` frame carries embedded blob bytes *inside* an RDF frame, so
@@ -528,6 +572,9 @@ pub(crate) fn push_diagnostic(
 ) {
     if let Some(sink) = sink.as_deref_mut() {
         sink.diagnostic(&diagnostic);
+        if !sink.continue_reading() {
+            return;
+        }
     }
     g.diagnostics.push(diagnostic);
 }
@@ -588,6 +635,20 @@ struct Folder<'g, 's, 'k> {
 }
 
 impl Folder<'_, '_, '_> {
+    fn sink_accepting(&self) -> bool {
+        self.sink
+            .as_deref()
+            .is_none_or(StreamingSink::continue_reading)
+    }
+
+    fn report_decoded_refusal(&mut self, blob: bool, error: &PayloadError) {
+        if let Some((required, limit)) = error.decoded_limit_refusal()
+            && let Some(sink) = self.sink.as_deref_mut()
+        {
+            sink.decoded_payload_refused(blob, required, limit);
+        }
+    }
+
     fn decode_limit(&self, blob: bool) -> Option<usize> {
         let sink_limit = self.sink.as_deref().and_then(|sink| {
             if blob {
@@ -718,6 +779,9 @@ impl Folder<'_, '_, '_> {
         };
         let meta = self.blob_meta_index.get(&self.g.blob_meta, digest);
         sink.blob(self.segment_index, digest, meta);
+        if !sink.continue_reading() {
+            return;
+        }
         sink.blob_payload(BlobPayload {
             segment_index: self.segment_index,
             digest,
@@ -733,6 +797,9 @@ impl Folder<'_, '_, '_> {
 
     fn push_opaque(&mut self, opaque: OpaqueNode) {
         self.with_sink(|segment_index, sink| sink.opaque(segment_index, &opaque));
+        if !self.sink_accepting() {
+            return;
+        }
         if self.materialize {
             self.g.opaque.push(opaque);
         }
@@ -740,6 +807,9 @@ impl Folder<'_, '_, '_> {
 
     fn push_signature(&mut self, signature: Signature) {
         self.with_sink(|segment_index, sink| sink.signature(segment_index, &signature));
+        if !self.sink_accepting() {
+            return;
+        }
         if self.materialize {
             self.g.signatures.push(signature);
         }
@@ -747,15 +817,15 @@ impl Folder<'_, '_, '_> {
 
     /// Resolve a frame's logical payload through its original shared codec path.
     fn payload<'frame>(
-        &self,
+        &mut self,
         frame: &'frame [(Value, Value)],
         blob: bool,
         data: Option<ValueRef<'frame>>,
     ) -> Result<Payload<'frame>, PayloadError> {
-        payload::PayloadContext {
+        let payload = match (payload::PayloadContext {
             catalog: &self.catalog,
             content_key: self.content_key,
-        }
+        })
         .decode(
             frame,
             blob,
@@ -766,7 +836,17 @@ impl Folder<'_, '_, '_> {
                     .as_deref()
                     .and_then(StreamingSink::blob_encoded_limit)
             },
-        )
+        ) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.report_decoded_refusal(blob, &error);
+                return Err(error);
+            }
+        };
+        if let Some(sink) = self.sink.as_deref_mut() {
+            sink.decoded_payload(blob, payload.decoded_len());
+        }
+        Ok(payload)
     }
 
     /// Fold one already-verified frame into the graph.
@@ -800,7 +880,12 @@ impl Folder<'_, '_, '_> {
                 self.failed_payload(frame, ftype, index, error);
                 return;
             }
-            Ok(p) => p,
+            Ok(payload) => {
+                if !self.sink_accepting() {
+                    return;
+                }
+                payload
+            }
         };
         let folded = (|| -> Result<(), PayloadError> {
             match ftype {
@@ -880,6 +965,9 @@ impl Folder<'_, '_, '_> {
         for raw in rows {
             let raw = raw?.to_value()?;
             self.h_term_row(raw.as_ref(), index, base)?;
+            if !self.sink_accepting() {
+                break;
+            }
         }
         Ok(())
     }
@@ -904,11 +992,17 @@ impl Folder<'_, '_, '_> {
             }
         } else if let Some(terms) = self.shared_terms.as_deref_mut() {
             let term = Arc::new(term);
+            let accepted = if let Some(sink) = self.sink.as_deref_mut() {
+                sink.term(self.segment_index, term_id, Arc::clone(&term));
+                sink.continue_reading()
+            } else {
+                true
+            };
+            if !accepted {
+                return Ok(());
+            }
             terms.push(Arc::clone(&term));
             self.reifier_index.observe_term(term_id, &term);
-            if let Some(sink) = self.sink.as_deref_mut() {
-                sink.term(self.segment_index, term_id, term);
-            }
         } else {
             self.g.terms.push(term);
             self.reifier_index
@@ -928,6 +1022,9 @@ impl Folder<'_, '_, '_> {
         };
         for row in rows {
             self.h_quad_row(row?, index, base)?;
+            if !self.sink_accepting() {
+                break;
+            }
         }
         Ok(())
     }
@@ -984,6 +1081,9 @@ impl Folder<'_, '_, '_> {
             self.provenance.observe_terms(terms, s, p, o)?;
         }
         self.with_sink(|segment_index, sink| sink.quad(segment_index, quad));
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         if self.materialize {
             self.g.quads.push(quad);
         }
@@ -1009,6 +1109,9 @@ impl Folder<'_, '_, '_> {
         };
         for row in rows {
             self.h_reifier_row(row?, index, base)?;
+            if !self.sink_accepting() {
+                break;
+            }
         }
         Ok(())
     }
@@ -1044,6 +1147,10 @@ impl Folder<'_, '_, '_> {
         // through `rf` and carries no `tt` of its own), whose meaning would
         // become double-valued. That shape is flagged after the fold, once
         // every term and every binding of the segment has been seen.
+        self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         if matches!(self.reifier_index.first_binding(rid), Some(existing) if existing != triple) {
             self.rebound_reifiers.push((rid, index));
         }
@@ -1052,7 +1159,6 @@ impl Folder<'_, '_, '_> {
         if let Some(terms) = self.stored_terms {
             terms.bind_first(rid, triple)?;
         }
-        self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         Ok(())
     }
 
@@ -1067,6 +1173,9 @@ impl Folder<'_, '_, '_> {
         };
         for row in rows {
             self.h_annotation_row(row?, index, base)?;
+            if !self.sink_accepting() {
+                break;
+            }
         }
         Ok(())
     }
@@ -1094,6 +1203,9 @@ impl Folder<'_, '_, '_> {
             }
         };
         self.with_sink(|segment_index, sink| sink.annotation(segment_index, annotation));
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         if self.materialize {
             self.g.annotations.push(annotation);
         }
@@ -1164,6 +1276,9 @@ impl Folder<'_, '_, '_> {
             } else {
                 Err(PayloadError::Damaged(PayloadCause::TransformedNotBytes))
             };
+            if !self.sink_accepting() {
+                return;
+            }
             match decoded {
                 Ok(Some((digest, bytes))) => {
                     if let Some(meta) = pub_meta {
@@ -1223,6 +1338,33 @@ impl Folder<'_, '_, '_> {
         }
 
         if let Some(digest) = declared_digest {
+            // A bounded sink must admit the eventual lazy decode now. Stream
+            // through the transform chain without retaining the output so a
+            // declared digest cannot defer a resource bomb until first use.
+            if self.decode_limit(true).is_some()
+                && let Some(bytes) = d
+                && let Err(error) = self.blob_digest(&chain, bytes)
+            {
+                let detail = error.diagnostic_detail();
+                if let Some(kind) = error.blob_refusal_kind() {
+                    self.emit_blob_refusal(
+                        kind,
+                        Some(&digest),
+                        false,
+                        declared_metadata,
+                        encoded_len,
+                        &detail,
+                    );
+                }
+                self.opaque(frame, "blob", error.opaque_reason());
+                self.diag_native(
+                    error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                    error,
+                    detail,
+                    index,
+                );
+                return;
+            }
             // A declared digest stores the wire bytes undecoded, so a payload
             // that cannot be a stream of its codec is refused here, by its
             // structure, instead of folding as sound and failing on first use.
@@ -1284,6 +1426,9 @@ impl Folder<'_, '_, '_> {
             self.blob_digest(&chain, wire_bytes)
                 .map(|digest| Some((digest, BlobBytes::Chunks(wire_bytes))))
         };
+        if !self.sink_accepting() {
+            return;
+        }
         match decoded {
             Ok(Some((digest, bytes))) => {
                 if let Some(meta) = pub_meta {
@@ -1335,7 +1480,7 @@ impl Folder<'_, '_, '_> {
     }
 
     fn blob_digest(
-        &self,
+        &mut self,
         codecs: &[Codec],
         bytes: cbor::ByteChunks<'_>,
     ) -> Result<String, PayloadError> {
@@ -1352,23 +1497,42 @@ impl Folder<'_, '_, '_> {
         }
         let limit = self.decode_limit(true).unwrap_or(usize::MAX);
         if codecs.is_empty() && bytes.byte_len() > limit {
-            return Err(PayloadError::Budget(PayloadCause::DecodedBlobLimit {
+            let error = PayloadError::Budget(PayloadCause::DecodedBlobLimit {
                 actual: bytes.byte_len(),
                 limit,
-            }));
+            });
+            self.report_decoded_refusal(true, &error);
+            return Err(error);
         }
-        let mut reader = crate::codec::decode_chain_reader(codecs, bytes, limit)?;
+        let mut reader = match crate::codec::decode_chain_reader(codecs, bytes, limit) {
+            Ok(reader) => reader,
+            Err(error) => {
+                let error = PayloadError::from(error);
+                self.report_decoded_refusal(true, &error);
+                return Err(error);
+            }
+        };
         let mut hash = purrdf_hash::blake3::Hasher::new();
         let mut scratch = [0; 8192];
+        let mut decoded_len = 0usize;
         loop {
             let count = match reader.read(&mut scratch) {
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                result => result?,
+                Ok(count) => count,
+                Err(error) => {
+                    let error = PayloadError::from(error);
+                    self.report_decoded_refusal(true, &error);
+                    return Err(error);
+                }
             };
             if count == 0 {
                 break;
             }
+            decoded_len = decoded_len.saturating_add(count);
             hash.update(&scratch[..count]);
+        }
+        if let Some(sink) = self.sink.as_deref_mut() {
+            sink.decoded_payload(true, decoded_len);
         }
         Ok(digest_label(hash.finalize().as_bytes()))
     }
@@ -1377,6 +1541,14 @@ impl Folder<'_, '_, '_> {
         if let Value::Map(entries) = payload {
             for (k, v) in entries {
                 let key = k.as_text().map_or_else(|| format!("{k:?}"), str::to_string);
+                if !self.g.meta.iter().any(|(existing, _)| existing == &key)
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.metadata_entries(1);
+                    if !sink.continue_reading() {
+                        return;
+                    }
+                }
                 self.g.set_meta(key, v.clone());
             }
         }
@@ -1399,6 +1571,9 @@ impl Folder<'_, '_, '_> {
             by: map_get(entries, "by").and_then(as_idx),
         };
         self.with_sink(|segment_index, sink| sink.suppression(segment_index, &suppression));
+        if !self.sink_accepting() {
+            return;
+        }
         if self.materialize {
             self.g.suppressions.push(suppression);
         }
@@ -1433,7 +1608,10 @@ impl Folder<'_, '_, '_> {
         if let Some(blobs) = payload.get("blobs")?
             && let Some(blobs) = blobs.map()?
         {
-            let ceiling = self.decode_limit(true);
+            let ceiling = self
+                .sink
+                .as_deref()
+                .and_then(StreamingSink::embedded_blob_limit);
             for entry in blobs {
                 let (_, value) = entry?;
                 if let Some(bytes) = value.byte_chunks() {
@@ -1445,6 +1623,12 @@ impl Folder<'_, '_, '_> {
                             actual: bytes.byte_len(),
                             limit,
                         });
+                        if let Some(sink) = self.sink.as_deref_mut() {
+                            sink.embedded_blob_refused(bytes.byte_len(), limit);
+                            if !sink.continue_reading() {
+                                return Ok(());
+                            }
+                        }
                         let detail = error.diagnostic_detail();
                         self.emit_blob_refusal(
                             BlobRefusalKind::ByteBudget,
@@ -1461,6 +1645,12 @@ impl Folder<'_, '_, '_> {
                             index,
                         );
                         continue;
+                    }
+                    if let Some(sink) = self.sink.as_deref_mut() {
+                        sink.embedded_blob(bytes.byte_len());
+                        if !sink.continue_reading() {
+                            return Ok(());
+                        }
                     }
                     if self.materialize {
                         self.blob_index.set(
@@ -1482,6 +1672,14 @@ impl Folder<'_, '_, '_> {
                     Some(text) => text.into_owned(),
                     None => format!("{:?}", key.to_value()?.as_ref()),
                 };
+                if !self.g.meta.iter().any(|(existing, _)| existing == &key)
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.metadata_entries(1);
+                    if !sink.continue_reading() {
+                        return Ok(());
+                    }
+                }
                 self.g.set_meta(key, value.to_value()?.into_owned());
             }
         }
@@ -1672,6 +1870,24 @@ pub struct SegmentAppendState {
 /// segment header, or its last item has no `"id"` — appending onto any of those
 /// would silently break the chain.
 pub fn segment_append_state(data: &[u8]) -> Result<SegmentAppendState, AppendError> {
+    segment_append_state_unbounded(data)
+}
+
+/// Recover append state under an explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal before parsing append state, followed by
+/// the ordinary append-state refusals.
+pub fn segment_append_state_with_limits(
+    data: &[u8],
+    limits: GtsReadLimits,
+) -> Result<SegmentAppendState, AppendError> {
+    check_read_limits(data, ReadOptions::new(true, None), limits)
+        .map_err(AppendError::ReadLimit)?;
+    segment_append_state_unbounded(data)
+}
+
+fn segment_append_state_unbounded(data: &[u8]) -> Result<SegmentAppendState, AppendError> {
     let (items, torn) = iter_items_with_error(data);
     if let Some(error) = torn {
         return Err(AppendError::Torn {
@@ -1799,6 +2015,27 @@ pub fn read(data: &[u8], allow_segments: bool, expected_head: Option<&[u8]>) -> 
 
 /// Read and fold a GTS file using explicit options.
 pub fn read_with_options(data: &[u8], options: ReadOptions<'_>) -> Graph {
+    read_with_options_unbounded(data, options)
+}
+
+/// Read and fold a GTS file under one explicit whole-read resource contract.
+///
+/// The immutable input is first driven through the production streaming fold.
+/// Only bytes that pass every ceiling are materialized by the compatibility
+/// graph fold, so a refusal never returns a partial graph.
+///
+/// # Errors
+/// Returns the first typed whole-read resource refusal.
+pub fn read_with_limits(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    limits: GtsReadLimits,
+) -> Result<Graph, GtsReadLimitError> {
+    check_read_limits(data, options, limits)?;
+    Ok(read_with_options_unbounded(data, options))
+}
+
+fn read_with_options_unbounded(data: &[u8], options: ReadOptions<'_>) -> Graph {
     let (items, torn) = iter_items_with_error(data);
     if items.is_empty() {
         let mut g = Graph::default();
@@ -1937,6 +2174,91 @@ pub fn read_to_sink_with_options(
     )
 }
 
+/// Read into a streaming sink under one explicit whole-read resource contract.
+///
+/// The returned usage belongs to the complete accepted drive. A refusal stops
+/// before finalizing the active segment and returns no partial result.
+///
+/// # Errors
+/// Returns the first typed whole-read resource refusal.
+pub fn read_to_sink_with_limits(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    limits: GtsReadLimits,
+    sink: &mut dyn StreamingSink,
+) -> Result<(StreamingReadResult, GtsReadUsage), GtsReadLimitError> {
+    let usage = check_read_limits(data, options, limits)?;
+    let result = read_items(
+        &mut SliceItems {
+            remaining: data,
+            offset: 0,
+            maximum: None,
+        },
+        options,
+        sink,
+    );
+    Ok((result, usage))
+}
+
+/// Check a byte slice against the production reader without publishing events.
+///
+/// This is the admission step for transactional hosts that use caller-owned
+/// dictionaries or storage after the complete artifact is accepted.
+///
+/// # Errors
+/// Returns the first typed whole-read resource refusal.
+pub fn check_read_limits(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    limits: GtsReadLimits,
+) -> Result<GtsReadUsage, GtsReadLimitError> {
+    struct Preflight;
+    impl StreamingSink for Preflight {}
+    let mut sink = Preflight;
+    let (_, usage, error) = read_to_sink_limited(data, options, limits, &mut sink);
+    match error {
+        Some(error) => Err(error),
+        None => Ok(usage),
+    }
+}
+
+fn read_to_sink_limited(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    limits: GtsReadLimits,
+    sink: &mut dyn StreamingSink,
+) -> (StreamingReadResult, GtsReadUsage, Option<GtsReadLimitError>) {
+    if data.len() > limits.encoded_input_bytes {
+        let error = GtsReadLimitError::input(data.len(), limits);
+        let diagnostic = error.diagnostic();
+        sink.diagnostic(&diagnostic);
+        return (
+            StreamingReadResult {
+                diagnostics: vec![diagnostic],
+                ..StreamingReadResult::default()
+            },
+            error.usage,
+            Some(error),
+        );
+    }
+    let mut limiter = read_limits::ReadLimiter::new(sink, limits, data.len());
+    let mut result = read_items(
+        &mut SliceItems {
+            remaining: data,
+            offset: 0,
+            maximum: Some(limits.encoded_frame_bytes),
+        },
+        options,
+        &mut limiter,
+    );
+    let usage = limiter.usage();
+    let error = limiter.take_error();
+    if let Some(error) = &error {
+        result.diagnostics.push(error.diagnostic());
+    }
+    (result, usage, error)
+}
+
 /// Read through the production fold with caller-owned dictionary storage.
 ///
 /// Accepted terms retain their original segment-local ids and reach
@@ -1968,11 +2290,39 @@ pub fn read_to_sink_with_dictionary(
     )
 }
 
+/// Read through caller-owned dictionary storage after whole-read admission.
+///
+/// The immutable input is preflighted without publishing sink events or
+/// mutating dictionary storage. Ordinary dictionary limits remain independent.
+///
+/// # Errors
+/// Returns the first whole-read refusal as a dictionary limit, followed by the
+/// original dictionary storage, admission and cancellation failures.
+pub fn read_to_sink_with_dictionary_and_limits(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    read_limits: GtsReadLimits,
+    dictionary: &mut dyn TermStorage,
+    sink: &mut dyn StreamingSink,
+) -> Result<StreamingReadResult, DictionaryError> {
+    check_read_limits(data, options, read_limits).map_err(|error| dictionary_read_limit(&error))?;
+    read_to_sink_with_dictionary(data, options, dictionary, sink)
+}
+
+fn dictionary_read_limit(error: &GtsReadLimitError) -> DictionaryError {
+    DictionaryError::Limit {
+        resource: error.resource.label(),
+        required: error.required,
+        limit: error.limit,
+    }
+}
+
 struct StreamingCountingReader<R> {
     inner: R,
     pos: u64,
     address_exhausted: Option<(u64, usize)>,
     maximum: Option<usize>,
+    input_maximum: Option<u64>,
 }
 
 struct ItemWindow<'a, R> {
@@ -2005,7 +2355,32 @@ impl<R: Read> Read for ItemWindow<'_, R> {
 
 impl<R: Read> Read for StreamingCountingReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let read = self.inner.read(buf)?;
+        let read = if let Some(maximum) = self.input_maximum {
+            let remaining = maximum.saturating_sub(self.pos);
+            if remaining == 0 {
+                let mut probe = [0u8; 1];
+                let read = self.inner.read(&mut probe)?;
+                if read == 0 {
+                    return Ok(0);
+                }
+                return Err(purrdf_hash::error::io_error(
+                    std::io::ErrorKind::Other,
+                    DictionaryError::Limit {
+                        resource: "encoded-input-bytes",
+                        required: usize::try_from(maximum)
+                            .unwrap_or(usize::MAX)
+                            .saturating_add(1),
+                        limit: usize::try_from(maximum).unwrap_or(usize::MAX),
+                    },
+                ));
+            }
+            let width = usize::try_from(remaining)
+                .unwrap_or(usize::MAX)
+                .min(buf.len());
+            self.inner.read(&mut buf[..width])?
+        } else {
+            self.inner.read(buf)?
+        };
         self.pos = match self.pos.checked_add(read as u64) {
             Some(position) => position,
             None => {
@@ -2054,6 +2429,7 @@ fn next_stream_item<R: Read>(
 enum ItemError {
     Torn(TornAppendError),
     Dictionary(DictionaryError),
+    Limit { required: usize, limit: usize },
 }
 
 impl From<TornAppendError> for ItemError {
@@ -2116,11 +2492,10 @@ impl ItemSource for SliceItems<'_> {
                         .is_some_and(|maximum| self.remaining.len() > maximum)
                         && cause.kind() == cbor::DecodeErrorKind::Truncated
                     {
-                        return Err(ItemError::Dictionary(DictionaryError::Limit {
-                            resource: "encoded-frame-bytes",
+                        return Err(ItemError::Limit {
                             required: length.saturating_add(1),
                             limit: length,
-                        }));
+                        });
                     }
                     return Err(TornAppendError {
                         offset: start,
@@ -2676,8 +3051,44 @@ pub fn read_to_sink_from_reader<R: Read>(
         pos: 0,
         address_exhausted: None,
         maximum: None,
+        input_maximum: None,
     };
     read_items(&mut reader, options, sink)
+}
+
+/// Drive a byte stream under one whole-read resource contract.
+///
+/// Sink events are provisional until this function returns `Ok`; callers must
+/// discard them on refusal. The active segment is never finalized after a
+/// limit trips.
+///
+/// # Errors
+/// Returns the first typed whole-read resource refusal.
+pub fn read_to_sink_from_reader_with_limits<R: Read>(
+    reader: R,
+    options: ReadOptions<'_>,
+    limits: GtsReadLimits,
+    sink: &mut dyn StreamingSink,
+) -> Result<(StreamingReadResult, GtsReadUsage), GtsReadLimitError> {
+    let input_maximum = u64::try_from(limits.encoded_input_bytes).unwrap_or(u64::MAX);
+    let mut reader = StreamingCountingReader {
+        inner: reader,
+        pos: 0,
+        address_exhausted: None,
+        maximum: Some(limits.encoded_frame_bytes),
+        input_maximum: Some(input_maximum),
+    };
+    let mut limiter = read_limits::ReadLimiter::new(sink, limits, 0);
+    let mut result = read_items(&mut reader, options, &mut limiter);
+    limiter.complete_input(usize::try_from(reader.pos).unwrap_or(usize::MAX));
+    let usage = limiter.usage();
+    let error = limiter.take_error();
+    if let Some(error) = error {
+        result.diagnostics.push(error.diagnostic());
+        Err(error)
+    } else {
+        Ok((result, usage))
+    }
 }
 
 /// Read a byte stream through the same caller-owned dictionary fold.
@@ -2699,8 +3110,48 @@ pub fn read_to_sink_from_reader_with_dictionary<R: Read>(
         pos: 0,
         address_exhausted: None,
         maximum: Some(limits.encoded_frame_bytes),
+        input_maximum: None,
     };
     read_items_stored(&mut reader, options, sink, Some(dictionary))
+}
+
+/// Drive a byte stream through caller-owned dictionary storage under a
+/// whole-read resource contract.
+///
+/// Sink and storage events are provisional until this function returns `Ok`;
+/// callers must discard or roll them back on refusal. Dictionary storage is not
+/// committed after a whole-read limit trips.
+///
+/// # Errors
+/// Returns the first whole-read refusal as a dictionary limit, followed by the
+/// original dictionary storage, admission and cancellation failures.
+pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
+    reader: R,
+    options: ReadOptions<'_>,
+    read_limits: GtsReadLimits,
+    dictionary: &mut dyn TermStorage,
+    sink: &mut dyn StreamingSink,
+) -> Result<StreamingReadResult, DictionaryError> {
+    let dictionary_limits = dictionary.limits()?;
+    let input_maximum = u64::try_from(read_limits.encoded_input_bytes).unwrap_or(u64::MAX);
+    let mut reader = StreamingCountingReader {
+        inner: reader,
+        pos: 0,
+        address_exhausted: None,
+        maximum: Some(
+            dictionary_limits
+                .encoded_frame_bytes
+                .min(read_limits.encoded_frame_bytes),
+        ),
+        input_maximum: Some(input_maximum),
+    };
+    let mut limiter = read_limits::ReadLimiter::new(sink, read_limits, 0);
+    let result = read_items_stored(&mut reader, options, &mut limiter, Some(dictionary));
+    limiter.complete_input(usize::try_from(reader.pos).unwrap_or(usize::MAX));
+    if let Some(error) = limiter.take_error() {
+        return Err(dictionary_read_limit(&error));
+    }
+    result
 }
 
 fn read_items(
@@ -2725,6 +3176,7 @@ fn read_items_stored(
         .as_deref_mut()
         .map(TermStorage::limits)
         .transpose()?;
+    let mut cancelled = false;
     let result = (|| {
         let mut result = StreamingReadResult::default();
         let mut completed_meta_entries = 0usize;
@@ -2735,7 +3187,33 @@ fn read_items_stored(
             let (item, frame_start, frame_end) = match reader.next() {
                 Ok(Some(item)) => item,
                 Ok(None) => break,
+                Err(ItemError::Dictionary(
+                    error @ DictionaryError::Limit {
+                        resource: "encoded-input-bytes",
+                        required,
+                        limit,
+                    },
+                )) => {
+                    sink.encoded_input_refused(required, limit);
+                    if !sink.continue_reading() {
+                        cancelled = true;
+                        return Ok(result);
+                    }
+                    return Err(error);
+                }
                 Err(ItemError::Dictionary(error)) => return Err(error),
+                Err(ItemError::Limit { required, limit }) => {
+                    sink.encoded_frame_refused(required, limit);
+                    if !sink.continue_reading() {
+                        cancelled = true;
+                        return Ok(result);
+                    }
+                    return Err(DictionaryError::Limit {
+                        resource: "encoded-frame-bytes",
+                        required,
+                        limit,
+                    });
+                }
                 Err(ItemError::Torn(torn)) => {
                     if let Some((position, read)) = reader.address_exhausted() {
                         push_result_diagnostic(
@@ -2756,6 +3234,13 @@ fn read_items_stored(
                     break;
                 }
             };
+            let encoded_bytes =
+                usize::try_from(frame_end.saturating_sub(frame_start)).unwrap_or(usize::MAX);
+            sink.item(encoded_bytes);
+            if !sink.continue_reading() {
+                cancelled = true;
+                return Ok(result);
+            }
             if let StreamItem::Header(item) = item {
                 if let Some(segment) = current.take() {
                     if !options.allow_segments {
@@ -2806,6 +3291,25 @@ fn read_items_stored(
                     );
                     return Ok(result);
                 }
+                let completed_retained = completed_meta_entries
+                    .saturating_add(result.diagnostics.len())
+                    .saturating_add(result.segment_heads.len().saturating_mul(4));
+                sink.retained_metadata(completed_retained);
+                let retained_header_entries = unwrap_header(&item).map_or(1, |header| {
+                    let nested = ["cat", "dct"]
+                        .into_iter()
+                        .filter_map(|key| match map_get(header, key) {
+                            Some(Value::Map(entries)) => Some(entries.len()),
+                            _ => None,
+                        })
+                        .fold(0usize, usize::saturating_add);
+                    header.len().saturating_add(nested)
+                });
+                sink.metadata_entries(retained_header_entries);
+                if !sink.continue_reading() {
+                    cancelled = true;
+                    return Ok(result);
+                }
                 current = Some(ActiveStreamingSegment::new(
                     item,
                     item_index,
@@ -2854,15 +3358,24 @@ fn read_items_stored(
                 );
                 return Ok(result);
             }
+            if !sink.continue_reading() {
+                cancelled = true;
+                return Ok(result);
+            }
+            let required = completed_meta_entries
+                .saturating_add(result.diagnostics.len())
+                .saturating_add(result.segment_heads.len().saturating_mul(4))
+                .saturating_add(
+                    current
+                        .as_ref()
+                        .map_or(0, ActiveStreamingSegment::retained_entries),
+                );
+            sink.retained_metadata(required);
+            if !sink.continue_reading() {
+                cancelled = true;
+                return Ok(result);
+            }
             if let Some(limits) = limits {
-                let required = completed_meta_entries
-                    .saturating_add(result.diagnostics.len())
-                    .saturating_add(result.segment_heads.len().saturating_mul(4))
-                    .saturating_add(
-                        current
-                            .as_ref()
-                            .map_or(0, ActiveStreamingSegment::retained_entries),
-                    );
                 check_metadata_limit(required, limits)?;
             }
             item_index = match item_index.checked_add(1) {
@@ -2899,6 +3412,10 @@ fn read_items_stored(
                     None => diagnostic.with_native_cause(FoldError::EmptyFile),
                 },
             );
+            return Ok(result);
+        }
+        if !sink.continue_reading() {
+            cancelled = true;
             return Ok(result);
         }
         if let Some(segment) = current {
@@ -2945,7 +3462,7 @@ fn read_items_stored(
         }
         Ok(result)
     })();
-    if result.is_ok() {
+    if result.is_ok() && !cancelled {
         if let (Some(limits), Ok(result)) = (limits, &result) {
             let required = result
                 .segment_meta
@@ -2991,6 +3508,22 @@ pub struct FileSegments {
 /// Fold a file segment-by-segment WITHOUT unioning — the composition ledger
 /// view that `gts info`/`gts verify` report per-segment (§14.1).
 pub fn read_file_segments(data: &[u8]) -> FileSegments {
+    read_file_segments_unbounded(data)
+}
+
+/// Fold a file segment-by-segment under an explicit whole-read contract.
+///
+/// # Errors
+/// Returns the first resource refusal without publishing partial segments.
+pub fn read_file_segments_with_limits(
+    data: &[u8],
+    limits: GtsReadLimits,
+) -> Result<FileSegments, GtsReadLimitError> {
+    check_read_limits(data, ReadOptions::new(true, None), limits)?;
+    Ok(read_file_segments_unbounded(data))
+}
+
+fn read_file_segments_unbounded(data: &[u8]) -> FileSegments {
     let (items, torn) = iter_items_with_error(data);
     if items.is_empty() {
         let diagnostic = Diagnostic {
@@ -3296,6 +3829,7 @@ mod transformed_payload_tests {
             pos: (1 << 32) + 7,
             address_exhausted: None,
             maximum: None,
+            input_maximum: None,
         };
         let (_, start, end) = next_stream_item(&mut reader).unwrap().unwrap();
         assert_eq!(start, (1 << 32) + 7);
@@ -3305,6 +3839,7 @@ mod transformed_payload_tests {
             pos: u64::MAX,
             address_exhausted: None,
             maximum: None,
+            input_maximum: None,
         };
         assert_eq!(next_stream_item(&mut reader).unwrap_err().offset, u64::MAX);
         assert_eq!(reader.address_exhausted, Some((u64::MAX, 1)));

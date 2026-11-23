@@ -86,6 +86,8 @@ impl purrdf_hash::error::StructuredError for Base64UrlError {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompactRefusedError {
+    /// Whole-read admission refused the source before compaction.
+    ReadLimit(crate::reader::GtsReadLimitError),
     /// Dictionary names must be nonempty.
     EmptyDictionaryName,
     /// A pinned name occurs more than once.
@@ -301,6 +303,7 @@ purrdf_lex::constructors! {
 impl fmt::Display for CompactRefusedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReadLimit(cause) => write!(f, "input exceeds a GTS read limit: {cause}"),
             Self::EmptyDictionaryName => f.write_str("an in-band dictionary name must be non-empty"),
             Self::DuplicateDictionary { name } => write!(f, "duplicate in-band dictionary name {name:?}"),
             Self::PinnedDictionary { name, cause } => write!(f, "the pinned dictionary {name:?} is not a parseable finalized zstd dictionary: {cause}"),
@@ -350,6 +353,7 @@ impl fmt::Display for CompactRefusedError {
 }
 
 purrdf_lex::error_source!(CompactRefusedError => {
+    Self::ReadLimit(cause) => cause,
     Self::Torn { cause, .. } => cause,
     Self::PinnedDictionary { cause, .. } => cause,
     Self::InputDiagnostic(cause) => cause,
@@ -372,6 +376,7 @@ purrdf_lex::error_source!(CompactRefusedError => {
 
 impl purrdf_hash::error::StructuredError for CompactRefusedError {
     purrdf_hash::error_visit! {
+        ReadLimit(cause) => "gts-compact-read-limit" { "cause" => Cause(cause) },
         EmptyDictionaryName => "gts-compact-empty-dictionary-name" {},
         DuplicateDictionary { name } => "gts-compact-duplicate-dictionary" { "name" => Text(name) },
         PinnedDictionary { name, cause } => "gts-compact-pinned-dictionary" { "name" => Text(name), "cause" => Cause(cause) },

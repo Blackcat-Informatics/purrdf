@@ -97,6 +97,24 @@ fn classified(
 }
 
 impl PayloadError {
+    pub(super) fn decoded_limit_refusal(&self) -> Option<(usize, usize)> {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(self);
+        while let Some(error) = source {
+            if let Some(CodecError::Limit { limit }) = error.downcast_ref::<CodecError>() {
+                return Some((limit.saturating_add(1), *limit));
+            }
+            if let Some(
+                PayloadCause::DecodedBlobLimit { actual, limit }
+                | PayloadCause::SnapshotBlobLimit { actual, limit },
+            ) = error.downcast_ref::<PayloadCause>()
+            {
+                return Some((*actual, *limit));
+            }
+            source = error.source();
+        }
+        None
+    }
+
     pub(super) fn blob_refusal_kind(&self) -> Option<super::BlobRefusalKind> {
         match self {
             Self::Budget(_) => Some(super::BlobRefusalKind::ByteBudget),

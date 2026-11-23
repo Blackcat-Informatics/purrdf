@@ -10,7 +10,9 @@
 //! SPARQL conformance gate replays against the frozen goldens.
 
 pub use crate::gts_core::*;
-pub use crate::gts_verify::{ContentChainVerification, verify_content_chain};
+pub use crate::gts_verify::{
+    ContentChainVerification, verify_content_chain, verify_content_chain_with_limits,
+};
 
 use crate::RdfDiagnostic;
 use crate::gts_resolve::ensure_terms_terminate;
@@ -163,6 +165,19 @@ pub fn flattened_dataset_from_bytes(
     bytes: &[u8],
 ) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
     let graph = read_all_segments(bytes)?;
+    flattened_dataset_from_gts_graph(&graph)
+}
+
+/// Load and flatten GTS bytes under a whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal or ordinary fold failure without a
+/// partial dataset.
+pub fn flattened_dataset_from_bytes_with_limits(
+    bytes: &[u8],
+    limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
+    let graph = read_graph_with_limits(bytes, true, limits)?;
     flattened_dataset_from_gts_graph(&graph)
 }
 

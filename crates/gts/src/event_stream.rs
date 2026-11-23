@@ -347,6 +347,10 @@ fn parse_direction(
 }
 
 impl ResolvedSink for EventEmitter<'_> {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
     type Id = EventTermId;
     type Error = EventError;
 
@@ -701,6 +705,23 @@ pub fn stream_events(
         emitter.sink.finish()?;
     }
     Ok(read_result)
+}
+
+/// Drive a GTS file into events after whole-read admission.
+///
+/// The preflight publishes no sink events, so a resource refusal cannot finish
+/// or partially mutate the caller's event sink.
+///
+/// # Errors
+/// Returns the first typed read refusal or ordinary event failure.
+pub fn stream_events_with_limits(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    limits: crate::reader::GtsReadLimits,
+    sink: &mut dyn GtsEventSink,
+) -> Result<StreamingReadResult, EventError> {
+    crate::reader::check_read_limits(data, options, limits).map_err(EventError::native)?;
+    stream_events(data, options, sink)
 }
 
 #[cfg(test)]
