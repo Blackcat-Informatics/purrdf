@@ -31,7 +31,7 @@ pub enum TermOrder {
     Arrival = 2,
 }
 
-/// A fault while interpreting the content of an RDF frame.
+/// A fault while interpreting a frame's content.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ContentError {
@@ -57,7 +57,7 @@ impl fmt::Display for ContentError {
             Self::UnknownEnumeration { code, offset } => {
                 write!(
                     f,
-                    "GTS v2 term field at byte {offset} uses newer enumeration value {code}"
+                    "GTS v2 content field at byte {offset} uses newer enumeration value {code}"
                 )
             }
             Self::FormedCapacity(count) => {

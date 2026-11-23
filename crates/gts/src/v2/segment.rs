@@ -7,12 +7,14 @@ use std::collections::TryReserveError;
 
 use purrdf_lex::cbor::StructuralError;
 
+use super::index::TypeRuns;
 use super::parity::ParityHistory;
 use super::rows::OrderKey;
 use super::{
     CommitCheck, ContentError, DIGEST_LENGTH, DecodedRows, DecodedTerms, FormedBudget, FrameCheck,
-    FrameEnvelope, FrameField, FrameType, ParityCheck, PayloadBudget, PayloadResourceError,
-    PayloadState, Range, RangeFull, RowHeader, TermReservation, UnknownFrameType,
+    FrameEnvelope, FrameField, FrameType, IndexPrefixCheck, ParityCheck, PayloadBudget,
+    PayloadResourceError, PayloadState, Range, RangeFull, RowHeader, TermReservation,
+    UnknownFrameType,
 };
 use super::{RowOrder, terms};
 
@@ -26,6 +28,8 @@ pub struct SegmentFrame<'a> {
     pub frame: FrameCheck<'a>,
     /// Result of checking a commit against the observed prefix.
     pub commit: Option<CommitCheck>,
+    /// Index grammar and comparisons with the observed ordinary prefix.
+    pub index: Option<Result<IndexPrefixCheck, ContentError>>,
     /// Dictionary reservation when this item is a terms frame.
     pub terms: Option<TermReservation<'a>>,
     /// The content record check of a row frame that reaches interpretation.
@@ -60,6 +64,8 @@ pub enum SegmentCheckError {
     Framing(StructuralError),
     /// The allocator refused to record a parity span for duplicate checking.
     ParityHistory(TryReserveError),
+    /// The allocator refused to record a run of ordinary frame types.
+    IndexHistory(TryReserveError),
 }
 
 impl fmt::Display for SegmentCheckError {
@@ -71,6 +77,9 @@ impl fmt::Display for SegmentCheckError {
             Self::ParityHistory(error) => {
                 write!(f, "could not record the GTS parity span ({error})")
             }
+            Self::IndexHistory(error) => {
+                write!(f, "could not record the GTS frame type run ({error})")
+            }
         }
     }
 }
@@ -81,7 +90,7 @@ impl std::error::Error for SegmentCheckError {
             Self::Payload(error) => Some(error),
             Self::Range(error) => Some(error),
             Self::Framing(error) => Some(error),
-            Self::ParityHistory(error) => Some(error),
+            Self::ParityHistory(error) | Self::IndexHistory(error) => Some(error),
         }
     }
 }
@@ -92,6 +101,7 @@ impl purrdf_hash::error::StructuredError for SegmentCheckError {
         Range(cause) => "gts-v2-segment-range-full" { "cause" => Cause(cause) },
         Framing(cause) => "gts-v2-segment-framing" { "cause" => Cause(cause) },
         ParityHistory(cause) => "gts-v2-segment-parity-history" { "cause" => Cause(cause) },
+        IndexHistory(cause) => "gts-v2-segment-index-history" { "cause" => Cause(cause) },
     }
 }
 
@@ -102,6 +112,7 @@ pub struct SegmentVerifier {
     head: Digest,
     range: Range,
     parity: ParityHistory,
+    types: TypeRuns,
     next_term: u128,
     content_stopped: bool,
     last_rows: [Option<OrderKey>; 3],
@@ -116,6 +127,7 @@ impl SegmentVerifier {
             head: opener,
             range: Range::new(&opener),
             parity: ParityHistory::new(opener),
+            types: TypeRuns::default(),
             next_term: 0,
             content_stopped: false,
             last_rows: [None; 3],
@@ -210,6 +222,12 @@ impl SegmentVerifier {
             .commit_claim
             .map(|claim| self.range.check_commit(claim, checked.link.state));
         let frame_type = checked.frame_type.and_then(FrameType::from_code);
+        let index = if frame_type == Some(FrameType::Index) {
+            self.types
+                .inspect(frame, &checked, self.registry, &self.head, &self.range)
+        } else {
+            None
+        };
         let terms = if frame_type == Some(FrameType::Terms) {
             Some(
                 terms::reserve(
@@ -246,10 +264,14 @@ impl SegmentVerifier {
             None
         };
         if let Some(identifier) = checked.link.effective_identifier {
+            self.types
+                .reserve_next(checked.frame_type)
+                .map_err(SegmentCheckError::IndexHistory)?;
             self.range
                 .append(&identifier)
                 .map_err(SegmentCheckError::Range)?;
             self.head = identifier;
+            self.types.record(checked.frame_type);
         }
         if let Some(terms) = &terms {
             self.next_term = terms.end;
@@ -270,6 +292,7 @@ impl SegmentVerifier {
         Ok(SegmentFrame {
             frame: checked,
             commit,
+            index,
             terms,
             rows,
             parity: parity.map(|observation| self.parity.record(observation)),

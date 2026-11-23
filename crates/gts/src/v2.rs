@@ -6,6 +6,7 @@
 mod fields;
 mod frame;
 mod header;
+mod index;
 mod item;
 mod link;
 mod parity;
@@ -24,6 +25,7 @@ pub use header::{
     CanonicalForm, Header, Lineage, Profile, ResyncCandidate, ResyncRefusal, ResyncScan,
     write_header,
 };
+pub use index::{IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexStorageProblem};
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
@@ -39,8 +41,8 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, FramingDamage, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph,
-    Resynchronization, VerifiedBlob, read,
+    ExternalBlob, FramingDamage, GraphIndexCheck, RdfGraph, ReadCapacity, ReadError, ReadFailure,
+    ReadGraph, Resynchronization, VerifiedBlob, read,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};

@@ -318,7 +318,10 @@ fn check_count(actual: u128, expected: u64, offset: usize) -> Result<(), Content
     Ok(())
 }
 
-fn graph_name(fields: &mut Fields<'_>, registry: NonZeroU64) -> Result<Option<u64>, ContentError> {
+pub(super) fn graph_name(
+    fields: &mut Fields<'_>,
+    registry: NonZeroU64,
+) -> Result<Option<u64>, ContentError> {
     let offset = fields.offset();
     let length = fields.array()?;
     if length == 0 {

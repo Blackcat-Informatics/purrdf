@@ -458,9 +458,7 @@ fn check_content_shape(frame_type: u64, fields: &mut Fields<'_>) -> Result<(), W
             read_commit_claim(fields)?;
         }
         FrameType::Index => {
-            fields.record(2)?;
-            fields.uint()?;
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
+            fields.count_and_digest()?;
         }
         FrameType::Parity => {
             ParityClaim::read(fields)?;
@@ -470,11 +468,8 @@ fn check_content_shape(frame_type: u64, fields: &mut Fields<'_>) -> Result<(), W
 }
 
 fn read_commit_claim<'a>(fields: &mut Fields<'a>) -> Result<CommitClaim<'a>, WireError> {
-    fields.record(2)?;
-    Ok(CommitClaim {
-        count: fields.uint()?,
-        root: fields.fixed_bytes()?,
-    })
+    let (count, root) = fields.count_and_digest()?;
+    Ok(CommitClaim { count, root })
 }
 
 fn media_type_shape(fields: &mut Fields<'_>) -> Result<(), WireError> {

@@ -161,22 +161,40 @@ impl<'a> Item<'a> {
             (ItemKind::Frame, Some((registry, predecessor))) => Ok(self
                 .frame()?
                 .is_some_and(|frame| frame.passes_framing_test(predecessor, witness, registry))),
-            (ItemKind::Offsets, Some(_)) => Ok(self.check_offsets_grammar().is_ok()),
-            (ItemKind::Locator, Some(_)) => {
-                Ok(self.bytes.len() == 11 && self.bytes.starts_with(&[0x82, 0x03, 0x1b]))
-            }
+            (ItemKind::Offsets, Some(_)) => Ok(self.offsets_match(&[]).is_ok()),
+            (ItemKind::Locator, Some(_)) => Ok(self.locator_distance().is_ok()),
             _ => Ok(true),
         }
     }
 
-    fn check_offsets_grammar(self) -> Result<(), WireError> {
+    pub(super) fn offsets_match(self, observed: &[usize]) -> Result<bool, WireError> {
         let mut fields = Fields::new(self.bytes);
         fields.record(2)?;
         fields.fixed_uint(OFFSETS_KIND, MalformedReason::WrongType)?;
-        for _ in 0..fields.array()? {
-            fields.uint()?;
+        let count = fields.array()?;
+        let mut matches = count == observed.len() as u64;
+        let mut lengths = observed.iter().copied();
+        for _ in 0..count {
+            let length = fields.uint()?;
+            matches &= lengths
+                .next()
+                .is_some_and(|observed| observed as u64 == length);
         }
-        Ok(())
+        Ok(matches)
+    }
+
+    pub(super) fn locator_distance(self) -> Result<u64, WireError> {
+        let mut fields = Fields::new(self.bytes);
+        fields.record(2)?;
+        fields.fixed_uint(LOCATOR_KIND, MalformedReason::WrongType)?;
+        let offset = fields.offset();
+        let mut distance = fields.remaining();
+        let value = head::read_argument(&mut distance, head::UNSIGNED)
+            .ok_or_else(|| WireError::new(MalformedReason::WrongType, offset))?;
+        if fields.remaining().first() != Some(&0x1b) {
+            return Err(WireError::new(MalformedReason::NotDeterministic, offset));
+        }
+        Ok(value)
     }
 
     /// Locate the fields of a complete P1 §3.1 frame envelope.
