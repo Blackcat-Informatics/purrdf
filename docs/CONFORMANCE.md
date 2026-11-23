@@ -75,7 +75,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 39 | 0 | 0 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
-| Python binding suite | first-party (incl. compat differential vs rdflib) | 1558 | 4 | 4 | 0 | GREEN |
+| Python binding suite | first-party (incl. compat differential vs rdflib) | 1564 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
 
 The RDFLib row states the required scoreboard under native XSD string-subtype

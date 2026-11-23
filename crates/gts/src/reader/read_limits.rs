@@ -598,6 +598,12 @@ impl StreamingSink for ReadLimiter<'_> {
         )
     }
 
+    fn eagerly_validate_declared_blobs(&self) -> bool {
+        self.limits.decoded_blob_bytes != usize::MAX
+            || self.limits.total_decoded_bytes != usize::MAX
+            || self.limits.work != usize::MAX
+    }
+
     fn embedded_blob_limit(&self) -> Option<usize> {
         let limit = self
             .limits

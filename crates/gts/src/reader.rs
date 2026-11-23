@@ -491,6 +491,14 @@ pub trait StreamingSink {
     fn blob_decode_limit(&self) -> Option<usize> {
         None
     }
+    /// Whether declared-digest blobs must be decoded during this read.
+    ///
+    /// Whole-read admission enables this when a deferred decode could otherwise
+    /// escape its decoded-byte or work ceiling. Ordinary sinks retain the GTS
+    /// lazy-payload contract.
+    fn eagerly_validate_declared_blobs(&self) -> bool {
+        false
+    }
     /// Decoded bound for a blob already contained in an admitted snapshot.
     ///
     /// Aggregate decoded bytes already include the enclosing snapshot, so this
@@ -1341,7 +1349,10 @@ impl Folder<'_, '_, '_> {
             // A bounded sink must admit the eventual lazy decode now. Stream
             // through the transform chain without retaining the output so a
             // declared digest cannot defer a resource bomb until first use.
-            if self.decode_limit(true).is_some()
+            if self
+                .sink
+                .as_deref()
+                .is_some_and(StreamingSink::eagerly_validate_declared_blobs)
                 && let Some(bytes) = d
                 && let Err(error) = self.blob_digest(&chain, bytes)
             {
