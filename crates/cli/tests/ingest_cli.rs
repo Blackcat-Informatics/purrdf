@@ -93,6 +93,18 @@ fn zstd(payload: &[u8]) -> Vec<u8> {
     )
 }
 
+/// Prefix one valid zstd frame with a skippable frame whose payload produces no
+/// decoded bytes.
+fn zstd_with_skippable(payload: &[u8], skipped: usize) -> Vec<u8> {
+    let skipped_len = skipped;
+    let skipped = u32::try_from(skipped).expect("fixture skip length fits u32");
+    let mut wrapped = 0x184D_2A50_u32.to_le_bytes().to_vec();
+    wrapped.extend_from_slice(&skipped.to_le_bytes());
+    wrapped.resize(wrapped.len() + skipped_len, 0x5a);
+    wrapped.extend_from_slice(&zstd(payload));
+    wrapped
+}
+
 // --------------------------------------------------------------------------------
 // GTS fixtures
 // --------------------------------------------------------------------------------
@@ -179,6 +191,48 @@ fn gts_safe_read_bounds_transport_expansion() {
         stderr(&result)
     );
     assert!(!Path::new(&out).exists());
+}
+
+/// Raw compressed bytes are bounded before zstd consumes leading skippable
+/// frames, including the exact admitted boundary and its adjacent refusal.
+#[test]
+fn gts_safe_read_bounds_transport_input_before_decoder_construction() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let bytes = two_segment_gts();
+    let wrapped_bytes = zstd_with_skippable(&bytes, bytes.len());
+    let wrapped = write_bytes(dir, "in.gts.zst", &wrapped_bytes);
+
+    let admitted = path(dir, "admitted.nq");
+    let exact = format!("encoded-input-bytes={}", wrapped_bytes.len());
+    let result = run(&[
+        "--gts-safe-read",
+        "--gts-read-limit",
+        &exact,
+        "convert",
+        &wrapped,
+        &admitted,
+    ]);
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert!(Path::new(&admitted).is_file());
+
+    let refused = path(dir, "refused.nq");
+    let adjacent = format!("encoded-input-bytes={}", wrapped_bytes.len() - 1);
+    let result = run(&[
+        "--gts-safe-read",
+        "--gts-read-limit",
+        &adjacent,
+        "convert",
+        &wrapped,
+        &refused,
+    ]);
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("encoded GTS transport input requires more"),
+        "{}",
+        stderr(&result)
+    );
+    assert!(!Path::new(&refused).exists());
 }
 
 /// THE CORRECTNESS PROPERTY OF THE AUTHORITATIVE IMPORTER: the same blank-node label in

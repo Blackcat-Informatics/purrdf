@@ -616,7 +616,7 @@ fn read_gts_bytes_with_transport(
     policy: TransportPolicy,
     maximum: usize,
 ) -> Result<Vec<u8>, CliError> {
-    let source = open_raw_stream(path)?;
+    let source = LimitedGtsTransport::new(open_raw_stream(path)?, maximum);
     let mut decoded: Box<dyn Read> = match policy {
         TransportPolicy::Verbatim => Box::new(
             transport_reader(source, None)
@@ -650,6 +650,60 @@ fn read_gts_bytes_with_transport(
         )));
     }
     Ok(bytes)
+}
+
+/// Raw transport input admitted before sniffing or decoder construction.
+///
+/// Zstandard skippable frames are consumed while the transport reader is
+/// constructed, so limiting only its decoded output would leave that work
+/// unbounded. This adapter permits exactly the configured source byte maximum
+/// and probes one adjacent byte only when a consumer asks whether the stream
+/// ended.
+struct LimitedGtsTransport<R> {
+    inner: R,
+    remaining: usize,
+    maximum: usize,
+}
+
+impl<R> LimitedGtsTransport<R> {
+    const fn new(inner: R, maximum: usize) -> Self {
+        Self {
+            inner,
+            remaining: maximum,
+            maximum,
+        }
+    }
+}
+
+impl<R: Read> Read for LimitedGtsTransport<R> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining > 0 {
+            let width = self.remaining.min(output.len());
+            let count = self.inner.read(&mut output[..width])?;
+            self.remaining -= count;
+            return Ok(count);
+        }
+        let mut adjacent = [0_u8; 1];
+        loop {
+            match self.inner.read(&mut adjacent) {
+                Ok(0) => return Ok(0),
+                Ok(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "encoded GTS transport input requires more than {} bytes",
+                            self.maximum
+                        ),
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 /// The GTS loss-ledger code family: what a GTS envelope carried and an RDF dataset
