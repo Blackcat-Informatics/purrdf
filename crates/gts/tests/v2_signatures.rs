@@ -6,7 +6,7 @@
 use purrdf_ed25519::{EncodedVerificationError, SigningKey};
 use purrdf_gts::cose::{SigningKeyRef, composite};
 use purrdf_gts::v2::{
-    Authenticity, HeldKey, ReadCapacity, ReadGraph, SegmentWriteError, SegmentWriter,
+    Authenticity, FileEnd, HeldKey, ReadCapacity, ReadGraph, SegmentWriteError, SegmentWriter,
     SignatureInputs, SignatureInvalid, SignatureStatus, SignatureUnverified, SignatureWriteError,
     read, read_with_signature_inputs,
 };
@@ -139,6 +139,7 @@ fn caller_trust_changes_authentication_without_changing_signature_status() {
     let verified = graph.signatures[0].checks[0];
     assert_eq!(verified.status, SignatureStatus::Valid);
     assert!(!verified.authenticated);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
     assert_eq!(
         graph.segment_authentication[0].authenticity,
         Authenticity::Unauthenticated
@@ -198,6 +199,7 @@ fn a_trusted_commit_covers_linked_frames_across_a_break() {
     let summary = &graph.segment_authentication[0];
     assert_eq!(summary.authenticated_frames, 3);
     assert_eq!(summary.authenticity, Authenticity::PartlyAuthenticated);
+    assert_eq!(graph.end, FileEnd::AtAuthenticatedCommit);
     let [_, second_commit] = graph.signatures.as_slice() else {
         panic!("expected signatures on both commits");
     };
@@ -239,6 +241,7 @@ fn an_unsigned_index_leaves_a_fully_authenticated_segment_authenticated() {
     let summary = &graph.segment_authentication[0];
     assert_eq!(summary.authenticity, Authenticity::Authenticated);
     assert_eq!(summary.authenticated_frames, 5);
+    assert_eq!(graph.end, FileEnd::AfterCommit);
 }
 
 #[test]
@@ -334,4 +337,5 @@ fn a_composite_and_classical_commit_signature_use_one_subject_each_in_wire_order
             .all(|check| { check.authenticated && check.status == SignatureStatus::Valid })
     );
     assert_eq!(verified.segment_authentication[0].authenticated_frames, 2);
+    assert_eq!(verified.end, FileEnd::AtAuthenticatedCommit);
 }

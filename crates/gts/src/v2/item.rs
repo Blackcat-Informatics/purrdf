@@ -146,6 +146,13 @@ impl<'a> Item<'a> {
         }
     }
 
+    pub(super) fn names_closing_hint(self) -> bool {
+        matches!(
+            self.record_prefix().map(|prefix| prefix.kind),
+            Some(OFFSETS_KIND | LOCATOR_KIND)
+        )
+    }
+
     /// Decide whether this complete item passes the P1 §6.7 framing test.
     ///
     /// A readable segment supplies its declared registry and effective

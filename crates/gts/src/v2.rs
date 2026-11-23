@@ -43,8 +43,8 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, FrameSignatures, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph,
-    ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveryRefusal, Resynchronization,
+    ExternalBlob, FileEnd, FrameSignatures, FramingDamage, GraphIndexCheck, ParityRecovery,
+    RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveryRefusal, Resynchronization,
     VerifiedBlob, read, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};

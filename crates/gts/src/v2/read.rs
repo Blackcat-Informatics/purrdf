@@ -84,6 +84,8 @@ pub enum ReadGraph<'a> {
 pub struct RdfGraph<'a> {
     /// Readable RDF terms and resolved RDF lines.
     pub rdf: RdfFold,
+    /// Where the supplied bytes end relative to framing and commits.
+    pub end: FileEnd,
     /// Verified blob declarations in file order.
     pub blobs: Vec<VerifiedBlob<'a>>,
     /// References to named blobs declared without inline bytes.
@@ -120,6 +122,33 @@ pub struct RdfGraph<'a> {
     pub signatures: Vec<FrameSignatures>,
     /// Authentication of each readable segment, in file order.
     pub segment_authentication: Vec<SegmentAuthentication>,
+}
+
+/// The end of a readable GTS v2 file under P7 §1.2.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FileEnd {
+    /// The input ends in an undelimitable region.
+    Undelimitable,
+    /// The input ends inside an item.
+    Torn,
+    /// The last segment holds no valid commit.
+    #[default]
+    NoCommit,
+    /// Uncommitted ordinary material follows the last valid commit.
+    AfterCommit,
+    /// The last valid commit carries an authenticating signature.
+    AtAuthenticatedCommit,
+    /// The end is at a valid commit.
+    AtValidCommit,
+}
+
+impl FileEnd {
+    const fn observe_uncommitted(&mut self) {
+        if matches!(self, Self::AtAuthenticatedCommit | Self::AtValidCommit) {
+            *self = Self::AfterCommit;
+        }
+    }
 }
 
 /// The checked signatures of an ordinary frame.
@@ -420,6 +449,7 @@ struct Segment<'a> {
     file_ordinal: u64,
     header_identifier: [u8; DIGEST_LENGTH],
     authentication: AuthenticationProgress,
+    end: FileEnd,
     units: FastMap<[u8; 32], Unit<'a>>,
     parity: ParityStream<'a>,
     index_storage: StorageIndex,
@@ -725,6 +755,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         let accept = || {
             segment.parity.opaque_extent(region)?;
             segment.dictionary.mark_doubt();
+            segment.end.observe_uncommitted();
             let detached = segment
                 .verifier
                 .resume_parity(candidate.anchor, &candidate.table)?;
@@ -996,6 +1027,9 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                         }
                         (_, ReadFailure::Classification(_)) => {
                             self.retain_opaque_item(original, end, &mut segment)?;
+                            if !item.names_closing_hint() {
+                                segment.end.observe_uncommitted();
+                            }
                         }
                         _ => return Err(original),
                     }
@@ -1020,6 +1054,11 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             offset = end;
         }
         self.finish_segment(&mut segment, offset)?;
+        self.graph.end = match self.graph.framing_tail {
+            Some(FramingDamage::Undelimitable { .. }) => FileEnd::Undelimitable,
+            Some(FramingDamage::TornTail { .. }) => FileEnd::Torn,
+            None => segment.end,
+        };
         self.graph.frame_failures.sort_unstable_by_key(|error| {
             (
                 error.offset,
@@ -1348,6 +1387,15 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         }
         if authenticates {
             segment.authentication.authenticate(committed);
+        }
+        if committed {
+            segment.end = if authenticates {
+                FileEnd::AtAuthenticatedCommit
+            } else {
+                FileEnd::AtValidCommit
+            };
+        } else if !frame.transparent() && kind != Some(FrameType::Index) {
+            segment.end.observe_uncommitted();
         }
         if let Some(commit) = checked.commit.filter(|commit| !commit.valid) {
             let findings = if segment.verifier.incomplete_prefix() {
@@ -1733,6 +1781,7 @@ fn segment_from_header<'a>(
         file_ordinal,
         header_identifier: identifier,
         authentication: AuthenticationProgress::default(),
+        end: FileEnd::NoCommit,
         units: FastMap::default(),
         index_storage: StorageIndex::default(),
         index_content: IndexContent::default(),

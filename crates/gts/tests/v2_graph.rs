@@ -6,10 +6,10 @@
 use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
-    ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
-    Line, Lineage, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage,
-    PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError,
-    SegmentWriter, Term, ValueName, read, write_header,
+    ContentError, FileEnd, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item,
+    ItemKind, Line, Lineage, MalformedReason, ParityFindingKind, ParityRepairFailure,
+    PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph,
+    SegmentWriteError, SegmentWriter, Term, ValueName, read, write_header,
 };
 use purrdf_lex::cbor::head;
 
@@ -18,6 +18,46 @@ fn second(bytes: &[u8]) -> RdfGraph<'_> {
         panic!("the fixture opens a generation 2 file");
     };
     graph
+}
+
+#[test]
+fn file_end_uses_the_last_valid_commit_and_retained_item_classes() {
+    for (input, expected) in [
+        (
+            include_bytes!("fixtures/v2/P7/file-end-no-commit.bin").as_slice(),
+            FileEnd::NoCommit,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/file-end-at-valid-commit.bin").as_slice(),
+            FileEnd::AtValidCommit,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/file-end-opaque-after-commit.bin").as_slice(),
+            FileEnd::AfterCommit,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/file-end-region-after-commit.bin").as_slice(),
+            FileEnd::AfterCommit,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/end-locator-own-grammar.bin").as_slice(),
+            FileEnd::AtValidCommit,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/end-frame-no-effective-identifier.bin").as_slice(),
+            FileEnd::AfterCommit,
+        ),
+    ] {
+        assert_eq!(second(input).end, expected);
+    }
+
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_commit().unwrap();
+    let mut bytes = writer.into_inner();
+    bytes.extend_from_slice(&[0x98, 0x02, 0x03, 0x01]);
+    let graph = second(&bytes);
+    assert_eq!(graph.opaque_items.len(), 1);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
 }
 
 #[test]
@@ -289,16 +329,22 @@ fn an_unrecoverable_tail_preserves_the_checked_prefix_and_its_repairs() {
     let damaged = include_bytes!("fixtures/v2/P5/parity-damaged-shard.bin");
     let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
     let offset = damaged.len();
-    for (tail, expected) in [
-        ([0x8b, 0x02], FramingDamage::TornTail { offset, length: 2 }),
+    for (tail, expected, end) in [
+        (
+            [0x8b, 0x02],
+            FramingDamage::TornTail { offset, length: 2 },
+            FileEnd::Torn,
+        ),
         (
             [0xff, 0x00],
             FramingDamage::Undelimitable { offset, length: 2 },
+            FileEnd::Undelimitable,
         ),
     ] {
         let input = [damaged.as_slice(), tail.as_slice()].concat();
         let graph = second(&input);
         assert_eq!(graph.framing_tail, Some(expected));
+        assert_eq!(graph.end, end);
         assert_eq!(graph.blobs.len(), 1);
         assert_eq!(graph.parity_recoveries, []);
         let repaired = [intact.as_slice(), tail.as_slice()].concat();
