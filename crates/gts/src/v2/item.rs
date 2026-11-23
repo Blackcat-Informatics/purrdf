@@ -83,7 +83,7 @@ impl<'a> Item<'a> {
         Self::first_examined_with_depth(bytes, bytes.len())
     }
 
-    fn first_examined_with_depth(
+    pub(super) fn first_examined_with_depth(
         bytes: &'a [u8],
         max_depth: usize,
     ) -> (Result<Option<Self>, StructuralError>, usize) {

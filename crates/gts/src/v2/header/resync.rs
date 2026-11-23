@@ -152,6 +152,12 @@ impl<'a> ResyncScan<'a> {
                 ..offset
                     .saturating_add(RESYNC_MAX_BYTES)
                     .min(self.bytes.len())];
+            let Ok(prefix) = ResyncPrefix::read(bytes, true) else {
+                continue;
+            };
+            if prefix.place != offset as u64 {
+                continue;
+            }
             let item = match Item::first_with_depth(bytes, self.max_depth) {
                 Ok(Some(item)) => item,
                 Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
@@ -163,12 +169,6 @@ impl<'a> ResyncScan<'a> {
                 Ok(None) | Err(_) => continue,
             };
             let bytes = item.bytes();
-            let Ok(prefix) = ResyncPrefix::read(bytes, true) else {
-                continue;
-            };
-            if prefix.place != offset as u64 {
-                continue;
-            }
             budget
                 .charge_resync(RESYNC_MAX_BYTES as u64)
                 .map_err(|requested_total| ResyncRefusal {
@@ -299,4 +299,24 @@ fn read_marks(fields: &mut Fields<'_>) -> Result<(), WireError> {
         previous = Some(&remaining[..fields.offset() - offset]);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResyncScan;
+    use crate::v2::{Item, PayloadBudget, ReadCapacity};
+
+    #[test]
+    fn a_wrong_place_is_rejected_before_structural_depth_admission() {
+        let source =
+            include_bytes!("../../../tests/fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
+        let candidate = Item::first(&source[2..]).unwrap().unwrap();
+        let mut budget = PayloadBudget::new(ReadCapacity::default().payload);
+        let mut decoy = ResyncScan::with_depth(candidate.bytes(), 0);
+        assert!(decoy.scan(0..1, &mut budget).unwrap().is_none());
+        assert!(decoy.take_depth_refusal().is_none());
+
+        let mut scanner = ResyncScan::with_depth(source, 2);
+        assert!(scanner.scan(0..3, &mut budget).unwrap().is_some());
+    }
 }

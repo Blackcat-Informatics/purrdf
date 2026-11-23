@@ -56,6 +56,7 @@ pub(super) struct SegmentInput<'a> {
     pub(super) items: &'a [OriginalItem],
     pub(super) opener: Digest,
     pub(super) registry: NonZeroU64,
+    pub(super) nesting_depth: Option<usize>,
 }
 
 #[derive(Default)]
@@ -195,13 +196,23 @@ impl SegmentInput<'_> {
             return Ok((opener.end, RunResult::PreservedHead));
         }
         loop {
-            let (item, examined) = Item::first_examined(&working[at - start..]);
+            let (item, examined) = self.nesting_depth.map_or_else(
+                || Item::first_examined(&working[at - start..]),
+                |depth| Item::first_examined_with_depth(&working[at - start..], depth),
+            );
             let item = match item {
                 Ok(Some(item)) => item,
                 Ok(None) => return Ok((at, RunResult::Failed)),
                 Err(error) => match error.kind() {
                     DecodeErrorKind::Malformed(_) | DecodeErrorKind::Truncated => {
                         return Ok((at + examined, RunResult::Failed));
+                    }
+                    DecodeErrorKind::Depth { limit } => {
+                        return Err(ReadFailure::ItemDepth {
+                            required: limit.saturating_add(1),
+                            limit,
+                            cause: error,
+                        });
                     }
                     _ => return Err(ReadFailure::Framing(error)),
                 },
@@ -235,8 +246,10 @@ impl SegmentInput<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Candidate, OriginalItem, ParityRepairFailure, SegmentInput, Write};
-    use crate::v2::{Header, Item, PayloadBudget, ReadCapacity};
+    use core::num::NonZeroU64;
+
+    use super::{Candidate, OriginalItem, ParityRepairFailure, RunResult, SegmentInput, Write};
+    use crate::v2::{Header, Item, PayloadBudget, ReadCapacity, ReadFailure};
 
     #[test]
     fn rejection_propagates_to_a_run_using_the_rejected_repair_as_predecessor() {
@@ -286,6 +299,7 @@ mod tests {
                 items: &items,
                 opener,
                 registry,
+                nesting_depth: None,
             }
             .verify(
                 &mut candidates,
@@ -297,6 +311,49 @@ mod tests {
                 [failure; 2]
             );
         }
+    }
+
+    #[test]
+    fn repaired_item_framing_observes_the_body_nesting_limit() {
+        let depth = 8;
+        let mut working = vec![0];
+        working.extend(std::iter::repeat_n(0x81, depth));
+        working.push(0);
+        let items = [
+            OriginalItem {
+                bytes: 0..1,
+                ordinary: None,
+            },
+            OriginalItem {
+                bytes: 1..working.len(),
+                ordinary: None,
+            },
+        ];
+        let mut budget = PayloadBudget::new(ReadCapacity::default().payload);
+        let input = SegmentInput {
+            original: &working,
+            items: &items,
+            opener: [0; 32],
+            registry: NonZeroU64::MIN,
+            nesting_depth: Some(depth),
+        };
+        assert!(matches!(
+            input.walk(&working, &mut budget, 1, 1, [0; 32]),
+            Ok((end, RunResult::Failed)) if end == working.len()
+        ));
+
+        let input = SegmentInput {
+            nesting_depth: Some(depth - 1),
+            ..input
+        };
+        let Err(error) = input.walk(&working, &mut budget, 1, 1, [0; 32]) else {
+            panic!("the adjacent repaired item must exceed its nesting limit");
+        };
+        assert!(matches!(
+            error,
+            ReadFailure::ItemDepth { required, limit, .. }
+                if required == depth && limit == depth - 1
+        ));
     }
 
     #[test]

@@ -383,6 +383,23 @@ fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
     assert!(graph.index_checks.is_empty());
     assert_eq!(graph.repaired.as_deref(), Some(intact.as_slice()));
 
+    let mut limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = 3;
+    let ReadGraph::Second(graph) = read_with_limits(&damaged, limits).unwrap() else {
+        panic!("the bounded reader admits the parity candidate at its structural depth");
+    };
+    assert_eq!(graph.parity_recoveries.len(), 1);
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(&damaged, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 3,
+            limit: 2,
+            ..
+        }
+    ));
+
     let mut capacity = ReadCapacity::default();
     for limit in [588, 589] {
         capacity.payload.decoded_bytes_per_read = limit;
@@ -504,6 +521,23 @@ fn recovery_accepts_whichever_valid_candidate_is_earlier() {
         panic!("expected the earlier resync opener to end the lost region");
     };
     assert_eq!(opener.offset, index + 1);
+
+    let mut limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = 3;
+    let ReadGraph::Second(graph) = read_with_limits(&resync_first, limits).unwrap() else {
+        panic!("the bounded reader admits the later resync opener at its structural depth");
+    };
+    assert_eq!(graph.resynchronizations[0].offset, index + 1);
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(&resync_first, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 3,
+            limit: 2,
+            ..
+        }
+    ));
 
     damaged.extend(resync_opener_at(u16::try_from(intact.len()).unwrap()));
     let graph = second(&damaged);
