@@ -214,6 +214,8 @@ pub enum ReadFailure {
         required: usize,
         /// Configured opener-byte ceiling.
         limit: usize,
+        /// Native framing failure that led bounded recovery to this ceiling.
+        cause: Option<StructuralError>,
     },
     /// Generation detection needs more nesting than admitted.
     DetectionDepth {
@@ -230,6 +232,8 @@ pub enum ReadFailure {
         required: usize,
         /// Configured structural-work ceiling.
         limit: usize,
+        /// Native framing failure that led bounded recovery to this ceiling.
+        cause: Option<StructuralError>,
     },
     /// A generation 1 resource exceeded its explicit read capacity.
     FirstGenerationCapacity(crate::reader::GtsReadLimitError),
@@ -300,6 +304,12 @@ impl std::error::Error for ReadError {
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
             ReadFailure::DetectionDepth { cause, .. } => Some(cause),
+            ReadFailure::DetectionBytes {
+                cause: Some(cause), ..
+            }
+            | ReadFailure::DetectionWork {
+                cause: Some(cause), ..
+            } => Some(cause),
             ReadFailure::FirstGenerationCapacity(error) => Some(error),
             ReadFailure::PayloadDamage(PayloadDamage::DecodeFailed(error)) => Some(error),
             _ => None,
@@ -384,11 +394,13 @@ fn detect_opener<'a>(
             ReadFailure::DetectionBytes {
                 required: required_bytes,
                 limit: capacity.encoded_opener_bytes,
+                cause: None,
             }
         } else {
             ReadFailure::DetectionWork {
                 required: required_bytes,
                 limit: capacity.work,
+                cause: None,
             }
         };
         ReadError { offset: 0, failure }
@@ -408,6 +420,7 @@ fn detect_opener<'a>(
                     failure: ReadFailure::DetectionWork {
                         required,
                         limit: capacity.work,
+                        cause: None,
                     },
                 });
             }
@@ -559,6 +572,7 @@ impl<'a> GraphReader<'a> {
                         ReadFailure::DetectionBytes {
                             required: end.saturating_add(1),
                             limit: byte_end,
+                            cause: None,
                         }
                     } else {
                         ReadFailure::DetectionWork {
@@ -567,6 +581,7 @@ impl<'a> GraphReader<'a> {
                                     .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
                             ),
                             limit: capacity.detection.work,
+                            cause: None,
                         }
                     };
                     ReadError {
@@ -602,6 +617,31 @@ impl<'a> GraphReader<'a> {
         self.initial_refusal = None;
     }
 
+    fn detection_exhausted(&self) -> bool {
+        self.initial_scan
+            .as_ref()
+            .zip(self.initial_end)
+            .is_some_and(|(scan, end)| scan.next_offset() >= end)
+    }
+
+    fn detection_refusal(&mut self, initial: &ReadError) -> Option<ReadError> {
+        if !self.detection_exhausted() {
+            return None;
+        }
+        let mut refusal = self.initial_refusal.take()?;
+        let ReadFailure::Framing(cause) = &initial.failure else {
+            return Some(refusal);
+        };
+        match &mut refusal.failure {
+            ReadFailure::DetectionBytes { cause: slot, .. }
+            | ReadFailure::DetectionWork { cause: slot, .. } => {
+                *slot = Some(cause.clone());
+            }
+            _ => {}
+        }
+        Some(refusal)
+    }
+
     fn read_first(
         self,
         opener: Item<'a>,
@@ -632,7 +672,7 @@ impl<'a> GraphReader<'a> {
             self.scan_undelimited(&initial, 0, false)?
         };
         let Some(candidate) = candidate else {
-            return Err(self.initial_refusal.take().unwrap_or(initial));
+            return Err(self.detection_refusal(&initial).unwrap_or(initial));
         };
         let start = candidate.offset;
         let end = start + candidate.bytes.len();

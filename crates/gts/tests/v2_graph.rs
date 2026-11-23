@@ -375,7 +375,7 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
     let error = read(bytes, capacity).unwrap_err();
     assert!(matches!(
         error.failure,
-        ReadFailure::DetectionBytes { required, limit }
+        ReadFailure::DetectionBytes { required, limit, .. }
             if required == opener_bytes && limit == opener_bytes - 1
     ));
     capacity.detection.encoded_opener_bytes = 0;
@@ -384,7 +384,8 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
         error.failure,
         ReadFailure::DetectionBytes {
             required: 1,
-            limit: 0
+            limit: 0,
+            ..
         }
     ));
 
@@ -402,7 +403,7 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
     let error = read(&tagged_opener, capacity).unwrap_err();
     assert!(matches!(
         error.failure,
-        ReadFailure::DetectionWork { required, limit }
+        ReadFailure::DetectionWork { required, limit, .. }
             if required == tagged_work && limit == tagged_work - 1
     ));
     capacity.detection.work = 0;
@@ -411,7 +412,8 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
         error.failure,
         ReadFailure::DetectionWork {
             required: 1,
-            limit: 0
+            limit: 0,
+            ..
         }
     ));
 
@@ -514,6 +516,12 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     assert_eq!(error.offset, 0);
     assert!(matches!(error.failure, ReadFailure::Framing(_)));
 
+    capacity.detection.encoded_opener_bytes = 1;
+    capacity.detection.work = usize::MAX;
+    let error = read(bytes, capacity).unwrap_err();
+    assert!(matches!(error.failure, ReadFailure::Framing(_)));
+    capacity.detection = ReadCapacity::default().detection;
+
     capacity.items = 4;
     capacity.payload.decoded_bytes_per_read = 4095;
     let error = read(bytes, capacity).unwrap_err();
@@ -534,10 +542,14 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     capacity.detection.encoded_opener_bytes -= 1;
     let error = read(bytes, capacity).unwrap_err();
     assert!(matches!(
-        error.failure,
-        ReadFailure::DetectionBytes { required, limit }
-            if required == opener_end && limit == opener_end - 1
+        &error.failure,
+        ReadFailure::DetectionBytes { required, limit, .. }
+            if *required == opener_end && *limit == opener_end - 1
     ));
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the malformed opener remains the recovery refusal's source");
+    assert!(matches!(cause.kind(), DecodeErrorKind::Malformed(_)));
 
     let recovery_work = 1 + DetectionCapacity::recovery_work(opener_end);
     capacity.detection.encoded_opener_bytes = usize::MAX;
@@ -550,7 +562,7 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     let error = read(bytes, capacity).unwrap_err();
     assert!(matches!(
         error.failure,
-        ReadFailure::DetectionWork { required, limit }
+        ReadFailure::DetectionWork { required, limit, .. }
             if required == recovery_work && limit == recovery_work - 1
     ));
     capacity.detection = ReadCapacity::default().detection;

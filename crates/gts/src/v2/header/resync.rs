@@ -91,6 +91,11 @@ impl<'a> ResyncScan<'a> {
         Self { bytes, next: 0 }
     }
 
+    /// First prefix byte not yet examined by this scanner.
+    pub(in crate::v2) const fn next_offset(&self) -> usize {
+        self.next
+    }
+
     /// Find the first acceptable occurrence starting in the supplied run.
     ///
     /// A candidate may extend past the run's end. An overlapping later run
