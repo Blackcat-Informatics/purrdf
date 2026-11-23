@@ -100,6 +100,7 @@ def gts_to_sqlite(
 
     Existing projection tables are replaced in one transaction. SQLite is part
     of Python's standard library and needs no optional dependency.
+    ``read_limits=None`` preserves v4 behavior; hostile input supplies limits.
     """
     from .purrdf_native import rdf as _native
 
@@ -143,6 +144,7 @@ def gts_to_duckdb(
 
     Requires ``pip install 'purrdf[duckdb]'``. Existing tables are replaced
     together; a failed insertion rolls the transaction back.
+    ``read_limits=None`` preserves v4 behavior; hostile input supplies limits.
     """
     duckdb = _require("duckdb", "duckdb")
     with TemporaryDirectory(prefix="purrdf-duckdb-") as directory:
@@ -175,6 +177,7 @@ def gts_to_parquet(
 
     No optional encoder dependency is required. The output includes all five
     files even for an empty dataset, with complete schemas and native metadata.
+    ``read_limits=None`` preserves v4 behavior; hostile input supplies limits.
     """
     from .purrdf_native import rdf as _native
 

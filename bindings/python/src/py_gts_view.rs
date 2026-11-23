@@ -32,6 +32,10 @@ type PyReifierRow = (usize, (usize, usize, usize), Option<usize>);
 type PyAnnotationRow = (usize, usize, usize, Option<usize>);
 
 /// Whole-read limits selected explicitly for hostile GTS input.
+///
+/// Omitting `read_limits` from a byte reader preserves the unbounded v4
+/// contract. Pass `GtsReadLimits()` for hostile input, tune its ceilings for
+/// large admitted datasets, and use `unbounded()` only for trusted artifacts.
 #[pyclass(name = "GtsReadLimits", frozen)]
 #[derive(Clone, Copy, Debug)]
 pub struct PyGtsReadLimits {
@@ -416,6 +420,10 @@ impl PyGtsFoldView {
 
 #[pyfunction]
 #[pyo3(signature = (data, *, read_limits = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts optional Python borrows by value"
+)]
 fn gts_relational_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],

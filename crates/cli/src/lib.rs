@@ -198,6 +198,11 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         cli.canonical_search.as_deref(),
         cli.canonicalization_receipts.as_deref(),
     )?;
+    canonical.set_gts_read_limits(if cli.gts_safe_read {
+        purrdf::gts::reader::GtsReadLimits::DEFAULT
+    } else {
+        purrdf::gts::reader::GtsReadLimits::UNBOUNDED
+    });
     if cli.canonical_search.is_some()
         && matches!(
             &cli.cmd,

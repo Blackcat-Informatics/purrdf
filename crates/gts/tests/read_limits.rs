@@ -76,7 +76,7 @@ fn rdf_bytes() -> Vec<u8> {
 
 fn blob_bytes() -> Vec<u8> {
     let mut writer = Writer::new("generic");
-    for fill in [b'a', b'b'] {
+    for fill in *b"ab" {
         writer
             .add_frame_with_options(
                 "blob",
@@ -240,7 +240,7 @@ fn a_refused_preflight_publishes_no_partial_sink_events() {
     )
     .expect_err("the second term exceeds the contract");
     assert_eq!(error.resource, GtsReadResource::Terms);
-    assert!(sink.0.is_empty());
+    assert_eq!(sink.0, Vec::new());
 }
 
 #[test]
@@ -268,7 +268,7 @@ fn incremental_input_enforces_the_complete_encoded_boundary() {
         &mut Null,
     )
     .expect("an exactly-at-limit stream remains valid");
-    assert!(result.diagnostics.is_empty());
+    assert_eq!(result.diagnostics, Vec::new());
     assert_eq!(usage.encoded_input_bytes, bytes.len());
 
     let error = read_to_sink_from_reader_with_limits(
@@ -343,4 +343,32 @@ fn low_level_file_views_apply_the_explicit_input_contract() {
     let segments = read_file_segments_with_limits(&bytes, limits)
         .expect_err("per-segment admission refuses the first excess byte");
     assert_eq!(segments.resource, GtsReadResource::EncodedInputBytes);
+
+    let wire = purrdf_gts::wire::iter_items_with_limits(&bytes, limits)
+        .expect_err("wire item admission refuses the first excess byte");
+    assert_eq!(wire.resource, GtsReadResource::EncodedInputBytes);
+    let inventory = purrdf_gts::replication::inventory_with_limits(&bytes, limits)
+        .expect_err("inventory admission refuses the first excess byte");
+    assert_eq!(inventory.resource, GtsReadResource::EncodedInputBytes);
+    let nested = purrdf_gts::nested::read_nested_with_limits(&bytes, 2, bytes.len(), limits)
+        .expect_err("nested admission refuses the first excess byte");
+    assert_eq!(nested.resource, GtsReadResource::EncodedInputBytes);
+    let verify = purrdf_gts::verify::verify_file_with_limits(&bytes, limits)
+        .expect_err("verification admission refuses the first excess byte");
+    assert_eq!(verify.resource, GtsReadResource::EncodedInputBytes);
+    let append = Writer::appending_with_limits(&bytes, limits)
+        .expect_err("writer append admission refuses the first excess byte");
+    assert!(matches!(
+        append,
+        purrdf_gts::writer::WriterError::Append(
+            purrdf_gts::reader::AppendError::ReadLimit(ref error)
+        ) if error.resource == GtsReadResource::EncodedInputBytes
+    ));
+    let proof = purrdf_gts::mmr::prove_file_with_limits(&bytes, &[0; 32], limits)
+        .expect_err("proof admission refuses the first excess byte");
+    assert!(matches!(
+        proof,
+        purrdf_gts::mmr::ProofError::ReadLimit(ref error)
+            if error.resource == GtsReadResource::EncodedInputBytes
+    ));
 }

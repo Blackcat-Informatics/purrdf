@@ -166,6 +166,19 @@ pub fn flattened_dataset_from_bytes(
     flattened_dataset_from_gts_graph(&graph)
 }
 
+/// Load and flatten GTS bytes under a whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal or ordinary fold failure without a
+/// partial dataset.
+pub fn flattened_dataset_from_bytes_with_limits(
+    bytes: &[u8],
+    limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<std::sync::Arc<crate::RdfDataset>, RdfDiagnostic> {
+    let graph = read_graph_with_limits(bytes, true, limits)?;
+    flattened_dataset_from_gts_graph(&graph)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

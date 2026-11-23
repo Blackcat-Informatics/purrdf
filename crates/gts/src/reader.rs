@@ -2278,11 +2278,11 @@ pub fn read_to_sink_with_dictionary_and_limits(
     dictionary: &mut dyn TermStorage,
     sink: &mut dyn StreamingSink,
 ) -> Result<StreamingReadResult, DictionaryError> {
-    check_read_limits(data, options, read_limits).map_err(dictionary_read_limit)?;
+    check_read_limits(data, options, read_limits).map_err(|error| dictionary_read_limit(&error))?;
     read_to_sink_with_dictionary(data, options, dictionary, sink)
 }
 
-fn dictionary_read_limit(error: GtsReadLimitError) -> DictionaryError {
+fn dictionary_read_limit(error: &GtsReadLimitError) -> DictionaryError {
     DictionaryError::Limit {
         resource: error.resource.label(),
         required: error.required,
@@ -3122,7 +3122,7 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
     let result = read_items_stored(&mut reader, options, &mut limiter, Some(dictionary));
     limiter.complete_input(usize::try_from(reader.pos).unwrap_or(usize::MAX));
     if let Some(error) = limiter.take_error() {
-        return Err(dictionary_read_limit(error));
+        return Err(dictionary_read_limit(&error));
     }
     result
 }
@@ -3215,21 +3215,6 @@ fn read_items_stored(
                 return Ok(result);
             }
             if let StreamItem::Header(item) = item {
-                let retained_header_entries = unwrap_header(&item).map_or(1, |header| {
-                    let nested = ["cat", "dct"]
-                        .into_iter()
-                        .filter_map(|key| match map_get(header, key) {
-                            Some(Value::Map(entries)) => Some(entries.len()),
-                            _ => None,
-                        })
-                        .fold(0usize, usize::saturating_add);
-                    header.len().saturating_add(nested)
-                });
-                sink.metadata_entries(retained_header_entries);
-                if !sink.continue_reading() {
-                    cancelled = true;
-                    return Ok(result);
-                }
                 if let Some(segment) = current.take() {
                     if !options.allow_segments {
                         segment.finish_into_result(
@@ -3277,6 +3262,25 @@ fn read_items_stored(
                         }
                         .with_native_cause(FoldError::FirstHeader),
                     );
+                    return Ok(result);
+                }
+                let completed_retained = completed_meta_entries
+                    .saturating_add(result.diagnostics.len())
+                    .saturating_add(result.segment_heads.len().saturating_mul(4));
+                sink.retained_metadata(completed_retained);
+                let retained_header_entries = unwrap_header(&item).map_or(1, |header| {
+                    let nested = ["cat", "dct"]
+                        .into_iter()
+                        .filter_map(|key| match map_get(header, key) {
+                            Some(Value::Map(entries)) => Some(entries.len()),
+                            _ => None,
+                        })
+                        .fold(0usize, usize::saturating_add);
+                    header.len().saturating_add(nested)
+                });
+                sink.metadata_entries(retained_header_entries);
+                if !sink.continue_reading() {
+                    cancelled = true;
                     return Ok(result);
                 }
                 current = Some(ActiveStreamingSegment::new(
@@ -3798,6 +3802,7 @@ mod transformed_payload_tests {
             pos: (1 << 32) + 7,
             address_exhausted: None,
             maximum: None,
+            input_maximum: None,
         };
         let (_, start, end) = next_stream_item(&mut reader).unwrap().unwrap();
         assert_eq!(start, (1 << 32) + 7);
@@ -3807,6 +3812,7 @@ mod transformed_payload_tests {
             pos: u64::MAX,
             address_exhausted: None,
             maximum: None,
+            input_maximum: None,
         };
         assert_eq!(next_stream_item(&mut reader).unwrap_err().offset, u64::MAX);
         assert_eq!(reader.address_exhausted, Some((u64::MAX, 1)));

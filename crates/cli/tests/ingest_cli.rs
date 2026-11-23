@@ -138,7 +138,7 @@ fn gts_input_is_admitted_and_inferred_from_its_extension() {
     let gts = write_bytes(dir, "in.gts", &two_segment_gts());
     let out = path(dir, "out.nq");
 
-    let o = run(&["convert", &gts, &out]);
+    let o = run(&["--gts-safe-read", "convert", &gts, &out]);
     assert!(o.status.success(), "gts convert failed: {}", stderr(&o));
 
     let text = std::fs::read_to_string(&out).expect("read output");

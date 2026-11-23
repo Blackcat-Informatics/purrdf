@@ -42,9 +42,11 @@ def test_limits_are_discoverable_under_the_gts_namespace() -> None:
 )
 def test_columnar_byte_readers_apply_explicit_whole_read_limits(read) -> None:
     data = _container()
-    with pytest.raises(ValueError, match="resource limit"):
+    with pytest.raises(ValueError) as caught:
         read(
             data,
             blob_limits=purrdf.GtsBlobLimits.unbounded(),
             read_limits=purrdf.GtsReadLimits(encoded_input_bytes=len(data) - 1),
         )
+    assert caught.value.code == "rdf-ir-gts-read-limit"
+    assert caught.value.diagnostic_json

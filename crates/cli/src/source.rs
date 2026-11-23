@@ -43,7 +43,7 @@
 //!
 //! ## GTS sources, the envelope and the tag fold
 //!
-//! A GTS file is folded by [`import_gts_events`] — the AUTHORITATIVE importer, which
+//! A GTS file is folded by [`import_gts_events_with_limits`] — the AUTHORITATIVE importer, which
 //! drives the reader in per-segment mode so **per-segment blank-node scope survives**
 //! (C2.a) and which hard-fails on any reader diagnostic or dangling term reference.
 //! It is deliberately not `import_gts_graph`, whose own documentation records that it
@@ -122,13 +122,14 @@ use std::borrow::Cow;
 use std::io::Read;
 use std::sync::Arc;
 
+use purrdf::gts::reader::GtsReadLimits;
 use purrdf_core::{
     DatasetView, LossDetail, LossEntry, LossLedger, LossSite, LossSubject, PackView, RdfDataset,
     RdfDiagnostic, RdfLookaside, dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
     NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
-    decode_transport, detect_transport, import_gts_events, parse_dataset_from_reader,
+    decode_transport, detect_transport, import_gts_events_with_limits, parse_dataset_from_reader,
     serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
@@ -587,16 +588,17 @@ pub(crate) fn verified_pack_input(
 /// Fold a GTS source into its dataset AND the ledger of what the read dropped: the
 /// envelope material and every language tag the dataset folded to lower case.
 ///
-/// This is the one GTS ingestion seam in the CLI. It calls [`import_gts_events`], the
+/// This is the one GTS ingestion seam in the CLI. It calls [`import_gts_events_with_limits`], the
 /// authoritative importer that preserves per-segment blank-node scope and hard-fails on
 /// a reader diagnostic or a dangling term reference — never `import_gts_graph`, which
 /// flattens those scopes.
 pub(crate) fn load_gts(
     path: &str,
     policy: TransportPolicy,
+    limits: GtsReadLimits,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
     let bytes = read_bytes_with_transport(path, policy)?;
-    let bundle = import_gts_events(&bytes)
+    let bundle = import_gts_events_with_limits(&bytes, limits)
         .map_err(|diagnostic| CliError::Runtime(format!("{}: {diagnostic}", display_path(path))))?;
     let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
     for entry in bundle.envelope.losses.entries() {
@@ -765,7 +767,7 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
             op.run(&view, canonical)
         }
         SourceFormat::Gts => {
-            let (dataset, _envelope_ledger) = load_gts(path, policy)?;
+            let (dataset, _envelope_ledger) = load_gts(path, policy, canonical.gts_read_limits())?;
             op.run(&*dataset, canonical)
         }
         _ => Err(crate::format::unsupported_format(
@@ -829,7 +831,7 @@ pub(crate) fn load_dataset_reporting(
             let view = PackView::from_bytes(input.as_bytes())?;
             Ok((dataset_from_view(&view)?, LossLedger::new()))
         }
-        SourceFormat::Gts => load_gts(path, policy),
+        SourceFormat::Gts => load_gts(path, policy, canonical.gts_read_limits()),
         _ => Err(crate::format::unsupported_format(
             format,
             "the input source",

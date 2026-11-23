@@ -103,14 +103,12 @@ impl PayloadError {
             if let Some(CodecError::Limit { limit }) = error.downcast_ref::<CodecError>() {
                 return Some((limit.saturating_add(1), *limit));
             }
-            if let Some(cause) = error.downcast_ref::<PayloadCause>() {
-                match cause {
-                    PayloadCause::DecodedBlobLimit { actual, limit }
-                    | PayloadCause::SnapshotBlobLimit { actual, limit } => {
-                        return Some((*actual, *limit));
-                    }
-                    _ => {}
-                }
+            if let Some(
+                PayloadCause::DecodedBlobLimit { actual, limit }
+                | PayloadCause::SnapshotBlobLimit { actual, limit },
+            ) = error.downcast_ref::<PayloadCause>()
+            {
+                return Some((*actual, *limit));
             }
             source = error.source();
         }

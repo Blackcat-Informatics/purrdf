@@ -213,6 +213,10 @@ pub(crate) struct Cli {
         value_name = "DEST"
     )]
     pub(crate) canonicalization_receipts: Option<PathBuf>,
+    /// Apply finite host-safe limits while reading GTS input. Omit this only
+    /// for trusted artifacts, including admitted datasets above that profile.
+    #[arg(long, global = true)]
+    pub(crate) gts_safe_read: bool,
 
     /// Surface the conversion/projection loss ledger: bare writes it to stderr,
     /// `--loss-ledger=PATH` writes it to PATH.

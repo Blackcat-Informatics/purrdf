@@ -389,9 +389,38 @@ pub fn import_gts_events_with_blobs(
     selectors: &[GtsBlobSelector<'_>],
     limits: GtsBlobLimits,
 ) -> Result<GtsImportWithBlobs, RdfDiagnostic> {
+    import_gts_events_with_blobs_impl(bytes, selectors, limits, None)
+}
+
+/// Import selected blobs under blob and whole-read ceilings.
+///
+/// # Errors
+/// Preserves selected-blob failures and returns the first whole-read refusal
+/// without a partial import.
+pub fn import_gts_events_with_blobs_and_read_limits(
+    bytes: &[u8],
+    selectors: &[GtsBlobSelector<'_>],
+    limits: GtsBlobLimits,
+    read_limits: purrdf_gts::reader::GtsReadLimits,
+) -> Result<GtsImportWithBlobs, RdfDiagnostic> {
+    import_gts_events_with_blobs_impl(bytes, selectors, limits, Some(read_limits))
+}
+
+fn import_gts_events_with_blobs_impl(
+    bytes: &[u8],
+    selectors: &[GtsBlobSelector<'_>],
+    limits: GtsBlobLimits,
+    read_limits: Option<purrdf_gts::reader::GtsReadLimits>,
+) -> Result<GtsImportWithBlobs, RdfDiagnostic> {
     let collector = BlobCollector::new(selectors, limits)?;
-    let (bundle, collector) =
-        crate::gts_import_sink::import_with_collector(bytes, Some(collector))?;
+    let (bundle, collector) = match read_limits {
+        Some(read_limits) => crate::gts_import_sink::import_with_collector_limits(
+            bytes,
+            Some(collector),
+            read_limits,
+        ),
+        None => crate::gts_import_sink::import_with_collector(bytes, Some(collector)),
+    }?;
     // The fold hands the collector straight back, so this cannot be None today.
     // It is still a hard error rather than a panic: an internal invariant that
     // fails should surface as a diagnostic on a Result-returning API, not abort

@@ -51,7 +51,10 @@ use crate::{
 
 mod export;
 mod indexed;
-pub use export::{GtsTextExport, export_gts_rdf_nquads_with_dictionary};
+pub use export::{
+    GtsTextExport, export_gts_rdf_nquads_with_dictionary,
+    export_gts_rdf_nquads_with_dictionary_and_limits,
+};
 pub use indexed::import_gts_indexed_term;
 
 /// The immutable-IR emit target for GTS ingestion: an [`RdfDatasetBuilder`] that
@@ -753,9 +756,9 @@ pub(crate) fn import_with_collector_limits<'a>(
     finish_collected_import(resolver)
 }
 
-fn finish_collected_import<'a>(
-    mut resolver: SegmentResolver<SinkImporter<'a>>,
-) -> Result<(GtsBundle, Option<BlobCollector<'a>>), RdfDiagnostic> {
+fn finish_collected_import(
+    mut resolver: SegmentResolver<SinkImporter<'_>>,
+) -> Result<(GtsBundle, Option<BlobCollector<'_>>), RdfDiagnostic> {
     // A latched streaming error (e.g. a reader diagnostic) precedes phase-2.
     if let Some(error) = resolver.take_error() {
         return Err(error);

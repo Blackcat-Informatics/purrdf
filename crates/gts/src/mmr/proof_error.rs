@@ -15,6 +15,8 @@ use purrdf_lex::{
 #[derive(Debug, PartialEq)]
 #[non_exhaustive]
 pub enum ProofError {
+    /// Whole-read admission refused the source before proof construction.
+    ReadLimit(crate::reader::GtsReadLimitError),
     /// A fixed-size digest has the wrong byte length.
     DigestLength {
         /// Original digest role.
@@ -248,6 +250,7 @@ pub enum ProofError {
 impl fmt::Display for ProofError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReadLimit(cause) => write!(f, "GTS proof input exceeds a read limit: {cause}"),
             Self::DigestLength { field, .. } => write!(f, "{field} must be 32 bytes"),
             Self::PeakHeight { height } => write!(f, "peak height {height} is too large"),
             Self::LeafRange { leaf_index, count } => write!(
@@ -338,6 +341,7 @@ impl fmt::Display for ProofError {
 }
 
 purrdf_lex::error_source!(ProofError => {
+    Self::ReadLimit(cause) => cause,
     Self::Json(cause) => cause,
     Self::Hex(cause) => cause,
     Self::Header { cause, .. } => cause,
@@ -346,6 +350,7 @@ purrdf_lex::variant_from! { ProofError { Hex(Hex32Error) } }
 
 impl purrdf_hash::error::StructuredError for ProofError {
     purrdf_hash::error_visit! {
+        ReadLimit(cause) => "gts-mmr-read-limit" { "cause" => Cause(cause) },
         DigestLength { field, actual } => "gts-proof-digest-length" { "field" => Code(field), "actual" => ByteCount(*actual as u128), "expected" => ByteCount(32) },
         PeakHeight { height } => "gts-proof-peak-height" { "height" => Unsigned(*height as u128) },
         LeafRange { leaf_index, count } => "gts-proof-leaf-range" { "leaf_index" => Unsigned(*leaf_index as u128), "count" => Unsigned(*count as u128) },

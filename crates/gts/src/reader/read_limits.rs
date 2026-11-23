@@ -261,6 +261,7 @@ pub(super) struct ReadLimiter<'a> {
     inner: &'a mut dyn StreamingSink,
     limits: GtsReadLimits,
     usage: GtsReadUsage,
+    current_metadata_entries: usize,
     error: Option<GtsReadLimitError>,
 }
 
@@ -277,6 +278,7 @@ impl<'a> ReadLimiter<'a> {
                 encoded_input_bytes,
                 ..GtsReadUsage::default()
             },
+            current_metadata_entries: 0,
             error: None,
         }
     }
@@ -449,7 +451,8 @@ impl StreamingSink for ReadLimiter<'_> {
     }
 
     fn retained_metadata(&mut self, entries: usize) {
-        let added = entries.saturating_sub(self.usage.metadata_entries);
+        let added = entries.saturating_sub(self.current_metadata_entries);
+        self.current_metadata_entries = entries;
         self.usage.metadata_entries = self.usage.metadata_entries.max(entries);
         if !self.charge_work(added)
             && !self.trip(
@@ -463,8 +466,9 @@ impl StreamingSink for ReadLimiter<'_> {
     }
 
     fn metadata_entries(&mut self, additional: usize) {
-        let required = self.usage.metadata_entries.saturating_add(additional);
-        self.usage.metadata_entries = required;
+        let required = self.current_metadata_entries.saturating_add(additional);
+        self.current_metadata_entries = required;
+        self.usage.metadata_entries = self.usage.metadata_entries.max(required);
         if !self.charge_work(additional)
             && !self.trip(
                 GtsReadResource::MetadataEntries,

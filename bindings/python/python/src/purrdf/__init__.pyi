@@ -1487,6 +1487,10 @@ class GtsRelationalRows(TypedDict):
     annotations: list[_AnnotationRow]
     blobs: list[_BlobExportRow]
 
+# GTS byte APIs preserve their v4 unbounded behavior when `read_limits` is
+# omitted or `None`. Pass `GtsReadLimits()` for hostile input, customize its
+# ceilings for large admitted datasets, and use `unbounded()` only for trusted
+# artifacts.
 class GtsReadLimits:
     def __init__(
         self,

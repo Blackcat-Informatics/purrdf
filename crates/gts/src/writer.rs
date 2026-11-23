@@ -1311,6 +1311,20 @@ impl Writer {
         Self::continuing(state)
     }
 
+    /// Continue an existing segment after whole-read admission.
+    ///
+    /// # Errors
+    /// Returns the first resource or append-state refusal before constructing
+    /// an append writer.
+    pub fn appending_with_limits(
+        existing: &[u8],
+        limits: crate::reader::GtsReadLimits,
+    ) -> Result<Self, WriterError> {
+        let state = crate::reader::segment_append_state_with_limits(existing, limits)
+            .map_err(WriterError::Append)?;
+        Self::continuing(state)
+    }
+
     /// Continue from an already-recovered append state without re-scanning the
     /// underlying file. Used by append-heavy in-crate facades that cache the
     /// last segment's catalog and head between writes.

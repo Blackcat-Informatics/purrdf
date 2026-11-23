@@ -63,6 +63,59 @@ pub fn read_nested(data: &[u8], max_depth: usize, max_decoded_bytes: usize) -> N
     }
 }
 
+/// Read nested GTS artifacts after admitting every artifact the recursive walk
+/// can reach under one per-artifact whole-read contract.
+///
+/// # Errors
+/// Returns the first resource refusal without a partial nested result.
+pub fn read_nested_with_limits(
+    data: &[u8],
+    max_depth: usize,
+    max_decoded_bytes: usize,
+    limits: crate::reader::GtsReadLimits,
+) -> Result<NestedReadResult, crate::reader::GtsReadLimitError> {
+    let mut remaining = max_decoded_bytes;
+    let mut seen = FastSet::default();
+    admit_nested(data, 0, max_depth, &mut remaining, &mut seen, limits)?;
+    Ok(read_nested(data, max_depth, max_decoded_bytes))
+}
+
+fn admit_nested(
+    data: &[u8],
+    depth: usize,
+    max_depth: usize,
+    remaining: &mut usize,
+    seen: &mut FastSet<String>,
+    limits: crate::reader::GtsReadLimits,
+) -> Result<(), crate::reader::GtsReadLimitError> {
+    let mut graph =
+        crate::reader::read_with_limits(data, crate::reader::ReadOptions::new(true, None), limits)?;
+    if depth >= max_depth {
+        return Ok(());
+    }
+    let nested_digests: Vec<String> = graph
+        .blob_meta
+        .iter()
+        .filter(|(_, meta)| blob_media_type(meta) == Some(GTS_MEDIA_TYPE))
+        .map(|(digest, _)| digest.clone())
+        .collect();
+    for digest in nested_digests {
+        if seen.contains(&digest) {
+            continue;
+        }
+        let Ok(Some(bytes)) = graph.blob_bytes_cloned(&digest) else {
+            continue;
+        };
+        if bytes.len() > *remaining {
+            continue;
+        }
+        *remaining -= bytes.len();
+        seen.insert(digest);
+        admit_nested(&bytes, depth + 1, max_depth, remaining, seen, limits)?;
+    }
+    Ok(())
+}
+
 fn visit(
     data: &[u8],
     depth: usize,
