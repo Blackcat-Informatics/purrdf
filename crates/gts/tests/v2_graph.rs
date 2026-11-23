@@ -6,10 +6,11 @@
 use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
-    ContentError, FileEnd, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item,
-    ItemKind, Line, Lineage, MalformedReason, ParityFindingKind, ParityRepairFailure,
-    PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph,
-    SegmentWriteError, SegmentWriter, Term, ValueName, read, write_header,
+    ContentError, FileEnd, FrameField, FramingDamage, Header, IndexStorageItem,
+    IndexStorageProblem, Item, ItemKind, Line, Lineage, MalformedReason, ParityFindingKind,
+    ParityRepairFailure, PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure,
+    ReadGraph, SegmentWriteError, SegmentWriter, SignatureStatus, SignatureUnverified, Term,
+    UnknownFrameType, ValueName, read, write_header,
 };
 use purrdf_lex::cbor::head;
 
@@ -18,6 +19,267 @@ fn second(bytes: &[u8]) -> RdfGraph<'_> {
         panic!("the fixture opens a generation 2 file");
     };
     graph
+}
+
+fn relink_frame(bytes: &mut [u8], predecessor: &[u8; 32]) -> [u8; 32] {
+    let item = Item::first(bytes).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let identifier = frame
+        .check_link(predecessor, None)
+        .computed_identifier
+        .unwrap();
+    let end = item.bytes().len() - frame.field(FrameField::Signatures).len();
+    bytes[end - identifier.len()..end].copy_from_slice(&identifier);
+    identifier
+}
+
+#[test]
+fn newer_registry_reports_opaque_items_and_checks_unknown_signature_algorithms() {
+    let opener = include_bytes!("fixtures/v2/P1/header-registry-newer.bin");
+    let version = NonZeroU64::new(2).unwrap();
+    let graph = second(opener);
+    assert_eq!(graph.unsupported_registries, [(0, version)]);
+    graph.into_complete_rdf().unwrap();
+
+    let signed = include_bytes!("fixtures/v2/P2/registry__signature__unknown.bin");
+    let mut bytes = opener.to_vec();
+    bytes.extend_from_slice(&[0x81, 6]);
+    bytes.extend_from_slice(&signed[opener.len()..]);
+    let graph = second(&bytes);
+    assert_eq!(graph.unsupported_registries, [(0, version)]);
+    let [opaque] = graph.opaque_items.as_slice() else {
+        panic!("expected one opaque item");
+    };
+    assert_eq!(opaque.offset, opener.len());
+    assert!(matches!(
+        opaque.failure,
+        ReadFailure::Item(ItemKind::Unknown(6))
+    ));
+    assert_eq!(graph.blobs.len(), 1);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+    assert_eq!(
+        graph.signatures[0].checks[0].status,
+        SignatureStatus::Unverified(SignatureUnverified::UnknownAlgorithm)
+    );
+    assert!(graph.into_complete_rdf().is_err());
+
+    bytes[opener.len() + 1] = 0;
+    let graph = second(&bytes);
+    assert!(matches!(
+        graph.opaque_items[0].failure,
+        ReadFailure::Classification(MalformedReason::UnregisteredValue)
+    ));
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+}
+
+#[test]
+fn unknown_critical_frame_stops_only_its_segment_and_keeps_payload_checks() {
+    let blob_file = include_bytes!("fixtures/v2/P2/registry__signature__unknown.bin");
+    let opener = Item::first(blob_file).unwrap().unwrap();
+    let blob = Item::first(&blob_file[opener.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let envelope = blob.frame().unwrap().unwrap();
+    let digest = blob.bytes().len() - envelope.field(FrameField::Signatures).len() - 32;
+    let mut next = SegmentWriter::new(Vec::new()).unwrap();
+    let after_reset = ValueName::of(b"next segment");
+    next.add_blob(b"next segment", None).unwrap();
+    next.add_commit().unwrap();
+    let next = next.into_inner();
+
+    for (source, expected) in [
+        (
+            include_bytes!("fixtures/v2/P1/frame-unknown-noncritical.bin").as_slice(),
+            UnknownFrameType::Noncritical(99),
+        ),
+        (
+            include_bytes!("fixtures/v2/P1/frame-unknown-critical.bin").as_slice(),
+            UnknownFrameType::Critical(99),
+        ),
+    ] {
+        let fixture = second(source);
+        let [frame] = fixture.frame_failures.as_slice() else {
+            panic!("expected one unsupported frame type");
+        };
+        assert!(matches!(frame.failure, ReadFailure::UnknownFrame(kind) if kind == expected));
+
+        let unknown = Item::first(&source[frame.offset..]).unwrap().unwrap();
+        let unknown_envelope = unknown.frame().unwrap().unwrap();
+        let predecessor = unknown_envelope.field(FrameField::Identifier)[2..]
+            .try_into()
+            .unwrap();
+        let blob_offset = frame.offset + unknown.bytes().len();
+        let mut bytes = source[..blob_offset].to_vec();
+        bytes.extend_from_slice(blob.bytes());
+        relink_frame(&mut bytes[blob_offset..], predecessor);
+        bytes.extend_from_slice(&next);
+        let graph = second(&bytes);
+        assert_eq!(graph.blobs.last().unwrap().name, after_reset);
+        assert_eq!(graph.end, FileEnd::AtValidCommit);
+        if matches!(expected, UnknownFrameType::Noncritical(_)) {
+            assert_eq!(graph.stopped_frames, [] as [usize; 0]);
+            assert_eq!(graph.blobs.len(), 2);
+            continue;
+        }
+        assert_eq!(graph.stopped_frames, [blob_offset]);
+        assert_eq!(graph.blobs.len(), 1);
+
+        let payload_end = blob_offset + digest - 2;
+        bytes[payload_end - 1] ^= 1;
+        let graph = second(&bytes);
+        assert_eq!(graph.stopped_frames, [blob_offset]);
+        assert!(graph.frame_failures.iter().any(|failure| {
+            failure.offset == blob_offset
+                && matches!(
+                    failure.failure,
+                    ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+                )
+        }));
+        assert_eq!(graph.blobs.len(), 1);
+        assert_eq!(graph.blobs[0].name, after_reset);
+    }
+}
+
+#[test]
+fn invalid_flags_do_not_stop_the_fold_and_stopped_indexes_are_checked() {
+    let malformed =
+        include_bytes!("fixtures/v2/P1/frame-unknown-transparent-not-bool.critical-true.bin");
+    let opener = Item::first(malformed).unwrap().unwrap();
+    let frame = Item::first(&malformed[opener.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let malformed_end = opener.bytes().len() + frame.bytes().len();
+    let mut bytes = malformed[..malformed_end].to_vec();
+    let predecessor = frame
+        .frame()
+        .unwrap()
+        .unwrap()
+        .field(FrameField::Identifier)[2..]
+        .try_into()
+        .unwrap();
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"still folded", None).unwrap();
+    let written = writer.into_inner();
+    let written_opener = Item::first(&written).unwrap().unwrap();
+    bytes.extend_from_slice(&written[written_opener.bytes().len()..]);
+    relink_frame(&mut bytes[malformed_end..], predecessor);
+    let graph = second(&bytes);
+    assert_eq!(graph.stopped_frames, [] as [usize; 0]);
+    assert_eq!(graph.blobs.len(), 1);
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [error] if matches!(error.failure, ReadFailure::Wire(wire) if wire.reason == MalformedReason::WrongType)
+    ));
+
+    for (bytes, type_runs_match) in [
+        (
+            include_bytes!("fixtures/v2/P5/index-after-stop.exact.bin").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-after-stop.wrong-type-runs.bin").as_slice(),
+            false,
+        ),
+    ] {
+        let graph = second(bytes);
+        let [index] = graph.index_checks.as_slice() else {
+            panic!("expected the stopped segment's index check");
+        };
+        assert!(graph.stopped_frames.contains(&index.offset));
+        let prefix = index.prefix.as_ref().unwrap();
+        assert!(prefix.head_matches);
+        assert!(prefix.root_matches);
+        assert_eq!(prefix.type_runs_match, type_runs_match);
+    }
+}
+
+#[test]
+fn a_stopped_newer_parity_geometry_is_opaque_without_a_geometry_finding() {
+    let graph = second(include_bytes!(
+        "fixtures/v2/P1/parity-later-version-after-stop.bin"
+    ));
+    assert_eq!(graph.stopped_frames, [289]);
+    assert!(!graph.parity_findings.iter().any(|finding| {
+        matches!(
+            finding.kind,
+            ParityFindingKind::UnknownGeometry(_) | ParityFindingKind::Damaged
+        )
+    }));
+}
+
+#[test]
+fn newer_enumerations_in_critical_blob_content_stop_the_current_segment() {
+    let original = include_bytes!("fixtures/v2/P4/external-ok.bin");
+    let original_header = Item::first(original).unwrap().unwrap();
+    let external = Item::first(&original[original_header.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let content = external
+        .frame()
+        .unwrap()
+        .unwrap()
+        .field(FrameField::Content);
+    let algorithm = content.as_ptr().addr() - external.bytes().as_ptr().addr() + 2;
+    assert_eq!(external.bytes()[algorithm], 1);
+
+    let newer = include_bytes!("fixtures/v2/P1/header-registry-newer.bin");
+    let header = Header::decode(Item::first(newer).unwrap().unwrap()).unwrap();
+    let predecessor = header.identifier().unwrap();
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"still folded", None).unwrap();
+    let written = writer.into_inner();
+    let written_opener = Item::first(&written).unwrap().unwrap();
+    let blob = &written[written_opener.bytes().len()..];
+    let blob_offset = newer.len() + external.bytes().len();
+    for code in 0..=2 {
+        let mut bytes = newer.to_vec();
+        bytes.extend_from_slice(external.bytes());
+        let frame = &mut bytes[newer.len()..];
+        frame[algorithm] = code;
+        let identifier = relink_frame(frame, &predecessor);
+        bytes.extend_from_slice(blob);
+        relink_frame(&mut bytes[blob_offset..], &identifier);
+        if code == 0 {
+            let error = read(&bytes, ReadCapacity::default()).unwrap_err();
+            assert!(matches!(
+                error.failure,
+                ReadFailure::Wire(wire) if wire.reason == MalformedReason::UnregisteredValue
+            ));
+        } else {
+            let graph = second(&bytes);
+            if code == 1 {
+                assert_eq!(graph.external_blobs.len(), 1);
+                assert_eq!(graph.blobs.len(), 1);
+                graph.into_complete_rdf().unwrap();
+            } else {
+                assert_eq!(graph.external_blobs.len(), 0);
+                assert_eq!(graph.blobs.len(), 0);
+                assert_eq!(graph.stopped_frames, [blob_offset]);
+                assert!(matches!(
+                    graph.into_complete_rdf().unwrap_err().failure,
+                    ReadFailure::Content(ContentError::UnknownEnumeration { code: 2, .. })
+                ));
+            }
+        }
+    }
+
+    let original = include_bytes!("fixtures/v2/P2/registry__unknown__member_kind.bin");
+    let original_header = Item::first(original).unwrap().unwrap();
+    let pack = Item::first(&original[original_header.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let error = read(original, ReadCapacity::default()).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::Wire(wire) if wire.reason == MalformedReason::UnregisteredValue
+    ));
+    let mut bytes = newer.to_vec();
+    bytes.extend_from_slice(pack.bytes());
+    relink_frame(&mut bytes[newer.len()..], &predecessor);
+    assert!(matches!(
+        second(&bytes).into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Content(ContentError::UnknownEnumeration { code: 5, .. })
+    ));
 }
 
 #[test]

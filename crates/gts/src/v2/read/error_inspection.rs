@@ -8,6 +8,7 @@ use super::{
 };
 use crate::v2::{
     DefinitionFindings, Generation, ItemKind, PayloadDamage, PayloadRefusal, RowFindings,
+    UnknownFrameType,
 };
 
 impl StructuredError for ReadError {
@@ -31,6 +32,7 @@ impl StructuredError for ReadFailure {
         Lineage => "gts-v2-read-lineage" {},
         Item(kind) => "gts-v2-read-item" { "kind" => Record(kind) },
         Frame(kind) => "gts-v2-read-frame" { "type" => Unsigned(u128::from(*kind as u8)) },
+        UnknownFrame(kind) => "gts-v2-read-unknown-frame" { "kind" => Record(kind) },
         BrokenLink => "gts-v2-read-broken-link" {},
         PayloadDamage(cause) => "gts-v2-read-payload-damage" { "cause" => Cause(cause) },
         PayloadRefusal(cause) => "gts-v2-read-payload-refusal" { "cause" => Cause(cause) },
@@ -73,6 +75,13 @@ impl StructuredError for ItemKind {
         Locator => "locator" {},
         Resync => "resync" {},
         Unknown(code) => "unknown_item" { "code" => Unsigned(u128::from(*code)) },
+    }
+}
+
+impl StructuredError for UnknownFrameType {
+    purrdf_hash::error_visit! {
+        Noncritical(code) => "unknown_frame_type" { "code" => Unsigned(u128::from(*code)) },
+        Critical(code) => "unsupported_critical" { "code" => Unsigned(u128::from(*code)) },
     }
 }
 

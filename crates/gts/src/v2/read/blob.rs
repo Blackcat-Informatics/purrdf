@@ -1,17 +1,31 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use core::num::NonZeroU64;
 use std::borrow::Cow;
 
 use super::{GraphReader, ReadError, ReadFailure, Segment, Unit, VerifiedBlob};
 use crate::FastMap;
 use crate::v2::fields::{Fields, push};
+use crate::v2::terms::read_enum;
 use crate::v2::{
-    BLAKE3_256, DIGEST_LENGTH, FoldError, FrameType, MalformedReason, ValueName, WireError,
+    BLAKE3_256, ContentError, DIGEST_LENGTH, FoldError, FrameType, MalformedReason, ValueName,
+    WireError,
 };
 
 type Digest = [u8; DIGEST_LENGTH];
 type Entry = (ValueName, usize);
+
+fn content_enum(
+    fields: &mut Fields<'_>,
+    last: u64,
+    registry: NonZeroU64,
+) -> Result<u64, ReadFailure> {
+    read_enum(fields, last, registry).map_err(|error| match error {
+        ContentError::Malformed(error) => ReadFailure::Wire(error),
+        error => ReadFailure::Content(error),
+    })
+}
 
 /// The name, length and media type of an external blob declaration.
 #[derive(Debug)]
@@ -178,16 +192,20 @@ impl<'a> GraphReader<'a, '_> {
                     self.read_pack(content, &bytes, location, segment, copy_unit)?;
                 }
             },
-            FrameType::External => self.external(content)?,
+            FrameType::External => self.external(content, segment.registry)?,
             _ => return Err(ReadFailure::Frame(kind)),
         }
         Ok(())
     }
 
-    fn external(&mut self, mut content: Fields<'a>) -> Result<(), ReadFailure> {
+    fn external(
+        &mut self,
+        mut content: Fields<'a>,
+        registry: NonZeroU64,
+    ) -> Result<(), ReadFailure> {
         content.record(3)?;
         content.record(2)?;
-        content.fixed_uint(BLAKE3_256, MalformedReason::UnregisteredValue)?;
+        content_enum(&mut content, BLAKE3_256, registry)?;
         let digest = *content.fixed_bytes()?;
         let length = content.uint()?;
         let media_type = content.option(Fields::text)?;
@@ -334,7 +352,7 @@ impl<'a> GraphReader<'a, '_> {
         let count = content.positive(MalformedReason::OutOfRange)?;
         let length_offset = content.offset();
         let unit_length = content.uint()?;
-        let pack = Pack::read(bytes, count.get())?;
+        let pack = Pack::read(bytes, count.get(), segment.registry)?;
         if pack.unit_length != u128::from(unit_length) {
             return Err(WireError::new(MalformedReason::InconsistentCounts, length_offset).into());
         }
@@ -405,7 +423,11 @@ struct Pack<'a> {
 }
 
 impl<'a> Pack<'a> {
-    fn read(bytes: &'a [u8], declared_count: u64) -> Result<Self, ReadFailure> {
+    fn read(
+        bytes: &'a [u8],
+        declared_count: u64,
+        registry: NonZeroU64,
+    ) -> Result<Self, ReadFailure> {
         let mut fields = Fields::new(bytes);
         fields.record(2)?;
         let count_offset = fields.offset();
@@ -415,17 +437,12 @@ impl<'a> Pack<'a> {
         let mut unit_length = 0_u128;
         for _ in 0..count {
             fields.record(3)?;
-            let kind_offset = fields.offset();
-            let declaration = match fields.uint()? {
+            let declaration = match content_enum(&mut fields, 4, registry)? {
                 1 => Declaration::Unit(UnitDeclaration::read(&mut fields, false)?),
                 2 => Declaration::Unit(UnitDeclaration::read(&mut fields, true)?),
                 3 => Declaration::Recipe(RecipeDeclaration::read(&mut fields, true)?),
                 4 => Declaration::Recipe(RecipeDeclaration::read(&mut fields, false)?),
-                _ => {
-                    return Err(
-                        WireError::new(MalformedReason::UnregisteredValue, kind_offset).into(),
-                    );
-                }
+                _ => unreachable!("content enum admits only member kinds 1 through 4"),
             };
             let length_offset = fields.offset();
             let length = fields.uint()?;

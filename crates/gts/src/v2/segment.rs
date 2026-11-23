@@ -178,6 +178,10 @@ impl SegmentVerifier {
         self.content_stopped
     }
 
+    pub(super) fn stop_content(&mut self) {
+        self.content_stopped = true;
+    }
+
     /// Interpret the current checked terms frame before advancing to the next item.
     ///
     /// An unknown enumeration stops interpretation of later content in this
