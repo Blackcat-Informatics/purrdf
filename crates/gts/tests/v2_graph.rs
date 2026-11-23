@@ -1310,6 +1310,53 @@ fn value_rebuild_precedes_term_resolution_across_segments() {
 }
 
 #[test]
+fn refused_value_remains_a_candidate_for_later_terms() {
+    let bytes = include_bytes!("fixtures/v2/P4/rebuild-charge-value-term.bin");
+    let admitted = second(bytes);
+    assert_eq!(admitted.rdf.lines().count(), 1);
+    assert!(!admitted.rdf.has_held_rows());
+
+    let capacity = ReadCapacity {
+        rebuilt_bytes: 2,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(refused) = read(bytes, capacity).unwrap() else {
+        panic!("the fixture is generation 2");
+    };
+    assert!(refused.rdf.has_held_rows());
+    let [declaration, row] = refused.frame_failures.as_slice() else {
+        panic!("expected the value refusal and the held row");
+    };
+    assert!(matches!(
+        declaration.failure,
+        ReadFailure::RebuildCapacity(name) if name.length > 2
+    ));
+    assert!(matches!(&row.failure, ReadFailure::Rows(findings) if findings.opaque_term));
+    assert!(declaration.offset < row.offset);
+
+    let recipe = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.units-first.bin");
+    let mut writer = SegmentWriter::new(recipe.to_vec()).unwrap();
+    let later = writer.add_value(b"d").unwrap();
+    writer.add_commit().unwrap();
+    let bytes = writer.into_inner();
+    assert!(second(&bytes).frame_failures.is_empty());
+    let ReadGraph::Second(refused) = read(&bytes, capacity).unwrap() else {
+        panic!("the writer emits generation 2");
+    };
+    let [first_refusal, later_refusal] = refused.frame_failures.as_slice() else {
+        panic!("both declarations are refused after the budget stops");
+    };
+    assert!(matches!(
+        first_refusal.failure,
+        ReadFailure::RebuildCapacity(name) if name.length > 2
+    ));
+    assert!(matches!(
+        later_refusal.failure,
+        ReadFailure::RebuildCapacity(name) if name == later
+    ));
+}
+
+#[test]
 fn rdf_writer_preserves_resolved_rows_and_typed_values() {
     let annotations = second(include_bytes!("fixtures/v2/P3/annotations-counts-add.bin"));
     let values = second(include_bytes!("fixtures/v2/P3/terms-forms-and-values.bin"));
@@ -1449,7 +1496,11 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
         assert_eq!(packed.blobs[0].bytes, earlier.blobs[0].bytes);
     }
     let later = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.recipe-first.bin");
-    let error = read(later, ReadCapacity::default()).unwrap_err();
+    let graph = second(later);
+    assert!(graph.blobs.is_empty());
+    let [error] = graph.frame_failures.as_slice() else {
+        panic!("expected one unavailable unit finding");
+    };
     assert!(matches!(error.failure, ReadFailure::MissingUnit(_)));
 
     let malformed = include_bytes!("fixtures/v2/P4/pack-recipe-trailing-count.bin");

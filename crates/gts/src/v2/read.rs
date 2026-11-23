@@ -95,7 +95,7 @@ pub struct RdfGraph<'a> {
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
-    /// Opaque frames and rows held by unreadable terms.
+    /// Opaque frames, unavailable rebuilds and rows held by unreadable terms.
     pub frame_failures: Vec<ReadError>,
     /// Complete items that could not be classified in their segment.
     pub opaque_items: Vec<ReadError>,
@@ -657,7 +657,7 @@ struct GraphReader<'a, 'keys> {
     formed: FormedBudget,
     items: u64,
     item_limit: u64,
-    rebuilt_remaining: u64,
+    rebuilt_remaining: Option<u64>,
     signature_inputs: &'keys SignatureInputs<'keys>,
 }
 
@@ -676,7 +676,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             formed: FormedBudget::new(capacity.formed_bytes),
             items: 0,
             item_limit: capacity.items,
-            rebuilt_remaining: capacity.rebuilt_bytes,
+            rebuilt_remaining: Some(capacity.rebuilt_bytes),
             signature_inputs,
         }
     }
@@ -1605,7 +1605,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                     kind,
                     frame.read_field(FrameField::Content),
                     bytes,
-                    position,
+                    (offset, position),
                     segment,
                 )?;
             }

@@ -3,10 +3,12 @@
 
 use std::borrow::Cow;
 
-use super::{GraphReader, ReadFailure, Segment, Unit, VerifiedBlob};
+use super::{GraphReader, ReadError, ReadFailure, Segment, Unit, VerifiedBlob};
 use crate::FastMap;
 use crate::v2::fields::{Fields, push};
-use crate::v2::{BLAKE3_256, DIGEST_LENGTH, FrameType, MalformedReason, ValueName, WireError};
+use crate::v2::{
+    BLAKE3_256, DIGEST_LENGTH, FoldError, FrameType, MalformedReason, ValueName, WireError,
+};
 
 type Digest = [u8; DIGEST_LENGTH];
 type Entry = (ValueName, usize);
@@ -141,7 +143,7 @@ impl<'a> GraphReader<'a, '_> {
         kind: FrameType,
         mut content: Fields<'a>,
         bytes: Cow<'a, [u8]>,
-        position: u64,
+        location: (usize, u64),
         segment: &mut Segment<'a>,
     ) -> Result<(), ReadFailure> {
         match kind {
@@ -157,21 +159,23 @@ impl<'a> GraphReader<'a, '_> {
             FrameType::Recipe | FrameType::Value => {
                 let recipe = RecipeDeclaration::read(&mut content, kind == FrameType::Recipe)?;
                 let entries = recipe.entries(&bytes, 0)?;
-                let output = self.rebuild(recipe.name, &entries, segment, |_| None)?;
-                self.store_rebuild(
+                self.rebuild_and_store(
                     recipe.name,
                     recipe.kind.hold(|text| Ok(Cow::Borrowed(text)))?,
-                    output,
+                    &entries,
+                    segment,
+                    |_| None,
+                    location.0,
                 )?;
             }
             FrameType::Pack => match bytes {
                 Cow::Borrowed(bytes) => {
-                    self.read_pack(content, bytes, position, segment, |unit| {
+                    self.read_pack(content, bytes, location, segment, |unit| {
                         Ok(Cow::Borrowed(unit))
                     })?;
                 }
                 Cow::Owned(bytes) => {
-                    self.read_pack(content, &bytes, position, segment, copy_unit)?;
+                    self.read_pack(content, &bytes, location, segment, copy_unit)?;
                 }
             },
             FrameType::External => self.external(content)?,
@@ -233,8 +237,10 @@ impl<'a> GraphReader<'a, '_> {
     ) -> Result<Vec<u8>, ReadFailure> {
         self.rebuilt_remaining = self
             .rebuilt_remaining
-            .checked_sub(name.length)
-            .ok_or(ReadFailure::RebuildCapacity(name))?;
+            .and_then(|remaining| remaining.checked_sub(name.length));
+        if self.rebuilt_remaining.is_none() {
+            return Err(ReadFailure::RebuildCapacity(name));
+        }
         let mut output = Vec::new();
         for &(entry, _) in entries {
             let bytes = match segment.units.get(&entry.digest) {
@@ -249,6 +255,43 @@ impl<'a> GraphReader<'a, '_> {
             output.extend_from_slice(bytes);
         }
         Ok(output)
+    }
+
+    fn rebuild_and_store<'p>(
+        &mut self,
+        name: ValueName,
+        kind: RecipeKind<Cow<'a, str>>,
+        entries: &[Entry],
+        segment: &Segment<'a>,
+        pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
+        offset: usize,
+    ) -> Result<(), ReadFailure> {
+        let is_value = matches!(kind, RecipeKind::Value);
+        let result = self
+            .rebuild(name, entries, segment, pack_unit)
+            .and_then(|bytes| self.store_rebuild(name, kind, bytes));
+        match result {
+            Err(
+                failure @ (ReadFailure::RebuildCapacity(_)
+                | ReadFailure::MissingUnit(_)
+                | ReadFailure::UnitLength(_)
+                | ReadFailure::BlobDigest
+                | ReadFailure::Fold(FoldError::ValueClaim { .. })),
+            ) => {
+                if is_value {
+                    // The declaration remains a candidate for later terms.
+                    self.values.record(name, None).map_err(ReadFailure::Fold)?;
+                } else {
+                    self.graph.note_content_omission(offset);
+                }
+                push(
+                    &mut self.graph.frame_failures,
+                    ReadError { offset, failure },
+                )?;
+                Ok(())
+            }
+            result => result,
+        }
     }
 
     fn store_rebuild(
@@ -283,7 +326,7 @@ impl<'a> GraphReader<'a, '_> {
         &mut self,
         mut content: Fields<'_>,
         bytes: &'p [u8],
-        position: u64,
+        (offset, position): (usize, u64),
         segment: &mut Segment<'a>,
         retain: impl Fn(&'p [u8]) -> Result<Cow<'a, [u8]>, ReadFailure>,
     ) -> Result<(), ReadFailure> {
@@ -322,9 +365,14 @@ impl<'a> GraphReader<'a, '_> {
                     self.store_unit(name, kind, retain(bytes)?, segment)?;
                 }
                 Member::Recipe(recipe, entries) => {
-                    let output =
-                        self.rebuild(recipe.name, &entries, segment, |id| units.get(id).copied())?;
-                    self.store_rebuild(recipe.name, recipe.kind.hold(copy_text)?, output)?;
+                    self.rebuild_and_store(
+                        recipe.name,
+                        recipe.kind.hold(copy_text)?,
+                        &entries,
+                        segment,
+                        |id| units.get(id).copied(),
+                        offset,
+                    )?;
                 }
             }
         }
