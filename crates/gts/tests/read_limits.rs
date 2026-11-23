@@ -2031,6 +2031,97 @@ impl StreamingSink for CountDamagedFrameEvents {
     }
 }
 
+#[derive(Default)]
+struct CountTermDiagnosticEvents {
+    diagnostics: usize,
+    terms: usize,
+}
+
+impl StreamingSink for CountTermDiagnosticEvents {
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.diagnostics += 1;
+    }
+
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {
+        self.terms += 1;
+    }
+}
+
+#[derive(Default)]
+struct CancelAtTermDiagnostic {
+    cancelled: bool,
+    diagnostics: usize,
+    terms: usize,
+}
+
+impl StreamingSink for CancelAtTermDiagnostic {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.diagnostics += 1;
+        self.cancelled = true;
+    }
+
+    fn term(&mut self, _segment_index: u64, _term_id: usize, _term: Arc<Term>) {
+        self.terms += 1;
+    }
+}
+
+#[test]
+fn term_diagnostic_refusal_precedes_surviving_term_delivery() {
+    let mut writer = Writer::new("generic");
+    let mut malformed = Term::lang_literal("Purr", "en us");
+    malformed.direction = Some("ltr".to_owned());
+    writer.add_terms(&[malformed]);
+    let bytes = writer.into_bytes();
+
+    let mut cancelled_sink = CancelAtTermDiagnostic::default();
+    read_to_sink_with_options(&bytes, ReadOptions::default(), &mut cancelled_sink);
+    assert!(cancelled_sink.cancelled);
+    assert_eq!((cancelled_sink.diagnostics, cancelled_sink.terms), (1, 0));
+
+    let mut refused_sink = CountTermDiagnosticEvents::default();
+    let mut refused_limits = GtsReadLimits::UNBOUNDED;
+    refused_limits.diagnostics = 0;
+    let error = read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        refused_limits,
+        &mut refused_sink,
+    )
+    .expect_err("the malformed language diagnostic exceeds a zero ceiling");
+    assert_eq!(error.resource, GtsReadResource::Diagnostics);
+    assert_eq!((refused_sink.diagnostics, refused_sink.terms), (0, 0));
+
+    let mut admitted_sink = CountTermDiagnosticEvents::default();
+    let mut admitted_limits = GtsReadLimits::UNBOUNDED;
+    admitted_limits.diagnostics = 2;
+    read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        admitted_limits,
+        &mut admitted_sink,
+    )
+    .expect("the exact diagnostic ceiling preserves the surviving term");
+    assert_eq!((admitted_sink.diagnostics, admitted_sink.terms), (2, 1));
+
+    let mut valid_writer = Writer::new("generic");
+    valid_writer.add_terms(&[Term::lang_literal("Purr", "en-US")]);
+    let mut valid_sink = CountTermDiagnosticEvents::default();
+    let mut valid_limits = GtsReadLimits::UNBOUNDED;
+    valid_limits.diagnostics = 0;
+    read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(valid_writer.into_bytes()),
+        ReadOptions::default(),
+        valid_limits,
+        &mut valid_sink,
+    )
+    .expect("the neighboring valid language term needs no diagnostic allowance");
+    assert_eq!((valid_sink.diagnostics, valid_sink.terms), (0, 1));
+}
+
 #[test]
 fn predecessor_diagnostic_cancellation_precedes_signature_delivery() {
     let mut header = vec![

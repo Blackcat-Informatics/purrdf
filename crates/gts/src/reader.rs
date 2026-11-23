@@ -1113,10 +1113,15 @@ impl Folder<'_, '_, '_> {
     ) -> Result<(), PayloadError> {
         let term_id = self.terms().len();
         let Some(term) = term_decode::decode(raw, term_id, base, |diagnostic| {
-            push_diagnostic(self.g, &mut self.sink, diagnostic.into_diagnostic(index));
+            if self.sink_accepting() {
+                push_diagnostic(self.g, &mut self.sink, diagnostic.into_diagnostic(index));
+            }
         }) else {
             return Ok(());
         };
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         if let Some(terms) = self.stored_terms {
             let lease = terms.append(&term)?;
             self.reifier_index.observe_term(term_id, &lease);
