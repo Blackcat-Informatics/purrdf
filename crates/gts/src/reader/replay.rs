@@ -91,6 +91,9 @@ impl Folder<'_, '_, '_> {
                         self.report_decoded_refusal(false, &cause);
                     }
                 }
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
+                }
                 return Err(cause);
             }
         };
@@ -105,6 +108,9 @@ impl Folder<'_, '_, '_> {
                     } else {
                         self.report_decoded_refusal(false, &cause);
                     }
+                }
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
                 }
                 return Err(cause);
             }
@@ -244,12 +250,18 @@ impl Folder<'_, '_, '_> {
                         length,
                         &detail,
                     );
+                    if !self.sink_accepting() {
+                        return Ok(());
+                    }
                     self.diag_native(
                         error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                         error,
                         detail,
                         index,
                     );
+                    if !self.sink_accepting() {
+                        return Ok(());
+                    }
                     continue;
                 }
                 if let Some(sink) = self.sink.as_deref_mut() {

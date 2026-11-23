@@ -568,6 +568,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         if self.failed {
             return Err(self.previous_failure(key));
         }
+        if !self.consumer_accepting() {
+            self.failed = true;
+            return Err(self.sink.err_cancelled_resolution(key.segment, key.term));
+        }
         let result = match self.resolve_term(key.segment, key.term, "selected term") {
             Ok(ResolveOutcome::Resolved(id)) => Ok(id),
             Ok(ResolveOutcome::Cancelled) => {
@@ -632,8 +636,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         if self.failed {
             return;
         }
-        self.advance_segment(segment);
-        if self.failed {
+        if !self.advance_segment(segment) {
             return;
         }
         let pending = PendingResolution::new(Some(term));
@@ -651,17 +654,37 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// Note an incoming buffering event's segment. When it advances past the
     /// segment currently buffered, flush the completed segment (latching any
     /// error) before accepting the new one.
-    fn advance_segment(&mut self, segment_index: u64) {
+    fn advance_segment(&mut self, segment_index: u64) -> bool {
+        if self.failed || !self.consumer_accepting() {
+            return false;
+        }
         match self.current_segment {
             Some(current) if segment_index > current => {
                 if let Err(error) = self.resolve_buffered() {
                     self.fail(error);
+                    return false;
+                }
+                if !self.consumer_accepting() {
+                    return false;
                 }
                 self.current_segment = Some(segment_index);
             }
             None => self.current_segment = Some(segment_index),
             Some(_) => {}
         }
+        true
+    }
+
+    fn discard_buffered_rows(&mut self) {
+        self.raw_quads = std::mem::take(&mut self.raw_quads)
+            .into_iter()
+            .into_empty(true);
+        self.raw_reifiers = std::mem::take(&mut self.raw_reifiers)
+            .into_iter()
+            .into_empty(true);
+        self.raw_annotations = std::mem::take(&mut self.raw_annotations)
+            .into_iter()
+            .into_empty(true);
     }
 
     /// Phase 2 for the currently buffered segment: resolve every buffered term
@@ -669,6 +692,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// single buffered segment) then push its quad / reifier / annotation rows
     /// in insertion order, draining the raw buffers.
     fn resolve_buffered(&mut self) -> Result<(), S::Error> {
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
         // Resolve every introduced term (idempotent through `remaps`). Iterate
         // in a deterministic order so the target's interner allocation order —
         // and thus any frozen term order — is reproducible for a fixed stream.
@@ -686,10 +713,15 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                     self.resolve_term(segment_index, gts_id, "term")?,
                     ResolveOutcome::Cancelled
                 ) {
+                    self.discard_buffered_rows();
                     return Ok(());
                 }
                 previous = Some(gts_id);
             }
+        }
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
         }
 
         let mut quads = std::mem::take(&mut self.raw_quads).into_iter();
@@ -728,6 +760,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         })();
         self.raw_quads = quads.into_empty(quad_result.is_ok());
         quad_result?;
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
 
         let mut reifiers = std::mem::take(&mut self.raw_reifiers).into_iter();
         let reifier_result = (|| {
@@ -773,6 +809,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         })();
         self.raw_reifiers = reifiers.into_empty(reifier_result.is_ok());
         reifier_result?;
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
 
         let mut annotations = std::mem::take(&mut self.raw_annotations).into_iter();
         let annotation_result = (|| {
@@ -812,6 +852,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         })();
         self.raw_annotations = annotations.into_empty(annotation_result.is_ok());
         annotation_result?;
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
 
         // Bounded-memory streaming fold: both maps are segment-local — no
         // resolution ever crosses a segment boundary (reifier bindings, and
@@ -1401,8 +1445,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
         if self.failed {
             return;
         }
-        self.advance_segment(segment_index);
-        if self.failed {
+        if !self.advance_segment(segment_index) {
             return;
         }
         let (s, p, o, graph) = quad;
@@ -1415,8 +1458,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
         if self.failed {
             return;
         }
-        self.advance_segment(segment_index);
-        if self.failed {
+        if !self.advance_segment(segment_index) {
             return;
         }
         // Row-array `(reifier_id, (s, p, o), graph?)`. Record the reifier → (s,
@@ -1453,8 +1495,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
         if self.failed {
             return;
         }
-        self.advance_segment(segment_index);
-        if self.failed {
+        if !self.advance_segment(segment_index) {
             return;
         }
         // Row-array `(reifier, predicate, value, graph?)`.

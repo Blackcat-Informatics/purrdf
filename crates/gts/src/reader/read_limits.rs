@@ -267,7 +267,6 @@ pub(super) struct ReadLimiter<'a> {
     inner: &'a mut dyn StreamingSink,
     limits: GtsReadLimits,
     usage: GtsReadUsage,
-    encoded_work: usize,
     charge_encoded_work: bool,
     current_metadata_entries: usize,
     error: Option<GtsReadLimitError>,
@@ -286,7 +285,6 @@ impl<'a> ReadLimiter<'a> {
                 encoded_input_bytes,
                 ..GtsReadUsage::default()
             },
-            encoded_work: 0,
             charge_encoded_work: true,
             current_metadata_entries: 0,
             error: None,
@@ -307,10 +305,6 @@ impl<'a> ReadLimiter<'a> {
 
     pub(super) const fn usage(&self) -> GtsReadUsage {
         self.usage
-    }
-
-    pub(super) const fn encoded_work(&self) -> usize {
-        self.encoded_work
     }
 
     pub(super) fn complete_input(&mut self, actual: usize) {
@@ -404,7 +398,6 @@ impl StreamingSink for ReadLimiter<'_> {
         self.usage.largest_encoded_frame_bytes =
             self.usage.largest_encoded_frame_bytes.max(encoded_bytes);
         let work = encoded_bytes.saturating_add(1);
-        self.encoded_work = self.encoded_work.saturating_add(work);
         if (self.charge_encoded_work && self.charge_work(work))
             || self.trip(GtsReadResource::Items, required, self.limits.items)
             || self.trip(

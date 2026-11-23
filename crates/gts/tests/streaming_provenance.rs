@@ -13,7 +13,8 @@ use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{AnnotationRow, ByteRange, OpaqueNode, Quad, ReifierRow, Term};
 use purrdf_gts::reader::{FrameContext, GtsReadLimits, StreamingSink, read_to_sink};
 use purrdf_gts::reader::{
-    ReadOptions, read_to_sink_with_dictionary, read_to_sink_with_dictionary_and_limits,
+    ReadOptions, read_to_sink_from_reader_with_dictionary_and_limits, read_to_sink_with_dictionary,
+    read_to_sink_with_dictionary_and_limits,
 };
 use purrdf_gts::replication::inventory;
 use purrdf_gts::writer::Writer;
@@ -414,6 +415,72 @@ fn final_limit_refusal_never_commits_dictionary_storage() {
     )
     .expect("the matching neighbor commits");
     assert_eq!(storage.commits, 1);
+}
+
+#[test]
+fn bounded_dictionary_tail_admission_precedes_commit() {
+    let first = three_frame_fixture();
+    let second_header = Writer::new("generic").into_bytes();
+    let mut second = Writer::new("generic");
+    second.add_terms(&[Term::iri("https://example.org/tail")]);
+    let mut prefix = first.clone();
+    prefix.extend(second_header);
+    let mut complete = first;
+    complete.extend(second.into_bytes());
+    let options = ReadOptions::new(false, None);
+
+    let mut refused = StoredTerms::default();
+    let mut input_limited = GtsReadLimits::UNBOUNDED;
+    input_limited.encoded_input_bytes = prefix.len();
+    let error = read_to_sink_from_reader_with_dictionary_and_limits(
+        std::io::Cursor::new(&complete),
+        options,
+        input_limited,
+        &mut refused,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the unread segment tail exceeds the complete input contract");
+    assert!(matches!(
+        error,
+        DictionaryError::Limit {
+            resource: "encoded-input-bytes",
+            ..
+        }
+    ));
+    assert_eq!(refused.commits, 0);
+
+    let mut frame_refused = StoredTerms::default();
+    let mut frame_limited = GtsReadLimits::UNBOUNDED;
+    frame_limited.encoded_frame_bytes = 1;
+    let error = read_to_sink_from_reader_with_dictionary_and_limits(
+        std::io::Cursor::new(&complete),
+        options,
+        frame_limited,
+        &mut frame_refused,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("an oversized streaming frame is a typed dictionary refusal");
+    assert!(matches!(
+        error,
+        DictionaryError::Limit {
+            resource: "encoded-frame-bytes",
+            ..
+        }
+    ));
+    assert_eq!(frame_refused.commits, 0);
+
+    let mut exact = StoredTerms::default();
+    let mut exact_limits = GtsReadLimits::UNBOUNDED;
+    exact_limits.encoded_input_bytes = complete.len();
+    read_to_sink_from_reader_with_dictionary_and_limits(
+        std::io::Cursor::new(&complete),
+        options,
+        exact_limits,
+        &mut exact,
+        &mut OrderingSink::default(),
+    )
+    .expect("the exact complete tail boundary commits once");
+    assert_eq!(exact.commits, 1);
 }
 
 type IndexedIdentity = Box<

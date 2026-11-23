@@ -50,6 +50,50 @@ impl ReplayStorage for MemoryReplay {
     }
 }
 
+enum TailReadMode {
+    InterruptOnce,
+    Fail,
+}
+
+struct TailReader {
+    bytes: Vec<u8>,
+    position: usize,
+    tail_start: usize,
+    mode: TailReadMode,
+    interrupted: bool,
+}
+
+impl std::io::Read for TailReader {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if self.position >= self.tail_start {
+            match self.mode {
+                TailReadMode::InterruptOnce if !self.interrupted => {
+                    self.interrupted = true;
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+                }
+                TailReadMode::Fail => {
+                    return Err(std::io::Error::other("tail source failure"));
+                }
+                TailReadMode::InterruptOnce => {}
+            }
+        }
+        if self.position == self.bytes.len() {
+            return Ok(0);
+        }
+        let available_end = if self.position < self.tail_start {
+            self.tail_start
+        } else {
+            self.bytes.len()
+        };
+        let count = output
+            .len()
+            .min(available_end.saturating_sub(self.position));
+        output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
+        self.position += count;
+        Ok(count)
+    }
+}
+
 #[derive(Default)]
 struct ReplaySink {
     terms: usize,
@@ -203,6 +247,25 @@ fn transformed_snapshot_with(transforms: &[String]) -> Vec<u8> {
 
 fn transformed_snapshot_bytes() -> Vec<u8> {
     transformed_snapshot_with(&["gzip".to_owned()])
+}
+
+fn transformed_two_blob_snapshot_bytes() -> Vec<u8> {
+    let snapshot = Value::Map(vec![(
+        "blobs".into(),
+        Value::Map(vec![
+            ("first".into(), Value::Bytes(vec![b'a'; 8])),
+            ("second".into(), Value::Bytes(vec![b'b'; 8])),
+        ]),
+    )]);
+    let mut writer = Writer::new("generic");
+    writer.add_frame(
+        "snapshot",
+        None,
+        Some(encode(&snapshot)),
+        Some(&["gzip".to_owned()]),
+        None,
+    );
+    writer.into_bytes()
 }
 
 fn limits(resource: GtsReadResource, limit: usize) -> GtsReadLimits {
@@ -674,6 +737,114 @@ fn transformed_snapshot_replay_refuses_embedded_blobs_and_stops_rows() {
     assert_eq!(sink.terms, 1, "replay stops at the first refused row");
 }
 
+#[derive(Default)]
+struct CancelReplayRefusal {
+    cancelled: bool,
+    opaque: usize,
+    diagnostics: usize,
+}
+
+impl StreamingSink for CancelReplayRefusal {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
+        Some(Ok(Box::new(MemoryReplay::default())))
+    }
+
+    fn frame_decode_limit(&self) -> Option<usize> {
+        Some(1)
+    }
+
+    fn decoded_payload_refused(&mut self, blob: bool, _required: usize, _limit: usize) {
+        if !blob {
+            self.cancelled = true;
+        }
+    }
+
+    fn opaque(&mut self, _segment: u64, _opaque: &purrdf_gts::model::OpaqueNode) {
+        self.opaque += 1;
+    }
+
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.diagnostics += 1;
+    }
+}
+
+#[test]
+fn replay_decode_refusal_cancellation_precedes_opaque_and_diagnostic_events() {
+    let mut sink = CancelReplayRefusal::default();
+    read_to_sink_with_options(
+        &transformed_snapshot_bytes(),
+        ReadOptions::default(),
+        &mut sink,
+    );
+    assert!(sink.cancelled);
+    assert_eq!(sink.opaque, 0);
+    assert_eq!(sink.diagnostics, 0);
+}
+
+#[derive(Clone, Copy)]
+enum BlobCancellation {
+    Refusal,
+    Diagnostic,
+}
+
+struct CancelReplayBlob {
+    at: BlobCancellation,
+    cancelled: bool,
+    refusals: usize,
+    diagnostics: usize,
+}
+
+impl StreamingSink for CancelReplayBlob {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
+        Some(Ok(Box::new(MemoryReplay::default())))
+    }
+
+    fn embedded_blob_limit(&self) -> Option<usize> {
+        Some(1)
+    }
+
+    fn blob_refused(&mut self, _refusal: purrdf_gts::reader::BlobRefusal<'_>) {
+        self.refusals += 1;
+        self.cancelled |= matches!(self.at, BlobCancellation::Refusal);
+    }
+
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.diagnostics += 1;
+        self.cancelled |= matches!(self.at, BlobCancellation::Diagnostic);
+    }
+}
+
+#[test]
+fn replay_blob_refusal_and_diagnostic_cancellation_stop_the_iterator() {
+    for at in [BlobCancellation::Refusal, BlobCancellation::Diagnostic] {
+        let mut sink = CancelReplayBlob {
+            at,
+            cancelled: false,
+            refusals: 0,
+            diagnostics: 0,
+        };
+        read_to_sink_with_options(
+            &transformed_two_blob_snapshot_bytes(),
+            ReadOptions::default(),
+            &mut sink,
+        );
+        assert!(sink.cancelled);
+        assert_eq!(sink.refusals, 1);
+        assert_eq!(
+            sink.diagnostics,
+            usize::from(matches!(at, BlobCancellation::Diagnostic))
+        );
+    }
+}
+
 #[test]
 fn cancelled_snapshot_replay_does_not_verify_or_finish_provisional_storage() {
     let finishes = Arc::new(AtomicUsize::new(0));
@@ -824,6 +995,12 @@ fn sink_selected_frame_ceiling_configures_slice_admission() {
     };
     read_to_sink_with_options(&bytes, ReadOptions::default(), &mut exact);
     assert_eq!(exact.refusals, 0);
+    read_to_sink_from_reader(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        &mut exact,
+    );
+    assert_eq!(exact.refusals, 0);
 
     let mut adjacent = EncodedCeiling {
         frame: usage.largest_encoded_frame_bytes - 1,
@@ -831,6 +1008,12 @@ fn sink_selected_frame_ceiling_configures_slice_admission() {
     };
     read_to_sink_with_options(&bytes, ReadOptions::default(), &mut adjacent);
     assert_eq!(adjacent.refusals, 1);
+    read_to_sink_from_reader(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        &mut adjacent,
+    );
+    assert_eq!(adjacent.refusals, 2);
 }
 
 #[derive(Default)]
@@ -860,6 +1043,48 @@ fn frame_cancellation_precedes_payload_decode() {
     read_to_sink_with_options(&bytes, ReadOptions::default(), &mut sink);
     assert!(sink.cancelled);
     assert_eq!(sink.decoded_payloads, 0);
+}
+
+#[derive(Default)]
+struct CancelInSnapshotTerm {
+    cancelled: bool,
+    late_callbacks: usize,
+}
+
+impl StreamingSink for CancelInSnapshotTerm {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn term(&mut self, _segment: u64, _id: usize, _term: Arc<Term>) {
+        self.cancelled = true;
+    }
+
+    fn quad(&mut self, _segment: u64, _quad: purrdf_gts::model::Quad) {
+        self.late_callbacks += 1;
+    }
+
+    fn embedded_blob(&mut self, _bytes: usize) {
+        self.late_callbacks += 1;
+    }
+
+    fn metadata_entries(&mut self, _additional: usize) {
+        if self.cancelled {
+            self.late_callbacks += 1;
+        }
+    }
+}
+
+#[test]
+fn resident_snapshot_cancellation_stops_later_fields() {
+    let mut sink = CancelInSnapshotTerm::default();
+    read_to_sink_with_options(
+        &transformed_snapshot_bytes(),
+        ReadOptions::default(),
+        &mut sink,
+    );
+    assert!(sink.cancelled);
+    assert_eq!(sink.late_callbacks, 0);
 }
 
 #[derive(Default)]
@@ -1295,6 +1520,7 @@ fn resident_nested_blob_reports_its_work_boundary() {
         match purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), candidate) {
             Ok(result) => break (candidate, result),
             Err(error) if error.resource == GtsReadResource::Work => {
+                assert!(error.required > exact_work);
                 exact_work = error.required;
             }
             Err(error) => panic!("unexpected resident nested refusal: {error}"),
@@ -1312,6 +1538,8 @@ struct SplitBlobLimits {
     eager: usize,
     embedded: usize,
     eager_refusals: usize,
+    embedded_bytes: usize,
+    embedded_refusals: usize,
 }
 
 impl StreamingSink for SplitBlobLimits {
@@ -1328,28 +1556,43 @@ impl StreamingSink for SplitBlobLimits {
             self.eager_refusals += 1;
         }
     }
+
+    fn embedded_blob(&mut self, bytes: usize) {
+        self.embedded_bytes += bytes;
+    }
+
+    fn embedded_blob_refused(&mut self, _required: usize, _limit: usize) {
+        self.embedded_refusals += 1;
+    }
 }
 
 #[test]
 fn eager_and_embedded_blob_ceilings_remain_independent() {
     let mut limits = GtsReadLimits::UNBOUNDED;
     limits.decoded_blob_bytes = 4096;
+    let mut embedded_allowed = SplitBlobLimits {
+        eager: 1,
+        embedded: 4096,
+        eager_refusals: 0,
+        embedded_bytes: 0,
+        embedded_refusals: 0,
+    };
     read_to_sink_with_limits(
         &transformed_snapshot_bytes(),
         ReadOptions::default(),
         limits,
-        &mut SplitBlobLimits {
-            eager: 1,
-            embedded: 4096,
-            eager_refusals: 0,
-        },
+        &mut embedded_allowed,
     )
     .expect("an eager blob ceiling does not reduce the embedded allowance");
+    assert_eq!(embedded_allowed.embedded_bytes, 4096);
+    assert_eq!(embedded_allowed.embedded_refusals, 0);
 
     let mut eager_limited = SplitBlobLimits {
         eager: 4095,
         embedded: usize::MAX,
         eager_refusals: 0,
+        embedded_bytes: 0,
+        embedded_refusals: 0,
     };
     let (result, _) = read_to_sink_with_limits(
         &declared_transformed_blob_bytes(),
@@ -1409,6 +1652,125 @@ fn prohibited_segment_tail_is_fully_admitted_and_reported() {
     )
     .expect_err("one unread tail byte over the complete input limit is refused");
     assert_eq!(error.resource, GtsReadResource::EncodedInputBytes);
+}
+
+#[derive(Default)]
+struct CancelAtSegmentBoundary {
+    cancelled: bool,
+    retained_after_cancel: usize,
+}
+
+impl StreamingSink for CancelAtSegmentBoundary {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
+        if diagnostic.code == "SegmentBoundary" {
+            self.cancelled = true;
+        }
+    }
+
+    fn retained_metadata(&mut self, _entries: usize) {
+        if self.cancelled {
+            self.retained_after_cancel += 1;
+        }
+    }
+}
+
+#[test]
+fn segment_boundary_diagnostic_cancellation_precedes_metadata_delivery() {
+    let (bytes, _) = two_segment_bytes();
+    let mut sink = CancelAtSegmentBoundary::default();
+    read_to_sink_with_options(&bytes, ReadOptions::new(false, None), &mut sink);
+    assert!(sink.cancelled);
+    assert_eq!(sink.retained_after_cancel, 0);
+}
+
+#[test]
+fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
+    let (prefix, complete) = two_segment_bytes();
+    let options = ReadOptions::new(false, None);
+    let interrupted = TailReader {
+        bytes: complete.clone(),
+        position: 0,
+        tail_start: prefix.len(),
+        mode: TailReadMode::InterruptOnce,
+        interrupted: false,
+    };
+    let (result, usage) = read_to_sink_from_reader_with_limits(
+        interrupted,
+        options,
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("an interrupted tail read resumes to clean EOF");
+    assert_eq!(result.torn, None);
+    assert_eq!(usage.encoded_input_bytes, complete.len());
+
+    let failed = TailReader {
+        bytes: complete,
+        position: 0,
+        tail_start: prefix.len(),
+        mode: TailReadMode::Fail,
+        interrupted: false,
+    };
+    let (result, _) =
+        read_to_sink_from_reader_with_limits(failed, options, GtsReadLimits::UNBOUNDED, &mut Null)
+            .expect("native tail I/O failure is represented by the torn result contract");
+    assert_eq!(result.torn, Some(prefix.len() as u64));
+    let diagnostic = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "TornAppendError")
+        .expect("the native tail failure remains visible");
+    assert!(diagnostic.native_cause().is_some());
+}
+
+#[test]
+fn complete_envelope_work_precedes_sink_only_production_work() {
+    let mut bytes = transformed_snapshot_bytes();
+    let mut tail = Writer::new("generic");
+    tail.add_frame_with_options(
+        "unknown",
+        FrameOptions {
+            raw: Some(vec![b't'; 1024]),
+            ..FrameOptions::default()
+        },
+    )
+    .expect("second-segment tail frame");
+    bytes.extend(tail.into_bytes());
+    let options = ReadOptions::new(false, None);
+    let mut generous = GtsReadLimits::UNBOUNDED;
+    generous.work = usize::MAX - 1;
+    let mut measured_sink = SplitBlobLimits {
+        eager: usize::MAX,
+        embedded: 1,
+        eager_refusals: 0,
+        embedded_bytes: 0,
+        embedded_refusals: 0,
+    };
+    let (_, measured) = read_to_sink_with_limits(&bytes, options, generous, &mut measured_sink)
+        .expect("measure complete envelope and sink-only refusal work");
+    assert_eq!(measured_sink.embedded_refusals, 1);
+
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.work = measured.work;
+    let mut exact_sink = SplitBlobLimits {
+        eager: usize::MAX,
+        embedded: 1,
+        eager_refusals: 0,
+        embedded_bytes: 0,
+        embedded_refusals: 0,
+    };
+    let (_, usage) = read_to_sink_with_limits(&bytes, options, exact, &mut exact_sink)
+        .expect("the complete aggregate accepts its exact work boundary");
+    assert!(usage.work <= exact.work);
+    exact.work -= 1;
+    let error = read_to_sink_with_limits(&bytes, options, exact, &mut exact_sink)
+        .expect_err("the sink-only production event refuses the adjacent work excess");
+    assert_eq!(error.resource, GtsReadResource::Work);
+    assert!(error.usage.work > error.limit);
 }
 
 #[test]
@@ -1471,6 +1833,7 @@ fn streaming_input_limit_is_typed_without_a_frame_limit() {
 struct CancelAtDiagnostic {
     cancelled: bool,
     signatures: usize,
+    cause_code: Option<&'static str>,
 }
 
 impl StreamingSink for CancelAtDiagnostic {
@@ -1478,7 +1841,10 @@ impl StreamingSink for CancelAtDiagnostic {
         !self.cancelled
     }
 
-    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+    fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.cause_code = diagnostic
+            .native_cause()
+            .map(|cause| purrdf_testkit::error_capture::Capture::read(cause).code);
         self.cancelled = true;
     }
 
@@ -1514,6 +1880,7 @@ fn predecessor_diagnostic_cancellation_precedes_signature_delivery() {
     read_to_sink_with_options(&bytes, ReadOptions::default(), &mut sink);
     assert!(sink.cancelled);
     assert_eq!(sink.signatures, 0);
+    assert_eq!(sink.cause_code, Some("gts-frame-previous"));
 }
 
 #[test]
