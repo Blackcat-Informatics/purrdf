@@ -26,7 +26,9 @@ pub use header::{
 };
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
-pub use parity::{ParityCheck, ParityMismatches, ParitySpanLength, ParityTable};
+pub use parity::{
+    ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParitySpanLength, ParityTable,
+};
 pub use payload::{
     PayloadBudget, PayloadCapacity, PayloadCheck, PayloadDamage, PayloadRefusal,
     PayloadResourceError, PayloadState, StoredState,

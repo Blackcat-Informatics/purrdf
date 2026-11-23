@@ -175,6 +175,14 @@ impl<'a> FrameEnvelope<'a> {
         Self { bytes, ends }
     }
 
+    pub(super) const fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    pub(super) fn transparent(&self) -> bool {
+        self.field(FrameField::Transparent) == [0xf5]
+    }
+
     /// The original CBOR bytes of one field, including its head.
     #[must_use]
     pub fn field(&self, field: FrameField) -> &'a [u8] {

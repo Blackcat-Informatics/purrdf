@@ -13,6 +13,11 @@ use super::{
 };
 use crate::FastSet;
 
+mod stream;
+
+pub(super) use stream::ParityStream;
+pub use stream::{ParityFinding, ParityFindingKind};
+
 type Digest = [u8; DIGEST_LENGTH];
 const SPAN_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SHARD_BYTES: usize = 4096;
@@ -82,17 +87,53 @@ impl ParityTable<'_> {
             });
         }
 
+        Ok(self.compare_stream_shards(core::iter::once(span)))
+    }
+
+    fn compare_stream_shards<'a>(
+        &self,
+        mut parts: impl Iterator<Item = &'a [u8]>,
+    ) -> ParityMismatches {
         let initial = Hasher::new_derive_key("gts2 shard");
+        let mut part = &[][..];
+        let mut remaining = self.geometry.span_bytes;
         let size = self.geometry.shard_bytes;
         let mut data = [0; DATA_MASKS];
-        for shard in failing_shards(span, self.data_digests, size, &initial) {
-            data[shard / MASK_WIDTH] |= 1 << (shard % MASK_WIDTH);
+        for (shard, digest) in self.data_digests.iter().enumerate() {
+            let mut hasher = initial.clone();
+            let mut needed = remaining.min(size);
+            remaining -= needed;
+            let padding = size - needed;
+            while needed != 0 {
+                if part.is_empty() {
+                    // The caller supplies exactly the span's admitted bytes.
+                    part = parts.next().expect("parity span has remaining bytes");
+                }
+                let length = needed.min(part.len());
+                let (prefix, rest) = part.split_at(length);
+                hasher.update(prefix);
+                part = rest;
+                needed -= length;
+            }
+            hasher.update(&ZERO_PADDING[..padding]);
+            if !matches_shard(&hasher, digest) {
+                data[shard / MASK_WIDTH] |= 1 << (shard % MASK_WIDTH);
+            }
         }
         let mut parity = 0;
-        for shard in failing_shards(self.parity, self.parity_digests, size, &initial) {
-            parity |= 1 << shard;
+        for (shard, (bytes, digest)) in self
+            .parity
+            .chunks_exact(size)
+            .zip(self.parity_digests)
+            .enumerate()
+        {
+            let mut hasher = initial.clone();
+            hasher.update(bytes);
+            if !matches_shard(&hasher, digest) {
+                parity |= 1 << shard;
+            }
         }
-        Ok(ParityMismatches { data, parity })
+        ParityMismatches { data, parity }
     }
 }
 
@@ -156,24 +197,8 @@ impl purrdf_hash::error::StructuredError for ParitySpanLength {
     }
 }
 
-fn failing_shards<'a>(
-    bytes: &'a [u8],
-    digests: &'a [DigestEntry],
-    size: usize,
-    initial: &'a Hasher,
-) -> impl Iterator<Item = usize> + 'a {
-    bytes
-        .chunks(size)
-        .zip(digests)
-        .enumerate()
-        .filter_map(move |(index, (bytes, entry))| {
-            let mut hasher = initial.clone();
-            hasher.update(bytes);
-            if bytes.len() < size {
-                hasher.update(&ZERO_PADDING[..size - bytes.len()]);
-            }
-            (hasher.finalize().as_bytes()[..SHARD_DIGEST_BYTES] != entry[1..]).then_some(index)
-        })
+fn matches_shard(hasher: &Hasher, entry: &DigestEntry) -> bool {
+    hasher.finalize().as_bytes()[..SHARD_DIGEST_BYTES] == entry[1..]
 }
 
 #[derive(Debug)]
