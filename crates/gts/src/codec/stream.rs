@@ -162,11 +162,6 @@ fn decode_chain_reader_build<'a>(
                 ));
             }
         };
-        reader = Box::new(Limited {
-            inner: reader,
-            remaining: limit,
-            limit,
-        });
         if codec.name != "identity"
             && let Some(work) = work
         {
@@ -175,6 +170,11 @@ fn decode_chain_reader_build<'a>(
                 work: work.clone(),
             });
         }
+        reader = Box::new(Limited {
+            inner: reader,
+            remaining: limit,
+            limit,
+        });
     }
     if chain.is_empty() {
         reader = Box::new(Limited {

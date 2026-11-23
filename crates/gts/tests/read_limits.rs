@@ -305,6 +305,25 @@ fn declared_digest_cannot_defer_a_transformed_blob_beyond_admission() {
     assert_boundary(&bytes, GtsReadResource::Work, usage.work);
 }
 
+#[test]
+fn streaming_stage_refusal_counts_each_transform_byte_once() {
+    let bytes = declared_transformed_blob_bytes();
+    let decoded = 4096;
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.decoded_blob_bytes = decoded;
+    let (_, admitted) = read_to_sink_with_limits(&bytes, ReadOptions::default(), exact, &mut Null)
+        .expect("the exact decoded stage boundary remains valid");
+
+    let mut adjacent = exact;
+    adjacent.decoded_blob_bytes -= 1;
+    let error = read_to_sink_with_limits(&bytes, ReadOptions::default(), adjacent, &mut Null)
+        .expect_err("the first excess decoded stage byte is refused");
+    assert_eq!(error.resource, GtsReadResource::DecodedBlobBytes);
+    assert_eq!(error.required, decoded);
+    assert_eq!(error.usage.largest_decoded_blob_bytes, decoded);
+    assert!(error.usage.work < admitted.work);
+}
+
 fn nested_child(name: &str) -> Vec<u8> {
     let mut writer = Writer::new("generic");
     writer.add_terms(&[

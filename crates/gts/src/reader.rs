@@ -414,6 +414,10 @@ pub trait StreamingSink {
     fn decoded_payload(&mut self, _blob: bool, _bytes: usize) {}
     /// A bounded decoder stopped at the first byte beyond its effective limit.
     fn decoded_payload_refused(&mut self, _blob: bool, _required: usize, _limit: usize) {}
+    /// Report a decoded refusal whose transform work was already admitted.
+    fn decoded_payload_refused_accounted(&mut self, blob: bool, required: usize, limit: usize) {
+        self.decoded_payload_refused(blob, required, limit);
+    }
     /// Current aggregate retained reader metadata entries.
     fn retained_metadata(&mut self, _entries: usize) {}
     /// Admit new retained metadata entries before they are stored.
@@ -701,6 +705,14 @@ impl Folder<'_, '_, '_> {
             && let Some(sink) = self.sink.as_deref_mut()
         {
             sink.decoded_payload_refused(blob, required, limit);
+        }
+    }
+
+    fn report_accounted_decoded_refusal(&mut self, blob: bool, error: &PayloadError) {
+        if let Some((required, limit)) = error.decoded_limit_refusal()
+            && let Some(sink) = self.sink.as_deref_mut()
+        {
+            sink.decoded_payload_refused_accounted(blob, required, limit);
         }
     }
 
@@ -1643,7 +1655,11 @@ impl Folder<'_, '_, '_> {
                     }
                     let error = PayloadError::from(error);
                     if !transform_work.refused() {
-                        self.report_decoded_refusal(true, &error);
+                        if transform_work.total() > 0 {
+                            self.report_accounted_decoded_refusal(true, &error);
+                        } else {
+                            self.report_decoded_refusal(true, &error);
+                        }
                     }
                     return Err(error);
                 }

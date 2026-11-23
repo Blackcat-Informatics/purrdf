@@ -168,20 +168,6 @@ fn visit_with_limits(
             }
             Err(MeasureError::Codec { cause, work }) => {
                 charge_nested_work(usage, limits.read, work)?;
-                if measurement_limit == remaining_work
-                    && remaining_work < limits.read.decoded_blob_bytes
-                    && error_is_codec_limit(&cause)
-                {
-                    let required = usage.work.saturating_add(remaining_work.saturating_add(1));
-                    let mut refused_usage = *usage;
-                    refused_usage.work = required;
-                    return Err(crate::reader::GtsReadLimitError {
-                        resource: crate::reader::GtsReadResource::Work,
-                        required,
-                        limit: limits.read.work,
-                        usage: refused_usage,
-                    });
-                }
                 let error = NestedError::DecodeStream {
                     digest,
                     cause: cause.into(),
