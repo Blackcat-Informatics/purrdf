@@ -264,6 +264,12 @@ fn nested_artifacts_share_one_aggregate_row_contract() {
         None,
     );
     let bytes = writer.into_bytes();
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.terms = 6;
+    let admitted = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, exact)
+        .expect("the aggregate term contract accepts its exact boundary");
+    assert_eq!(admitted.subgraphs.len(), 2);
+
     let mut limits = GtsReadLimits::UNBOUNDED;
     limits.terms = 3;
     let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, limits)
@@ -286,6 +292,15 @@ fn nested_size_budget_measures_transforms_without_retaining_the_excess() {
         )
         .expect("compressed nested artifact");
     let bytes = writer.into_bytes();
+    let admitted = purrdf_gts::nested::read_nested_with_limits(
+        &bytes,
+        1,
+        child.len(),
+        GtsReadLimits::UNBOUNDED,
+    )
+    .expect("the nested decoded-byte contract accepts its exact boundary");
+    assert_eq!(admitted.subgraphs.len(), 1);
+
     let error = purrdf_gts::nested::read_nested_with_limits(
         &bytes,
         1,
@@ -306,6 +321,15 @@ fn nested_depth_refuses_without_publishing_a_partial_result() {
         None,
     );
     let bytes = writer.into_bytes();
+    let admitted = purrdf_gts::nested::read_nested_with_limits(
+        &bytes,
+        1,
+        usize::MAX,
+        GtsReadLimits::UNBOUNDED,
+    )
+    .expect("the nested depth contract accepts its exact boundary");
+    assert_eq!(admitted.subgraphs.len(), 1);
+
     let error = purrdf_gts::nested::read_nested_with_limits(
         &bytes,
         0,
@@ -331,6 +355,12 @@ fn nested_traversal_diagnostics_share_the_aggregate_contract() {
         None,
     );
     let bytes = writer.into_bytes();
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.diagnostics = 4;
+    let admitted = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, exact)
+        .expect("the traversal diagnostic contract accepts its exact boundary");
+    assert_eq!(admitted.diagnostics.len(), 2);
+
     let mut limits = GtsReadLimits::UNBOUNDED;
     limits.diagnostics = 3;
     let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, limits)
