@@ -66,10 +66,16 @@ impl<'a> Item<'a> {
     /// `Ok(None)`. Each opening head occupies at least one input byte, so
     /// the framing walk can admit every representable nesting depth.
     pub fn first(bytes: &'a [u8]) -> Result<Option<Self>, StructuralError> {
+        Self::first_with_depth(bytes, bytes.len())
+    }
+
+    /// Delimit the first item under a caller-owned structural depth ceiling.
+    pub(super) fn first_with_depth(
+        bytes: &'a [u8],
+        max_depth: usize,
+    ) -> Result<Option<Self>, StructuralError> {
         let mut source = Cursor::new(bytes);
-        let limits = Limits {
-            max_depth: bytes.len(),
-        };
+        let limits = Limits { max_depth };
         let Some(range) = StructuralRange::scan(&mut source, 0, bytes.len() as u64, limits)? else {
             return Ok(None);
         };

@@ -31,9 +31,33 @@ mod blob;
 
 pub use blob::ExternalBlob;
 
+/// Generation-neutral bounds applied before an opener selects its reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DetectionCapacity {
+    /// Maximum encoded bytes in the opening item.
+    pub encoded_opener_bytes: usize,
+    /// Maximum arrays, maps and tags open while delimiting the opener.
+    pub nesting_depth: usize,
+    /// Maximum structural work, charged as two units per encoded opener byte
+    /// for delimiting and generation inspection.
+    pub work: usize,
+}
+
+impl Default for DetectionCapacity {
+    fn default() -> Self {
+        Self {
+            encoded_opener_bytes: 64 * 1024 * 1024,
+            nesting_depth: 256,
+            work: 128 * 1024 * 1024,
+        }
+    }
+}
+
 /// Limits for materializing an RDF graph through generation detection.
 #[derive(Clone, Copy, Debug)]
 pub struct ReadCapacity {
+    /// Bounds shared by every generation before dispatch.
+    pub detection: DetectionCapacity,
     /// Complete generation 1 read contract when the opener delegates to the
     /// legacy graph reader.
     pub first_generation: crate::reader::GtsReadLimits,
@@ -50,6 +74,7 @@ pub struct ReadCapacity {
 impl Default for ReadCapacity {
     fn default() -> Self {
         Self {
+            detection: DetectionCapacity::default(),
             first_generation: crate::reader::GtsReadLimits::DEFAULT,
             payload: PayloadCapacity {
                 stored_bytes_per_frame: 1 << 26,
@@ -170,6 +195,27 @@ pub enum ReadFailure {
     Framing(StructuralError),
     /// The item is outside the item count capacity.
     ItemCapacity(u64),
+    /// Generation detection needs more opener bytes than admitted.
+    DetectionBytes {
+        /// First encoded byte beyond the capacity.
+        required: usize,
+        /// Configured opener-byte ceiling.
+        limit: usize,
+    },
+    /// Generation detection needs more nesting than admitted.
+    DetectionDepth {
+        /// First nesting depth beyond the capacity.
+        required: usize,
+        /// Configured nesting ceiling.
+        limit: usize,
+    },
+    /// Generation detection needs more structural work than admitted.
+    DetectionWork {
+        /// Conservative work charge required by the opener.
+        required: usize,
+        /// Configured structural-work ceiling.
+        limit: usize,
+    },
     /// A generation 1 resource exceeded its explicit read capacity.
     FirstGenerationCapacity(crate::reader::GtsReadLimitError),
     /// The item failed the structural classification rules.
@@ -268,7 +314,7 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             failure: ReadFailure::ItemCapacity(0),
         });
     }
-    let opener = match delimit(bytes, 0) {
+    let opener = match detect_opener(bytes, capacity.detection) {
         Ok(Some(item)) => item,
         Ok(None) => {
             return Err(ReadError {
@@ -304,6 +350,52 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             offset: 0,
             failure: ReadFailure::Generation(generation),
         }),
+    }
+}
+
+fn detect_opener(bytes: &[u8], capacity: DetectionCapacity) -> Result<Option<Item<'_>>, ReadError> {
+    const WORK_PER_BYTE: usize = 2;
+
+    let work_bytes = capacity.work / WORK_PER_BYTE;
+    let encoded_limit = capacity.encoded_opener_bytes.min(work_bytes);
+    let available = bytes.len().min(encoded_limit);
+    let refusal = |required_bytes: usize| {
+        let failure = if capacity.encoded_opener_bytes <= work_bytes {
+            ReadFailure::DetectionBytes {
+                required: required_bytes,
+                limit: capacity.encoded_opener_bytes,
+            }
+        } else {
+            ReadFailure::DetectionWork {
+                required: required_bytes.saturating_mul(WORK_PER_BYTE),
+                limit: capacity.work,
+            }
+        };
+        ReadError { offset: 0, failure }
+    };
+    if available == 0 && !bytes.is_empty() {
+        return Err(refusal(1));
+    }
+    match Item::first_with_depth(&bytes[..available], capacity.nesting_depth) {
+        Ok(item) => Ok(item),
+        Err(error)
+            if matches!(error.kind(), DecodeErrorKind::Truncated) && bytes.len() > available =>
+        {
+            Err(refusal(available.saturating_add(1)))
+        }
+        Err(error) => match error.kind() {
+            DecodeErrorKind::Depth { limit } => Err(ReadError {
+                offset: usize::try_from(error.offset()).unwrap_or(usize::MAX),
+                failure: ReadFailure::DetectionDepth {
+                    required: limit.saturating_add(1),
+                    limit,
+                },
+            }),
+            _ => Err(ReadError {
+                offset: 0,
+                failure: ReadFailure::Framing(error),
+            }),
+        },
     }
 }
 

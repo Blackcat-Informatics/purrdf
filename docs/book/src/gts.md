@@ -30,10 +30,11 @@ bytes. Unreadable and unsupported content returns a byte position and
 reason. [Generation 2 specification](https://github.com/Blackcat-Informatics/gmeow-gts/tree/main/docs/v2)
 
 Supply a finite `ReadCapacity` to this generation-detecting entry point. Its
-`first_generation` field carries the complete `GtsReadLimits` contract into a
-generation 1 delegation; the remaining fields bound generation 2 payloads,
-formed text, rebuilt values and item count. Large datasets raise the applicable
-finite ceilings.
+`detection` field bounds opener bytes, nesting and structural work before any
+generation is selected. The `first_generation` field then carries the complete
+`GtsReadLimits` contract into a generation 1 delegation; the remaining fields
+bound generation 2 payloads, formed text, rebuilt values and item count. Large
+datasets raise the applicable finite ceilings.
 
 Use `purrdf_rdf::gts_write::write_gts_v2` to send an RDF dataset to a
 `std::io::Write` sink as one committed segment. `purrdf_gts::v2::SegmentWriter`

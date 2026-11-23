@@ -359,6 +359,70 @@ fn legacy_opener_delegates_the_entire_input() {
 }
 
 #[test]
+fn generation_detection_bounds_opener_bytes_work_and_depth() {
+    let bytes = include_bytes!("fixtures/v2/P9/reader__first-and-second.bin");
+    let opener_bytes = Item::first(bytes).unwrap().unwrap().bytes().len();
+    let mut capacity = ReadCapacity::default();
+    capacity.detection.encoded_opener_bytes = opener_bytes;
+    capacity.detection.work = usize::MAX;
+    assert!(matches!(
+        read(bytes, capacity).unwrap(),
+        ReadGraph::First(_)
+    ));
+
+    capacity.detection.encoded_opener_bytes -= 1;
+    let error = read(bytes, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionBytes { required, limit }
+            if required == opener_bytes && limit == opener_bytes - 1
+    ));
+    capacity.detection.encoded_opener_bytes = 0;
+    let error = read(bytes, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionBytes {
+            required: 1,
+            limit: 0
+        }
+    ));
+
+    capacity.detection.encoded_opener_bytes = usize::MAX;
+    capacity.detection.work = opener_bytes * 2;
+    assert!(matches!(
+        read(bytes, capacity).unwrap(),
+        ReadGraph::First(_)
+    ));
+    capacity.detection.work -= 1;
+    let error = read(bytes, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork { required, limit }
+            if required == opener_bytes * 2 && limit == opener_bytes * 2 - 1
+    ));
+
+    let nested_arrays = 4;
+    let exact_depth = nested_arrays + 1;
+    let mut deep_opener = vec![0xa2, 0x61, b'a'];
+    deep_opener.extend(std::iter::repeat_n(0x81, nested_arrays));
+    deep_opener.extend_from_slice(&[0x00, 0x61, b'v', 0x01]);
+    capacity.detection.encoded_opener_bytes = usize::MAX;
+    capacity.detection.work = usize::MAX;
+    capacity.detection.nesting_depth = exact_depth;
+    assert!(matches!(
+        read(&deep_opener, capacity).unwrap(),
+        ReadGraph::First(_)
+    ));
+    capacity.detection.nesting_depth -= 1;
+    let error = read(&deep_opener, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionDepth { required, limit }
+            if required == exact_depth && limit == exact_depth - 1
+    ));
+}
+
+#[test]
 fn scanned_openers_preserve_the_difference_between_torn_and_undelimitable_prefixes() {
     let foreign = include_bytes!("fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
     let torn = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
