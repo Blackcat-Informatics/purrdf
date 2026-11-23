@@ -3,7 +3,7 @@
 
 //! Reader that exposes one malformed tail item before a later transport failure.
 
-pub struct TailDrainFailureReader {
+pub(crate) struct TailDrainFailureReader {
     bytes: Vec<u8>,
     position: usize,
     tail_start: usize,
@@ -11,7 +11,7 @@ pub struct TailDrainFailureReader {
 }
 
 impl TailDrainFailureReader {
-    pub fn new(bytes: Vec<u8>, tail_start: usize, message: &'static str) -> Self {
+    pub(crate) fn new(bytes: Vec<u8>, tail_start: usize, message: &'static str) -> Self {
         Self {
             bytes,
             position: 0,
