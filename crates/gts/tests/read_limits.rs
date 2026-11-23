@@ -1124,6 +1124,18 @@ fn invalid_codec_after_a_valid_transform_charges_the_drained_work() {
     .expect("unavailable outer codecs retain work from valid inner transforms");
     assert!(usage.work >= bytes.len().saturating_add(raw.len().saturating_mul(2)));
     assert_boundary(&bytes, GtsReadResource::Work, usage.work);
+
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.decoded_blob_bytes = raw.len();
+    let (_, admitted) = read_to_sink_with_limits(&bytes, ReadOptions::default(), exact, &mut Null)
+        .expect("the exact drained stage boundary remains valid");
+    let mut adjacent = exact;
+    adjacent.decoded_blob_bytes -= 1;
+    let error = read_to_sink_with_limits(&bytes, ReadOptions::default(), adjacent, &mut Null)
+        .expect_err("the adjacent drain byte is refused before the unknown outer codec");
+    assert_eq!(error.resource, GtsReadResource::DecodedBlobBytes);
+    assert_eq!(error.required, raw.len());
+    assert!(error.usage.work < admitted.work);
 }
 
 #[test]

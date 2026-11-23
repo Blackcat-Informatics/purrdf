@@ -1632,7 +1632,11 @@ impl Folder<'_, '_, '_> {
                 }
                 let cause = PayloadError::from(error.cause);
                 if !error.work.refused() {
-                    self.report_decoded_refusal(true, &cause);
+                    if error.work.total() > 0 {
+                        self.report_accounted_decoded_refusal(true, &cause);
+                    } else {
+                        self.report_decoded_refusal(true, &cause);
+                    }
                 }
                 return Err(cause);
             }
