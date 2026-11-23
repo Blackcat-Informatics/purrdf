@@ -1187,6 +1187,10 @@ class RdfDataset:
     def __init__(self, data: bytes | str, format: RdfFormat, *, base: str | None=...) -> None:
         ...
 
+    @staticmethod
+    def from_gts(data: bytes) -> RdfDataset:
+        ...
+
     def quad_count(self) -> int:
         ...
 
@@ -1203,6 +1207,9 @@ class RdfDataset:
         ...
 
     def to_gts(self, profile: str=...) -> bytes:
+        ...
+
+    def to_gts_v2(self) -> bytes:
         ...
 
     def columnar_rows(self) -> ColumnarRows:

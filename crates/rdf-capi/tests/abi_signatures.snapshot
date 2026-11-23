@@ -17,7 +17,7 @@
 #
 # Regenerate by running `cargo test -p purrdf-capi --test abi_signatures` and
 # pasting the ACTUAL block it prints. Never hand-tune a single line.
-abi-version 0.20.0
+abi-version 0.21.0
 const char *purrdf_error_canonicalization_json(const PurrdfError *error)
 const char *purrdf_error_execution_receipt_json(const PurrdfError *error)
 const char *purrdf_error_message(const PurrdfError *err)
@@ -133,6 +133,7 @@ int32_t purrdf_shapes_product_rebuild_expecting_xpath_regex(const uint8_t *produ
 int32_t purrdf_shapes_product_rebuild_xpath_regex(const uint8_t *product, size_t product_len, const char *data_nt, const char *regex_profile, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_term_to_ntriples(const PurrdfDataset *dataset, const PurrdfTermView *view, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_to_gts(const PurrdfDataset *dataset, const char *profile, PurrdfBuffer **out_buffer, PurrdfError **out_error)
+int32_t purrdf_to_gts_v2(const PurrdfDataset *dataset, PurrdfBuffer **out_buffer, PurrdfError **out_error)
 int32_t purrdf_update_governed(PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, int32_t graph_existence, const PurrdfQueryGovernors *governors, const char *now, const uint64_t *entropy_seed, PurrdfBuffer **out_receipt, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)
 int32_t purrdf_update_governed_with_geo(const PurrdfGeoSession *geo, PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, const char *regex_profile, int32_t graph_existence, const PurrdfQueryGovernors *governors, const char *now, const uint64_t *entropy_seed, PurrdfBuffer **out_receipt, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)
 int32_t purrdf_update_governed_xpath_regex(PurrdfDataset *dataset, const char *request, const char *base_iri, const char *aggregate_namespace, const char *regex_profile, int32_t graph_existence, const PurrdfQueryGovernors *governors, const char *now, const uint64_t *entropy_seed, PurrdfBuffer **out_receipt, int32_t *out_outcome, PurrdfGovernorEvidence *out_evidence, PurrdfError **out_error)
