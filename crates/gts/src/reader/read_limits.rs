@@ -8,6 +8,7 @@ use super::{
     Quad, ReifierRow, Signature, StreamableInfo, StreamingSink, Suppression, Term, TermLease,
     Value,
 };
+use std::cell::Cell;
 use std::sync::Arc;
 
 const MIB: usize = 1024 * 1024;
@@ -270,6 +271,7 @@ pub(super) struct ReadLimiter<'a> {
     charge_encoded_work: bool,
     current_metadata_entries: usize,
     error: Option<GtsReadLimitError>,
+    cancelled: Cell<bool>,
 }
 
 impl<'a> ReadLimiter<'a> {
@@ -288,6 +290,7 @@ impl<'a> ReadLimiter<'a> {
             charge_encoded_work: true,
             current_metadata_entries: 0,
             error: None,
+            cancelled: Cell::new(false),
         }
     }
 
@@ -389,7 +392,14 @@ impl<'a> ReadLimiter<'a> {
 
 impl StreamingSink for ReadLimiter<'_> {
     fn continue_reading(&self) -> bool {
-        self.error.is_none() && self.inner.continue_reading()
+        if self.error.is_some() || self.cancelled.get() {
+            return false;
+        }
+        let accepting = self.inner.continue_reading();
+        if !accepting {
+            self.cancelled.set(true);
+        }
+        accepting
     }
 
     fn item(&mut self, encoded_bytes: usize) {

@@ -14,7 +14,9 @@ use purrdf_gts::reader::{
 };
 use purrdf_gts::wire::SELF_DESCRIBE_TAG;
 use purrdf_gts::writer::{FrameOptions, Writer};
+use purrdf_hash::error::ErrorValue;
 use purrdf_lex::cbor::{ReplayStorage, Value, encode};
+use purrdf_testkit::error_capture::Capture;
 
 struct Null;
 impl StreamingSink for Null {}
@@ -88,6 +90,30 @@ impl std::io::Read for TailReader {
         let count = output
             .len()
             .min(available_end.saturating_sub(self.position));
+        output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
+        self.position += count;
+        Ok(count)
+    }
+}
+
+struct ParseThenFailReader {
+    bytes: Vec<u8>,
+    position: usize,
+    tail_start: usize,
+}
+
+impl std::io::Read for ParseThenFailReader {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if self.position == self.bytes.len() {
+            return Err(std::io::Error::other("distinct tail drain failure"));
+        }
+        let end = if self.position < self.tail_start {
+            self.tail_start
+        } else {
+            self.position.saturating_add(1)
+        }
+        .min(self.bytes.len());
+        let count = output.len().min(end.saturating_sub(self.position));
         output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
         self.position += count;
         Ok(count)
@@ -1833,6 +1859,35 @@ fn segment_boundary_diagnostic_cancellation_precedes_metadata_delivery() {
     assert_eq!(sink.retained_after_cancel, 0);
 }
 
+#[derive(Default)]
+struct CancelAtRetainedMetadata {
+    cancelled: bool,
+    metadata_entries: usize,
+}
+
+impl StreamingSink for CancelAtRetainedMetadata {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn retained_metadata(&mut self, _entries: usize) {
+        self.cancelled = true;
+    }
+
+    fn metadata_entries(&mut self, _additional: usize) {
+        self.metadata_entries += 1;
+    }
+}
+
+#[test]
+fn retained_metadata_cancellation_precedes_header_admission() {
+    let bytes = Writer::new("generic").into_bytes();
+    let mut sink = CancelAtRetainedMetadata::default();
+    read_to_sink_with_options(&bytes, ReadOptions::default(), &mut sink);
+    assert!(sink.cancelled);
+    assert_eq!(sink.metadata_entries, 0);
+}
+
 #[test]
 fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     let (prefix, complete) = two_segment_bytes();
@@ -1871,6 +1926,42 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
         .find(|diagnostic| diagnostic.code == "TornAppendError")
         .expect("the native tail failure remains visible");
     assert!(diagnostic.native_cause().is_some());
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let (result, _) = read_to_sink_from_reader_with_limits(
+        ParseThenFailReader {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("the semantic tail failure and later drain failure remain inspectable");
+    assert_eq!(result.torn, Some(prefix.len() as u64));
+    let item = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "TornAppendError")
+        .expect("the original item failure is retained");
+    let captured = Capture::read(item.native_cause().expect("typed item failure"));
+    assert_eq!(captured.code, "gts-torn-append");
+    assert!(matches!(
+        captured.field("offset"),
+        ErrorValue::Unsigned(offset) if offset == prefix.len() as u128
+    ));
+    assert_ne!(captured.child("cause").code, "std-io");
+    let drain = result
+        .diagnostics
+        .iter()
+        .find(|diagnostic| diagnostic.code == "TailDrainError")
+        .expect("the later drain failure is represented separately");
+    assert_eq!(
+        Capture::read(drain.native_cause().expect("typed drain failure")).code,
+        "std-io"
+    );
 }
 
 #[test]
@@ -1994,7 +2085,7 @@ impl StreamingSink for CancelAtDiagnostic {
         }
         self.cause_code = diagnostic
             .native_cause()
-            .map(|cause| purrdf_testkit::error_capture::Capture::read(cause).code);
+            .map(|cause| Capture::read(cause).code);
         self.cancelled = true;
     }
 
@@ -2240,6 +2331,6 @@ fn transformed_invalid_cbor_keeps_its_stable_structured_code() {
     let Some(purrdf_gts::model::DiagnosticCause::Native(cause)) = diagnostic.cause.as_ref() else {
         panic!("the payload diagnostic retains its native cause");
     };
-    let captured = purrdf_testkit::error_capture::Capture::read(&***cause);
+    let captured = Capture::read(&***cause);
     assert_eq!(captured.child("detail").code, "gts-payload-cbor");
 }

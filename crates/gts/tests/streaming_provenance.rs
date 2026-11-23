@@ -249,6 +249,7 @@ struct StoredTerms {
     refused_reads: usize,
     omit_read: bool,
     metadata: purrdf_gts::dictionary::ReaderMetadata,
+    metadata_calls: usize,
     refuse_metadata: bool,
     epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
     advance_epoch: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -261,6 +262,7 @@ impl TermStorage for StoredTerms {
         &mut self,
         usage: purrdf_gts::dictionary::ReaderMetadata,
     ) -> Result<(), DictionaryError> {
+        self.metadata_calls += 1;
         if self.refuse_metadata {
             return Err(DictionaryError::Corrupt("original metadata refusal"));
         }
@@ -363,6 +365,85 @@ impl TermStorage for StoredTerms {
         self.bindings.entry(key).or_insert(triple);
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct StopOnceAfterStoredTerm {
+    stop_once: std::cell::Cell<bool>,
+    terms: usize,
+}
+
+struct SemanticThenDrainFailure {
+    bytes: Vec<u8>,
+    position: usize,
+    tail_start: usize,
+}
+
+impl std::io::Read for SemanticThenDrainFailure {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if self.position == self.bytes.len() {
+            return Err(std::io::Error::other("distinct dictionary drain failure"));
+        }
+        let end = if self.position < self.tail_start {
+            self.tail_start
+        } else {
+            self.position.saturating_add(1)
+        }
+        .min(self.bytes.len());
+        let count = output.len().min(end.saturating_sub(self.position));
+        output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
+        self.position += count;
+        Ok(count)
+    }
+}
+
+impl StreamingSink for StopOnceAfterStoredTerm {
+    fn continue_reading(&self) -> bool {
+        !self.stop_once.replace(false)
+    }
+
+    fn stored_term(
+        &mut self,
+        _segment: u64,
+        _id: usize,
+        _term: TermLease,
+    ) -> Result<(), DictionaryError> {
+        self.terms += 1;
+        self.stop_once.set(true);
+        Ok(())
+    }
+}
+
+#[test]
+fn transient_cancellation_is_latched_before_metadata_and_commit() {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[Term::iri("https://example.org/term")]);
+    let bytes = writer.into_bytes();
+
+    let mut cancelled_storage = StoredTerms::default();
+    let mut cancelled_sink = StopOnceAfterStoredTerm::default();
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut cancelled_storage,
+        &mut cancelled_sink,
+    )
+    .expect("consumer cancellation remains a non-error stop");
+    assert_eq!(cancelled_sink.terms, 1);
+    assert_eq!(cancelled_storage.metadata_calls, 0);
+    assert_eq!(cancelled_storage.commits, 0);
+
+    let mut accepted_storage = StoredTerms::default();
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut accepted_storage,
+        &mut OrderingSink::default(),
+    )
+    .expect("a clean accepted read commits once");
+    assert_eq!(accepted_storage.commits, 1);
 }
 
 #[test]
@@ -481,6 +562,32 @@ fn bounded_dictionary_tail_admission_precedes_commit() {
     )
     .expect("the exact complete tail boundary commits once");
     assert_eq!(exact.commits, 1);
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut failed = StoredTerms::default();
+    let error = read_to_sink_from_reader_with_dictionary_and_limits(
+        SemanticThenDrainFailure {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        GtsReadLimits::UNBOUNDED,
+        &mut failed,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the item and drain failures remain typed together");
+    let DictionaryError::Tail { torn, drain } = error else {
+        panic!("expected combined dictionary tail failure");
+    };
+    assert_eq!(torn.offset, prefix.len() as u64);
+    assert!(
+        drain
+            .to_string()
+            .contains("distinct dictionary drain failure")
+    );
+    assert_eq!(failed.commits, 0);
 }
 
 type IndexedIdentity = Box<

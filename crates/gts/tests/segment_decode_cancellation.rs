@@ -145,6 +145,8 @@ impl ResolvedSink for CancellingSink {
 struct TrackingStorage {
     inner: ResidentResolutionStorage<usize>,
     segment_one_writes: usize,
+    resolved_writes: usize,
+    pending_removals: usize,
     completed: usize,
 }
 
@@ -163,6 +165,7 @@ impl ResolutionStorage<usize> for TrackingStorage {
     }
 
     fn remove_pending(&mut self, key: TermKey) -> Result<(), Self::Error> {
+        self.pending_removals += 1;
         self.inner.remove_pending(key)
     }
 
@@ -179,6 +182,7 @@ impl ResolutionStorage<usize> for TrackingStorage {
     }
 
     fn set_resolved(&mut self, key: TermKey, id: usize) -> Result<(), Self::Error> {
+        self.resolved_writes += 1;
         self.inner.set_resolved(key, id)
     }
 
@@ -240,6 +244,27 @@ fn selected_resolution_reports_cancellation_instead_of_a_child_id() {
         })
         .expect_err("a cancelled parent resolution has no selected term id");
     assert!(error.contains("resolution cancelled"));
+}
+
+#[test]
+fn interner_cancellation_precedes_resolved_storage_writes() {
+    let sink = CancellingSink {
+        cancel_at: CancelPoint::Intern,
+        ..CancellingSink::default()
+    };
+    let mut resolver = SegmentResolver::with_storage(sink, TrackingStorage::default(), impossible);
+    resolver.term(0, 0, Arc::new(Term::iri("https://example.org/cancelled")));
+    let error = resolver
+        .resolve_selected(TermKey {
+            segment: 0,
+            term: 0,
+        })
+        .expect_err("a cancelled interner has no selected term id");
+    assert!(error.contains("resolution cancelled"));
+    let (sink, storage) = resolver.into_parts();
+    assert!(sink.cancelled);
+    assert_eq!(storage.resolved_writes, 0);
+    assert_eq!(storage.pending_removals, 0);
 }
 
 #[test]

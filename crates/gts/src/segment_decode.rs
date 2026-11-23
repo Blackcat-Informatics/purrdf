@@ -1001,6 +1001,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 .set_pending(key(current), held)
                 .map_err(self.map_storage)?;
             let resolved = self.intern_raw_term(segment_index, current, term, degraded)?;
+            if !self.consumer_accepting() {
+                return Ok(ResolveOutcome::Cancelled);
+            }
             self.storage
                 .set_resolved(key(current), resolved)
                 .map_err(self.map_storage)?;

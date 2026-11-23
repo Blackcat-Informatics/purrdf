@@ -2885,13 +2885,19 @@ fn read_retry(reader: &mut impl Read, output: &mut [u8]) -> std::io::Result<usiz
     }
 }
 
+#[derive(Default)]
+struct BoundedTailOutcome {
+    torn: Option<TornAppendError>,
+    drain: Option<purrdf_hash::error::IoFailure>,
+}
+
 fn finish_bounded_input<R: Read>(
     reader: &mut StreamingCountingReader<R>,
     sink: &mut dyn StreamingSink,
     scan_items: bool,
-) -> Result<Option<TornAppendError>, purrdf_hash::error::IoFailure> {
+) -> BoundedTailOutcome {
     if !sink.continue_reading() {
-        return Ok(None);
+        return BoundedTailOutcome::default();
     }
     let mut torn = None;
     if scan_items {
@@ -2900,17 +2906,17 @@ fn finish_bounded_input<R: Read>(
                 Ok(Some((_, start, end))) => {
                     sink.item(usize::try_from(end.saturating_sub(start)).unwrap_or(usize::MAX));
                     if !sink.continue_reading() {
-                        return Ok(None);
+                        return BoundedTailOutcome::default();
                     }
                 }
-                Ok(None) => return Ok(None),
+                Ok(None) => return BoundedTailOutcome::default(),
                 Err(ItemError::Dictionary(DictionaryError::Limit {
                     resource: "encoded-input-bytes",
                     required,
                     limit,
                 })) => {
                     sink.encoded_input_refused(required, limit);
-                    return Ok(None);
+                    return BoundedTailOutcome::default();
                 }
                 Err(
                     ItemError::Dictionary(DictionaryError::Limit {
@@ -2921,20 +2927,20 @@ fn finish_bounded_input<R: Read>(
                     | ItemError::Limit { required, limit },
                 ) => {
                     sink.encoded_frame_refused(required, limit);
-                    return Ok(None);
+                    return BoundedTailOutcome::default();
                 }
                 Err(ItemError::Torn(error)) => {
                     torn = Some(error);
                     break;
                 }
-                Err(ItemError::Dictionary(_)) => return Ok(None),
+                Err(ItemError::Dictionary(_)) => return BoundedTailOutcome::default(),
             }
         }
     }
     let mut buffer = [0u8; 8192];
     loop {
         match reader.read(&mut buffer) {
-            Ok(0) => return Ok(torn),
+            Ok(0) => return BoundedTailOutcome { torn, drain: None },
             Ok(_) => {}
             Err(cause) => {
                 if let Some(DictionaryError::Limit {
@@ -2944,9 +2950,12 @@ fn finish_bounded_input<R: Read>(
                 }) = dictionary_cause(&cause)
                 {
                     sink.encoded_input_refused(required, limit);
-                    return Ok(torn);
+                    return BoundedTailOutcome { torn, drain: None };
                 }
-                return Err(cause.into());
+                return BoundedTailOutcome {
+                    torn,
+                    drain: Some(cause.into()),
+                };
             }
         }
     }
@@ -2958,7 +2967,7 @@ fn push_bounded_tail_diagnostic(
     offset: u64,
     cause: impl purrdf_hash::error::NativeError + 'static,
 ) {
-    result.torn = Some(offset);
+    result.torn.get_or_insert(offset);
     let detail = cause.to_string();
     push_result_diagnostic(
         result,
@@ -2966,6 +2975,33 @@ fn push_bounded_tail_diagnostic(
         Diagnostic {
             cause: None,
             code: "TornAppendError".to_owned(),
+            detail,
+            frame_index: None,
+        }
+        .with_native_cause(cause),
+    );
+}
+
+fn push_bounded_tail_drain_diagnostic(
+    result: &mut StreamingReadResult,
+    sink: &mut dyn StreamingSink,
+    offset: u64,
+    cause: purrdf_hash::error::IoFailure,
+    follows_torn_item: bool,
+) {
+    result.torn.get_or_insert(offset);
+    let detail = cause.to_string();
+    push_result_diagnostic(
+        result,
+        sink,
+        Diagnostic {
+            cause: None,
+            code: if follows_torn_item {
+                "TailDrainError"
+            } else {
+                "TornAppendError"
+            }
+            .to_owned(),
             detail,
             frame_index: None,
         }
@@ -3544,6 +3580,9 @@ impl ActiveStreamingSegment {
         if let Some(error) = dictionary_failure {
             return Err(ProcessError::Dictionary(error));
         }
+        if !sink.continue_reading() {
+            return Ok(());
+        }
         if let Some(terms) = external_terms.as_ref() {
             terms
                 .storage
@@ -3738,16 +3777,21 @@ pub fn read_to_sink_from_reader_with_limits<R: Read>(
     };
     let mut limiter = read_limits::ReadLimiter::new(sink, limits, 0);
     let mut result = read_items(&mut reader, options, &mut limiter);
-    match finish_bounded_input(&mut reader, &mut limiter, result.torn.is_none()) {
-        Ok(Some(error)) => {
-            let offset = error.offset;
-            push_bounded_tail_diagnostic(&mut result, &mut limiter, offset, error);
-        }
-        Ok(None) => {}
-        Err(cause) => {
-            let offset = reader.pos;
-            push_bounded_tail_diagnostic(&mut result, &mut limiter, offset, cause);
-        }
+    let tail = finish_bounded_input(&mut reader, &mut limiter, result.torn.is_none());
+    let follows_torn_item = tail.torn.is_some();
+    if let Some(error) = tail.torn {
+        let offset = error.offset;
+        push_bounded_tail_diagnostic(&mut result, &mut limiter, offset, error);
+    }
+    if let Some(cause) = tail.drain {
+        let offset = reader.pos;
+        push_bounded_tail_drain_diagnostic(
+            &mut result,
+            &mut limiter,
+            offset,
+            cause,
+            follows_torn_item,
+        );
     }
     limiter.complete_input(usize::try_from(reader.pos).unwrap_or(usize::MAX));
     let usage = limiter.usage();
@@ -3832,10 +3876,11 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
     if let Some(error) = limiter.take_error() {
         return Err(dictionary_read_limit(&error));
     }
-    match tail {
-        Ok(Some(error)) => return Err(DictionaryError::Replay(error.cause)),
-        Ok(None) => {}
-        Err(cause) => return Err(DictionaryError::Io(cause)),
+    match (tail.torn, tail.drain) {
+        (Some(torn), Some(drain)) => return Err(DictionaryError::Tail { torn, drain }),
+        (Some(error), None) => return Err(DictionaryError::Replay(error.cause)),
+        (None, Some(cause)) => return Err(DictionaryError::Io(cause)),
+        (None, None) => {}
     }
     if limiter.continue_reading() && result_allows_storage_commit(&result) {
         dictionary.commit()?;
@@ -4016,6 +4061,10 @@ fn read_items_stored(
                 }
                 let completed_retained = retained_result_entries(&result, completed_meta_entries);
                 sink.retained_metadata(completed_retained);
+                if !sink.continue_reading() {
+                    cancelled = true;
+                    return Ok(result);
+                }
                 let retained_header_entries =
                     unwrap_header(&item).map_or(1, |header| header_retained_entries(header));
                 sink.metadata_entries(retained_header_entries);
