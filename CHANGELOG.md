@@ -6,7 +6,24 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
-## [Unreleased]
+## [5.0.1] - 2026-11-22
+
+- **Security: Python validation authenticates native dataset handles before
+  borrowing them.** Validation accepts the exact PurRDF store types, resolves
+  their registered native handle, and keeps the producer alive for the complete
+  borrow. A forged or stale capsule is rejected with a typed Python error
+  without dereferencing caller-supplied memory. Store and mutable-dataset
+  validation remain zero-serialization paths.
+- **Security: hostile GTS reads can enforce one explicit, cumulative resource
+  contract across Rust, Python, C and the command line.** Bounded entry points
+  account for encoded input, frames, rows, terms, dictionaries, blobs, metadata,
+  diagnostics, nested decoded bytes, nesting depth and measurable work,
+  including transport decompression and deferred blob paths. Exact-limit input
+  is admitted and the first excess unit is refused without a partial result.
+  Existing v4 entry points retain their trusted-input behavior. Applications
+  that accept untrusted artifacts select the safe profile or set individual
+  limits; large datasets can raise those finite limits explicitly instead of
+  disabling admission control.
 
 ## [5.0.0] - 2026-11-21
 
