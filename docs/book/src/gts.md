@@ -15,7 +15,34 @@ This chapter is a user-level tour. **The wire format itself is specified in
 in `gmeow-gts`** — consult the spec for framing, fold semantics, registries, and conformance
 classes; nothing here supersedes it.
 
+## Generation 2 RDF graph transport
+
+Use `purrdf_gts::v2::read` for generation detection and strict graph reading.
+Generation 1 input goes to the legacy reader and returns its graph and
+diagnostics. Generation 2 input returns resolved RDF lines, typed values and
+blob declarations. The reader interprets headers, resync openers at item
+boundaries, RDF dictionary and row frames, chunks, whole blobs, recipes,
+values, external declarations, packs and commits. It preserves RDF 1.2
+triple terms, reifier bindings, directed language literals,
+annotation multiplicities and empty named graphs. Readable rows and payloads
+remain available when a row order claim or stored check disagrees with the
+bytes. Unreadable and unsupported content returns a byte position and
+reason. [Generation 2 specification](https://github.com/Blackcat-Informatics/gmeow-gts/tree/main/docs/v2)
+
+Supply a finite `ReadCapacity` to this generation-detecting entry point. Its
+`first_generation` field carries the complete `GtsReadLimits` contract into a
+generation 1 delegation; the remaining fields bound generation 2 payloads,
+formed text, rebuilt values and item count. Large datasets raise the applicable
+finite ceilings.
+
+Use `purrdf_rdf::gts_write::write_gts_v2` to send an RDF dataset to a
+`std::io::Write` sink as one committed segment. `purrdf_gts::v2::SegmentWriter`
+can also append resolved RDF folds, whole or chunked blobs, values and
+external declarations to a caller-owned sink.
+
 ## The container model, at a high level
+
+The container model below describes generation 1.
 
 A GTS file is a **CBOR Sequence of one or more append-only segments**. Each
 segment is a deterministic CBOR header followed by deterministic CBOR frames
@@ -38,6 +65,8 @@ Properties that fall out of this design:
   mapping, blank-node scoping, and multi-segment value union.
 
 ## Reading and writing from Rust
+
+The Rust examples in this section use generation 1.
 
 The container engine (`purrdf-gts`) owns the wire-format machinery — reader,
 writer, fold, verify, COSE, trust policy:

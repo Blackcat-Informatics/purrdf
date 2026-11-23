@@ -8,7 +8,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 
 use super::super::{
     Capturing, DecodeErrorKind, EncodedItem, Limits, OwnedOutput, Source, SpanOutput, Stream,
-    Value, WalkError, argument, decode_item_to, display_error,
+    Value, WalkError, argument, decode_item_to, display_error, visit_failure,
 };
 
 /// A structural-navigation failure with its absolute source byte position.
@@ -17,6 +17,7 @@ use super::super::{
 pub struct StructuralError {
     kind: DecodeErrorKind,
     offset: u64,
+    stack_reserve: Option<std::collections::TryReserveError>,
 }
 
 impl StructuralError {
@@ -35,24 +36,29 @@ impl From<WalkError> for StructuralError {
         Self {
             kind: error.kind,
             offset: error.offset,
+            stack_reserve: error.stack_reserve,
         }
     }
 }
 
 impl fmt::Display for StructuralError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        display_error(self.offset, &self.kind, f)
+        display_error(self.offset, &self.kind, self.stack_reserve.as_ref(), f)
     }
 }
 crate::error_source!(StructuralError => {
+    Self { stack_reserve: Some(cause), .. } => cause,
     Self { kind: DecodeErrorKind::Io(cause), .. } => cause,
 });
 impl purrdf_hash::error::StructuredError for StructuralError {
-    purrdf_hash::error_visit! {
-        @record self { kind, offset } => "cbor-structural-range" {
-            "kind" => Cause(&self.kind),
-            "offset" => ByteCount(u128::from(self.offset)),
-        }
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visit_failure(
+            visitor,
+            "cbor-structural-range",
+            u128::from(self.offset),
+            &self.kind,
+            self.stack_reserve.as_ref(),
+        );
     }
 }
 

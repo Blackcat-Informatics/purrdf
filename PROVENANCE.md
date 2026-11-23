@@ -123,6 +123,27 @@ Copied from `gmeow-gts`:
 - GTS specification and implementer docs under `docs`
 - SVG brand assets under `docs`
 
+The GTS generation 2 wire grammar, segment openers, resync candidate tests, frame links and payload checks follow [P1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P1.md)
+and [P2](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P2.md)
+at `c646f9d98be7ff31ceb0cb96695ee5ccc75db04a`. The whole-blob writer,
+range commitments and signature envelope grammar follow [P4](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P4.md),
+[P5](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P5.md)
+and [P6](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P6.md)
+at the same revision. Term reservations, dictionary payloads, row
+columns and RDF resolution follow [P3](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P3.md).
+Chunked writing uses the fixed gear table and cut rule of P4, and recipe
+and value reconstruction use its unit scope.
+The graph reader takes the file capacity limits from [P7](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P7.md)
+and delegates generation 1 inputs as specified in [P9](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P9.md).
+The binary fixtures in `crates/gts/tests/fixtures/v2`
+preserve their upstream paths and bytes from `vectors/v2`. Their SHA-256
+values match the upstream manifest. The header identity expectation
+follows P1 section 10.2.
+The full-span parity writer uses the field, matrix and shard geometry of P5
+sections 6.1 through 6.5. Its byte identity expectation is the BLAKE3 digest
+of the decoded `P5/parity-placement.crossing.bin.zst` fixture at that
+revision, checked against the upstream SHA-256 manifest.
+
 Extraction policy:
 
 - Source repositories are read-only during this phase.

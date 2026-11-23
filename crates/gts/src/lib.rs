@@ -104,6 +104,7 @@ pub mod tar;
 mod term_table;
 pub mod transport;
 pub mod ulid;
+pub mod v2;
 pub mod verify;
 pub mod wire;
 pub mod writer;

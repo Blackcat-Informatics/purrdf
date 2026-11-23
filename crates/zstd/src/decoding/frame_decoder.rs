@@ -36,6 +36,13 @@ use core::convert::TryInto;
 
 use crate::common::MAXIMUM_ALLOWED_WINDOW_SIZE;
 
+fn check_frame_block_size(size: u64, maximum: u64) -> Result<(), FrameDecoderError> {
+    if size > maximum {
+        return Err(FrameDecoderError::BlockSizeExceedsFrameLimit { size, maximum });
+    }
+    Ok(())
+}
+
 fn block_header_decode_error(
     source: decoding::errors::BlockHeaderReadError,
     _block_index: u32,
@@ -1424,6 +1431,25 @@ impl FrameDecoder {
         self.decode_all_impl(input, output, |this, src| this.reset_from_slice(src))
     }
 
+    /// Decode one Zstandard frame into a bounded output slice.
+    ///
+    /// Advances `input` through the first frame and returns the number of
+    /// bytes written. Callers can inspect the remaining input when their
+    /// format requires the frame to consume the entire source.
+    ///
+    /// # Errors
+    ///
+    /// Returns the native frame error for invalid data, a skippable frame,
+    /// or insufficient output space.
+    pub fn decode_frame(
+        &mut self,
+        input: &mut &[u8],
+        output: &mut [u8],
+    ) -> Result<usize, FrameDecoderError> {
+        self.reset_from_slice(input)?;
+        self.decode_initialized_frame(input, output)
+    }
+
     /// Decode multiple frames into the output slice using a pre-parsed dictionary handle.
     ///
     /// `input` must contain an exact number of frames. Skippable frames are allowed and will be
@@ -1681,105 +1707,114 @@ impl FrameDecoder {
                 }
                 Err(e) => return Err(e),
             };
-            // Per-frame direct-path dispatch. Now safe to route the
-            // public `decode_all` here because
-            // `UserSliceBackend::exec_sequence_inline` returns
-            // `Result<(), ExecuteSequencesError>` instead of
-            // panicking on capacity overflow; the error propagates
-            // up as `FrameDecoderError`. Eligibility (FCS > 0,
-            // remaining `output` slice holds the declared content)
-            // puts the frame on the fast path that bypasses the
-            // FlatBuf/Ring -> `read()` drain copy. Ineligible frames
-            // (no FCS, output too small) fall through to the legacy
-            // `decode_blocks` + `read` drain loop below. Dictionary
-            // frames are eligible: `run_direct_decode` hands the
-            // shared dict handle to its buffer, and beyond-prefix
-            // offsets resolve through `repeat_from_dict`.
-            let (content_size, fcs_declared) = {
-                let state_ref = self.state.as_ref().expect("init populated state");
-                (
-                    state_ref.frame_header.frame_content_size(),
-                    state_ref.frame_header.fcs_declared(),
-                )
-            };
-            // Direct decode requires only that the caller slice holds the
-            // declared content; the inline sequence-exec path no longer
-            // needs `WILDCOPY_OVERLENGTH` trailing slack because the
-            // trailing sequence(s) take the bounded (non-overshooting)
-            // copy in `UserSliceBackend::exec_sequence_bounded`. This is
-            // the universal "decode into an FCS-sized buffer" case (a
-            // caller sizing `output` to exactly `frame_content_size`),
-            // so dropping the slack requirement halves its peak alloc.
-            //
-            // Per-block checksums collected inside `run_direct_decode`
-            // post-loop (over recorded (start, end) ranges of `output`)
-            // so the direct path stays eligible AND keeps the
-            // window-size cap (`drop_to_window_size`) between blocks
-            // that the spec relies on for `offset <= window_size`
-            // validation. Path choice no longer alters checksum
-            // semantics.
-            let direct_eligible = content_size > 0 && (output.len() as u64) >= content_size;
-            if direct_eligible {
-                let written = self.run_direct_decode(&mut input, output, content_size)?;
-                output = &mut output[written..];
-                total_bytes_written += written;
-                // Per-frame content-checksum verification (no-op unless the
-                // mode is `Verify` and the frame carries a checksum).
-
-                self.verify_content_checksum()?;
-                continue;
-            }
-            // Non-direct fallback: pre-reserve the backing buffer to
-            // `window_size` in a single allocation before block decode
-            // starts, so multi-segment frames don't pay repeated
-            // `reserve_amortized` grow steps as blocks accumulate (each
-            // block only reserves MAX_BLOCK_SIZE = 128 KiB, so a window
-            // > 128 KiB otherwise grows through several intermediate
-            // sizes with `alloc_zeroed + memcpy` each time).
-            if let Some(state) = self.state.as_mut() {
-                // FCS-capped via `useful_window_size` — the same cap
-                // `decode_blocks` applies, so its per-iteration reserve in
-                // the loop below cannot grow the buffer back to the raw
-                // frame window.
-                let useful_window = state.useful_window_size();
-                state.decoder_scratch.reserve_buffer(useful_window);
-            }
-            let frame_start_total = total_bytes_written;
-            loop {
-                self.decode_blocks(&mut input, BlockDecodingStrategy::UptoBytes(1024 * 1024))?;
-                let bytes_written = self
-                    .read(output)
-                    .map_err(FrameDecoderError::FailedToDrainDecodebuffer)?;
-                output = &mut output[bytes_written..];
-                total_bytes_written += bytes_written;
-                if self.can_collect() != 0 {
-                    return Err(FrameDecoderError::TargetTooSmall);
-                }
-                if self.is_finished() {
-                    break;
-                }
-            }
-            // Per-frame FCS validation on the legacy fallback path.
-            // Use `fcs_declared()` (NOT `content_size > 0`) so an
-            // empty frame with explicit FCS=0 on the wire still gets
-            // validated.
-            if fcs_declared {
-                let produced = (total_bytes_written - frame_start_total) as u64;
-                if produced != content_size {
-                    return Err(FrameDecoderError::FrameContentSizeMismatch {
-                        declared: content_size,
-                        produced,
-                    });
-                }
-            }
-            // Per-frame content-checksum verification on the drain path: the
-            // frame is fully decoded and drained here (is_finished + nothing
-            // left to collect), so the running digest and stored value are
-            // final. No-op unless the mode is `Verify`.
-
-            self.verify_content_checksum()?;
+            let written = self.decode_initialized_frame(&mut input, output)?;
+            output = &mut output[written..];
+            total_bytes_written += written;
         }
 
+        Ok(total_bytes_written)
+    }
+
+    fn decode_initialized_frame(
+        &mut self,
+        input: &mut &[u8],
+        mut output: &mut [u8],
+    ) -> Result<usize, FrameDecoderError> {
+        // Per-frame direct-path dispatch. Now safe to route the
+        // public `decode_all` here because
+        // `UserSliceBackend::exec_sequence_inline` returns
+        // `Result<(), ExecuteSequencesError>` instead of
+        // panicking on capacity overflow; the error propagates
+        // up as `FrameDecoderError`. Eligibility (FCS > 0,
+        // remaining `output` slice holds the declared content)
+        // puts the frame on the fast path that bypasses the
+        // FlatBuf/Ring -> `read()` drain copy. Ineligible frames
+        // (no FCS, output too small) fall through to the legacy
+        // `decode_blocks` + `read` drain loop below. Dictionary
+        // frames are eligible: `run_direct_decode` hands the
+        // shared dict handle to its buffer, and beyond-prefix
+        // offsets resolve through `repeat_from_dict`.
+        let (content_size, fcs_declared) = {
+            let state_ref = self.state.as_ref().expect("init populated state");
+            (
+                state_ref.frame_header.frame_content_size(),
+                state_ref.frame_header.fcs_declared(),
+            )
+        };
+        // Direct decode requires only that the caller slice holds the
+        // declared content; the inline sequence-exec path no longer
+        // needs `WILDCOPY_OVERLENGTH` trailing slack because the
+        // trailing sequence(s) take the bounded (non-overshooting)
+        // copy in `UserSliceBackend::exec_sequence_bounded`. This is
+        // the universal "decode into an FCS-sized buffer" case (a
+        // caller sizing `output` to exactly `frame_content_size`),
+        // so dropping the slack requirement halves its peak alloc.
+        //
+        // Per-block checksums collected inside `run_direct_decode`
+        // post-loop (over recorded (start, end) ranges of `output`)
+        // so the direct path stays eligible AND keeps the
+        // window-size cap (`drop_to_window_size`) between blocks
+        // that the spec relies on for `offset <= window_size`
+        // validation. Path choice no longer alters checksum
+        // semantics.
+        let direct_eligible = content_size > 0 && (output.len() as u64) >= content_size;
+        if direct_eligible {
+            let written = self.run_direct_decode(input, output, content_size)?;
+            // Per-frame content-checksum verification (no-op unless the
+            // mode is `Verify` and the frame carries a checksum).
+
+            self.verify_content_checksum()?;
+            return Ok(written);
+        }
+        // Non-direct fallback: pre-reserve the backing buffer to
+        // `window_size` in a single allocation before block decode
+        // starts, so multi-segment frames don't pay repeated
+        // `reserve_amortized` grow steps as blocks accumulate (each
+        // block only reserves MAX_BLOCK_SIZE = 128 KiB, so a window
+        // > 128 KiB otherwise grows through several intermediate
+        // sizes with `alloc_zeroed + memcpy` each time).
+        if let Some(state) = self.state.as_mut() {
+            // FCS-capped via `useful_window_size` — the same cap
+            // `decode_blocks` applies, so its per-iteration reserve in
+            // the loop below cannot grow the buffer back to the raw
+            // frame window.
+            let useful_window = state.useful_window_size();
+            state.decoder_scratch.reserve_buffer(useful_window);
+        }
+        let mut total_bytes_written = 0;
+        loop {
+            self.decode_blocks(&mut *input, BlockDecodingStrategy::UptoBytes(1024 * 1024))?;
+            let bytes_written = self
+                .read(output)
+                .map_err(FrameDecoderError::FailedToDrainDecodebuffer)?;
+            output = &mut output[bytes_written..];
+            total_bytes_written += bytes_written;
+            if self.can_collect() != 0 {
+                return Err(FrameDecoderError::TargetTooSmall);
+            }
+            if self.is_finished() {
+                break;
+            }
+        }
+        // Per-frame FCS validation on the legacy fallback path.
+        // Use `fcs_declared()` (NOT `content_size > 0`) so an
+        // empty frame with explicit FCS=0 on the wire still gets
+        // validated.
+        if fcs_declared {
+            let produced = total_bytes_written as u64;
+            if produced != content_size {
+                return Err(FrameDecoderError::FrameContentSizeMismatch {
+                    declared: content_size,
+                    produced,
+                });
+            }
+        }
+        // Per-frame content-checksum verification on the drain path: the
+        // frame is fully decoded and drained here (is_finished + nothing
+        // left to collect), so the running digest and stored value are
+        // final. No-op unless the mode is `Verify`.
+
+        self.verify_content_checksum()?;
         Ok(total_bytes_written)
     }
 
@@ -1882,6 +1917,7 @@ impl FrameDecoder {
             .state
             .as_mut()
             .expect("caller ensures init populated state");
+        let block_limit = super::frame_block_size_max(&state.frame_header) as u64;
 
         // Fast path: a frame that is a single RAW block spanning the whole
         // declared content. Upstream zstd handles this as one `ZSTD_copyRawBlock`
@@ -1900,6 +1936,7 @@ impl FrameDecoder {
                 if bh.last_block
                     && matches!(bh.block_type, crate::blocks::block::BlockType::Raw)
                     && n as u64 == content_size
+                    && n as u64 <= block_limit
                     && probe.len() >= n
                     && output.len() >= n
                 {
@@ -2042,6 +2079,14 @@ impl FrameDecoder {
                 block_dec.read_block_header(&mut *input).map_err(|source| {
                     block_header_decode_error(source, block_index, block_frame_offset)
                 })?;
+            let block_size = if matches!(
+                block_header.block_type,
+                crate::blocks::block::BlockType::Compressed
+            ) {
+                block_header.content_size
+            } else {
+                block_header.decompressed_size
+            };
             state.bytes_read_counter += u64::from(hsize);
             // Pre-flight FCS check ONLY for Raw / RLE blocks where
             // `decompressed_size` is the actual block output size.
@@ -2057,6 +2102,7 @@ impl FrameDecoder {
                     produced: produced + block_upper,
                 });
             }
+            check_frame_block_size(u64::from(block_size), block_limit)?;
             // Slice-source fast path: consume the block body
             // straight from `input` without copying into the
             // persistent `block_content_buffer`.
@@ -2129,7 +2175,9 @@ impl FrameDecoder {
                 use core::hash::Hasher;
                 hasher.write(direct.buffer.buffer_ref().written_since(produced as usize));
             }
-            produced = direct.buffer.buffer_ref().tail() as u64;
+            let end = direct.buffer.buffer_ref().tail() as u64;
+            check_frame_block_size(end - produced, block_limit)?;
+            produced = end;
             // Post-decode FCS overflow check.
             if produced > content_size {
                 return Err(err::FrameContentSizeMismatch {

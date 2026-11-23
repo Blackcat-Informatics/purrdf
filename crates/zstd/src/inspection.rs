@@ -305,6 +305,11 @@ impl StructuredError for crate::decoding::errors::FrameDecoderError {
             Self::TargetTooSmall => {
                 visitor.variant("zstd-frame-decoder-target-too-small");
             }
+            Self::BlockSizeExceedsFrameLimit { size, maximum } => {
+                visitor.variant("zstd-frame-decoder-block-size-exceeds-frame-limit");
+                visitor.value(Some("size"), ErrorValue::ByteCount(u128::from(*size)));
+                visitor.value(Some("maximum"), ErrorValue::ByteCount(u128::from(*maximum)));
+            }
             Self::FrameContentSizeMismatch { declared, produced } => {
                 visitor.variant("zstd-frame-decoder-frame-content-size-mismatch");
                 visitor.value(

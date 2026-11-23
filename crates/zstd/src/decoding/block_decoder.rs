@@ -20,7 +20,7 @@ use crate::common::MAX_BLOCK_SIZE;
 use crate::decoding::errors::DecodeSequenceError;
 use crate::decoding::errors::{
     BlockHeaderReadError, BlockSizeError, BlockTypeError, DecodeBlockContentError,
-    DecompressBlockError,
+    DecompressBlockError, ExecuteSequencesError,
 };
 use crate::decoding::scratch::Workspace;
 use crate::io::Read;
@@ -413,7 +413,9 @@ impl BlockDecoder {
                     },
                 ));
             }
-            buffer.push(literals_view);
+            buffer
+                .try_push(literals_view)
+                .map_err(ExecuteSequencesError::from)?;
         }
 
         Ok(())
