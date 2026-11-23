@@ -14,9 +14,12 @@ use super::{
 use crate::FastSet;
 
 mod encode;
+mod field;
+mod solve;
 mod stream;
 
 pub(super) use encode::{Recorder, RecordingWriter};
+pub use solve::{ParityPatch, ParitySolution, ParitySolveError};
 pub(super) use stream::ParityStream;
 pub use stream::{ParityFinding, ParityFindingKind};
 

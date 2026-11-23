@@ -29,7 +29,8 @@ pub use index::{IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexSt
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
-    ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParitySpanLength, ParityTable,
+    ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParityPatch, ParitySolution,
+    ParitySolveError, ParitySpanLength, ParityTable,
 };
 pub use payload::{
     PayloadBudget, PayloadCapacity, PayloadCheck, PayloadDamage, PayloadRefusal,
