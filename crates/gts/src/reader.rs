@@ -3883,7 +3883,12 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
         return Err(dictionary_read_limit(&error));
     }
     match (tail.torn, tail.drain) {
-        (Some(torn), Some(drain)) => return Err(DictionaryError::Tail { torn, drain }),
+        (Some(torn), Some(drain)) => {
+            return Err(DictionaryError::Tail {
+                torn: Box::new(torn),
+                drain,
+            });
+        }
         (Some(error), None) => return Err(DictionaryError::Replay(error.cause)),
         (None, Some(cause)) => return Err(DictionaryError::Io(cause)),
         (None, None) => {}

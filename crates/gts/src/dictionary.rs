@@ -71,7 +71,7 @@ pub enum DictionaryError {
     /// An item decode failed and the subsequent tail-admission drain also failed.
     Tail {
         /// Original item-boundary failure, including its absolute start offset.
-        torn: TornAppendError,
+        torn: Box<TornAppendError>,
         /// Later host failure while checking the remaining input.
         drain: IoFailure,
     },
@@ -125,7 +125,7 @@ impl std::error::Error for DictionaryError {
             Self::Storage(cause) => Some(cause),
             Self::Io(cause) => Some(cause),
             Self::Replay(cause) => Some(cause),
-            Self::Tail { torn, .. } => Some(torn),
+            Self::Tail { torn, .. } => Some(torn.as_ref()),
             _ => None,
         }
     }
@@ -137,7 +137,7 @@ impl purrdf_hash::error::StructuredError for DictionaryError {
         Io(cause) => "gts-dictionary-io" { "cause" => Cause(cause) },
         Replay(cause) => "gts-dictionary-replay" { "cause" => Cause(cause) },
         Tail { torn, drain } => "gts-dictionary-tail" {
-            "torn" => Cause(torn), "drain" => Cause(drain)
+            "torn" => Cause(torn.as_ref()), "drain" => Cause(drain)
         },
         Missing(key) => "gts-dictionary-missing" {
             "segment" => Unsigned(u128::from(key.segment)),
