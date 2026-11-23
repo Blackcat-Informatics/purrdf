@@ -107,6 +107,11 @@ executes that example against the generated shared library and committed header.
 
 ## ABI contract (every entry point)
 
+ABI `0.21.0` adds `purrdf_to_gts_v2` for a committed v2 segment in arrival
+order. `purrdf_from_gts` loads complete datasets from either generation.
+`purrdf_to_gts` writes profiled v1 containers. Free the returned handles
+with `purrdf_buffer_free` or `purrdf_dataset_free`.
+
 ABI `0.20.0` adds `purrdf_yaml_source_export` and
 `purrdf_yaml_source_reconstruct`. Export borrows original source bytes, an
 explicit source IRI and mandatory profile JSON, returning independent dataset
@@ -163,7 +168,7 @@ the IRI failure without parsing English. The error message and the record's
   When an error out-pointer is supplied, a failure stores an owned `PurrdfError`
   there.
 - **SemVer-frozen ABI.** The status enum is append-only; new fields/functions are
-  additive. The current ABI is **0.20.0 (beta)** — the freeze *discipline* is in
+  additive. The current ABI is **0.21.0 (beta)** — the freeze *discipline* is in
   place, but the version stays pre-1.0 until a real C consumer and the rdflib
   shim exercise it. `purrdf_abi_version` reports it.
 - **An incompatible change is declared, not smuggled.** Pre-1.0 the project
@@ -475,7 +480,7 @@ documents are parsed as N-Quads (which accepts N-Triples); `purrdf_term_to_ntrip
 emits N-Triples. Both rows carry `admits_relative_iri: false` / `emits_base: false`
 in the format registry, so a base could only be ignored. A C host holding Turtle or
 RDF/XML reaches those services through `purrdf_parse`, which does take a base.
-`purrdf_to_gts` / `purrdf_from_gts` move a binary CBOR container whose terms are
+`purrdf_to_gts_v2`, `purrdf_to_gts` and `purrdf_from_gts` move a binary CBOR container whose terms are
 already absolute, and the `purrdf_graph_*` mutators take structured term views
 whose IRIs are absolute by contract.
 

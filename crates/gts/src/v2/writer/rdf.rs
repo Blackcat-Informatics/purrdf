@@ -11,6 +11,28 @@ use crate::v2::{Line, LiteralDirection, LiteralValue, RdfFold, Term, TermId, Ter
 
 const FRAME_ROWS: usize = 4096;
 
+/// Write one committed RDF segment and flush the sink.
+///
+/// # Errors
+/// Returns a fold, capacity, or sink failure. A sink can contain a partial
+/// segment when writing fails.
+pub fn write_rdf_segment<W: Write>(fold: &RdfFold, sink: W) -> Result<W, SegmentWriteError> {
+    let mut writer = SegmentWriter::new(sink)?;
+    writer.add_rdf(fold)?;
+    writer.add_commit()?;
+    let mut sink = writer.into_inner();
+    sink.flush()?;
+    Ok(sink)
+}
+
+/// Encode one committed RDF segment into an owned buffer.
+///
+/// # Errors
+/// Returns a fold or capacity failure, including a refused byte reservation.
+pub fn rdf_segment_bytes(fold: &RdfFold) -> Result<Vec<u8>, SegmentWriteError> {
+    Ok(write_rdf_segment(fold, Buffer::default())?.0)
+}
+
 impl<W: Write> SegmentWriter<W> {
     /// Append a resolved RDF fold in arrival order.
     ///

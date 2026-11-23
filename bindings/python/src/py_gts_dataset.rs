@@ -20,9 +20,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyString};
 
+use crate::gts::{GtsDatasetReadError, read_gts_dataset};
 use crate::py_gts::rdf_format;
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs, serialize_frozen};
 use crate::py_store::PyRdfFormat;
+use crate::py_store::presentation::native_error;
 use crate::{RdfLookaside, canonical_flat_nquads, gts_write};
 
 /// A Python handle to a frozen [`crate::RdfDataset`].
@@ -78,6 +80,19 @@ impl PyRdfDataset {
         Ok(Self {
             inner: inner.into(),
         })
+    }
+
+    /// Load a complete RDF dataset from a GTS v1 or v2 container.
+    #[staticmethod]
+    fn from_gts(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+        let dataset = py
+            .detach(|| read_gts_dataset(data))
+            .map_err(|error| match error {
+                GtsDatasetReadError::Legacy(diagnostic)
+                | GtsDatasetReadError::GenerationTwo(diagnostic) => native_error(py, &diagnostic),
+                error => PyValueError::new_err(error.to_string()),
+            })?;
+        Ok(Self::from_frozen(dataset))
     }
 
     /// The number of deduplicated quads.
@@ -179,6 +194,18 @@ impl PyRdfDataset {
             .detach(|| gts_write::to_gts(dataset.as_ref(), &RdfLookaside::default(), profile))
             .map_err(|e| PyValueError::new_err(e.to_string()))?;
         Ok(PyBytes::new(py, &bytes).unbind())
+    }
+
+    /// Encode one committed GTS v2 segment in arrival order.
+    fn to_gts_v2(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        let bytes = py
+            .detach(|| gts_write::to_gts_v2(self.inner.as_ref()))
+            .map_err(|diagnostic| native_error(py, &diagnostic))?;
+        let result = PyBytes::new_with(py, bytes.len(), |output| {
+            output.copy_from_slice(&bytes);
+            Ok(())
+        })?;
+        Ok(result.unbind())
     }
 }
 

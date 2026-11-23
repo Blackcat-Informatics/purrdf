@@ -6,14 +6,15 @@
 use std::os::raw::c_char;
 
 use purrdf_core::RdfLookaside;
+use purrdf_lex::allocation::{Memory, Resident};
 use purrdf_rs::gts::{GtsDatasetReadError, read_gts_dataset};
-use purrdf_rs::gts_write::to_gts;
+use purrdf_rs::gts_write::{to_gts, to_gts_v2};
 
 use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
-use crate::handles::into_handle;
+use crate::handles::{into_handle, publish_handle};
 use crate::status::PurrdfStatus;
 
 /// Read a GTS v1 or v2 container into a fresh frozen dataset.
@@ -56,7 +57,7 @@ pub unsafe extern "C" fn purrdf_from_gts(
     }
 }
 
-/// Write a frozen dataset to canonical GTS container bytes under `profile`
+/// Write a frozen dataset to canonical GTS v1 bytes under `profile`
 /// (e.g. `"dist"`). The output goes to `*out_buffer` (free with
 /// `purrdf_buffer_free`).
 ///
@@ -88,6 +89,41 @@ pub unsafe extern "C" fn purrdf_to_gts(
                 PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
             })?;
             *out_buffer = into_handle(PurrdfBuffer::from(bytes));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Write a frozen dataset as one committed GTS v2 segment in arrival order.
+/// Release the returned `*out_buffer` with `purrdf_buffer_free`.
+///
+/// Preserves RDF 1.2 statements, scoped blank identities and empty named graphs.
+/// Used composite literals require valid lexical forms and blank-free contents.
+/// # Safety
+/// `dataset` must be a live handle and the out-params must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_to_gts_v2(
+    dataset: *const PurrdfDataset,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_to_gts_v2",
+                ));
+            }
+            let bytes = to_gts_v2(PurrdfDataset::dataset(dataset)).map_err(|diagnostic| {
+                PurrdfError::from_owned_diagnostic(PurrdfStatus::GtsError, diagnostic)
+            })?;
+            let buffer = Memory::new(&mut Resident)
+                .boxed(PurrdfBuffer::from(bytes))
+                .map_err(|cause| {
+                    PurrdfError::from_owned_diagnostic(PurrdfStatus::StorageError, cause.into())
+                })?;
+            *out_buffer = publish_handle(buffer);
             Ok(PurrdfStatus::Ok)
         })
     }

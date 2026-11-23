@@ -25,6 +25,7 @@ mod rdf;
 mod signature;
 
 pub use cosign::{CoSignError, append_cosigned_commit};
+pub use rdf::{rdf_segment_bytes, write_rdf_segment};
 pub use signature::SignatureWriteError;
 
 type Digest = [u8; DIGEST_LENGTH];

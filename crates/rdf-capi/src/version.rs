@@ -330,7 +330,12 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// Adds `purrdf_yaml_source_export` and `purrdf_yaml_source_reconstruct` with
 /// existing dataset/buffer ownership. The `purrdf_parse` signature stays unchanged.
 /// The native-cause accessor also exposes original YAML source refusals.
-pub const PURRDF_ABI_MINOR: u32 = 20;
+///
+/// # `0.21.0`: GTS v2
+///
+/// Adds `purrdf_to_gts_v2` for a committed segment in arrival order.
+/// `purrdf_from_gts` loads complete datasets from both generations.
+pub const PURRDF_ABI_MINOR: u32 = 21;
 /// ABI patch version. Reset to `0` by the MINOR bump documented above.
 pub const PURRDF_ABI_PATCH: u32 = 0;
 

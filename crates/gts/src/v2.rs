@@ -59,6 +59,7 @@ pub use terms::{
 };
 pub use writer::{
     CoSignError, SegmentWriteError, SegmentWriter, SignatureWriteError, append_cosigned_commit,
+    rdf_segment_bytes, write_rdf_segment,
 };
 
 /// The reason a wire value violates the GTS v2 grammar.

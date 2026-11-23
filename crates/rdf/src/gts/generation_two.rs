@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use core::fmt;
+use std::borrow::Cow;
 use std::sync::Arc;
 
-use purrdf_core::FastMap;
 use purrdf_core::blank_label::allocatable_scope;
-use purrdf_core::cdt_blank::{BlankBinding, cdt_embedded_blanks_with_memory};
+use purrdf_core::cdt_blank::{
+    BlankBinding, bind_cdt_blank_labels_with_memory, cdt_embedded_blanks_with_memory,
+    is_cdt_datatype,
+};
+use purrdf_core::{FastMap, LossLedger};
 use purrdf_gts::v2::{
     Generation, Item, Line, LiteralDirection, RdfFold, RdfGraph, ReadCapacity, ReadError,
     ReadGraph, SignatureInputs, Term, TermId as WireId, read_with_signature_inputs,
@@ -14,6 +18,7 @@ use purrdf_gts::v2::{
 use purrdf_hash::error::NativeError;
 use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError, retain_native_cause};
 
+use crate::gts_language_fold::{FoldSite, record_language_fold_loss};
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfTextDirection, TermId};
 
 /// A native RDF dataset and the transport graph that supplied its lines.
@@ -89,6 +94,19 @@ impl purrdf_hash::error::StructuredError for GtsDatasetReadError {
     }
 }
 
+/// Whether the first complete item identifies the generation 2 reader.
+///
+/// This recognizes the opener by value. The selected reader still checks its
+/// encoding and contents.
+#[must_use]
+pub fn has_gts_v2_opener(bytes: &[u8]) -> bool {
+    Item::first(bytes)
+        .ok()
+        .flatten()
+        .and_then(|item| item.generation().ok())
+        == Some(Generation::Second)
+}
+
 /// Load the complete native RDF dataset of a GTS file.
 ///
 /// A generation 2 opener selects the native v2 fold with default capacity and
@@ -100,11 +118,7 @@ impl purrdf_hash::error::StructuredError for GtsDatasetReadError {
 /// Returns a legacy diagnostic, a generation 2 failure or a native RDF
 /// admission diagnostic. An incomplete generation 2 fold is refused.
 pub fn read_gts_dataset(bytes: &[u8]) -> Result<Arc<RdfDataset>, GtsDatasetReadError> {
-    let generation = Item::first(bytes)
-        .ok()
-        .flatten()
-        .and_then(|item| item.generation().ok());
-    if generation == Some(Generation::Second) {
+    if has_gts_v2_opener(bytes) {
         let graph = read_v2_graph(bytes, ReadCapacity::default(), &SignatureInputs::default())
             .map_err(|cause| GtsDatasetReadError::GenerationTwo(read_diagnostic(cause)))?;
         let fold = graph
@@ -174,13 +188,30 @@ fn read_v2_graph<'a>(
 /// admission. Composite literals with embedded blank nodes require native
 /// scope binding and are refused at this boundary.
 pub fn dataset_from_gts_v2_fold(fold: &RdfFold) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+    project_v2_fold(fold, None)
+}
+
+/// Admit a GTS v2 fold and report language tags normalized by native RDF.
+///
+/// The loss sites use file-wide resolved term indices. Callers can combine
+/// these entries with information about the transport they projected.
+/// # Errors
+/// Returns a diagnostic if RDF admission or loss recording fails.
+pub fn dataset_from_gts_v2_fold_with_losses(
+    fold: &RdfFold,
+) -> Result<(Arc<RdfDataset>, LossLedger), RdfDiagnostic> {
+    let mut losses = LossLedger::new();
+    let dataset = project_v2_fold(fold, Some(&mut losses))?;
+    Ok((dataset, losses))
+}
+
+fn project_v2_fold(
+    fold: &RdfFold,
+    mut losses: Option<&mut LossLedger>,
+) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
-    let mut terms = Vec::new();
-    let count = fold.terms().len();
-    memory.reserve(&mut terms, count)?;
-    terms.resize(count, TermSlot::Unused);
-    mark_used_terms(fold, &mut terms)?;
+    let mut terms = used_terms(fold, &mut memory)?;
 
     let mut builder = RdfDatasetBuilder::new();
     let mut scopes = FastMap::default();
@@ -208,12 +239,7 @@ pub fn dataset_from_gts_v2_fold(fold: &RdfFold) -> Result<Arc<RdfDataset>, RdfDi
                 let Some(Term::Iri(datatype)) = fold.term(*datatype) else {
                     return Err(term_reference_error());
                 };
-                if !cdt_embedded_blanks_with_memory(lexical, datatype, &mut memory)?.is_empty() {
-                    return Err(RdfDiagnostic::error(
-                        "gts-v2-native-cdt-blank",
-                        "a GTS composite literal with embedded blank nodes requires native scope binding",
-                    ));
-                }
+                require_blank_free_cdt(lexical, datatype, &mut memory)?;
                 builder.intern_literal_parts_bound_with_memory(
                     lexical,
                     Some(datatype),
@@ -232,6 +258,19 @@ pub fn dataset_from_gts_v2_fold(fold: &RdfFold) -> Result<Arc<RdfDataset>, RdfDi
                     LiteralDirection::LeftToRight => RdfTextDirection::Ltr,
                     LiteralDirection::RightToLeft => RdfTextDirection::Rtl,
                 });
+                if let Some(losses) = losses.as_deref_mut() {
+                    record_language_fold_loss(
+                        losses,
+                        lexical,
+                        (language, direction),
+                        FoldSite {
+                            logical: "gts:v2-fold",
+                            segment: None,
+                            term: index as u64,
+                        },
+                        &mut memory,
+                    )?;
+                }
                 builder.intern_literal_parts_with_memory(
                     lexical,
                     None,
@@ -294,6 +333,67 @@ enum TermSlot {
     Unused,
     Needed,
     Native(TermId),
+}
+
+fn used_terms(
+    fold: &RdfFold,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<Vec<TermSlot>, RdfDiagnostic> {
+    let mut terms = Vec::new();
+    let count = fold.terms().len();
+    memory.reserve(&mut terms, count)?;
+    terms.resize(count, TermSlot::Unused);
+    mark_used_terms(fold, &mut terms)?;
+    Ok(terms)
+}
+
+pub(crate) fn validate_v2_composites(fold: &RdfFold) -> Result<(), RdfDiagnostic> {
+    if !fold
+        .terms()
+        .any(|term| matches!(term, Term::Iri(iri) if is_cdt_datatype(iri)))
+    {
+        return Ok(());
+    }
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let used = used_terms(fold, &mut memory)?;
+    for (slot, term) in used.iter().zip(fold.terms()) {
+        if let (TermSlot::Needed, Term::Typed { lexical, datatype }) = (slot, term) {
+            let Some(Term::Iri(datatype)) = fold.term(*datatype) else {
+                return Err(term_reference_error());
+            };
+            if !is_cdt_datatype(datatype) {
+                continue;
+            }
+            require_blank_free_cdt(lexical, datatype, &mut memory)?;
+            let bound = bind_cdt_blank_labels_with_memory(
+                lexical,
+                datatype,
+                BlankBinding::Ambient(BlankScope::DEFAULT),
+                &mut memory,
+            )?;
+            if let Cow::Owned(text) = bound {
+                memory.release_string(text)?;
+            }
+        }
+    }
+    memory.release_vec(used)?;
+    Ok(())
+}
+
+fn require_blank_free_cdt(
+    lexical: &str,
+    datatype: &str,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<(), RdfDiagnostic> {
+    if cdt_embedded_blanks_with_memory(lexical, datatype, memory)?.is_empty() {
+        Ok(())
+    } else {
+        Err(RdfDiagnostic::error(
+            "gts-v2-native-cdt-blank",
+            "a GTS composite literal with embedded blank nodes requires native scope binding",
+        ))
+    }
 }
 
 fn mark_used_terms(fold: &RdfFold, terms: &mut [TermSlot]) -> Result<(), RdfDiagnostic> {

@@ -26,7 +26,7 @@ use purrdf::graph::{
     PurrdfGraph, purrdf_graph_free, purrdf_graph_freeze, purrdf_graph_from_dataset,
     purrdf_graph_insert, purrdf_graph_remove,
 };
-use purrdf::gts::{purrdf_from_gts, purrdf_to_gts};
+use purrdf::gts::{purrdf_from_gts, purrdf_to_gts, purrdf_to_gts_v2};
 use purrdf::handles::{
     PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
 };
@@ -3025,14 +3025,24 @@ fn gts_round_trips_a_plain_graph() {
 #[test]
 fn gts_v2_abi_admits_complete_rdf_and_reports_a_torn_tail() {
     use purrdf::error::purrdf_error_native_cause_json;
+    use purrdf_rs::gts::v2::{Generation, Item};
 
-    let dataset =
-        purrdf_rs::parse_dataset(THREE_QUADS.as_bytes(), "application/n-triples", None).unwrap();
-    let mut bytes = Vec::new();
-    purrdf_rs::gts_write::write_gts_v2(&dataset, &mut bytes).unwrap();
-    // The input comes from the shared v2 writer and the ABI owns either the
-    // returned dataset or error until its matching free function is called.
+    // Each returned buffer, dataset and error has a matching ABI free call.
     unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let mut output = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = purrdf_to_gts_v2(dataset, &raw mut output, &raw mut error);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let bytes = buffer_bytes(output);
+        purrdf_buffer_free(output);
+        purrdf_dataset_free(dataset);
+        assert_eq!(
+            Item::first(&bytes).unwrap().unwrap().generation().unwrap(),
+            Generation::Second
+        );
+
         let restored = from_gts(&bytes);
         assert_eq!(quad_count(restored), 3);
         purrdf_dataset_free(restored);

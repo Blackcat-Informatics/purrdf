@@ -270,7 +270,9 @@ fn gts_envelope_is_surfaced_in_the_loss_ledger_with_exact_counts() {
 /// lower case reports none.
 #[test]
 fn gts_language_tag_case_fold_is_surfaced_in_the_loss_ledger() {
-    let file = |tags: &[&str]| {
+    use purrdf_gts::v2::{Line, RdfFold, Term as V2Term, rdf_segment_bytes};
+
+    let v1_file = |tags: &[&str]| {
         let mut writer = Writer::new("purrdf.gts");
         let mut terms = vec![
             Term::iri("http://example.org/s"),
@@ -282,10 +284,30 @@ fn gts_language_tag_case_fold_is_surfaced_in_the_loss_ledger() {
         writer.add_quads(&quads);
         writer.into_bytes()
     };
-    let ledger_of = |name: &str, tags: &[&str]| {
+    let v2_file = |tags: &[&str]| {
+        let mut fold = RdfFold::default();
+        let s = fold
+            .intern_term(V2Term::Iri("http://example.org/s".into()))
+            .expect("subject");
+        let p = fold
+            .intern_term(V2Term::Iri("http://example.org/p".into()))
+            .expect("predicate");
+        for &tag in tags {
+            let o = fold
+                .intern_term(V2Term::Language {
+                    lexical: "x".into(),
+                    language: tag.into(),
+                    direction: None,
+                })
+                .expect("language literal");
+            fold.add_line(Line::Quad([s, p, o], None)).expect("quad");
+        }
+        rdf_segment_bytes(&fold).expect("committed v2 segment")
+    };
+    let ledger_of = |bytes: &[u8]| {
         let dir = purrdf_testkit::temp_dir!().expect("tempdir");
         let dir = dir.path();
-        let gts = write_bytes(dir, name, &file(tags));
+        let gts = write_bytes(dir, "in.gts", bytes);
         let out = path(dir, "out.nq");
         let ledger_path = path(dir, "ledger.json");
         let ledger_flag = format!("--loss-ledger={ledger_path}");
@@ -293,45 +315,72 @@ fn gts_language_tag_case_fold_is_surfaced_in_the_loss_ledger() {
         assert!(o.status.success(), "gts convert failed: {}", stderr(&o));
         std::fs::read_to_string(&ledger_path).expect("read ledger")
     };
-    let variant = ledger_of("variant.gts", &["EN-us", "en-us"]);
-    assert!(variant.contains("language-tag-case-folded"), "{variant}");
-    assert!(
-        variant.contains("EN-us"),
-        "the written tag is named: {variant}"
-    );
-    let lower = ledger_of("lower.gts", &["en-us", "fr"]);
-    assert!(!lower.contains("language-tag-case-folded"), "{lower}");
+    for write in [v1_file as fn(&[&str]) -> Vec<u8>, v2_file] {
+        let variant = ledger_of(&write(&["EN-us", "en-us"]));
+        assert!(variant.contains("language-tag-case-folded"), "{variant}");
+        assert!(
+            variant.contains("EN-us"),
+            "the written tag is named: {variant}"
+        );
+        let lower = ledger_of(&write(&["en-us", "fr"]));
+        assert!(!lower.contains("language-tag-case-folded"), "{lower}");
+    }
 }
 
-/// GTS is an INPUT container: named as a `--to` target it is refused BY NAME, with the
-/// reason, rather than accepted and written as something else.
+/// Both output selectors write a committed v2 segment that the CLI reads back
+/// with its RDF 1.2 structure and reported transport loss.
 #[test]
-fn gts_is_refused_as_an_output_target_by_name() {
+fn gts_v2_round_trip_preserves_dataset_and_reports_segment_loss() {
+    use purrdf_gts::v2::{FileEnd, ReadCapacity, ReadGraph, read};
+
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
-    let seed = write_file(dir, "seed.nt", SEED_LEFT);
-    let out = path(dir, "out.gts");
-
+    let seed = write_file(
+        dir,
+        "seed.trig",
+        "<https://example.org/g> { _:s <https://example.org/p> <<( _:s <https://example.org/p> _:o )>> . }\n\
+         <https://example.org/empty> {}\n",
+    );
+    let inferred = path(dir, "out.gts");
+    let explicit = path(dir, "out.bin");
     for args in [
-        vec!["convert", "--from", "ntriples", "--to", "gts"],
-        vec!["convert", "--from", "ntriples"],
+        vec!["convert", &seed, &inferred],
+        vec!["convert", "--to", "gts", &seed, &explicit],
     ] {
-        let mut full = args;
-        full.push(&seed);
-        full.push(&out);
-        let o = run(&full);
-        assert!(!o.status.success(), "a GTS target must be refused");
-        assert_eq!(o.status.code(), Some(2), "usage errors exit 2");
-        assert!(
-            stderr(&o).contains("GTS"),
-            "the refusal must name GTS: {}",
-            stderr(&o)
-        );
-        assert!(
-            !Path::new(&out).exists(),
-            "a refused target must leave no file behind"
-        );
+        let output = run(&args);
+        assert!(output.status.success(), "{}", stderr(&output));
     }
+    let bytes = std::fs::read(&inferred).expect("read GTS");
+    assert_eq!(bytes, std::fs::read(&explicit).expect("read explicit GTS"));
+    let ReadGraph::Second(graph) = read(&bytes, ReadCapacity::default()).expect("read v2") else {
+        panic!("expected a GTS v2 file");
+    };
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+
+    let ledger_path = path(dir, "ledger.json");
+    let ledger_flag = format!("--loss-ledger={ledger_path}");
+    let restored = path(dir, "restored.trig");
+    let output = run(&["convert", &ledger_flag, &inferred, &restored]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = std::fs::read_to_string(&restored).expect("read restored TriG");
+    assert!(text.contains("<https://example.org/empty>"), "{text}");
+    assert_eq!(canonical_of(dir, &[&seed]), canonical_of(dir, &[&restored]));
+    let ledger = std::fs::read_to_string(ledger_path).expect("read loss ledger");
+    let parsed = purrdf_lex::json::read(&ledger).expect("ledger JSON");
+    let losses = parsed["losses"].as_array().expect("loss array");
+    assert_eq!(losses.len(), 1, "{ledger}");
+    assert_eq!(
+        losses[0]["code"].as_str(),
+        Some("gts-segment-ledger-dropped")
+    );
+    assert_eq!(losses[0]["detail"][0]["value"]["count"].as_u64(), Some(1));
+
+    let torn = write_bytes(dir, "torn.gts", &bytes[..bytes.len() - 1]);
+    let absent = path(dir, "absent.trig");
+    let output = run(&["convert", &torn, &absent]);
+    assert!(!output.status.success(), "a torn GTS v2 file was admitted");
+    assert!(stderr(&output).contains("the file ends inside an item"));
+    assert!(!Path::new(&absent).exists());
 }
 
 /// A corrupt GTS source fails closed: the authoritative importer hard-fails on a reader

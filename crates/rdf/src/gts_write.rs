@@ -21,7 +21,7 @@ use crate::ir::RdfDataset;
 use crate::{RdfDiagnostic, RdfLookaside, RdfMetadataValue};
 
 mod generation_two;
-pub use generation_two::write_gts_v2;
+pub use generation_two::{to_gts_v2, write_gts_v2};
 
 /// Convert a frozen [`RdfDataset`] into a canonical GTS [`Writer`].
 ///
@@ -357,6 +357,7 @@ mod tests {
         let dataset = builder.freeze().unwrap();
         let mut bytes = Vec::new();
         write_gts_v2(&dataset, &mut bytes).unwrap();
+        assert_eq!(to_gts_v2(&dataset).unwrap(), bytes);
         let decoded =
             read_gts_v2_dataset(&bytes, ReadCapacity::default(), &SignatureInputs::default())
                 .unwrap();
@@ -402,6 +403,40 @@ mod tests {
         assert_ne!(s, o);
         let graph = native.term_id_by_iri("https://example.org/empty").unwrap();
         assert_eq!(native.named_graphs().collect::<Vec<_>>(), [graph]);
+    }
+
+    #[test]
+    fn generation_two_writer_checks_reached_composite_literals_before_writing() {
+        use crate::gts::read_gts_dataset;
+        use purrdf_cdt::CDT_LIST;
+
+        for (lexical, error) in [
+            ("[1]", None),
+            ("[_:local]", Some("gts-v2-native-cdt-blank")),
+            ("[1,", Some("cdt-literal-malformed")),
+        ] {
+            let mut builder = RdfDatasetBuilder::new();
+            let s = builder.intern_iri("https://example.org/s").unwrap();
+            let p = builder.intern_iri("https://example.org/p").unwrap();
+            builder
+                .intern_literal(RdfLiteral::typed("[_:unused]", CDT_LIST))
+                .unwrap();
+            let o = builder
+                .intern_literal(RdfLiteral::typed(lexical, CDT_LIST))
+                .unwrap();
+            builder.push_quad(s, p, o, None).unwrap();
+            let dataset = builder.freeze().unwrap();
+            let mut sink = Vec::new();
+            let result = write_gts_v2(&dataset, &mut sink);
+            if let Some(code) = error {
+                assert_eq!(result.unwrap_err().code, code);
+                assert_eq!(to_gts_v2(&dataset).unwrap_err().code, code);
+                assert_eq!(sink, []);
+            } else {
+                result.unwrap();
+                assert_eq!(read_gts_dataset(&sink).unwrap().quad_count(), 1);
+            }
+        }
     }
 
     #[test]

@@ -362,8 +362,13 @@
  * Adds `purrdf_yaml_source_export` and `purrdf_yaml_source_reconstruct` with
  * existing dataset/buffer ownership. The `purrdf_parse` signature stays unchanged.
  * The native-cause accessor also exposes original YAML source refusals.
+ *
+ * # `0.21.0`: GTS v2
+ *
+ * Adds `purrdf_to_gts_v2` for a committed segment in arrival order.
+ * `purrdf_from_gts` loads complete datasets from both generations.
  */
-#define PURRDF_ABI_MINOR 20
+#define PURRDF_ABI_MINOR 21
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -2778,7 +2783,7 @@ int32_t purrdf_from_gts(const uint8_t *bytes,
                         PurrdfError **out_error);
 
 /**
- * Write a frozen dataset to canonical GTS container bytes under `profile`
+ * Write a frozen dataset to canonical GTS v1 bytes under `profile`
  * (e.g. `"dist"`). The output goes to `*out_buffer` (free with
  * `purrdf_buffer_free`).
  *
@@ -2790,6 +2795,19 @@ int32_t purrdf_to_gts(const PurrdfDataset *dataset,
                       const char *profile,
                       PurrdfBuffer **out_buffer,
                       PurrdfError **out_error);
+
+/**
+ * Write a frozen dataset as one committed GTS v2 segment in arrival order.
+ * Release the returned `*out_buffer` with `purrdf_buffer_free`.
+ *
+ * Preserves RDF 1.2 statements, scoped blank identities and empty named graphs.
+ * Used composite literals require valid lexical forms and blank-free contents.
+ * # Safety
+ * `dataset` must be a live handle and the out-params must be writable.
+ */
+int32_t purrdf_to_gts_v2(const PurrdfDataset *dataset,
+                         PurrdfBuffer **out_buffer,
+                         PurrdfError **out_error);
 
 /**
  * Release a dataset handle. No-op on null.

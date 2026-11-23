@@ -2775,10 +2775,7 @@ pub(crate) enum CliRdfFormat {
     // variant IS the pack container's clap spelling, so it is not re-declared as a
     // literal here — the identifier lives once, in `purrdf_rdf::PACK_EXTENSIONS`.
     Pack,
-    /// The GTS transport container. INPUT only: it is read through the authoritative
-    /// event importer (per-segment blank-node scope preserved), and named as a `--to`
-    /// target it is refused by name rather than silently written as something else —
-    /// see `crate::format::refuse_gts_target`.
+    /// Read GTS v1 or v2. With convert, write one committed GTS v2 segment.
     // Same rule as `Pack`: clap's kebab-case rendering IS the spelling, so the literal
     // lives once, in `purrdf_rdf::GTS_EXTENSIONS`.
     Gts,
