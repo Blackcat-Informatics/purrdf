@@ -237,6 +237,14 @@ fn aggregate_compressed_blobs_stop_at_the_first_byte_over_the_total() {
 fn declared_digest_cannot_defer_a_transformed_blob_beyond_admission() {
     let bytes = declared_transformed_blob_bytes();
     assert_boundary(&bytes, GtsReadResource::DecodedBlobBytes, 4096);
+    let (_, usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        limits(GtsReadResource::Work, usize::MAX - 1),
+        &mut Null,
+    )
+    .expect("a finite work contract admits the transformed blob");
+    assert_boundary(&bytes, GtsReadResource::Work, usage.work);
 }
 
 fn nested_child(name: &str) -> Vec<u8> {

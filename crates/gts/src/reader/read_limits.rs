@@ -591,10 +591,11 @@ impl StreamingSink for ReadLimiter<'_> {
             .limits
             .total_decoded_bytes
             .saturating_sub(self.usage.total_decoded_bytes);
+        let remaining_work = self.limits.work.saturating_sub(self.usage.work);
         Self::effective_limit(
             self.limits.decoded_blob_bytes,
             self.inner.blob_decode_limit(),
-            remaining,
+            remaining.min(remaining_work),
         )
     }
 
@@ -639,10 +640,11 @@ impl StreamingSink for ReadLimiter<'_> {
             .limits
             .total_decoded_bytes
             .saturating_sub(self.usage.total_decoded_bytes);
+        let remaining_work = self.limits.work.saturating_sub(self.usage.work);
         Self::effective_limit(
             self.limits.decoded_frame_bytes,
             self.inner.frame_decode_limit(),
-            remaining,
+            remaining.min(remaining_work),
         )
     }
 
