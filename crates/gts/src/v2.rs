@@ -16,6 +16,7 @@ mod rdf;
 mod read;
 mod rows;
 mod segment;
+mod signature;
 mod terms;
 mod writer;
 
@@ -42,11 +43,16 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph, ReadCapacity,
-    ReadError, ReadFailure, ReadGraph, RecoveryRefusal, Resynchronization, VerifiedBlob, read,
+    ExternalBlob, FrameSignatures, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph,
+    ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveryRefusal, Resynchronization,
+    VerifiedBlob, read, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
+pub use signature::{
+    HeldKey, SignatureCheck, SignatureInputs, SignatureInvalid, SignatureStatus,
+    SignatureUnverified,
+};
 pub use terms::{
     ContentError, DecodedTerms, FormedBudget, LiteralForm, TermDefinition, TermOrder,
     TermReservation, TermText, TermsHeader, TypedValue, ValueReference,

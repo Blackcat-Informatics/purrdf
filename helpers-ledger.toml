@@ -1293,6 +1293,7 @@ entry_points = [
     "purrdf_lex::cbor::head::write_head",
     "purrdf_lex::cbor::head::with_encoded_head",
     "purrdf_lex::cbor::head::with_encoded_text",
+    "purrdf_lex::cbor::head::with_encoded_bytes",
 ]
 spec = "RFC 8949 (section 4.2.1 core deterministic encoding; section 3 the data item heads)"
 vectors = []

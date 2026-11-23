@@ -114,13 +114,28 @@ fn challenge(r: &[u8; 32], a: &[u8; 32], message: &[u8]) -> Scalar {
 
 #[test]
 fn the_eight_torsion_points_are_weak_keys_for_both_implementations() {
+    use crate::EncodedVerificationError::{SmallOrderKey, SmallOrderNonce};
+
     let torsion = torsion_points();
     assert_eq!(torsion.len(), 8);
     let decoding = VectorFile::parse(include_str!("../tests/vectors/key_decoding_vectors.txt"))
         .expect("key decoding vectors");
+    let signer = SigningKey::from_bytes(&[1; 32]);
+    let public = signer.verifying_key();
+    let message = b"encoded verification";
+    let signature = signer.sign(message);
     for encoding in &torsion {
         let key = VerifyingKey::from_bytes(encoding).expect("torsion points decode");
         assert!(key.is_weak(), "{encoding:02x?}");
+        assert_eq!(
+            VerifyingKey::verify_encoded_strict(encoding, message, &signature),
+            Err(SmallOrderKey),
+        );
+        let signature = Signature::from_components(*encoding, *signature.s_bytes());
+        assert_eq!(
+            VerifyingKey::verify_encoded_strict(public.as_bytes(), message, &signature),
+            Err(SmallOrderNonce),
+        );
         let hex = encode_str(&purrdf_hash::hex::encode(encoding));
         let record = decoding
             .records()
@@ -129,8 +144,11 @@ fn the_eight_torsion_points_are_weak_keys_for_both_implementations() {
             .unwrap_or_else(|| panic!("{hex} is not a frozen key encoding"));
         assert_eq!(record.fields[1..], [hex.as_str(), "weak"], "{hex}");
     }
-    // Neighbour: a prime-order key is not weak.
-    assert!(!SigningKey::from_bytes(&[1; 32]).verifying_key().is_weak());
+    assert!(!public.is_weak());
+    assert_eq!(
+        VerifyingKey::verify_encoded_strict(public.as_bytes(), message, &signature),
+        Ok(()),
+    );
 }
 
 #[test]

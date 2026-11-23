@@ -66,6 +66,42 @@ impl fmt::Display for SignatureError {
 
 impl std::error::Error for SignatureError {}
 
+/// The first failure when verifying an encoded key and signature in wire order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EncodedVerificationError {
+    /// The encoded scalar is at least the group order.
+    NonCanonicalScalar,
+    /// The public key encodes a point of small order.
+    SmallOrderKey,
+    /// The signature nonce encodes a point of small order.
+    SmallOrderNonce,
+    /// The key does not decode or the cofactorless equation fails.
+    EquationFailed,
+}
+
+impl fmt::Display for EncodedVerificationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::NonCanonicalScalar => "Ed25519 signature S is not below the group order",
+            Self::SmallOrderKey => "Ed25519 public key has small order",
+            Self::SmallOrderNonce => "Ed25519 signature nonce has small order",
+            Self::EquationFailed => "Ed25519 key decoding or verification equation failed",
+        })
+    }
+}
+
+impl std::error::Error for EncodedVerificationError {}
+
+impl purrdf_hash::error::StructuredError for EncodedVerificationError {
+    purrdf_hash::error_visit! {
+        NonCanonicalScalar => "ed25519-noncanonical-scalar" {},
+        SmallOrderKey => "ed25519-small-order-key" {},
+        SmallOrderNonce => "ed25519-small-order-nonce" {},
+        EquationFailed => "ed25519-equation-failed" {},
+    }
+}
+
 impl purrdf_hash::error::StructuredError for SignatureError {
     purrdf_hash::error_visit! {
         InvalidPublicKey => "ed25519-invalid-public-key" {},
@@ -206,13 +242,44 @@ impl VerifyingKey {
         if r.is_small_order() || self.point.is_small_order() {
             return Err(SignatureError::SmallOrder);
         }
-        let k = challenge(&signature.r, &self.bytes, message);
-        let expected = Point::double_scalar_mul_vartime(&k, &self.point.neg(), &s);
-        if expected.encode() == signature.r {
+        if self.matches_equation(message, signature, &s) {
             Ok(())
         } else {
             Err(SignatureError::Mismatch)
         }
+    }
+
+    /// Verify a pure Ed25519 signature with GTS generation 2 diagnostic order.
+    ///
+    /// Checks the scalar, public-key encoding for small order, nonce encoding
+    /// for small order, then the key decode and cofactorless equation.
+    /// # Errors
+    /// Returns the first failed check in that order.
+    pub fn verify_encoded_strict(
+        public_key: &[u8; PUBLIC_KEY_LENGTH],
+        message: &[u8],
+        signature: &Signature,
+    ) -> Result<(), EncodedVerificationError> {
+        use EncodedVerificationError as Failure;
+
+        let scalar =
+            Scalar::from_canonical_bytes(&signature.s).ok_or(Failure::NonCanonicalScalar)?;
+        if is_small_order_encoding(public_key) {
+            return Err(Failure::SmallOrderKey);
+        }
+        if is_small_order_encoding(&signature.r) {
+            return Err(Failure::SmallOrderNonce);
+        }
+        let key = Self::from_bytes(public_key).map_err(|_| Failure::EquationFailed)?;
+        key.matches_equation(message, signature, &scalar)
+            .then_some(())
+            .ok_or(Failure::EquationFailed)
+    }
+
+    fn matches_equation(&self, message: &[u8], signature: &Signature, scalar: &Scalar) -> bool {
+        let k = challenge(&signature.r, &self.bytes, message);
+        let expected = Point::double_scalar_mul_vartime(&k, &self.point.neg(), scalar);
+        expected.encode() == signature.r
     }
 
     /// Verify `signature` over `message`. This is [`Self::verify_strict`]:
@@ -352,6 +419,40 @@ impl fmt::Debug for SigningKey {
         f.debug_struct("SigningKey")
             .field("verifying_key", &self.verifying)
             .finish_non_exhaustive()
+    }
+}
+
+// GTS P6 lists eight canonical encodings. Nonzero x allows both signs.
+fn is_small_order_encoding(bytes: &[u8; 32]) -> bool {
+    const IDENTITY: [u8; 32] = {
+        let mut value = [0; 32];
+        value[0] = 1;
+        value
+    };
+    const ORDER_TWO: [u8; 32] = {
+        let mut value = [0xff; 32];
+        value[0] = 0xec;
+        value[31] = 0x7f;
+        value
+    };
+    const ORDER_FOUR: [u8; 32] = [0; 32];
+    const ORDER_EIGHT_FIRST: [u8; 32] = [
+        0x26, 0xe8, 0x95, 0x8f, 0xc2, 0xb2, 0x27, 0xb0, 0x45, 0xc3, 0xf4, 0x89, 0xf2, 0xef, 0x98,
+        0xf0, 0xd5, 0xdf, 0xac, 0x05, 0xd3, 0xc6, 0x33, 0x39, 0xb1, 0x38, 0x02, 0x88, 0x6d, 0x53,
+        0xfc, 0x05,
+    ];
+    const ORDER_EIGHT_SECOND: [u8; 32] = [
+        0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10, 0x67,
+        0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77, 0x92, 0xac,
+        0x03, 0x7a,
+    ];
+
+    let mut y = *bytes;
+    y[31] &= 0x7f;
+    match y {
+        ORDER_FOUR | ORDER_EIGHT_FIRST | ORDER_EIGHT_SECOND => true,
+        IDENTITY | ORDER_TWO => y == *bytes,
+        _ => false,
     }
 }
 

@@ -135,7 +135,7 @@ impl<'a> RecipeDeclaration<'a> {
     }
 }
 
-impl<'a> GraphReader<'a> {
+impl<'a> GraphReader<'a, '_> {
     pub(super) fn observe_blob_frame(
         &mut self,
         kind: FrameType,
