@@ -23,6 +23,8 @@
 //! is `PURRDF_LABELLING_COUNT_NODES`. Without `--counts` the report prints the
 //! chain rows of 1,000 and 10,000 statements: the lowered lines, the walk units,
 //! and the allocation counts of the lowering and of the labelling.
+//! The ground payload row isolates a large encoded line sequence without
+//! blank node search.
 
 use std::hint::black_box;
 
@@ -31,6 +33,7 @@ use purrdf_core::canonical_labelling::{
     Limit, Line, Scope, Term, admit, label, label_reference, label_view, lines_of_view,
 };
 use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
+use purrdf_xsd::datatype::XSD_STRING;
 
 #[path = "../tests/support/nested_chain.rs"]
 mod nested_chain;
@@ -78,6 +81,19 @@ fn triangles(n: usize) -> Vec<Line> {
 
 fn hub(n: usize) -> Vec<Line> {
     (0..n).map(|i| quad("h", "p", &format!("l{i}"))).collect()
+}
+
+fn ground_payload(n: usize) -> Vec<Line> {
+    let predicate = iri("https://example.org/payload");
+    let object = Term::typed(&[b'x'; 4_096], XSD_STRING.as_bytes());
+    (0..n)
+        .map(|i| Line::Quad {
+            subject: iri(&format!("https://example.org/row/{i}")),
+            predicate: predicate.clone(),
+            object: object.clone(),
+            graph: None,
+        })
+        .collect()
 }
 
 fn cube() -> Vec<Line> {
@@ -277,8 +293,9 @@ fn measure(name: &str, lines: &[Line]) {
     // its explored units are the reference tree's.
     let (_, oracle) = label_reference(lines).expect("the oracle labels the shape");
     assert_eq!(oracle.digest, labelled.digest, "{name}: engines agree");
+    let line_bytes: usize = labelled.lines.iter().map(|line| line.len()).sum();
     println!(
-        "[canonical_labelling] {name}: nodes={nodes} lines={} guaranteed={} \
+        "[canonical_labelling] {name}: nodes={nodes} lines={} line_bytes={line_bytes} guaranteed={} \
          rule3_calls={} explored_units={} reference_explored_units={} twin_units={} \
          path_units={} allowance={} stopped_on_s={} stopped_on_e={} allocations={} \
          requested_bytes={} retained_bytes={} peak_working_bytes={}",
@@ -346,6 +363,7 @@ fn main() {
         ("path", path(1_000 * scale)),
         ("triangles", triangles(1_000 * scale)),
         ("hub_with_leaves", hub(1_000 * scale)),
+        ("ground_payload", ground_payload(4_096)),
         ("complement_of_cycles_4_6", complement_of_cycles(4, 6)),
         ("complement_of_cycles_3_5", complement_of_cycles(3, 5)),
         ("quadratic_residue_13", quadratic_residue_13()),

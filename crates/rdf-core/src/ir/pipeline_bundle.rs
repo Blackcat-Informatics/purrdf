@@ -128,8 +128,8 @@ use super::view_accounting::{
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::provenance::DatasetProvenance;
 use crate::{
-    ContentDigest, ContentStore, QuadIds, RdfDiagnostic, RdfLookaside, RdfStoreCapabilities,
-    TermRef, TermValue,
+    ContentDigest, ContentStore, QuadIds, RdfBlobRecord, RdfDiagnostic, RdfLookaside,
+    RdfStoreCapabilities, TermRef, TermValue,
 };
 
 /// Field separator inside the digest fold (mirrors `StageProduct::from_artifacts`).
@@ -431,7 +431,7 @@ struct BundleCore<H> {
     blobs: Arc<ContentStore>,
     /// The provenance sidecar (units / artifacts / origin-sets / occurrences).
     /// Folded into every identity through its PUBLIC projection.
-    provenance: DatasetProvenance,
+    provenance: Arc<DatasetProvenance>,
     /// The typed-handle lane: backing-graph IRI → typed payload + pinned digest.
     /// Mutated only through the carriers' pin/detach/accumulate methods, so the pin
     /// invariant holds. EXCLUDED from every identity.
@@ -463,7 +463,7 @@ impl<H> BundleCore<H> {
         Self {
             lookaside,
             blobs,
-            provenance,
+            provenance: Arc::new(provenance),
             handles: BTreeMap::new(),
             digest_cache: Arc::new(Mutex::new(BTreeMap::new())),
             work: Arc::default(),
@@ -1011,6 +1011,68 @@ impl<H> PipelineBundle<H> {
         &self.core.blobs
     }
 
+    /// Replace resident blob records and their backing store together.
+    ///
+    /// Supply the complete new blob-record lane. Each record uses a native
+    /// SHA-256 digest in hexadecimal and resolves in the replacement store.
+    /// A file origin is retained as metadata. A declared length matches the
+    /// resident payload. Resources previously backed by the store retain that
+    /// backing. Graphs and their handle pins keep their existing identities.
+    ///
+    /// # Errors
+    /// Refuses malformed digests, missing resident payloads, wrong decoded
+    /// lengths and removal of backing for an existing resource. A refusal
+    /// leaves the carrier intact.
+    pub fn replace_resident_blob_records(
+        &mut self,
+        records: Vec<RdfBlobRecord>,
+        blobs: ContentStore,
+    ) -> Result<(), RdfDiagnostic> {
+        for record in &records {
+            let digest = ContentDigest::from_hex(&record.digest).ok_or_else(|| {
+                RdfDiagnostic::error(
+                    "resident-blob-digest",
+                    format!("invalid resident blob digest {:?}", record.digest),
+                )
+            })?;
+            let bytes = blobs.get(&digest).ok_or_else(|| {
+                RdfDiagnostic::error(
+                    "resident-blob-missing",
+                    format!("resident blob {digest} has no backing payload"),
+                )
+            })?;
+            if let Some(declared) = record.decoded_len
+                && u64::try_from(bytes.len()) != Ok(declared)
+            {
+                return Err(RdfDiagnostic::error(
+                    "resident-blob-length",
+                    format!(
+                        "resident blob {digest} declares {declared} bytes but contains {}",
+                        bytes.len(),
+                    ),
+                ));
+            }
+        }
+        for digest in self
+            .core
+            .lookaside
+            .resources
+            .iter()
+            .filter_map(|resource| resource.content_digest.as_deref())
+            .filter_map(ContentDigest::from_hex)
+        {
+            if self.core.blobs.contains(&digest) && !blobs.contains(&digest) {
+                return Err(RdfDiagnostic::error(
+                    "resident-resource-missing",
+                    format!("replacement removes resident backing for resource blob {digest}"),
+                ));
+            }
+        }
+        self.core.lookaside.blobs = records;
+        self.core.blobs = Arc::new(blobs);
+        Ok(())
+    }
+
     /// Borrow the provenance sidecar.
     pub fn provenance(&self) -> &DatasetProvenance {
         &self.core.provenance
@@ -1035,7 +1097,7 @@ impl<H> PipelineBundle<H> {
     /// through the public projection. Used by the pipeline scheduler to thread the
     /// per-stage provenance into the produced carrier.
     pub fn set_provenance(&mut self, provenance: DatasetProvenance) {
-        self.core.provenance = provenance;
+        self.core.provenance = Arc::new(provenance);
     }
 
     /// Where this carrier family's digests came from. Never an identity input — see
@@ -1585,7 +1647,7 @@ impl<H> PipelineViewBundle<H> {
     /// Replace the provenance sidecar in place. See
     /// [`PipelineBundle::set_provenance`].
     pub fn set_provenance(&mut self, provenance: DatasetProvenance) {
-        self.core.provenance = provenance;
+        self.core.provenance = Arc::new(provenance);
     }
 
     /// Where this carrier family's digests came from. Never an identity input — see
@@ -2438,6 +2500,119 @@ mod tests {
             Arc::new(ContentStore::new()),
             DatasetProvenance::new(),
         )
+    }
+
+    /// Resident replacement preserves pins, resource backing and sibling carriers
+    /// while refusing an invalid replacement before publishing it.
+    #[test]
+    fn resident_blob_replacement_preserves_pins_and_refuses_invalid_records() {
+        let graph = "http://example.org/graph";
+        let mut blobs = ContentStore::new();
+        let resource = blobs.insert(b"resource".to_vec());
+        let lookaside = RdfLookaside {
+            resources: vec![
+                RdfLookasideResource::new(RdfLookasideKind::Blob).with_digest(resource.to_hex()),
+                RdfLookasideResource::new(RdfLookasideKind::Blob)
+                    .with_digest(ContentDigest::of(b"external").to_hex())
+                    .with_path("external.dat"),
+            ],
+            ..RdfLookaside::default()
+        };
+        let mut provenance = DatasetProvenance::new();
+        provenance
+            .register_unit("publisher", OriginKind::Generated)
+            .expect("register publication unit");
+        let mut bundle = PipelineBundle::new(
+            dataset_with_named_graph(),
+            lookaside,
+            Arc::new(blobs),
+            provenance,
+        );
+        let mut control = crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None);
+        let pin = bundle
+            .graph_digest(graph, &mut control)
+            .expect("pin digest");
+        bundle
+            .pin_handle(
+                graph,
+                SyntheticHandle {
+                    note: "original".into(),
+                },
+                pin,
+                &mut control,
+            )
+            .expect("pin the original graph");
+        let original = bundle.clone();
+        let original_digest = original.digest(&mut control).expect("original digest");
+        let graph_work = bundle.digest_work().graph_canonicalizations;
+        let mut new_blobs = bundle.blobs().clone();
+        let payload = new_blobs.insert(b"data".to_vec());
+        let record = RdfBlobRecord {
+            digest: payload.to_hex(),
+            media_type: None,
+            representation: Some("example:data".into()),
+            decoded_len: Some(4),
+            metadata: BTreeMap::new(),
+            origin: Some(crate::RdfBlobOrigin {
+                source_segments: vec!["ab".repeat(32)],
+            }),
+        };
+        let mut malformed = record.clone();
+        malformed.digest = format!("blake3:{}", record.digest);
+        let mut wrong_length = record.clone();
+        wrong_length.decoded_len = Some(5);
+        for (records, backing, expected_code) in [
+            (vec![malformed], new_blobs.clone(), "resident-blob-digest"),
+            (
+                vec![record.clone()],
+                original.blobs().clone(),
+                "resident-blob-missing",
+            ),
+            (
+                vec![wrong_length],
+                new_blobs.clone(),
+                "resident-blob-length",
+            ),
+            (Vec::new(), ContentStore::new(), "resident-resource-missing"),
+        ] {
+            let refusal = bundle
+                .replace_resident_blob_records(records, backing)
+                .expect_err("refuse invalid replacement");
+            assert_eq!(refusal.code, expected_code);
+            assert_eq!(bundle.lookaside(), original.lookaside());
+            assert_eq!(bundle.blobs(), original.blobs());
+        }
+        bundle
+            .replace_resident_blob_records(vec![record], new_blobs)
+            .expect("valid resident record");
+        assert_eq!(bundle.lookaside().resources, original.lookaside().resources);
+        assert!(std::ptr::eq(bundle.provenance(), original.provenance()));
+        assert_eq!(
+            bundle
+                .graph_digest(graph, &mut control)
+                .expect("graph digest"),
+            pin
+        );
+        assert_eq!(
+            bundle
+                .handle(graph)
+                .expect("original handle")
+                .content_digest,
+            pin
+        );
+        assert_eq!(bundle.digest_work().graph_canonicalizations, graph_work);
+        assert_ne!(
+            bundle.digest(&mut control).expect("new digest"),
+            original_digest
+        );
+        assert!(original.blobs().get(&payload).is_none());
+        bundle
+            .replace_resident_blob_records(Vec::new(), original.blobs().clone())
+            .expect("remove the unreferenced payload");
+        assert_eq!(
+            bundle.digest(&mut control).expect("restored digest"),
+            original_digest
+        );
     }
 
     /// `<g1>`'s digest is a function of `<g1>`'s content alone: adding a declaration
