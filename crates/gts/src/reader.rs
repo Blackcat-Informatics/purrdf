@@ -2984,29 +2984,30 @@ fn push_bounded_tail_diagnostic(
 
 fn push_bounded_tail_drain_diagnostic(
     result: &mut StreamingReadResult,
-    sink: &mut dyn StreamingSink,
+    sink: Option<&mut dyn StreamingSink>,
     offset: u64,
     cause: purrdf_hash::error::IoFailure,
     follows_torn_item: bool,
 ) {
     result.torn.get_or_insert(offset);
     let detail = cause.to_string();
-    push_result_diagnostic(
-        result,
-        sink,
-        Diagnostic {
-            cause: None,
-            code: if follows_torn_item {
-                "TailDrainError"
-            } else {
-                "TornAppendError"
-            }
-            .to_owned(),
-            detail,
-            frame_index: None,
+    let diagnostic = Diagnostic {
+        cause: None,
+        code: if follows_torn_item {
+            "TailDrainError"
+        } else {
+            "TornAppendError"
         }
-        .with_native_cause(cause),
-    );
+        .to_owned(),
+        detail,
+        frame_index: None,
+    }
+    .with_native_cause(cause);
+    if let Some(sink) = sink {
+        push_result_diagnostic(result, sink, diagnostic);
+    } else {
+        result.diagnostics.push(diagnostic);
+    }
 }
 
 fn next_stream_item<R: Read>(
@@ -3785,13 +3786,18 @@ pub fn read_to_sink_from_reader_with_limits<R: Read>(
     }
     if let Some(cause) = tail.drain {
         let offset = reader.pos;
-        push_bounded_tail_drain_diagnostic(
-            &mut result,
-            &mut limiter,
-            offset,
-            cause,
-            follows_torn_item,
-        );
+        if limiter.continue_reading() {
+            push_bounded_tail_drain_diagnostic(
+                &mut result,
+                Some(&mut limiter),
+                offset,
+                cause,
+                follows_torn_item,
+            );
+        } else {
+            limiter.account_diagnostic();
+            push_bounded_tail_drain_diagnostic(&mut result, None, offset, cause, follows_torn_item);
+        }
     }
     limiter.complete_input(usize::try_from(reader.pos).unwrap_or(usize::MAX));
     let usage = limiter.usage();

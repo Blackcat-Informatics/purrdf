@@ -121,6 +121,34 @@ impl std::io::Read for ParseThenFailReader {
 }
 
 #[derive(Default)]
+struct CancelAtTornDiagnostic {
+    cancelled: bool,
+    diagnostics: usize,
+}
+
+#[derive(Default)]
+struct CountDiagnostics(usize);
+
+impl StreamingSink for CountDiagnostics {
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.0 += 1;
+    }
+}
+
+impl StreamingSink for CancelAtTornDiagnostic {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
+        if diagnostic.code == "TornAppendError" {
+            self.diagnostics += 1;
+            self.cancelled = true;
+        }
+    }
+}
+
+#[derive(Default)]
 struct ReplaySink {
     terms: usize,
 }
@@ -1962,6 +1990,111 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
         Capture::read(drain.native_cause().expect("typed drain failure")).code,
         "std-io"
     );
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut cancelling = CancelAtTornDiagnostic::default();
+    let (result, usage) = read_to_sink_from_reader_with_limits(
+        ParseThenFailReader {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        GtsReadLimits::UNBOUNDED,
+        &mut cancelling,
+    )
+    .expect("cancellation does not hide either returned tail failure");
+    assert!(cancelling.cancelled);
+    assert_eq!(cancelling.diagnostics, 1);
+    assert_eq!(usage.diagnostics, 3);
+    let tail_codes: Vec<&str> = result
+        .diagnostics
+        .iter()
+        .filter_map(|diagnostic| {
+            matches!(
+                diagnostic.code.as_str(),
+                "TornAppendError" | "TailDrainError"
+            )
+            .then_some(diagnostic.code.as_str())
+        })
+        .collect();
+    assert_eq!(tail_codes, ["TornAppendError", "TailDrainError"]);
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut exact_sink = CountDiagnostics::default();
+    let mut exact_limits = GtsReadLimits::UNBOUNDED;
+    exact_limits.diagnostics = 3;
+    exact_limits.work = usage.work;
+    let (result, exact_usage) = read_to_sink_from_reader_with_limits(
+        ParseThenFailReader {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        exact_limits,
+        &mut exact_sink,
+    )
+    .expect("the complete dual failure fits the exact diagnostic ceiling");
+    assert_eq!(exact_sink.0, 3);
+    assert_eq!(result.diagnostics.len(), 3);
+    assert_eq!(exact_usage.work, usage.work);
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut adjacent_sink = CountDiagnostics::default();
+    let mut adjacent_limits = GtsReadLimits::UNBOUNDED;
+    adjacent_limits.diagnostics = 2;
+    let error = read_to_sink_from_reader_with_limits(
+        ParseThenFailReader {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        adjacent_limits,
+        &mut adjacent_sink,
+    )
+    .expect_err("the adjacent diagnostic ceiling refuses the drain finding");
+    assert_eq!(error.resource, GtsReadResource::Diagnostics);
+    assert_eq!(adjacent_sink.0, 2);
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut cancelling = CancelAtTornDiagnostic::default();
+    let error = read_to_sink_from_reader_with_limits(
+        ParseThenFailReader {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        adjacent_limits,
+        &mut cancelling,
+    )
+    .expect_err("an undelivered drain finding still obeys the diagnostic ceiling");
+    assert_eq!(error.resource, GtsReadResource::Diagnostics);
+    assert!(cancelling.cancelled);
+    assert_eq!(cancelling.diagnostics, 1);
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut adjacent_work_limits = GtsReadLimits::UNBOUNDED;
+    adjacent_work_limits.work = usage.work - 1;
+    let error = read_to_sink_from_reader_with_limits(
+        ParseThenFailReader {
+            bytes: malformed,
+            position: 0,
+            tail_start: prefix.len(),
+        },
+        options,
+        adjacent_work_limits,
+        &mut CountDiagnostics::default(),
+    )
+    .expect_err("the adjacent work ceiling accounts for the undelivered drain finding");
+    assert_eq!(error.resource, GtsReadResource::Work);
 }
 
 #[test]

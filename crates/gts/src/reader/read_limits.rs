@@ -358,6 +358,21 @@ impl<'a> ReadLimiter<'a> {
         self.charge_work(1) || self.trip(GtsReadResource::Rows, required, self.limits.rows)
     }
 
+    fn count_diagnostic(&mut self) -> bool {
+        let required = self.usage.diagnostics.saturating_add(1);
+        self.usage.diagnostics = required;
+        self.charge_work(1)
+            || self.trip(
+                GtsReadResource::Diagnostics,
+                required,
+                self.limits.diagnostics,
+            )
+    }
+
+    pub(super) fn account_diagnostic(&mut self) {
+        self.count_diagnostic();
+    }
+
     fn count_decoded(&mut self, blob: bool, bytes: usize, charge_work: bool) -> bool {
         if blob {
             self.usage.largest_decoded_blob_bytes =
@@ -699,15 +714,7 @@ impl StreamingSink for ReadLimiter<'_> {
     }
 
     fn diagnostic(&mut self, diagnostic: &Diagnostic) {
-        let required = self.usage.diagnostics.saturating_add(1);
-        self.usage.diagnostics = required;
-        if !self.charge_work(1)
-            && !self.trip(
-                GtsReadResource::Diagnostics,
-                required,
-                self.limits.diagnostics,
-            )
-        {
+        if !self.count_diagnostic() {
             self.inner.diagnostic(diagnostic);
         }
     }
