@@ -4,7 +4,7 @@
 use core::num::NonZeroU64;
 use std::collections::TryReserveError;
 
-use super::fields::{Fields, OptionShape};
+use super::fields::{Fields, OptionShape, push};
 use super::rows::graph_name;
 use super::terms::read_enum;
 use super::{
@@ -184,4 +184,141 @@ pub struct GraphIndexCheck {
     pub offset: usize,
     /// Verified-prefix comparisons or a grammar failure in the index.
     pub prefix: Result<IndexPrefixCheck, ContentError>,
+}
+
+/// An accelerator item outside the frame chain and parity stream.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IndexStorageItem {
+    /// The list of encoded lengths of earlier items.
+    Offsets,
+    /// The distance back to the closing index.
+    Locator,
+}
+
+/// A storage accelerator's claim or placement failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum IndexStorageProblem {
+    /// The claim differs from the observed item lengths or index location.
+    ClaimMismatch,
+    /// The item is out of order or repeated within its segment.
+    Misplaced,
+}
+
+/// A diagnostic for an offsets item or locator read in segment order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct IndexStorageFinding {
+    /// Physical offset of the accelerator item.
+    pub offset: usize,
+    /// The accelerator that produced this diagnostic.
+    pub item: IndexStorageItem,
+    /// The claim or placement failure.
+    pub problem: IndexStorageProblem,
+}
+
+struct StorageClaim {
+    offset: usize,
+    position: usize,
+    item: IndexStorageItem,
+    matches: bool,
+}
+
+pub(super) struct StorageIndex {
+    lengths: Vec<usize>,
+    last_index: Option<usize>,
+    claims: Vec<StorageClaim>,
+}
+
+impl StorageIndex {
+    pub(super) fn new(opener_length: usize) -> Result<Self, TryReserveError> {
+        let mut lengths = Vec::new();
+        push(&mut lengths, opener_length)?;
+        Ok(Self {
+            lengths,
+            last_index: None,
+            claims: Vec::new(),
+        })
+    }
+
+    pub(super) fn lengths(&self) -> &[usize] {
+        &self.lengths
+    }
+
+    pub(super) fn record_length(&mut self, length: usize) -> Result<(), TryReserveError> {
+        push(&mut self.lengths, length)
+    }
+
+    pub(super) const fn closing_index(&mut self, offset: usize) {
+        self.last_index = Some(offset);
+    }
+
+    pub(super) fn locator_matches(&self, offset: usize, distance: u64) -> bool {
+        self.last_index
+            .is_some_and(|start| (offset - start) as u64 == distance)
+    }
+
+    pub(super) fn observe(
+        &mut self,
+        offset: usize,
+        length: usize,
+        item: IndexStorageItem,
+        matches: bool,
+    ) -> Result<(), TryReserveError> {
+        let position = self.lengths.len();
+        self.record_length(length)?;
+        push(
+            &mut self.claims,
+            StorageClaim {
+                offset,
+                position,
+                item,
+                matches,
+            },
+        )
+    }
+
+    pub(super) fn finish(
+        &self,
+        findings: &mut Vec<IndexStorageFinding>,
+    ) -> Result<(), TryReserveError> {
+        let last_position = self.lengths.len() - 1;
+        let last_item_is_locator = self.claims.last().is_some_and(|claim| {
+            claim.position == last_position && claim.item == IndexStorageItem::Locator
+        });
+        let mut locator_seen = false;
+        for (index, claim) in self.claims.iter().enumerate() {
+            let last = claim.position == last_position;
+            let placed = match claim.item {
+                IndexStorageItem::Offsets => {
+                    index == 0
+                        && (last
+                            || (last_item_is_locator
+                                && last_position.checked_sub(1) == Some(claim.position)))
+                }
+                IndexStorageItem::Locator => {
+                    let placed = last && !locator_seen;
+                    locator_seen = true;
+                    placed
+                }
+            };
+            let problem = if !placed {
+                IndexStorageProblem::Misplaced
+            } else if !claim.matches {
+                IndexStorageProblem::ClaimMismatch
+            } else {
+                continue;
+            };
+            push(
+                findings,
+                IndexStorageFinding {
+                    offset: claim.offset,
+                    item: claim.item,
+                    problem,
+                },
+            )?;
+        }
+        Ok(())
+    }
 }

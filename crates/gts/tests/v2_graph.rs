@@ -6,9 +6,9 @@
 use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
-    ContentError, FrameField, FramingDamage, Item, ItemKind, Line, MalformedReason,
-    ParityFindingKind, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph,
-    SegmentWriteError, SegmentWriter, Term, ValueName, read,
+    ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
+    Line, MalformedReason, ParityFindingKind, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure,
+    ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
 };
 use purrdf_lex::cbor::head;
 
@@ -17,6 +17,96 @@ fn second(bytes: &[u8]) -> RdfGraph<'_> {
         panic!("the fixture opens a generation 2 file");
     };
     graph
+}
+
+#[test]
+fn offsets_and_locators_compare_against_the_walked_sequence() {
+    let intact = include_bytes!("fixtures/v2/P5/index-intact.bin");
+    let graph = second(intact);
+    assert_eq!(graph.index_storage_findings, []);
+    assert_eq!(graph.index_checks.len(), 1);
+
+    let mut wrong_length = intact.to_vec();
+    assert_eq!(wrong_length[703], 11);
+    wrong_length[703] = 12;
+    let mut wrong_locator = intact.to_vec();
+    *wrong_locator.last_mut().unwrap() ^= 1;
+    for (bytes, offset, kind) in [
+        (wrong_length.as_slice(), 700, IndexStorageItem::Offsets),
+        (wrong_locator.as_slice(), 714, IndexStorageItem::Locator),
+    ] {
+        let graph = second(bytes);
+        let [finding] = graph.index_storage_findings.as_slice() else {
+            panic!(
+                "expected one storage claim mismatch: {:?}",
+                graph.index_storage_findings
+            );
+        };
+        assert_eq!(
+            (finding.offset, finding.item, finding.problem),
+            (offset, kind, IndexStorageProblem::ClaimMismatch)
+        );
+    }
+}
+
+#[test]
+fn a_later_commit_or_repeated_locator_invalidates_the_hints() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-cosigned-not-scanned.bin");
+    let prefix = &bytes[..666];
+    let graph = second(prefix);
+    assert_eq!(graph.index_storage_findings, []);
+    assert_eq!(
+        graph.parity_findings,
+        second(&prefix[..643]).parity_findings
+    );
+
+    let mut repeated_locator = prefix.to_vec();
+    repeated_locator.extend_from_slice(&prefix[655..]);
+    let graph = second(&repeated_locator);
+    assert!(
+        graph
+            .index_storage_findings
+            .iter()
+            .map(|finding| (finding.offset, finding.item, finding.problem))
+            .eq([
+                (
+                    643,
+                    IndexStorageItem::Offsets,
+                    IndexStorageProblem::Misplaced
+                ),
+                (
+                    655,
+                    IndexStorageItem::Locator,
+                    IndexStorageProblem::Misplaced
+                ),
+                (
+                    666,
+                    IndexStorageItem::Locator,
+                    IndexStorageProblem::Misplaced
+                ),
+            ])
+    );
+
+    let graph = second(bytes);
+    assert!(
+        graph
+            .index_storage_findings
+            .iter()
+            .map(|finding| (finding.offset, finding.item, finding.problem))
+            .eq([
+                (
+                    643,
+                    IndexStorageItem::Offsets,
+                    IndexStorageProblem::Misplaced
+                ),
+                (
+                    655,
+                    IndexStorageItem::Locator,
+                    IndexStorageProblem::Misplaced
+                ),
+            ])
+    );
+    assert_eq!(graph.resynchronizations, []);
 }
 
 #[test]

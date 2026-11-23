@@ -25,7 +25,9 @@ pub use header::{
     CanonicalForm, Header, Lineage, Profile, ResyncCandidate, ResyncRefusal, ResyncScan,
     write_header,
 };
-pub use index::{GraphIndexCheck, IndexPrefixCheck};
+pub use index::{
+    GraphIndexCheck, IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexStorageProblem,
+};
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
