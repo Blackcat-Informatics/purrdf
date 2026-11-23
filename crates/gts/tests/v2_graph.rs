@@ -459,6 +459,49 @@ fn file_end_uses_the_last_valid_commit_and_retained_item_classes() {
 }
 
 #[test]
+fn a_malformed_envelope_keeps_an_independent_payload_failure() {
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"verified blob", None).unwrap();
+    let mut bytes = writer.into_inner();
+    assert_eq!(second(&bytes).blobs.len(), 1);
+
+    let header = Item::first(&bytes).unwrap().unwrap();
+    let frame_offset = header.bytes().len();
+    let item = Item::first(&bytes[frame_offset..]).unwrap().unwrap();
+    let payload = item.frame().unwrap().unwrap().field(FrameField::Payload);
+    let payload_end = payload.as_ptr_range().end.addr() - bytes.as_ptr().addr();
+    bytes[payload_end - 1] ^= 1;
+    let graph = second(&bytes);
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [error] if matches!(error.failure, ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest))
+    ));
+
+    assert_eq!(bytes.pop(), Some(0x80));
+    bytes.extend_from_slice(&[0x81, 0]);
+    let graph = second(&bytes);
+    let [envelope, payload] = graph.frame_failures.as_slice() else {
+        panic!("expected independent envelope and payload findings");
+    };
+    assert_eq!(
+        (envelope.offset, payload.offset),
+        (frame_offset, frame_offset)
+    );
+    assert!(matches!(
+        envelope.failure,
+        ReadFailure::Wire(wire) if wire.reason == MalformedReason::WrongType
+    ));
+    assert!(matches!(
+        payload.failure,
+        ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+    ));
+    assert!(matches!(
+        graph.into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Wire(_)
+    ));
+}
+
+#[test]
 fn offsets_and_locators_compare_against_the_walked_sequence() {
     let intact = include_bytes!("fixtures/v2/P5/index-intact.bin");
     let graph = second(intact);

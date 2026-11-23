@@ -94,7 +94,7 @@ pub struct RdfGraph<'a> {
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
-    /// Opaque frames, unavailable rebuilds and rows held by unreadable terms.
+    /// Findings for opaque frames, unavailable rebuilds and held rows.
     pub frame_failures: Vec<ReadError>,
     /// Complete items that could not be classified in their segment.
     pub opaque_items: Vec<ReadError>,
@@ -1334,7 +1334,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         self.graph.frame_failures.sort_unstable_by_key(|error| {
             let detail = match error.failure {
                 ReadFailure::UnknownFrame(_) => 2,
-                ReadFailure::PayloadRefusal(_) => 1,
+                ReadFailure::PayloadDamage(_) | ReadFailure::PayloadRefusal(_) => 1,
                 _ => 0,
             };
             (error.offset, detail)
@@ -1648,7 +1648,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         let failed_wire = broken || checked.malformed.is_some();
         let opaque = !accelerator
             && (failed_wire || !matches!(checked.payload.state, PayloadState::Verified(_)));
-        if kind != Some(FrameType::Parity)
+        if kind == Some(FrameType::Index)
             && failed_wire
             && let PayloadState::Unchecked(refusal @ PayloadRefusal::TotalDecoded(_)) =
                 checked.payload.state
@@ -1754,13 +1754,22 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                     .observe_terms(&mut self.graph.rdf, reservation, None, &self.values)
                     .map_err(ReadFailure::Fold)?;
             }
-            let failure = admit_checked(checked.frame)
-                .err()
-                .ok_or(ReadFailure::MissingContent)?;
-            super::fields::push(
-                &mut self.graph.frame_failures,
-                ReadError { offset, failure },
-            )?;
+            let primary = checked
+                .frame
+                .malformed
+                .map(ReadFailure::Wire)
+                .or_else(|| broken.then_some(ReadFailure::BrokenLink));
+            let payload = match checked.frame.payload.state {
+                PayloadState::Verified(_) => None,
+                PayloadState::Damaged(PayloadDamage::Malformed) if primary.is_some() => None,
+                state => Some(payload_failure(state)),
+            };
+            for failure in [primary, payload].into_iter().flatten() {
+                super::fields::push(
+                    &mut self.graph.frame_failures,
+                    ReadError { offset, failure },
+                )?;
+            }
             return Ok(committed);
         }
         if unknown.is_some() {
