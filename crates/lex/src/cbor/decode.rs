@@ -49,7 +49,7 @@ pub enum DecodeErrorKind {
         /// The cap that was exceeded.
         limit: usize,
     },
-    /// A length does not fit this platform's address space.
+    /// A length or a decoder reservation exceeds available addressable storage.
     TooLong,
     /// The item is well-formed but not in core deterministic encoding (RFC
     /// 8949 §4.2.1); the text names the rule.
@@ -86,11 +86,16 @@ pub enum DecodeErrorKind {
 pub struct DecodeError {
     kind: DecodeErrorKind,
     offset: usize,
+    stack_reserve: Option<std::collections::TryReserveError>,
 }
 
 impl DecodeError {
     const fn new(kind: DecodeErrorKind, offset: usize) -> Self {
-        Self { kind, offset }
+        Self {
+            kind,
+            offset,
+            stack_reserve: None,
+        }
     }
 
     /// What is wrong.
@@ -106,16 +111,20 @@ impl DecodeError {
 
 impl fmt::Display for DecodeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        display_error(self.offset, &self.kind, f)
+        display_error(self.offset, &self.kind, self.stack_reserve.as_ref(), f)
     }
 }
 
 fn display_error(
     offset: impl fmt::Display,
     kind: &DecodeErrorKind,
+    stack_reserve: Option<&std::collections::TryReserveError>,
     f: &mut fmt::Formatter<'_>,
 ) -> fmt::Result {
     write!(f, "CBOR byte {offset}: ")?;
+    if let Some(cause) = stack_reserve {
+        return write!(f, "unable to grow the decoder nesting stack ({cause})");
+    }
     match kind {
         DecodeErrorKind::Truncated => f.write_str("the input ends inside an item"),
         DecodeErrorKind::Malformed(rule) => write!(f, "not well-formed: {rule}"),
@@ -147,6 +156,7 @@ fn display_error(
 }
 
 crate::error_source!(DecodeError => {
+    Self { stack_reserve: Some(cause), .. } => cause,
     Self { kind: DecodeErrorKind::Io(cause), .. } => cause,
 });
 
@@ -169,12 +179,33 @@ impl purrdf_hash::error::StructuredError for DecodeErrorKind {
 }
 
 impl purrdf_hash::error::StructuredError for DecodeError {
-    purrdf_hash::error_visit! {
-        @record self { kind, offset } => "cbor-document" {
-            "kind" => Cause(&self.kind),
-            "offset" => ByteCount(self.offset as u128),
-        }
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visit_failure(
+            visitor,
+            "cbor-document",
+            self.offset as u128,
+            &self.kind,
+            self.stack_reserve.as_ref(),
+        );
     }
+}
+
+fn visit_failure<'error>(
+    visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>,
+    code: &'static str,
+    offset: u128,
+    kind: &'error DecodeErrorKind,
+    stack_reserve: Option<&'error std::collections::TryReserveError>,
+) {
+    use purrdf_hash::error::ErrorValue;
+    if let Some(cause) = stack_reserve {
+        visitor.variant("cbor-nesting-allocation");
+        visitor.value(Some("cause"), ErrorValue::Cause(cause));
+    } else {
+        visitor.variant(code);
+        visitor.value(Some("kind"), ErrorValue::Cause(kind));
+    }
+    visitor.value(Some("offset"), ErrorValue::ByteCount(offset));
 }
 
 /// Private wide walker failure. Legacy sources keep checked native positions;
@@ -182,6 +213,7 @@ impl purrdf_hash::error::StructuredError for DecodeError {
 struct WalkError {
     kind: DecodeErrorKind,
     offset: u64,
+    stack_reserve: Option<std::collections::TryReserveError>,
 }
 
 impl WalkError {
@@ -189,13 +221,17 @@ impl WalkError {
         Self {
             kind,
             offset: offset.try_into().ok().expect("a decoder offset fits u64"),
+            stack_reserve: None,
         }
     }
 }
 
 impl From<DecodeError> for WalkError {
     fn from(error: DecodeError) -> Self {
-        Self::new(error.kind, error.offset)
+        Self {
+            stack_reserve: error.stack_reserve,
+            ..Self::new(error.kind, error.offset)
+        }
     }
 }
 
@@ -203,7 +239,11 @@ impl From<WalkError> for DecodeError {
     fn from(error: WalkError) -> Self {
         // Slice, Stream and admitted replay keep their checked usize cursor.
         // Structural sources use their separate wide error boundary instead.
-        Self::new(error.kind, native_offset(error.offset))
+        Self {
+            kind: error.kind,
+            offset: native_offset(error.offset),
+            stack_reserve: error.stack_reserve,
+        }
     }
 }
 
@@ -680,6 +720,20 @@ fn attach_to<S: Source, B: DecodeOutput>(
     }
 }
 
+fn push_open<B: DecodeOutput>(
+    open: &mut Vec<Open<B>>,
+    item: Open<B>,
+    at: u64,
+) -> Result<(), WalkError> {
+    open.try_reserve(1).map_err(|cause| WalkError {
+        kind: DecodeErrorKind::TooLong,
+        offset: at,
+        stack_reserve: Some(cause),
+    })?;
+    open.push(item);
+    Ok(())
+}
+
 fn decode_item_to<S: Source, B: DecodeString<S>>(
     source: &mut S,
     limits: Limits,
@@ -757,28 +811,36 @@ fn decode_item_to<S: Source, B: DecodeString<S>>(
                 if !B::WIDE && remaining.is_some_and(|n| usize::try_from(n).is_err()) {
                     return Err(WalkError::new(DecodeErrorKind::TooLong, at));
                 }
-                open.push(Open::Array {
-                    start: at,
-                    remaining,
-                    items: B::Array::default(),
-                });
+                push_open(
+                    &mut open,
+                    Open::Array {
+                        start: at,
+                        remaining,
+                        items: B::Array::default(),
+                    },
+                    at,
+                )?;
                 continue;
             }
             (5, remaining) => {
                 if !B::WIDE && remaining.is_some_and(|n| usize::try_from(n).is_err()) {
                     return Err(WalkError::new(DecodeErrorKind::TooLong, at));
                 }
-                open.push(Open::Map {
-                    start: at,
-                    remaining,
-                    entries: B::Map::default(),
-                    key: None,
-                    last_key: None,
-                });
+                push_open(
+                    &mut open,
+                    Open::Map {
+                        start: at,
+                        remaining,
+                        entries: B::Map::default(),
+                        key: None,
+                        last_key: None,
+                    },
+                    at,
+                )?;
                 continue;
             }
             (6, Some(tag)) => {
-                open.push(Open::Tag { start: at, tag });
+                push_open(&mut open, Open::Tag { start: at, tag }, at)?;
                 continue;
             }
             (7, Some(n)) => scalar(
