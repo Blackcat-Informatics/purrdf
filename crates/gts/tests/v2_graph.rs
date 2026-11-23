@@ -259,6 +259,65 @@ fn repaired_data_requires_rechecking_its_frame_with_the_shared_budget() {
 }
 
 #[test]
+fn a_damaged_ordinary_payload_remains_opaque_through_parity_repair() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let (blob_offset, damaged) = damage_first_payload(intact);
+
+    let graph = second(&damaged);
+    let [failure] = graph.frame_failures.as_slice() else {
+        panic!("expected the original blob payload failure");
+    };
+    assert_eq!(failure.offset, blob_offset);
+    assert!(matches!(
+        failure.failure,
+        ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+    ));
+    assert!(graph.blobs.is_empty());
+    assert_eq!(graph.repaired.as_deref(), Some(intact.as_slice()));
+    let repaired = second(graph.repaired.as_deref().unwrap());
+    assert_eq!(repaired.blobs.len(), 1);
+    assert_eq!(repaired.frame_failures.len(), 0);
+}
+
+#[test]
+fn a_damaged_terms_payload_reserves_the_ids_named_by_later_rows() {
+    let source =
+        include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.undelimitable.bin");
+    let intact = &source[..209];
+    assert_eq!(second(intact).rdf.lines().count(), 1);
+    let (terms_offset, damaged) = damage_first_payload(intact);
+    let graph = second(&damaged);
+    assert!(graph.rdf.has_held_rows());
+    assert_eq!(graph.rdf.lines().count(), 0);
+    let [terms, rows] = graph.frame_failures.as_slice() else {
+        panic!("expected the terms digest failure and the held row");
+    };
+    assert_eq!(terms.offset, terms_offset);
+    assert_eq!(rows.offset, 114);
+    assert!(matches!(
+        terms.failure,
+        ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+    ));
+    assert!(matches!(&rows.failure, ReadFailure::Rows(finding)
+        if finding.opaque_term && !finding.forward_reference));
+}
+
+fn damage_first_payload(intact: &[u8]) -> (usize, Vec<u8>) {
+    let offset = Item::first(intact).unwrap().unwrap().bytes().len();
+    let frame = Item::first(&intact[offset..])
+        .unwrap()
+        .unwrap()
+        .frame()
+        .unwrap()
+        .unwrap();
+    let payload = frame.field(FrameField::Payload);
+    let last_payload_byte = payload.as_ptr().addr() - intact.as_ptr().addr() + payload.len() - 1;
+    let mut damaged = intact.to_vec();
+    damaged[last_payload_byte] ^= 1;
+    (offset, damaged)
+}
+
+#[test]
 fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
     let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
     let index_offset = second(intact).index_checks[0].offset;
@@ -869,8 +928,29 @@ fn a_stored_mismatch_does_not_refuse_verified_payload() {
     assert_eq!(graph.blobs[0].bytes, second(source).blobs[0].bytes);
 
     let damaged_payload = include_bytes!("fixtures/v2/P1/stored-mismatch.bin");
-    let error = read(damaged_payload, ReadCapacity::default()).unwrap_err();
-    assert!(matches!(error.failure, ReadFailure::PayloadDamage(_)));
+    let damaged = second(damaged_payload);
+    assert_eq!(damaged.stored_digest_mismatches, [opener_len]);
+    let [failure] = damaged.frame_failures.as_slice() else {
+        panic!("expected one damaged compressed payload");
+    };
+    assert_eq!(failure.offset, opener_len);
+    assert!(matches!(failure.failure, ReadFailure::PayloadDamage(_)));
+
+    let mut raw_payload = frame.field(FrameField::Payload);
+    let body = head::read_bytes(&mut raw_payload).unwrap();
+    let payload_start = body.as_ptr().addr() - source.as_ptr().addr();
+    let mut bad_header = source.to_vec();
+    bad_header[payload_start] ^= 1;
+    let damaged = second(&bad_header);
+    assert_eq!(damaged.stored_digest_mismatches, [opener_len]);
+    let [failure] = damaged.frame_failures.as_slice() else {
+        panic!("expected one malformed compression header");
+    };
+    assert_eq!(failure.offset, opener_len);
+    assert!(matches!(
+        failure.failure,
+        ReadFailure::Wire(error) if error.reason == MalformedReason::CodecConstraint
+    ));
 }
 
 #[test]

@@ -84,6 +84,8 @@ pub struct RdfGraph<'a> {
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
+    /// Damaged payloads and rows held by unreadable term definitions.
+    pub frame_failures: Vec<ReadError>,
     /// Scanned resync openers and the framing damage before them, in file order.
     pub resynchronizations: Vec<Resynchronization>,
     /// Damaged regions ended by verified parity frames, in file order.
@@ -265,8 +267,9 @@ impl std::error::Error for ReadError {
 ///
 /// The first generation uses the existing reader over the original bytes.
 /// The generation 2 graph projection checks framing, links, payloads, commits
-/// and RDF positions. It returns an error when a row or term is unreadable or
-/// when an item requires content interpretation outside the graph projection.
+/// and RDF positions. Frames with damaged payloads and rows held by unreadable
+/// definitions stay outside the fold and carry findings. An item that requires
+/// unsupported content interpretation prevents a complete graph projection.
 /// The reader can recover at a verified resync opener after failure of the
 /// framing test or opening generation recognition. A verified parity frame
 /// can resume a readable segment after undelimitable bytes. An ordinary frame
@@ -1109,7 +1112,14 @@ impl<'a> GraphReader<'a> {
         segment: &mut Segment<'a>,
     ) -> Result<(), ReadFailure> {
         let kind = checked.frame_type.and_then(FrameType::from_code);
-        let checked = if matches!(kind, Some(FrameType::Index | FrameType::Parity)) {
+        let accelerator = matches!(kind, Some(FrameType::Index | FrameType::Parity));
+        let damaged_payload = !accelerator
+            && checked
+                .malformed
+                .is_none_or(|error| error.reason == MalformedReason::CodecConstraint)
+            && checked.link.state != LinkState::Broken
+            && matches!(checked.payload.state, PayloadState::Damaged(_));
+        let checked = if accelerator || damaged_payload {
             checked
         } else {
             admit_checked(checked)?
@@ -1141,6 +1151,25 @@ impl<'a> GraphReader<'a> {
             segment
                 .parity
                 .other_item(offset..offset + frame.bytes().len())?;
+        }
+        if damaged_payload {
+            if let Some(reservation) = &checked.terms {
+                segment
+                    .dictionary
+                    .observe_terms(&mut self.graph.rdf, reservation, None, &self.values)
+                    .map_err(ReadFailure::Fold)?;
+            }
+            super::fields::push(
+                &mut self.graph.frame_failures,
+                ReadError {
+                    offset,
+                    failure: checked.frame.malformed.map_or_else(
+                        || payload_failure(checked.frame.payload.state),
+                        ReadFailure::Wire,
+                    ),
+                },
+            )?;
+            return Ok(());
         }
         let kind = kind.ok_or(ReadFailure::MissingContent)?;
         match kind {
@@ -1257,8 +1286,17 @@ impl<'a> GraphReader<'a> {
                 ),
                 error => ReadFailure::Fold(error),
             })?;
-        if findings.forward_reference || findings.opaque_term || findings.position_constraint {
+        if findings.forward_reference || findings.position_constraint {
             return Err(ReadFailure::Rows(findings));
+        }
+        if findings.opaque_term {
+            super::fields::push(
+                &mut self.graph.frame_failures,
+                ReadError {
+                    offset,
+                    failure: ReadFailure::Rows(findings),
+                },
+            )?;
         }
         if self.graph.rdf.annotation_width_exceeded() {
             return Err(ReadFailure::AnnotationWidth);
