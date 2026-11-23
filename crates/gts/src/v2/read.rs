@@ -18,11 +18,11 @@ use super::frame::FrameWire;
 use super::parity::ParityStream;
 use super::{
     ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget, FrameCheck,
-    FrameEnvelope, FrameField, FrameType, Generation, Header, Item, ItemKind, LinkState,
-    MalformedReason, ParityFinding, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
-    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings,
-    SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore,
-    WireError,
+    FrameEnvelope, FrameField, FrameType, Generation, GraphIndexCheck, Header, Item, ItemKind,
+    LinkState, MalformedReason, ParityFinding, PayloadBudget, PayloadCapacity, PayloadDamage,
+    PayloadRefusal, PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan,
+    RowFindings, SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName,
+    ValueStore, WireError,
 };
 use crate::{FastMap, model::Graph};
 
@@ -86,6 +86,8 @@ pub struct RdfGraph<'a> {
     pub resynchronizations: Vec<Resynchronization>,
     /// Parity diagnostics in segment and item order, followed by each segment's tail.
     pub parity_findings: Vec<ParityFinding>,
+    /// Closing or intermediate index checks in file order.
+    pub index_checks: Vec<GraphIndexCheck>,
 }
 
 /// A verified resync opener reached by scanning after framing failed.
@@ -233,6 +235,8 @@ impl std::error::Error for ReadError {
 /// framing test or opening generation recognition. An ordinary frame whose
 /// healing witness is discarded prevents a complete graph projection.
 /// Parity findings describe the supplied bytes before any repair.
+/// Indexes report comparisons against the observed prefix and never supply
+/// graph content.
 /// The graph carries no assertion about file authenticity or canonical form.
 ///
 /// # Errors
@@ -885,19 +889,6 @@ impl<'a> GraphReader<'a> {
         } else {
             admit_checked(checked)?
         };
-        if !frame.transparent() {
-            let passes = checked.malformed.is_none()
-                && checked.link.state == LinkState::Linked
-                && checked.payload.stored.map_or(
-                    matches!(checked.payload.state, PayloadState::Verified(_)),
-                    |stored| stored == StoredState::Matches,
-                );
-            segment.parity.ordinary(
-                offset..offset + frame.bytes().len(),
-                checked.link.state,
-                passes,
-            )?;
-        }
         if !parity && checked.payload.stored == Some(StoredState::Mismatch) {
             super::fields::push(&mut self.graph.stored_digest_mismatches, offset)?;
         }
@@ -905,6 +896,21 @@ impl<'a> GraphReader<'a> {
             .verifier
             .accept_checked(&frame, checked, &self.payload)
             .map_err(ReadFailure::Segment)?;
+        if !frame.transparent() {
+            let wire = &checked.frame;
+            let passes = wire.malformed.is_none()
+                && wire.link.state == LinkState::Linked
+                && !checked.index.as_ref().is_some_and(Result::is_err)
+                && wire.payload.stored.map_or(
+                    matches!(wire.payload.state, PayloadState::Verified(_)),
+                    |stored| stored == StoredState::Matches,
+                );
+            segment.parity.ordinary(
+                offset..offset + frame.bytes().len(),
+                wire.link.state,
+                passes,
+            )?;
+        }
         let kind = checked
             .frame
             .frame_type
@@ -968,6 +974,13 @@ impl<'a> GraphReader<'a> {
             }
             FrameType::Commit if checked.commit.is_some_and(|commit| commit.valid) => {}
             FrameType::Commit => return Err(ReadFailure::Commit),
+            FrameType::Index => {
+                let prefix = checked.index.take().ok_or(ReadFailure::MissingContent)?;
+                super::fields::push(
+                    &mut self.graph.index_checks,
+                    GraphIndexCheck { offset, prefix },
+                )?;
+            }
             kind => return Err(ReadFailure::Frame(kind)),
         }
         Ok(())

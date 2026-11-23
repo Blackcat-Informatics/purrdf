@@ -6,6 +6,7 @@
 mod fields;
 mod frame;
 mod header;
+mod index;
 mod item;
 mod link;
 mod parity;
@@ -24,6 +25,7 @@ pub use header::{
     CanonicalForm, Header, Lineage, Profile, ResyncCandidate, ResyncRefusal, ResyncScan,
     write_header,
 };
+pub use index::{GraphIndexCheck, IndexPrefixCheck};
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{

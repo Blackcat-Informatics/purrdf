@@ -8,7 +8,7 @@ use std::io::{self, Write};
 
 use purrdf_lex::cbor::head;
 
-use super::{MalformedReason, REGISTRY_VERSION};
+use super::{DIGEST_LENGTH, MalformedReason, REGISTRY_VERSION};
 
 pub(super) fn push<T>(output: &mut Vec<T>, value: T) -> Result<(), TryReserveError> {
     output.try_reserve(1)?;
@@ -93,7 +93,11 @@ pub(super) struct Fields<'a> {
 pub(super) enum OptionShape {
     Absent,
     Present,
-    Unknown { remaining: u64, tag_offset: usize },
+    Unknown {
+        code: u64,
+        remaining: u64,
+        tag_offset: usize,
+    },
 }
 
 impl<'a> Fields<'a> {
@@ -258,7 +262,8 @@ impl<'a> Fields<'a> {
             1 if length == 1 => Ok(OptionShape::Absent),
             2 if length == 2 => Ok(OptionShape::Present),
             1 | 2 => Err(wrong_length),
-            _ => Ok(OptionShape::Unknown {
+            code => Ok(OptionShape::Unknown {
+                code,
                 remaining: length - 1,
                 tag_offset,
             }),
@@ -267,6 +272,11 @@ impl<'a> Fields<'a> {
 
     pub(super) fn bytes(&mut self) -> Result<&'a [u8], WireError> {
         self.string(head::BYTES)
+    }
+
+    pub(super) fn count_and_digest(&mut self) -> Result<(u64, &'a [u8; DIGEST_LENGTH]), WireError> {
+        self.record(2)?;
+        Ok((self.uint()?, self.fixed_bytes()?))
     }
 
     pub(super) fn fixed_bytes<const LENGTH: usize>(

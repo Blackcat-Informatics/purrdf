@@ -7,7 +7,7 @@ use std::io::{self, Write};
 
 use purrdf_gts::v2::{
     FrameField, FrameType, Header, Item, LinkState, ParityCheck, PayloadBudget, PayloadCapacity,
-    PayloadRefusal, SegmentVerifier, SegmentWriteError, SegmentWriter,
+    PayloadRefusal, SegmentFrame, SegmentVerifier, SegmentWriteError, SegmentWriter,
 };
 
 const CAPACITY: PayloadCapacity = PayloadCapacity {
@@ -121,22 +121,90 @@ fn a_well_formed_signature_still_damages_the_parity_envelope() {
     }
 }
 
-fn parity_checks(bytes: &[u8]) -> Vec<ParityCheck<'_>> {
+fn checked_frames(bytes: &[u8]) -> impl Iterator<Item = SegmentFrame<'_>> {
     let opener = Item::first(bytes).unwrap().unwrap();
     let header = Header::decode(opener).unwrap();
     let mut verifier =
         SegmentVerifier::new(header.identifier().unwrap(), header.registry_version());
     let mut budget = PayloadBudget::new(CAPACITY);
     let mut tail = &bytes[opener.bytes().len()..];
-    let mut checks = Vec::new();
-    while let Some(item) = Item::first(tail).unwrap() {
-        tail = &tail[item.bytes().len()..];
-        if let Some(frame) = item.frame().unwrap() {
-            let checked = verifier.check(&frame, None, &mut budget).unwrap();
-            checks.extend(checked.parity);
+    core::iter::from_fn(move || {
+        while let Some(item) = Item::first(tail).unwrap() {
+            tail = &tail[item.bytes().len()..];
+            if let Some(frame) = item.frame().unwrap() {
+                return Some(verifier.check(&frame, None, &mut budget).unwrap());
+            }
         }
+        None
+    })
+}
+
+fn parity_checks(bytes: &[u8]) -> Vec<ParityCheck<'_>> {
+    checked_frames(bytes)
+        .filter_map(|frame| frame.parity)
+        .collect()
+}
+
+#[test]
+fn index_head_root_and_runs_are_independent_prefix_claims() {
+    for (bytes, expected) in [
+        (
+            include_bytes!("fixtures/v2/P5/index-intact.bin").as_slice(),
+            (true, true, true),
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.head.bin").as_slice(),
+            (false, true, true),
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.range_root.bin").as_slice(),
+            (true, false, true),
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.type_runs.bin").as_slice(),
+            (true, true, false),
+        ),
+    ] {
+        let index = checked_frames(bytes)
+            .find_map(|frame| frame.index)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                index.head_matches,
+                index.root_matches,
+                index.type_runs_match
+            ),
+            expected
+        );
     }
-    checks
+}
+
+#[test]
+fn index_runs_include_ordinary_frames_that_do_not_fold() {
+    for (bytes, expected) in [
+        (
+            include_bytes!("fixtures/v2/P5/index-after-stop.exact.bin").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-after-stop.wrong-type-runs.bin").as_slice(),
+            false,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-covers-frame-of-no-type.long-form-15-omitted.bin")
+                .as_slice(),
+            false,
+        ),
+    ] {
+        let index = checked_frames(bytes)
+            .find_map(|frame| frame.index)
+            .unwrap()
+            .unwrap();
+        assert!(index.head_matches);
+        assert!(index.root_matches);
+        assert_eq!(index.type_runs_match, expected);
+    }
 }
 
 #[test]

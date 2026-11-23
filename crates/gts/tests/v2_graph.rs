@@ -20,6 +20,44 @@ fn second(bytes: &[u8]) -> RdfGraph<'_> {
 }
 
 #[test]
+fn the_graph_reader_admits_a_closing_index_before_parity() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let graph = second(intact);
+    assert_eq!(graph.blobs.len(), 1);
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("expected one closing index");
+    };
+    let prefix = index.prefix.as_ref().unwrap();
+    assert_eq!(
+        (
+            prefix.head_matches,
+            prefix.root_matches,
+            prefix.type_runs_match
+        ),
+        (true, true, true)
+    );
+    assert_eq!(graph.parity_findings, []);
+
+    let damaged = include_bytes!("fixtures/v2/P5/parity-damaged-shard.bin");
+    let graph = second(damaged);
+    assert_eq!(graph.blobs.len(), 1);
+    let [damage, mismatch] = graph.parity_findings.as_slice() else {
+        panic!(
+            "expected parity damage and a parity shard mismatch: {:?}",
+            graph.parity_findings
+        );
+    };
+    assert_eq!(
+        (damage.offset, damage.kind),
+        (481, ParityFindingKind::Damaged)
+    );
+    assert_eq!(
+        (mismatch.offset, mismatch.kind),
+        (481, ParityFindingKind::ParityMismatch(1))
+    );
+}
+
+#[test]
 fn a_broken_transparent_copy_does_not_hide_the_placed_parity_or_spend_an_extra_item() {
     let bytes = include_bytes!("fixtures/v2/P5/parity-broken-copy-no-first.bin");
     let capacity = ReadCapacity {
