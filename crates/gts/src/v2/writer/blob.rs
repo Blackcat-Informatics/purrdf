@@ -92,10 +92,7 @@ impl<W: Write> SegmentWriter<W> {
             head::write_head(&mut payload, head::UNSIGNED, part.length)?;
         }
         for (part, unit) in parts {
-            self.append(FrameType::Chunk, unit, |output| {
-                head::write_head(output, head::ARRAY, 1)?;
-                head::write_bytes(output, &part.digest)
-            })?;
+            self.append_chunk(unit, &part.digest)?;
         }
         let name = ValueName::of(bytes);
         let blob = kind == FrameType::Recipe;

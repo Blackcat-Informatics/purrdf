@@ -139,6 +139,10 @@ The binary fixtures in `crates/gts/tests/fixtures/v2`
 preserve their upstream paths and bytes from `vectors/v2`. Their SHA-256
 values match the upstream manifest. The header identity expectation
 follows P1 section 10.2.
+The full-span parity writer uses the field, matrix and shard geometry of P5
+sections 6.1 through 6.5. Its byte identity expectation is the BLAKE3 digest
+of the decoded `P5/parity-placement.crossing.bin.zst` fixture at that
+revision, checked against the upstream SHA-256 manifest.
 
 Extraction policy:
 

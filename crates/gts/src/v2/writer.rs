@@ -5,11 +5,13 @@ use core::fmt;
 use std::io::{self, Write};
 
 use purrdf_hash::blake3::Hasher;
+use purrdf_lex::allocation::try_boxed;
 use purrdf_lex::cbor::head;
 
 use super::fields::write_option;
 use super::header::HEADER_CONTEXT;
 use super::link::frame_hasher;
+use super::parity::{GEOMETRY_ONE, Recorder, RecordingWriter};
 use super::payload::payload_digest;
 use super::rdf::unit_digest;
 use super::{
@@ -92,6 +94,7 @@ pub struct SegmentWriter<W> {
     head: Option<Digest>,
     range: Range,
     term_base: u128,
+    parity: Option<Box<Recorder>>,
 }
 
 impl<W: Write> SegmentWriter<W> {
@@ -99,11 +102,30 @@ impl<W: Write> SegmentWriter<W> {
     ///
     /// # Errors
     /// Returns the sink error if the header cannot be written.
-    pub fn new(mut sink: W) -> io::Result<Self> {
+    pub fn new(sink: W) -> io::Result<Self> {
+        Self::open(sink, None)
+    }
+
+    /// Write a header and emit parity for each completed four MiB span.
+    ///
+    /// A span's parity follows the ordinary frame that completed it. The
+    /// writer leaves an unfinished span open when its sink is extracted.
+    ///
+    /// # Errors
+    /// Returns an error if allocation or the header write fails.
+    pub fn new_with_parity(sink: W) -> io::Result<Self> {
+        let parity = try_boxed(Recorder::new()?).map_err(io::Error::other)?;
+        Self::open(sink, Some(parity))
+    }
+
+    fn open(mut sink: W, mut parity: Option<Box<Recorder>>) -> io::Result<Self> {
         let mut hasher = Hasher::new_derive_key(HEADER_CONTEXT);
         write_header(
             &mut HashingWriter {
-                sink: &mut sink,
+                sink: &mut RecordingWriter {
+                    sink: &mut sink,
+                    recorder: parity.as_deref_mut(),
+                },
                 hasher: &mut hasher,
             },
             None,
@@ -111,11 +133,15 @@ impl<W: Write> SegmentWriter<W> {
             None,
         )?;
         let head = *hasher.finalize().as_bytes();
+        if let Some(parity) = &mut parity {
+            parity.set_opener(head);
+        }
         Ok(Self {
             sink,
             head: Some(head),
             range: Range::new(&head),
             term_base: 0,
+            parity,
         })
     }
 
@@ -187,45 +213,90 @@ impl<W: Write> SegmentWriter<W> {
         })
     }
 
+    fn append_chunk(&mut self, bytes: &[u8], digest: &Digest) -> Result<Digest, SegmentWriteError> {
+        self.append(FrameType::Chunk, bytes, |output| {
+            head::write_head(output, head::ARRAY, 1)?;
+            head::write_bytes(output, digest)
+        })
+    }
+
     fn append(
         &mut self,
         frame_type: FrameType,
         payload: &[u8],
-        content: impl FnOnce(&mut HashingWriter<'_, W>) -> io::Result<()>,
+        content: impl FnOnce(&mut HashingWriter<'_, RecordingWriter<'_, W>>) -> io::Result<()>,
     ) -> Result<Digest, SegmentWriteError> {
         if self.range.count().get() == u64::MAX {
             return Err(SegmentWriteError::RangeFull(RangeFull));
         }
         let predecessor = self.head.take().ok_or(SegmentWriteError::IncompleteFrame)?;
-        let mut hasher = frame_hasher(&predecessor);
-        head::write_head(&mut self.sink, head::ARRAY, FRAME_FIELDS as u64)?;
-        head::write_head(&mut self.sink, head::UNSIGNED, FRAME_KIND)?;
-        {
-            let mut identity = HashingWriter {
+        let identifier = write_frame(
+            &mut RecordingWriter {
                 sink: &mut self.sink,
-                hasher: &mut hasher,
-            };
-            head::write_head(&mut identity, head::UNSIGNED, u64::from(frame_type as u8))?;
-            identity.write_all(&[
-                0xf4 + u8::from(frame_type.critical()),
-                0xf4 + u8::from(frame_type.transparent()),
-            ])?;
-            content(&mut identity)?;
-            head::write_head(&mut identity, head::UNSIGNED, payload.len() as u64)?;
-            head::write_bytes(&mut identity, &payload_digest(payload))?;
+                recorder: self.parity.as_deref_mut(),
+            },
+            &predecessor,
+            frame_type,
+            payload,
+            content,
+        )?;
+        if let Some(parity) = &mut self.parity {
+            for span in parity.drain() {
+                write_frame(
+                    &mut self.sink,
+                    &identifier,
+                    FrameType::Parity,
+                    &span.payload,
+                    |output| {
+                        head::write_head(output, head::ARRAY, 5)?;
+                        head::write_head(output, head::UNSIGNED, GEOMETRY_ONE)?;
+                        head::write_head(output, head::UNSIGNED, span.first)?;
+                        head::write_head(output, head::UNSIGNED, span.end)?;
+                        head::write_bytes(output, &identifier)?;
+                        head::write_bytes(output, &span.table)
+                    },
+                )?;
+            }
         }
-        let identifier = *hasher.finalize().as_bytes();
-        head::write_head(&mut self.sink, head::ARRAY, 1)?;
-        head::write_head(&mut self.sink, head::UNSIGNED, 1)?;
-        head::write_bytes(&mut self.sink, payload)?;
-        head::write_bytes(&mut self.sink, &identifier)?;
-        head::write_head(&mut self.sink, head::ARRAY, 0)?;
         self.range
             .append(&identifier)
             .map_err(SegmentWriteError::RangeFull)?;
         self.head = Some(identifier);
         Ok(identifier)
     }
+}
+
+fn write_frame<W: Write>(
+    sink: &mut W,
+    predecessor: &Digest,
+    frame_type: FrameType,
+    payload: &[u8],
+    content: impl FnOnce(&mut HashingWriter<'_, W>) -> io::Result<()>,
+) -> io::Result<Digest> {
+    let mut hasher = frame_hasher(predecessor);
+    head::write_head(sink, head::ARRAY, FRAME_FIELDS as u64)?;
+    head::write_head(sink, head::UNSIGNED, FRAME_KIND)?;
+    {
+        let mut identity = HashingWriter {
+            sink,
+            hasher: &mut hasher,
+        };
+        head::write_head(&mut identity, head::UNSIGNED, u64::from(frame_type as u8))?;
+        identity.write_all(&[
+            0xf4 + u8::from(frame_type.critical()),
+            0xf4 + u8::from(frame_type.transparent()),
+        ])?;
+        content(&mut identity)?;
+        head::write_head(&mut identity, head::UNSIGNED, payload.len() as u64)?;
+        head::write_bytes(&mut identity, &payload_digest(payload))?;
+    }
+    let identifier = *hasher.finalize().as_bytes();
+    head::write_head(sink, head::ARRAY, 1)?;
+    head::write_head(sink, head::UNSIGNED, 1)?;
+    head::write_bytes(sink, payload)?;
+    head::write_bytes(sink, &identifier)?;
+    head::write_head(sink, head::ARRAY, 0)?;
+    Ok(identifier)
 }
 
 struct HashingWriter<'a, W> {
@@ -242,5 +313,41 @@ impl<W: Write> Write for HashingWriter<'_, W> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.sink.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SegmentWriteError, SegmentWriter};
+    use crate::v2::rdf::unit_digest;
+
+    #[test]
+    fn parity_writer_matches_the_two_span_placement_vector() {
+        let mut bytes = Vec::with_capacity(8_389_487);
+        bytes.extend((0_u8..=255).cycle().take(8_389_487));
+        let digest = unit_digest(&bytes);
+        let mut writer = SegmentWriter::new_with_parity(Vec::new()).unwrap();
+        writer.append_chunk(&bytes, &digest).unwrap();
+
+        // The pinned P5 crossing vector covers one chunk that reaches two
+        // span ends. Its complete byte identity covers both parity payloads.
+        let expected = purrdf_hash::hex::decode_32(
+            "d785c9e04c9a06937eeb9e1b3068126da2f9d3762f2ebdc9cd156141bb0c239d",
+        )
+        .unwrap();
+        let output = writer.into_inner();
+        assert_eq!(purrdf_hash::blake3::hash(&output).as_bytes(), &expected);
+
+        let mut partial = vec![0; 8_389_620];
+        let mut writer = SegmentWriter::new_with_parity(partial.as_mut_slice()).unwrap();
+        let error = writer.append_chunk(&bytes, &digest).unwrap_err();
+        assert!(
+            matches!(error, SegmentWriteError::Io(error) if error.kind() == std::io::ErrorKind::WriteZero)
+        );
+        assert_eq!(writer.head(), None);
+        assert!(matches!(
+            writer.add_commit(),
+            Err(SegmentWriteError::IncompleteFrame)
+        ));
     }
 }

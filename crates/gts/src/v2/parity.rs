@@ -13,12 +13,15 @@ use super::{
 };
 use crate::FastSet;
 
+mod encode;
 mod stream;
 
+pub(super) use encode::{Recorder, RecordingWriter};
 pub(super) use stream::ParityStream;
 pub use stream::{ParityFinding, ParityFindingKind};
 
 type Digest = [u8; DIGEST_LENGTH];
+pub(super) const GEOMETRY_ONE: u64 = 1;
 const SPAN_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SHARD_BYTES: usize = 4096;
 const DATA_COLUMNS: usize = 64;
@@ -94,7 +97,7 @@ impl ParityTable<'_> {
         &self,
         mut parts: impl Iterator<Item = &'a [u8]>,
     ) -> ParityMismatches {
-        let initial = Hasher::new_derive_key("gts2 shard");
+        let initial = shard_hasher();
         let mut part = &[][..];
         let mut remaining = self.geometry.span_bytes;
         let size = self.geometry.shard_bytes;
@@ -201,6 +204,18 @@ fn matches_shard(hasher: &Hasher, entry: &DigestEntry) -> bool {
     hasher.finalize().as_bytes()[..SHARD_DIGEST_BYTES] == entry[1..]
 }
 
+fn shard_hasher() -> Hasher {
+    Hasher::new_derive_key("gts2 shard")
+}
+
+fn parity_table_digest(opener: &Digest, digest_lists: &[u8]) -> Digest {
+    let mut hasher = Hasher::new_derive_key("gts2 parity table");
+    hasher.update(&[0x83, 0x58, DIGEST_LENGTH as u8]);
+    hasher.update(opener);
+    hasher.update(digest_lists);
+    *hasher.finalize().as_bytes()
+}
+
 #[derive(Debug)]
 struct Geometry {
     span_bytes: usize,
@@ -267,11 +282,7 @@ impl<'a> ParityClaim<'a> {
         if parity.len() != geometry.shard_bytes * geometry.parity_shards {
             return None;
         }
-        let mut hasher = Hasher::new_derive_key("gts2 parity table");
-        hasher.update(&[0x83, 0x58, DIGEST_LENGTH as u8]);
-        hasher.update(opener);
-        hasher.update(&payload[start..end]);
-        if hasher.finalize().as_bytes() != self.table_digest {
+        if &parity_table_digest(opener, &payload[start..end]) != self.table_digest {
             return None;
         }
 
@@ -346,7 +357,7 @@ impl ParityHistory {
             return Ok(ParityObservation::without_span(ParityCheck::Damaged));
         };
         let envelope_damaged = checked.parity_envelope_damaged || checked.malformed.is_some();
-        if !envelope_damaged && registry.get() > REGISTRY_VERSION && claim.geometry > 1 {
+        if !envelope_damaged && registry.get() > REGISTRY_VERSION && claim.geometry > GEOMETRY_ONE {
             return Ok(ParityObservation::without_span(
                 ParityCheck::UnknownGeometry {
                     code: claim.geometry,
@@ -367,12 +378,15 @@ impl ParityHistory {
             .end
             .checked_sub(claim.first)
             .is_some_and(|length| (1..SPAN_BYTES as u64).contains(&length));
-        let check =
-            if blocked || envelope_damaged || claim.geometry != 1 || claim.anchor != predecessor {
-                ParityCheck::Damaged
-            } else {
-                self.check_table(frame, checked, &claim)
-            };
+        let check = if blocked
+            || envelope_damaged
+            || claim.geometry != GEOMETRY_ONE
+            || claim.anchor != predecessor
+        {
+            ParityCheck::Damaged
+        } else {
+            self.check_table(frame, checked, &claim)
+        };
         Ok(ParityObservation {
             check,
             first_to_record,
