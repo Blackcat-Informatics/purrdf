@@ -15,8 +15,8 @@ use super::{
     ContentError, DefinitionFindings, FoldError, FormedBudget, FrameEnvelope, FrameField,
     FrameType, Generation, Header, Item, ItemKind, LinkState, MalformedReason, PayloadBudget,
     PayloadCapacity, PayloadDamage, PayloadRefusal, PayloadState, RESYNC_MAX_BYTES, RdfFold,
-    ResyncScan, RowFindings, SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState,
-    ValueName, ValueStore, WireError,
+    ResyncCandidate, ResyncScan, RowFindings, SegmentCheckError, SegmentDictionary,
+    SegmentVerifier, StoredState, ValueName, ValueStore, WireError,
 };
 use crate::{FastMap, model::Graph};
 
@@ -76,22 +76,36 @@ pub struct RdfGraph<'a> {
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
-    /// Initial framing damage before a verified scanned opener.
-    pub recovered_prefix: Option<RecoveredPrefix>,
+    /// Scanned resync openers and the framing damage before them, in file order.
+    pub resynchronizations: Vec<Resynchronization>,
 }
 
-/// Initial bytes skipped to reach the graph's first resync opener.
+/// A verified resync opener reached by scanning after framing failed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum RecoveredPrefix {
+pub struct Resynchronization {
+    /// Byte offset of the accepted opener.
+    pub offset: usize,
+    /// Skipped bytes when the opener starts inside the failed item.
+    pub damage: Option<FramingDamage>,
+}
+
+/// The extent and kind of bytes skipped when resynchronizing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FramingDamage {
     /// Bytes that end inside an otherwise structurally valid CBOR item.
     TornTail {
-        /// Byte offset of the accepted opener.
+        /// Byte offset of the torn item.
+        offset: usize,
+        /// Number of skipped bytes.
         length: usize,
     },
     /// Bytes that contain a structural CBOR violation.
     Undelimitable {
-        /// Byte offset of the accepted opener.
+        /// Byte offset of the undelimitable item.
+        offset: usize,
+        /// Number of skipped bytes.
         length: usize,
     },
 }
@@ -207,8 +221,8 @@ impl std::error::Error for ReadError {
 /// The generation 2 graph projection checks framing, links, payloads, commits
 /// and RDF positions. It returns an error when a row or term is unreadable or
 /// when an item requires content interpretation outside the graph projection.
-/// If the first item fails framing or generation recognition, the reader
-/// can recover at a verified resync opener and report the skipped prefix.
+/// The reader can recover at a verified resync opener when framing cannot
+/// delimit an item, or when the first item fails generation or opener checks.
 /// The graph carries no assertion about file authenticity or canonical form.
 ///
 /// # Errors
@@ -272,6 +286,7 @@ enum Unit<'a> {
 
 struct GraphReader<'a> {
     bytes: &'a [u8],
+    scan: ResyncScan<'a>,
     graph: RdfGraph<'a>,
     values: ValueStore,
     payload: PayloadBudget,
@@ -285,6 +300,7 @@ impl<'a> GraphReader<'a> {
     fn new(bytes: &'a [u8], capacity: ReadCapacity) -> Self {
         Self {
             bytes,
+            scan: ResyncScan::new(bytes),
             graph: RdfGraph::default(),
             values: ValueStore::default(),
             payload: PayloadBudget::new(capacity.payload),
@@ -317,51 +333,97 @@ impl<'a> GraphReader<'a> {
         initial: ReadError,
         framed_end: Option<usize>,
     ) -> Result<RdfGraph<'a>, ReadError> {
-        let end = if let Some(end) = framed_end {
+        let candidate = if let Some(end) = framed_end {
             self.count_item(0)?;
             self.count_held_items(end)?;
-            end
+            self.scan_resync(0, end)?
         } else {
-            let ReadFailure::Framing(error) = &initial.failure else {
-                return Err(initial);
-            };
-            match error.kind() {
-                DecodeErrorKind::Malformed(_) => self.count_item(0)?,
-                DecodeErrorKind::Truncated => {}
-                _ => return Err(initial),
-            }
-            self.bytes.len()
+            self.scan_undelimited(&initial, 0)?
         };
-        if self.items == self.item_limit {
+        let Some(candidate) = candidate else {
             return Err(initial);
-        }
+        };
+        let start = candidate.offset;
+        let end = start + candidate.bytes.len();
+        let segment = self.resume_segment(initial, &candidate, None)?;
+        self.read_segment(segment, start, end)
+    }
 
-        let mut scan = ResyncScan::new(self.bytes);
-        let candidate = scan
-            .scan(0..end, &mut self.payload)
+    fn scan_undelimited(
+        &mut self,
+        failure: &ReadError,
+        scan_start: usize,
+    ) -> Result<Option<ResyncCandidate<'a>>, ReadError> {
+        let ReadFailure::Framing(error) = &failure.failure else {
+            return Ok(None);
+        };
+        match error.kind() {
+            DecodeErrorKind::Malformed(_) => self.count_item(failure.offset)?,
+            DecodeErrorKind::Truncated => {}
+            _ => return Ok(None),
+        }
+        self.scan_resync(scan_start, self.bytes.len())
+    }
+
+    fn scan_resync(
+        &mut self,
+        start: usize,
+        end: usize,
+    ) -> Result<Option<ResyncCandidate<'a>>, ReadError> {
+        if self.items == self.item_limit {
+            return Ok(None);
+        }
+        self.scan
+            .scan(start..end, &mut self.payload)
             .map_err(|refused| ReadError {
                 offset: refused.offset,
                 failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
                     refused.requested_total,
                 )),
-            })?;
-        let Some(candidate) = candidate else {
-            return Err(initial);
-        };
+            })
+    }
 
-        let length = candidate.offset;
-        let Err(prefix) = delimit(&self.bytes[..length], 0) else {
-            return Err(initial);
+    fn resume_segment(
+        &mut self,
+        original: ReadError,
+        candidate: &ResyncCandidate<'a>,
+        previous: Option<&Segment<'a>>,
+    ) -> Result<Segment<'a>, ReadError> {
+        let offset = original.offset;
+        let damage = if candidate.offset > offset {
+            let length = candidate.offset - offset;
+            let Err(prefix) = delimit(&self.bytes[..candidate.offset], offset) else {
+                return Err(original);
+            };
+            let ReadFailure::Framing(error) = &prefix.failure else {
+                return Err(prefix);
+            };
+            Some(match error.kind() {
+                DecodeErrorKind::Truncated => FramingDamage::TornTail { offset, length },
+                DecodeErrorKind::Malformed(_) => FramingDamage::Undelimitable { offset, length },
+                _ => return Err(prefix),
+            })
+        } else {
+            None
         };
-        let ReadFailure::Framing(error) = &prefix.failure else {
-            return Err(prefix);
-        };
-        self.graph.recovered_prefix = Some(match error.kind() {
-            DecodeErrorKind::Truncated => RecoveredPrefix::TornTail { length },
-            DecodeErrorKind::Malformed(_) => RecoveredPrefix::Undelimitable { length },
-            _ => return Err(prefix),
-        });
-        self.read_opened(candidate.header, length, length + candidate.bytes.len())
+        let segment =
+            segment_from_header(candidate.header, previous).map_err(|failure| ReadError {
+                offset: candidate.offset,
+                failure,
+            })?;
+        self.count_item(candidate.offset)?;
+        super::fields::push(
+            &mut self.graph.resynchronizations,
+            Resynchronization {
+                offset: candidate.offset,
+                damage,
+            },
+        )
+        .map_err(|error| ReadError {
+            offset: candidate.offset,
+            failure: error.into(),
+        })?;
+        Ok(segment)
     }
 
     fn count_held_items(&mut self, failed_end: usize) -> Result<(), ReadError> {
@@ -412,16 +474,31 @@ impl<'a> GraphReader<'a> {
             offset: start,
             failure,
         })?;
-        self.read_segment(segment, end)
+        self.read_segment(segment, start, end)
     }
 
     fn read_segment(
         mut self,
         mut segment: Segment<'a>,
+        mut previous_start: usize,
         mut offset: usize,
     ) -> Result<RdfGraph<'a>, ReadError> {
         let mut next = self.next_item(offset);
-        while let Some(item) = next? {
+        loop {
+            let item = match next {
+                Ok(Some(item)) => item,
+                Ok(None) => return Ok(self.graph),
+                Err(error) => {
+                    let Some(candidate) = self.scan_undelimited(&error, previous_start + 1)? else {
+                        return Err(error);
+                    };
+                    previous_start = candidate.offset;
+                    offset = candidate.offset + candidate.bytes.len();
+                    segment = self.resume_segment(error, &candidate, Some(&segment))?;
+                    next = self.next_item(offset);
+                    continue;
+                }
+            };
             self.count_item(offset)?;
             let end = offset + item.bytes().len();
             next = self.next_item(end);
@@ -432,9 +509,9 @@ impl<'a> GraphReader<'a> {
                 &mut segment,
             );
             observed.map_err(|failure| ReadError { offset, failure })?;
+            previous_start = offset;
             offset = end;
         }
-        Ok(self.graph)
     }
 
     fn count_item(&mut self, offset: usize) -> Result<(), ReadError> {

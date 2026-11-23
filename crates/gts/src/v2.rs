@@ -35,8 +35,8 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveredPrefix,
-    VerifiedBlob, read,
+    ExternalBlob, FramingDamage, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph,
+    Resynchronization, VerifiedBlob, read,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};

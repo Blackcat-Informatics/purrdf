@@ -6,8 +6,8 @@
 use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
-    ContentError, FrameField, Item, ItemKind, Line, MalformedReason, PayloadRefusal, RdfGraph,
-    ReadCapacity, ReadFailure, ReadGraph, RecoveredPrefix, SegmentWriteError, SegmentWriter, Term,
+    ContentError, FrameField, FramingDamage, Item, ItemKind, Line, MalformedReason, PayloadRefusal,
+    RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term,
     ValueName, read,
 };
 use purrdf_lex::cbor::head;
@@ -39,13 +39,25 @@ fn legacy_opener_delegates_the_entire_input() {
 fn scanned_openers_preserve_the_difference_between_torn_and_undelimitable_prefixes() {
     let foreign = include_bytes!("fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
     let torn = include_bytes!("fixtures/v2/P1/resync-first-item-torn.whole.bin");
-    for (bytes, prefix, items) in [
+    for (bytes, opener_offset, prefix, items) in [
         (
             foreign.as_slice(),
-            RecoveredPrefix::Undelimitable { length: 2 },
+            2,
+            FramingDamage::Undelimitable {
+                offset: 0,
+                length: 2,
+            },
             4,
         ),
-        (torn.as_slice(), RecoveredPrefix::TornTail { length: 10 }, 6),
+        (
+            torn.as_slice(),
+            10,
+            FramingDamage::TornTail {
+                offset: 0,
+                length: 10,
+            },
+            6,
+        ),
     ] {
         let capacity = ReadCapacity {
             items,
@@ -54,7 +66,11 @@ fn scanned_openers_preserve_the_difference_between_torn_and_undelimitable_prefix
         let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
             panic!("the scanned opener identifies a generation 2 file");
         };
-        assert_eq!(graph.recovered_prefix, Some(prefix));
+        let [resumed] = graph.resynchronizations.as_slice() else {
+            panic!("the input contains one scanned opener");
+        };
+        assert_eq!(resumed.offset, opener_offset);
+        assert_eq!(resumed.damage, Some(prefix));
         assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
         let capacity = ReadCapacity {
             items: items - 1,
@@ -110,6 +126,70 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     let error = read(incomplete, capacity).unwrap_err();
     assert_eq!(error.offset, 264);
     assert!(matches!(error.failure, ReadFailure::ItemCapacity(1)));
+}
+
+#[test]
+fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-item-limit-region.whole.bin");
+    let mut capacity = ReadCapacity {
+        items: 3,
+        ..ReadCapacity::default()
+    };
+    capacity.payload.decoded_bytes_per_read = 17;
+    let error = read(bytes, capacity).unwrap_err();
+    assert_eq!(error.offset, 114);
+    assert!(matches!(error.failure, ReadFailure::Framing(_)));
+
+    // The segment before the damage spends 17 bytes. The scan adds
+    // another 4,096 and the resumed terms and row frames add 31.
+    capacity.items = 6;
+    capacity.payload.decoded_bytes_per_read = 4144;
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("the input opens a generation 2 file");
+    };
+    let [resumed] = graph.resynchronizations.as_slice() else {
+        panic!("the input contains one scanned opener");
+    };
+    assert_eq!(resumed.offset, 115);
+    assert_eq!(
+        resumed.damage,
+        Some(FramingDamage::Undelimitable {
+            offset: 114,
+            length: 1
+        })
+    );
+    assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
+
+    capacity.payload.decoded_bytes_per_read = 4143;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert!(matches!(
+        refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4144))
+    ));
+}
+
+#[test]
+fn a_later_torn_item_leaves_the_last_slot_for_the_resync_opener() {
+    let bytes =
+        include_bytes!("fixtures/v2/P1/resync-incomplete-item-not-counted.ends-at-candidate.bin");
+    let capacity = ReadCapacity {
+        items: 3,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("the input opens a generation 2 file");
+    };
+    let [resumed] = graph.resynchronizations.as_slice() else {
+        panic!("the input contains one scanned opener");
+    };
+    assert_eq!(resumed.offset, 199);
+    assert_eq!(
+        resumed.damage,
+        Some(FramingDamage::TornTail {
+            offset: 114,
+            length: 85
+        })
+    );
 }
 
 #[test]
