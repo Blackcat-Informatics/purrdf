@@ -1,0 +1,23 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: a9acea28aa7f0d4cb8d4d2e22211b86983e64d86
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1491
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1491
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 39ccd2b37668b41b24a390d172e7f8d3c5ecbd6c
+GhpRsq-Head-Ref: paudley/stream-canonical-line-sequence-digest
+GhpRsq-Head-OID: a9acea28aa7f0d4cb8d4d2e22211b86983e64d86
+GhpRsq-Result-Tree: 8945a132b9f8b448ade2532fececf0399294f3ce
+GhpRsq-Result-Commit: 875d59c77385d8607cfe1cba503c2c08a878f08f
+GhpRsq-Parent-Hashes: a9acea28aa7f0d4cb8d4d2e22211b86983e64d86
+GhpRsq-Squash-Notes-SHA256: 6315cdb7ac5fa82f93836b789a5e8f51ac6539014577478f38a0c3edfbc1719b
+GhpRsq-Stage-Tree: e8390a71cf5b98b31ecf7aee21912b8c9c98e527
+GhpRsq-Stage-Commit: f022ae5fd710f613da1c761c331947135cdbc0c3
+GhpRsq-Stage-Tag: refs/tags/ghprsq/artifacts/f022ae5fd710f613da1c761c331947135cdbc0c3
+GhpRsq-Stage-Ref: refs/ghprsq/pr/1491/stage
+GhpRsq-Stage-Files: 14
+GhpRsq-Stage-URL: https://github.com/Blackcat-Informatics/purrdf/tree/f022ae5fd710f613da1c761c331947135cdbc0c3
