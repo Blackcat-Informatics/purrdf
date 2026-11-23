@@ -54,6 +54,12 @@ impl DetectionCapacity {
     pub const fn recovery_work(bytes: usize) -> usize {
         bytes.saturating_mul(Self::RECOVERY_WORK_PER_BYTE)
     }
+
+    const LEGACY: Self = Self {
+        encoded_opener_bytes: usize::MAX,
+        nesting_depth: usize::MAX,
+        work: usize::MAX,
+    };
 }
 
 impl Default for DetectionCapacity {
@@ -66,14 +72,9 @@ impl Default for DetectionCapacity {
     }
 }
 
-/// Limits for materializing an RDF graph through generation detection.
+/// Limits for materializing a generation 2 RDF graph.
 #[derive(Clone, Copy, Debug)]
 pub struct ReadCapacity {
-    /// Bounds shared by every generation before dispatch.
-    pub detection: DetectionCapacity,
-    /// Complete generation 1 read contract when the opener delegates to the
-    /// legacy graph reader.
-    pub first_generation: crate::reader::GtsReadLimits,
     /// Maximum stored and decoded payload lengths.
     pub payload: PayloadCapacity,
     /// Maximum total bytes copied by front coding.
@@ -87,8 +88,6 @@ pub struct ReadCapacity {
 impl Default for ReadCapacity {
     fn default() -> Self {
         Self {
-            detection: DetectionCapacity::default(),
-            first_generation: crate::reader::GtsReadLimits::DEFAULT,
             payload: PayloadCapacity {
                 stored_bytes_per_frame: 1 << 26,
                 decoded_bytes_per_frame: 1 << 26,
@@ -97,6 +96,39 @@ impl Default for ReadCapacity {
             formed_bytes: 1 << 37,
             rebuilt_bytes: 1 << 37,
             items: 1 << 26,
+        }
+    }
+}
+
+/// Complete limits for generation detection and the selected graph reader.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ReadLimits {
+    /// Bounds shared by every generation before dispatch.
+    pub detection: DetectionCapacity,
+    /// Complete generation 1 read contract when the opener delegates to the
+    /// legacy graph reader.
+    pub first_generation: crate::reader::GtsReadLimits,
+    /// Generation 2 graph materialization limits.
+    pub second_generation: ReadCapacity,
+}
+
+impl ReadLimits {
+    const fn legacy(second_generation: ReadCapacity) -> Self {
+        Self {
+            detection: DetectionCapacity::LEGACY,
+            first_generation: crate::reader::GtsReadLimits::UNBOUNDED,
+            second_generation,
+        }
+    }
+}
+
+impl Default for ReadLimits {
+    fn default() -> Self {
+        Self {
+            detection: DetectionCapacity::default(),
+            first_generation: crate::reader::GtsReadLimits::DEFAULT,
+            second_generation: ReadCapacity::default(),
         }
     }
 }
@@ -334,6 +366,23 @@ impl std::error::Error for ReadError {
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadError> {
+    read_inner(bytes, ReadLimits::legacy(capacity))
+}
+
+/// Decode a GTS file under one finite generation-neutral read contract.
+///
+/// Use this entry point for untrusted input. [`ReadLimits::default`] bounds
+/// generation detection and both generation readers; callers handling larger
+/// admitted datasets can raise the applicable finite fields.
+///
+/// # Errors
+/// Returns the byte position and reason when a graph cannot be produced.
+pub fn read_with_limits(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
+    read_inner(bytes, limits)
+}
+
+fn read_inner(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
+    let capacity = limits.second_generation;
     if capacity.items == 0 && !bytes.is_empty() {
         return Err(ReadError {
             offset: 0,
@@ -341,7 +390,7 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
         });
     }
     let mut detection_work = 0;
-    let (opener, generation) = match detect_opener(bytes, capacity.detection, &mut detection_work) {
+    let (opener, generation) = match detect_opener(bytes, limits.detection, &mut detection_work) {
         Ok(Some(detected)) => detected,
         Ok(None) => {
             return Err(ReadError {
@@ -353,7 +402,7 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             if !matches!(error.failure, ReadFailure::Framing(_)) {
                 return Err(error);
             }
-            return GraphReader::new(bytes, capacity, Some(detection_work))
+            return GraphReader::new(bytes, capacity, limits.detection, Some(detection_work))
                 .recover_initial(error, None)
                 .map(ReadGraph::Second);
         }
@@ -362,19 +411,21 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
         Generation::First => crate::reader::read_with_limits(
             bytes,
             crate::reader::ReadOptions::new(true, None),
-            capacity.first_generation,
+            limits.first_generation,
         )
         .map(ReadGraph::First)
         .map_err(|error| ReadError {
             offset: 0,
             failure: ReadFailure::FirstGenerationCapacity(error),
         }),
-        Generation::Second => GraphReader::new(bytes, capacity, None)
+        Generation::Second => GraphReader::new(bytes, capacity, limits.detection, None)
             .read_first(opener, generation)
             .map(ReadGraph::Second),
-        Generation::Unrecognized => GraphReader::new(bytes, capacity, Some(detection_work))
-            .read_first(opener, generation)
-            .map(ReadGraph::Second),
+        Generation::Unrecognized => {
+            GraphReader::new(bytes, capacity, limits.detection, Some(detection_work))
+                .read_first(opener, generation)
+                .map(ReadGraph::Second)
+        }
         generation => Err(ReadError {
             offset: 0,
             failure: ReadFailure::Generation(generation),
@@ -550,6 +601,7 @@ struct GraphReader<'a> {
     initial_scan: Option<ResyncScan<'a>>,
     initial_end: Option<usize>,
     initial_refusal: Option<ReadError>,
+    initial_exhausted: bool,
     graph: RdfGraph<'a>,
     values: ValueStore,
     payload: PayloadBudget,
@@ -560,12 +612,17 @@ struct GraphReader<'a> {
 }
 
 impl<'a> GraphReader<'a> {
-    fn new(bytes: &'a [u8], capacity: ReadCapacity, detection_work: Option<usize>) -> Self {
+    fn new(
+        bytes: &'a [u8],
+        capacity: ReadCapacity,
+        detection: DetectionCapacity,
+        detection_work: Option<usize>,
+    ) -> Self {
         let (initial_scan, initial_end, initial_refusal) =
             detection_work.map_or((None, None, None), |used| {
-                let remaining = capacity.detection.work.saturating_sub(used);
+                let remaining = detection.work.saturating_sub(used);
                 let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
-                let byte_end = capacity.detection.encoded_opener_bytes;
+                let byte_end = detection.encoded_opener_bytes;
                 let end = bytes.len().min(work_end).min(byte_end);
                 let refusal = (end < bytes.len()).then(|| {
                     let failure = if byte_end <= work_end {
@@ -580,7 +637,7 @@ impl<'a> GraphReader<'a> {
                                 end.saturating_add(1)
                                     .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
                             ),
-                            limit: capacity.detection.work,
+                            limit: detection.work,
                             cause: None,
                         }
                     };
@@ -597,6 +654,7 @@ impl<'a> GraphReader<'a> {
             initial_scan,
             initial_end,
             initial_refusal,
+            initial_exhausted: false,
             graph: RdfGraph::default(),
             values: ValueStore::default(),
             payload: PayloadBudget::new(capacity.payload),
@@ -618,10 +676,7 @@ impl<'a> GraphReader<'a> {
     }
 
     fn detection_exhausted(&self) -> bool {
-        self.initial_scan
-            .as_ref()
-            .zip(self.initial_end)
-            .is_some_and(|(scan, end)| scan.next_offset() >= end)
+        self.initial_exhausted
     }
 
     fn detection_refusal(&mut self, initial: &ReadError) -> Option<ReadError> {
@@ -711,7 +766,10 @@ impl<'a> GraphReader<'a> {
             return Ok(None);
         }
         let scanned = if let Some(scan) = &mut self.initial_scan {
-            scan.scan(start..end, &mut self.payload)
+            let scanned = scan.scan(start..end, &mut self.payload);
+            self.initial_exhausted =
+                scanned.as_ref().is_ok_and(Option::is_none) && scan.next_offset() >= end;
+            scanned
         } else {
             self.scan.scan(start..end, &mut self.payload)
         };
