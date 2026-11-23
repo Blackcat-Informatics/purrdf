@@ -7,11 +7,12 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::reader::GtsReadResource;
 use purrdf_gts::v2::{
-    ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
-    Line, MalformedReason, ParityFindingKind, PayloadDamage, PayloadRefusal, RdfGraph,
-    ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
+    ContentError, DetectionCapacity, FrameField, FramingDamage, IndexStorageItem,
+    IndexStorageProblem, Item, ItemKind, Line, MalformedReason, ParityFindingKind, PayloadDamage,
+    PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError,
+    SegmentWriter, Term, ValueName, read,
 };
-use purrdf_lex::cbor::head;
+use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
 fn second(bytes: &[u8]) -> RdfGraph<'_> {
     let ReadGraph::Second(graph) = read(bytes, ReadCapacity::default()).unwrap() else {
@@ -387,18 +388,31 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
         }
     ));
 
+    let mut tagged_opener = vec![0xd9, 0xd9, 0xf7, 0xa2, 0x61, b'a', 0x58, 0x40];
+    tagged_opener.extend(std::iter::repeat_n(0, 64));
+    tagged_opener.extend_from_slice(&[0x61, b'v', 0x01]);
+    let tagged_work = tagged_opener.len() * DetectionCapacity::OPENER_WORK_PER_BYTE;
     capacity.detection.encoded_opener_bytes = usize::MAX;
-    capacity.detection.work = opener_bytes * 2;
+    capacity.detection.work = tagged_work;
     assert!(matches!(
-        read(bytes, capacity).unwrap(),
+        read(&tagged_opener, capacity).unwrap(),
         ReadGraph::First(_)
     ));
     capacity.detection.work -= 1;
-    let error = read(bytes, capacity).unwrap_err();
+    let error = read(&tagged_opener, capacity).unwrap_err();
     assert!(matches!(
         error.failure,
         ReadFailure::DetectionWork { required, limit }
-            if required == opener_bytes * 2 && limit == opener_bytes * 2 - 1
+            if required == tagged_work && limit == tagged_work - 1
+    ));
+    capacity.detection.work = 0;
+    let error = read(&tagged_opener, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork {
+            required: 1,
+            limit: 0
+        }
     ));
 
     let nested_arrays = 4;
@@ -416,9 +430,28 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
     capacity.detection.nesting_depth -= 1;
     let error = read(&deep_opener, capacity).unwrap_err();
     assert!(matches!(
+        &error.failure,
+        ReadFailure::DetectionDepth { required, limit, .. }
+            if *required == exact_depth && *limit == exact_depth - 1
+    ));
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the native structural depth refusal remains inspectable");
+    assert_eq!(
+        cause.kind(),
+        DecodeErrorKind::Depth {
+            limit: exact_depth - 1
+        }
+    );
+    capacity.detection.nesting_depth = 0;
+    let error = read(&deep_opener, capacity).unwrap_err();
+    assert!(matches!(
         error.failure,
-        ReadFailure::DetectionDepth { required, limit }
-            if required == exact_depth && limit == exact_depth - 1
+        ReadFailure::DetectionDepth {
+            required: 1,
+            limit: 0,
+            ..
+        }
     ));
 }
 
@@ -489,6 +522,38 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
         error.failure,
         ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4096))
     ));
+
+    capacity.payload = ReadCapacity::default().payload;
+    let opener_end = 2 + Item::first(&bytes[2..]).unwrap().unwrap().bytes().len();
+    capacity.detection.encoded_opener_bytes = opener_end;
+    capacity.detection.work = usize::MAX;
+    assert!(matches!(
+        read(bytes, capacity).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    capacity.detection.encoded_opener_bytes -= 1;
+    let error = read(bytes, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionBytes { required, limit }
+            if required == opener_end && limit == opener_end - 1
+    ));
+
+    let recovery_work = 1 + DetectionCapacity::recovery_work(opener_end);
+    capacity.detection.encoded_opener_bytes = usize::MAX;
+    capacity.detection.work = recovery_work;
+    assert!(matches!(
+        read(bytes, capacity).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    capacity.detection.work -= 1;
+    let error = read(bytes, capacity).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::DetectionWork { required, limit }
+            if required == recovery_work && limit == recovery_work - 1
+    ));
+    capacity.detection = ReadCapacity::default().detection;
 
     // The complete failing opener plus its two held frames reach capacity
     // before the candidate can be tested or charged.

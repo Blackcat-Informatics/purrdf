@@ -38,9 +38,22 @@ pub struct DetectionCapacity {
     pub encoded_opener_bytes: usize,
     /// Maximum arrays, maps and tags open while delimiting the opener.
     pub nesting_depth: usize,
-    /// Maximum structural work, charged as two units per encoded opener byte
-    /// for delimiting and generation inspection.
+    /// Maximum structural work. A complete opener charges
+    /// [`Self::OPENER_WORK_PER_BYTE`] units per encoded byte; damaged-prefix
+    /// recovery charges [`Self::RECOVERY_WORK_PER_BYTE`] units per scanned byte.
     pub work: usize,
+}
+
+impl DetectionCapacity {
+    /// Delimiting, tagged-child inspection and generation inspection.
+    pub const OPENER_WORK_PER_BYTE: usize = 3;
+    /// Pattern matching plus worst-case candidate parsing for one recovery byte.
+    pub const RECOVERY_WORK_PER_BYTE: usize = RESYNC_MAX_BYTES * 2 + 3;
+
+    /// Conservative work charge for scanning this many damaged-prefix bytes.
+    pub const fn recovery_work(bytes: usize) -> usize {
+        bytes.saturating_mul(Self::RECOVERY_WORK_PER_BYTE)
+    }
 }
 
 impl Default for DetectionCapacity {
@@ -48,7 +61,7 @@ impl Default for DetectionCapacity {
         Self {
             encoded_opener_bytes: 64 * 1024 * 1024,
             nesting_depth: 256,
-            work: 128 * 1024 * 1024,
+            work: 192 * 1024 * 1024,
         }
     }
 }
@@ -208,6 +221,8 @@ pub enum ReadFailure {
         required: usize,
         /// Configured nesting ceiling.
         limit: usize,
+        /// Native structural refusal at the first excess opening item.
+        cause: StructuralError,
     },
     /// Generation detection needs more structural work than admitted.
     DetectionWork {
@@ -284,6 +299,7 @@ impl std::error::Error for ReadError {
             ReadFailure::Segment(error) => Some(error),
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
+            ReadFailure::DetectionDepth { cause, .. } => Some(cause),
             ReadFailure::FirstGenerationCapacity(error) => Some(error),
             ReadFailure::PayloadDamage(PayloadDamage::DecodeFailed(error)) => Some(error),
             _ => None,
@@ -314,8 +330,9 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             failure: ReadFailure::ItemCapacity(0),
         });
     }
-    let opener = match detect_opener(bytes, capacity.detection) {
-        Ok(Some(item)) => item,
+    let mut detection_work = 0;
+    let (opener, generation) = match detect_opener(bytes, capacity.detection, &mut detection_work) {
+        Ok(Some(detected)) => detected,
         Ok(None) => {
             return Err(ReadError {
                 offset: 0,
@@ -323,15 +340,14 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             });
         }
         Err(error) => {
-            return GraphReader::new(bytes, capacity)
+            if !matches!(error.failure, ReadFailure::Framing(_)) {
+                return Err(error);
+            }
+            return GraphReader::new(bytes, capacity, Some(detection_work))
                 .recover_initial(error, None)
                 .map(ReadGraph::Second);
         }
     };
-    let generation = opener.generation().map_err(|error| ReadError {
-        offset: 0,
-        failure: ReadFailure::Framing(error),
-    })?;
     match generation {
         Generation::First => crate::reader::read_with_limits(
             bytes,
@@ -343,7 +359,10 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             offset: 0,
             failure: ReadFailure::FirstGenerationCapacity(error),
         }),
-        Generation::Second | Generation::Unrecognized => GraphReader::new(bytes, capacity)
+        Generation::Second => GraphReader::new(bytes, capacity, None)
+            .read_first(opener, generation)
+            .map(ReadGraph::Second),
+        Generation::Unrecognized => GraphReader::new(bytes, capacity, Some(detection_work))
             .read_first(opener, generation)
             .map(ReadGraph::Second),
         generation => Err(ReadError {
@@ -353,21 +372,22 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
     }
 }
 
-fn detect_opener(bytes: &[u8], capacity: DetectionCapacity) -> Result<Option<Item<'_>>, ReadError> {
-    const WORK_PER_BYTE: usize = 2;
-
-    let work_bytes = capacity.work / WORK_PER_BYTE;
-    let encoded_limit = capacity.encoded_opener_bytes.min(work_bytes);
+fn detect_opener<'a>(
+    bytes: &'a [u8],
+    capacity: DetectionCapacity,
+    work_used: &mut usize,
+) -> Result<Option<(Item<'a>, Generation)>, ReadError> {
+    let encoded_limit = capacity.encoded_opener_bytes.min(capacity.work);
     let available = bytes.len().min(encoded_limit);
     let refusal = |required_bytes: usize| {
-        let failure = if capacity.encoded_opener_bytes <= work_bytes {
+        let failure = if capacity.encoded_opener_bytes <= capacity.work {
             ReadFailure::DetectionBytes {
                 required: required_bytes,
                 limit: capacity.encoded_opener_bytes,
             }
         } else {
             ReadFailure::DetectionWork {
-                required: required_bytes.saturating_mul(WORK_PER_BYTE),
+                required: required_bytes,
                 limit: capacity.work,
             }
         };
@@ -377,25 +397,53 @@ fn detect_opener(bytes: &[u8], capacity: DetectionCapacity) -> Result<Option<Ite
         return Err(refusal(1));
     }
     match Item::first_with_depth(&bytes[..available], capacity.nesting_depth) {
-        Ok(item) => Ok(item),
+        Ok(Some(item)) => {
+            let required = item
+                .bytes()
+                .len()
+                .saturating_mul(DetectionCapacity::OPENER_WORK_PER_BYTE);
+            if required > capacity.work {
+                return Err(ReadError {
+                    offset: 0,
+                    failure: ReadFailure::DetectionWork {
+                        required,
+                        limit: capacity.work,
+                    },
+                });
+            }
+            *work_used = required;
+            let generation = item.generation().map_err(|error| ReadError {
+                offset: 0,
+                failure: ReadFailure::Framing(error),
+            })?;
+            Ok(Some((item, generation)))
+        }
+        Ok(None) => Ok(None),
         Err(error)
             if matches!(error.kind(), DecodeErrorKind::Truncated) && bytes.len() > available =>
         {
             Err(refusal(available.saturating_add(1)))
         }
-        Err(error) => match error.kind() {
-            DecodeErrorKind::Depth { limit } => Err(ReadError {
-                offset: usize::try_from(error.offset()).unwrap_or(usize::MAX),
-                failure: ReadFailure::DetectionDepth {
-                    required: limit.saturating_add(1),
-                    limit,
-                },
-            }),
-            _ => Err(ReadError {
-                offset: 0,
-                failure: ReadFailure::Framing(error),
-            }),
-        },
+        Err(error) => {
+            *work_used = usize::try_from(error.offset())
+                .unwrap_or(usize::MAX)
+                .saturating_add(1)
+                .min(available);
+            match error.kind() {
+                DecodeErrorKind::Depth { limit } => Err(ReadError {
+                    offset: usize::try_from(error.offset()).unwrap_or(usize::MAX),
+                    failure: ReadFailure::DetectionDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                }),
+                _ => Err(ReadError {
+                    offset: 0,
+                    failure: ReadFailure::Framing(error),
+                }),
+            }
+        }
     }
 }
 
@@ -486,6 +534,9 @@ enum ItemCheck<'a> {
 struct GraphReader<'a> {
     bytes: &'a [u8],
     scan: ResyncScan<'a>,
+    initial_scan: Option<ResyncScan<'a>>,
+    initial_end: Option<usize>,
+    initial_refusal: Option<ReadError>,
     graph: RdfGraph<'a>,
     values: ValueStore,
     payload: PayloadBudget,
@@ -496,10 +547,41 @@ struct GraphReader<'a> {
 }
 
 impl<'a> GraphReader<'a> {
-    fn new(bytes: &'a [u8], capacity: ReadCapacity) -> Self {
+    fn new(bytes: &'a [u8], capacity: ReadCapacity, detection_work: Option<usize>) -> Self {
+        let (initial_scan, initial_end, initial_refusal) =
+            detection_work.map_or((None, None, None), |used| {
+                let remaining = capacity.detection.work.saturating_sub(used);
+                let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
+                let byte_end = capacity.detection.encoded_opener_bytes;
+                let end = bytes.len().min(work_end).min(byte_end);
+                let refusal = (end < bytes.len()).then(|| {
+                    let failure = if byte_end <= work_end {
+                        ReadFailure::DetectionBytes {
+                            required: end.saturating_add(1),
+                            limit: byte_end,
+                        }
+                    } else {
+                        ReadFailure::DetectionWork {
+                            required: used.saturating_add(
+                                end.saturating_add(1)
+                                    .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
+                            ),
+                            limit: capacity.detection.work,
+                        }
+                    };
+                    ReadError {
+                        offset: end,
+                        failure,
+                    }
+                });
+                (Some(ResyncScan::new(&bytes[..end])), Some(end), refusal)
+            });
         Self {
             bytes,
             scan: ResyncScan::new(bytes),
+            initial_scan,
+            initial_end,
+            initial_refusal,
             graph: RdfGraph::default(),
             values: ValueStore::default(),
             payload: PayloadBudget::new(capacity.payload),
@@ -508,6 +590,16 @@ impl<'a> GraphReader<'a> {
             item_limit: capacity.items,
             rebuilt_remaining: capacity.rebuilt_bytes,
         }
+    }
+
+    fn scan_end(&self) -> usize {
+        self.initial_end.unwrap_or(self.bytes.len())
+    }
+
+    fn finish_detection(&mut self) {
+        self.initial_scan = None;
+        self.initial_end = None;
+        self.initial_refusal = None;
     }
 
     fn read_first(
@@ -540,10 +632,11 @@ impl<'a> GraphReader<'a> {
             self.scan_undelimited(&initial, 0, false)?
         };
         let Some(candidate) = candidate else {
-            return Err(initial);
+            return Err(self.initial_refusal.take().unwrap_or(initial));
         };
         let start = candidate.offset;
         let end = start + candidate.bytes.len();
+        self.finish_detection();
         let segment = self.resume_segment(initial, &candidate, None)?;
         self.read_segment(segment, start, end)
     }
@@ -566,7 +659,7 @@ impl<'a> GraphReader<'a> {
             DecodeErrorKind::Truncated => {}
             _ => return Ok(None),
         }
-        self.scan_resync(scan_start, self.bytes.len())
+        self.scan_resync(scan_start, self.scan_end())
     }
 
     fn scan_resync(
@@ -577,14 +670,17 @@ impl<'a> GraphReader<'a> {
         if self.items == self.item_limit {
             return Ok(None);
         }
-        self.scan
-            .scan(start..end, &mut self.payload)
-            .map_err(|refused| ReadError {
-                offset: refused.offset,
-                failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
-                    refused.requested_total,
-                )),
-            })
+        let scanned = if let Some(scan) = &mut self.initial_scan {
+            scan.scan(start..end, &mut self.payload)
+        } else {
+            self.scan.scan(start..end, &mut self.payload)
+        };
+        scanned.map_err(|refused| ReadError {
+            offset: refused.offset,
+            failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
+                refused.requested_total,
+            )),
+        })
     }
 
     fn resume_segment(
@@ -659,9 +755,8 @@ impl<'a> GraphReader<'a> {
         if items.region_counted {
             return Ok(());
         }
-        let limit = failed_end
-            .saturating_add(RESYNC_MAX_BYTES)
-            .min(self.bytes.len());
+        let scan_end = self.scan_end();
+        let limit = failed_end.saturating_add(RESYNC_MAX_BYTES).min(scan_end);
         let mut offset = if items.complete.is_empty() {
             failed_end
         } else {
@@ -670,7 +765,7 @@ impl<'a> GraphReader<'a> {
         while offset < limit && self.items < self.item_limit {
             // The immediate next item's extent can move the decision point
             // past the byte lookahead. Later items count only within it.
-            let full_input = offset == failed_end || limit == self.bytes.len();
+            let full_input = offset == failed_end || limit == scan_end;
             let next = if full_input {
                 items.next.take().unwrap_or_else(|| self.next_item(offset))
             } else {
@@ -860,7 +955,7 @@ impl<'a> GraphReader<'a> {
     }
 
     fn check_item_limit(&self, offset: usize) -> Result<(), ReadError> {
-        if self.items == self.item_limit && offset < self.bytes.len() {
+        if self.items == self.item_limit && offset < self.scan_end() {
             return Err(ReadError {
                 offset,
                 failure: ReadFailure::ItemCapacity(self.item_limit),
@@ -871,7 +966,11 @@ impl<'a> GraphReader<'a> {
 
     fn next_item(&self, offset: usize) -> Result<Option<Item<'a>>, ReadError> {
         self.check_item_limit(offset)?;
-        delimit(self.bytes, offset)
+        let end = self.scan_end();
+        if offset >= end {
+            return Ok(None);
+        }
+        delimit(&self.bytes[..end], offset)
     }
 
     fn inspect_item(
