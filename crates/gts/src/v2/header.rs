@@ -15,6 +15,8 @@ pub(super) const HEADER_CONTEXT: &str = "gts2 header";
 
 mod resync;
 
+pub use resync::{ResyncCandidate, ResyncRefusal, ResyncScan};
+
 /// P2 profile codes for authored headers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -78,7 +80,8 @@ impl<'a> Header<'a> {
         reader.record(7)?;
         reader.fixed_uint(HEADER_KIND, MalformedReason::WrongType)?;
         reader.fixed_uint(GENERATION, MalformedReason::OutOfRange)?;
-        let (registry_version, hash_algorithm, profile) = read_registry_profile(&mut reader)?;
+        let (registry_version, hash_algorithm) = read_registry_hash(&mut reader, false)?;
+        let profile = read_profile(&mut reader)?;
         let holds_hash = hash_algorithm.get() == BLAKE3_256;
         let canonical = reader.option(|reader| {
             reader.registry_value(registry_version, u64::from(CanonicalForm::V1 as u8))
@@ -132,13 +135,22 @@ impl<'a> Header<'a> {
     }
 }
 
-fn read_registry_profile(
+fn read_registry_hash(
     fields: &mut Fields<'_>,
-) -> Result<(NonZeroU64, NonZeroU64, Option<NonZeroU64>), WireError> {
+    require_held_hash: bool,
+) -> Result<(NonZeroU64, NonZeroU64), WireError> {
     let registry = fields.positive(MalformedReason::OutOfRange)?;
-    let algorithm = fields.registry_value(registry, BLAKE3_256)?;
-    let profile = fields.option(|fields| fields.positive(MalformedReason::UnregisteredValue))?;
-    Ok((registry, algorithm, profile))
+    let hash_registry = if require_held_hash {
+        NonZeroU64::MIN
+    } else {
+        registry
+    };
+    let algorithm = fields.registry_value(hash_registry, BLAKE3_256)?;
+    Ok((registry, algorithm))
+}
+
+fn read_profile(fields: &mut Fields<'_>) -> Result<Option<NonZeroU64>, WireError> {
+    fields.option(|fields| fields.positive(MalformedReason::UnregisteredValue))
 }
 
 fn read_digest<'a>(fields: &mut Fields<'a>, holds_hash: bool) -> Result<&'a [u8], WireError> {

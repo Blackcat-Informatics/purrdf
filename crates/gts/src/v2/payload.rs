@@ -67,6 +67,20 @@ impl PayloadBudget {
         if decoded > self.capacity.decoded_bytes_per_frame {
             return Err(PayloadRefusal::DecodedSize(decoded));
         }
+        self.admit_total(decoded)
+            .map_err(PayloadRefusal::TotalDecoded)
+    }
+
+    pub(super) const fn total_refused(&self) -> bool {
+        self.refused
+    }
+
+    pub(super) fn charge_resync(&mut self, decoded: u64) -> Result<(), u64> {
+        self.charged = self.admit_total(decoded)?;
+        Ok(())
+    }
+
+    fn admit_total(&mut self, decoded: u64) -> Result<u64, u64> {
         let total = self.charged.checked_add(decoded);
         if !self.refused
             && let Some(total) = total
@@ -75,7 +89,7 @@ impl PayloadBudget {
             return Ok(total);
         }
         self.refused = true;
-        Err(PayloadRefusal::TotalDecoded(total.unwrap_or(u64::MAX)))
+        Err(total.unwrap_or(u64::MAX))
     }
 }
 

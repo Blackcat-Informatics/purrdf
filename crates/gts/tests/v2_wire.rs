@@ -7,12 +7,102 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
     CanonicalForm, FrameField, Generation, Header, Item, ItemKind, LinkState, MalformedReason,
-    PayloadBudget, PayloadCapacity, UnknownFrameType, write_header,
+    PayloadBudget, PayloadCapacity, ResyncScan, SegmentVerifier, UnknownFrameType, write_header,
 };
 use purrdf_lex::cbor::DecodeErrorKind;
 
 const MINIMAL: &[u8] = include_bytes!("fixtures/v2/P1/header-minimal.bin");
 const LINK_OK: &[u8] = include_bytes!("fixtures/v2/P1/link-ok.bin");
+const RESYNC_CHAIN: &[u8] = include_bytes!("fixtures/v2/P1/resync-chain.with-frames.bin");
+
+fn scan_budget(total: u64) -> PayloadBudget {
+    PayloadBudget::new(PayloadCapacity {
+        stored_bytes_per_frame: 0,
+        decoded_bytes_per_frame: 0,
+        decoded_bytes_per_read: total,
+    })
+}
+
+#[test]
+fn resync_scan_bounds_candidate_starts_and_skips_tested_occurrences() {
+    let mut scan = ResyncScan::new(RESYNC_CHAIN);
+    let mut budget = PayloadBudget::new(PayloadCapacity {
+        stored_bytes_per_frame: 64,
+        decoded_bytes_per_frame: 17,
+        decoded_bytes_per_read: 4127,
+    });
+    let opener = first(RESYNC_CHAIN);
+    let header = Header::decode(opener).unwrap();
+    let mut verifier =
+        SegmentVerifier::new(header.identifier().unwrap(), header.registry_version());
+    let mut rest = &RESYNC_CHAIN[opener.bytes().len()..209];
+    while !rest.is_empty() {
+        let item = first(rest);
+        verifier
+            .check(&item.frame().unwrap().unwrap(), None, &mut budget)
+            .unwrap();
+        rest = &rest[item.bytes().len()..];
+    }
+    assert_eq!(budget.charged(), 31);
+    assert!(scan.scan(0..209, &mut budget).unwrap().is_none());
+    assert_eq!(budget.charged(), 31);
+
+    // The candidate starts at the last byte in the run and crosses its end.
+    let found = scan.scan(200..210, &mut budget).unwrap().unwrap();
+    assert_eq!(found.offset, 209);
+    assert_eq!(found.bytes, first(&RESYNC_CHAIN[209..]).bytes());
+    assert_eq!(budget.charged(), 4127);
+    assert!(
+        scan.scan(208..RESYNC_CHAIN.len(), &mut budget)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn resync_scan_checks_place_and_held_hash_before_charging() {
+    let later_hash = include_bytes!("fixtures/v2/P1/resync-candidate-hash-later-version.bin");
+    let profile =
+        include_bytes!("fixtures/v2/P1/resync-candidate-option-rule.profile-tag-next-charged.bin");
+    let mut displaced = vec![0];
+    displaced.extend_from_slice(RESYNC_CHAIN);
+    for bytes in [later_hash.as_slice(), &displaced] {
+        let mut budget = scan_budget(0);
+        assert!(
+            ResyncScan::new(bytes)
+                .scan(0..bytes.len(), &mut budget)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(budget.charged(), 0);
+    }
+
+    // The invalid profile is cost-free. Only the next occurrence reaches the charge.
+    let mut scan = ResyncScan::new(profile);
+    let mut budget = scan_budget(4095);
+    let refused = scan.scan(0..profile.len(), &mut budget).unwrap_err();
+    assert_eq!((refused.offset, refused.requested_total), (473, 4096));
+    assert!(scan.scan(0..profile.len(), &mut budget).unwrap().is_none());
+    assert_eq!(budget.charged(), 0);
+}
+
+#[test]
+fn resync_scan_charges_before_checking_mark_order_and_identifier() {
+    let marks = include_bytes!("fixtures/v2/P1/resync-candidate-marks-unordered.whole.bin");
+    let mut wrong_identifier = RESYNC_CHAIN.to_vec();
+    let opener = first(&RESYNC_CHAIN[209..]);
+    wrong_identifier[209 + opener.bytes().len() - 1] ^= 1;
+    for bytes in [marks.as_slice(), &wrong_identifier] {
+        let mut budget = scan_budget(4096);
+        assert!(
+            ResyncScan::new(bytes)
+                .scan(0..bytes.len(), &mut budget)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(budget.charged(), 4096);
+    }
+}
 
 fn first(bytes: &[u8]) -> Item<'_> {
     Item::first(bytes)

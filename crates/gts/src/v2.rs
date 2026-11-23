@@ -19,7 +19,10 @@ mod writer;
 
 pub use fields::WireError;
 pub use frame::{FrameCheck, FrameEnvelope, FrameField, FrameType, UnknownFrameType};
-pub use header::{CanonicalForm, Header, Lineage, Profile, write_header};
+pub use header::{
+    CanonicalForm, Header, Lineage, Profile, ResyncCandidate, ResyncRefusal, ResyncScan,
+    write_header,
+};
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
 pub use payload::{

@@ -123,7 +123,7 @@ Copied from `gmeow-gts`:
 - GTS specification and implementer docs under `docs`
 - SVG brand assets under `docs`
 
-The GTS generation 2 wire grammar, segment header, frame links and payload checks follow [P1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P1.md)
+The GTS generation 2 wire grammar, segment openers, resync candidate tests, frame links and payload checks follow [P1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P1.md)
 and [P2](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P2.md)
 at `c646f9d98be7ff31ceb0cb96695ee5ccc75db04a`. The whole-blob writer,
 range commitments and signature envelope grammar follow [P4](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P4.md),
