@@ -1363,12 +1363,13 @@ fn compact_streamable_impl<S: PackagingSigner>(
     // tie-break; the sealed original (least significant) always travels last.
     // Decode once here so the streaming index and re-emission reuse cached
     // bytes instead of repeating lazy decode work.
+    let decode_limit = limits.map_or(usize::MAX, |limits| limits.decoded_blob_bytes);
     let mut keyed: Vec<(usize, String)> = g
         .blobs
         .iter_mut()
         .map(|(d, entry)| {
             entry
-                .decode()
+                .decode_bounded(decode_limit)
                 .map(|bytes| (bytes.len(), d.clone()))
                 .map_err(|err| CompactRefusedError::blob_decode(d.as_str(), err))
         })

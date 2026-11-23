@@ -149,8 +149,12 @@ pub unsafe extern "C" fn purrdf_from_gts_with_limits(
                 ));
             }
             let slice = std::slice::from_raw_parts(bytes, len);
-            let limits = limits.as_ref().map(native_limits).transpose()?;
-            *out_dataset = into_handle(read_gts_dataset(slice, limits)?);
+            let limits = limits
+                .as_ref()
+                .map(native_limits)
+                .transpose()?
+                .unwrap_or(GtsReadLimits::DEFAULT);
+            *out_dataset = into_handle(read_gts_dataset(slice, Some(limits))?);
             Ok(PurrdfStatus::Ok)
         })
     }

@@ -135,10 +135,19 @@ fn two_segment_gts() -> Vec<u8> {
 fn gts_input_is_admitted_and_inferred_from_its_extension() {
     let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let dir = dir.path();
-    let gts = write_bytes(dir, "in.gts", &two_segment_gts());
+    let bytes = two_segment_gts();
+    let gts = write_bytes(dir, "in.gts", &bytes);
     let out = path(dir, "out.nq");
+    let input_limit = format!("encoded-input-bytes={}", bytes.len());
 
-    let o = run(&["--gts-safe-read", "convert", &gts, &out]);
+    let o = run(&[
+        "--gts-safe-read",
+        "--gts-read-limit",
+        &input_limit,
+        "convert",
+        &gts,
+        &out,
+    ]);
     assert!(o.status.success(), "gts convert failed: {}", stderr(&o));
 
     let text = std::fs::read_to_string(&out).expect("read output");
@@ -149,6 +158,27 @@ fn gts_input_is_admitted_and_inferred_from_its_extension() {
         4,
         "both segments' quads must survive: {text}"
     );
+}
+
+/// A transport wrapper is bounded while it inflates, before the decoded GTS
+/// payload is retained or handed to the container reader.
+#[test]
+fn gts_safe_read_bounds_transport_expansion() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let bytes = two_segment_gts();
+    let wrapped = write_bytes(dir, "in.gts.gz", &gzip(&bytes));
+    let out = path(dir, "out.nq");
+    let input_limit = format!("encoded-input-bytes={}", bytes.len() - 1);
+
+    let result = run(&["--gts-read-limit", &input_limit, "convert", &wrapped, &out]);
+    assert!(!result.status.success());
+    assert!(
+        stderr(&result).contains("decoded GTS input requires more"),
+        "{}",
+        stderr(&result)
+    );
+    assert!(!Path::new(&out).exists());
 }
 
 /// THE CORRECTNESS PROPERTY OF THE AUTHORITATIVE IMPORTER: the same blank-node label in

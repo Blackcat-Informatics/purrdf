@@ -3030,6 +3030,21 @@ fn gts_read_limits_accept_exact_input_and_refuse_the_adjacent_excess() {
     unsafe {
         let source = parse("application/n-triples", THREE_QUADS);
         let gts = to_gts(source);
+        let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_from_gts_with_limits(
+                gts.as_ptr(),
+                gts.len(),
+                std::ptr::null(),
+                &raw mut restored,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        purrdf_dataset_free(restored);
+
         let mut limits = std::mem::MaybeUninit::<PurrdfGtsReadLimits>::uninit();
         assert_eq!(
             purrdf_gts_read_limits_init(limits.as_mut_ptr()),
@@ -3038,8 +3053,7 @@ fn gts_read_limits_accept_exact_input_and_refuse_the_adjacent_excess() {
         let mut limits = limits.assume_init();
         limits.encoded_input_bytes = gts.len() as u64;
 
-        let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
-        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        restored = std::ptr::null_mut();
         assert_eq!(
             purrdf_from_gts_with_limits(
                 gts.as_ptr(),

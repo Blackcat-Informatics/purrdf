@@ -597,7 +597,11 @@ pub(crate) fn load_gts(
     policy: TransportPolicy,
     limits: GtsReadLimits,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
-    let bytes = read_bytes_with_transport(path, policy)?;
+    let bytes = if limits == GtsReadLimits::UNBOUNDED {
+        read_bytes_with_transport(path, policy)?
+    } else {
+        read_gts_bytes_with_transport(path, policy, limits.encoded_input_bytes)?
+    };
     let bundle = import_gts_events_with_limits(&bytes, limits)
         .map_err(|diagnostic| CliError::Runtime(format!("{}: {diagnostic}", display_path(path))))?;
     let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
@@ -605,6 +609,47 @@ pub(crate) fn load_gts(
         ledger.record(entry.clone());
     }
     Ok((bundle.dataset, ledger))
+}
+
+fn read_gts_bytes_with_transport(
+    path: &str,
+    policy: TransportPolicy,
+    maximum: usize,
+) -> Result<Vec<u8>, CliError> {
+    let source = open_raw_stream(path)?;
+    let mut decoded: Box<dyn Read> = match policy {
+        TransportPolicy::Verbatim => Box::new(
+            transport_reader(source, None)
+                .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?,
+        ),
+        TransportPolicy::Forced(encoding) => Box::new(
+            transport_reader(source, Some(encoding))
+                .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?,
+        ),
+        TransportPolicy::Detect => {
+            let (encoding, source) = sniff_transport(source, transport_name(path))
+                .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
+            Box::new(
+                transport_reader(source, encoding).map_err(|error| {
+                    CliError::Runtime(format!("{}: {error}", display_path(path)))
+                })?,
+            )
+        }
+    };
+    let read_maximum = u64::try_from(maximum).unwrap_or(u64::MAX).saturating_add(1);
+    let mut bytes = Vec::new();
+    decoded
+        .by_ref()
+        .take(read_maximum)
+        .read_to_end(&mut bytes)
+        .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
+    if bytes.len() > maximum {
+        return Err(CliError::Runtime(format!(
+            "{}: decoded GTS input requires more than {maximum} bytes",
+            display_path(path)
+        )));
+    }
+    Ok(bytes)
 }
 
 /// The GTS loss-ledger code family: what a GTS envelope carried and an RDF dataset

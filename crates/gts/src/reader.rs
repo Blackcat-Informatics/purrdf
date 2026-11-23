@@ -1338,6 +1338,33 @@ impl Folder<'_, '_, '_> {
         }
 
         if let Some(digest) = declared_digest {
+            // A bounded sink must admit the eventual lazy decode now. Stream
+            // through the transform chain without retaining the output so a
+            // declared digest cannot defer a resource bomb until first use.
+            if self.decode_limit(true).is_some()
+                && let Some(bytes) = d
+                && let Err(error) = self.blob_digest(&chain, bytes)
+            {
+                let detail = error.diagnostic_detail();
+                if let Some(kind) = error.blob_refusal_kind() {
+                    self.emit_blob_refusal(
+                        kind,
+                        Some(&digest),
+                        false,
+                        declared_metadata,
+                        encoded_len,
+                        &detail,
+                    );
+                }
+                self.opaque(frame, "blob", error.opaque_reason());
+                self.diag_native(
+                    error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
+                    error,
+                    detail,
+                    index,
+                );
+                return;
+            }
             // A declared digest stores the wire bytes undecoded, so a payload
             // that cannot be a stream of its codec is refused here, by its
             // structure, instead of folding as sound and failing on first use.

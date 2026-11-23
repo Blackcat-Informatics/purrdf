@@ -64,7 +64,7 @@ pub fn read_nested(data: &[u8], max_depth: usize, max_decoded_bytes: usize) -> N
 }
 
 /// Read nested GTS artifacts after admitting every artifact the recursive walk
-/// can reach under one per-artifact whole-read contract.
+/// can reach under one aggregate whole-read contract.
 ///
 /// # Errors
 /// Returns the first resource refusal without a partial nested result.
@@ -76,23 +76,54 @@ pub fn read_nested_with_limits(
 ) -> Result<NestedReadResult, crate::reader::GtsReadLimitError> {
     let mut remaining = max_decoded_bytes;
     let mut seen = FastSet::default();
-    admit_nested(data, 0, max_depth, &mut remaining, &mut seen, limits)?;
-    Ok(read_nested(data, max_depth, max_decoded_bytes))
+    let mut usage = crate::reader::GtsReadUsage::default();
+    let mut subgraphs = Vec::new();
+    let nested_limits = NestedLimits {
+        max_depth,
+        read: limits,
+    };
+    let graph = visit_with_limits(
+        data,
+        0,
+        &mut remaining,
+        &mut seen,
+        &mut subgraphs,
+        nested_limits,
+        &mut usage,
+    )?;
+    let mut diagnostics = graph.diagnostics.clone();
+    for (_, subgraph) in &subgraphs {
+        diagnostics.extend(subgraph.diagnostics.iter().cloned());
+    }
+    Ok(NestedReadResult {
+        graph,
+        subgraphs,
+        diagnostics,
+    })
 }
 
-fn admit_nested(
+#[derive(Clone, Copy)]
+struct NestedLimits {
+    max_depth: usize,
+    read: crate::reader::GtsReadLimits,
+}
+
+fn visit_with_limits(
     data: &[u8],
     depth: usize,
-    max_depth: usize,
     remaining: &mut usize,
     seen: &mut FastSet<String>,
-    limits: crate::reader::GtsReadLimits,
-) -> Result<(), crate::reader::GtsReadLimitError> {
-    let mut graph =
-        crate::reader::read_with_limits(data, crate::reader::ReadOptions::new(true, None), limits)?;
-    if depth >= max_depth {
-        return Ok(());
-    }
+    subgraphs: &mut Vec<(String, Graph)>,
+    limits: NestedLimits,
+    usage: &mut crate::reader::GtsReadUsage,
+) -> Result<Graph, crate::reader::GtsReadLimitError> {
+    let artifact_usage = crate::reader::check_read_limits(
+        data,
+        crate::reader::ReadOptions::new(true, None),
+        limits.read,
+    )?;
+    accumulate_usage(usage, artifact_usage, limits.read)?;
+    let mut graph = read(data, true, None);
     let nested_digests: Vec<String> = graph
         .blob_meta
         .iter()
@@ -103,15 +134,196 @@ fn admit_nested(
         if seen.contains(&digest) {
             continue;
         }
-        let Ok(Some(bytes)) = graph.blob_bytes_cloned(&digest) else {
-            continue;
-        };
-        if bytes.len() > *remaining {
+        if depth >= limits.max_depth {
+            let error = NestedError::Depth {
+                digest,
+                depth,
+                limit: limits.max_depth,
+            };
+            graph.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "RecursionLimit".to_owned(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            );
             continue;
         }
-        *remaining -= bytes.len();
-        seen.insert(digest);
-        admit_nested(&bytes, depth + 1, max_depth, remaining, seen, limits)?;
+        let Some(entry) = graph.blob_entry(&digest) else {
+            continue;
+        };
+        let decoded_len = match entry.decoded_len_bounded(limits.read.decoded_blob_bytes) {
+            Ok(len) => len,
+            Err(cause) => {
+                let error = NestedError::DecodeStream {
+                    digest,
+                    cause: cause.into(),
+                };
+                graph.diagnostics.push(
+                    Diagnostic {
+                        cause: None,
+                        code: "DamagedFrame".to_owned(),
+                        detail: error.to_string(),
+                        frame_index: None,
+                    }
+                    .with_native_cause(error),
+                );
+                continue;
+            }
+        };
+        if decoded_len > *remaining {
+            let error = NestedError::DecodedSize {
+                digest,
+                actual: decoded_len,
+                remaining: *remaining,
+            };
+            graph.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "RecursionLimit".to_owned(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            );
+            continue;
+        }
+        let bytes = match graph.blob_bytes_cloned_bounded(&digest, decoded_len) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(cause) => {
+                let error = NestedError::Decode { digest, cause };
+                graph.diagnostics.push(
+                    Diagnostic {
+                        cause: None,
+                        code: "DamagedFrame".to_owned(),
+                        detail: error.to_string(),
+                        frame_index: None,
+                    }
+                    .with_native_cause(error),
+                );
+                continue;
+            }
+        };
+        *remaining -= decoded_len;
+        seen.insert(digest.clone());
+        let child =
+            visit_with_limits(&bytes, depth + 1, remaining, seen, subgraphs, limits, usage)?;
+        if child.segment_heads.is_empty() {
+            let error = NestedError::Unreadable {
+                digest,
+                diagnostics: child.diagnostics,
+            };
+            graph.diagnostics.push(
+                Diagnostic {
+                    cause: None,
+                    code: "DamagedFrame".to_owned(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            );
+            continue;
+        }
+        subgraphs.push((digest, child));
+    }
+    Ok(graph)
+}
+
+fn accumulate_usage(
+    total: &mut crate::reader::GtsReadUsage,
+    next: crate::reader::GtsReadUsage,
+    limits: crate::reader::GtsReadLimits,
+) -> Result<(), crate::reader::GtsReadLimitError> {
+    total.encoded_input_bytes = total
+        .encoded_input_bytes
+        .saturating_add(next.encoded_input_bytes);
+    total.items = total.items.saturating_add(next.items);
+    total.largest_encoded_frame_bytes = total
+        .largest_encoded_frame_bytes
+        .max(next.largest_encoded_frame_bytes);
+    total.largest_decoded_frame_bytes = total
+        .largest_decoded_frame_bytes
+        .max(next.largest_decoded_frame_bytes);
+    total.largest_decoded_blob_bytes = total
+        .largest_decoded_blob_bytes
+        .max(next.largest_decoded_blob_bytes);
+    total.total_decoded_bytes = total
+        .total_decoded_bytes
+        .saturating_add(next.total_decoded_bytes);
+    total.terms = total.terms.saturating_add(next.terms);
+    total.rows = total.rows.saturating_add(next.rows);
+    total.metadata_entries = total.metadata_entries.saturating_add(next.metadata_entries);
+    total.diagnostics = total.diagnostics.saturating_add(next.diagnostics);
+    total.work = total.work.saturating_add(next.work);
+
+    for (resource, required, limit) in [
+        (
+            crate::reader::GtsReadResource::EncodedInputBytes,
+            total.encoded_input_bytes,
+            limits.encoded_input_bytes,
+        ),
+        (
+            crate::reader::GtsReadResource::Items,
+            total.items,
+            limits.items,
+        ),
+        (
+            crate::reader::GtsReadResource::EncodedFrameBytes,
+            total.largest_encoded_frame_bytes,
+            limits.encoded_frame_bytes,
+        ),
+        (
+            crate::reader::GtsReadResource::DecodedFrameBytes,
+            total.largest_decoded_frame_bytes,
+            limits.decoded_frame_bytes,
+        ),
+        (
+            crate::reader::GtsReadResource::DecodedBlobBytes,
+            total.largest_decoded_blob_bytes,
+            limits.decoded_blob_bytes,
+        ),
+        (
+            crate::reader::GtsReadResource::TotalDecodedBytes,
+            total.total_decoded_bytes,
+            limits.total_decoded_bytes,
+        ),
+        (
+            crate::reader::GtsReadResource::Terms,
+            total.terms,
+            limits.terms,
+        ),
+        (
+            crate::reader::GtsReadResource::Rows,
+            total.rows,
+            limits.rows,
+        ),
+        (
+            crate::reader::GtsReadResource::MetadataEntries,
+            total.metadata_entries,
+            limits.metadata_entries,
+        ),
+        (
+            crate::reader::GtsReadResource::Diagnostics,
+            total.diagnostics,
+            limits.diagnostics,
+        ),
+        (
+            crate::reader::GtsReadResource::Work,
+            total.work,
+            limits.work,
+        ),
+    ] {
+        if required > limit {
+            return Err(crate::reader::GtsReadLimitError {
+                resource,
+                required,
+                limit,
+                usage: *total,
+            });
+        }
     }
     Ok(())
 }

@@ -91,6 +91,20 @@ fn blob_bytes() -> Vec<u8> {
     writer.into_bytes()
 }
 
+fn declared_transformed_blob_bytes() -> Vec<u8> {
+    let mut writer = Writer::new("generic");
+    writer
+        .add_blob_transformed(
+            vec![b'x'; 4096],
+            Some("application/octet-stream"),
+            None,
+            &["gzip".to_owned()],
+            None,
+        )
+        .expect("small declared transformed blob");
+    writer.into_bytes()
+}
+
 fn transformed_snapshot_bytes() -> Vec<u8> {
     let snapshot = Value::Map(vec![
         (
@@ -216,6 +230,79 @@ fn aggregate_compressed_blobs_stop_at_the_first_byte_over_the_total() {
         &bytes,
         GtsReadResource::TotalDecodedBytes,
         usage.total_decoded_bytes,
+    );
+}
+
+#[test]
+fn declared_digest_cannot_defer_a_transformed_blob_beyond_admission() {
+    let bytes = declared_transformed_blob_bytes();
+    assert_boundary(&bytes, GtsReadResource::DecodedBlobBytes, 4096);
+}
+
+fn nested_child(name: &str) -> Vec<u8> {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[
+        Term::iri(format!("https://example.org/{name}")),
+        Term::iri("https://example.org/p"),
+        Term::literal("value", None),
+    ]);
+    writer.add_quads(&[(0, 1, 2, None)]);
+    writer.into_bytes()
+}
+
+#[test]
+fn nested_artifacts_share_one_aggregate_row_contract() {
+    let mut writer = Writer::new("generic");
+    writer.add_blob(
+        &nested_child("one"),
+        Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+        None,
+    );
+    writer.add_blob(
+        &nested_child("two"),
+        Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+        None,
+    );
+    let bytes = writer.into_bytes();
+    let mut limits = GtsReadLimits::UNBOUNDED;
+    limits.terms = 3;
+    let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, limits)
+        .expect_err("the second child exceeds the aggregate term contract");
+    assert_eq!(error.resource, GtsReadResource::Terms);
+    assert_eq!(error.required, 6);
+}
+
+#[test]
+fn nested_size_budget_measures_transforms_without_retaining_the_excess() {
+    let child = nested_child("compressed");
+    let mut writer = Writer::new("generic");
+    writer
+        .add_blob_transformed(
+            child.clone(),
+            Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+            None,
+            &["gzip".to_owned()],
+            None,
+        )
+        .expect("compressed nested artifact");
+    let bytes = writer.into_bytes();
+    let result = purrdf_gts::nested::read_nested_with_limits(
+        &bytes,
+        1,
+        child.len() - 1,
+        GtsReadLimits::UNBOUNDED,
+    )
+    .expect("the recursion size refusal is a diagnostic, not a read failure");
+    assert!(result.subgraphs.is_empty());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RecursionLimit")
+    );
+    assert!(
+        result.graph.blobs[0].1.is_lazy(),
+        "the refused decoded payload must not be retained"
     );
 }
 

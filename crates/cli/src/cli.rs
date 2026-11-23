@@ -217,6 +217,13 @@ pub(crate) struct Cli {
     /// for trusted artifacts, including admitted datasets above that profile.
     #[arg(long, global = true)]
     pub(crate) gts_safe_read: bool,
+    /// Override one host-safe GTS ceiling as `RESOURCE=MAX`. Repeat for
+    /// multiple resources; supplying any override selects bounded reading.
+    /// Resources are `encoded-input-bytes`, `items`, `encoded-frame-bytes`,
+    /// `decoded-frame-bytes`, `decoded-blob-bytes`, `total-decoded-bytes`,
+    /// `terms`, `rows`, `metadata-entries`, `diagnostics`, and `work`.
+    #[arg(long, global = true, value_name = "RESOURCE=MAX")]
+    pub(crate) gts_read_limit: Vec<String>,
 
     /// Surface the conversion/projection loss ledger: bare writes it to stderr,
     /// `--loss-ledger=PATH` writes it to PATH.
