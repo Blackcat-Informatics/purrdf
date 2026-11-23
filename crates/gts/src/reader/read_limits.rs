@@ -150,6 +150,10 @@ pub enum GtsReadResource {
     DecodedBlobBytes,
     /// Aggregate decoded payload bytes.
     TotalDecodedBytes,
+    /// Aggregate decoded nested-artifact bytes retained by recursive reading.
+    NestedDecodedBytes,
+    /// Recursive nested-artifact depth.
+    NestedDepth,
     /// Accepted term rows.
     Terms,
     /// Accepted RDF and suppression rows.
@@ -172,6 +176,8 @@ impl GtsReadResource {
             Self::DecodedFrameBytes => "decoded-frame-bytes",
             Self::DecodedBlobBytes => "decoded-blob-bytes",
             Self::TotalDecodedBytes => "total-decoded-bytes",
+            Self::NestedDecodedBytes => "nested-decoded-bytes",
+            Self::NestedDepth => "nested-depth",
             Self::Terms => "terms",
             Self::Rows => "rows",
             Self::MetadataEntries => "metadata-entries",

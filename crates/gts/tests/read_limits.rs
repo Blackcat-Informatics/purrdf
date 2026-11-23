@@ -269,7 +269,7 @@ fn nested_artifacts_share_one_aggregate_row_contract() {
     let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, limits)
         .expect_err("the second child exceeds the aggregate term contract");
     assert_eq!(error.resource, GtsReadResource::Terms);
-    assert_eq!(error.required, 6);
+    assert_eq!(error.required, 4);
 }
 
 #[test]
@@ -286,24 +286,57 @@ fn nested_size_budget_measures_transforms_without_retaining_the_excess() {
         )
         .expect("compressed nested artifact");
     let bytes = writer.into_bytes();
-    let result = purrdf_gts::nested::read_nested_with_limits(
+    let error = purrdf_gts::nested::read_nested_with_limits(
         &bytes,
         1,
         child.len() - 1,
         GtsReadLimits::UNBOUNDED,
     )
-    .expect("the recursion size refusal is a diagnostic, not a read failure");
-    assert!(result.subgraphs.is_empty());
-    assert!(
-        result
-            .diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RecursionLimit")
+    .expect_err("the recursion size refusal publishes no nested result");
+    assert_eq!(error.resource, GtsReadResource::NestedDecodedBytes);
+    assert_eq!(error.required, child.len());
+}
+
+#[test]
+fn nested_depth_refuses_without_publishing_a_partial_result() {
+    let mut writer = Writer::new("generic");
+    writer.add_blob(
+        &nested_child("one"),
+        Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+        None,
     );
-    assert!(
-        result.graph.blobs[0].1.is_lazy(),
-        "the refused decoded payload must not be retained"
+    let bytes = writer.into_bytes();
+    let error = purrdf_gts::nested::read_nested_with_limits(
+        &bytes,
+        0,
+        usize::MAX,
+        GtsReadLimits::UNBOUNDED,
+    )
+    .expect_err("the depth refusal publishes no nested result");
+    assert_eq!(error.resource, GtsReadResource::NestedDepth);
+    assert_eq!(error.required, 1);
+}
+
+#[test]
+fn nested_traversal_diagnostics_share_the_aggregate_contract() {
+    let mut writer = Writer::new("generic");
+    writer.add_blob(
+        b"not a GTS file",
+        Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+        None,
     );
+    writer.add_blob(
+        b"also not a GTS file",
+        Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+        None,
+    );
+    let bytes = writer.into_bytes();
+    let mut limits = GtsReadLimits::UNBOUNDED;
+    limits.diagnostics = 3;
+    let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, usize::MAX, limits)
+        .expect_err("the second traversal diagnostic exceeds the aggregate contract");
+    assert_eq!(error.resource, GtsReadResource::Diagnostics);
+    assert_eq!(error.required, 4);
 }
 
 #[derive(Default)]
