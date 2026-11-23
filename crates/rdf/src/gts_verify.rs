@@ -425,21 +425,24 @@ mod tests {
         let (bytes, head, frame_ids) = build_file_with_two_indexed_blobs();
         let content_ids = [digest_label(&frame_ids[0]), digest_label(&frame_ids[1])];
         let dataset = dataset_referencing_many(&[content_ids[0].as_str(), content_ids[1].as_str()]);
-        let unbounded = purrdf_gts::reader::GtsReadLimits::UNBOUNDED;
+        let mut bounded_probe = purrdf_gts::reader::GtsReadLimits::UNBOUNDED;
+        // Any finite work ceiling eagerly validates declared blobs. Measure
+        // that bounded production path rather than the trusted-input shortcut.
+        bounded_probe.work = usize::MAX - 1;
         let ordinary = purrdf_gts::reader::check_read_limits(
             &bytes,
             purrdf_gts::reader::ReadOptions::new(true, None),
-            unbounded,
+            bounded_probe,
         )
         .expect("ordinary phase usage");
         let replay = purrdf_gts::reader::check_read_limits(
             &bytes,
             purrdf_gts::reader::ReadOptions::new(true, Some(&head)),
-            unbounded,
+            bounded_probe,
         )
         .expect("expected-head phase usage");
 
-        let mut limits = unbounded;
+        let mut limits = bounded_probe;
         limits.work = ordinary
             .work
             .checked_mul(2)
