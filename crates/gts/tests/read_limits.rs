@@ -1047,3 +1047,137 @@ fn repeated_codec_strings_are_admitted_before_chain_cloning() {
     );
     assert_boundary(&bytes, GtsReadResource::Work, usage.work);
 }
+
+#[test]
+fn invalid_codec_after_a_valid_transform_charges_the_drained_work() {
+    let raw = vec![b'x'; 32 * 1024];
+    let encoded =
+        purrdf_gts::codec::encode_chain(&["gzip".to_owned()], &raw).expect("single gzip stage");
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "generic".into()),
+        (
+            "cat".into(),
+            Value::Map(vec![
+                (
+                    Value::Integer(0.into()),
+                    Value::Map(vec![
+                        ("name".into(), "unknown".into()),
+                        ("cls".into(), "compress".into()),
+                    ]),
+                ),
+                (
+                    Value::Integer(1.into()),
+                    Value::Map(vec![
+                        ("name".into(), "gzip".into()),
+                        ("cls".into(), "compress".into()),
+                    ]),
+                ),
+            ]),
+        ),
+    ];
+    let mut previous = purrdf_gts::wire::header_id(&header);
+    header.push(("id".into(), Value::Bytes(previous.clone())));
+    let mut bytes =
+        purrdf_gts::wire::canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))));
+    for _ in 0..2 {
+        let mut frame = vec![
+            ("t".into(), "blob".into()),
+            ("prev".into(), Value::Bytes(previous)),
+            (
+                "x".into(),
+                Value::Array(vec![Value::Integer(0.into()), Value::Integer(1.into())]),
+            ),
+            ("d".into(), Value::Bytes(encoded.clone())),
+        ];
+        previous = purrdf_gts::wire::content_id(&frame);
+        frame.push(("id".into(), Value::Bytes(previous.clone())));
+        bytes.extend(purrdf_gts::wire::canonical(&Value::Map(frame)));
+    }
+
+    let (_, usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("unavailable outer codecs retain work from valid inner transforms");
+    assert!(usage.work >= bytes.len().saturating_add(raw.len().saturating_mul(2)));
+    assert_boundary(&bytes, GtsReadResource::Work, usage.work);
+}
+
+#[test]
+fn unresolved_codec_ids_do_not_charge_uncloned_valid_neighbors() {
+    let large_name = "identity-neighbor".repeat(2048);
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "generic".into()),
+        (
+            "cat".into(),
+            Value::Map(vec![
+                (
+                    Value::Integer(0.into()),
+                    Value::Map(vec![
+                        ("name".into(), large_name.into()),
+                        ("cls".into(), "encode".into()),
+                    ]),
+                ),
+                (
+                    "invalid-id".into(),
+                    Value::Map(vec![("name".into(), "not-retained".repeat(2048).into())]),
+                ),
+                (
+                    Value::Integer(1.into()),
+                    Value::Map(vec![
+                        ("name".into(), "missing-dictionary".repeat(2048).into()),
+                        ("dct".into(), "absent".into()),
+                    ]),
+                ),
+            ]),
+        ),
+    ];
+    let header_id = purrdf_gts::wire::header_id(&header);
+    header.push(("id".into(), Value::Bytes(header_id.clone())));
+    let make_file = |ids: Vec<Value>| {
+        let mut frame = vec![
+            ("t".into(), "unknown".into()),
+            ("prev".into(), Value::Bytes(header_id.clone())),
+            ("x".into(), Value::Array(ids)),
+            ("d".into(), Value::Bytes(Vec::new())),
+        ];
+        frame.push((
+            "id".into(),
+            Value::Bytes(purrdf_gts::wire::content_id(&frame)),
+        ));
+        let mut bytes = purrdf_gts::wire::canonical(&Value::Tag(
+            SELF_DESCRIBE_TAG,
+            Box::new(Value::Map(header.clone())),
+        ));
+        bytes.extend(purrdf_gts::wire::canonical(&Value::Map(frame)));
+        bytes
+    };
+    let baseline = make_file(vec![Value::Integer(99.into())]);
+    let neighbors = make_file(vec![
+        Value::Integer(99.into()),
+        Value::Integer(0.into()),
+        Value::Integer(0.into()),
+    ]);
+    let (_, baseline_usage) = read_to_sink_with_limits(
+        &baseline,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("early unresolved codec baseline");
+    let (_, neighbor_usage) = read_to_sink_with_limits(
+        &neighbors,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("later valid codecs are never cloned after the unresolved prefix");
+    assert!(neighbor_usage.work.saturating_sub(baseline_usage.work) < 128);
+    assert_boundary(&neighbors, GtsReadResource::Work, neighbor_usage.work);
+}

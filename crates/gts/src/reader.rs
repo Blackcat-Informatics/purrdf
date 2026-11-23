@@ -759,6 +759,9 @@ impl Folder<'_, '_, '_> {
             }
             if ambiguous {
                 self.diag(FoldError::ConflictingReifier { reifier: rid }, index);
+                if !self.sink_accepting() {
+                    return Ok(());
+                }
             }
         }
         Ok(())
@@ -1607,9 +1610,19 @@ impl Folder<'_, '_, '_> {
         ) {
             Ok(reader) => reader,
             Err(error) => {
-                let error = PayloadError::from(error);
-                self.report_decoded_refusal(true, &error);
-                return Err(error);
+                if error.work.total() > 0
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.transform_work(error.work.total());
+                    if !sink.continue_reading() {
+                        return Err(PayloadError::Cancelled);
+                    }
+                }
+                let cause = PayloadError::from(error.cause);
+                if !error.work.refused() {
+                    self.report_decoded_refusal(true, &cause);
+                }
+                return Err(cause);
             }
         };
         let mut hash = purrdf_hash::blake3::Hasher::new();
@@ -1953,14 +1966,12 @@ fn catalog_copy_work(header: &[(Value, Value)]) -> usize {
         return 0;
     };
     raw.iter()
-        .filter_map(|(_, entry)| match entry {
-            Value::Map(fields) => {
+        .filter_map(|(cid, entry)| match (as_i128(cid), entry) {
+            (Some(_), Value::Map(fields)) => {
                 let name = text_or(map_get(fields, "name"), "").len();
                 let class = text_or(map_get(fields, "cls"), "encode").len();
                 let dictionary = match map_get(fields, "dct") {
-                    Some(Value::Text(name)) => {
-                        dict_table.get(name.as_str()).map_or(0, |bytes| bytes.len())
-                    }
+                    Some(Value::Text(name)) => dict_table.get(name.as_str())?.len(),
                     _ => 0,
                 };
                 Some(name.saturating_add(class).saturating_add(dictionary))
@@ -1971,16 +1982,17 @@ fn catalog_copy_work(header: &[(Value, Value)]) -> usize {
 }
 
 fn codec_copy_work(catalog: &FastMap<i128, Codec>, ids: &[Value]) -> usize {
-    ids.iter()
-        .filter_map(|id| as_i128(id).and_then(|id| catalog.get(&id)))
-        .map(|codec| {
-            codec
-                .name
-                .len()
-                .saturating_add(codec.cls.len())
-                .saturating_add(codec.dct.as_ref().map_or(0, Vec::len))
-        })
-        .fold(0usize, usize::saturating_add)
+    let mut work = 0usize;
+    for id in ids {
+        let Some(codec) = as_i128(id).and_then(|id| catalog.get(&id)) else {
+            break;
+        };
+        work = work
+            .saturating_add(codec.name.len())
+            .saturating_add(codec.cls.len())
+            .saturating_add(codec.dct.as_ref().map_or(0, Vec::len));
+    }
+    work
 }
 
 /// One catalog row exactly as it appears on the wire (§5, §8.5), keeping the

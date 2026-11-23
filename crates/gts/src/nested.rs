@@ -166,7 +166,8 @@ fn visit_with_limits(
                     usage: refused_usage,
                 });
             }
-            Err(MeasureError::Codec(cause)) => {
+            Err(MeasureError::Codec { cause, work }) => {
+                charge_nested_work(usage, limits.read, work)?;
                 if measurement_limit == remaining_work
                     && remaining_work < limits.read.decoded_blob_bytes
                     && error_is_codec_limit(&cause)
@@ -303,7 +304,7 @@ struct MeasuredEntry {
 }
 
 enum MeasureError {
-    Codec(std::io::Error),
+    Codec { cause: std::io::Error, work: usize },
     Work { required: usize },
 }
 
@@ -315,14 +316,15 @@ fn measure_nested_entry(
     use std::io::Read as _;
 
     match entry {
-        BlobEntry::Bytes(bytes) if bytes.len() > decoded_limit => {
-            Err(MeasureError::Codec(purrdf_hash::error::io_error(
+        BlobEntry::Bytes(bytes) if bytes.len() > decoded_limit => Err(MeasureError::Codec {
+            cause: purrdf_hash::error::io_error(
                 std::io::ErrorKind::InvalidData,
                 crate::codec::CodecError::Limit {
                     limit: decoded_limit,
                 },
-            )))
-        }
+            ),
+            work: 0,
+        }),
         BlobEntry::Bytes(bytes) => Ok(MeasuredEntry {
             decoded: bytes.len(),
             work: bytes.len(),
@@ -334,7 +336,18 @@ fn measure_nested_entry(
                 decoded_limit,
                 work_limit,
             )
-            .map_err(MeasureError::Codec)?;
+            .map_err(|error| {
+                if error.work.refused() {
+                    MeasureError::Work {
+                        required: error.work.total(),
+                    }
+                } else {
+                    MeasureError::Codec {
+                        cause: error.cause,
+                        work: error.work.total(),
+                    }
+                }
+            })?;
             let mut scratch = [0; 8192];
             let mut decoded = 0usize;
             loop {
@@ -356,7 +369,12 @@ fn measure_nested_entry(
                             required: work.total(),
                         });
                     }
-                    Err(error) => return Err(MeasureError::Codec(error)),
+                    Err(error) => {
+                        return Err(MeasureError::Codec {
+                            cause: error,
+                            work: work.total(),
+                        });
+                    }
                 }
             }
         }
