@@ -3,6 +3,9 @@
 
 //! Whole-read limits refuse the first excess event without publishing a partial drive.
 
+#[path = "support/tail_drain_failure.rs"]
+mod tail_drain_failure;
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -17,6 +20,7 @@ use purrdf_gts::writer::{FrameOptions, Writer};
 use purrdf_hash::error::ErrorValue;
 use purrdf_lex::cbor::{ReplayStorage, Value, encode};
 use purrdf_testkit::error_capture::Capture;
+use tail_drain_failure::TailDrainFailureReader;
 
 struct Null;
 impl StreamingSink for Null {}
@@ -50,6 +54,14 @@ impl ReplayStorage for MemoryReplay {
     fn finish(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+macro_rules! memory_replay_scratch {
+    () => {
+        fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
+            Some(Ok(Box::new(MemoryReplay::default())))
+        }
+    };
 }
 
 enum TailReadMode {
@@ -90,30 +102,6 @@ impl std::io::Read for TailReader {
         let count = output
             .len()
             .min(available_end.saturating_sub(self.position));
-        output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
-        self.position += count;
-        Ok(count)
-    }
-}
-
-struct ParseThenFailReader {
-    bytes: Vec<u8>,
-    position: usize,
-    tail_start: usize,
-}
-
-impl std::io::Read for ParseThenFailReader {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        if self.position == self.bytes.len() {
-            return Err(std::io::Error::other("distinct tail drain failure"));
-        }
-        let end = if self.position < self.tail_start {
-            self.tail_start
-        } else {
-            self.position.saturating_add(1)
-        }
-        .min(self.bytes.len());
-        let count = output.len().min(end.saturating_sub(self.position));
         output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
         self.position += count;
         Ok(count)
@@ -215,9 +203,7 @@ impl StreamingSink for CancellingReplaySink {
 }
 
 impl StreamingSink for ReplaySink {
-    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
-        Some(Ok(Box::new(MemoryReplay::default())))
-    }
+    memory_replay_scratch!();
 
     fn term(&mut self, _segment: u64, _id: usize, _term: Arc<Term>) {
         self.terms += 1;
@@ -808,9 +794,7 @@ impl StreamingSink for CancelReplayRefusal {
         !self.cancelled
     }
 
-    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
-        Some(Ok(Box::new(MemoryReplay::default())))
-    }
+    memory_replay_scratch!();
 
     fn frame_decode_limit(&self) -> Option<usize> {
         Some(1)
@@ -862,9 +846,7 @@ impl StreamingSink for CancelReplayBlob {
         !self.cancelled
     }
 
-    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
-        Some(Ok(Box::new(MemoryReplay::default())))
-    }
+    memory_replay_scratch!();
 
     fn embedded_blob_limit(&self) -> Option<usize> {
         Some(1)
@@ -1963,11 +1945,7 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     let mut malformed = prefix.clone();
     malformed.push(0xff);
     let (result, _) = read_to_sink_from_reader_with_limits(
-        ParseThenFailReader {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct tail drain failure"),
         options,
         GtsReadLimits::UNBOUNDED,
         &mut Null,
@@ -2000,11 +1978,7 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     malformed.push(0xff);
     let mut cancelling = CancelAtTornDiagnostic::default();
     let (result, usage) = read_to_sink_from_reader_with_limits(
-        ParseThenFailReader {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct tail drain failure"),
         options,
         GtsReadLimits::UNBOUNDED,
         &mut cancelling,
@@ -2033,11 +2007,7 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     exact_limits.diagnostics = 3;
     exact_limits.work = usage.work;
     let (result, exact_usage) = read_to_sink_from_reader_with_limits(
-        ParseThenFailReader {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct tail drain failure"),
         options,
         exact_limits,
         &mut exact_sink,
@@ -2053,11 +2023,7 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     let mut adjacent_limits = GtsReadLimits::UNBOUNDED;
     adjacent_limits.diagnostics = 2;
     let error = read_to_sink_from_reader_with_limits(
-        ParseThenFailReader {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct tail drain failure"),
         options,
         adjacent_limits,
         &mut adjacent_sink,
@@ -2070,11 +2036,7 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     malformed.push(0xff);
     let mut cancelling = CancelAtTornDiagnostic::default();
     let error = read_to_sink_from_reader_with_limits(
-        ParseThenFailReader {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct tail drain failure"),
         options,
         adjacent_limits,
         &mut cancelling,
@@ -2089,11 +2051,7 @@ fn bounded_tail_retries_interruptions_and_preserves_native_failures() {
     let mut adjacent_work_limits = GtsReadLimits::UNBOUNDED;
     adjacent_work_limits.work = usage.work - 1;
     let error = read_to_sink_from_reader_with_limits(
-        ParseThenFailReader {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct tail drain failure"),
         options,
         adjacent_work_limits,
         &mut CountDiagnostics::default(),

@@ -9,6 +9,9 @@
 //! same bytes: both derive their per-frame `(content-id, byte range, wire
 //! type, valid)` from the same frames, so they must agree field-for-field.
 
+#[path = "support/tail_drain_failure.rs"]
+mod tail_drain_failure;
+
 use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{AnnotationRow, ByteRange, OpaqueNode, Quad, ReifierRow, Term};
 use purrdf_gts::reader::{FrameContext, GtsReadLimits, StreamingSink, read_to_sink};
@@ -20,6 +23,7 @@ use purrdf_gts::replication::inventory;
 use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Ceiling, Memory, OwnedAdmission, SharedOwned};
 use std::sync::Arc;
+use tail_drain_failure::TailDrainFailureReader;
 
 /// Owned copy of one streamed [`FrameContext`], captured for later assertion.
 struct CapturedFrame {
@@ -373,30 +377,6 @@ struct StopOnceAfterStoredTerm {
     terms: usize,
 }
 
-struct SemanticThenDrainFailure {
-    bytes: Vec<u8>,
-    position: usize,
-    tail_start: usize,
-}
-
-impl std::io::Read for SemanticThenDrainFailure {
-    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
-        if self.position == self.bytes.len() {
-            return Err(std::io::Error::other("distinct dictionary drain failure"));
-        }
-        let end = if self.position < self.tail_start {
-            self.tail_start
-        } else {
-            self.position.saturating_add(1)
-        }
-        .min(self.bytes.len());
-        let count = output.len().min(end.saturating_sub(self.position));
-        output[..count].copy_from_slice(&self.bytes[self.position..self.position + count]);
-        self.position += count;
-        Ok(count)
-    }
-}
-
 impl StreamingSink for StopOnceAfterStoredTerm {
     fn continue_reading(&self) -> bool {
         !self.stop_once.replace(false)
@@ -567,11 +547,7 @@ fn bounded_dictionary_tail_admission_precedes_commit() {
     malformed.push(0xff);
     let mut failed = StoredTerms::default();
     let error = read_to_sink_from_reader_with_dictionary_and_limits(
-        SemanticThenDrainFailure {
-            bytes: malformed,
-            position: 0,
-            tail_start: prefix.len(),
-        },
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct dictionary drain failure"),
         options,
         GtsReadLimits::UNBOUNDED,
         &mut failed,
