@@ -1088,6 +1088,152 @@ fn resident_snapshot_cancellation_stops_later_fields() {
 }
 
 #[derive(Default)]
+struct CancelAtDecodedPayload {
+    cancelled: bool,
+    late_callbacks: usize,
+}
+
+impl StreamingSink for CancelAtDecodedPayload {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn decoded_payload(&mut self, _blob: bool, _bytes: usize) {
+        self.cancelled = true;
+    }
+
+    fn decoded_payload_accounted(&mut self, _blob: bool, _bytes: usize) {
+        self.cancelled = true;
+    }
+
+    fn term(&mut self, _segment: u64, _id: usize, _term: Arc<Term>) {
+        self.late_callbacks += 1;
+    }
+
+    fn embedded_blob(&mut self, _bytes: usize) {
+        self.late_callbacks += 1;
+    }
+
+    fn opaque(&mut self, _segment: u64, _opaque: &purrdf_gts::model::OpaqueNode) {
+        self.late_callbacks += 1;
+    }
+
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.late_callbacks += 1;
+    }
+}
+
+#[test]
+fn decoded_payload_cancellation_precedes_snapshot_folding() {
+    let mut sink = CancelAtDecodedPayload::default();
+    read_to_sink_with_options(
+        &transformed_snapshot_bytes(),
+        ReadOptions::default(),
+        &mut sink,
+    );
+    assert!(sink.cancelled);
+    assert_eq!(sink.late_callbacks, 0);
+}
+
+#[derive(Clone, Copy)]
+enum DirectBlobCancellation {
+    DecodedRefusal,
+    BlobRefusal,
+    Opaque,
+}
+
+struct CancelDirectBlob {
+    at: DirectBlobCancellation,
+    cancelled: bool,
+    blob_refusals: usize,
+    opaque: usize,
+    diagnostics: usize,
+}
+
+impl StreamingSink for CancelDirectBlob {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn decoded_payload_refused(&mut self, _blob: bool, _required: usize, _limit: usize) {
+        self.cancelled |= matches!(self.at, DirectBlobCancellation::DecodedRefusal);
+    }
+
+    fn blob_refused(&mut self, _refusal: purrdf_gts::reader::BlobRefusal<'_>) {
+        self.blob_refusals += 1;
+        self.cancelled |= matches!(self.at, DirectBlobCancellation::BlobRefusal);
+    }
+
+    fn opaque(&mut self, _segment: u64, _opaque: &purrdf_gts::model::OpaqueNode) {
+        self.opaque += 1;
+        self.cancelled |= matches!(self.at, DirectBlobCancellation::Opaque);
+    }
+
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.diagnostics += 1;
+    }
+
+    fn blob_encoded_limit(&self) -> Option<usize> {
+        matches!(self.at, DirectBlobCancellation::BlobRefusal).then_some(1)
+    }
+
+    fn blob_decode_limit(&self) -> Option<usize> {
+        matches!(self.at, DirectBlobCancellation::DecodedRefusal).then_some(1)
+    }
+
+    fn eagerly_validate_declared_blobs(&self) -> bool {
+        matches!(self.at, DirectBlobCancellation::DecodedRefusal)
+    }
+}
+
+#[test]
+fn direct_blob_cancellation_stops_each_failure_callback_chain() {
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "generic".into()),
+    ];
+    let header_id = purrdf_gts::wire::header_id(&header);
+    header.push(("id".into(), Value::Bytes(header_id.clone())));
+    let mut malformed = vec![
+        ("t".into(), "blob".into()),
+        ("prev".into(), Value::Bytes(header_id)),
+        ("d".into(), Value::Integer(7.into())),
+    ];
+    malformed.push((
+        "id".into(),
+        Value::Bytes(purrdf_gts::wire::content_id(&malformed)),
+    ));
+    let mut malformed_bytes =
+        purrdf_gts::wire::canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))));
+    malformed_bytes.extend(purrdf_gts::wire::canonical(&Value::Map(malformed)));
+    let cases = [
+        (
+            DirectBlobCancellation::DecodedRefusal,
+            declared_transformed_blob_bytes(),
+            (0, 0, 0),
+        ),
+        (DirectBlobCancellation::BlobRefusal, blob_bytes(), (1, 0, 0)),
+        (DirectBlobCancellation::Opaque, malformed_bytes, (0, 1, 0)),
+    ];
+    for (at, bytes, expected) in cases {
+        let mut sink = CancelDirectBlob {
+            at,
+            cancelled: false,
+            blob_refusals: 0,
+            opaque: 0,
+            diagnostics: 0,
+        };
+        read_to_sink_with_options(&bytes, ReadOptions::default(), &mut sink);
+        assert!(sink.cancelled);
+        assert_eq!(
+            (sink.blob_refusals, sink.opaque, sink.diagnostics),
+            expected
+        );
+    }
+}
+
+#[derive(Default)]
 struct CancelAtSegmentHead {
     cancelled: bool,
     layouts: usize,
@@ -1833,6 +1979,7 @@ fn streaming_input_limit_is_typed_without_a_frame_limit() {
 struct CancelAtDiagnostic {
     cancelled: bool,
     signatures: usize,
+    late_callbacks: usize,
     cause_code: Option<&'static str>,
 }
 
@@ -1842,14 +1989,45 @@ impl StreamingSink for CancelAtDiagnostic {
     }
 
     fn diagnostic(&mut self, diagnostic: &purrdf_gts::model::Diagnostic) {
+        if self.cancelled {
+            self.late_callbacks += 1;
+        }
         self.cause_code = diagnostic
             .native_cause()
             .map(|cause| purrdf_testkit::error_capture::Capture::read(cause).code);
         self.cancelled = true;
     }
 
+    fn opaque(&mut self, _segment_index: u64, _opaque: &purrdf_gts::model::OpaqueNode) {
+        if self.cancelled {
+            self.late_callbacks += 1;
+        }
+    }
+
+    fn work(&mut self, _units: usize) {
+        if self.cancelled {
+            self.late_callbacks += 1;
+        }
+    }
+
     fn signature(&mut self, _segment_index: u64, _signature: &purrdf_gts::model::Signature) {
         self.signatures += 1;
+    }
+}
+
+#[derive(Default)]
+struct CountDamagedFrameEvents {
+    diagnostics: usize,
+    opaque: usize,
+}
+
+impl StreamingSink for CountDamagedFrameEvents {
+    fn diagnostic(&mut self, _diagnostic: &purrdf_gts::model::Diagnostic) {
+        self.diagnostics += 1;
+    }
+
+    fn opaque(&mut self, _segment_index: u64, _opaque: &purrdf_gts::model::OpaqueNode) {
+        self.opaque += 1;
     }
 }
 
@@ -1881,6 +2059,72 @@ fn predecessor_diagnostic_cancellation_precedes_signature_delivery() {
     assert!(sink.cancelled);
     assert_eq!(sink.signatures, 0);
     assert_eq!(sink.cause_code, Some("gts-frame-previous"));
+}
+
+#[test]
+fn self_hash_and_header_diagnostics_stop_later_callbacks() {
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "generic".into()),
+    ];
+    let header_id = purrdf_gts::wire::header_id(&header);
+    header.push(("id".into(), Value::Bytes(header_id.clone())));
+    let frame = vec![
+        ("t".into(), "unknown".into()),
+        ("prev".into(), Value::Bytes(header_id)),
+        ("d".into(), Value::Null),
+        ("id".into(), Value::Bytes(vec![9; 32])),
+    ];
+    let mut bytes =
+        purrdf_gts::wire::canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))));
+    bytes.extend(purrdf_gts::wire::canonical(&Value::Map(frame)));
+    let mut frame_sink = CancelAtDiagnostic::default();
+    read_to_sink_with_options(&bytes, ReadOptions::default(), &mut frame_sink);
+    assert!(frame_sink.cancelled);
+    assert_eq!(frame_sink.cause_code, Some("gts-frame-self-hash"));
+    assert_eq!(frame_sink.late_callbacks, 0);
+
+    let mut refused_sink = CountDamagedFrameEvents::default();
+    let mut refused_limits = GtsReadLimits::UNBOUNDED;
+    refused_limits.diagnostics = 0;
+    let error = read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        refused_limits,
+        &mut refused_sink,
+    )
+    .expect_err("the self-hash diagnostic exceeds a zero diagnostic ceiling");
+    assert_eq!(error.resource, GtsReadResource::Diagnostics);
+    assert_eq!((refused_sink.diagnostics, refused_sink.opaque), (0, 0));
+
+    let mut admitted_sink = CountDamagedFrameEvents::default();
+    let mut admitted_limits = GtsReadLimits::UNBOUNDED;
+    admitted_limits.diagnostics = 1;
+    read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        admitted_limits,
+        &mut admitted_sink,
+    )
+    .expect("the exact diagnostic ceiling preserves opaque degradation");
+    assert_eq!((admitted_sink.diagnostics, admitted_sink.opaque), (1, 1));
+
+    let damaged_header = vec![
+        ("gts".into(), "invalid".into()),
+        ("v".into(), Value::Integer(99.into())),
+        ("prof".into(), "generic".into()),
+        ("id".into(), Value::Bytes(vec![7; 32])),
+    ];
+    let damaged_bytes = purrdf_gts::wire::canonical(&Value::Tag(
+        SELF_DESCRIBE_TAG,
+        Box::new(Value::Map(damaged_header)),
+    ));
+    let mut header_sink = CancelAtDiagnostic::default();
+    read_to_sink_with_options(&damaged_bytes, ReadOptions::default(), &mut header_sink);
+    assert!(header_sink.cancelled);
+    assert_eq!(header_sink.cause_code, Some("gts-header-self-hash"));
+    assert_eq!(header_sink.late_callbacks, 0);
 }
 
 #[test]

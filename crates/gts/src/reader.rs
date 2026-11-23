@@ -941,7 +941,13 @@ impl Folder<'_, '_, '_> {
                         sink.decoded_payload(blob, actual);
                     }
                 }
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
+                }
                 self.report_decoded_refusal(blob, &error);
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
+                }
                 return Err(error);
             }
         };
@@ -951,6 +957,9 @@ impl Folder<'_, '_, '_> {
             } else {
                 sink.decoded_payload(blob, payload.decoded_len());
             }
+        }
+        if !self.sink_accepting() {
+            return Err(PayloadError::Cancelled);
         }
         Ok(payload)
     }
@@ -1015,6 +1024,9 @@ impl Folder<'_, '_, '_> {
                 "opaque" => self.h_opaque(payload.view().to_value()?.as_ref()),
                 _ => {
                     self.opaque(frame, ftype, "unknown-frame-type");
+                    if !self.sink_accepting() {
+                        return Ok(());
+                    }
                     self.diag(
                         FoldError::UnknownFrameType {
                             frame_type: ftype.to_string(),
@@ -1352,6 +1364,9 @@ impl Folder<'_, '_, '_> {
             let error = PayloadError::Damaged(cause);
             let detail = error.diagnostic_detail();
             self.opaque(frame, "blob", error.opaque_reason());
+            if !self.sink_accepting() {
+                return;
+            }
             self.diag_native(
                 error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                 error,
@@ -1370,6 +1385,9 @@ impl Folder<'_, '_, '_> {
                     Ok(chain) => chain,
                     Err(error) => {
                         self.opaque(frame, "blob", error.opaque_reason());
+                        if !self.sink_accepting() {
+                            return;
+                        }
                         let detail = error.diagnostic_detail();
                         self.diag_native(
                             error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
@@ -1423,6 +1441,9 @@ impl Folder<'_, '_, '_> {
                         declared_metadata,
                         encoded_len,
                     );
+                    if !self.sink_accepting() {
+                        return;
+                    }
                     if self.materialize {
                         self.blob_index.set(
                             &mut self.g.blobs,
@@ -1445,8 +1466,14 @@ impl Folder<'_, '_, '_> {
                             encoded_len,
                             &detail,
                         );
+                        if !self.sink_accepting() {
+                            return;
+                        }
                     }
                     self.opaque(frame, "blob", error.opaque_reason());
+                    if !self.sink_accepting() {
+                        return;
+                    }
                     self.diag_native(
                         error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                         error,
@@ -1469,6 +1496,9 @@ impl Folder<'_, '_, '_> {
                 && let Some(bytes) = d
                 && let Err(error) = self.blob_digest(&chain, bytes)
             {
+                if error.is_cancelled() {
+                    return;
+                }
                 let detail = error.diagnostic_detail();
                 if let Some(kind) = error.blob_refusal_kind() {
                     self.emit_blob_refusal(
@@ -1479,8 +1509,14 @@ impl Folder<'_, '_, '_> {
                         encoded_len,
                         &detail,
                     );
+                    if !self.sink_accepting() {
+                        return;
+                    }
                 }
                 self.opaque(frame, "blob", error.opaque_reason());
+                if !self.sink_accepting() {
+                    return;
+                }
                 self.diag_native(
                     error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                     error,
@@ -1504,6 +1540,9 @@ impl Folder<'_, '_, '_> {
                 let error = PayloadError::from(error);
                 let detail = error.diagnostic_detail();
                 self.opaque(frame, "blob", error.opaque_reason());
+                if !self.sink_accepting() {
+                    return;
+                }
                 self.diag_native(
                     error.diagnostic_code(BLOB_BUDGET_DIAGNOSTIC),
                     error,
@@ -1517,6 +1556,9 @@ impl Folder<'_, '_, '_> {
                     .set(&mut self.g.blob_meta, digest.clone(), meta);
             }
             self.emit_blob(&digest, false, d, &chain, declared_metadata, encoded_len);
+            if !self.sink_accepting() {
+                return;
+            }
             if let Some(wire) = wire
                 && self.materialize
             {
@@ -1635,6 +1677,9 @@ impl Folder<'_, '_, '_> {
                 limit,
             });
             self.report_decoded_refusal(true, &error);
+            if !self.sink_accepting() {
+                return Err(PayloadError::Cancelled);
+            }
             return Err(error);
         }
         let work_limit = self
@@ -1663,6 +1708,9 @@ impl Folder<'_, '_, '_> {
                         self.report_decoded_refusal(true, &cause);
                     }
                 }
+                if !self.sink_accepting() {
+                    return Err(PayloadError::Cancelled);
+                }
                 return Err(cause);
             }
         };
@@ -1690,6 +1738,9 @@ impl Folder<'_, '_, '_> {
                             self.report_decoded_refusal(true, &error);
                         }
                     }
+                    if !self.sink_accepting() {
+                        return Err(PayloadError::Cancelled);
+                    }
                     return Err(error);
                 }
             };
@@ -1709,6 +1760,9 @@ impl Folder<'_, '_, '_> {
             } else {
                 sink.decoded_payload(true, decoded_len);
             }
+        }
+        if !self.sink_accepting() {
+            return Err(PayloadError::Cancelled);
         }
         Ok(digest_label(hash.finalize().as_bytes()))
     }
@@ -3203,8 +3257,11 @@ impl ActiveStreamingSegment {
                         }),
                     );
                 }
-                if map_get(&header, "gts").and_then(Value::as_text) != Some(MAGIC)
-                    || map_get(&header, "v").and_then(as_i128) != Some(i128::from(VERSION))
+                if sink_slot
+                    .as_deref()
+                    .is_none_or(StreamingSink::continue_reading)
+                    && (map_get(&header, "gts").and_then(Value::as_text) != Some(MAGIC)
+                        || map_get(&header, "v").and_then(as_i128) != Some(i128::from(VERSION)))
                 {
                     push_diagnostic(
                         &mut g,
@@ -3241,7 +3298,11 @@ impl ActiveStreamingSegment {
                 );
             }
         }
-        let catalog = if valid_header {
+        let catalog = if valid_header
+            && sink_slot
+                .as_deref()
+                .is_none_or(StreamingSink::continue_reading)
+        {
             let accepting = sink_slot.is_none_or(|sink| {
                 sink.work(catalog_copy_work(&header));
                 sink.continue_reading()
@@ -3368,7 +3429,13 @@ impl ActiveStreamingSegment {
                         },
                         abs_index,
                     );
+                    if !folder.sink_accepting() {
+                        return Ok(());
+                    }
                     folder.opaque(frame, &ftype, "damaged");
+                    if !folder.sink_accepting() {
+                        return Ok(());
+                    }
                     self.expected_prev = stored_id.cloned().unwrap_or(computed);
                     self.frame_ids.push(self.expected_prev.clone());
                 }
@@ -3442,7 +3509,9 @@ impl ActiveStreamingSegment {
             });
             if folder.sink_accepting() {
                 folder.diag(FoldError::FrameMap, abs_index);
-                self.frame_ids.push(Vec::new());
+                if folder.sink_accepting() {
+                    self.frame_ids.push(Vec::new());
+                }
             }
         }
         let catalog = std::mem::take(&mut folder.catalog);
