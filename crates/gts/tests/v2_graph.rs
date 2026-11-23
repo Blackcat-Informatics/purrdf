@@ -400,6 +400,22 @@ fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
         }
     ));
 
+    let decoy_depth = 8;
+    let mut decoy = vec![0x8b];
+    decoy.extend(std::iter::repeat_n(0x81, decoy_depth));
+    decoy.push(0);
+    let mut with_decoy = damaged[..=index_offset].to_vec();
+    with_decoy.extend_from_slice(&decoy);
+    with_decoy.extend_from_slice(&damaged[index_offset + 1..]);
+    limits.second_generation_nesting_depth = 3;
+    let ReadGraph::Second(graph) = read_with_limits(&with_decoy, limits).unwrap() else {
+        panic!("a non-parity decoy must not preempt the later parity candidate");
+    };
+    assert_eq!(
+        graph.parity_recoveries[0].offset,
+        parity_offset + decoy.len()
+    );
+
     let mut capacity = ReadCapacity::default();
     for limit in [588, 589] {
         capacity.payload.decoded_bytes_per_read = limit;

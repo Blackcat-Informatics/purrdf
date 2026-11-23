@@ -953,19 +953,9 @@ impl<'a> GraphReader<'a> {
             if !parity_allowed {
                 continue;
             }
-            let item = match self.delimit_item(self.bytes.len(), offset) {
-                Ok(Some(item)) => item,
-                Ok(None) => continue,
-                Err(error) if matches!(error.failure, ReadFailure::Framing(_)) => continue,
-                Err(error) => return Err(error),
-            };
-            if let Some(candidate) =
-                history
-                    .scan_at(item.bytes(), &mut self.payload)
-                    .map_err(|count| ReadError {
-                        offset,
-                        failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(count)),
-                    })?
+            if let Some(candidate) = history
+                .scan_at(bytes, &mut self.payload, self.item_nesting_depth)
+                .map_err(|failure| ReadError { offset, failure })?
             {
                 return Ok(Some(Recovery::Parity {
                     offset,
