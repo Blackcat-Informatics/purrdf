@@ -57,7 +57,9 @@ pub use terms::{
     ContentError, DecodedTerms, FormedBudget, LiteralForm, TermDefinition, TermOrder,
     TermReservation, TermText, TermsHeader, TypedValue, ValueReference,
 };
-pub use writer::{SegmentWriteError, SegmentWriter, SignatureWriteError};
+pub use writer::{
+    CoSignError, SegmentWriteError, SegmentWriter, SignatureWriteError, append_cosigned_commit,
+};
 
 /// The reason a wire value violates the GTS v2 grammar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

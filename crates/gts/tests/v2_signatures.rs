@@ -6,9 +6,9 @@
 use purrdf_ed25519::{EncodedVerificationError, SigningKey};
 use purrdf_gts::cose::{SigningKeyRef, composite};
 use purrdf_gts::v2::{
-    Authenticity, FileEnd, HeldKey, ReadCapacity, ReadGraph, SegmentWriteError, SegmentWriter,
-    SignatureInputs, SignatureInvalid, SignatureStatus, SignatureUnverified, SignatureWriteError,
-    read, read_with_signature_inputs,
+    Authenticity, CoSignError, FileEnd, HeldKey, ReadCapacity, ReadGraph, SegmentWriteError,
+    SegmentWriter, SignatureInputs, SignatureInvalid, SignatureStatus, SignatureUnverified,
+    SignatureWriteError, append_cosigned_commit, read, read_with_signature_inputs,
 };
 use purrdf_hash::hex;
 use purrdf_lex::{cbor, json};
@@ -276,6 +276,87 @@ fn a_signed_commit_matches_the_wire_vector_after_refusing_duplicate_keys() {
         Err(SegmentWriteError::IncompleteFrame)
     ));
     assert_eq!(partial, expected[..expected.len() - 1]);
+}
+
+#[test]
+fn an_appended_cosignature_covers_the_old_commit_of_the_final_segment() {
+    let signed = include_bytes!("fixtures/v2/P6/ed25519-honest.bin");
+    let mut first = SegmentWriter::new(Vec::new()).unwrap();
+    first.add_blob(b"earlier segment", None).unwrap();
+    first.add_commit().unwrap();
+    let prefix = [first.into_inner().as_slice(), signed, &[0xf6]].concat();
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let mut file = prefix.clone();
+    append_cosigned_commit(&mut file, &[SigningKeyRef::Ed25519(&key)]).unwrap();
+    assert_eq!(file[..prefix.len()], prefix);
+
+    let ReadGraph::Second(graph) = read(&file, ReadCapacity::default()).unwrap() else {
+        panic!("the append stays in generation 2");
+    };
+    let [old, appended] = graph.signatures.as_slice() else {
+        panic!("the old and new commit both retain their signatures");
+    };
+    assert_eq!(old.segment, 1);
+    assert_eq!(appended.segment, 1);
+    assert_eq!(appended.offset, prefix.len());
+    let key_id = appended.checks[0].key_id;
+    let public_key = key.verifying_key().to_bytes();
+    let keys = SignatureInputs::new(
+        vec![key_id],
+        vec![HeldKey {
+            algorithm: 1,
+            key_id,
+            public_key: &public_key,
+        }],
+    );
+    let ReadGraph::Second(verified) =
+        read_with_signature_inputs(&file, ReadCapacity::default(), &keys).unwrap()
+    else {
+        panic!("the signed append stays in generation 2");
+    };
+    assert_eq!(verified.invalid_commits, []);
+    assert_eq!(verified.end, FileEnd::AtAuthenticatedCommit);
+    assert_eq!(verified.segment_authentication[0].authenticated_frames, 0);
+    assert_eq!(verified.segment_authentication[1].authenticated_frames, 3);
+    assert!(verified.signatures[1].checks[0].authenticated);
+}
+
+#[test]
+fn a_cosigner_leaves_torn_and_undelimitable_files_and_resync_scopes_untouched() {
+    let intact = include_bytes!("fixtures/v2/P6/ed25519-honest.bin");
+    let resync_scope = include_bytes!("fixtures/v2/P1/resync-chain.with-frames.bin");
+    let key = SigningKey::from_bytes(&[42; 32]);
+    let signers = [SigningKeyRef::Ed25519(&key)];
+    let mut invalid = intact.to_vec();
+    invalid.push(0xff);
+    for (prefix, resync) in [
+        (&intact[..intact.len() - 1], false),
+        (invalid.as_slice(), false),
+        (resync_scope.as_slice(), true),
+    ] {
+        let mut file = prefix.to_vec();
+        let error = append_cosigned_commit(&mut file, &signers).unwrap_err();
+        assert!(if resync {
+            matches!(error, CoSignError::ResyncScope(_))
+        } else {
+            matches!(error, CoSignError::Framing { .. })
+        });
+        assert_eq!(file, prefix);
+    }
+    let mut file = intact.to_vec();
+    assert!(matches!(
+        append_cosigned_commit(&mut file, &[]),
+        Err(CoSignError::NoSigner)
+    ));
+    assert!(matches!(
+        append_cosigned_commit(&mut file, &[signers[0]; 2]),
+        Err(CoSignError::Write(SegmentWriteError::Signature(
+            SignatureWriteError::DuplicateKey { .. }
+        )))
+    ));
+    assert_eq!(file, intact.as_slice());
+    append_cosigned_commit(&mut file, &signers).unwrap();
+    assert!(file.len() > intact.len());
 }
 
 #[test]

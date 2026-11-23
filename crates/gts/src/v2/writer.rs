@@ -20,9 +20,11 @@ use super::{
 };
 
 mod blob;
+mod cosign;
 mod rdf;
 mod signature;
 
+pub use cosign::{CoSignError, append_cosigned_commit};
 pub use signature::SignatureWriteError;
 
 type Digest = [u8; DIGEST_LENGTH];

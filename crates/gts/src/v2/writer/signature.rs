@@ -101,24 +101,55 @@ impl<W: Write> SegmentWriter<W> {
         }
 
         let predecessor = self.append_head()?;
-        let count = self.range.count().get() - 1;
-        let root = self.range.root();
+        let commit = SignedCommit::prepare(&self.opener, &predecessor, &self.range, signers)?;
+        self.append_with(|sink, _| {
+            sink.write_all(commit.body())?;
+            sink.write_all(commit.signatures())?;
+            Ok(commit.identifier)
+        })
+    }
+}
+
+pub(super) struct SignedCommit {
+    pub(super) identifier: Digest,
+    body: [u8; 121],
+    body_length: usize,
+    signatures: Buffer,
+}
+
+impl SignedCommit {
+    pub(super) fn prepare(
+        opener: &Digest,
+        predecessor: &Digest,
+        range: &crate::v2::Range,
+        signers: &[SigningKeyRef<'_>],
+    ) -> Result<Self, SegmentWriteError> {
+        let count = range.count().get() - 1;
+        let root = range.root();
         // Even the longest count occupies nine bytes. With fixed digests and
         // an empty payload, the frame body ends within 121 bytes.
         let mut body = [0; 121];
         let mut tail = body.as_mut_slice();
-        let identifier =
-            write_frame_body(&mut tail, &predecessor, FrameType::Commit, &[], |output| {
-                write_commit_content(output, count, &root)
-            })
-            .map_err(SignatureWriteError::Preparation)?;
-        let remaining = tail.len();
-        let signatures = prepare_signatures(signers, &self.opener, &identifier)?;
-        self.append_with(|sink, _| {
-            sink.write_all(&body[..body.len() - remaining])?;
-            sink.write_all(&signatures.0)?;
-            Ok(identifier)
+        let identifier = write_frame_body(&mut tail, predecessor, FrameType::Commit, &[], |out| {
+            write_commit_content(out, count, &root)
         })
+        .map_err(SignatureWriteError::Preparation)?;
+        let remaining = tail.len();
+        let signatures = prepare_signatures(signers, opener, &identifier)?;
+        Ok(Self {
+            body_length: body.len() - remaining,
+            body,
+            identifier,
+            signatures,
+        })
+    }
+
+    pub(super) fn body(&self) -> &[u8] {
+        &self.body[..self.body_length]
+    }
+
+    pub(super) fn signatures(&self) -> &[u8] {
+        &self.signatures.0
     }
 }
 
