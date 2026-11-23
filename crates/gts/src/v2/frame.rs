@@ -8,7 +8,8 @@ use super::parity::ParityClaim;
 use super::payload::PayloadWire;
 use super::{
     BLAKE3_256, CommitClaim, DIGEST_LENGTH, FRAME_FIELDS, LinkCheck, LinkState, MalformedReason,
-    PayloadBudget, PayloadCheck, PayloadResourceError, REGISTRY_VERSION, WireError,
+    PayloadBudget, PayloadCheck, PayloadResourceError, PayloadState, REGISTRY_VERSION, StoredState,
+    WireError,
 };
 
 /// Frame types of GTS registry version 1.
@@ -261,6 +262,28 @@ impl<'a> FrameEnvelope<'a> {
     ) -> bool {
         self.check_wire(predecessor, witness, registry)
             .passes_framing()
+    }
+
+    pub(super) fn check_repair(
+        &self,
+        predecessor: &[u8; DIGEST_LENGTH],
+        registry: NonZeroU64,
+        budget: &mut PayloadBudget,
+    ) -> Result<Option<LinkCheck>, PayloadResourceError> {
+        let link = self.check_link(predecessor, None);
+        if link.state != LinkState::Linked {
+            return Ok(None);
+        }
+        let wire = self.payload_wire(registry);
+        let stored = wire.stored_check();
+        if stored == Some(StoredState::Mismatch) {
+            return Ok(None);
+        }
+        let payload = self.check_decoded_payload(wire, stored, budget)?;
+        let passes = matches!(payload.state, PayloadState::Verified(_))
+            || (stored == Some(StoredState::Matches)
+                && matches!(payload.state, PayloadState::Unchecked(_)));
+        Ok(passes.then_some(link))
     }
 
     pub(super) fn check_wire(

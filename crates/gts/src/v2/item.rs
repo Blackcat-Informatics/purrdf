@@ -66,17 +66,27 @@ impl<'a> Item<'a> {
     /// `Ok(None)`. Each opening head occupies at least one input byte, so
     /// the framing walk can admit every representable nesting depth.
     pub fn first(bytes: &'a [u8]) -> Result<Option<Self>, StructuralError> {
+        Self::first_examined(bytes).0
+    }
+
+    pub(super) fn first_examined(
+        bytes: &'a [u8],
+    ) -> (Result<Option<Self>, StructuralError>, usize) {
         let mut source = Cursor::new(bytes);
         let limits = Limits {
             max_depth: bytes.len(),
         };
-        let Some(range) = StructuralRange::scan(&mut source, 0, bytes.len() as u64, limits)? else {
-            return Ok(None);
-        };
-        Ok(Some(Self {
-            bytes: item_slice(bytes, range),
-            range,
-        }))
+        let result = StructuralRange::scan(&mut source, 0, bytes.len() as u64, limits);
+        let examined = source.position() as usize;
+        (
+            result.map(|range| {
+                range.map(|range| Self {
+                    bytes: item_slice(bytes, range),
+                    range,
+                })
+            }),
+            examined,
+        )
     }
 
     /// The extent and encoding of this item.
@@ -161,22 +171,24 @@ impl<'a> Item<'a> {
             (ItemKind::Frame, Some((registry, predecessor))) => Ok(self
                 .frame()?
                 .is_some_and(|frame| frame.passes_framing_test(predecessor, witness, registry))),
-            (ItemKind::Offsets, Some(_)) => Ok(self.offsets_match(&[]).is_ok()),
+            (ItemKind::Offsets, Some(_)) => Ok(self.offsets_match(core::iter::empty()).is_ok()),
             (ItemKind::Locator, Some(_)) => Ok(self.locator_distance().is_ok()),
             _ => Ok(true),
         }
     }
 
-    pub(super) fn offsets_match(self, observed: &[usize]) -> Result<bool, WireError> {
+    pub(super) fn offsets_match(
+        self,
+        mut observed: impl ExactSizeIterator<Item = usize>,
+    ) -> Result<bool, WireError> {
         let mut fields = Fields::new(self.bytes);
         fields.record(2)?;
         fields.fixed_uint(OFFSETS_KIND, MalformedReason::WrongType)?;
         let count = fields.array()?;
         let mut matches = count == observed.len() as u64;
-        let mut lengths = observed.iter().copied();
         for _ in 0..count {
             let length = fields.uint()?;
-            matches &= lengths
+            matches &= observed
                 .next()
                 .is_some_and(|observed| observed as u64 == length);
         }

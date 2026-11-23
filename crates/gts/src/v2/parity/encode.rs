@@ -62,11 +62,7 @@ impl FullSpan {
             .take(PARITY_ROWS)
             .enumerate()
         {
-            let divisor = (255 - row) ^ column;
-            let products = &PRODUCTS[divisor & (DATA_COLUMNS - 1)];
-            for (destination, &source) in parity.iter_mut().zip(bytes) {
-                *destination ^= products[usize::from(source)];
-            }
+            super::field::add_data_shard(parity, bytes, row, column);
         }
         self.data_shards += 1;
     }
@@ -87,35 +83,6 @@ fn write_digest(payload: &mut [u8], start: usize, shard: usize, bytes: &[u8], in
     let offset = start + shard * DIGEST_ENTRY_BYTES + 1;
     payload[offset..offset + SHARD_DIGEST_BYTES]
         .copy_from_slice(&hasher.finalize().as_bytes()[..SHARD_DIGEST_BYTES]);
-}
-
-// Each divisor in the P5 Cauchy matrix is in 192..=255. The table
-// multiplies a byte by its inverse in GF(2^8) with polynomial 0x11d.
-const PRODUCTS: [[u8; 256]; DATA_COLUMNS] = inverse_products();
-
-const fn inverse_products() -> [[u8; 256]; DATA_COLUMNS] {
-    let mut exp = [0_u8; 255];
-    let mut log = [0_usize; 256];
-    let mut exponent = 0;
-    let mut power = 1_u8;
-    while exponent < exp.len() {
-        exp[exponent] = power;
-        log[power as usize] = exponent;
-        power = (power << 1) ^ if power & 0x80 == 0 { 0 } else { 0x1d };
-        exponent += 1;
-    }
-    let mut products = [[0_u8; 256]; DATA_COLUMNS];
-    let mut divisor = 0;
-    while divisor < products.len() {
-        let inverse_log = 255 - log[192 + divisor];
-        let mut byte = 1;
-        while byte < 256 {
-            products[divisor][byte] = exp[(inverse_log + log[byte]) % 255];
-            byte += 1;
-        }
-        divisor += 1;
-    }
-    products
 }
 
 #[derive(Debug)]
