@@ -138,7 +138,10 @@ impl PayloadContext<'_, '_> {
             return EncodedItem::from_bytes(decoded, cbor::Limits::DEFAULT)
                 .map(Payload::Encoded)
                 .map_err(|cause| {
-                    PayloadError::Damaged(PayloadCause::DecodedCbor { actual, cause })
+                    PayloadError::Damaged(PayloadCause::DecodedCbor {
+                        actual,
+                        cause: Box::new(cause),
+                    })
                 });
         }
         if blob

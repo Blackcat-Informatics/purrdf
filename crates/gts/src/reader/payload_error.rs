@@ -28,11 +28,26 @@ pub(super) enum PayloadCause {
     BlobNotBytes,
     BlobMissingIdentity,
     Cbor(DecodeError),
-    DecodedCbor { actual: usize, cause: DecodeError },
-    EncodedBlobLimit { actual: usize, limit: usize },
-    DecodedFrameLimit { actual: usize, limit: usize },
-    DecodedBlobLimit { actual: usize, limit: usize },
-    SnapshotBlobLimit { actual: usize, limit: usize },
+    DecodedCbor {
+        actual: usize,
+        cause: Box<DecodeError>,
+    },
+    EncodedBlobLimit {
+        actual: usize,
+        limit: usize,
+    },
+    DecodedFrameLimit {
+        actual: usize,
+        limit: usize,
+    },
+    DecodedBlobLimit {
+        actual: usize,
+        limit: usize,
+    },
+    SnapshotBlobLimit {
+        actual: usize,
+        limit: usize,
+    },
 }
 
 impl From<CodecError> for PayloadError {
@@ -229,7 +244,7 @@ purrdf_lex::error_source!(PayloadCause => {
     Self::Codec(cause) => cause,
     Self::Stream(cause) => cause,
     Self::Cbor(cause) => cause,
-    Self::DecodedCbor { cause, .. } => cause,
+    Self::DecodedCbor { cause, .. } => cause.as_ref(),
 });
 
 impl purrdf_hash::error::StructuredError for PayloadError {
@@ -254,7 +269,7 @@ impl purrdf_hash::error::StructuredError for PayloadCause {
         BlobMissingIdentity => "gts-payload-blob-missing-identity" {},
         Cbor(error) => "gts-payload-cbor" { "cause" => Cause(error) },
         DecodedCbor { actual, cause } => "gts-payload-cbor" {
-            "actual" => ByteCount(*actual as u128), "cause" => Cause(cause),
+            "actual" => ByteCount(*actual as u128), "cause" => Cause(cause.as_ref()),
         },
         EncodedBlobLimit { actual, limit } => "gts-payload-encoded-blob-limit" {
             "actual" => ByteCount(*actual as u128), "limit" => ByteCount(*limit as u128),
