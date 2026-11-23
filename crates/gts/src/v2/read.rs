@@ -16,14 +16,15 @@ use purrdf_lex::cbor::{DecodeErrorKind, StructuralError};
 
 use super::frame::FrameWire;
 use super::index::StorageIndex;
-use super::parity::ParityStream;
+use super::parity::{ParityResumption, ParityStream};
 use super::{
-    ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget, FrameCheck,
-    FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
-    IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason,
-    ParityFinding, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal, PayloadState,
-    RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings, SegmentCheckError,
-    SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore, WireError,
+    CommitCheck, ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget,
+    FrameCheck, FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
+    IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason, ParityCheck,
+    ParityFinding, ParitySolveError, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
+    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings,
+    SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore,
+    WireError,
 };
 use crate::{FastMap, model::Graph};
 
@@ -54,12 +55,6 @@ impl DetectionCapacity {
     pub const fn recovery_work(bytes: usize) -> usize {
         bytes.saturating_mul(Self::RECOVERY_WORK_PER_BYTE)
     }
-
-    const LEGACY: Self = Self {
-        encoded_opener_bytes: usize::MAX,
-        nesting_depth: usize::MAX,
-        work: usize::MAX,
-    };
 }
 
 impl Default for DetectionCapacity {
@@ -113,16 +108,6 @@ pub struct ReadLimits {
     pub second_generation: ReadCapacity,
 }
 
-impl ReadLimits {
-    const fn legacy(second_generation: ReadCapacity) -> Self {
-        Self {
-            detection: DetectionCapacity::LEGACY,
-            first_generation: crate::reader::GtsReadLimits::UNBOUNDED,
-            second_generation,
-        }
-    }
-}
-
 impl Default for ReadLimits {
     fn default() -> Self {
         Self {
@@ -157,10 +142,20 @@ pub struct RdfGraph<'a> {
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
+    /// Damaged payloads and rows held by unreadable term definitions.
+    pub frame_failures: Vec<ReadError>,
+    /// Complete items that could not be classified in their segment.
+    pub opaque_items: Vec<ReadError>,
     /// Scanned resync openers and the framing damage before them, in file order.
     pub resynchronizations: Vec<Resynchronization>,
-    /// Parity diagnostics in segment and item order, followed by each segment's tail.
+    /// Damaged regions ended by verified parity frames, in file order.
+    pub parity_recoveries: Vec<ParityRecovery>,
+    /// Commits that cannot verify the ordinary prefix across a parity recovery.
+    pub interrupted_commits: Vec<(usize, CommitCheck)>,
+    /// Parity diagnostics and repair outcomes, followed by each segment's tail.
     pub parity_findings: Vec<ParityFinding>,
+    /// A repaired copy when any span passes verification.
+    pub repaired: Option<Vec<u8>>,
     /// Closing or intermediate index checks in file order.
     pub index_checks: Vec<GraphIndexCheck>,
     /// False or misplaced offsets items and locators.
@@ -185,6 +180,18 @@ pub struct Resynchronization {
     pub offset: usize,
     /// Skipped bytes when the opener starts inside the failed item.
     pub damage: Option<FramingDamage>,
+}
+
+/// A verified parity frame reached after an undelimitable region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ParityRecovery {
+    /// Byte range skipped before the accepted parity frame.
+    pub damage: FramingDamage,
+    /// File offset of the parity frame that continued the segment.
+    pub offset: usize,
+    /// Whether the parity anchor differs from the preceding known head.
+    pub detached: bool,
 }
 
 /// The extent and kind of bytes skipped when resynchronizing.
@@ -289,6 +296,8 @@ pub enum ReadFailure {
     PayloadRefusal(PayloadRefusal),
     /// The segment verifier could not complete a check.
     Segment(SegmentCheckError),
+    /// Parity reconstruction could not run.
+    ParityRepair(ParitySolveError),
     /// The commit disagrees with the computed prefix.
     Commit,
     /// The content of a verified frame is malformed or unavailable.
@@ -320,6 +329,7 @@ impl fmt::Display for ReadError {
             ReadFailure::Framing(error) => error.fmt(f),
             ReadFailure::Wire(error) => error.fmt(f),
             ReadFailure::Segment(error) => error.fmt(f),
+            ReadFailure::ParityRepair(error) => error.fmt(f),
             ReadFailure::Content(error) => error.fmt(f),
             ReadFailure::Fold(error) => error.fmt(f),
             failure => write!(f, "{failure:?}"),
@@ -333,6 +343,7 @@ impl std::error::Error for ReadError {
             ReadFailure::Framing(error) => Some(error),
             ReadFailure::Wire(error) => Some(error),
             ReadFailure::Segment(error) => Some(error),
+            ReadFailure::ParityRepair(error) => Some(error),
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
             ReadFailure::DetectionDepth { cause, .. } => Some(cause),
@@ -353,11 +364,14 @@ impl std::error::Error for ReadError {
 ///
 /// The first generation uses the existing reader over the original bytes.
 /// The generation 2 graph projection checks framing, links, payloads, commits
-/// and RDF positions. It returns an error when a row or term is unreadable or
-/// when an item requires content interpretation outside the graph projection.
+/// and RDF positions. Frames with damaged payloads and rows held by unreadable
+/// definitions stay outside the fold and carry findings. Complete opaque items
+/// put subsequent term resolution in doubt. An item that requires unsupported
+/// content interpretation prevents a complete graph projection.
 /// The reader can recover at a verified resync opener after failure of the
-/// framing test or opening generation recognition. An ordinary frame whose
-/// healing witness is discarded prevents a complete graph projection.
+/// framing test or opening generation recognition. A verified parity frame
+/// can resume a readable segment after undelimitable bytes. An ordinary frame
+/// whose healing witness is discarded prevents a complete graph projection.
 /// Parity findings describe the supplied bytes before any repair.
 /// Indexes report comparisons against the observed prefix and never supply
 /// graph content.
@@ -366,7 +380,42 @@ impl std::error::Error for ReadError {
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadError> {
-    read_inner(bytes, ReadLimits::legacy(capacity))
+    if capacity.items == 0 && !bytes.is_empty() {
+        return Err(ReadError {
+            offset: 0,
+            failure: ReadFailure::ItemCapacity(0),
+        });
+    }
+    let opener = match delimit(bytes, 0) {
+        Ok(Some(item)) => item,
+        Ok(None) => {
+            return Err(ReadError {
+                offset: 0,
+                failure: ReadFailure::Empty,
+            });
+        }
+        Err(error) => {
+            return GraphReader::new(bytes, capacity, None, None)
+                .recover_initial(error, None)
+                .map(ReadGraph::Second);
+        }
+    };
+    let generation = opener.generation().map_err(|error| ReadError {
+        offset: 0,
+        failure: ReadFailure::Framing(error),
+    })?;
+    match generation {
+        Generation::First => Ok(ReadGraph::First(crate::reader::read(bytes, true, None))),
+        Generation::Second | Generation::Unrecognized => {
+            GraphReader::new(bytes, capacity, None, None)
+                .read_first(opener, generation)
+                .map(ReadGraph::Second)
+        }
+        generation => Err(ReadError {
+            offset: 0,
+            failure: ReadFailure::Generation(generation),
+        }),
+    }
 }
 
 /// Decode a GTS file under one finite generation-neutral read contract.
@@ -378,10 +427,10 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read_with_limits(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
-    read_inner(bytes, limits)
+    read_bounded(bytes, limits)
 }
 
-fn read_inner(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
+fn read_bounded(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
     let capacity = limits.second_generation;
     if capacity.items == 0 && !bytes.is_empty() {
         return Err(ReadError {
@@ -402,9 +451,14 @@ fn read_inner(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadErr
             if !matches!(error.failure, ReadFailure::Framing(_)) {
                 return Err(error);
             }
-            return GraphReader::new(bytes, capacity, limits.detection, Some(detection_work))
-                .recover_initial(error, None)
-                .map(ReadGraph::Second);
+            return GraphReader::new(
+                bytes,
+                capacity,
+                Some(limits.detection),
+                Some(detection_work),
+            )
+            .recover_initial(error, None)
+            .map(ReadGraph::Second);
         }
     };
     match generation {
@@ -418,14 +472,17 @@ fn read_inner(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadErr
             offset: 0,
             failure: ReadFailure::FirstGenerationCapacity(error),
         }),
-        Generation::Second => GraphReader::new(bytes, capacity, limits.detection, None)
+        Generation::Second => GraphReader::new(bytes, capacity, Some(limits.detection), None)
             .read_first(opener, generation)
             .map(ReadGraph::Second),
-        Generation::Unrecognized => {
-            GraphReader::new(bytes, capacity, limits.detection, Some(detection_work))
-                .read_first(opener, generation)
-                .map(ReadGraph::Second)
-        }
+        Generation::Unrecognized => GraphReader::new(
+            bytes,
+            capacity,
+            Some(limits.detection),
+            Some(detection_work),
+        )
+        .read_first(opener, generation)
+        .map(ReadGraph::Second),
         generation => Err(ReadError {
             offset: 0,
             failure: ReadFailure::Generation(generation),
@@ -544,6 +601,15 @@ struct FailedItem<'a> {
     accelerator: Option<GraphFrame<'a>>,
 }
 
+enum Recovery<'a> {
+    Resync(ResyncCandidate<'a>),
+    Parity {
+        offset: usize,
+        region_counted: bool,
+        candidate: ParityResumption<'a>,
+    },
+}
+
 #[derive(Default)]
 struct HeldItems<'a> {
     complete: VecDeque<Item<'a>>,
@@ -615,39 +681,41 @@ impl<'a> GraphReader<'a> {
     fn new(
         bytes: &'a [u8],
         capacity: ReadCapacity,
-        detection: DetectionCapacity,
+        detection: Option<DetectionCapacity>,
         detection_work: Option<usize>,
     ) -> Self {
         let (initial_scan, initial_end, initial_refusal) =
-            detection_work.map_or((None, None, None), |used| {
-                let remaining = detection.work.saturating_sub(used);
-                let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
-                let byte_end = detection.encoded_opener_bytes;
-                let end = bytes.len().min(work_end).min(byte_end);
-                let refusal = (end < bytes.len()).then(|| {
-                    let failure = if byte_end <= work_end {
-                        ReadFailure::DetectionBytes {
-                            required: end.saturating_add(1),
-                            limit: byte_end,
-                            cause: None,
+            detection
+                .zip(detection_work)
+                .map_or((None, None, None), |(detection, used)| {
+                    let remaining = detection.work.saturating_sub(used);
+                    let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
+                    let byte_end = detection.encoded_opener_bytes;
+                    let end = bytes.len().min(work_end).min(byte_end);
+                    let refusal = (end < bytes.len()).then(|| {
+                        let failure = if byte_end <= work_end {
+                            ReadFailure::DetectionBytes {
+                                required: end.saturating_add(1),
+                                limit: byte_end,
+                                cause: None,
+                            }
+                        } else {
+                            ReadFailure::DetectionWork {
+                                required: used.saturating_add(
+                                    end.saturating_add(1)
+                                        .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
+                                ),
+                                limit: detection.work,
+                                cause: None,
+                            }
+                        };
+                        ReadError {
+                            offset: end,
+                            failure,
                         }
-                    } else {
-                        ReadFailure::DetectionWork {
-                            required: used.saturating_add(
-                                end.saturating_add(1)
-                                    .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
-                            ),
-                            limit: detection.work,
-                            cause: None,
-                        }
-                    };
-                    ReadError {
-                        offset: end,
-                        failure,
-                    }
+                    });
+                    (Some(ResyncScan::new(&bytes[..end])), Some(end), refusal)
                 });
-                (Some(ResyncScan::new(&bytes[..end])), Some(end), refusal)
-            });
         Self {
             bytes,
             scan: ResyncScan::new(bytes),
@@ -723,8 +791,10 @@ impl<'a> GraphReader<'a> {
             self.count_item(0)?;
             self.count_held_items(end, &mut HeldItems::default())?;
             self.scan_resync(0, end)?
+        } else if self.count_undelimited(&initial, false)?.is_some() {
+            self.scan_resync(0, self.scan_end())?
         } else {
-            self.scan_undelimited(&initial, 0, false)?
+            None
         };
         let Some(candidate) = candidate else {
             return Err(self.detection_refusal(&initial).unwrap_or(initial));
@@ -736,25 +806,25 @@ impl<'a> GraphReader<'a> {
         self.read_segment(segment, start, end)
     }
 
-    fn scan_undelimited(
+    fn count_undelimited(
         &mut self,
         failure: &ReadError,
-        scan_start: usize,
         region_counted: bool,
-    ) -> Result<Option<ResyncCandidate<'a>>, ReadError> {
+    ) -> Result<Option<bool>, ReadError> {
         let ReadFailure::Framing(error) = &failure.failure else {
             return Ok(None);
         };
-        match error.kind() {
+        let counted = match error.kind() {
             DecodeErrorKind::Malformed(_) => {
                 if !region_counted {
                     self.count_item(failure.offset)?;
                 }
+                true
             }
-            DecodeErrorKind::Truncated => {}
+            DecodeErrorKind::Truncated => region_counted,
             _ => return Ok(None),
-        }
-        self.scan_resync(scan_start, self.scan_end())
+        };
+        Ok(Some(counted))
     }
 
     fn scan_resync(
@@ -765,10 +835,11 @@ impl<'a> GraphReader<'a> {
         if self.items == self.item_limit {
             return Ok(None);
         }
+        let initial_end = self.initial_end;
         let scanned = if let Some(scan) = &mut self.initial_scan {
             let scanned = scan.scan(start..end, &mut self.payload);
-            self.initial_exhausted =
-                scanned.as_ref().is_ok_and(Option::is_none) && scan.next_offset() >= end;
+            self.initial_exhausted = scanned.as_ref().is_ok_and(Option::is_none)
+                && initial_end.is_some_and(|admitted| scan.next_offset() >= admitted);
             scanned
         } else {
             self.scan.scan(start..end, &mut self.payload)
@@ -778,6 +849,103 @@ impl<'a> GraphReader<'a> {
             failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
                 refused.requested_total,
             )),
+        })
+    }
+
+    fn scan_recovery(
+        &mut self,
+        failure: &ReadError,
+        scan_start: usize,
+        region_counted: bool,
+        segment: &Segment<'a>,
+    ) -> Result<Option<Recovery<'a>>, ReadError> {
+        let Some(region_counted) = self.count_undelimited(failure, region_counted)? else {
+            return Ok(None);
+        };
+        if self.items == self.item_limit || self.payload.total_refused() {
+            return Ok(None);
+        }
+        if let Some(candidate) = self.scan_resync(scan_start, failure.offset)? {
+            return Ok(Some(Recovery::Resync(candidate)));
+        }
+        let parity_slots = if region_counted { 1 } else { 2 };
+        let parity_allowed = self.item_limit - self.items >= parity_slots;
+        let history = segment.verifier.parity_history();
+        for offset in failure.offset..self.bytes.len() {
+            // Both candidate types start with a deterministic 11-field array.
+            let bytes = &self.bytes[offset..];
+            if bytes.first() != Some(&0x8b) {
+                continue;
+            }
+            if let Some(candidate) = self.scan_resync(offset, offset + 1)? {
+                return Ok(Some(Recovery::Resync(candidate)));
+            }
+            if !parity_allowed {
+                continue;
+            }
+            if let Some(candidate) =
+                history
+                    .scan_at(bytes, &mut self.payload)
+                    .map_err(|count| ReadError {
+                        offset,
+                        failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(count)),
+                    })?
+            {
+                return Ok(Some(Recovery::Parity {
+                    offset,
+                    region_counted,
+                    candidate,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn resume_parity(
+        &mut self,
+        region: Range<usize>,
+        region_counted: bool,
+        candidate: ParityResumption<'a>,
+        segment: &mut Segment<'a>,
+    ) -> Result<(), ReadError> {
+        let offset = region.end;
+        if !region_counted {
+            self.count_item(region.start)?;
+        }
+        self.count_item(offset)?;
+        let damage = FramingDamage::Undelimitable {
+            offset: region.start,
+            length: region.len(),
+        };
+        let accept = || {
+            segment.parity.opaque_extent(region)?;
+            segment.dictionary.mark_doubt();
+            let detached = segment
+                .verifier
+                .resume_parity(candidate.anchor, &candidate.table)?;
+            segment
+                .parity
+                .other_item(offset..offset + candidate.length)?;
+            segment.parity.observe(
+                offset,
+                offset + candidate.payload_end,
+                ParityCheck::Table {
+                    table: candidate.table,
+                    payload_damaged: false,
+                },
+            )?;
+            super::fields::push(
+                &mut self.graph.parity_recoveries,
+                ParityRecovery {
+                    damage,
+                    offset,
+                    detached,
+                },
+            )
+        };
+        accept().map_err(|error| ReadError {
+            offset,
+            failure: error.into(),
         })
     }
 
@@ -815,15 +983,8 @@ impl<'a> GraphReader<'a> {
         if let Some(previous) = previous {
             if let Some(FramingDamage::Undelimitable { offset, length }) = damage {
                 previous
-                    .index_storage
-                    .record_length(length)
-                    .map_err(|error| ReadError {
-                        offset,
-                        failure: error.into(),
-                    })?;
-                previous
                     .parity
-                    .damaged_region(offset..offset + length)
+                    .opaque_extent(offset..offset + length)
                     .map_err(|error| ReadError {
                         offset,
                         failure: error.into(),
@@ -939,14 +1100,33 @@ impl<'a> GraphReader<'a> {
                     return Ok(self.graph);
                 }
                 Err(error) => {
-                    let Some(candidate) =
-                        self.scan_undelimited(&error, previous_start + 1, items.region_counted)?
-                    else {
-                        return Err(error);
-                    };
-                    previous_start = candidate.offset;
-                    offset = candidate.offset + candidate.bytes.len();
-                    segment = self.resume_segment(error, &candidate, Some(&mut segment))?;
+                    match self.scan_recovery(
+                        &error,
+                        previous_start + 1,
+                        items.region_counted,
+                        &segment,
+                    )? {
+                        Some(Recovery::Resync(candidate)) => {
+                            previous_start = candidate.offset;
+                            offset = candidate.offset + candidate.bytes.len();
+                            segment = self.resume_segment(error, &candidate, Some(&mut segment))?;
+                        }
+                        Some(Recovery::Parity {
+                            offset: start,
+                            region_counted,
+                            candidate,
+                        }) => {
+                            previous_start = start;
+                            offset = start + candidate.length;
+                            self.resume_parity(
+                                error.offset..start,
+                                region_counted,
+                                candidate,
+                                &mut segment,
+                            )?;
+                        }
+                        None => return Err(error),
+                    }
                     items = HeldItems::default();
                     continue;
                 }
@@ -955,7 +1135,7 @@ impl<'a> GraphReader<'a> {
             let head = held
                 .as_ref()
                 .and_then(|frame| frame.checked.link.effective_identifier.as_ref())
-                .unwrap_or_else(|| segment.verifier.head());
+                .unwrap_or_else(|| segment.verifier.predecessor());
             // The current frame already links under a held predecessor's
             // computed ID. Its successor cannot heal it in that case.
             let witness = if held.is_none() {
@@ -963,7 +1143,7 @@ impl<'a> GraphReader<'a> {
             } else {
                 None
             };
-            let checked = Self::inspect_item(item, witness, head, offset, &segment.index_storage)
+            let checked = Self::inspect_item(item, witness, head, offset, &segment)
                 .map_err(|failure| ReadError { offset, failure })?;
             if let Some(failed) =
                 self.observe_item(checked, offset..end, &mut held, &mut segment)?
@@ -999,6 +1179,12 @@ impl<'a> GraphReader<'a> {
                     failure: failed.failure,
                 };
                 let Some(candidate) = candidate? else {
+                    if matches!(original.failure, ReadFailure::Classification(_)) {
+                        self.retain_opaque_item(original, end, &mut segment)?;
+                        previous_start = offset;
+                        offset = end;
+                        continue;
+                    }
                     return Err(original);
                 };
                 if let Some(mut frame) = held.take() {
@@ -1038,12 +1224,38 @@ impl<'a> GraphReader<'a> {
         };
         segment
             .parity
-            .finish(self.bytes, &mut self.graph.parity_findings)
-            .map_err(read_error)?;
+            .finish(
+                self.bytes,
+                &mut self.graph.parity_findings,
+                &mut self.graph.repaired,
+                &mut self.payload,
+            )
+            .map_err(|failure| ReadError { offset, failure })?;
         segment
             .index_storage
-            .finish(&mut self.graph.index_storage_findings)
+            .finish(
+                segment.parity.item_count(),
+                &mut self.graph.index_storage_findings,
+            )
             .map_err(read_error)
+    }
+
+    fn retain_opaque_item(
+        &mut self,
+        error: ReadError,
+        end: usize,
+        segment: &mut Segment<'a>,
+    ) -> Result<(), ReadError> {
+        let offset = error.offset;
+        segment.dictionary.mark_doubt();
+        segment
+            .parity
+            .opaque_extent(offset..end)
+            .and_then(|()| super::fields::push(&mut self.graph.opaque_items, error))
+            .map_err(|cause| ReadError {
+                offset,
+                failure: cause.into(),
+            })
     }
 
     fn count_item(&mut self, offset: usize) -> Result<(), ReadError> {
@@ -1076,7 +1288,7 @@ impl<'a> GraphReader<'a> {
         next: Option<Item<'a>>,
         predecessor: &[u8; DIGEST_LENGTH],
         offset: usize,
-        storage_index: &StorageIndex,
+        segment: &Segment<'a>,
     ) -> Result<ItemCheck<'a>, ReadFailure> {
         // The graph reader admits only registry version 1 segment openers.
         let registry = NonZeroU64::MIN;
@@ -1110,13 +1322,14 @@ impl<'a> GraphReader<'a> {
                 let (storage_item, claim) = if kind == ItemKind::Offsets {
                     (
                         IndexStorageItem::Offsets,
-                        item.offsets_match(storage_index.lengths()),
+                        item.offsets_match(segment.parity.item_lengths()),
                     )
                 } else {
                     (
                         IndexStorageItem::Locator,
-                        item.locator_distance()
-                            .map(|distance| storage_index.locator_matches(offset, distance)),
+                        item.locator_distance().map(|distance| {
+                            segment.index_storage.locator_matches(offset, distance)
+                        }),
                     )
                 };
                 Ok(match claim {
@@ -1197,13 +1410,19 @@ impl<'a> GraphReader<'a> {
             }
             ItemCheck::StorageClaim(item, matches) => {
                 self.deliver_held(held.take(), segment)?;
-                segment
-                    .index_storage
-                    .observe(offset, extent.len(), item, matches)
-                    .map_err(|error| ReadError {
+                let record = || {
+                    segment.index_storage.observe(
                         offset,
-                        failure: error.into(),
-                    })?;
+                        segment.parity.item_count(),
+                        item,
+                        matches,
+                    )?;
+                    segment.parity.other_item(extent)
+                };
+                record().map_err(|error| ReadError {
+                    offset,
+                    failure: error.into(),
+                })?;
             }
             ItemCheck::Unsupported(kind) => {
                 self.deliver_held(held.take(), segment)?;
@@ -1255,7 +1474,14 @@ impl<'a> GraphReader<'a> {
         segment: &mut Segment<'a>,
     ) -> Result<(), ReadFailure> {
         let kind = checked.frame_type.and_then(FrameType::from_code);
-        let checked = if matches!(kind, Some(FrameType::Index | FrameType::Parity)) {
+        let accelerator = matches!(kind, Some(FrameType::Index | FrameType::Parity));
+        let damaged_payload = !accelerator
+            && checked
+                .malformed
+                .is_none_or(|error| error.reason == MalformedReason::CodecConstraint)
+            && checked.link.state != LinkState::Broken
+            && matches!(checked.payload.state, PayloadState::Damaged(_));
+        let checked = if accelerator || damaged_payload {
             checked
         } else {
             admit_checked(checked)?
@@ -1281,14 +1507,41 @@ impl<'a> GraphReader<'a> {
                 offset..offset + frame.bytes().len(),
                 wire.link.state,
                 passes,
+                wire.link.effective_identifier,
             )?;
+        } else {
+            segment
+                .parity
+                .other_item(offset..offset + frame.bytes().len())?;
+        }
+        if damaged_payload {
+            if let Some(reservation) = &checked.terms {
+                segment
+                    .dictionary
+                    .observe_terms(&mut self.graph.rdf, reservation, None, &self.values)
+                    .map_err(ReadFailure::Fold)?;
+            }
+            super::fields::push(
+                &mut self.graph.frame_failures,
+                ReadError {
+                    offset,
+                    failure: checked.frame.malformed.map_or_else(
+                        || payload_failure(checked.frame.payload.state),
+                        ReadFailure::Wire,
+                    ),
+                },
+            )?;
+            return Ok(());
         }
         let kind = kind.ok_or(ReadFailure::MissingContent)?;
-        segment.index_storage.record_length(frame.bytes().len())?;
         match kind {
             FrameType::Parity => {
                 let check = checked.parity.take().ok_or(ReadFailure::MissingContent)?;
-                segment.parity.observe(offset, check)?;
+                segment.parity.observe(
+                    offset,
+                    offset + frame.start(FrameField::Identifier),
+                    check,
+                )?;
             }
             FrameType::Terms => {
                 let reservation = checked.terms.as_mut().ok_or(ReadFailure::MissingContent)?;
@@ -1342,6 +1595,12 @@ impl<'a> GraphReader<'a> {
                 )?;
             }
             FrameType::Commit if checked.commit.is_some_and(|commit| commit.valid) => {}
+            FrameType::Commit
+                if segment.verifier.incomplete_prefix() && checked.commit.is_some() =>
+            {
+                let commit = checked.commit.ok_or(ReadFailure::MissingContent)?;
+                super::fields::push(&mut self.graph.interrupted_commits, (offset, commit))?;
+            }
             FrameType::Commit => return Err(ReadFailure::Commit),
             FrameType::Index => {
                 segment.index_storage.closing_index(offset);
@@ -1389,8 +1648,17 @@ impl<'a> GraphReader<'a> {
                 ),
                 error => ReadFailure::Fold(error),
             })?;
-        if findings.forward_reference || findings.opaque_term || findings.position_constraint {
+        if findings.forward_reference || findings.position_constraint {
             return Err(ReadFailure::Rows(findings));
+        }
+        if findings.opaque_term {
+            super::fields::push(
+                &mut self.graph.frame_failures,
+                ReadError {
+                    offset,
+                    failure: ReadFailure::Rows(findings),
+                },
+            )?;
         }
         if self.graph.rdf.annotation_width_exceeded() {
             return Err(ReadFailure::AnnotationWidth);
@@ -1478,7 +1746,7 @@ fn segment_from_header<'a>(
         dictionary: SegmentDictionary::new(file_ordinal),
         file_ordinal,
         units: FastMap::default(),
-        index_storage: StorageIndex::new(extent.len())?,
-        parity: ParityStream::new(extent),
+        index_storage: StorageIndex::default(),
+        parity: ParityStream::new(extent, identifier, registry)?,
     })
 }

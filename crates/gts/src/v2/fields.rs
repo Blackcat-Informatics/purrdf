@@ -16,6 +16,13 @@ pub(super) fn push<T>(output: &mut Vec<T>, value: T) -> Result<(), TryReserveErr
     Ok(())
 }
 
+pub(super) fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, TryReserveError> {
+    let mut owned = Vec::new();
+    owned.try_reserve_exact(bytes.len())?;
+    owned.extend_from_slice(bytes);
+    Ok(owned)
+}
+
 pub(super) fn write_option<W: Write + ?Sized, T>(
     writer: &mut W,
     value: Option<T>,

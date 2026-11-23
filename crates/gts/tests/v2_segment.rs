@@ -6,8 +6,9 @@
 use std::io::{self, Write};
 
 use purrdf_gts::v2::{
-    FrameField, FrameType, Header, Item, LinkState, ParityCheck, PayloadBudget, PayloadCapacity,
-    PayloadRefusal, SegmentFrame, SegmentVerifier, SegmentWriteError, SegmentWriter,
+    FrameField, FrameType, Header, Item, LinkState, ParityCheck, ParitySolveError, PayloadBudget,
+    PayloadCapacity, PayloadRefusal, SegmentFrame, SegmentVerifier, SegmentWriteError,
+    SegmentWriter,
 };
 
 const CAPACITY: PayloadCapacity = PayloadCapacity {
@@ -227,9 +228,62 @@ fn parity_shards_can_be_checked_when_the_table_survives_payload_damage() {
         let report = table.compare_shards(&bytes[..481]).unwrap();
         assert_eq!(report.data_shards().count(), 0);
         assert!(report.parity_shards().eq(damaged_shards.iter().copied()));
+        let solved = table.solve_shards(&bytes[..481], |_| true).unwrap();
+        if let Some(solved) = solved {
+            assert!(solved.solved_digests_match);
+            assert_eq!(solved.data, []);
+            let [patch] = solved.parity.as_slice() else {
+                panic!("expected one repaired parity shard");
+            };
+            let item = Item::first(&intact[481..]).unwrap().unwrap();
+            let frame = item.frame().unwrap().unwrap();
+            let payload = frame.field(FrameField::Payload);
+            assert_eq!(patch.index, 3);
+            assert_eq!(patch.bytes, payload[payload.len() - 64..]);
+        } else {
+            assert_eq!(damaged_shards, []);
+        }
         let wrong_size = table.compare_shards(&bytes[..480]).unwrap_err();
         assert_eq!((wrong_size.expected, wrong_size.supplied), (481, 480));
     }
+}
+
+#[test]
+fn geometry_one_solves_four_data_erasures_and_refuses_a_fifth_in_one_stripe() {
+    let damaged = include_bytes!("fixtures/v2/P5/recover-no-signature.signature-00-3f.bin");
+    let repaired =
+        include_bytes!("fixtures/v2/P5/recover-no-signature.signature-00-3f.repaired.bin");
+    let checks = parity_checks(repaired);
+    let [ParityCheck::Table { table, .. }] = checks.as_slice() else {
+        panic!("expected a verified parity table in the repaired fixture");
+    };
+    assert_eq!(table.span(), 0..9456);
+    let damaged = &damaged[..9456];
+    let repaired = &repaired[..9456];
+    let solved = table.solve_shards(damaged, |_| true).unwrap().unwrap();
+    assert!(solved.solved_digests_match);
+    assert_eq!(solved.parity, []);
+    assert!(solved.data.iter().map(|patch| patch.index).eq(12..16));
+    for patch in &solved.data {
+        let start = patch.index * 256;
+        assert_eq!(patch.bytes, repaired[start..start + 256]);
+    }
+
+    let restricted = table
+        .solve_shards(damaged, |shard| shard != 12)
+        .unwrap()
+        .unwrap();
+    assert!(restricted.solved_digests_match);
+    assert!(restricted.data.iter().map(|patch| patch.index).eq(13..16));
+    let mut excessive = damaged.to_vec();
+    excessive[16 * 256] ^= 1;
+    assert!(matches!(
+        table.solve_shards(&excessive, |_| true),
+        Err(ParitySolveError::TooManyErasures {
+            stripe: 0,
+            count: 5
+        })
+    ));
 }
 
 #[test]

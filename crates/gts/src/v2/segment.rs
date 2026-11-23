@@ -110,8 +110,10 @@ impl purrdf_hash::error::StructuredError for SegmentCheckError {
 pub struct SegmentVerifier {
     registry: NonZeroU64,
     head: Digest,
+    resume_anchor: Option<Digest>,
     range: Range,
     parity: ParityHistory,
+    incomplete_prefix: bool,
     types: TypeRuns,
     next_term: u128,
     content_stopped: bool,
@@ -125,8 +127,10 @@ impl SegmentVerifier {
         Self {
             registry,
             head: opener,
+            resume_anchor: None,
             range: Range::new(&opener),
             parity: ParityHistory::new(opener),
+            incomplete_prefix: false,
             types: TypeRuns::default(),
             next_term: 0,
             content_stopped: false,
@@ -138,6 +142,30 @@ impl SegmentVerifier {
     #[must_use]
     pub const fn head(&self) -> &Digest {
         &self.head
+    }
+
+    pub(super) const fn incomplete_prefix(&self) -> bool {
+        self.incomplete_prefix
+    }
+
+    pub(super) fn predecessor(&self) -> &Digest {
+        self.resume_anchor.as_ref().unwrap_or(&self.head)
+    }
+
+    pub(super) const fn parity_history(&self) -> &ParityHistory {
+        &self.parity
+    }
+
+    pub(super) fn resume_parity(
+        &mut self,
+        anchor: Digest,
+        table: &super::ParityTable<'_>,
+    ) -> Result<bool, TryReserveError> {
+        self.parity.record_resumption(table)?;
+        let detached = self.head != anchor;
+        self.incomplete_prefix |= detached;
+        self.resume_anchor = Some(anchor);
+        Ok(detached)
     }
 
     /// Whether an unknown critical type or enumeration has stopped content.
@@ -205,7 +233,7 @@ impl SegmentVerifier {
     ) -> Result<SegmentFrame<'a>, SegmentCheckError> {
         let mut next_budget = budget.clone();
         let checked = frame
-            .check(&self.head, witness, self.registry, &mut next_budget)
+            .check(self.predecessor(), witness, self.registry, &mut next_budget)
             .map_err(SegmentCheckError::Payload)?;
         let accepted = self.accept_checked(frame, checked, budget)?;
         *budget = next_budget;
@@ -218,13 +246,28 @@ impl SegmentVerifier {
         checked: FrameCheck<'a>,
         budget: &PayloadBudget,
     ) -> Result<SegmentFrame<'a>, SegmentCheckError> {
-        let commit = checked
-            .commit_claim
-            .map(|claim| self.range.check_commit(claim, checked.link.state));
+        let commit = checked.commit_claim.map(|claim| {
+            let mut commit = self.range.check_commit(claim, checked.link.state);
+            if self.incomplete_prefix {
+                commit.root_matches = false;
+                commit.valid = false;
+            }
+            commit
+        });
         let frame_type = checked.frame_type.and_then(FrameType::from_code);
         let index = if frame_type == Some(FrameType::Index) {
             self.types
                 .inspect(frame, &checked, self.registry, &self.head, &self.range)
+                .map(|result| {
+                    result.map(|mut index| {
+                        if self.incomplete_prefix {
+                            index.head_matches = false;
+                            index.root_matches = false;
+                            index.type_runs_match = false;
+                        }
+                        index
+                    })
+                })
         } else {
             None
         };
@@ -249,12 +292,13 @@ impl SegmentVerifier {
             RowHeader::inspect(frame, &checked, self.registry)
         };
         let parity = if frame_type == Some(FrameType::Parity) {
+            let predecessor = *self.predecessor();
             Some(
                 self.parity
                     .inspect(
                         frame,
                         &checked,
-                        &self.head,
+                        &predecessor,
                         self.registry,
                         self.content_stopped,
                     )
@@ -271,6 +315,7 @@ impl SegmentVerifier {
                 .append(&identifier)
                 .map_err(SegmentCheckError::Range)?;
             self.head = identifier;
+            self.resume_anchor = None;
             self.types.record(checked.frame_type);
         }
         if let Some(terms) = &terms {

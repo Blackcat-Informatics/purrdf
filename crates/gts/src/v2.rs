@@ -29,7 +29,8 @@ pub use index::{IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexSt
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
-    ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParitySpanLength, ParityTable,
+    ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParityPatch,
+    ParityRepairFailure, ParitySolution, ParitySolveError, ParitySpanLength, ParityTable,
 };
 pub use payload::{
     PayloadBudget, PayloadCapacity, PayloadCheck, PayloadDamage, PayloadRefusal,
@@ -41,9 +42,9 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    DetectionCapacity, ExternalBlob, FramingDamage, GraphIndexCheck, RdfGraph, ReadCapacity,
-    ReadError, ReadFailure, ReadGraph, ReadLimits, Resynchronization, VerifiedBlob, read,
-    read_with_limits,
+    DetectionCapacity, ExternalBlob, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph,
+    ReadCapacity, ReadError, ReadFailure, ReadGraph, ReadLimits, Resynchronization, VerifiedBlob,
+    read, read_with_limits,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
