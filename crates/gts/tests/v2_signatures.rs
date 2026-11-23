@@ -5,8 +5,8 @@
 
 use purrdf_ed25519::EncodedVerificationError;
 use purrdf_gts::v2::{
-    HeldKey, ReadCapacity, ReadGraph, SignatureInputs, SignatureInvalid, SignatureStatus,
-    SignatureUnverified, read, read_with_signature_inputs,
+    Authenticity, HeldKey, ReadCapacity, ReadGraph, SignatureInputs, SignatureInvalid,
+    SignatureStatus, SignatureUnverified, read, read_with_signature_inputs,
 };
 use purrdf_hash::hex;
 use purrdf_lex::{cbor, json};
@@ -110,6 +110,14 @@ fn signature_outcomes_follow_the_pinned_reader_vectors() {
             assert!(!commit.count_matches);
             assert!(commit.root_matches);
         }
+        let signed_segment = &graph.segment_authentication[0];
+        if actual.authenticated {
+            assert_eq!(signed_segment.authenticity, Authenticity::Authenticated);
+            assert_eq!(signed_segment.authenticated_frames, 2);
+        } else {
+            assert_eq!(signed_segment.authenticity, Authenticity::Unauthenticated);
+            assert_eq!(signed_segment.authenticated_frames, 0);
+        }
     }
 }
 
@@ -129,6 +137,10 @@ fn caller_trust_changes_authentication_without_changing_signature_status() {
     let verified = graph.signatures[0].checks[0];
     assert_eq!(verified.status, SignatureStatus::Valid);
     assert!(!verified.authenticated);
+    assert_eq!(
+        graph.segment_authentication[0].authenticity,
+        Authenticity::Unauthenticated
+    );
     let ReadGraph::Second(graph) = read(bytes, ReadCapacity::default()).unwrap() else {
         panic!("the vector uses generation 2");
     };
@@ -165,4 +177,64 @@ fn a_signature_after_detached_recovery_covers_only_its_new_run() {
     assert_eq!(signature.status, SignatureStatus::Valid);
     assert_eq!((signature.coverage_first, signature.coverage_end), (1, 2));
     assert!(signature.authenticated);
+    let summary = &graph.segment_authentication[0];
+    assert_eq!(summary.authenticated_frames, 1);
+    assert_eq!(summary.authenticity, Authenticity::PartlyAuthenticated);
+}
+
+#[test]
+fn a_trusted_commit_covers_linked_frames_across_a_break() {
+    let bytes = include_bytes!("fixtures/v2/P6/auth-broken-middle.bin");
+    let manifest = json::read(include_str!("fixtures/v2/P6/auth-broken-middle.json")).unwrap();
+    let report = pinned_report(&manifest["cases"].as_array().unwrap()[0]);
+    let inputs = inputs(&report);
+    let ReadGraph::Second(graph) =
+        read_with_signature_inputs(bytes, ReadCapacity::default(), &inputs).unwrap()
+    else {
+        panic!("the vector uses generation 2");
+    };
+    let summary = &graph.segment_authentication[0];
+    assert_eq!(summary.authenticated_frames, 3);
+    assert_eq!(summary.authenticity, Authenticity::PartlyAuthenticated);
+    let [_, second_commit] = graph.signatures.as_slice() else {
+        panic!("expected signatures on both commits");
+    };
+    let authenticating = second_commit
+        .checks
+        .iter()
+        .find(|check| check.authenticated)
+        .unwrap();
+    assert_eq!(
+        (authenticating.coverage_first, authenticating.coverage_end),
+        (3, 4)
+    );
+}
+
+#[test]
+fn an_unsigned_index_leaves_a_fully_authenticated_segment_authenticated() {
+    let bytes = include_bytes!("fixtures/v2/P6/auth-two-commits-two-signers.bin");
+    let manifest = json::read(include_str!(
+        "fixtures/v2/P6/auth-two-commits-two-signers.json"
+    ))
+    .unwrap();
+    let report = pinned_report(&manifest["cases"].as_array().unwrap()[0]);
+    let inputs = inputs(&report);
+    let ReadGraph::Second(graph) =
+        read_with_signature_inputs(bytes, ReadCapacity::default(), &inputs).unwrap()
+    else {
+        panic!("the vector uses generation 2");
+    };
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("expected the closing index");
+    };
+    let ReadGraph::Second(prefix) =
+        read_with_signature_inputs(&bytes[..index.offset], ReadCapacity::default(), &inputs)
+            .unwrap()
+    else {
+        panic!("the prefix uses generation 2");
+    };
+    assert_eq!(graph.segment_authentication, prefix.segment_authentication);
+    let summary = &graph.segment_authentication[0];
+    assert_eq!(summary.authenticity, Authenticity::Authenticated);
+    assert_eq!(summary.authenticated_frames, 5);
 }

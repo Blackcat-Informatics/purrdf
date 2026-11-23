@@ -19,16 +19,16 @@ use super::index::{IndexContent, StorageIndex};
 use super::parity::{ParityResumption, ParityStream};
 use super::payload::CandidateRefusal;
 use super::rdf::RowScope;
-use super::signature::SignatureRecord;
+use super::signature::{AuthenticationProgress, SignatureRecord};
 use super::{
     CommitCheck, ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget,
     FrameCheck, FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
     IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason, ParityCheck,
     ParityFinding, ParitySolveError, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
     PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncRefusal, ResyncScan, Row,
-    RowFindings, SegmentCheckError, SegmentDictionary, SegmentFrame, SegmentVerifier,
-    SignatureCheck, SignatureInputs, SignatureStatus, StoredState, ValueName, ValueStore,
-    WireError,
+    RowFindings, SegmentAuthentication, SegmentCheckError, SegmentDictionary, SegmentFrame,
+    SegmentVerifier, SignatureCheck, SignatureInputs, SignatureStatus, StoredState, ValueName,
+    ValueStore, WireError,
 };
 use crate::{FastMap, model::Graph};
 
@@ -118,6 +118,8 @@ pub struct RdfGraph<'a> {
     pub index_storage_findings: Vec<IndexStorageFinding>,
     /// Signature checks on retained frames, in file order.
     pub signatures: Vec<FrameSignatures>,
+    /// Authentication of each readable segment, in file order.
+    pub segment_authentication: Vec<SegmentAuthentication>,
 }
 
 /// The checked signatures of an ordinary frame.
@@ -417,7 +419,7 @@ struct Segment<'a> {
     ordinal: Option<u64>,
     file_ordinal: u64,
     header_identifier: [u8; DIGEST_LENGTH],
-    signature_run_start: u64,
+    authentication: AuthenticationProgress,
     units: FastMap<[u8; 32], Unit<'a>>,
     parity: ParityStream<'a>,
     index_storage: StorageIndex,
@@ -1052,7 +1054,12 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 segment.parity.item_count(),
                 &mut self.graph.index_storage_findings,
             )
-            .map_err(read_error)
+            .map_err(read_error)?;
+        super::fields::push(
+            &mut self.graph.segment_authentication,
+            segment.authentication.summary(segment.file_ordinal),
+        )
+        .map_err(read_error)
     }
 
     fn retain_opaque_item(
@@ -1328,14 +1335,20 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         if checked.link.effective_identifier.is_some()
             && segment.verifier.predecessor() != segment.verifier.head()
         {
-            segment.signature_run_start = position;
+            segment.authentication.begin_run(position);
         }
         let mut checked = segment
             .verifier
             .accept_checked(&frame, checked, &self.payload, Some(&segment.index_content))
             .map_err(ReadFailure::Segment)?;
         let committed = checked.commit.is_some_and(|commit| commit.valid);
-        self.observe_signatures(frame, &checked, offset, position, segment)?;
+        let authenticates = self.observe_signatures(frame, &checked, offset, position, segment)?;
+        if checked.frame.link.effective_identifier.is_some() && kind != Some(FrameType::Index) {
+            segment.authentication.count_frame(!broken);
+        }
+        if authenticates {
+            segment.authentication.authenticate(committed);
+        }
         if let Some(commit) = checked.commit.filter(|commit| !commit.valid) {
             let findings = if segment.verifier.incomplete_prefix() {
                 &mut self.graph.interrupted_commits
@@ -1520,30 +1533,33 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         offset: usize,
         ordinary: u64,
         segment: &mut Segment<'a>,
-    ) -> Result<(), ReadFailure> {
+    ) -> Result<bool, ReadFailure> {
         if frame.transparent() {
-            return Ok(());
+            return Ok(false);
         }
         let link_holds = checked.frame.link.state != LinkState::Broken;
         if !link_holds {
-            segment.signature_run_start = segment.verifier.ordinary_count();
+            segment
+                .authentication
+                .begin_run(segment.verifier.ordinary_count());
         }
         let Some(identifier) = checked.frame.link.effective_identifier else {
-            return Ok(());
+            return Ok(false);
         };
         if !checked.frame.signatures_valid
             || !self
                 .payload
                 .admits_content(frame.field(FrameField::Signatures).len() as u64)
         {
-            return Ok(());
+            return Ok(false);
         }
         let mut fields = frame.read_field(FrameField::Signatures);
         let count = fields.array().map_err(ReadFailure::Wire)?;
         if count == 0 {
-            return Ok(());
+            return Ok(false);
         }
         let mut checks = Vec::new();
+        let mut authenticates = false;
         let eligible = checked.frame.frame_type != Some(FrameType::Commit as u64)
             || checked.commit.is_some_and(|commit| commit.valid);
         for _ in 0..count {
@@ -1561,6 +1577,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                     .trusted_keys()
                     .binary_search(signature.key_id)
                     .is_ok();
+            authenticates |= authenticated;
             super::fields::push(
                 &mut checks,
                 SignatureCheck {
@@ -1568,7 +1585,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                     key_id: *signature.key_id,
                     status,
                     coverage_first: if covered {
-                        segment.signature_run_start
+                        segment.authentication.run_start
                     } else {
                         ordinary
                     },
@@ -1586,7 +1603,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 checks,
             },
         )?;
-        Ok(())
+        Ok(authenticates)
     }
 
     fn flush_rows(&mut self, segment: &mut Segment<'_>, committed: bool) -> Result<(), ReadError> {
@@ -1715,7 +1732,7 @@ fn segment_from_header<'a>(
         dictionary: SegmentDictionary::new(file_ordinal),
         file_ordinal,
         header_identifier: identifier,
-        signature_run_start: 0,
+        authentication: AuthenticationProgress::default(),
         units: FastMap::default(),
         index_storage: StorageIndex::default(),
         index_content: IndexContent::default(),

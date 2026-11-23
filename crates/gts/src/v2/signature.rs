@@ -193,6 +193,82 @@ pub struct SignatureCheck {
     pub authenticated: bool,
 }
 
+/// Authenticity of the counted ordinary frames in a segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Authenticity {
+    /// At least one frame was counted, and all counted frames authenticate.
+    Authenticated,
+    /// Some counted frames authenticate.
+    PartlyAuthenticated,
+    /// No counted frame authenticates.
+    Unauthenticated,
+}
+
+/// The signature-based authentication summary of one readable segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SegmentAuthentication {
+    /// The file-relative segment ordinal.
+    pub segment: u64,
+    /// Authenticated ordinary frames, excluding indexes.
+    pub authenticated_frames: u64,
+    /// Authenticity across the counted frames.
+    pub authenticity: Authenticity,
+}
+
+#[derive(Default)]
+pub(super) struct AuthenticationProgress {
+    pub(super) run_start: u64,
+    counted: u64,
+    linked: u64,
+    authenticated: u64,
+    run_linked: u64,
+    run_authenticated: u64,
+}
+
+impl AuthenticationProgress {
+    pub(super) const fn begin_run(&mut self, first: u64) {
+        self.run_start = first;
+        self.run_linked = 0;
+        self.run_authenticated = 0;
+    }
+
+    pub(super) const fn count_frame(&mut self, link_holds: bool) {
+        // Every counted frame already fits the range's ordinary count.
+        self.counted += 1;
+        if link_holds {
+            self.linked += 1;
+            self.run_linked += 1;
+        }
+    }
+
+    pub(super) const fn authenticate(&mut self, commit: bool) {
+        if commit {
+            // A valid commit covers every linked frame in the prefix.
+            self.authenticated = self.linked;
+        } else {
+            self.authenticated += self.run_linked - self.run_authenticated;
+        }
+        self.run_authenticated = self.run_linked;
+    }
+
+    pub(super) const fn summary(&self, segment: u64) -> SegmentAuthentication {
+        let authenticity = if self.authenticated == 0 {
+            Authenticity::Unauthenticated
+        } else if self.authenticated == self.counted {
+            Authenticity::Authenticated
+        } else {
+            Authenticity::PartlyAuthenticated
+        };
+        SegmentAuthentication {
+            segment,
+            authenticated_frames: self.authenticated,
+            authenticity,
+        }
+    }
+}
+
 pub(super) struct SignatureRecord<'a> {
     pub(super) algorithm: u64,
     pub(super) key_id: &'a Digest,

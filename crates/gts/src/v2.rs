@@ -50,8 +50,8 @@ pub use read::{
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
 pub use signature::{
-    HeldKey, SignatureCheck, SignatureInputs, SignatureInvalid, SignatureStatus,
-    SignatureUnverified,
+    Authenticity, HeldKey, SegmentAuthentication, SignatureCheck, SignatureInputs,
+    SignatureInvalid, SignatureStatus, SignatureUnverified,
 };
 pub use terms::{
     ContentError, DecodedTerms, FormedBudget, LiteralForm, TermDefinition, TermOrder,
