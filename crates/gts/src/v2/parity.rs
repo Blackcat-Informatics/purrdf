@@ -15,10 +15,12 @@ use crate::FastSet;
 
 mod encode;
 mod field;
+mod repair;
 mod solve;
 mod stream;
 
 pub(super) use encode::{Recorder, RecordingWriter};
+pub use repair::ParityRepairFailure;
 pub use solve::{ParityPatch, ParitySolution, ParitySolveError};
 pub(super) use stream::ParityStream;
 pub use stream::{ParityFinding, ParityFindingKind};

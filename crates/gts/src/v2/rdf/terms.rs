@@ -7,7 +7,7 @@ use purrdf_hash::{fixed::hash_one, hex::encode_upper_into};
 use purrdf_xsd::datatype;
 
 use super::FoldError;
-use crate::v2::TypedValue;
+use crate::v2::{TypedValue, fields::copy_bytes};
 use crate::{FastMap, FastSet};
 
 /// A handle to a term interned in one file fold.
@@ -103,13 +103,6 @@ fn own_text(text: Cow<'_, str>) -> Result<Cow<'static, str>, FoldError> {
             owned
         }
     }))
-}
-
-fn copy_bytes(bytes: &[u8]) -> Result<Vec<u8>, FoldError> {
-    let mut owned = Vec::new();
-    owned.try_reserve_exact(bytes.len())?;
-    owned.extend_from_slice(bytes);
-    Ok(owned)
 }
 
 /// The original typed value paired with its generated literal.

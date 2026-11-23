@@ -210,6 +210,13 @@ pub(super) struct PayloadWire<'a> {
     forbidden: Option<WireError>,
 }
 
+impl PayloadWire<'_> {
+    pub(super) fn stored_check(&self) -> Option<StoredState> {
+        self.stored
+            .map(|(codec, check, payload)| check_stored(codec, check, payload))
+    }
+}
+
 struct DecodedFields<'a> {
     length: u64,
     digest: &'a [u8; DIGEST_LENGTH],
@@ -277,10 +284,17 @@ impl<'a> FrameEnvelope<'a> {
         wire: PayloadWire<'a>,
         budget: &mut PayloadBudget,
     ) -> Result<PayloadCheck<'a>, PayloadResourceError> {
+        let stored = wire.stored_check();
+        self.check_decoded_payload(wire, stored, budget)
+    }
+
+    pub(super) fn check_decoded_payload(
+        &self,
+        wire: PayloadWire<'a>,
+        stored: Option<StoredState>,
+        budget: &mut PayloadBudget,
+    ) -> Result<PayloadCheck<'a>, PayloadResourceError> {
         let mut malformed = wire.grammar_error();
-        let stored = wire
-            .stored
-            .map(|(codec, check, payload)| check_stored(codec, check, payload));
         let Ok(DecodedFields {
             length: decoded,
             digest,

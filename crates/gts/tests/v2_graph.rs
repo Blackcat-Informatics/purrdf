@@ -7,8 +7,9 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
     ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
-    Line, MalformedReason, ParityFindingKind, PayloadDamage, PayloadRefusal, RdfGraph,
-    ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term, ValueName, read,
+    Line, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage, PayloadRefusal,
+    RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term,
+    ValueName, read,
 };
 use purrdf_lex::cbor::head;
 
@@ -190,9 +191,13 @@ fn the_graph_reader_admits_a_closing_index_before_parity() {
     assert_eq!(graph.parity_findings, []);
 
     let damaged = include_bytes!("fixtures/v2/P5/parity-damaged-shard.bin");
-    let graph = second(damaged);
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_read = 589;
+    let ReadGraph::Second(graph) = read(damaged, capacity).unwrap() else {
+        panic!("the fixture opens a generation 2 file");
+    };
     assert_eq!(graph.blobs.len(), 1);
-    let [damage, mismatch] = graph.parity_findings.as_slice() else {
+    let [damage, mismatch, repair] = graph.parity_findings.as_slice() else {
         panic!(
             "expected parity damage and a parity shard mismatch: {:?}",
             graph.parity_findings
@@ -206,6 +211,45 @@ fn the_graph_reader_admits_a_closing_index_before_parity() {
         (mismatch.offset, mismatch.kind),
         (481, ParityFindingKind::ParityMismatch(1))
     );
+    assert_eq!(
+        (repair.offset, repair.kind),
+        (481, ParityFindingKind::Repaired(1))
+    );
+    assert_eq!(graph.repaired.as_deref(), Some(intact.as_slice()));
+}
+
+#[test]
+fn repaired_data_requires_rechecking_its_frame_with_the_shared_budget() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let mut damaged = intact.to_vec();
+    damaged[479] ^= 1;
+    let mut capacity = ReadCapacity::default();
+    for budget in [673, 674] {
+        capacity.payload.decoded_bytes_per_read = budget;
+        let ReadGraph::Second(graph) = read(&damaged, capacity).unwrap() else {
+            panic!("the fixture opens a generation 2 file");
+        };
+        let [mismatch, repair] = graph.parity_findings.as_slice() else {
+            panic!(
+                "expected a data mismatch and a repair outcome: {:?}",
+                graph.parity_findings
+            );
+        };
+        assert_eq!(
+            (mismatch.offset, mismatch.kind),
+            (481, ParityFindingKind::DataMismatch(1))
+        );
+        if budget == 674 {
+            assert_eq!(repair.kind, ParityFindingKind::Repaired(1));
+            assert_eq!(graph.repaired.as_deref(), Some(intact.as_slice()));
+        } else {
+            assert_eq!(
+                repair.kind,
+                ParityFindingKind::RepairFailed(ParityRepairFailure::VerifyFailed)
+            );
+            assert_eq!(graph.repaired, None);
+        }
+    }
 }
 
 #[test]

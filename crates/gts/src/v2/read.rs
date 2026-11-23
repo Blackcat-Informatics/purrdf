@@ -21,9 +21,10 @@ use super::{
     ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget, FrameCheck,
     FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
     IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason,
-    ParityFinding, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal, PayloadState,
-    RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings, SegmentCheckError,
-    SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore, WireError,
+    ParityFinding, ParitySolveError, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
+    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings,
+    SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore,
+    WireError,
 };
 use crate::{FastMap, model::Graph};
 
@@ -85,8 +86,10 @@ pub struct RdfGraph<'a> {
     pub stored_digest_mismatches: Vec<usize>,
     /// Scanned resync openers and the framing damage before them, in file order.
     pub resynchronizations: Vec<Resynchronization>,
-    /// Parity diagnostics in segment and item order, followed by each segment's tail.
+    /// Parity diagnostics and repair outcomes, followed by each segment's tail.
     pub parity_findings: Vec<ParityFinding>,
+    /// A repaired copy when any span passes verification.
+    pub repaired: Option<Vec<u8>>,
     /// Closing or intermediate index checks in file order.
     pub index_checks: Vec<GraphIndexCheck>,
     /// False or misplaced offsets items and locators.
@@ -186,6 +189,8 @@ pub enum ReadFailure {
     PayloadRefusal(PayloadRefusal),
     /// The segment verifier could not complete a check.
     Segment(SegmentCheckError),
+    /// Parity reconstruction could not run.
+    ParityRepair(ParitySolveError),
     /// The commit disagrees with the computed prefix.
     Commit,
     /// The content of a verified frame is malformed or unavailable.
@@ -217,6 +222,7 @@ impl fmt::Display for ReadError {
             ReadFailure::Framing(error) => error.fmt(f),
             ReadFailure::Wire(error) => error.fmt(f),
             ReadFailure::Segment(error) => error.fmt(f),
+            ReadFailure::ParityRepair(error) => error.fmt(f),
             ReadFailure::Content(error) => error.fmt(f),
             ReadFailure::Fold(error) => error.fmt(f),
             failure => write!(f, "{failure:?}"),
@@ -230,6 +236,7 @@ impl std::error::Error for ReadError {
             ReadFailure::Framing(error) => Some(error),
             ReadFailure::Wire(error) => Some(error),
             ReadFailure::Segment(error) => Some(error),
+            ReadFailure::ParityRepair(error) => Some(error),
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
             ReadFailure::PayloadDamage(PayloadDamage::DecodeFailed(error)) => Some(error),
@@ -513,13 +520,6 @@ impl<'a> GraphReader<'a> {
         if let Some(previous) = previous {
             if let Some(FramingDamage::Undelimitable { offset, length }) = damage {
                 previous
-                    .index_storage
-                    .record_length(length)
-                    .map_err(|error| ReadError {
-                        offset,
-                        failure: error.into(),
-                    })?;
-                previous
                     .parity
                     .damaged_region(offset..offset + length)
                     .map_err(|error| ReadError {
@@ -662,7 +662,7 @@ impl<'a> GraphReader<'a> {
             } else {
                 None
             };
-            let checked = Self::inspect_item(item, witness, head, offset, &segment.index_storage)
+            let checked = Self::inspect_item(item, witness, head, offset, &segment)
                 .map_err(|failure| ReadError { offset, failure })?;
             if let Some(failed) =
                 self.observe_item(checked, offset..end, &mut held, &mut segment)?
@@ -737,11 +737,19 @@ impl<'a> GraphReader<'a> {
         };
         segment
             .parity
-            .finish(self.bytes, &mut self.graph.parity_findings)
-            .map_err(read_error)?;
+            .finish(
+                self.bytes,
+                &mut self.graph.parity_findings,
+                &mut self.graph.repaired,
+                &mut self.payload,
+            )
+            .map_err(|failure| ReadError { offset, failure })?;
         segment
             .index_storage
-            .finish(&mut self.graph.index_storage_findings)
+            .finish(
+                segment.parity.item_count(),
+                &mut self.graph.index_storage_findings,
+            )
             .map_err(read_error)
     }
 
@@ -771,7 +779,7 @@ impl<'a> GraphReader<'a> {
         next: Option<Item<'a>>,
         predecessor: &[u8; DIGEST_LENGTH],
         offset: usize,
-        storage_index: &StorageIndex,
+        segment: &Segment<'a>,
     ) -> Result<ItemCheck<'a>, ReadFailure> {
         // The graph reader admits only registry version 1 segment openers.
         let registry = NonZeroU64::MIN;
@@ -805,13 +813,14 @@ impl<'a> GraphReader<'a> {
                 let (storage_item, claim) = if kind == ItemKind::Offsets {
                     (
                         IndexStorageItem::Offsets,
-                        item.offsets_match(storage_index.lengths()),
+                        item.offsets_match(segment.parity.item_lengths()),
                     )
                 } else {
                     (
                         IndexStorageItem::Locator,
-                        item.locator_distance()
-                            .map(|distance| storage_index.locator_matches(offset, distance)),
+                        item.locator_distance().map(|distance| {
+                            segment.index_storage.locator_matches(offset, distance)
+                        }),
                     )
                 };
                 Ok(match claim {
@@ -892,13 +901,19 @@ impl<'a> GraphReader<'a> {
             }
             ItemCheck::StorageClaim(item, matches) => {
                 self.deliver_held(held.take(), segment)?;
-                segment
-                    .index_storage
-                    .observe(offset, extent.len(), item, matches)
-                    .map_err(|error| ReadError {
+                let record = || {
+                    segment.index_storage.observe(
                         offset,
-                        failure: error.into(),
-                    })?;
+                        segment.parity.item_count(),
+                        item,
+                        matches,
+                    )?;
+                    segment.parity.other_item(extent)
+                };
+                record().map_err(|error| ReadError {
+                    offset,
+                    failure: error.into(),
+                })?;
             }
             ItemCheck::Unsupported(kind) => {
                 self.deliver_held(held.take(), segment)?;
@@ -976,14 +991,22 @@ impl<'a> GraphReader<'a> {
                 offset..offset + frame.bytes().len(),
                 wire.link.state,
                 passes,
+                wire.link.effective_identifier,
             )?;
+        } else {
+            segment
+                .parity
+                .other_item(offset..offset + frame.bytes().len())?;
         }
         let kind = kind.ok_or(ReadFailure::MissingContent)?;
-        segment.index_storage.record_length(frame.bytes().len())?;
         match kind {
             FrameType::Parity => {
                 let check = checked.parity.take().ok_or(ReadFailure::MissingContent)?;
-                segment.parity.observe(offset, check)?;
+                segment.parity.observe(
+                    offset,
+                    offset + frame.start(FrameField::Identifier),
+                    check,
+                )?;
             }
             FrameType::Terms => {
                 let reservation = checked.terms.as_mut().ok_or(ReadFailure::MissingContent)?;
@@ -1173,7 +1196,7 @@ fn segment_from_header<'a>(
         dictionary: SegmentDictionary::new(file_ordinal),
         file_ordinal,
         units: FastMap::default(),
-        index_storage: StorageIndex::new(extent.len())?,
-        parity: ParityStream::new(extent),
+        index_storage: StorageIndex::default(),
+        parity: ParityStream::new(extent, identifier, registry)?,
     })
 }

@@ -102,9 +102,18 @@ impl ParityTable<'_> {
     pub fn solve_shards(
         &self,
         span: &[u8],
-        mut explained: impl FnMut(usize) -> bool,
+        explained: impl FnMut(usize) -> bool,
     ) -> Result<Option<ParitySolution>, ParitySolveError> {
         let mismatch = self.compare_shards(span)?;
+        self.solve_mismatches(span, &mismatch, explained)
+    }
+
+    pub(super) fn solve_mismatches(
+        &self,
+        span: &[u8],
+        mismatch: &ParityMismatches,
+        mut explained: impl FnMut(usize) -> bool,
+    ) -> Result<Option<ParitySolution>, ParitySolveError> {
         let mut writable = [0_u64; DATA_MASKS];
         for shard in mismatch.data_shards().filter(|&shard| explained(shard)) {
             writable[shard / MASK_WIDTH] |= 1 << (shard % MASK_WIDTH);
@@ -146,7 +155,7 @@ impl ParityTable<'_> {
                     span,
                     stripe,
                     depth,
-                    &mismatch,
+                    mismatch,
                     &writable,
                     &initial,
                     &mut solution,

@@ -215,31 +215,13 @@ struct StorageClaim {
     matches: bool,
 }
 
+#[derive(Default)]
 pub(super) struct StorageIndex {
-    lengths: Vec<usize>,
     last_index: Option<usize>,
     claims: Vec<StorageClaim>,
 }
 
 impl StorageIndex {
-    pub(super) fn new(opener_length: usize) -> Result<Self, TryReserveError> {
-        let mut lengths = Vec::new();
-        push(&mut lengths, opener_length)?;
-        Ok(Self {
-            lengths,
-            last_index: None,
-            claims: Vec::new(),
-        })
-    }
-
-    pub(super) fn lengths(&self) -> &[usize] {
-        &self.lengths
-    }
-
-    pub(super) fn record_length(&mut self, length: usize) -> Result<(), TryReserveError> {
-        push(&mut self.lengths, length)
-    }
-
     pub(super) const fn closing_index(&mut self, offset: usize) {
         self.last_index = Some(offset);
     }
@@ -252,12 +234,10 @@ impl StorageIndex {
     pub(super) fn observe(
         &mut self,
         offset: usize,
-        length: usize,
+        position: usize,
         item: IndexStorageItem,
         matches: bool,
     ) -> Result<(), TryReserveError> {
-        let position = self.lengths.len();
-        self.record_length(length)?;
         push(
             &mut self.claims,
             StorageClaim {
@@ -271,9 +251,10 @@ impl StorageIndex {
 
     pub(super) fn finish(
         &self,
+        item_count: usize,
         findings: &mut Vec<IndexStorageFinding>,
     ) -> Result<(), TryReserveError> {
-        let last_position = self.lengths.len() - 1;
+        let last_position = item_count - 1;
         let last_item_is_locator = self.claims.last().is_some_and(|claim| {
             claim.position == last_position && claim.item == IndexStorageItem::Locator
         });
