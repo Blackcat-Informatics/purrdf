@@ -8,6 +8,7 @@ mod frame;
 mod header;
 mod item;
 mod link;
+mod parity;
 mod payload;
 mod range;
 mod rdf;
@@ -25,6 +26,9 @@ pub use header::{
 };
 pub use item::{Generation, Item, ItemKind};
 pub use link::{LinkCheck, LinkState};
+pub use parity::{
+    ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParitySpanLength, ParityTable,
+};
 pub use payload::{
     PayloadBudget, PayloadCapacity, PayloadCheck, PayloadDamage, PayloadRefusal,
     PayloadResourceError, PayloadState, StoredState,

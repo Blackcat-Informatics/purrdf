@@ -58,7 +58,7 @@ impl FrameEnvelope<'_> {
             .ok()
             .map(|bytes| **bytes)
             .or_else(|| permissive_identifier(self.field(FrameField::Identifier)));
-        let transparent = self.field(FrameField::Transparent) == [0xf5];
+        let transparent = self.transparent();
 
         let state = if stored.is_some() && stored == computed {
             LinkState::Linked

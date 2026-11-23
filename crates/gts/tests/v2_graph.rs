@@ -6,9 +6,9 @@
 use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
-    ContentError, FrameField, FramingDamage, Item, ItemKind, Line, MalformedReason, PayloadRefusal,
-    RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term,
-    ValueName, read,
+    ContentError, FrameField, FramingDamage, Item, ItemKind, Line, MalformedReason,
+    ParityFindingKind, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph,
+    SegmentWriteError, SegmentWriter, Term, ValueName, read,
 };
 use purrdf_lex::cbor::head;
 
@@ -17,6 +17,117 @@ fn second(bytes: &[u8]) -> RdfGraph<'_> {
         panic!("the fixture opens a generation 2 file");
     };
     graph
+}
+
+#[test]
+fn a_broken_transparent_copy_does_not_hide_the_placed_parity_or_spend_an_extra_item() {
+    let bytes = include_bytes!("fixtures/v2/P5/parity-broken-copy-no-first.bin");
+    let capacity = ReadCapacity {
+        items: 5,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("the fixture opens a generation 2 file");
+    };
+    assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
+    let [finding] = graph.parity_findings.as_slice() else {
+        panic!(
+            "expected damage to the first parity frame: {:?}",
+            graph.parity_findings
+        );
+    };
+    assert_eq!(finding.offset, 209);
+    assert_eq!(finding.kind, ParityFindingKind::Damaged);
+
+    let first_parity = Item::first(&bytes[209..]).unwrap().unwrap();
+    let mut without_broken_copy = bytes[..209].to_vec();
+    without_broken_copy.extend_from_slice(&bytes[209 + first_parity.bytes().len()..]);
+    assert_eq!(second(&without_broken_copy).parity_findings, []);
+
+    let mut two_broken_copies = bytes[..209].to_vec();
+    two_broken_copies.extend_from_slice(first_parity.bytes());
+    two_broken_copies.extend_from_slice(&bytes[209..]);
+    let capacity = ReadCapacity {
+        items: 6,
+        ..capacity
+    };
+    let ReadGraph::Second(graph) = read(&two_broken_copies, capacity).unwrap() else {
+        panic!("the input opens a generation 2 file");
+    };
+    assert_eq!(graph.parity_findings.len(), 2);
+    assert!(
+        graph
+            .parity_findings
+            .iter()
+            .all(|finding| finding.kind == ParityFindingKind::Damaged)
+    );
+}
+
+#[test]
+fn changing_ordinary_storage_makes_short_parity_stale_before_the_shard_check() {
+    let bytes = include_bytes!("fixtures/v2/P5/parity-broken-copy-no-first.bin");
+    let signed = include_bytes!("fixtures/v2/P1/parity-signature.bin");
+    let mut tail = signed.as_slice();
+    let signatures = loop {
+        let item = Item::first(tail).unwrap().expect("a signed frame");
+        tail = &tail[item.bytes().len()..];
+        if let Some(frame) = item.frame().unwrap() {
+            let signatures = frame.field(FrameField::Signatures);
+            if signatures != [0x80] {
+                break signatures;
+            }
+        }
+    };
+    // The last ordinary frame ends in an empty signature list. Changing it
+    // preserves the ordinary identifier and parity anchor but extends S.
+    assert_eq!(bytes[208], 0x80);
+    let first_parity = Item::first(&bytes[209..]).unwrap().unwrap();
+    let mut rewritten = bytes[..208].to_vec();
+    rewritten.extend_from_slice(signatures);
+    let parity_start = rewritten.len();
+    rewritten.extend_from_slice(&bytes[209 + first_parity.bytes().len()..]);
+
+    let graph = second(&rewritten);
+    let [stale, tail] = graph.parity_findings.as_slice() else {
+        panic!(
+            "expected stale parity and an unprotected tail: {:?}",
+            graph.parity_findings
+        );
+    };
+    assert_eq!(
+        (stale.offset, stale.kind),
+        (parity_start, ParityFindingKind::Stale)
+    );
+    assert_eq!(
+        (tail.offset, tail.kind),
+        (11, ParityFindingKind::UnprotectedTail(parity_start - 11))
+    );
+}
+
+#[test]
+fn damaged_parity_leaves_a_logical_tail_after_the_opener() {
+    let bytes = include_bytes!(
+        "fixtures/v2/P5/parity-condition-six-first-by-case.own-version-geometry-zero.bin"
+    );
+    let graph = second(bytes);
+    let [first, second, tail] = graph.parity_findings.as_slice() else {
+        panic!(
+            "expected damage to both parity frames and an unprotected tail: {:?}",
+            graph.parity_findings
+        );
+    };
+    assert_eq!(
+        (first.offset, first.kind),
+        (209, ParityFindingKind::Damaged)
+    );
+    assert_eq!(
+        (second.offset, second.kind),
+        (762, ParityFindingKind::Damaged)
+    );
+    assert_eq!(
+        (tail.offset, tail.kind),
+        (11, ParityFindingKind::UnprotectedTail(198))
+    );
 }
 
 #[test]
@@ -190,6 +301,76 @@ fn a_later_torn_item_leaves_the_last_slot_for_the_resync_opener() {
             length: 85
         })
     );
+}
+
+#[test]
+fn a_resync_opener_inside_a_complete_failed_frame_restores_later_rows() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-after-torn-swallowed-failing.whole.bin");
+    let graph = second(bytes);
+    let [resumed] = graph.resynchronizations.as_slice() else {
+        panic!("the input contains one scanned opener");
+    };
+    assert_eq!(resumed.offset, 206);
+    assert_eq!(
+        resumed.damage,
+        Some(FramingDamage::TornTail {
+            offset: 114,
+            length: 92
+        })
+    );
+    assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
+}
+
+#[test]
+fn a_complete_failed_frame_charges_its_payload_before_scanning() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-order-held-after-g.whole.bin");
+    let mut capacity = ReadCapacity {
+        items: 6,
+        ..ReadCapacity::default()
+    };
+    // Terms charge 17 bytes and the rejected frame charges one. The held
+    // frames after it are discarded without using the decoded-byte budget.
+    capacity.payload.decoded_bytes_per_read = 4114;
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("the input opens a generation 2 file");
+    };
+    let [resumed] = graph.resynchronizations.as_slice() else {
+        panic!("the input contains one scanned opener");
+    };
+    assert_eq!(resumed.offset, 370);
+
+    capacity.payload.decoded_bytes_per_read = 4113;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert_eq!(refused.offset, 370);
+    assert!(matches!(
+        refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4114))
+    ));
+
+    // The failed frame and both held items reach the item limit at EOF.
+    // The candidate is never charged and the original failure survives.
+    capacity.items = 5;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert_eq!(refused.offset, 114);
+    assert!(matches!(refused.failure, ReadFailure::Wire(_)));
+}
+
+#[test]
+fn a_replaced_healing_witness_leaves_the_previous_frame_broken() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-heal-witness-removed.ample-whole.bin");
+    let mut capacity = ReadCapacity::default();
+    let broken = read(bytes, capacity).unwrap_err();
+    assert_eq!(broken.offset, 114);
+    assert!(matches!(broken.failure, ReadFailure::BrokenLink));
+
+    // When the scan cannot admit the new opener, the witness remains.
+    capacity.payload.decoded_bytes_per_read = 4114;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert_eq!(refused.offset, 316);
+    assert!(matches!(
+        refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4184))
+    ));
 }
 
 #[test]

@@ -4,6 +4,7 @@
 use core::num::NonZeroU64;
 
 use super::fields::{Fields, OptionShape};
+use super::parity::ParityClaim;
 use super::payload::PayloadWire;
 use super::{
     BLAKE3_256, CommitClaim, DIGEST_LENGTH, FRAME_FIELDS, LinkCheck, LinkState, MalformedReason,
@@ -152,7 +153,7 @@ pub struct FrameEnvelope<'a> {
     ends: [usize; FRAME_FIELDS],
 }
 
-struct FrameWire<'a> {
+pub(super) struct FrameWire<'a> {
     frame_type: Option<u64>,
     unknown_type: Option<UnknownFrameType>,
     link: LinkCheck,
@@ -161,9 +162,25 @@ struct FrameWire<'a> {
     parity_envelope_damaged: bool,
 }
 
+impl FrameWire<'_> {
+    pub(super) const fn passes_framing(&self) -> bool {
+        self.malformed.is_none()
+            && !self.parity_envelope_damaged
+            && !matches!(self.link.state, LinkState::Broken)
+    }
+}
+
 impl<'a> FrameEnvelope<'a> {
     pub(super) const fn new(bytes: &'a [u8], ends: [usize; FRAME_FIELDS]) -> Self {
         Self { bytes, ends }
+    }
+
+    pub(super) const fn bytes(&self) -> &'a [u8] {
+        self.bytes
+    }
+
+    pub(super) fn transparent(&self) -> bool {
+        self.field(FrameField::Transparent) == [0xf5]
     }
 
     /// The original CBOR bytes of one field, including its head.
@@ -201,7 +218,14 @@ impl<'a> FrameEnvelope<'a> {
         registry: NonZeroU64,
         budget: &mut PayloadBudget,
     ) -> Result<FrameCheck<'a>, PayloadResourceError> {
-        let wire = self.check_wire(predecessor, witness, registry);
+        self.check_prepared(self.check_wire(predecessor, witness, registry), budget)
+    }
+
+    pub(super) fn check_prepared(
+        &self,
+        wire: FrameWire<'a>,
+        budget: &mut PayloadBudget,
+    ) -> Result<FrameCheck<'a>, PayloadResourceError> {
         let payload = self.check_payload(wire.payload, budget)?;
         let known = wire.frame_type.and_then(FrameType::from_code);
         let mut malformed = wire
@@ -235,13 +259,11 @@ impl<'a> FrameEnvelope<'a> {
         witness: Option<&Self>,
         registry: NonZeroU64,
     ) -> bool {
-        let wire = self.check_wire(predecessor, witness, registry);
-        wire.malformed.is_none()
-            && !wire.parity_envelope_damaged
-            && wire.link.state != LinkState::Broken
+        self.check_wire(predecessor, witness, registry)
+            .passes_framing()
     }
 
-    fn check_wire(
+    pub(super) fn check_wire(
         &self,
         predecessor: &[u8; DIGEST_LENGTH],
         witness: Option<&Self>,
@@ -441,12 +463,7 @@ fn check_content_shape(frame_type: u64, fields: &mut Fields<'_>) -> Result<(), W
             fields.fixed_bytes::<DIGEST_LENGTH>()?;
         }
         FrameType::Parity => {
-            fields.record(5)?;
-            fields.uint()?;
-            fields.uint()?;
-            fields.uint()?;
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
+            ParityClaim::read(fields)?;
         }
     }
     Ok(())

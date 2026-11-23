@@ -6,8 +6,8 @@
 use std::io::{self, Write};
 
 use purrdf_gts::v2::{
-    FrameField, FrameType, Header, Item, LinkState, PayloadBudget, PayloadCapacity,
-    SegmentVerifier, SegmentWriteError, SegmentWriter,
+    FrameField, FrameType, Header, Item, LinkState, ParityCheck, PayloadBudget, PayloadCapacity,
+    PayloadRefusal, SegmentVerifier, SegmentWriteError, SegmentWriter,
 };
 
 const CAPACITY: PayloadCapacity = PayloadCapacity {
@@ -119,6 +119,98 @@ fn a_well_formed_signature_still_damages_the_parity_envelope() {
             break;
         }
     }
+}
+
+fn parity_checks(bytes: &[u8]) -> Vec<ParityCheck<'_>> {
+    let opener = Item::first(bytes).unwrap().unwrap();
+    let header = Header::decode(opener).unwrap();
+    let mut verifier =
+        SegmentVerifier::new(header.identifier().unwrap(), header.registry_version());
+    let mut budget = PayloadBudget::new(CAPACITY);
+    let mut tail = &bytes[opener.bytes().len()..];
+    let mut checks = Vec::new();
+    while let Some(item) = Item::first(tail).unwrap() {
+        tail = &tail[item.bytes().len()..];
+        if let Some(frame) = item.frame().unwrap() {
+            let checked = verifier.check(&frame, None, &mut budget).unwrap();
+            checks.extend(checked.parity);
+        }
+    }
+    checks
+}
+
+#[test]
+fn parity_shards_can_be_checked_when_the_table_survives_payload_damage() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let damaged = include_bytes!("fixtures/v2/P5/parity-damaged-shard.bin");
+    for (bytes, damaged_shards) in [(intact.as_slice(), &[][..]), (damaged.as_slice(), &[3][..])] {
+        let checks = parity_checks(bytes);
+        let [
+            ParityCheck::Table {
+                table,
+                payload_damaged,
+            },
+        ] = checks.as_slice()
+        else {
+            panic!("expected one verified parity table: {checks:?}");
+        };
+        assert_eq!(*payload_damaged, !damaged_shards.is_empty());
+        assert_eq!(table.span(), 0..481);
+        let report = table.compare_shards(&bytes[..481]).unwrap();
+        assert_eq!(report.data_shards().count(), 0);
+        assert!(report.parity_shards().eq(damaged_shards.iter().copied()));
+        let wrong_size = table.compare_shards(&bytes[..480]).unwrap_err();
+        assert_eq!((wrong_size.expected, wrong_size.supplied), (481, 480));
+    }
+}
+
+#[test]
+fn parity_checks_envelope_damage_even_when_capacity_prevents_reading_the_table() {
+    let unchecked = include_bytes!("fixtures/v2/P5/parity-above-capacity-wrong-table.bin");
+    assert!(matches!(
+        parity_checks(unchecked).as_slice(),
+        [ParityCheck::Unchecked(PayloadRefusal::DecodedSize(
+            134_217_728
+        ))]
+    ));
+    for bytes in [
+        include_bytes!("fixtures/v2/P5/parity-above-capacity-and-damaged.bin").as_slice(),
+        include_bytes!("fixtures/v2/P5/parity-damaged-each.5.bin").as_slice(),
+    ] {
+        assert!(matches!(
+            parity_checks(bytes).as_slice(),
+            [ParityCheck::Damaged]
+        ));
+    }
+}
+
+#[test]
+fn parity_history_distinguishes_unsupported_geometry_from_a_damaged_span() {
+    let newer = include_bytes!(
+        "fixtures/v2/P5/parity-condition-six-first-by-case.later-version-geometry.bin"
+    );
+    assert!(matches!(
+        parity_checks(newer).as_slice(),
+        [
+            ParityCheck::UnknownGeometry {
+                code: 9,
+                report: true
+            },
+            ParityCheck::Table { .. }
+        ]
+    ));
+    let invalid = include_bytes!(
+        "fixtures/v2/P5/parity-condition-six-first-by-case.own-version-geometry-zero.bin"
+    );
+    assert!(matches!(
+        parity_checks(invalid).as_slice(),
+        [ParityCheck::Damaged, ParityCheck::Damaged]
+    ));
+    let broken = include_bytes!("fixtures/v2/P5/parity-broken-copy-no-first.bin");
+    assert!(matches!(
+        parity_checks(broken).as_slice(),
+        [ParityCheck::Damaged, ParityCheck::Table { .. }]
+    ));
 }
 
 struct ShortSink {
