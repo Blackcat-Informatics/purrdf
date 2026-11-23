@@ -149,7 +149,7 @@ impl<'a> ParityStream<'a> {
         self.append(bytes, passes)
     }
 
-    pub(in crate::v2) fn damaged_region(
+    pub(in crate::v2) fn opaque_extent(
         &mut self,
         bytes: Range<usize>,
     ) -> Result<(), TryReserveError> {

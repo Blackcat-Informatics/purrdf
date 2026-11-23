@@ -302,6 +302,46 @@ fn a_damaged_terms_payload_reserves_the_ids_named_by_later_rows() {
         if finding.opaque_term && !finding.forward_reference));
 }
 
+#[test]
+fn a_complete_opaque_item_puts_the_dictionary_in_doubt_after_the_scan() {
+    let source =
+        include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.undelimitable.bin");
+    let intact = &source[..209];
+    let row_offset = 114;
+    let mut damaged = intact[..row_offset].to_vec();
+    damaged.push(0);
+    damaged.extend_from_slice(&intact[row_offset..]);
+
+    let mut capacity = ReadCapacity {
+        items: 4,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(graph) = read(&damaged, capacity).unwrap() else {
+        panic!("expected the opaque item to count once");
+    };
+    let [item] = graph.opaque_items.as_slice() else {
+        panic!("expected the unclassified complete item to be retained");
+    };
+    assert_eq!(item.offset, row_offset);
+    assert!(matches!(
+        item.failure,
+        ReadFailure::Classification(MalformedReason::WrongType)
+    ));
+    assert!(graph.rdf.has_held_rows());
+    assert_eq!(graph.rdf.lines().count(), 0);
+    let [rows] = graph.frame_failures.as_slice() else {
+        panic!("expected the later quad frame to hold its rows");
+    };
+    assert_eq!(rows.offset, row_offset + 1);
+    assert!(matches!(&rows.failure, ReadFailure::Rows(finding)
+        if finding.opaque_term && !finding.forward_reference));
+
+    capacity.items -= 1;
+    let refusal = read(&damaged, capacity).unwrap_err();
+    assert_eq!(refusal.offset, row_offset + 1);
+    assert!(matches!(refusal.failure, ReadFailure::ItemCapacity(3)));
+}
+
 fn damage_first_payload(intact: &[u8]) -> (usize, Vec<u8>) {
     let offset = Item::first(intact).unwrap().unwrap().bytes().len();
     let frame = Item::first(&intact[offset..])

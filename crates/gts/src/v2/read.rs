@@ -86,6 +86,8 @@ pub struct RdfGraph<'a> {
     pub stored_digest_mismatches: Vec<usize>,
     /// Damaged payloads and rows held by unreadable term definitions.
     pub frame_failures: Vec<ReadError>,
+    /// Complete items that could not be classified in their segment.
+    pub opaque_items: Vec<ReadError>,
     /// Scanned resync openers and the framing damage before them, in file order.
     pub resynchronizations: Vec<Resynchronization>,
     /// Damaged regions ended by verified parity frames, in file order.
@@ -268,8 +270,9 @@ impl std::error::Error for ReadError {
 /// The first generation uses the existing reader over the original bytes.
 /// The generation 2 graph projection checks framing, links, payloads, commits
 /// and RDF positions. Frames with damaged payloads and rows held by unreadable
-/// definitions stay outside the fold and carry findings. An item that requires
-/// unsupported content interpretation prevents a complete graph projection.
+/// definitions stay outside the fold and carry findings. Complete opaque items
+/// put subsequent term resolution in doubt. An item that requires unsupported
+/// content interpretation prevents a complete graph projection.
 /// The reader can recover at a verified resync opener after failure of the
 /// framing test or opening generation recognition. A verified parity frame
 /// can resume a readable segment after undelimitable bytes. An ordinary frame
@@ -583,7 +586,7 @@ impl<'a> GraphReader<'a> {
             length: region.len(),
         };
         let accept = || {
-            segment.parity.damaged_region(region)?;
+            segment.parity.opaque_extent(region)?;
             segment.dictionary.mark_doubt();
             let detached = segment
                 .verifier
@@ -649,7 +652,7 @@ impl<'a> GraphReader<'a> {
             if let Some(FramingDamage::Undelimitable { offset, length }) = damage {
                 previous
                     .parity
-                    .damaged_region(offset..offset + length)
+                    .opaque_extent(offset..offset + length)
                     .map_err(|error| ReadError {
                         offset,
                         failure: error.into(),
@@ -845,6 +848,12 @@ impl<'a> GraphReader<'a> {
                     failure: failed.failure,
                 };
                 let Some(candidate) = candidate? else {
+                    if matches!(original.failure, ReadFailure::Classification(_)) {
+                        self.retain_opaque_item(original, end, &mut segment)?;
+                        previous_start = offset;
+                        offset = end;
+                        continue;
+                    }
                     return Err(original);
                 };
                 if let Some(mut frame) = held.take() {
@@ -898,6 +907,24 @@ impl<'a> GraphReader<'a> {
                 &mut self.graph.index_storage_findings,
             )
             .map_err(read_error)
+    }
+
+    fn retain_opaque_item(
+        &mut self,
+        error: ReadError,
+        end: usize,
+        segment: &mut Segment<'a>,
+    ) -> Result<(), ReadError> {
+        let offset = error.offset;
+        segment.dictionary.mark_doubt();
+        segment
+            .parity
+            .opaque_extent(offset..end)
+            .and_then(|()| super::fields::push(&mut self.graph.opaque_items, error))
+            .map_err(|cause| ReadError {
+                offset,
+                failure: cause.into(),
+            })
     }
 
     fn count_item(&mut self, offset: usize) -> Result<(), ReadError> {
