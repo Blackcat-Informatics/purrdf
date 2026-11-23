@@ -58,6 +58,24 @@ fn file_end_uses_the_last_valid_commit_and_retained_item_classes() {
     let graph = second(&bytes);
     assert_eq!(graph.opaque_items.len(), 1);
     assert_eq!(graph.end, FileEnd::AtValidCommit);
+    graph.into_complete_rdf().unwrap();
+
+    let source = include_bytes!("fixtures/v2/P7/file-end-at-valid-commit.bin");
+    let mut malformed_commit = source.to_vec();
+    assert_eq!(malformed_commit.pop(), Some(0x80));
+    malformed_commit.extend_from_slice(&[0x81, 0x00]);
+    let graph = second(&malformed_commit);
+    assert!(
+        matches!(graph.frame_failures.as_slice(), [error] if matches!(error.failure, ReadFailure::Wire(_)))
+    );
+    assert_eq!(
+        graph
+            .into_complete_rdf()
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        second(source).rdf.lines().collect::<Vec<_>>()
+    );
 }
 
 #[test]
@@ -131,6 +149,9 @@ fn index_content_claims_compare_against_their_covered_rows_and_members() {
         (prefix.graph_directory_matches, prefix.pack_members_match),
         (None, Some(true))
     );
+    let refusal = graph.into_complete_rdf().unwrap_err();
+    assert_eq!(refusal.offset, 152);
+    assert!(matches!(refusal.failure, ReadFailure::PayloadDamage(_)));
 }
 
 #[test]
@@ -175,6 +196,7 @@ fn a_locator_names_the_closing_index_even_if_it_does_not_verify() {
                     )
             }));
             assert_eq!(graph.index_storage_findings, []);
+            graph.into_complete_rdf().unwrap();
         }
     }
 }

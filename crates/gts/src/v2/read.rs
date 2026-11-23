@@ -33,6 +33,7 @@ use super::{
 use crate::{FastMap, model::Graph};
 
 mod blob;
+mod error_inspection;
 
 pub use blob::ExternalBlob;
 
@@ -122,6 +123,69 @@ pub struct RdfGraph<'a> {
     pub signatures: Vec<FrameSignatures>,
     /// Authentication of each readable segment, in file order.
     pub segment_authentication: Vec<SegmentAuthentication>,
+    first_content_omission: Option<usize>,
+}
+
+impl RdfGraph<'_> {
+    /// Take the resolved RDF fold when the read omitted no content.
+    ///
+    /// Use this at dataset-only boundaries that cannot return the read
+    /// evidence. A false index or commit claim over readable content and a
+    /// complete uncommitted suffix do not prevent projection.
+    ///
+    /// # Errors
+    /// Retains the cause of the omission, a recovery, or trailing damage.
+    pub fn into_complete_rdf(self) -> Result<RdfFold, ReadError> {
+        if let Some(offset) = self.first_content_omission {
+            let cause = self
+                .frame_failures
+                .into_iter()
+                .chain(self.opaque_items)
+                .find(|error| error.offset == offset);
+            return Err(cause.unwrap_or(ReadError {
+                offset,
+                failure: ReadFailure::OmittedContent,
+            }));
+        }
+        if let Some(damage) = self.framing_tail {
+            return Err(ReadError {
+                offset: damage.offset(),
+                failure: ReadFailure::FramingTail(damage),
+            });
+        }
+        if let Some(recovery) = self.resynchronizations.first() {
+            return Err(ReadError {
+                offset: recovery.offset,
+                failure: ReadFailure::RecoveredResync(*recovery),
+            });
+        }
+        if let Some(recovery) = self.parity_recoveries.first() {
+            return Err(ReadError {
+                offset: recovery.damage.offset(),
+                failure: ReadFailure::RecoveredParity(*recovery),
+            });
+        }
+        if let Some(refusal) = self.recovery_refusal {
+            return Err(ReadError {
+                offset: refusal.offset,
+                failure: ReadFailure::RecoveryRefused(refusal),
+            });
+        }
+        if self.rdf.has_held_rows() || self.rdf.annotation_width_exceeded() {
+            return Err(ReadError {
+                offset: 0,
+                failure: ReadFailure::OmittedContent,
+            });
+        }
+        Ok(self.rdf)
+    }
+
+    fn note_content_omission(&mut self, offset: usize) {
+        self.first_content_omission = Some(
+            self.first_content_omission
+                .map_or(offset, |earlier| earlier.min(offset)),
+        );
+    }
 }
 
 /// The end of a readable GTS v2 file under P7 §1.2.
@@ -233,6 +297,14 @@ pub enum FramingDamage {
     },
 }
 
+impl FramingDamage {
+    const fn offset(self) -> usize {
+        match self {
+            Self::TornTail { offset, .. } | Self::Undelimitable { offset, .. } => offset,
+        }
+    }
+}
+
 /// The declared media type and verified bytes of an embedded blob.
 #[derive(Debug)]
 #[non_exhaustive]
@@ -312,6 +384,16 @@ pub enum ReadFailure {
     Fold(FoldError),
     /// An ML-DSA verification operation could not complete.
     Signature(crate::mldsa65::Error),
+    /// A strict RDF projection cannot use a recovered resync prefix.
+    RecoveredResync(Resynchronization),
+    /// A strict RDF projection cannot use a prefix with a parity resumption.
+    RecoveredParity(ParityRecovery),
+    /// A strict RDF projection cannot use a prefix with a refused recovery.
+    RecoveryRefused(RecoveryRefusal),
+    /// A strict RDF projection requires the file to end at an item boundary.
+    FramingTail(FramingDamage),
+    /// The graph records an omission without a more specific retained cause.
+    OmittedContent,
 }
 
 impl fmt::Display for ReadError {
@@ -325,6 +407,22 @@ impl fmt::Display for ReadError {
             ReadFailure::Content(error) => error.fmt(f),
             ReadFailure::Fold(error) => error.fmt(f),
             ReadFailure::Signature(error) => error.fmt(f),
+            ReadFailure::RecoveredResync(_) => {
+                f.write_str("the RDF fold omits material before a resync opener")
+            }
+            ReadFailure::RecoveredParity(_) => {
+                f.write_str("the RDF fold omits material before a parity resumption")
+            }
+            ReadFailure::RecoveryRefused(_) => {
+                f.write_str("the decoded-byte limit prevented recovery")
+            }
+            ReadFailure::FramingTail(FramingDamage::TornTail { .. }) => {
+                f.write_str("the file ends inside an item")
+            }
+            ReadFailure::FramingTail(FramingDamage::Undelimitable { .. }) => {
+                f.write_str("the file ends with undelimitable bytes")
+            }
+            ReadFailure::OmittedContent => f.write_str("the RDF fold omits content"),
             failure => write!(f, "{failure:?}"),
         }
     }
@@ -1028,6 +1126,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                         (_, ReadFailure::Classification(_)) => {
                             self.retain_opaque_item(original, end, &mut segment)?;
                             if !item.names_closing_hint() {
+                                self.graph.note_content_omission(offset);
                                 segment.end.observe_uncommitted();
                             }
                         }
@@ -1430,6 +1529,9 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         }
         if opaque {
             segment.index_content.opaque_frame(kind);
+            if kind != Some(FrameType::Commit) {
+                self.graph.note_content_omission(offset);
+            }
             if let Some(reservation) = &checked.terms {
                 segment
                     .dictionary
@@ -1686,6 +1788,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             return Err(ReadFailure::Rows(findings));
         }
         if findings.opaque_term {
+            self.graph.note_content_omission(offset);
             super::fields::push(
                 &mut self.graph.frame_failures,
                 ReadError {

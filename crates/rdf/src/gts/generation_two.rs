@@ -8,10 +8,11 @@ use purrdf_core::FastMap;
 use purrdf_core::blank_label::allocatable_scope;
 use purrdf_core::cdt_blank::{BlankBinding, cdt_embedded_blanks_with_memory};
 use purrdf_gts::v2::{
-    Line, LiteralDirection, RdfFold, RdfGraph, ReadCapacity, ReadError, ReadGraph, SignatureInputs,
-    Term, TermId as WireId, read_with_signature_inputs,
+    Generation, Item, Line, LiteralDirection, RdfFold, RdfGraph, ReadCapacity, ReadError,
+    ReadGraph, SignatureInputs, Term, TermId as WireId, read_with_signature_inputs,
 };
-use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError};
+use purrdf_hash::error::NativeError;
+use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError, retain_native_cause};
 
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfTextDirection, TermId};
 
@@ -50,6 +51,84 @@ impl fmt::Display for GtsV2DatasetError {
 purrdf_lex::error_source!(GtsV2DatasetError { Read, Native });
 purrdf_lex::variant_from!(GtsV2DatasetError { Read(ReadError), Native(RdfDiagnostic) });
 
+impl purrdf_hash::error::StructuredError for GtsV2DatasetError {
+    purrdf_hash::error_visit! {
+        Read(cause) => "gts-v2-dataset-transport" { "cause" => Cause(cause) },
+        FirstGeneration => "gts-v2-dataset-first-generation" {},
+        Native(cause) => "gts-v2-dataset-native" { "cause" => Cause(cause) },
+    }
+}
+
+/// A complete native dataset load failed in the selected reader.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum GtsDatasetReadError {
+    /// Diagnostic from the original generation 1 loader.
+    Legacy(RdfDiagnostic),
+    /// Diagnostic from generation 2 transport checks or RDF admission.
+    GenerationTwo(RdfDiagnostic),
+}
+
+impl fmt::Display for GtsDatasetReadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Legacy(diagnostic) | Self::GenerationTwo(diagnostic) => diagnostic.fmt(f),
+        }
+    }
+}
+
+purrdf_lex::error_source!(GtsDatasetReadError {
+    Legacy,
+    GenerationTwo
+});
+
+impl purrdf_hash::error::StructuredError for GtsDatasetReadError {
+    purrdf_hash::error_visit! {
+        Legacy(cause) => "gts-dataset-legacy" { "cause" => Cause(cause) },
+        GenerationTwo(cause) => "gts-dataset-generation-two" { "cause" => Cause(cause) },
+    }
+}
+
+/// Load the complete native RDF dataset of a GTS file.
+///
+/// A generation 2 opener selects the native v2 fold with default capacity and
+/// no supplied signature keys. Legacy or ambiguous openings keep the original
+/// reader's behavior. Use [`read_gts_v2_dataset`] to inspect recovery evidence
+/// or admit only the readable prefix of a generation 2 file.
+///
+/// # Errors
+/// Returns a legacy diagnostic, a generation 2 failure or a native RDF
+/// admission diagnostic. An incomplete generation 2 fold is refused.
+pub fn read_gts_dataset(bytes: &[u8]) -> Result<Arc<RdfDataset>, GtsDatasetReadError> {
+    let generation = Item::first(bytes)
+        .ok()
+        .flatten()
+        .and_then(|item| item.generation().ok());
+    if generation == Some(Generation::Second) {
+        let graph = read_v2_graph(bytes, ReadCapacity::default(), &SignatureInputs::default())
+            .map_err(|cause| GtsDatasetReadError::GenerationTwo(read_diagnostic(cause)))?;
+        let fold = graph
+            .into_complete_rdf()
+            .map_err(|cause| GtsDatasetReadError::GenerationTwo(read_diagnostic(cause)))?;
+        dataset_from_gts_v2_fold(&fold).map_err(GtsDatasetReadError::GenerationTwo)
+    } else {
+        let bundle = super::read_all_segments(bytes)
+            .and_then(crate::import_gts_graph)
+            .map_err(GtsDatasetReadError::Legacy)?;
+        Ok(bundle.dataset)
+    }
+}
+
+fn read_diagnostic(cause: impl NativeError + 'static) -> RdfDiagnostic {
+    let result = (|| {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let diagnostic = RdfDiagnostic::try_error_with_memory("gts-v2-read", &cause, &mut memory)?;
+        diagnostic.with_native_cause(retain_native_cause(cause)?, &mut memory)
+    })();
+    result.unwrap_or_else(RdfDiagnostic::from)
+}
+
 /// Read generation 2 and admit its resolved lines into a native RDF dataset.
 ///
 /// The dataset uses native RDF validation and RDF set semantics. The graph
@@ -66,11 +145,24 @@ pub fn read_gts_v2_dataset<'a>(
     capacity: ReadCapacity,
     inputs: &SignatureInputs<'_>,
 ) -> Result<GtsV2Dataset<'a>, GtsV2DatasetError> {
+    let graph = read_v2_graph(bytes, capacity, inputs)?;
+    let dataset = dataset_from_gts_v2_fold(&graph.rdf)?;
+    Ok(GtsV2Dataset { dataset, graph })
+}
+
+#[expect(
+    clippy::result_large_err,
+    reason = "preserve the typed read failure without allocating on the refusal path"
+)]
+fn read_v2_graph<'a>(
+    bytes: &'a [u8],
+    capacity: ReadCapacity,
+    inputs: &SignatureInputs<'_>,
+) -> Result<RdfGraph<'a>, GtsV2DatasetError> {
     let ReadGraph::Second(graph) = read_with_signature_inputs(bytes, capacity, inputs)? else {
         return Err(GtsV2DatasetError::FirstGeneration);
     };
-    let dataset = dataset_from_gts_v2_fold(&graph.rdf)?;
-    Ok(GtsV2Dataset { dataset, graph })
+    Ok(graph)
 }
 
 /// Admit the resolved RDF lines of a GTS v2 fold into the native RDF model.

@@ -3022,6 +3022,50 @@ fn gts_round_trips_a_plain_graph() {
     }
 }
 
+#[test]
+fn gts_v2_abi_admits_complete_rdf_and_reports_a_torn_tail() {
+    use purrdf::error::purrdf_error_native_cause_json;
+
+    let dataset =
+        purrdf_rs::parse_dataset(THREE_QUADS.as_bytes(), "application/n-triples", None).unwrap();
+    let mut bytes = Vec::new();
+    purrdf_rs::gts_write::write_gts_v2(&dataset, &mut bytes).unwrap();
+    // The input comes from the shared v2 writer and the ABI owns either the
+    // returned dataset or error until its matching free function is called.
+    unsafe {
+        let restored = from_gts(&bytes);
+        assert_eq!(quad_count(restored), 3);
+        purrdf_dataset_free(restored);
+
+        for (source, is_v2) in [(&bytes[..bytes.len() - 1], true), (&[0xff][..], false)] {
+            let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_from_gts(
+                source.as_ptr(),
+                source.len(),
+                &raw mut restored,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::GtsError as i32);
+            assert!(restored.is_null());
+            assert!(!error.is_null());
+            let native = purrdf_error_native_cause_json(error);
+            if is_v2 {
+                assert!(!native.is_null());
+                let cause = std::ffi::CStr::from_ptr(native).to_str().unwrap();
+                assert!(cause.contains("gts-v2-torn-tail"), "{cause}");
+            } else {
+                assert!(native.is_null());
+                let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                    .to_str()
+                    .unwrap();
+                assert!(message.starts_with("[gts-fold-diagnostic]"), "{message}");
+            }
+            purrdf_error_free(error);
+        }
+    }
+}
+
 /// The C-ABI's `purrdf_to_gts` → `purrdf_from_gts` round-trip preserves the
 /// RDF-1.2 star layer (quoted triples + reifier bindings) losslessly. The C-ABI
 /// calls the canonical kernel path (`to_gts` → `read_graph` → `import_gts_graph`);

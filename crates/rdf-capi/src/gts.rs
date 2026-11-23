@@ -1,26 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `purrdf_from_gts` / `purrdf_to_gts`: GTS container read/write.
-//!
-//! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
-//! `gts_write` / `import_gts_events` core), so a language shim
-//! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
-//! "one shared library, not two" clause.
-//!
-//! Both the plain-graph data AND the full RDF-1.2 statement layer (quoted
-//! triples + reifier bindings) survive the round-trip. A language tag that is not
-//! lower case is read folded to lower case, and this entry point returns no loss
-//! report.
-//! The earlier `gts-missing-reifier-binding` gap was closed by the native
-//! text-codec work; see [`purrdf_from_gts`].
+//! GTS container read and write through the shared Rust RDF engine.
 
 use std::os::raw::c_char;
 
 use purrdf_core::RdfLookaside;
-use purrdf_rs::gts::read_graph;
+use purrdf_rs::gts::{GtsDatasetReadError, read_gts_dataset};
 use purrdf_rs::gts_write::to_gts;
-use purrdf_rs::import_gts_graph;
 
 use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
@@ -29,14 +16,12 @@ use crate::handles::PurrdfDataset;
 use crate::handles::into_handle;
 use crate::status::PurrdfStatus;
 
-/// Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
-/// caller-owned handle (free with `purrdf_dataset_free`).
+/// Read a GTS v1 or v2 container into a fresh frozen dataset.
+/// Release `*out_dataset` with `purrdf_dataset_free`.
 ///
-/// Keeps the RDF-1.2 statement layer: a reifier-bound quoted
-/// triple written by `to_gts` is read back intact via the canonical fold-back
-/// (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
-/// gap was closed by the native text-codec work. A language tag that is not lower
-/// case is read folded to lower case, and the envelope is not returned.
+/// This returns the complete RDF 1.2 dataset with native RDF set semantics.
+/// Unreadable v2 content or framing fails with diagnostic evidence. Transport
+/// metadata and language tag spelling are outside the dataset projection.
 ///
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the out-params must be writable.
@@ -56,17 +41,16 @@ pub unsafe extern "C" fn purrdf_from_gts(
                 ));
             }
             let slice = std::slice::from_raw_parts(bytes, len);
-            // The canonical fold-back: read the GTS container into a graph, then
-            // import the graph into the IR. `import_gts_graph` resolves `to_gts`'s
-            // reifier bindings (including forward references), so the RDF-1.2
-            // statement layer survives the round-trip.
-            let graph = read_graph(slice, true).map_err(|diagnostic| {
-                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
+            let dataset = read_gts_dataset(slice).map_err(|error| match error {
+                GtsDatasetReadError::Legacy(diagnostic) => {
+                    PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
+                }
+                GtsDatasetReadError::GenerationTwo(diagnostic) => {
+                    PurrdfError::from_owned_diagnostic(PurrdfStatus::GtsError, diagnostic)
+                }
+                error => PurrdfError::new(PurrdfStatus::GtsError, error.to_string()),
             })?;
-            let bundle = import_gts_graph(graph).map_err(|diagnostic| {
-                PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
-            })?;
-            *out_dataset = into_handle(PurrdfDataset::new(bundle.dataset));
+            *out_dataset = into_handle(PurrdfDataset::new(dataset));
             Ok(PurrdfStatus::Ok)
         })
     }

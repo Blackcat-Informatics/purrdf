@@ -74,20 +74,25 @@ impl std::error::Error for WireError {}
 impl purrdf_hash::error::StructuredError for WireError {
     fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
         use purrdf_hash::error::ErrorValue;
-        let code = match self.reason {
-            MalformedReason::NotDeterministic => "not_deterministic",
-            MalformedReason::WrongType => "wrong_type",
-            MalformedReason::WrongLength => "wrong_length",
-            MalformedReason::OutOfRange => "out_of_range",
-            MalformedReason::UnregisteredValue => "unregistered_value",
-            MalformedReason::ForbiddenCombination => "forbidden_combination",
-            MalformedReason::CodecConstraint => "codec_constraint",
-            MalformedReason::UnorderedOrRepeated => "unordered_or_repeated",
-            MalformedReason::InconsistentCounts => "inconsistent_counts",
-        };
         visitor.variant("gts-v2-malformed-value");
-        visitor.value(Some("reason"), ErrorValue::Code(code));
+        visitor.value(Some("reason"), ErrorValue::Code(self.reason.code()));
         visitor.value(Some("offset"), ErrorValue::ByteCount(self.offset as u128));
+    }
+}
+
+impl MalformedReason {
+    pub(super) const fn code(self) -> &'static str {
+        match self {
+            Self::NotDeterministic => "not_deterministic",
+            Self::WrongType => "wrong_type",
+            Self::WrongLength => "wrong_length",
+            Self::OutOfRange => "out_of_range",
+            Self::UnregisteredValue => "unregistered_value",
+            Self::ForbiddenCombination => "forbidden_combination",
+            Self::CodecConstraint => "codec_constraint",
+            Self::UnorderedOrRepeated => "unordered_or_repeated",
+            Self::InconsistentCounts => "inconsistent_counts",
+        }
     }
 }
 
