@@ -1664,7 +1664,7 @@ _gts_GtsBlobExportReport = GtsBlobExportReport
 _gts_GtsExportResult = GtsExportResult
 
 class gts:
-    GtsReadLimits = _GtsReadLimits
+    GtsReadLimits: TypeAlias = _GtsReadLimits
     GtsBlobLimits = _gts_GtsBlobLimits
     GtsBlobUsage = _gts_GtsBlobUsage
     GtsBlobOmission = _gts_GtsBlobOmission

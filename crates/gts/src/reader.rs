@@ -418,6 +418,8 @@ pub trait StreamingSink {
     fn retained_metadata(&mut self, _entries: usize) {}
     /// Admit new retained metadata entries before they are stored.
     fn metadata_entries(&mut self, _additional: usize) {}
+    /// Admit measurable allocation/copy work before retaining derived bytes.
+    fn work(&mut self, _units: usize) {}
     /// Optional complete encoded-input bound for streaming readers.
     fn encoded_input_limit(&self) -> Option<usize> {
         None
@@ -847,6 +849,11 @@ impl Folder<'_, '_, '_> {
         ) {
             Ok(payload) => payload,
             Err(error) => {
+                if let Some(actual) = error.decoded_extent()
+                    && let Some(sink) = self.sink.as_deref_mut()
+                {
+                    sink.decoded_payload(blob, actual);
+                }
                 self.report_decoded_refusal(blob, &error);
                 return Err(error);
             }
@@ -865,6 +872,15 @@ impl Folder<'_, '_, '_> {
         // Borrowed from `frame` (a parameter, not `self`), so the `&mut self`
         // handler calls below are unaffected and no per-frame `String` is made.
         let ftype = text_or(map_get(frame, "t"), "");
+        if let Some(Value::Array(ids)) = map_get(frame, "x") {
+            let work = codec_copy_work(&self.catalog, ids);
+            if let Some(sink) = self.sink.as_deref_mut() {
+                sink.work(work);
+            }
+            if !self.sink_accepting() {
+                return;
+            }
+        }
         if ftype == "blob" {
             self.h_blob_frame(frame, index, data);
             return;
@@ -1155,6 +1171,9 @@ impl Folder<'_, '_, '_> {
         // through `rf` and carries no `tt` of its own), whose meaning would
         // become double-valued. That shape is flagged after the fold, once
         // every term and every binding of the segment has been seen.
+        if let Some(terms) = self.stored_terms {
+            terms.bind_first(rid, triple)?;
+        }
         self.with_sink(|segment_index, sink| sink.reifier(segment_index, (rid, triple, gslot)));
         if !self.sink_accepting() {
             return Ok(());
@@ -1164,9 +1183,6 @@ impl Folder<'_, '_, '_> {
         }
         self.reifier_index
             .record(self.g, (rid, triple, gslot), self.materialize);
-        if let Some(terms) = self.stored_terms {
-            terms.bind_first(rid, triple)?;
-        }
         Ok(())
     }
 
@@ -1840,6 +1856,30 @@ fn catalog_from(header: &[(Value, Value)]) -> FastMap<i128, Codec> {
     out
 }
 
+fn catalog_copy_work(header: &[(Value, Value)]) -> usize {
+    let dict_table = header_dict_table(header);
+    let Some(Value::Map(raw)) = map_get(header, "cat") else {
+        return 0;
+    };
+    raw.iter()
+        .filter_map(|(_, entry)| match entry {
+            Value::Map(fields) => match map_get(fields, "dct") {
+                Some(Value::Text(name)) => dict_table.get(name.as_str()).map(|bytes| bytes.len()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .fold(0usize, usize::saturating_add)
+}
+
+fn codec_copy_work(catalog: &FastMap<i128, Codec>, ids: &[Value]) -> usize {
+    ids.iter()
+        .filter_map(|id| as_i128(id).and_then(|id| catalog.get(&id)))
+        .filter_map(|codec| codec.dct.as_ref())
+        .map(Vec::len)
+        .fold(0usize, usize::saturating_add)
+}
+
 /// One catalog row exactly as it appears on the wire (§5, §8.5), keeping the
 /// dictionary NAME the entry references rather than the resolved bytes.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2042,8 +2082,10 @@ pub fn read_with_limits(
     options: ReadOptions<'_>,
     limits: GtsReadLimits,
 ) -> Result<Graph, GtsReadLimitError> {
-    check_read_limits(data, options, limits)?;
-    Ok(read_with_options_unbounded(data, options))
+    with_stable_content_keys(options, |options| {
+        check_read_limits(data, options, limits)?;
+        Ok(read_with_options_unbounded(data, options))
+    })
 }
 
 fn read_with_options_unbounded(data: &[u8], options: ReadOptions<'_>) -> Graph {
@@ -2109,13 +2151,9 @@ fn read_with_options_unbounded(data: &[u8], options: ReadOptions<'_>) -> Graph {
     // folds by semantic term value, which avoids silently treating equal
     // numeric ids from different segments as equal terms.
     let ranges: Vec<(usize, usize)> = bounds.iter().copied().zip(ends).collect();
-    let mut folded = fold_segments(&items, &ranges, options.content_key);
+    let folded = fold_segments(&items, &ranges, options.content_key);
 
-    let mut g = if folded.len() == 1 {
-        folded.remove(0)
-    } else {
-        union_segments(&folded)
-    };
+    let mut g = union_folded_segments(folded);
 
     if let Some(expected) = options.expected_head {
         let last_head = g.segment_heads.last().cloned().unwrap_or_default();
@@ -2148,6 +2186,14 @@ fn read_with_options_unbounded(data: &[u8], options: ReadOptions<'_>) -> Graph {
     g
 }
 
+pub(crate) fn union_folded_segments(mut segments: Vec<Graph>) -> Graph {
+    if segments.len() == 1 {
+        segments.remove(0)
+    } else {
+        union_segments(&segments)
+    }
+}
+
 /// Read a GTS file into a [`StreamingSink`] without constructing the final
 /// union [`Graph`].
 ///
@@ -2174,11 +2220,17 @@ pub fn read_to_sink_with_options(
     options: ReadOptions<'_>,
     sink: &mut dyn StreamingSink,
 ) -> StreamingReadResult {
+    if let Some(limit) = sink.encoded_input_limit()
+        && data.len() > limit
+    {
+        sink.encoded_input_refused(data.len(), limit);
+        return StreamingReadResult::default();
+    }
     read_items(
         &mut SliceItems {
             remaining: data,
             offset: 0,
-            maximum: None,
+            maximum: sink.encoded_frame_limit(),
         },
         options,
         sink,
@@ -2198,17 +2250,54 @@ pub fn read_to_sink_with_limits(
     limits: GtsReadLimits,
     sink: &mut dyn StreamingSink,
 ) -> Result<(StreamingReadResult, GtsReadUsage), GtsReadLimitError> {
-    let usage = check_read_limits(data, options, limits)?;
-    let result = read_items(
-        &mut SliceItems {
-            remaining: data,
-            offset: 0,
-            maximum: None,
-        },
-        options,
-        sink,
-    );
-    Ok((result, usage))
+    let limits = limits_for_sink(limits, sink);
+    with_stable_content_keys(options, |options| {
+        check_read_limits(data, options, limits)?;
+        let (result, usage, error) = read_to_sink_limited(data, options, limits, sink);
+        match error {
+            Some(error) => Err(error),
+            None => Ok((result, usage)),
+        }
+    })
+}
+
+fn limits_for_sink(mut limits: GtsReadLimits, sink: &dyn StreamingSink) -> GtsReadLimits {
+    limits.encoded_input_bytes = limits
+        .encoded_input_bytes
+        .min(sink.encoded_input_limit().unwrap_or(usize::MAX));
+    limits.encoded_frame_bytes = limits
+        .encoded_frame_bytes
+        .min(sink.encoded_frame_limit().unwrap_or(usize::MAX));
+    limits.decoded_frame_bytes = limits
+        .decoded_frame_bytes
+        .min(sink.frame_decode_limit().unwrap_or(usize::MAX));
+    limits.decoded_blob_bytes = limits
+        .decoded_blob_bytes
+        .min(sink.blob_decode_limit().unwrap_or(usize::MAX));
+    limits
+}
+
+fn with_stable_content_keys<T>(
+    options: ReadOptions<'_>,
+    drive: impl FnOnce(ReadOptions<'_>) -> T,
+) -> T {
+    let decisions = std::cell::RefCell::new(FastMap::<String, Option<[u8; 32]>>::default());
+    let resolver = |kid: &str| {
+        if let Some(decision) = decisions.borrow().get(kid).copied() {
+            return decision;
+        }
+        let decision = options.content_key.and_then(|source| source(kid));
+        decisions.borrow_mut().insert(kid.to_owned(), decision);
+        decision
+    };
+    let content_key = options
+        .content_key
+        .map(|_| &resolver as &ContentKeyResolver<'_>);
+    drive(ReadOptions {
+        allow_segments: options.allow_segments,
+        expected_head: options.expected_head,
+        content_key,
+    })
 }
 
 /// Check a byte slice against the production reader without publishing events.
@@ -2223,14 +2312,86 @@ pub fn check_read_limits(
     options: ReadOptions<'_>,
     limits: GtsReadLimits,
 ) -> Result<GtsReadUsage, GtsReadLimitError> {
+    let envelope = check_sequence_envelope(data, limits)?;
     struct Preflight;
     impl StreamingSink for Preflight {}
     let mut sink = Preflight;
-    let (_, usage, error) = read_to_sink_limited(data, options, limits, &mut sink);
+    let (_, mut usage, mut error) = read_to_sink_limited(data, options, limits, &mut sink);
+    merge_envelope_usage(&mut usage, envelope);
+    if let Some(error) = error.as_mut() {
+        merge_envelope_usage(&mut error.usage, envelope);
+    }
     match error {
         Some(error) => Err(error),
         None => Ok(usage),
     }
+}
+
+fn merge_envelope_usage(usage: &mut GtsReadUsage, envelope: GtsReadUsage) {
+    usage.encoded_input_bytes = envelope.encoded_input_bytes;
+    usage.items = usage.items.max(envelope.items);
+    usage.largest_encoded_frame_bytes = usage
+        .largest_encoded_frame_bytes
+        .max(envelope.largest_encoded_frame_bytes);
+    usage.work = usage.work.max(envelope.work);
+}
+
+fn check_sequence_envelope(
+    data: &[u8],
+    limits: GtsReadLimits,
+) -> Result<GtsReadUsage, GtsReadLimitError> {
+    if data.len() > limits.encoded_input_bytes {
+        return Err(GtsReadLimitError::input(data.len(), limits));
+    }
+    let mut source = SliceItems {
+        remaining: data,
+        offset: 0,
+        maximum: Some(limits.encoded_frame_bytes),
+    };
+    let mut usage = GtsReadUsage {
+        encoded_input_bytes: data.len(),
+        ..GtsReadUsage::default()
+    };
+    loop {
+        let (_, start, end) = match source.next() {
+            Ok(Some(item)) => item,
+            Ok(None) | Err(ItemError::Torn(_)) => break,
+            Err(ItemError::Limit { required, limit }) => {
+                usage.largest_encoded_frame_bytes = usage.largest_encoded_frame_bytes.max(required);
+                usage.work = usage.work.saturating_add(required);
+                return Err(GtsReadLimitError {
+                    resource: GtsReadResource::EncodedFrameBytes,
+                    required,
+                    limit,
+                    usage,
+                });
+            }
+            Err(ItemError::Dictionary(error)) => {
+                unreachable!("slice sequence admission has no dictionary storage: {error}")
+            }
+        };
+        let encoded = usize::try_from(end.saturating_sub(start)).unwrap_or(usize::MAX);
+        usage.items = usage.items.saturating_add(1);
+        usage.largest_encoded_frame_bytes = usage.largest_encoded_frame_bytes.max(encoded);
+        usage.work = usage.work.saturating_add(encoded.saturating_add(1));
+        if usage.work > limits.work {
+            return Err(GtsReadLimitError {
+                resource: GtsReadResource::Work,
+                required: usage.work,
+                limit: limits.work,
+                usage,
+            });
+        }
+        if usage.items > limits.items {
+            return Err(GtsReadLimitError {
+                resource: GtsReadResource::Items,
+                required: usage.items,
+                limit: limits.items,
+                usage,
+            });
+        }
+    }
+    Ok(usage)
 }
 
 fn read_to_sink_limited(
@@ -2289,11 +2450,25 @@ pub fn read_to_sink_with_dictionary(
     sink: &mut dyn StreamingSink,
 ) -> Result<StreamingReadResult, DictionaryError> {
     let limits = dictionary.limits()?;
+    if let Some(limit) = sink.encoded_input_limit()
+        && data.len() > limit
+    {
+        sink.encoded_input_refused(data.len(), limit);
+        return Err(DictionaryError::Limit {
+            resource: "encoded-input-bytes",
+            required: data.len(),
+            limit,
+        });
+    }
     read_items_stored(
         &mut SliceItems {
             remaining: data,
             offset: 0,
-            maximum: Some(limits.encoded_frame_bytes),
+            maximum: Some(
+                limits
+                    .encoded_frame_bytes
+                    .min(sink.encoded_frame_limit().unwrap_or(usize::MAX)),
+            ),
         },
         options,
         sink,
@@ -2316,8 +2491,17 @@ pub fn read_to_sink_with_dictionary_and_limits(
     dictionary: &mut dyn TermStorage,
     sink: &mut dyn StreamingSink,
 ) -> Result<StreamingReadResult, DictionaryError> {
-    check_read_limits(data, options, read_limits).map_err(|error| dictionary_read_limit(&error))?;
-    read_to_sink_with_dictionary(data, options, dictionary, sink)
+    let read_limits = limits_for_sink(read_limits, sink);
+    with_stable_content_keys(options, |options| {
+        check_read_limits(data, options, read_limits)
+            .map_err(|error| dictionary_read_limit(&error))?;
+        let mut limiter = read_limits::ReadLimiter::new(sink, read_limits, data.len());
+        let result = read_to_sink_with_dictionary(data, options, dictionary, &mut limiter)?;
+        if let Some(error) = limiter.take_error() {
+            return Err(dictionary_read_limit(&error));
+        }
+        Ok(result)
+    })
 }
 
 fn dictionary_read_limit(error: &GtsReadLimitError) -> DictionaryError {
@@ -2628,7 +2812,7 @@ struct ActiveStreamingSegment {
 impl ActiveStreamingSegment {
     fn retained_entries(&self) -> usize {
         [
-            self.header.len(),
+            header_retained_entries(&self.header),
             self.frame_ids.len(),
             self.catalog.len(),
             self.index_records.len(),
@@ -2726,7 +2910,15 @@ impl ActiveStreamingSegment {
             }
         }
         let catalog = if valid_header {
-            catalog_from(&header)
+            let accepting = sink_slot.is_none_or(|sink| {
+                sink.work(catalog_copy_work(&header));
+                sink.continue_reading()
+            });
+            if accepting {
+                catalog_from(&header)
+            } else {
+                FastMap::default()
+            }
         } else {
             FastMap::default()
         };
@@ -2836,16 +3028,18 @@ impl ActiveStreamingSegment {
                         valid: false,
                     });
                 });
-                folder.diag(
-                    FoldError::SelfHash {
-                        stored: stored_id.cloned(),
-                        computed: computed.clone(),
-                    },
-                    abs_index,
-                );
-                folder.opaque(frame, &ftype, "damaged");
-                self.expected_prev = stored_id.cloned().unwrap_or(computed);
-                self.frame_ids.push(self.expected_prev.clone());
+                if folder.sink_accepting() {
+                    folder.diag(
+                        FoldError::SelfHash {
+                            stored: stored_id.cloned(),
+                            computed: computed.clone(),
+                        },
+                        abs_index,
+                    );
+                    folder.opaque(frame, &ftype, "damaged");
+                    self.expected_prev = stored_id.cloned().unwrap_or(computed);
+                    self.frame_ids.push(self.expected_prev.clone());
+                }
             } else {
                 let prev_ok = matches!(map_get(frame, "prev"),
                     Some(Value::Bytes(b)) if *b == self.expected_prev);
@@ -2859,42 +3053,46 @@ impl ActiveStreamingSegment {
                         valid: prev_ok,
                     });
                 });
-                if !prev_ok {
-                    folder.diag(
-                        FoldError::Previous {
-                            actual: map_get(frame, "prev")
-                                .and_then(Value::as_bytes)
-                                .map(<[u8]>::to_vec),
-                            expected: self.expected_prev.clone(),
-                        },
-                        abs_index,
-                    );
+                if folder.sink_accepting() {
+                    if !prev_ok {
+                        folder.diag(
+                            FoldError::Previous {
+                                actual: map_get(frame, "prev")
+                                    .and_then(Value::as_bytes)
+                                    .map(<[u8]>::to_vec),
+                                expected: self.expected_prev.clone(),
+                            },
+                            abs_index,
+                        );
+                    }
+                    self.expected_prev.clone_from(&computed);
+                    self.frame_ids.push(self.expected_prev.clone());
+                    if let Some(sig) = map_get(frame, "sig") {
+                        let (status, cose) = match sig {
+                            Value::Bytes(b) => ("unverified", Some(b.clone())),
+                            _ => ("invalid", None),
+                        };
+                        folder.push_signature(Signature {
+                            frame_id: computed.clone(),
+                            kid: None,
+                            status: status.to_string(),
+                            cose,
+                            packaging: crate::compact::packaging_role(
+                                &folder.provenance,
+                                text_or(map_get(frame, "t"), ""),
+                                folder.streamable,
+                            ),
+                        });
+                    }
+                    if folder.sink_accepting() {
+                        let data = if parsed.borrowed_data {
+                            parsed.data
+                        } else {
+                            map_get(frame, "d").map(ValueRef::Owned)
+                        };
+                        folder.fold_frame(frame, abs_index, data);
+                    }
                 }
-                self.expected_prev.clone_from(&computed);
-                self.frame_ids.push(self.expected_prev.clone());
-                if let Some(sig) = map_get(frame, "sig") {
-                    let (status, cose) = match sig {
-                        Value::Bytes(b) => ("unverified", Some(b.clone())),
-                        _ => ("invalid", None),
-                    };
-                    folder.push_signature(Signature {
-                        frame_id: computed.clone(),
-                        kid: None,
-                        status: status.to_string(),
-                        cose,
-                        packaging: crate::compact::packaging_role(
-                            &folder.provenance,
-                            text_or(map_get(frame, "t"), ""),
-                            folder.streamable,
-                        ),
-                    });
-                }
-                let data = if parsed.borrowed_data {
-                    parsed.data
-                } else {
-                    map_get(frame, "d").map(ValueRef::Owned)
-                };
-                folder.fold_frame(frame, abs_index, data);
             }
         } else {
             folder.with_sink(|segment_index, sink| {
@@ -2907,8 +3105,10 @@ impl ActiveStreamingSegment {
                     valid: false,
                 });
             });
-            folder.diag(FoldError::FrameMap, abs_index);
-            self.frame_ids.push(Vec::new());
+            if folder.sink_accepting() {
+                folder.diag(FoldError::FrameMap, abs_index);
+                self.frame_ids.push(Vec::new());
+            }
         }
         let catalog = std::mem::take(&mut folder.catalog);
         let blob_index = std::mem::take(&mut folder.blob_index);
@@ -3045,6 +3245,17 @@ impl ActiveStreamingSegment {
     }
 }
 
+fn header_retained_entries(header: &[(Value, Value)]) -> usize {
+    let nested = ["cat", "dct"]
+        .into_iter()
+        .filter_map(|key| match map_get(header, key) {
+            Some(Value::Map(entries)) => Some(entries.len()),
+            _ => None,
+        })
+        .fold(0usize, usize::saturating_add);
+    header.len().saturating_add(nested)
+}
+
 /// Read a GTS CBOR Sequence from a byte stream into a [`StreamingSink`].
 ///
 /// This additive API consumes one CBOR item at a time and returns only reader
@@ -3057,12 +3268,15 @@ pub fn read_to_sink_from_reader<R: Read>(
     options: ReadOptions<'_>,
     sink: &mut dyn StreamingSink,
 ) -> StreamingReadResult {
+    let input_maximum = sink
+        .encoded_input_limit()
+        .map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
         address_exhausted: None,
-        maximum: None,
-        input_maximum: None,
+        maximum: sink.encoded_frame_limit(),
+        input_maximum,
     };
     read_items(&mut reader, options, sink)
 }
@@ -3081,6 +3295,7 @@ pub fn read_to_sink_from_reader_with_limits<R: Read>(
     limits: GtsReadLimits,
     sink: &mut dyn StreamingSink,
 ) -> Result<(StreamingReadResult, GtsReadUsage), GtsReadLimitError> {
+    let limits = limits_for_sink(limits, sink);
     let input_maximum = u64::try_from(limits.encoded_input_bytes).unwrap_or(u64::MAX);
     let mut reader = StreamingCountingReader {
         inner: reader,
@@ -3116,12 +3331,19 @@ pub fn read_to_sink_from_reader_with_dictionary<R: Read>(
     sink: &mut dyn StreamingSink,
 ) -> Result<StreamingReadResult, DictionaryError> {
     let limits = dictionary.limits()?;
+    let input_maximum = sink
+        .encoded_input_limit()
+        .map(|limit| u64::try_from(limit).unwrap_or(u64::MAX));
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
         address_exhausted: None,
-        maximum: Some(limits.encoded_frame_bytes),
-        input_maximum: None,
+        maximum: Some(
+            limits
+                .encoded_frame_bytes
+                .min(sink.encoded_frame_limit().unwrap_or(usize::MAX)),
+        ),
+        input_maximum,
     };
     read_items_stored(&mut reader, options, sink, Some(dictionary))
 }
@@ -3144,6 +3366,7 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
     sink: &mut dyn StreamingSink,
 ) -> Result<StreamingReadResult, DictionaryError> {
     let dictionary_limits = dictionary.limits()?;
+    let read_limits = limits_for_sink(read_limits, sink);
     let input_maximum = u64::try_from(read_limits.encoded_input_bytes).unwrap_or(u64::MAX);
     let mut reader = StreamingCountingReader {
         inner: reader,
@@ -3152,7 +3375,8 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
         maximum: Some(
             dictionary_limits
                 .encoded_frame_bytes
-                .min(read_limits.encoded_frame_bytes),
+                .min(read_limits.encoded_frame_bytes)
+                .min(sink.encoded_frame_limit().unwrap_or(usize::MAX)),
         ),
         input_maximum: Some(input_maximum),
     };
@@ -3183,6 +3407,7 @@ fn read_items_stored(
     sink: &mut dyn StreamingSink,
     mut dictionary: Option<&mut dyn TermStorage>,
 ) -> Result<StreamingReadResult, DictionaryError> {
+    let stored = dictionary.is_some();
     let limits = dictionary
         .as_deref_mut()
         .map(TermStorage::limits)
@@ -3210,12 +3435,20 @@ fn read_items_stored(
                         cancelled = true;
                         return Ok(result);
                     }
+                    if !stored {
+                        cancelled = true;
+                        return Ok(result);
+                    }
                     return Err(error);
                 }
                 Err(ItemError::Dictionary(error)) => return Err(error),
                 Err(ItemError::Limit { required, limit }) => {
                     sink.encoded_frame_refused(required, limit);
                     if !sink.continue_reading() {
+                        cancelled = true;
+                        return Ok(result);
+                    }
+                    if !stored {
                         cancelled = true;
                         return Ok(result);
                     }
@@ -3306,16 +3539,8 @@ fn read_items_stored(
                     .saturating_add(result.diagnostics.len())
                     .saturating_add(result.segment_heads.len().saturating_mul(4));
                 sink.retained_metadata(completed_retained);
-                let retained_header_entries = unwrap_header(&item).map_or(1, |header| {
-                    let nested = ["cat", "dct"]
-                        .into_iter()
-                        .filter_map(|key| match map_get(header, key) {
-                            Some(Value::Map(entries)) => Some(entries.len()),
-                            _ => None,
-                        })
-                        .fold(0usize, usize::saturating_add);
-                    header.len().saturating_add(nested)
-                });
+                let retained_header_entries =
+                    unwrap_header(&item).map_or(1, |header| header_retained_entries(header));
                 sink.metadata_entries(retained_header_entries);
                 if !sink.continue_reading() {
                     cancelled = true;
@@ -3471,9 +3696,21 @@ fn read_items_stored(
                 .with_native_cause(error),
             );
         }
+        let required = result
+            .segment_meta
+            .iter()
+            .map(Vec::len)
+            .fold(0usize, usize::saturating_add)
+            .saturating_add(result.diagnostics.len())
+            .saturating_add(result.segment_heads.len().saturating_mul(4));
+        sink.retained_metadata(required);
+        if !sink.continue_reading() {
+            cancelled = true;
+            return Ok(result);
+        }
         Ok(result)
     })();
-    if result.is_ok() && !cancelled {
+    if result.is_ok() && !cancelled && sink.continue_reading() {
         if let (Some(limits), Ok(result)) = (limits, &result) {
             let required = result
                 .segment_meta

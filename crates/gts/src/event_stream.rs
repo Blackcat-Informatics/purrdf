@@ -693,8 +693,24 @@ pub fn stream_events(
     options: ReadOptions<'_>,
     sink: &mut dyn GtsEventSink,
 ) -> Result<StreamingReadResult, EventError> {
+    stream_events_inner(data, options, None, sink)
+}
+
+fn stream_events_inner(
+    data: &[u8],
+    options: ReadOptions<'_>,
+    limits: Option<crate::reader::GtsReadLimits>,
+    sink: &mut dyn GtsEventSink,
+) -> Result<StreamingReadResult, EventError> {
     let mut resolver = SegmentResolver::new(EventEmitter::new(sink));
-    let read_result = read_to_sink_with_options(data, options, &mut resolver);
+    let read_result = match limits {
+        Some(limits) => {
+            crate::reader::read_to_sink_with_limits(data, options, limits, &mut resolver)
+                .map_err(EventError::native)?
+                .0
+        }
+        None => read_to_sink_with_options(data, options, &mut resolver),
+    };
     if let Some(error) = resolver.take_error() {
         return Err(error);
     }
@@ -720,8 +736,7 @@ pub fn stream_events_with_limits(
     limits: crate::reader::GtsReadLimits,
     sink: &mut dyn GtsEventSink,
 ) -> Result<StreamingReadResult, EventError> {
-    crate::reader::check_read_limits(data, options, limits).map_err(EventError::native)?;
-    stream_events(data, options, sink)
+    stream_events_inner(data, options, Some(limits), sink)
 }
 
 #[cfg(test)]

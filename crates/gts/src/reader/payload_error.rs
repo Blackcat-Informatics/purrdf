@@ -27,7 +27,9 @@ pub(super) enum PayloadCause {
     BlobNotBytes,
     BlobMissingIdentity,
     Cbor(DecodeError),
+    DecodedCbor { actual: usize, cause: DecodeError },
     EncodedBlobLimit { actual: usize, limit: usize },
+    DecodedFrameLimit { actual: usize, limit: usize },
     DecodedBlobLimit { actual: usize, limit: usize },
     SnapshotBlobLimit { actual: usize, limit: usize },
 }
@@ -97,6 +99,13 @@ fn classified(
 }
 
 impl PayloadError {
+    pub(super) fn decoded_extent(&self) -> Option<usize> {
+        match self {
+            Self::Damaged(PayloadCause::DecodedCbor { actual, .. }) => Some(*actual),
+            _ => None,
+        }
+    }
+
     pub(super) fn decoded_limit_refusal(&self) -> Option<(usize, usize)> {
         let mut source: Option<&(dyn std::error::Error + 'static)> = Some(self);
         while let Some(error) = source {
@@ -104,7 +113,8 @@ impl PayloadError {
                 return Some((limit.saturating_add(1), *limit));
             }
             if let Some(
-                PayloadCause::DecodedBlobLimit { actual, limit }
+                PayloadCause::DecodedFrameLimit { actual, limit }
+                | PayloadCause::DecodedBlobLimit { actual, limit }
                 | PayloadCause::SnapshotBlobLimit { actual, limit },
             ) = error.downcast_ref::<PayloadCause>()
             {
@@ -193,7 +203,11 @@ impl fmt::Display for PayloadCause {
                 f.write_str("external blob frame must declare a valid public digest")
             }
             Self::Cbor(error) => error.fmt(f),
+            Self::DecodedCbor { cause, .. } => cause.fmt(f),
             Self::EncodedBlobLimit { limit, .. } => write!(f, "encoded blob exceeds {limit} bytes"),
+            Self::DecodedFrameLimit { limit, .. } => {
+                write!(f, "decoded frame exceeds {limit} bytes")
+            }
             Self::DecodedBlobLimit { limit, .. } => write!(f, "decoded blob exceeds {limit} bytes"),
             Self::SnapshotBlobLimit { limit, .. } => {
                 write!(f, "snapshot blob exceeds {limit} bytes")
@@ -202,10 +216,11 @@ impl fmt::Display for PayloadCause {
     }
 }
 
-purrdf_lex::error_source!(PayloadCause {
-    Codec,
-    Stream,
-    Cbor
+purrdf_lex::error_source!(PayloadCause => {
+    Self::Codec(cause) => cause,
+    Self::Stream(cause) => cause,
+    Self::Cbor(cause) => cause,
+    Self::DecodedCbor { cause, .. } => cause,
 });
 
 impl purrdf_hash::error::StructuredError for PayloadError {
@@ -228,7 +243,13 @@ impl purrdf_hash::error::StructuredError for PayloadCause {
         BlobNotBytes => "gts-payload-blob-not-bytes" {},
         BlobMissingIdentity => "gts-payload-blob-missing-identity" {},
         Cbor(error) => "gts-payload-cbor" { "cause" => Cause(error) },
+        DecodedCbor { actual, cause } => "gts-payload-decoded-cbor" {
+            "actual" => ByteCount(*actual as u128), "cause" => Cause(cause),
+        },
         EncodedBlobLimit { actual, limit } => "gts-payload-encoded-blob-limit" {
+            "actual" => ByteCount(*actual as u128), "limit" => ByteCount(*limit as u128),
+        },
+        DecodedFrameLimit { actual, limit } => "gts-payload-decoded-frame-limit" {
             "actual" => ByteCount(*actual as u128), "limit" => ByteCount(*limit as u128),
         },
         DecodedBlobLimit { actual, limit } => "gts-payload-decoded-blob-limit" {

@@ -84,9 +84,12 @@ impl PayloadContext<'_, '_> {
             if blob {
                 return Ok(Payload::Blob(Cow::Owned(decoded)));
             }
+            let actual = decoded.len();
             return EncodedItem::from_bytes(decoded, cbor::Limits::DEFAULT)
                 .map(Payload::Encoded)
-                .map_err(|e| PayloadError::Damaged(PayloadCause::Cbor(e)));
+                .map_err(|cause| {
+                    PayloadError::Damaged(PayloadCause::DecodedCbor { actual, cause })
+                });
         }
         if blob
             && let Some(bytes) = bytes.as_deref()
@@ -107,7 +110,10 @@ impl PayloadContext<'_, '_> {
                 ValueRef::Encoded(value) => value.encoded().len(),
             };
             if actual > limit {
-                return Err(crate::codec::CodecError::Limit { limit }.into());
+                return Err(PayloadError::Budget(PayloadCause::DecodedFrameLimit {
+                    actual,
+                    limit,
+                }));
             }
         }
         Ok(Payload::Value(d))

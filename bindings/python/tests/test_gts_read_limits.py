@@ -3,6 +3,9 @@
 # Why not Rust: this exercises Python keyword admission and typed native exception fields that Rust tests cannot observe.
 """Python GTS byte readers expose the native whole-read contract."""
 
+import ast
+from pathlib import Path
+
 import pytest
 
 import purrdf
@@ -34,6 +37,25 @@ def test_limits_are_discoverable_under_the_gts_namespace() -> None:
     assert purrdf.gts.GtsReadLimits is purrdf.GtsReadLimits
     finite = purrdf.GtsReadLimits().encoded_input_bytes
     assert finite < purrdf.GtsReadLimits.unbounded().encoded_input_bytes
+
+
+def test_namespace_limit_is_a_type_alias_in_the_shipped_stub() -> None:
+    stub = Path(purrdf.__file__).with_name("__init__.pyi")
+    module = ast.parse(stub.read_text(encoding="utf-8"))
+    namespace = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.ClassDef) and node.name == "gts"
+    )
+    alias = next(
+        node
+        for node in namespace.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and node.target.id == "GtsReadLimits"
+    )
+    assert isinstance(alias.annotation, ast.Name)
+    assert alias.annotation.id == "TypeAlias"
 
 
 @pytest.mark.parametrize(

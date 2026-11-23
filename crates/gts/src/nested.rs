@@ -151,9 +151,25 @@ fn visit_with_limits(
         let Some(entry) = graph.blob_entry(&digest) else {
             continue;
         };
-        let decoded_len = match entry.decoded_len_bounded(limits.read.decoded_blob_bytes) {
+        let remaining_work = limits.read.work.saturating_sub(usage.work);
+        let measurement_limit = limits.read.decoded_blob_bytes.min(remaining_work);
+        let decoded_len = match entry.decoded_len_bounded(measurement_limit) {
             Ok(len) => len,
             Err(cause) => {
+                if measurement_limit == remaining_work
+                    && remaining_work < limits.read.decoded_blob_bytes
+                    && error_is_codec_limit(&cause)
+                {
+                    let required = usage.work.saturating_add(remaining_work.saturating_add(1));
+                    let mut refused_usage = *usage;
+                    refused_usage.work = required;
+                    return Err(crate::reader::GtsReadLimitError {
+                        resource: crate::reader::GtsReadResource::Work,
+                        required,
+                        limit: limits.read.work,
+                        usage: refused_usage,
+                    });
+                }
                 let error = NestedError::DecodeStream {
                     digest,
                     cause: cause.into(),
@@ -184,8 +200,19 @@ fn visit_with_limits(
             });
         }
         *nested_decoded = required_nested;
+        let required_input = usage.encoded_input_bytes.saturating_add(decoded_len);
+        if required_input > limits.read.encoded_input_bytes {
+            let mut refused_usage = *usage;
+            refused_usage.encoded_input_bytes = required_input;
+            return Err(crate::reader::GtsReadLimitError {
+                resource: crate::reader::GtsReadResource::EncodedInputBytes,
+                required: required_input,
+                limit: limits.read.encoded_input_bytes,
+                usage: refused_usage,
+            });
+        }
         charge_nested_work(usage, limits.read, decoded_len)?;
-        let bytes = match graph.blob_bytes_cloned_bounded(&digest, decoded_len) {
+        let bytes = match graph.blob_bytes_cloned_bounded(&digest, limits.read.decoded_blob_bytes) {
             Ok(Some(bytes)) => bytes,
             Ok(None) => continue,
             Err(cause) => {
@@ -205,6 +232,26 @@ fn visit_with_limits(
                 continue;
             }
         };
+        if bytes.len() != decoded_len {
+            let error = NestedError::DecodedSize {
+                digest,
+                actual: bytes.len(),
+                remaining: decoded_len,
+            };
+            push_nested_diagnostic(
+                &mut graph,
+                usage,
+                limits.read,
+                Diagnostic {
+                    cause: None,
+                    code: "DamagedFrame".to_owned(),
+                    detail: error.to_string(),
+                    frame_index: None,
+                }
+                .with_native_cause(error),
+            )?;
+            continue;
+        }
         seen.insert(digest.clone());
         let child = visit_with_limits(
             &bytes,
@@ -237,6 +284,20 @@ fn visit_with_limits(
         subgraphs.push((digest, child));
     }
     Ok(graph)
+}
+
+fn error_is_codec_limit(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if matches!(
+            cause.downcast_ref::<crate::codec::CodecError>(),
+            Some(crate::codec::CodecError::Limit { .. })
+        ) {
+            return true;
+        }
+        current = cause.source();
+    }
+    false
 }
 
 fn remaining_limits(

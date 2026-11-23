@@ -11,8 +11,10 @@
 
 use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{AnnotationRow, ByteRange, OpaqueNode, Quad, ReifierRow, Term};
-use purrdf_gts::reader::{FrameContext, StreamingSink, read_to_sink};
-use purrdf_gts::reader::{ReadOptions, read_to_sink_with_dictionary};
+use purrdf_gts::reader::{FrameContext, GtsReadLimits, StreamingSink, read_to_sink};
+use purrdf_gts::reader::{
+    ReadOptions, read_to_sink_with_dictionary, read_to_sink_with_dictionary_and_limits,
+};
 use purrdf_gts::replication::inventory;
 use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Ceiling, Memory, OwnedAdmission, SharedOwned};
@@ -249,6 +251,8 @@ struct StoredTerms {
     refuse_metadata: bool,
     epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
     advance_epoch: Option<Arc<std::sync::atomic::AtomicBool>>,
+    bind_refusal: Option<&'static str>,
+    commits: usize,
 }
 
 impl TermStorage for StoredTerms {
@@ -336,6 +340,7 @@ impl TermStorage for StoredTerms {
         Ok(())
     }
     fn commit(&mut self) -> Result<(), DictionaryError> {
+        self.commits += 1;
         Ok(())
     }
 
@@ -351,9 +356,64 @@ impl TermStorage for StoredTerms {
         key: TermKey,
         triple: purrdf_gts::model::Triple3,
     ) -> Result<(), DictionaryError> {
+        if let Some(cause) = self.bind_refusal {
+            return Err(DictionaryError::Corrupt(cause));
+        }
         self.bindings.entry(key).or_insert(triple);
         Ok(())
     }
+}
+
+#[test]
+fn stored_reifier_is_delivered_only_after_binding_admission() {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"),
+        Term::iri("https://example.org/p"),
+        Term::literal("value", None),
+    ]);
+    writer.add_reifies(&[(0, (0, 1, 2), None)]);
+    let mut storage = StoredTerms {
+        bind_refusal: Some("original reifier binding refusal"),
+        ..StoredTerms::default()
+    };
+    let mut sink = OrderingSink::default();
+    read_to_sink_with_dictionary(
+        &writer.into_bytes(),
+        ReadOptions::default(),
+        &mut storage,
+        &mut sink,
+    )
+    .expect_err("the original binding refusal aborts the stored read");
+    assert!(!sink.log.iter().any(|event| event.starts_with("reifier:")));
+    assert_eq!(storage.commits, 0);
+}
+
+#[test]
+fn final_limit_refusal_never_commits_dictionary_storage() {
+    let bytes = three_frame_fixture();
+    let mut storage = StoredTerms::default();
+    let mut limits = GtsReadLimits::UNBOUNDED;
+    limits.diagnostics = 0;
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::new(false, Some(&[0; 32])),
+        limits,
+        &mut storage,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the expected-head diagnostic exceeds the final callback contract");
+    assert_eq!(storage.commits, 0);
+
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut storage,
+        &mut OrderingSink::default(),
+    )
+    .expect("the matching neighbor commits");
+    assert_eq!(storage.commits, 1);
 }
 
 type IndexedIdentity = Box<

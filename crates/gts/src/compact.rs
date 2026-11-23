@@ -36,7 +36,7 @@ use purrdf_lex::cbor::Value;
 use crate::dict;
 use crate::mmr;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
-use crate::reader::{read, read_file_segments};
+use crate::reader::read_file_segments;
 use crate::stream;
 use crate::term_table::TermsRef;
 use crate::wire::{blake3_256, digest_label, digest_str, map_get};
@@ -309,15 +309,7 @@ fn refusal_gate(
     if profile == "evidence" && !seal_original {
         return Err(CompactRefusedError::EvidenceProfile);
     }
-    let g = match limits {
-        Some(limits) => crate::reader::read_with_limits(
-            data,
-            crate::reader::ReadOptions::new(true, None),
-            limits,
-        )
-        .map_err(CompactRefusedError::ReadLimit)?,
-        None => read(data, true, None),
-    };
+    let g = crate::reader::union_folded_segments(fs.segments);
     for sup in &g.suppressions {
         for target in &sup.targets {
             if target_text(target, "kind") == Some("frame") {

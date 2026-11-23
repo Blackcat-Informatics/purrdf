@@ -5,11 +5,15 @@
 
 //! Streaming blob limits remain effective when a content key is supplied.
 
+use purrdf_gts::model::Term;
 use purrdf_gts::reader::{
-    BlobPayload, ReadOptions, StreamingReadResult, StreamingSink, read_to_sink_from_reader,
-    read_to_sink_with_options,
+    BlobPayload, GtsReadLimits, ReadOptions, StreamingReadResult, StreamingSink,
+    read_to_sink_from_reader, read_to_sink_with_limits, read_to_sink_with_options,
 };
 use purrdf_gts::writer::{Encrypt0Options, FrameOptions, Writer};
+use purrdf_lex::cbor::{Value, encode};
+use std::cell::Cell;
+use std::sync::Arc;
 
 fn fresh_bytes<const N: usize>() -> [u8; N] {
     let mut bytes = [0; N];
@@ -78,6 +82,80 @@ fn read(bytes: &[u8], sink: &mut Sink, key: Option<[u8; 32]>) -> StreamingReadRe
         ReadOptions::new(true, None).with_content_key(&resolve),
         sink,
     )
+}
+
+fn encrypted_terms(key: [u8; 32]) -> Vec<u8> {
+    let terms = Value::Array(vec![purrdf_gts::writer::term_to_wire(&Term::iri(
+        "https://example.org/term",
+    ))]);
+    let mut writer = Writer::new("generic");
+    writer
+        .add_frame_with_options(
+            "terms",
+            FrameOptions {
+                raw: Some(encode(&terms)),
+                encrypt: Some(Encrypt0Options {
+                    kid: "recipient".into(),
+                    key,
+                    iv: fresh_bytes(),
+                }),
+                ..FrameOptions::default()
+            },
+        )
+        .expect("tiny encrypted terms frame");
+    writer.into_bytes()
+}
+
+#[derive(Default)]
+struct TermSink(usize);
+
+impl StreamingSink for TermSink {
+    fn term(&mut self, _segment: u64, _id: usize, _term: Arc<Term>) {
+        self.0 += 1;
+    }
+}
+
+#[test]
+fn bounded_two_pass_read_reuses_missing_and_present_key_decisions() {
+    let key = fresh_bytes();
+    let bytes = encrypted_terms(key);
+    let calls = Cell::new(0usize);
+    let changing = |kid: &str| {
+        let call = calls.get();
+        calls.set(call + 1);
+        (kid == "recipient" && call > 0).then_some(key)
+    };
+    let mut limits = GtsReadLimits::UNBOUNDED;
+    limits.terms = 0;
+    let mut sink = TermSink::default();
+    read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::new(true, None).with_content_key(&changing),
+        limits,
+        &mut sink,
+    )
+    .expect("a cached missing key keeps the encrypted frame opaque");
+    assert_eq!(calls.get(), 1);
+    assert_eq!(sink.0, 0);
+
+    let calls = Cell::new(0usize);
+    let changing = |kid: &str| {
+        let call = calls.get();
+        calls.set(call + 1);
+        (kid == "recipient" && call == 0).then_some(key)
+    };
+    let mut limits = GtsReadLimits::UNBOUNDED;
+    limits.terms = 1;
+    let mut sink = TermSink::default();
+    read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::new(true, None).with_content_key(&changing),
+        limits,
+        &mut sink,
+    )
+    .expect("a cached present key admits the exact term boundary");
+    assert_eq!(calls.get(), 1);
+    assert_eq!(sink.0, 1);
 }
 
 fn assert_limit(result: &StreamingReadResult, sink: &Sink, detail: &str) {
@@ -235,7 +313,7 @@ fn encoded_payload_len(container: &[u8]) -> usize {
             value
                 .as_map()
                 .and_then(|map| purrdf_gts::wire::map_get(map, "d"))
-                .and_then(purrdf_lex::cbor::Value::as_bytes)
+                .and_then(Value::as_bytes)
                 .map(<[u8]>::len)
         })
         .expect("authored blob must contain encoded bytes")

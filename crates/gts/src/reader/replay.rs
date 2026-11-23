@@ -103,6 +103,9 @@ impl Folder<'_, '_, '_> {
                 }
                 error => error,
             })?;
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         spooled.verify(&mut replay).map_err(|cause| {
             if stored {
                 PayloadError::Dictionary(crate::dictionary::DictionaryError::Replay(cause))
@@ -110,6 +113,9 @@ impl Folder<'_, '_, '_> {
                 cause.into()
             }
         })?;
+        if !self.sink_accepting() {
+            return Ok(());
+        }
         replay.into_inner().finish()?;
         Ok(())
     }

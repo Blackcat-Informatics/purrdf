@@ -83,6 +83,16 @@ it to the sink and returns its id, so memory is bounded by the largest frame
 and not by the log. Both writers run one frame encoder, and for the same calls
 their bytes are identical.
 
+Bounded readers apply one cumulative `GtsReadLimits` contract. Slice entry
+points first admit the complete CBOR sequence envelope, then preflight decoded
+events before returning a materialized result. A transformed frame in that
+preflight can retain up to the selected `decoded_frame_bytes` ceiling even when
+the delivery sink supplies replay storage. Memory-constrained or
+larger-than-heap consumers use `read_to_sink_from_reader_with_limits`, supply
+`StreamingSink::frame_scratch`, treat events as provisional, and commit them
+only after the function returns `Ok`. Large datasets raise the applicable
+finite ceilings; they do not need the unbounded trusted-input contract.
+
 A long-lived log is a concatenation of segments, each a header and its frames.
 `bytes_written()` counts only what one writer has written: it starts at the
 header for `StreamWriter::new` and at zero for `StreamWriter::resume`, and is

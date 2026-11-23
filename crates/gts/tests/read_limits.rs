@@ -4,13 +4,15 @@
 //! Whole-read limits refuse the first excess event without publishing a partial drive.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_gts::model::Term;
 use purrdf_gts::reader::{
     GtsReadLimits, GtsReadResource, ReadOptions, StreamingSink, read_file_segments_with_limits,
-    read_to_sink_from_reader_with_limits, read_to_sink_with_limits, read_with_limits,
-    segment_append_state_with_limits,
+    read_to_sink_from_reader_with_limits, read_to_sink_with_limits, read_to_sink_with_options,
+    read_with_limits, segment_append_state_with_limits,
 };
+use purrdf_gts::wire::SELF_DESCRIBE_TAG;
 use purrdf_gts::writer::{FrameOptions, Writer};
 use purrdf_lex::cbor::{ReplayStorage, Value, encode};
 
@@ -51,6 +53,62 @@ impl ReplayStorage for MemoryReplay {
 #[derive(Default)]
 struct ReplaySink {
     terms: usize,
+}
+
+struct FinishReplay {
+    inner: std::io::Cursor<Vec<u8>>,
+    finishes: Arc<AtomicUsize>,
+}
+
+impl std::io::Read for FinishReplay {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        std::io::Read::read(&mut self.inner, bytes)
+    }
+}
+
+impl std::io::Write for FinishReplay {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        std::io::Write::write(&mut self.inner, bytes)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl std::io::Seek for FinishReplay {
+    fn seek(&mut self, position: std::io::SeekFrom) -> std::io::Result<u64> {
+        std::io::Seek::seek(&mut self.inner, position)
+    }
+}
+
+impl ReplayStorage for FinishReplay {
+    fn finish(&mut self) -> std::io::Result<()> {
+        self.finishes.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+struct CancellingReplaySink {
+    terms: usize,
+    finishes: Arc<AtomicUsize>,
+}
+
+impl StreamingSink for CancellingReplaySink {
+    fn continue_reading(&self) -> bool {
+        self.terms == 0
+    }
+
+    fn frame_scratch(&mut self) -> Option<std::io::Result<Box<dyn ReplayStorage>>> {
+        Some(Ok(Box::new(FinishReplay {
+            inner: std::io::Cursor::new(Vec::new()),
+            finishes: Arc::clone(&self.finishes),
+        })))
+    }
+
+    fn term(&mut self, _segment: u64, _id: usize, _term: Arc<Term>) {
+        self.terms += 1;
+    }
 }
 
 impl StreamingSink for ReplaySink {
@@ -321,6 +379,111 @@ fn nested_size_budget_measures_transforms_without_retaining_the_excess() {
 }
 
 #[test]
+fn nested_children_are_admitted_before_materialization() {
+    let child = nested_child("aggregate-input");
+    let mut writer = Writer::new("generic");
+    writer.add_blob(&child, Some(purrdf_gts::nested::GTS_MEDIA_TYPE), None);
+    let bytes = writer.into_bytes();
+    let exact_input = bytes.len().saturating_add(child.len());
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.encoded_input_bytes = exact_input;
+    purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), exact)
+        .expect("the aggregate encoded-input contract accepts its exact boundary");
+
+    let mut adjacent = exact;
+    adjacent.encoded_input_bytes -= 1;
+    let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), adjacent)
+        .expect_err("the child is refused before its buffer is materialized");
+    assert_eq!(error.resource, GtsReadResource::EncodedInputBytes);
+    assert_eq!(error.required, exact_input);
+}
+
+#[test]
+fn nested_measurement_obeys_remaining_work() {
+    let child = nested_child("aggregate-work");
+    let mut writer = Writer::new("generic");
+    writer
+        .add_blob_transformed(
+            child.clone(),
+            Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+            None,
+            &["gzip".to_owned()],
+            None,
+        )
+        .expect("compressed nested artifact");
+    let bytes = writer.into_bytes();
+    let (_, root_usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("measure root work");
+    let mut exact_work = root_usage.work;
+    let exact = loop {
+        let mut candidate = GtsReadLimits::UNBOUNDED;
+        candidate.work = exact_work;
+        match purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), candidate) {
+            Ok(_) => break candidate,
+            Err(error) if error.resource == GtsReadResource::Work => {
+                assert!(error.required > exact_work);
+                exact_work = error.required;
+            }
+            Err(error) => panic!("unexpected nested refusal: {error}"),
+        }
+    };
+
+    let mut adjacent = exact;
+    adjacent.work -= 1;
+    let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), adjacent)
+        .expect_err("nested decoding stops at the first excess work unit");
+    assert_eq!(error.resource, GtsReadResource::Work);
+    assert!(error.required > adjacent.work);
+}
+
+#[test]
+fn nested_multistage_materialization_uses_the_declared_stage_limit() {
+    let mut child_header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+    ];
+    child_header.push((
+        "id".into(),
+        Value::Bytes(purrdf_gts::wire::header_id(&child_header)),
+    ));
+    let child = purrdf_gts::wire::canonical(&Value::Tag(
+        SELF_DESCRIBE_TAG,
+        Box::new(Value::Map(child_header)),
+    ));
+    let intermediate =
+        purrdf_gts::codec::encode_chain(&["gzip".to_owned()], &child).expect("single gzip stage");
+    assert!(intermediate.len() > child.len());
+    let intermediate_len = intermediate.len();
+    let mut writer = Writer::new("generic");
+    writer
+        .add_blob_transformed(
+            child.clone(),
+            Some(purrdf_gts::nested::GTS_MEDIA_TYPE),
+            None,
+            &["gzip".to_owned(), "gzip".to_owned()],
+            None,
+        )
+        .expect("two-stage nested artifact");
+    let bytes = writer.into_bytes();
+    let mut exact = GtsReadLimits::UNBOUNDED;
+    exact.decoded_blob_bytes = intermediate_len;
+    let nested = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), exact)
+        .expect("the intermediate stage fits the explicit stage boundary");
+    assert_eq!(nested.subgraphs.len(), 1);
+
+    let mut adjacent = exact;
+    adjacent.decoded_blob_bytes -= 1;
+    let error = purrdf_gts::nested::read_nested_with_limits(&bytes, 1, child.len(), adjacent)
+        .expect_err("the adjacent intermediate-stage excess is refused");
+    assert_eq!(error.resource, GtsReadResource::DecodedBlobBytes);
+}
+
+#[test]
 fn nested_depth_refuses_without_publishing_a_partial_result() {
     let mut writer = Writer::new("generic");
     writer.add_blob(
@@ -471,6 +634,22 @@ fn transformed_snapshot_replay_refuses_embedded_blobs_and_stops_rows() {
 }
 
 #[test]
+fn cancelled_snapshot_replay_does_not_verify_or_finish_provisional_storage() {
+    let finishes = Arc::new(AtomicUsize::new(0));
+    let mut sink = CancellingReplaySink {
+        terms: 0,
+        finishes: Arc::clone(&finishes),
+    };
+    read_to_sink_with_options(
+        &transformed_snapshot_bytes(),
+        ReadOptions::default(),
+        &mut sink,
+    );
+    assert_eq!(sink.terms, 1);
+    assert_eq!(finishes.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn finite_defaults_do_not_contradict_their_component_ceilings() {
     let limits = GtsReadLimits::DEFAULT;
     let admitted_work = limits
@@ -529,4 +708,182 @@ fn low_level_file_views_apply_the_explicit_input_contract() {
         purrdf_gts::mmr::ProofError::ReadLimit(ref error)
             if error.resource == GtsReadResource::EncodedInputBytes
     ));
+}
+
+#[test]
+fn complete_sequence_item_admission_precedes_materialization() {
+    let admitted = read_with_limits(
+        &[0x00],
+        ReadOptions::default(),
+        limits(GtsReadResource::Items, 1),
+    )
+    .expect("one malformed item fits the item contract");
+    assert_eq!(admitted.diagnostics[0].code, "DamagedFrame");
+
+    let error = read_with_limits(
+        &[0x00, 0x00],
+        ReadOptions::default(),
+        limits(GtsReadResource::Items, 1),
+    )
+    .expect_err("the ignored malformed tail is still admitted before retention");
+    assert_eq!(error.resource, GtsReadResource::Items);
+    assert_eq!(error.required, 2);
+
+    let error = purrdf_gts::wire::iter_items_with_error_and_limits(
+        &[0x00, 0x00],
+        limits(GtsReadResource::Items, 1),
+    )
+    .expect_err("the error-preserving decoder cannot retain an unadmitted tail");
+    assert_eq!(error.resource, GtsReadResource::Items);
+}
+
+#[test]
+fn incremental_refusal_usage_includes_bytes_consumed_before_the_callback() {
+    let bytes = rdf_bytes();
+    let error = read_to_sink_from_reader_with_limits(
+        std::io::Cursor::new(&bytes),
+        ReadOptions::default(),
+        limits(GtsReadResource::Items, 1),
+        &mut Null,
+    )
+    .expect_err("the second item exceeds the item contract");
+    assert_eq!(error.resource, GtsReadResource::Items);
+    assert!(error.usage.encoded_input_bytes > 0);
+}
+
+#[derive(Default)]
+struct EncodedCeiling {
+    frame: usize,
+    refusals: usize,
+}
+
+impl StreamingSink for EncodedCeiling {
+    fn encoded_frame_limit(&self) -> Option<usize> {
+        Some(self.frame)
+    }
+
+    fn encoded_frame_refused(&mut self, _required: usize, _limit: usize) {
+        self.refusals += 1;
+    }
+}
+
+#[test]
+fn sink_selected_frame_ceiling_configures_slice_admission() {
+    let bytes = rdf_bytes();
+    let (_, usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("measure the largest frame");
+    let mut exact = EncodedCeiling {
+        frame: usage.largest_encoded_frame_bytes,
+        ..EncodedCeiling::default()
+    };
+    read_to_sink_with_options(&bytes, ReadOptions::default(), &mut exact);
+    assert_eq!(exact.refusals, 0);
+
+    let mut adjacent = EncodedCeiling {
+        frame: usage.largest_encoded_frame_bytes - 1,
+        ..EncodedCeiling::default()
+    };
+    read_to_sink_with_options(&bytes, ReadOptions::default(), &mut adjacent);
+    assert_eq!(adjacent.refusals, 1);
+}
+
+#[derive(Default)]
+struct CancelAtFrame {
+    cancelled: bool,
+    decoded_payloads: usize,
+}
+
+impl StreamingSink for CancelAtFrame {
+    fn continue_reading(&self) -> bool {
+        !self.cancelled
+    }
+
+    fn frame(&mut self, _frame: purrdf_gts::reader::FrameContext<'_>) {
+        self.cancelled = true;
+    }
+
+    fn decoded_payload(&mut self, _blob: bool, _bytes: usize) {
+        self.decoded_payloads += 1;
+    }
+}
+
+#[test]
+fn frame_cancellation_precedes_payload_decode() {
+    let bytes = transformed_snapshot_bytes();
+    let mut sink = CancelAtFrame::default();
+    read_to_sink_with_options(&bytes, ReadOptions::default(), &mut sink);
+    assert!(sink.cancelled);
+    assert_eq!(sink.decoded_payloads, 0);
+}
+
+#[test]
+fn malformed_transformed_payloads_charge_decoded_bytes() {
+    let mut writer = Writer::new("generic");
+    for _ in 0..2 {
+        writer
+            .add_frame_with_options(
+                "unknown",
+                FrameOptions {
+                    raw: Some(vec![0xff; 128]),
+                    transform: vec!["gzip".into()],
+                    ..FrameOptions::default()
+                },
+            )
+            .expect("small malformed transformed payload");
+    }
+    let error = read_with_limits(
+        &writer.into_bytes(),
+        ReadOptions::default(),
+        limits(GtsReadResource::TotalDecodedBytes, 128),
+    )
+    .expect_err("the second malformed decoded payload exceeds the aggregate contract");
+    assert_eq!(error.resource, GtsReadResource::TotalDecodedBytes);
+    assert_eq!(error.required, 129);
+}
+
+#[test]
+fn repeated_catalog_dictionary_copies_are_admitted_as_work() {
+    let dictionary = vec![b'd'; 1024];
+    let catalog = (0..4)
+        .map(|id| {
+            (
+                Value::Integer(id.into()),
+                Value::Map(vec![
+                    ("name".into(), format!("codec-{id}").into()),
+                    ("cls".into(), "compress".into()),
+                    ("dct".into(), "shared".into()),
+                ]),
+            )
+        })
+        .collect();
+    let mut header = vec![
+        ("gts".into(), "GTS1".into()),
+        ("v".into(), Value::Integer(1.into())),
+        ("prof".into(), "generic".into()),
+        ("cat".into(), Value::Map(catalog)),
+        (
+            "dct".into(),
+            Value::Map(vec![("shared".into(), Value::Bytes(dictionary))]),
+        ),
+    ];
+    header.push((
+        "id".into(),
+        Value::Bytes(purrdf_gts::wire::header_id(&header)),
+    ));
+    let bytes =
+        purrdf_gts::wire::canonical(&Value::Tag(SELF_DESCRIBE_TAG, Box::new(Value::Map(header))));
+    let (_, usage) = read_to_sink_with_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut Null,
+    )
+    .expect("the explicit unbounded contract admits catalog copies");
+    assert!(usage.work >= bytes.len().saturating_add(4 * 1024));
+    assert_boundary(&bytes, GtsReadResource::Work, usage.work);
 }

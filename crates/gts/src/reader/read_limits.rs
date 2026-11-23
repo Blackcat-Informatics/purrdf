@@ -294,10 +294,13 @@ impl<'a> ReadLimiter<'a> {
     }
 
     pub(super) fn complete_input(&mut self, actual: usize) {
-        self.usage.encoded_input_bytes = actual;
+        self.usage.encoded_input_bytes = self.usage.encoded_input_bytes.max(actual);
+        if let Some(error) = self.error.as_mut() {
+            error.usage.encoded_input_bytes = error.usage.encoded_input_bytes.max(actual);
+        }
         self.trip(
             GtsReadResource::EncodedInputBytes,
-            actual,
+            self.usage.encoded_input_bytes,
             self.limits.encoded_input_bytes,
         );
     }
@@ -483,6 +486,12 @@ impl StreamingSink for ReadLimiter<'_> {
             )
         {
             self.inner.metadata_entries(additional);
+        }
+    }
+
+    fn work(&mut self, units: usize) {
+        if !self.charge_work(units) {
+            self.inner.work(units);
         }
     }
 

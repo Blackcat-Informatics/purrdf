@@ -392,6 +392,8 @@ pub struct SegmentResolver<
     /// First latched error. Streaming callbacks are infallible, so a failure is
     /// parked here and surfaced after the reader returns.
     error: Option<S::Error>,
+    /// A consumer cancellation is terminal even when it carries no error.
+    cancelled: std::cell::Cell<bool>,
     failed: bool,
 }
 
@@ -406,6 +408,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> std::fmt::Debug for SegmentRe
             .field("buffered_reifier_bindings", &self.storage.counts().reifiers)
             .field("current_segment", &self.current_segment)
             .field("has_error", &self.error.is_some())
+            .field("cancelled", &self.cancelled.get())
             .field("failed", &self.failed)
             .finish_non_exhaustive()
     }
@@ -423,6 +426,17 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 }
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
+    fn consumer_accepting(&self) -> bool {
+        if self.cancelled.get() {
+            return false;
+        }
+        let accepting = self.sink.continue_reading();
+        if !accepting {
+            self.cancelled.set(true);
+        }
+        accepting
+    }
+
     /// Wrap a consumer with explicit caller-owned resolution storage.
     ///
     /// The backend preserves source keys, admitted term leases and original
@@ -440,6 +454,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             raw_annotations: Rows::default(),
             current_segment: None,
             error: None,
+            cancelled: std::cell::Cell::new(false),
             failed: false,
         }
     }
@@ -559,6 +574,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// rows. Call once after [`crate::reader::read_to_sink`] returns (and after
     /// checking [`Self::take_error`]).
     pub fn finish(&mut self) -> Result<(), S::Error> {
+        if self.cancelled.get() {
+            return Ok(());
+        }
         if self.failed {
             return Err(self.previous_failure(TermKey {
                 segment: self.current_segment.unwrap_or_default(),
@@ -567,6 +585,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         }
         self.failed = true;
         self.resolve_buffered()?;
+        if self.cancelled.get() {
+            self.failed = false;
+            return Ok(());
+        }
         if let Err(error) = self.raw_quads.finish() {
             return Err(self.row_failure(error));
         }
@@ -639,6 +661,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 .next_term(segment_index, previous)
                 .map_err(self.map_storage)?
             {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 self.resolve_term(segment_index, gts_id, "term")?;
                 previous = Some(gts_id);
             }
@@ -647,6 +672,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         let mut quads = std::mem::take(&mut self.raw_quads).into_iter();
         let quad_result = (|| {
             for row in quads.by_ref() {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 let (segment, [s, p, o], g) = row.map_err(|error| self.row_failure(error))?;
                 let s = self.resolve_term(segment, s, "quad subject")?;
                 let p = self.resolve_term(segment, p, "quad predicate")?;
@@ -655,6 +683,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                     .map(|id| self.resolve_term(segment, id, "quad graph name"))
                     .transpose()?;
                 self.sink.push_quad(segment, s, p, o, g)?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
             }
             Ok(())
         })();
@@ -664,6 +695,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         let mut reifiers = std::mem::take(&mut self.raw_reifiers).into_iter();
         let reifier_result = (|| {
             for row in reifiers.by_ref() {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 let (segment, [reifier, s, p, o], g) =
                     row.map_err(|error| self.row_failure(error))?;
                 let reifier = self.resolve_term(segment, reifier, "reifier")?;
@@ -674,6 +708,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                     .map(|id| self.resolve_term(segment, id, "reifier graph name"))
                     .transpose()?;
                 self.sink.push_reifier(segment, reifier, s, p, o, g)?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
             }
             Ok(())
         })();
@@ -683,6 +720,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         let mut annotations = std::mem::take(&mut self.raw_annotations).into_iter();
         let annotation_result = (|| {
             for row in annotations.by_ref() {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 let (segment, [r, p, v], g) = row.map_err(|error| self.row_failure(error))?;
                 let r = self.resolve_term(segment, r, "annotation reifier")?;
                 let p = self.resolve_term(segment, p, "annotation predicate")?;
@@ -691,6 +731,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                     .map(|id| self.resolve_term(segment, id, "annotation graph name"))
                     .transpose()?;
                 self.sink.push_annotation(segment, r, p, v, g)?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
             }
             Ok(())
         })();
@@ -847,6 +890,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             self.storage
                 .remove_pending(key(current))
                 .map_err(self.map_storage)?;
+            if !self.consumer_accepting() {
+                return Ok(resolved);
+            }
             if let Some(parent) = parent {
                 current = parent;
             } else {
@@ -1152,7 +1198,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentResolver<S, D> {
     fn continue_reading(&self) -> bool {
-        !self.failed && self.sink.continue_reading()
+        if self.failed {
+            return false;
+        }
+        self.consumer_accepting()
     }
 
     fn item(&mut self, encoded_bytes: usize) {

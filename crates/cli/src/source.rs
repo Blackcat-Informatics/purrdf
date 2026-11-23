@@ -129,8 +129,8 @@ use purrdf_core::{
 };
 use purrdf_rdf::{
     NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
-    decode_transport, detect_transport, import_gts_events_with_limits, parse_dataset_from_reader,
-    serialize_dataset_to_format, sniff_transport, transport_reader,
+    TransportError, decode_transport, detect_transport, import_gts_events_with_limits,
+    parse_dataset_from_reader, serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
 use crate::error::CliError;
@@ -266,6 +266,8 @@ fn open_raw_stream(path: &str) -> std::io::Result<Box<dyn Read>> {
 pub enum RawReadError {
     /// Original file or standard-input failure.
     Io(std::io::Error),
+    /// Original transport-wrapper construction failure.
+    Transport(TransportError),
     /// Original physical buffer admission/allocation refusal.
     Storage(purrdf_lex::allocation::StorageError),
     /// Input contained more bytes than the caller admitted.
@@ -273,13 +275,22 @@ pub enum RawReadError {
         /// Maximum source bytes, independent of buffer capacity.
         maximum: usize,
     },
+    /// Decoded GTS transport contained more bytes than the caller admitted.
+    DecodedLimit {
+        /// Maximum decoded bytes, independent of buffer capacity.
+        maximum: usize,
+    },
 }
 impl std::fmt::Display for RawReadError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(cause) => cause.fmt(out),
+            Self::Transport(cause) => cause.fmt(out),
             Self::Storage(cause) => cause.fmt(out),
             Self::Limit { maximum } => write!(out, "raw input exceeds {maximum} bytes"),
+            Self::DecodedLimit { maximum } => {
+                write!(out, "decoded GTS input exceeds {maximum} bytes")
+            }
         }
     }
 }
@@ -287,24 +298,35 @@ impl std::error::Error for RawReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(cause) => Some(cause),
+            Self::Transport(cause) => Some(cause),
             Self::Storage(cause) => Some(cause),
-            Self::Limit { .. } => None,
+            Self::Limit { .. } | Self::DecodedLimit { .. } => None,
         }
     }
 }
 impl purrdf_hash::error::StructuredError for RawReadError {
     purrdf_hash::error_visit! {
         Io(cause) => "raw-input-io" { "cause" => Cause(cause) },
+        Transport(cause) => "raw-input-transport" { "cause" => Cause(cause) },
         Storage(cause) => "raw-input-storage" { "cause" => Cause(cause) },
         Limit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
+        DecodedLimit { maximum } => "decoded-gts-input-limit" { "maximum" => ByteCount(*maximum as u128) },
     }
 }
 
 /// Acquire at most `maximum` raw bytes, probing one further byte without retaining it.
 /// The content limit is separate from Vec capacity and other phase accounts.
 pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u8>, RawReadError> {
+    let input = open_raw_stream(path).map_err(RawReadError::Io)?;
+    read_stream_bounded(input, maximum, |maximum| RawReadError::Limit { maximum })
+}
+
+fn read_stream_bounded(
+    mut input: impl Read,
+    maximum: usize,
+    limit_error: impl FnOnce(usize) -> RawReadError + Copy,
+) -> Result<Vec<u8>, RawReadError> {
     use purrdf_lex::allocation::{Memory, Resident};
-    let mut input = open_raw_stream(path).map_err(RawReadError::Io)?;
     let mut bytes = Vec::new();
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
@@ -320,7 +342,7 @@ pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u
             return Ok(bytes);
         }
         if read > remaining {
-            return Err(RawReadError::Limit { maximum });
+            return Err(limit_error(maximum));
         }
         memory
             .extend(&mut bytes, chunk[..read].iter().copied())
@@ -616,40 +638,36 @@ fn read_gts_bytes_with_transport(
     policy: TransportPolicy,
     maximum: usize,
 ) -> Result<Vec<u8>, CliError> {
-    let source = LimitedGtsTransport::new(open_raw_stream(path)?, maximum);
+    let document_error = |cause| CliError::DocumentInput {
+        path: display_path(path).to_owned(),
+        cause,
+    };
+    let source = LimitedGtsTransport::new(
+        open_raw_stream(path).map_err(|error| document_error(RawReadError::Io(error)))?,
+        maximum,
+    );
     let mut decoded: Box<dyn Read> = match policy {
         TransportPolicy::Verbatim => Box::new(
             transport_reader(source, None)
-                .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?,
+                .map_err(|error| document_error(RawReadError::Transport(error)))?,
         ),
         TransportPolicy::Forced(encoding) => Box::new(
             transport_reader(source, Some(encoding))
-                .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?,
+                .map_err(|error| document_error(RawReadError::Transport(error)))?,
         ),
         TransportPolicy::Detect => {
             let (encoding, source) = sniff_transport(source, transport_name(path))
-                .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
+                .map_err(|error| document_error(RawReadError::Io(error)))?;
             Box::new(
-                transport_reader(source, encoding).map_err(|error| {
-                    CliError::Runtime(format!("{}: {error}", display_path(path)))
-                })?,
+                transport_reader(source, encoding)
+                    .map_err(|error| document_error(RawReadError::Transport(error)))?,
             )
         }
     };
-    let read_maximum = u64::try_from(maximum).unwrap_or(u64::MAX).saturating_add(1);
-    let mut bytes = Vec::new();
-    decoded
-        .by_ref()
-        .take(read_maximum)
-        .read_to_end(&mut bytes)
-        .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
-    if bytes.len() > maximum {
-        return Err(CliError::Runtime(format!(
-            "{}: decoded GTS input requires more than {maximum} bytes",
-            display_path(path)
-        )));
-    }
-    Ok(bytes)
+    read_stream_bounded(&mut decoded, maximum, |maximum| {
+        RawReadError::DecodedLimit { maximum }
+    })
+    .map_err(document_error)
 }
 
 /// Raw transport input admitted before sniffing or decoder construction.

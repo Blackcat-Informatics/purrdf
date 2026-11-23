@@ -180,13 +180,19 @@ fn gts_safe_read_bounds_transport_expansion() {
     let dir = dir.path();
     let bytes = two_segment_gts();
     let wrapped = write_bytes(dir, "in.gts.gz", &gzip(&bytes));
-    let out = path(dir, "out.nq");
+    let admitted = path(dir, "admitted.nq");
+    let exact = format!("encoded-input-bytes={}", bytes.len());
+    let result = run(&["--gts-read-limit", &exact, "convert", &wrapped, &admitted]);
+    assert!(result.status.success(), "{}", stderr(&result));
+    assert!(Path::new(&admitted).is_file());
+
+    let out = path(dir, "refused.nq");
     let input_limit = format!("encoded-input-bytes={}", bytes.len() - 1);
 
     let result = run(&["--gts-read-limit", &input_limit, "convert", &wrapped, &out]);
     assert!(!result.status.success());
     assert!(
-        stderr(&result).contains("decoded GTS input requires more"),
+        stderr(&result).contains("decoded GTS input exceeds"),
         "{}",
         stderr(&result)
     );
