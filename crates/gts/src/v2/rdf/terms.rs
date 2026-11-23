@@ -152,7 +152,9 @@ pub(super) struct TermArena {
 }
 
 impl TermArena {
-    pub(super) fn terms(&self) -> impl ExactSizeIterator<Item = &Term<'static>> {
+    pub(super) fn terms(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &Term<'static>> + ExactSizeIterator {
         self.entries.iter().map(|entry| &entry.term)
     }
 

@@ -63,7 +63,8 @@ pub struct RdfFold {
 }
 
 impl RdfFold {
-    pub(in crate::v2) fn terms(&self) -> impl ExactSizeIterator<Item = &Term<'static>> {
+    /// Terms in handle order, with each dependency before the term that uses it.
+    pub fn terms(&self) -> impl DoubleEndedIterator<Item = &Term<'static>> + ExactSizeIterator {
         self.terms.terms()
     }
 

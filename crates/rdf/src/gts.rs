@@ -12,6 +12,11 @@
 pub use crate::gts_core::*;
 pub use crate::gts_verify::{ContentChainVerification, verify_content_chain};
 
+mod generation_two;
+pub use generation_two::{
+    GtsV2Dataset, GtsV2DatasetError, dataset_from_gts_v2_fold, read_gts_v2_dataset,
+};
+
 use crate::RdfDiagnostic;
 use crate::gts_resolve::ensure_terms_terminate;
 use crate::native_codecs::ser_model::{SerGraph, SerReifierRow, SerTerm, SerTermKind};

@@ -338,7 +338,11 @@ mod tests {
 
     #[test]
     fn generation_two_writer_orders_triple_dependencies_and_preserves_empty_graphs() {
-        use purrdf_gts::v2::{Line, ReadCapacity, ReadGraph, Term, read};
+        use purrdf_gts::v2::{Line, ReadCapacity, SignatureInputs, Term};
+
+        use crate::TermRef;
+        use crate::gts::read_gts_v2_dataset;
+
         let mut builder = RdfDatasetBuilder::new();
         let s = builder.intern_blank("same", crate::BlankScope(1)).unwrap();
         let p = builder.intern_iri("https://example.org/p").unwrap();
@@ -347,34 +351,57 @@ mod tests {
         let o = builder.intern_blank("same", crate::BlankScope(2)).unwrap();
         let graph = builder.intern_iri("https://example.org/empty").unwrap();
         assert_eq!(o, future_object);
-        builder.push_quad(s, p, triple, None).unwrap();
+        let nested = builder.intern_triple(s, p, triple).unwrap();
+        builder.push_quad(s, p, nested, None).unwrap();
         builder.declare_named_graph(graph).unwrap();
         let dataset = builder.freeze().unwrap();
         let mut bytes = Vec::new();
         write_gts_v2(&dataset, &mut bytes).unwrap();
-        let ReadGraph::Second(graph) = read(&bytes, ReadCapacity::default()).unwrap() else {
-            panic!("the writer emits generation 2");
-        };
-        let mut lines = graph.rdf.lines();
-        let Some(Line::Quad([s, _, triple], None)) = lines.next() else {
+        let decoded =
+            read_gts_v2_dataset(&bytes, ReadCapacity::default(), &SignatureInputs::default())
+                .unwrap();
+        let mut lines = decoded.graph.rdf.lines();
+        let Some(Line::Quad([s, _, nested], None)) = lines.next() else {
             panic!("the writer emits one quad");
         };
-        let Some(Term::Triple([triple_subject, _, o])) = graph.rdf.term(triple) else {
-            panic!("the object is a triple term");
+        let Some(Term::Triple([_, _, triple])) = decoded.graph.rdf.term(nested) else {
+            panic!("the object is a nested triple term");
+        };
+        let Some(Term::Triple([triple_subject, _, o])) = decoded.graph.rdf.term(*triple) else {
+            panic!("the nested object is a triple term");
         };
         let o = *o;
         assert_eq!(s, *triple_subject);
         assert_ne!(s, o);
-        assert!(matches!(graph.rdf.term(s), Some(Term::Blank { .. })));
-        assert!(matches!(graph.rdf.term(o), Some(Term::Blank { .. })));
+        assert!(matches!(
+            decoded.graph.rdf.term(s),
+            Some(Term::Blank { .. })
+        ));
+        assert!(matches!(
+            decoded.graph.rdf.term(o),
+            Some(Term::Blank { .. })
+        ));
         let Some(Line::EmptyGraph(name)) = lines.next() else {
             panic!("the writer emits the empty named graph");
         };
         assert!(matches!(
-            graph.rdf.term(name),
+            decoded.graph.rdf.term(name),
             Some(Term::Iri(iri)) if iri == "https://example.org/empty"
         ));
         assert!(lines.next().is_none());
+
+        let native = decoded.dataset;
+        let row = native.quads().next().unwrap();
+        let TermRef::Triple { o: triple, .. } = native.resolve(row.o) else {
+            panic!("the native quad retains the nesting");
+        };
+        let TermRef::Triple { s, o, .. } = native.resolve(triple) else {
+            panic!("the native dataset retains the inner triple term");
+        };
+        assert_eq!(s, row.s);
+        assert_ne!(s, o);
+        let graph = native.term_id_by_iri("https://example.org/empty").unwrap();
+        assert_eq!(native.named_graphs().collect::<Vec<_>>(), [graph]);
     }
 
     #[test]
