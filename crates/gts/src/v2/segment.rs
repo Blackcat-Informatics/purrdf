@@ -3,14 +3,16 @@
 
 use core::fmt;
 use core::num::NonZeroU64;
+use std::collections::TryReserveError;
 
 use purrdf_lex::cbor::StructuralError;
 
+use super::parity::ParityHistory;
 use super::rows::OrderKey;
 use super::{
     CommitCheck, ContentError, DIGEST_LENGTH, DecodedRows, DecodedTerms, FormedBudget, FrameCheck,
-    FrameEnvelope, FrameField, FrameType, PayloadBudget, PayloadResourceError, PayloadState, Range,
-    RangeFull, RowHeader, TermReservation, UnknownFrameType,
+    FrameEnvelope, FrameField, FrameType, ParityCheck, PayloadBudget, PayloadResourceError,
+    PayloadState, Range, RangeFull, RowHeader, TermReservation, UnknownFrameType,
 };
 use super::{RowOrder, terms};
 
@@ -28,6 +30,8 @@ pub struct SegmentFrame<'a> {
     pub terms: Option<TermReservation<'a>>,
     /// The content record check of a row frame that reaches interpretation.
     pub rows: Option<Result<RowHeader, ContentError>>,
+    /// Parity frame and table admission before stream placement and shard checks.
+    pub parity: Option<ParityCheck<'a>>,
     row_order: Option<(usize, Option<OrderKey>)>,
 }
 
@@ -54,6 +58,8 @@ pub enum SegmentCheckError {
     Range(RangeFull),
     /// A structural read failed while locating an independently reserved field.
     Framing(StructuralError),
+    /// The allocator refused to record a parity span for duplicate checking.
+    ParityHistory(TryReserveError),
 }
 
 impl fmt::Display for SegmentCheckError {
@@ -62,6 +68,9 @@ impl fmt::Display for SegmentCheckError {
             Self::Payload(error) => error.fmt(f),
             Self::Range(error) => error.fmt(f),
             Self::Framing(error) => error.fmt(f),
+            Self::ParityHistory(error) => {
+                write!(f, "could not record the GTS parity span ({error})")
+            }
         }
     }
 }
@@ -72,6 +81,7 @@ impl std::error::Error for SegmentCheckError {
             Self::Payload(error) => Some(error),
             Self::Range(error) => Some(error),
             Self::Framing(error) => Some(error),
+            Self::ParityHistory(error) => Some(error),
         }
     }
 }
@@ -81,6 +91,7 @@ impl purrdf_hash::error::StructuredError for SegmentCheckError {
         Payload(cause) => "gts-v2-segment-payload-resource" { "cause" => Cause(cause) },
         Range(cause) => "gts-v2-segment-range-full" { "cause" => Cause(cause) },
         Framing(cause) => "gts-v2-segment-framing" { "cause" => Cause(cause) },
+        ParityHistory(cause) => "gts-v2-segment-parity-history" { "cause" => Cause(cause) },
     }
 }
 
@@ -90,6 +101,7 @@ pub struct SegmentVerifier {
     registry: NonZeroU64,
     head: Digest,
     range: Range,
+    parity: ParityHistory,
     next_term: u128,
     content_stopped: bool,
     last_rows: [Option<OrderKey>; 3],
@@ -103,6 +115,7 @@ impl SegmentVerifier {
             registry,
             head: opener,
             range: Range::new(&opener),
+            parity: ParityHistory::new(opener),
             next_term: 0,
             content_stopped: false,
             last_rows: [None; 3],
@@ -217,6 +230,21 @@ impl SegmentVerifier {
         } else {
             RowHeader::inspect(frame, &checked, self.registry)
         };
+        let parity = if frame_type == Some(FrameType::Parity) {
+            Some(
+                self.parity
+                    .inspect(
+                        frame,
+                        &checked,
+                        &self.head,
+                        self.registry,
+                        self.content_stopped,
+                    )
+                    .map_err(SegmentCheckError::ParityHistory)?,
+            )
+        } else {
+            None
+        };
         if let Some(identifier) = checked.link.effective_identifier {
             self.range
                 .append(&identifier)
@@ -244,6 +272,7 @@ impl SegmentVerifier {
             commit,
             terms,
             rows,
+            parity: parity.map(|observation| self.parity.record(observation)),
             row_order,
         })
     }

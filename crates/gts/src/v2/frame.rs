@@ -4,6 +4,7 @@
 use core::num::NonZeroU64;
 
 use super::fields::{Fields, OptionShape};
+use super::parity::ParityClaim;
 use super::payload::PayloadWire;
 use super::{
     BLAKE3_256, CommitClaim, DIGEST_LENGTH, FRAME_FIELDS, LinkCheck, LinkState, MalformedReason,
@@ -454,12 +455,7 @@ fn check_content_shape(frame_type: u64, fields: &mut Fields<'_>) -> Result<(), W
             fields.fixed_bytes::<DIGEST_LENGTH>()?;
         }
         FrameType::Parity => {
-            fields.record(5)?;
-            fields.uint()?;
-            fields.uint()?;
-            fields.uint()?;
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
+            ParityClaim::read(fields)?;
         }
     }
     Ok(())
