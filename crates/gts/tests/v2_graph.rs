@@ -7,9 +7,9 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::v2::{
     ContentError, FrameField, FramingDamage, IndexStorageItem, IndexStorageProblem, Item, ItemKind,
-    Line, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage, PayloadRefusal,
-    RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError, SegmentWriter, Term,
-    ValueName, read,
+    Line, Lineage, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage,
+    PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure, ReadGraph, SegmentWriteError,
+    SegmentWriter, Term, ValueName, read, write_header,
 };
 use purrdf_lex::cbor::head;
 
@@ -142,17 +142,10 @@ fn a_later_commit_or_repeated_locator_invalidates_the_hints() {
 #[test]
 fn a_resync_opener_that_displaces_an_index_witness_leaves_a_broken_index() {
     let source = include_bytes!("fixtures/v2/P1/resync-cosigned-not-scanned.bin");
-    let mut opener = source[542..608].to_vec();
     // Move the embedded opener into the parity witness's final field, so
     // the witness is a complete item whose signature grammar fails.
     let offset = 642_u16;
-    assert_eq!(opener[26..29], [0x19, 0x02, 0x1e]);
-    opener[27..29].copy_from_slice(&offset.to_be_bytes());
-    let identifier = opener.len() - 32;
-    let mut hash = purrdf_hash::blake3::Hasher::new_derive_key("gts2 header");
-    hash.update(&[0x8a]);
-    hash.update(&opener[1..identifier - 2]);
-    opener[identifier..].copy_from_slice(hash.finalize().as_bytes());
+    let opener = resync_opener_at(offset);
 
     let mut changed = source[..usize::from(offset)].to_vec();
     changed[420] ^= 1;
@@ -169,6 +162,19 @@ fn a_resync_opener_that_displaces_an_index_witness_leaves_a_broken_index() {
         panic!("expected the opener inside the discarded witness");
     };
     assert_eq!(resync.offset, usize::from(offset));
+}
+
+fn resync_opener_at(offset: u16) -> Vec<u8> {
+    let source = include_bytes!("fixtures/v2/P1/resync-cosigned-not-scanned.bin");
+    let mut opener = source[542..608].to_vec();
+    assert_eq!(opener[26..29], [0x19, 0x02, 0x1e]);
+    opener[27..29].copy_from_slice(&offset.to_be_bytes());
+    let identifier = opener.len() - 32;
+    let mut hash = purrdf_hash::blake3::Hasher::new_derive_key("gts2 header");
+    hash.update(&[0x8a]);
+    hash.update(&opener[1..identifier - 2]);
+    opener[identifier..].copy_from_slice(hash.finalize().as_bytes());
+    opener
 }
 
 #[test]
@@ -250,6 +256,161 @@ fn repaired_data_requires_rechecking_its_frame_with_the_shared_budget() {
             assert_eq!(graph.repaired, None);
         }
     }
+}
+
+#[test]
+fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let index_offset = second(intact).index_checks[0].offset;
+    let parity_offset = 481;
+    let mut damaged = intact.to_vec();
+    damaged[index_offset] = 0xff;
+    let graph = second(&damaged);
+    let [recovery] = graph.parity_recoveries.as_slice() else {
+        panic!("expected the parity frame to resume its own segment");
+    };
+    assert_eq!(recovery.offset, parity_offset);
+    assert!(recovery.detached);
+    assert_eq!(
+        recovery.damage,
+        FramingDamage::Undelimitable {
+            offset: index_offset,
+            length: parity_offset - index_offset,
+        }
+    );
+    assert_eq!(graph.blobs.len(), 1);
+    assert!(graph.index_checks.is_empty());
+    assert_eq!(graph.repaired.as_deref(), Some(intact.as_slice()));
+
+    let mut capacity = ReadCapacity::default();
+    for limit in [588, 589] {
+        capacity.payload.decoded_bytes_per_read = limit;
+        let ReadGraph::Second(graph) = read(&damaged, capacity).unwrap() else {
+            panic!("expected the parity candidate to continue the segment");
+        };
+        assert_eq!(graph.parity_recoveries.len(), 1);
+        let expected = (limit == 589).then_some(intact.as_slice());
+        assert_eq!(graph.repaired.as_deref(), expected);
+    }
+
+    let index = Item::first(&intact[index_offset..])
+        .unwrap()
+        .unwrap()
+        .frame()
+        .unwrap()
+        .unwrap();
+    let mut claim = index.field(FrameField::Content);
+    assert_eq!(head::read_argument(&mut claim, head::ARRAY), Some(2));
+    assert!(head::read_argument(&mut claim, head::UNSIGNED).is_some());
+    let retained_head = head::read_bytes(&mut claim).unwrap().try_into().unwrap();
+    let parity_anchor = index
+        .field(FrameField::Identifier)
+        .strip_prefix(&[0x58, 32])
+        .unwrap()
+        .try_into()
+        .unwrap();
+    for (previous_head, valid) in [(retained_head, true), (parity_anchor, false)] {
+        let mut next_segment = damaged.clone();
+        write_header(
+            &mut next_segment,
+            None,
+            None,
+            Some(Lineage {
+                previous_head,
+                ordinal: NonZeroU64::MIN,
+            }),
+        )
+        .unwrap();
+        let result = read(&next_segment, ReadCapacity::default());
+        if valid {
+            assert!(matches!(result, Ok(ReadGraph::Second(_))));
+        } else {
+            assert!(matches!(result.unwrap_err().failure, ReadFailure::Lineage));
+        }
+    }
+}
+
+#[test]
+fn parity_recovery_uses_the_resync_opener_and_counts_each_region_as_one_item() {
+    let incomplete =
+        include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.incomplete-item.bin");
+    let undelimitable =
+        include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.undelimitable.bin");
+    let mut repaired = None;
+    for bytes in [incomplete.as_slice(), undelimitable.as_slice()] {
+        let mut capacity = ReadCapacity {
+            items: 6,
+            ..ReadCapacity::default()
+        };
+        let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+            panic!("expected a recovered generation 2 segment");
+        };
+        assert_eq!(graph.resynchronizations, []);
+        let [recovery] = graph.parity_recoveries.as_slice() else {
+            panic!("expected one accepted parity candidate");
+        };
+        assert_eq!(recovery.offset, 586);
+        assert!(recovery.detached);
+        assert_eq!(
+            recovery.damage,
+            FramingDamage::Undelimitable {
+                offset: 274,
+                length: 312,
+            }
+        );
+        assert!(graph.parity_findings.iter().any(|finding| {
+            finding.offset == 586 && finding.kind == ParityFindingKind::Repaired(1)
+        }));
+        let output = graph.repaired.unwrap();
+        assert_eq!(second(&output).parity_recoveries, []);
+        assert_eq!(repaired.get_or_insert_with(|| output.clone()), &output);
+
+        capacity.items -= 1;
+        assert!(matches!(
+            read(bytes, capacity).unwrap_err().failure,
+            ReadFailure::Framing(_)
+        ));
+    }
+
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_read = 462;
+    let refusal = read(incomplete, capacity).unwrap_err();
+    assert_eq!(refusal.offset, 586);
+    assert!(matches!(
+        refusal.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(463))
+    ));
+    capacity.payload.decoded_bytes_per_read = 463;
+    assert!(matches!(
+        read(incomplete, capacity),
+        Ok(ReadGraph::Second(_))
+    ));
+}
+
+#[test]
+fn recovery_accepts_whichever_valid_candidate_is_earlier() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let index = second(intact).index_checks[0].offset;
+    let parity = 481;
+    let mut damaged = intact.to_vec();
+    damaged[index] = 0xff;
+    let mut resync_first = damaged[..=index].to_vec();
+    resync_first.extend(resync_opener_at(u16::try_from(index + 1).unwrap()));
+    resync_first.extend_from_slice(&intact[parity..]);
+    let graph = second(&resync_first);
+    assert_eq!(graph.parity_recoveries, []);
+    let [opener] = graph.resynchronizations.as_slice() else {
+        panic!("expected the earlier resync opener to end the lost region");
+    };
+    assert_eq!(opener.offset, index + 1);
+
+    damaged.extend(resync_opener_at(u16::try_from(intact.len()).unwrap()));
+    let graph = second(&damaged);
+    assert_eq!(graph.resynchronizations, []);
+    let [recovery] = graph.parity_recoveries.as_slice() else {
+        panic!("expected the earlier parity frame to end the lost region");
+    };
+    assert_eq!(recovery.offset, parity);
 }
 
 #[test]

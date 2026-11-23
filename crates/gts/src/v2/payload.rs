@@ -80,6 +80,11 @@ impl PayloadBudget {
         Ok(())
     }
 
+    pub(super) fn charge_parity_candidate(&mut self, length: u64) -> Result<(), PayloadRefusal> {
+        self.charged = self.admit([length, 0, 0], length)?;
+        Ok(())
+    }
+
     fn admit_total(&mut self, decoded: u64) -> Result<u64, u64> {
         let total = self.charged.checked_add(decoded);
         if !self.refused

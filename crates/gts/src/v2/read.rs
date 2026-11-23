@@ -16,11 +16,11 @@ use purrdf_lex::cbor::{DecodeErrorKind, StructuralError};
 
 use super::frame::FrameWire;
 use super::index::StorageIndex;
-use super::parity::ParityStream;
+use super::parity::{ParityResumption, ParityStream};
 use super::{
-    ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget, FrameCheck,
-    FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
-    IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason,
+    CommitCheck, ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget,
+    FrameCheck, FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
+    IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason, ParityCheck,
     ParityFinding, ParitySolveError, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
     PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings,
     SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore,
@@ -86,6 +86,10 @@ pub struct RdfGraph<'a> {
     pub stored_digest_mismatches: Vec<usize>,
     /// Scanned resync openers and the framing damage before them, in file order.
     pub resynchronizations: Vec<Resynchronization>,
+    /// Damaged regions ended by verified parity frames, in file order.
+    pub parity_recoveries: Vec<ParityRecovery>,
+    /// Commits that cannot verify the ordinary prefix across a parity recovery.
+    pub interrupted_commits: Vec<(usize, CommitCheck)>,
     /// Parity diagnostics and repair outcomes, followed by each segment's tail.
     pub parity_findings: Vec<ParityFinding>,
     /// A repaired copy when any span passes verification.
@@ -114,6 +118,18 @@ pub struct Resynchronization {
     pub offset: usize,
     /// Skipped bytes when the opener starts inside the failed item.
     pub damage: Option<FramingDamage>,
+}
+
+/// A verified parity frame reached after an undelimitable region.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ParityRecovery {
+    /// Byte range skipped before the accepted parity frame.
+    pub damage: FramingDamage,
+    /// File offset of the parity frame that continued the segment.
+    pub offset: usize,
+    /// Whether the parity anchor differs from the preceding known head.
+    pub detached: bool,
 }
 
 /// The extent and kind of bytes skipped when resynchronizing.
@@ -252,8 +268,9 @@ impl std::error::Error for ReadError {
 /// and RDF positions. It returns an error when a row or term is unreadable or
 /// when an item requires content interpretation outside the graph projection.
 /// The reader can recover at a verified resync opener after failure of the
-/// framing test or opening generation recognition. An ordinary frame whose
-/// healing witness is discarded prevents a complete graph projection.
+/// framing test or opening generation recognition. A verified parity frame
+/// can resume a readable segment after undelimitable bytes. An ordinary frame
+/// whose healing witness is discarded prevents a complete graph projection.
 /// Parity findings describe the supplied bytes before any repair.
 /// Indexes report comparisons against the observed prefix and never supply
 /// graph content.
@@ -329,6 +346,15 @@ struct GraphFrame<'a> {
 struct FailedItem<'a> {
     failure: ReadFailure,
     accelerator: Option<GraphFrame<'a>>,
+}
+
+enum Recovery<'a> {
+    Resync(ResyncCandidate<'a>),
+    Parity {
+        offset: usize,
+        region_counted: bool,
+        candidate: ParityResumption<'a>,
+    },
 }
 
 #[derive(Default)]
@@ -435,8 +461,10 @@ impl<'a> GraphReader<'a> {
             self.count_item(0)?;
             self.count_held_items(end, &mut HeldItems::default())?;
             self.scan_resync(0, end)?
+        } else if self.count_undelimited(&initial, false)?.is_some() {
+            self.scan_resync(0, self.bytes.len())?
         } else {
-            self.scan_undelimited(&initial, 0, false)?
+            None
         };
         let Some(candidate) = candidate else {
             return Err(initial);
@@ -447,25 +475,25 @@ impl<'a> GraphReader<'a> {
         self.read_segment(segment, start, end)
     }
 
-    fn scan_undelimited(
+    fn count_undelimited(
         &mut self,
         failure: &ReadError,
-        scan_start: usize,
         region_counted: bool,
-    ) -> Result<Option<ResyncCandidate<'a>>, ReadError> {
+    ) -> Result<Option<bool>, ReadError> {
         let ReadFailure::Framing(error) = &failure.failure else {
             return Ok(None);
         };
-        match error.kind() {
+        let counted = match error.kind() {
             DecodeErrorKind::Malformed(_) => {
                 if !region_counted {
                     self.count_item(failure.offset)?;
                 }
+                true
             }
-            DecodeErrorKind::Truncated => {}
+            DecodeErrorKind::Truncated => region_counted,
             _ => return Ok(None),
-        }
-        self.scan_resync(scan_start, self.bytes.len())
+        };
+        Ok(Some(counted))
     }
 
     fn scan_resync(
@@ -484,6 +512,103 @@ impl<'a> GraphReader<'a> {
                     refused.requested_total,
                 )),
             })
+    }
+
+    fn scan_recovery(
+        &mut self,
+        failure: &ReadError,
+        scan_start: usize,
+        region_counted: bool,
+        segment: &Segment<'a>,
+    ) -> Result<Option<Recovery<'a>>, ReadError> {
+        let Some(region_counted) = self.count_undelimited(failure, region_counted)? else {
+            return Ok(None);
+        };
+        if self.items == self.item_limit || self.payload.total_refused() {
+            return Ok(None);
+        }
+        if let Some(candidate) = self.scan_resync(scan_start, failure.offset)? {
+            return Ok(Some(Recovery::Resync(candidate)));
+        }
+        let parity_slots = if region_counted { 1 } else { 2 };
+        let parity_allowed = self.item_limit - self.items >= parity_slots;
+        let history = segment.verifier.parity_history();
+        for offset in failure.offset..self.bytes.len() {
+            // Both candidate types start with a deterministic 11-field array.
+            let bytes = &self.bytes[offset..];
+            if bytes.first() != Some(&0x8b) {
+                continue;
+            }
+            if let Some(candidate) = self.scan_resync(offset, offset + 1)? {
+                return Ok(Some(Recovery::Resync(candidate)));
+            }
+            if !parity_allowed {
+                continue;
+            }
+            if let Some(candidate) =
+                history
+                    .scan_at(bytes, &mut self.payload)
+                    .map_err(|count| ReadError {
+                        offset,
+                        failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(count)),
+                    })?
+            {
+                return Ok(Some(Recovery::Parity {
+                    offset,
+                    region_counted,
+                    candidate,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn resume_parity(
+        &mut self,
+        region: Range<usize>,
+        region_counted: bool,
+        candidate: ParityResumption<'a>,
+        segment: &mut Segment<'a>,
+    ) -> Result<(), ReadError> {
+        let offset = region.end;
+        if !region_counted {
+            self.count_item(region.start)?;
+        }
+        self.count_item(offset)?;
+        let damage = FramingDamage::Undelimitable {
+            offset: region.start,
+            length: region.len(),
+        };
+        let accept = || {
+            segment.parity.damaged_region(region)?;
+            segment.dictionary.mark_doubt();
+            let detached = segment
+                .verifier
+                .resume_parity(candidate.anchor, &candidate.table)?;
+            segment
+                .parity
+                .other_item(offset..offset + candidate.length)?;
+            segment.parity.observe(
+                offset,
+                offset + candidate.payload_end,
+                ParityCheck::Table {
+                    table: candidate.table,
+                    payload_damaged: false,
+                },
+            )?;
+            super::fields::push(
+                &mut self.graph.parity_recoveries,
+                ParityRecovery {
+                    damage,
+                    offset,
+                    detached,
+                },
+            )
+        };
+        accept().map_err(|error| ReadError {
+            offset,
+            failure: error.into(),
+        })
     }
 
     fn resume_segment(
@@ -638,14 +763,33 @@ impl<'a> GraphReader<'a> {
                     return Ok(self.graph);
                 }
                 Err(error) => {
-                    let Some(candidate) =
-                        self.scan_undelimited(&error, previous_start + 1, items.region_counted)?
-                    else {
-                        return Err(error);
-                    };
-                    previous_start = candidate.offset;
-                    offset = candidate.offset + candidate.bytes.len();
-                    segment = self.resume_segment(error, &candidate, Some(&mut segment))?;
+                    match self.scan_recovery(
+                        &error,
+                        previous_start + 1,
+                        items.region_counted,
+                        &segment,
+                    )? {
+                        Some(Recovery::Resync(candidate)) => {
+                            previous_start = candidate.offset;
+                            offset = candidate.offset + candidate.bytes.len();
+                            segment = self.resume_segment(error, &candidate, Some(&mut segment))?;
+                        }
+                        Some(Recovery::Parity {
+                            offset: start,
+                            region_counted,
+                            candidate,
+                        }) => {
+                            previous_start = start;
+                            offset = start + candidate.length;
+                            self.resume_parity(
+                                error.offset..start,
+                                region_counted,
+                                candidate,
+                                &mut segment,
+                            )?;
+                        }
+                        None => return Err(error),
+                    }
                     items = HeldItems::default();
                     continue;
                 }
@@ -654,7 +798,7 @@ impl<'a> GraphReader<'a> {
             let head = held
                 .as_ref()
                 .and_then(|frame| frame.checked.link.effective_identifier.as_ref())
-                .unwrap_or_else(|| segment.verifier.head());
+                .unwrap_or_else(|| segment.verifier.predecessor());
             // The current frame already links under a held predecessor's
             // computed ID. Its successor cannot heal it in that case.
             let witness = if held.is_none() {
@@ -1060,6 +1204,12 @@ impl<'a> GraphReader<'a> {
                 )?;
             }
             FrameType::Commit if checked.commit.is_some_and(|commit| commit.valid) => {}
+            FrameType::Commit
+                if segment.verifier.incomplete_prefix() && checked.commit.is_some() =>
+            {
+                let commit = checked.commit.ok_or(ReadFailure::MissingContent)?;
+                super::fields::push(&mut self.graph.interrupted_commits, (offset, commit))?;
+            }
             FrameType::Commit => return Err(ReadFailure::Commit),
             FrameType::Index => {
                 segment.index_storage.closing_index(offset);

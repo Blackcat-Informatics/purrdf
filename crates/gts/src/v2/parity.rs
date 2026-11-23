@@ -5,6 +5,7 @@ use core::{fmt, num::NonZeroU64, ops::Range};
 use std::collections::TryReserveError;
 
 use purrdf_hash::blake3::Hasher;
+use purrdf_lex::cbor::head;
 
 use super::fields::Fields;
 use super::{
@@ -16,6 +17,7 @@ use crate::FastSet;
 mod encode;
 mod field;
 mod repair;
+mod resume;
 mod solve;
 mod stream;
 
@@ -230,6 +232,15 @@ struct Geometry {
 }
 
 impl Geometry {
+    const fn payload_length(&self) -> usize {
+        let parity_bytes = self.parity_shards * self.shard_bytes;
+        1 + head::head_len(self.data_shards as u64)
+            + head::head_len(self.parity_shards as u64)
+            + DIGEST_ENTRY_BYTES * (self.data_shards + self.parity_shards)
+            + head::head_len(parity_bytes as u64)
+            + parity_bytes
+    }
+
     fn for_span(first: u64, end: u64) -> Option<Self> {
         let span_bytes = usize::try_from(end.checked_sub(first)?).ok()?;
         if !first.is_multiple_of(SPAN_BYTES as u64) || !(1..=SPAN_BYTES).contains(&span_bytes) {
@@ -249,6 +260,8 @@ impl Geometry {
         })
     }
 }
+
+pub(super) use resume::ParityResumption;
 
 pub(super) struct ParityClaim<'a> {
     geometry: u64,
@@ -347,6 +360,20 @@ impl ParityHistory {
         }
     }
 
+    fn blocks(&self, first: u64) -> bool {
+        self.seen_short || self.starts.contains(&first)
+    }
+
+    pub(super) fn record_resumption(
+        &mut self,
+        table: &ParityTable<'_>,
+    ) -> Result<(), TryReserveError> {
+        self.starts.try_reserve(1)?;
+        self.starts.insert(table.span.start);
+        self.seen_short |= table.geometry.span_bytes < SPAN_BYTES;
+        Ok(())
+    }
+
     pub(super) fn inspect<'a>(
         &mut self,
         frame: &FrameEnvelope<'a>,
@@ -372,7 +399,7 @@ impl ParityHistory {
             ));
         }
 
-        let blocked = self.seen_short || self.starts.contains(&claim.first);
+        let blocked = self.blocks(claim.first);
         let first_to_record = if blocked {
             None
         } else {
