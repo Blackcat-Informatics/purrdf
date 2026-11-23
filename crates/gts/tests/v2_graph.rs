@@ -193,6 +193,76 @@ fn a_later_torn_item_leaves_the_last_slot_for_the_resync_opener() {
 }
 
 #[test]
+fn a_resync_opener_inside_a_complete_failed_frame_restores_later_rows() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-after-torn-swallowed-failing.whole.bin");
+    let graph = second(bytes);
+    let [resumed] = graph.resynchronizations.as_slice() else {
+        panic!("the input contains one scanned opener");
+    };
+    assert_eq!(resumed.offset, 206);
+    assert_eq!(
+        resumed.damage,
+        Some(FramingDamage::TornTail {
+            offset: 114,
+            length: 92
+        })
+    );
+    assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
+}
+
+#[test]
+fn a_complete_failed_frame_charges_its_payload_before_scanning() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-order-held-after-g.whole.bin");
+    let mut capacity = ReadCapacity {
+        items: 6,
+        ..ReadCapacity::default()
+    };
+    // Terms charge 17 bytes and the rejected frame charges one. The held
+    // frames after it are discarded without using the decoded-byte budget.
+    capacity.payload.decoded_bytes_per_read = 4114;
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("the input opens a generation 2 file");
+    };
+    let [resumed] = graph.resynchronizations.as_slice() else {
+        panic!("the input contains one scanned opener");
+    };
+    assert_eq!(resumed.offset, 370);
+
+    capacity.payload.decoded_bytes_per_read = 4113;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert_eq!(refused.offset, 370);
+    assert!(matches!(
+        refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4114))
+    ));
+
+    // The failed frame and both held items reach the item limit at EOF.
+    // The candidate is never charged and the original failure survives.
+    capacity.items = 5;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert_eq!(refused.offset, 114);
+    assert!(matches!(refused.failure, ReadFailure::Wire(_)));
+}
+
+#[test]
+fn a_replaced_healing_witness_leaves_the_previous_frame_broken() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-heal-witness-removed.ample-whole.bin");
+    let mut capacity = ReadCapacity::default();
+    let broken = read(bytes, capacity).unwrap_err();
+    assert_eq!(broken.offset, 114);
+    assert!(matches!(broken.failure, ReadFailure::BrokenLink));
+
+    // When the scan cannot admit the new opener, the witness remains.
+    capacity.payload.decoded_bytes_per_read = 4114;
+    let refused = read(bytes, capacity).unwrap_err();
+    assert_eq!(refused.offset, 316);
+    assert!(matches!(
+        refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4184))
+    ));
+}
+
+#[test]
 fn value_rebuild_precedes_term_resolution_across_segments() {
     for bytes in [
         include_bytes!("fixtures/v2/P3/terms-literal-ref-value-after.value-before.bin").as_slice(),

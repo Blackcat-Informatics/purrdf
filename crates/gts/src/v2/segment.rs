@@ -182,6 +182,17 @@ impl SegmentVerifier {
         let checked = frame
             .check(&self.head, witness, self.registry, &mut next_budget)
             .map_err(SegmentCheckError::Payload)?;
+        let accepted = self.accept_checked(frame, checked, budget)?;
+        *budget = next_budget;
+        Ok(accepted)
+    }
+
+    pub(super) fn accept_checked<'a>(
+        &mut self,
+        frame: &FrameEnvelope<'a>,
+        checked: FrameCheck<'a>,
+        budget: &PayloadBudget,
+    ) -> Result<SegmentFrame<'a>, SegmentCheckError> {
         let commit = checked
             .commit_claim
             .map(|claim| self.range.check_commit(claim, checked.link.state));
@@ -228,7 +239,6 @@ impl SegmentVerifier {
             _ => None,
         }
         .map(|slot| (slot, self.last_rows[slot].take()));
-        *budget = next_budget;
         Ok(SegmentFrame {
             frame: checked,
             commit,
