@@ -276,6 +276,11 @@ impl VerifyingKey {
             .ok_or(Failure::EquationFailed)
     }
 
+    #[allow(
+        clippy::inline_always,
+        reason = "keep the curve equation in both verification entry points so the measured verifier includes the field operations"
+    )]
+    #[inline(always)]
     fn matches_equation(&self, message: &[u8], signature: &Signature, scalar: &Scalar) -> bool {
         let k = challenge(&signature.r, &self.bytes, message);
         let expected = Point::double_scalar_mul_vartime(&k, &self.point.neg(), scalar);
