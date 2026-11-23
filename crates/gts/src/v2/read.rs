@@ -812,6 +812,7 @@ impl<'a> GraphReader<'a> {
     ) -> Result<RdfGraph<'a>, ReadError> {
         let end = opener.bytes().len();
         let failure = if generation == Generation::Second {
+            self.admit_body_nesting(opener.bytes(), 0)?;
             match decode_opener(opener) {
                 Ok(header) => {
                     self.finish_detection();
@@ -844,6 +845,7 @@ impl<'a> GraphReader<'a> {
         };
         let start = candidate.offset;
         let end = start + candidate.bytes.len();
+        self.admit_body_nesting(candidate.bytes, start)?;
         self.finish_detection();
         let segment = self.resume_segment(initial, &candidate, None)?;
         self.read_segment(segment, start, end)
@@ -1356,26 +1358,58 @@ impl<'a> GraphReader<'a> {
         };
         Item::first_with_depth(&self.bytes[offset..end], limit).map_err(|error| {
             let error_offset = usize::try_from(error.offset()).unwrap_or(usize::MAX);
-            let failure = match error.kind() {
-                DecodeErrorKind::Depth { limit } if self.initial_nesting_depth.is_some() => {
+            let (reported_offset, failure) = match error.kind() {
+                DecodeErrorKind::Depth { limit } if self.initial_nesting_depth.is_some() => (
+                    offset.saturating_add(error_offset),
                     ReadFailure::DetectionDepth {
                         required: limit.saturating_add(1),
                         limit,
                         cause: error,
-                    }
-                }
-                DecodeErrorKind::Depth { limit } => ReadFailure::ItemDepth {
-                    required: limit.saturating_add(1),
-                    limit,
-                    cause: error,
-                },
-                _ => ReadFailure::Framing(error),
+                    },
+                ),
+                DecodeErrorKind::Depth { limit } => (
+                    offset.saturating_add(error_offset),
+                    ReadFailure::ItemDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                ),
+                _ => (offset, ReadFailure::Framing(error)),
             };
             ReadError {
-                offset: offset.saturating_add(error_offset),
+                offset: reported_offset,
                 failure,
             }
         })
+    }
+
+    fn admit_body_nesting(&self, bytes: &'a [u8], offset: usize) -> Result<(), ReadError> {
+        let Some(limit) = self.item_nesting_depth else {
+            return Ok(());
+        };
+        match Item::first_with_depth(bytes, limit) {
+            Ok(Some(_)) => Ok(()),
+            Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
+                let error_offset = usize::try_from(error.offset()).unwrap_or(usize::MAX);
+                Err(ReadError {
+                    offset: offset.saturating_add(error_offset),
+                    failure: ReadFailure::ItemDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                })
+            }
+            Err(error) => Err(ReadError {
+                offset,
+                failure: ReadFailure::Framing(error),
+            }),
+            Ok(_) => Err(ReadError {
+                offset,
+                failure: ReadFailure::Empty,
+            }),
+        }
     }
 
     fn inspect_item(

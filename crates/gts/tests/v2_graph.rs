@@ -831,6 +831,18 @@ fn generation_detection_bounds_opener_bytes_work_and_depth() {
             ..
         }
     ));
+
+    limits.detection.nesting_depth = 2;
+    limits.second_generation_nesting_depth = 1;
+    let error = read_with_limits(recovered, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 2,
+            limit: 1,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -890,6 +902,44 @@ fn bounded_recovery_and_body_framing_apply_their_nesting_limits() {
             limit: body_depth - 1
         }
     );
+
+    let opener = include_bytes!("fixtures/v2/P1/header-minimal.bin");
+    limits = ReadLimits::default();
+    limits.second_generation_nesting_depth = 2;
+    assert!(matches!(
+        read_with_limits(opener, limits).unwrap(),
+        ReadGraph::Second(_)
+    ));
+    limits.second_generation_nesting_depth -= 1;
+    let error = read_with_limits(opener, limits).unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::ItemDepth {
+            required: 2,
+            limit: 1,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn bounded_framing_reports_the_item_start_and_retains_the_native_offset() {
+    let opener = include_bytes!("fixtures/v2/P1/header-minimal.bin");
+    let mut valid = opener.to_vec();
+    valid.extend_from_slice(&[0x82, 0x00, 0x00]);
+    assert!(matches!(
+        read_with_limits(&valid, ReadLimits::default()).unwrap(),
+        ReadGraph::Second(_)
+    ));
+
+    let mut malformed = opener.to_vec();
+    malformed.extend_from_slice(&[0x82, 0x00, 0xff]);
+    let error = read_with_limits(&malformed, ReadLimits::default()).unwrap_err();
+    assert_eq!(error.offset, opener.len());
+    let ReadFailure::Framing(cause) = &error.failure else {
+        panic!("the malformed body item must retain its framing refusal");
+    };
+    assert_eq!(cause.offset(), 2);
 }
 
 #[test]
