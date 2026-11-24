@@ -208,21 +208,24 @@ def unchanged(artifacts):
 
 
 def workflow_identity(version):
-    return f"https://github.com/{REPOSITORY}/.github/workflows/{WORKFLOW}@refs/tags/py-v{version}"
+    event = os.getenv("GITHUB_EVENT_NAME")
+    protected = os.getenv("GITHUB_REF_PROTECTED") == "true"
+    protected_dispatch = protected and event == "workflow_dispatch" and version == "5.0.1"
+    ref = "refs/heads/main" if protected_dispatch else f"refs/tags/py-v{version}"
+    return f"https://github.com/{REPOSITORY}/.github/workflows/{WORKFLOW}@{ref}"
 
 
 def publishing_context(version):
-    """Require the configured tag workflow, with no alternate credentials."""
+    """Require the configured release workflow and ambient credentials."""
+    workflow = workflow_identity(version).removeprefix("https://github.com/")
     expected = {
         "GITHUB_ACTIONS": "true",
         "GITHUB_REPOSITORY": REPOSITORY,
-        "GITHUB_REF": f"refs/tags/py-v{version}",
-        "GITHUB_WORKFLOW_REF": workflow_identity(version).removeprefix(
-            "https://github.com/"
-        ),
+        "GITHUB_REF": workflow.rsplit("@", 1)[1],
+        "GITHUB_WORKFLOW_REF": workflow,
     }
     if any(os.environ.get(key) != value for key, value in expected.items()):
-        raise PublisherError("publishing requires the configured GitHub tag workflow")
+        raise PublisherError("publishing requires the configured GitHub release workflow")
     if any(key.startswith("TWINE_") for key in os.environ) or (
         "SIGSTORE_ID_TOKEN" in os.environ
     ):
@@ -230,10 +233,7 @@ def publishing_context(version):
     import keyring
     from keyring.backends.null import Keyring
 
-    # Replace any already-loaded backend as well as selecting it for new loads.
-    # Setting the environment alone does not replace keyring's cached backend.
     keyring.set_keyring(Keyring())
-    # The /dev/null Twine config below similarly excludes .pypirc credentials.
     os.environ["PYTHON_KEYRING_BACKEND"] = "keyring.backends.null.Keyring"
 
 
@@ -251,7 +251,7 @@ def publish(artifacts, version):
     if token is None:
         raise PublisherError("ambient GitHub signing identity is unavailable")
     identity = oidc.IdentityToken(token)
-    expected_subject = f"repo:{REPOSITORY}:ref:refs/tags/py-v{version}"
+    expected_subject = f"repo:{REPOSITORY}:ref:{os.environ['GITHUB_REF']}"
     if identity.issuer != GITHUB_ISSUER or identity.identity != expected_subject:
         raise PublisherError(
             "ambient signing identity differs from the release workflow"

@@ -1,0 +1,12 @@
+{
+  "tag": "py-v5.0.1",
+  "commit": "6e63988e44a1f7a45c9803199e2a37415f85d41f",
+  "purrdf": {
+    "purrdf-5.0.1-cp313-abi3-manylinux_2_34_x86_64.whl": "3bf0bee930cdb670d0a0f7f9fad7c5d5264fdfb33a9d2b983d11c1a05c187567",
+    "purrdf-5.0.1.tar.gz": "0650a8bdc384951e100a21aab3aa962b88b583eb2745e3ce28e8b2492bc22667"
+  },
+  "purrdf-rdflib": {
+    "purrdf_rdflib-5.0.1-py3-none-any.whl": "bc9dffe36be4a4000af274ba65397311baf89fe26bfc7eedf3f5ecc1931b9161",
+    "purrdf_rdflib-5.0.1.tar.gz": "aa8ab3da50fe15754ade4ed668ff03c301eb30b8cfbf961d6f369f41eddac898"
+  }
+}
