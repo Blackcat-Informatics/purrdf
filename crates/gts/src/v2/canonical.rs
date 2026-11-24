@@ -118,6 +118,15 @@ impl std::error::Error for ReadLabellingError {
     }
 }
 
+impl purrdf_hash::error::StructuredError for ReadLabellingError {
+    purrdf_hash::error_visit! {
+        Segment(cause) => "gts-v2-read-labelling-segment" { "cause" => Cause(cause) },
+        Labeller(cause) => "gts-v2-read-labelling-engine" { "cause" => Cause(cause) },
+        Resource(cause) => "gts-v2-read-labelling-resource" { "cause" => Cause(cause) },
+        MissingFold => "gts-v2-read-labelling-missing-fold" {},
+    }
+}
+
 impl ContentLabelling {
     /// Encoded canonical lines in delivery order.
     #[must_use]

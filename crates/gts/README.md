@@ -33,6 +33,9 @@ Call `v2::RdfGraph::label_content` on the original read result to obtain the
 canonical lines, placements, statistics, and content digest of the file fold.
 Labelling takes a caller-supplied work limit and size and weight capacities.
 Held rows, bindings, and suppression entries leave the digest absent.
+Call `v2::RdfGraph::label_read` for each segment's own digest and its closing
+index comparisons as well as the file result. Labelling charges the same
+weight budget for the segments in file order, then for the file fold.
 
 The crate owns the wire-format machinery:
 
