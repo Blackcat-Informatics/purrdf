@@ -44,8 +44,8 @@ mod references;
 mod resync;
 mod state;
 
-use blob::{BlobClaim, RebuildBudget};
-pub use blob::{BlobEntry, ExternalBlob, RebuildResult, RebuildState};
+use blob::{BlobClaim, RebuildBudget, UnitUsage};
+pub use blob::{BlobEntry, ExternalBlob, RebuildResult, RebuildState, UnreferencedUnit};
 pub use frame_wire::{FrameWireResult, PayloadOutcome, PayloadUnchecked};
 use labelling_size::LabellingSize;
 pub(super) use own_segment::OwnSegment;
@@ -182,6 +182,8 @@ pub struct RdfGraph<'a> {
     pub blob_length_conflicts: Vec<usize>,
     /// Recipe and value rebuild outcomes in declaration order.
     pub rebuilds: Vec<RebuildResult>,
+    /// Chunk declarations with no reference in their segment, in file order.
+    pub unreferenced_units: Vec<UnreferencedUnit>,
     /// File offsets of terms frames whose canonical order declaration fails.
     pub term_order_violations: Vec<usize>,
     /// File offsets of row frames whose declared order differs from their rows.
@@ -197,6 +199,7 @@ pub struct RdfGraph<'a> {
     /// Declared profiles that the reader does not check, in segment order.
     pub unchecked_profiles: Vec<ProfileNotChecked>,
     pub(super) canonical_claim: bool,
+    pub(super) claimed_segments: Vec<u64>,
     pub(super) canonical_labels: Vec<(super::TermId, usize)>,
     pub(super) pack_regions: Vec<(usize, super::canonical::PackRegion)>,
     /// Segments whose opener prevents link and content checks.
@@ -1049,6 +1052,7 @@ struct Segment<'a> {
     durability: SegmentDurability,
     end: FileEnd,
     units: FastMap<[u8; 32], Unit<'a>>,
+    unit_usage: UnitUsage,
     parity: ParityStream<'a>,
     index_storage: StorageIndex,
     index_content: IndexContent,
@@ -1664,7 +1668,11 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                         failure: error.into(),
                     })?;
             }
-            self.finish_segment(previous, start)?;
+            let preceding_end = match damage {
+                Some(FramingDamage::TornTail { offset, .. }) => offset,
+                _ => start,
+            };
+            self.finish_segment(previous, preceding_end)?;
             if self.stop_after_segment {
                 return Ok(None);
             }
@@ -1842,6 +1850,13 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             .map_err(|failure| ReadError { offset, failure })?;
         if self.stop_after_segment {
             self.graph.canonical_claim = segment.canonical_claim;
+        } else if segment.canonical_claim {
+            super::fields::push(&mut self.graph.claimed_segments, file_ordinal).map_err(
+                |error| ReadError {
+                    offset,
+                    failure: error.into(),
+                },
+            )?;
         }
         segment.labelling.blob_start = self.blob_claims.len();
         segment.state_run = if header.resync().is_some() || header.lineage().is_none() {
@@ -2198,7 +2213,10 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         self.visibility.settle_segment(segment);
         let size = segment.labelling.size(self.blob_claims.len());
         self.labelling_size += size;
-        let end = if self.graph.framing_tail.is_some() {
+        let end = if matches!(
+            self.graph.framing_tail,
+            Some(FramingDamage::Undelimitable { .. })
+        ) {
             self.bytes.len()
         } else {
             offset
@@ -2232,6 +2250,12 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 &mut self.graph.index_storage_findings,
             )
             .map_err(read_error)?;
+        if self.graph.item_refusal.is_none() {
+            segment
+                .unit_usage
+                .report(&mut self.graph.unreferenced_units)
+                .map_err(read_error)?;
+        }
         super::fields::push(
             &mut self.graph.segment_authentication,
             segment.authentication.summary(segment.file_ordinal),
@@ -3277,6 +3301,7 @@ fn segment_from_header(
         },
         end: FileEnd::NoCommit,
         units: FastMap::default(),
+        unit_usage: UnitUsage::default(),
         index_storage: StorageIndex::default(),
         index_content: IndexContent::default(),
         pending_rows: Vec::new(),

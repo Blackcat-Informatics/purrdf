@@ -231,10 +231,9 @@ mod tests {
         assert!(graph.item_refusal.is_none());
         let report = graph
             .label_read(Limit::new(0), &mut LabellingCapacity::new(1, 0))
-            .unwrap()
             .unwrap();
         assert_eq!(report.segments.len(), 2);
-        let file = report.file.unwrap().content_digest;
+        let file = report.file.unwrap().unwrap().content_digest;
         assert!(file.is_some());
         assert!(
             report

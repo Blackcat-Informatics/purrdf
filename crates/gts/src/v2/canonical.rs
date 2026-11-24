@@ -86,13 +86,14 @@ impl purrdf_hash::error::StructuredError for ContentLabellingRefusal {
     }
 }
 
-/// Digest and labelling refusal for a readable segment's own fold.
+/// Digest, index comparisons, and canonical checks of a segment.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct SegmentContentLabelling {
     /// The segment's ordinal in the input file.
     pub segment: u64,
-    /// The digest, absent for a fold with a held item, or its refusal.
+    /// The digest or its labelling refusal. The digest is absent when the
+    /// segment has no fold or its fold has a held item.
     pub content_digest: Result<Option<[u8; 32]>, ContentLabellingRefusal>,
     /// Digest and statistics comparison for the eligible closing index.
     pub closing_index: Option<ClosingIndexLabelling>,
@@ -116,10 +117,21 @@ pub struct ClosingIndexLabelling {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct ReadContentLabelling {
-    /// Readable segments in file order. Unreadable segments have no digest.
+    /// Observed segments in file order.
     pub segments: Vec<SegmentContentLabelling>,
-    /// Canonical results of the file fold, or its labelling refusal.
-    pub file: Result<ContentLabelling, ContentLabellingRefusal>,
+    /// Labelling of the file fold, absent if the read produced no fold.
+    pub file: Result<Option<ContentLabelling>, ContentLabellingRefusal>,
+}
+
+impl SegmentContentLabelling {
+    const fn without_fold(segment: u64, claimed: bool) -> Self {
+        Self {
+            segment,
+            content_digest: Ok(None),
+            closing_index: None,
+            canonical: SegmentCanonicalCheck::without_fold(claimed),
+        }
+    }
 }
 
 /// A labelling operation could not return a result for the read.
@@ -241,8 +253,9 @@ impl<'a> RdfGraph<'a> {
     ///
     /// Each own fold resolves terms and references within its original
     /// segment only. It uses ordinal zero for blank sources. All folds share
-    /// the weight account. If the item budget stopped the read, returns
-    /// `None` and leaves the account untouched. Use the original read result.
+    /// the weight account. If the item budget stopped the read, reports the
+    /// observed segments with no digests and leaves the account untouched.
+    /// Use the original read result.
     ///
     /// # Errors
     /// Returns a replay, storage, or non-refusal labelling failure.
@@ -250,14 +263,39 @@ impl<'a> RdfGraph<'a> {
         &self,
         limit: Limit,
         capacity: &mut LabellingCapacity,
-    ) -> Result<Option<ReadContentLabelling>, ReadLabellingError> {
-        if self.labelling_size().is_none() {
-            return Ok(None);
-        }
+    ) -> Result<ReadContentLabelling, ReadLabellingError> {
         let mut segments = Vec::new();
         segments
-            .try_reserve_exact(self.own_segments().len())
+            .try_reserve_exact(self.segment_durability.len() + self.skipped_segments.len())
             .map_err(ReadLabellingError::Resource)?;
+        let file = if self.labelling_size().is_some() {
+            self.label_read_folds(limit, capacity, &mut segments)?
+                .map(Some)
+        } else {
+            let mut claims = self.claimed_segments.iter().copied().peekable();
+            segments.extend(self.segment_durability.iter().map(|segment| {
+                let claimed = claims.next_if_eq(&segment.segment).is_some();
+                SegmentContentLabelling::without_fold(segment.segment, claimed)
+            }));
+            Ok(None)
+        };
+        if !self.skipped_segments.is_empty() {
+            segments.extend(
+                self.skipped_segments
+                    .iter()
+                    .map(|segment| SegmentContentLabelling::without_fold(segment.ordinal, false)),
+            );
+            segments.sort_unstable_by_key(|segment| segment.segment);
+        }
+        Ok(ReadContentLabelling { segments, file })
+    }
+
+    fn label_read_folds(
+        &self,
+        limit: Limit,
+        capacity: &mut LabellingCapacity,
+        segments: &mut Vec<SegmentContentLabelling>,
+    ) -> Result<Result<ContentLabelling, ContentLabellingRefusal>, ReadLabellingError> {
         self.for_labelled_segments(limit, capacity, |segment, fold, labelled| {
             let closing_index = labelled.as_ref().ok().and_then(|result| {
                 let (offset, check) = segment.closing_index(self)?;
@@ -287,8 +325,7 @@ impl<'a> RdfGraph<'a> {
             });
             Ok(())
         })?;
-        let file = read_labelling(self.label_content(limit, capacity))?;
-        Ok(Some(ReadContentLabelling { segments, file }))
+        read_labelling(self.label_content(limit, capacity))
     }
 
     pub(super) fn label_for_compaction(

@@ -4,11 +4,11 @@
 use crate::v2::{PayloadOutcome, PayloadUnchecked, RdfGraph};
 
 use super::{
-    CanonicalLabellingCheck, CanonicalLabellingDifference, CanonicalStructureCheck,
-    CanonicalStructureDifference,
+    CanonicalLabellingCheck, CanonicalLabellingDifference, CanonicalLabellingUnchecked,
+    CanonicalStructureCheck, CanonicalStructureDifference,
 };
 
-/// The canonical check of a readable segment in a whole-file labelling report.
+/// The canonical check of a segment in a whole-file labelling report.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct SegmentCanonicalCheck {
@@ -30,7 +30,7 @@ pub struct SegmentCanonicalCheck {
 pub enum CanonicalStorageCheck {
     /// The segment makes no known canonical claim.
     NotClaimed,
-    /// A frame's stored or decoded payload exceeded read capacity.
+    /// The item, stored-payload or decoded-payload capacity prevented comparison.
     ExceedsCapacity,
     /// The reader does not hold the format's reference encoder.
     EncoderNotHeld,
@@ -59,6 +59,29 @@ pub enum CanonicalDifferenceReason {
 }
 
 impl SegmentCanonicalCheck {
+    pub(super) const fn without_fold(claimed: bool) -> Self {
+        let (structure, labelling, storage) = if claimed {
+            (
+                CanonicalStructureCheck::ExceedsCapacity,
+                CanonicalLabellingUnchecked::ExceedsCapacity,
+                CanonicalStorageCheck::ExceedsCapacity,
+            )
+        } else {
+            (
+                CanonicalStructureCheck::NotClaimed,
+                CanonicalLabellingUnchecked::NotClaimed,
+                CanonicalStorageCheck::NotClaimed,
+            )
+        };
+        Self {
+            claimed,
+            structure,
+            labelling: CanonicalLabellingCheck::Unchecked(labelling),
+            storage,
+            first_difference: None,
+        }
+    }
+
     pub(super) fn from_levels(
         fold: &RdfGraph<'_>,
         structure: CanonicalStructureCheck,

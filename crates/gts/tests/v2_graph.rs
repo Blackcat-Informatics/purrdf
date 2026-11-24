@@ -311,7 +311,6 @@ fn own_fold_only_resolves_values_from_its_segment() {
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
     let [declaring, referencing] = report.segments.as_slice() else {
         panic!("the vector has two readable segments");
@@ -325,7 +324,7 @@ fn own_fold_only_resolves_values_from_its_segment() {
     );
     assert_eq!(*referencing.content_digest.as_ref().unwrap(), None);
     assert_eq!(
-        report.file.unwrap().content_digest,
+        report.file.unwrap().unwrap().content_digest,
         digest("32eaa574d4ae4e3e6ac525138ba9413b07a0dffb9f03be55fb84d00196b223dd")
     );
 }
@@ -343,10 +342,7 @@ fn own_folds_charge_the_shared_weight_before_the_file() {
     let file = digest("3fcec7b269705554deedfa6e5a74cdce6f7969618664099f6640fb9b5b76e3a0");
     for (limit, admitted) in [(240, 240), (239, 120), (119, 60)] {
         let mut capacity = LabellingCapacity::new(u64::MAX, limit);
-        let report = graph
-            .label_read(Limit::new(0), &mut capacity)
-            .unwrap()
-            .unwrap();
+        let report = graph.label_read(Limit::new(0), &mut capacity).unwrap();
         assert_eq!(capacity.total(), admitted);
         let [one, two] = report.segments.as_slice() else {
             panic!("the vector has two readable segments");
@@ -365,7 +361,7 @@ fn own_folds_charge_the_shared_weight_before_the_file() {
             assert_eq!(*two.content_digest.as_ref().unwrap(), second);
         }
         if limit == 240 {
-            assert_eq!(report.file.unwrap().content_digest, file);
+            assert_eq!(report.file.unwrap().unwrap().content_digest, file);
         } else {
             assert!(matches!(report.file, Err(ContentLabellingRefusal::Lowering(
                 LoweringRefusal::Weight { weight: 120, total, .. }
@@ -458,7 +454,6 @@ fn indexed_writer_closes_the_written_fold_and_checks_labelling_before_output() {
     );
     let report = graph
         .label_read(Limit::new(0), &mut LabellingCapacity::new(2, u64::MAX))
-        .unwrap()
         .unwrap();
     let claims = report.segments[0].closing_index.unwrap();
     assert!(claims.statistics_match && claims.content_digest_matches);
@@ -484,7 +479,6 @@ fn canonical_structure_locates_differences_at_the_upstream_positions() {
                 Limit::new(0),
                 &mut LabellingCapacity::new(u64::MAX, u64::MAX),
             )
-            .unwrap()
             .unwrap();
         report.segments[0].canonical
     };
@@ -603,7 +597,6 @@ fn canonical_structure_reports_short_parity_after_an_intermediate_index() {
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
     assert_eq!(
         report.segments[0].canonical.structure,
@@ -643,7 +636,6 @@ fn canonical_structure_reports_a_healed_ordinary_identifier() {
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
     assert_eq!(
         report.segments[0].canonical.structure,
@@ -656,29 +648,115 @@ fn canonical_structure_reports_a_healed_ordinary_identifier() {
 }
 
 #[test]
-fn canonical_structure_uses_the_actual_segment_boundaries_and_reports_a_torn_suffix() {
+fn canonical_structure_counts_only_segment_items_when_the_file_ends_torn() {
     use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference};
 
     let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
     let mut bytes = [fixture.as_slice(), fixture.as_slice()].concat();
     let end = bytes.len();
     bytes.push(0x82);
-    let graph = second(&bytes);
+    let read = |bytes| {
+        let graph = second(bytes);
+        assert_eq!(graph.end, FileEnd::Torn);
+        graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap()
+    };
+    let report = read(&bytes);
+    let [first, second] = report.segments.as_slice() else {
+        panic!("the complete openers delimit two segments");
+    };
+    assert_eq!(first.canonical.structure, CanonicalStructureCheck::Verified);
+    assert_eq!(
+        second.canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+
+    let truncated = read(&bytes[..end - 1]);
+    let missing_locator = end - 11;
+    assert!(
+        matches!(truncated.segments[1].canonical.structure, CanonicalStructureCheck::Failed {
+        offset, difference: CanonicalStructureDifference::FrameSequence, ..
+    } if offset == missing_locator)
+    );
+}
+
+#[test]
+fn canonical_structure_keeps_a_complete_parity_item_that_contains_a_resync() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
+
+    let intact = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let graph = second(intact);
+    let parity = graph.frame_wire.last().unwrap();
+    assert_eq!(parity.frame_type, Some(FrameType::Parity as u64));
+    let parity_end = parity.offset + parity.length;
+    let mut input = intact[..parity_end].to_vec();
+    let start = parity.offset + 200;
+    let opener = resync_opener_at(u16::try_from(start).unwrap());
+    let end = start + opener.len();
+    input[start..end].copy_from_slice(&opener);
+    input[end] = 0xff;
+    input.push(0xff);
+    let graph = second(&input);
+    assert_eq!(graph.resynchronizations[0].offset, start);
+    assert!(graph.frame_wire.iter().any(|frame| frame.segment == 0
+        && frame.offset == parity.offset
+        && frame.length == parity.length));
     let report = graph
         .label_read(
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
-    let [first, second] = report.segments.as_slice() else {
-        panic!("the complete openers delimit two segments");
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: parity.position + 1,
+            offset: parity_end,
+            difference: CanonicalStructureDifference::FrameSequence,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_counts_an_unreferenced_packed_chunk_before_a_bad_commit() {
+    use purrdf_gts::v2::{CanonicalForm, CanonicalStructureCheck, CanonicalStructureDifference};
+
+    let source = include_bytes!("fixtures/v2/P4/pack-compressed.one-frame.bin");
+    let mut bytes = Vec::new();
+    write_header(&mut bytes, None, Some(CanonicalForm::V1), None).unwrap();
+    let pack_offset = bytes.len();
+    let header = Header::decode(Item::first(&bytes).unwrap().unwrap()).unwrap();
+    let predecessor = header.identifier().unwrap();
+    let original_header = Item::first(source).unwrap().unwrap().bytes().len();
+    bytes.extend_from_slice(&source[original_header..]);
+    let pack = Item::first(&bytes[pack_offset..]).unwrap().unwrap();
+    let commit_offset = pack_offset + pack.bytes().len();
+    let pack_id = relink_frame(&mut bytes[pack_offset..commit_offset], &predecessor);
+    relink_frame(&mut bytes[commit_offset..], &pack_id);
+
+    let graph = second(&bytes);
+    assert_eq!(graph.invalid_commits[0].0, commit_offset);
+    let [unit] = graph.unreferenced_units.as_slice() else {
+        panic!("the folded pack has one unreferenced member");
     };
-    assert_eq!(first.canonical.structure, CanonicalStructureCheck::Verified);
-    assert!(
-        matches!(second.canonical.structure, CanonicalStructureCheck::Failed {
-        offset, difference: CanonicalStructureDifference::FrameSequence, ..
-    } if offset == end)
+    assert_eq!((unit.offset, unit.member), (pack_offset, Some(0)));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: 1,
+            offset: pack_offset,
+            difference: CanonicalStructureDifference::BlobRegion,
+        }
     );
 }
 
@@ -692,7 +770,6 @@ fn canonical_labelling_accepts_automorphisms_and_locates_label_and_digest_differ
                 Limit::new(0),
                 &mut LabellingCapacity::new(u64::MAX, u64::MAX),
             )
-            .unwrap()
             .unwrap();
         assert_eq!(report.segments.len(), 1);
         report.segments[0].canonical.labelling
@@ -778,7 +855,6 @@ fn canonical_labelling_observes_claim_and_capacity_before_comparing() {
                 Limit::new(0),
                 &mut LabellingCapacity::new(u64::MAX, u64::MAX),
             )
-            .unwrap()
             .unwrap();
         let canonical = report.segments[0].canonical;
         assert_eq!(canonical.labelling, Unchecked(expected));
@@ -823,7 +899,6 @@ fn canonical_labelling_skips_an_index_after_the_fold_stops() {
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
     assert_eq!(
         report.segments[0].canonical.labelling,
@@ -902,7 +977,6 @@ fn assert_compaction_head(fixture: &[u8]) {
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
     let claims = report.segments[0].closing_index.unwrap();
     assert!(claims.statistics_match && claims.content_digest_matches);
@@ -1024,7 +1098,6 @@ fn closing_indexes_compare_digest_and_statistics_independently() {
                 Limit::new(0),
                 &mut LabellingCapacity::new(u64::MAX, u64::MAX),
             )
-            .unwrap()
             .unwrap();
         let comparison = report.segments[0].closing_index.unwrap();
         assert_eq!(
@@ -1056,7 +1129,6 @@ fn closing_index_checks_the_absence_of_a_digest_for_held_content() {
                 Limit::new(0),
                 &mut LabellingCapacity::new(u64::MAX, u64::MAX),
             )
-            .unwrap()
             .unwrap();
         let segment = &report.segments[0];
         assert_eq!(*segment.content_digest.as_ref().unwrap(), None);
@@ -1095,7 +1167,6 @@ fn broken_ordinary_parity_does_not_block_closing_index_comparisons() {
             Limit::new(0),
             &mut LabellingCapacity::new(u64::MAX, u64::MAX),
         )
-        .unwrap()
         .unwrap();
     let check = report.segments[0].closing_index.unwrap();
     assert_eq!(check.offset, end);
@@ -1133,7 +1204,6 @@ fn index_fold_claims_stay_uncompared_without_an_eligible_own_fold() {
                 Limit::new(0),
                 &mut LabellingCapacity::new(u64::MAX, u64::MAX),
             )
-            .unwrap()
             .unwrap();
         assert_eq!(report.segments[0].closing_index, None);
         assert_eq!(report.segments[0].content_digest.is_err(), refused);
@@ -3902,14 +3972,6 @@ fn the_item_limit_applies_before_framing_an_opener() {
     assert_eq!(stopped.end, FileEnd::NotRead);
     assert!(stopped.blobs.is_empty());
     assert_eq!(stopped.labelling_size(), None);
-    let mut capacity_to_label = LabellingCapacity::new(10, 1000);
-    assert!(
-        stopped
-            .label_read(Limit::new(0), &mut capacity_to_label)
-            .unwrap()
-            .is_none()
-    );
-    assert_eq!(capacity_to_label.total(), 0);
     assert!(
         stopped
             .label_content(Limit::new(0), &mut LabellingCapacity::new(0, 0))
@@ -3920,7 +3982,73 @@ fn the_item_limit_applies_before_framing_an_opener() {
 }
 
 #[test]
+fn the_item_limit_retains_canonical_claims_without_forming_a_fold() {
+    use purrdf_gts::v2::{
+        CanonicalLabellingCheck, CanonicalLabellingUnchecked, CanonicalStorageCheck,
+        CanonicalStructureCheck,
+    };
+
+    let bytes = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let preceding = SegmentWriter::new(Vec::new()).unwrap().into_inner();
+    let mut unreadable = include_bytes!("fixtures/v2/P1/header-minimal.bin").to_vec();
+    unreadable[0] = 0x88;
+    unreadable.push(0xf6);
+    let joined = [&unreadable, preceding.as_slice(), bytes.as_slice()].concat();
+    let limits = ReadCapacity {
+        items: 3,
+        ..ReadCapacity::default()
+    };
+    let stopped = second_at_capacity(&joined, limits);
+    assert_eq!(stopped.end, FileEnd::NotRead);
+    assert_eq!(stopped.labelling_size(), None);
+    let mut budget = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let report = stopped.label_read(Limit::new(0), &mut budget).unwrap();
+    assert_eq!(budget.total(), 0);
+    assert!(report.file.unwrap().is_none());
+    let [unreadable, unclaimed, claimed] = report.segments.as_slice() else {
+        panic!("all three openers were observed before the item limit");
+    };
+    for (ordinal, segment) in [unreadable, unclaimed, claimed].into_iter().enumerate() {
+        assert_eq!(segment.segment, ordinal as u64);
+        assert!(matches!(segment.content_digest, Ok(None)));
+        assert_eq!(segment.closing_index, None);
+        assert_eq!(segment.canonical.first_difference, None);
+    }
+    assert!(!unreadable.canonical.claimed);
+    assert_eq!(unreadable.canonical, unclaimed.canonical);
+    assert_eq!(
+        unclaimed.canonical.structure,
+        CanonicalStructureCheck::NotClaimed
+    );
+    assert!(claimed.canonical.claimed);
+    assert_eq!(
+        claimed.canonical.structure,
+        CanonicalStructureCheck::ExceedsCapacity
+    );
+    assert_eq!(
+        claimed.canonical.labelling,
+        CanonicalLabellingCheck::Unchecked(CanonicalLabellingUnchecked::ExceedsCapacity)
+    );
+    assert_eq!(
+        claimed.canonical.storage,
+        CanonicalStorageCheck::ExceedsCapacity
+    );
+
+    let complete = second(&joined)
+        .label_read(Limit::new(0), &mut budget)
+        .unwrap();
+    assert!(complete.file.unwrap().is_some());
+    assert_eq!(complete.segments[0].canonical, unreadable.canonical);
+    assert_eq!(
+        complete.segments[2].canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+}
+
+#[test]
 fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
+    use purrdf_gts::v2::UnreferencedUnit;
+
     let compressed = second(include_bytes!(
         "fixtures/v2/P4/pack-compressed.one-frame.bin"
     ));
@@ -3930,6 +4058,7 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
         "fixtures/v2/P4/rebuild-unit-after-recipe.units-first.bin"
     ));
     assert_eq!(earlier.blobs.len(), 1);
+    assert_eq!(earlier.unreferenced_units, [] as [UnreferencedUnit; 0]);
     for (bytes, member) in [
         (
             include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-first.bin")
@@ -3944,6 +4073,7 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
     ] {
         let packed = second(bytes);
         assert_eq!(packed.blobs.len(), 1);
+        assert_eq!(packed.unreferenced_units, [] as [UnreferencedUnit; 0]);
         let [result] = packed.rebuilds.as_slice() else {
             panic!("expected one rebuild from the pack");
         };
@@ -3957,6 +4087,7 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
     let later = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.recipe-first.bin");
     let graph = second(later);
     assert!(graph.blobs.is_empty());
+    assert_eq!(graph.unreferenced_units, [] as [UnreferencedUnit; 0]);
     let [error] = graph.frame_failures.as_slice() else {
         panic!("expected one unavailable unit finding");
     };

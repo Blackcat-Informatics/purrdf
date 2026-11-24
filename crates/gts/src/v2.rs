@@ -63,8 +63,8 @@ pub use read::{
     PayloadUnchecked, ProfileNotChecked, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph,
     ReadLimits, RebuildResult, RebuildState, RecoveryRefusal, ResyncOpener, ResyncPast,
     ResyncReach, Resynchronization, SegmentDurability, SkippedSegment, StateFold, UncommittedTail,
-    VerifiedBlob, Visibility, read, read_with_limits, read_with_limits_and_signature_inputs,
-    read_with_signature_inputs,
+    UnreferencedUnit, VerifiedBlob, Visibility, read, read_with_limits,
+    read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};

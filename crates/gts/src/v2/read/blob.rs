@@ -6,13 +6,13 @@ use std::borrow::Cow;
 use std::collections::TryReserveError;
 
 use super::{GraphReader, ReadError, ReadFailure, Segment, Unit, VerifiedBlob};
-use crate::FastMap;
 use crate::v2::fields::{Fields, push};
 use crate::v2::terms::read_enum;
 use crate::v2::{
     BLAKE3_256, ContentError, DIGEST_LENGTH, FoldError, FrameType, MalformedReason, ValueName,
     WireError,
 };
+use crate::{FastMap, FastSet};
 
 type Digest = [u8; DIGEST_LENGTH];
 type Entry = (ValueName, usize);
@@ -83,6 +83,65 @@ pub struct RebuildResult {
     pub state: RebuildState,
     pub(in crate::v2) is_value: bool,
     pub(in crate::v2) has_all_units: bool,
+}
+
+/// A chunk declaration whose digest has no reference in its segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnreferencedUnit {
+    /// File offset of the frame that declares the chunk.
+    pub offset: usize,
+    /// Zero-based position in the pack directory, if any.
+    pub member: Option<usize>,
+    /// The digest claimed by the chunk.
+    pub digest: Digest,
+}
+
+#[derive(Default)]
+pub(super) struct UnitUsage {
+    chunks: Vec<UnreferencedUnit>,
+    referenced: FastSet<Digest>,
+}
+
+impl UnitUsage {
+    fn unit(
+        &mut self,
+        unit: UnitDeclaration<'_>,
+        offset: usize,
+        member: Option<usize>,
+    ) -> Result<(), TryReserveError> {
+        match unit.kind {
+            UnitKind::Chunk => push(
+                &mut self.chunks,
+                UnreferencedUnit {
+                    offset,
+                    member,
+                    digest: unit.digest,
+                },
+            ),
+            UnitKind::Blob(_) => self.reference(unit.digest),
+        }
+    }
+
+    fn reference(&mut self, digest: Digest) -> Result<(), TryReserveError> {
+        if !self.referenced.contains(&digest) {
+            self.referenced.try_reserve(1)?;
+            self.referenced.insert(digest);
+        }
+        Ok(())
+    }
+
+    pub(super) fn report(
+        &mut self,
+        output: &mut Vec<UnreferencedUnit>,
+    ) -> Result<(), TryReserveError> {
+        for chunk in self.chunks.drain(..) {
+            if !self.referenced.contains(&chunk.digest) {
+                push(output, chunk)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl purrdf_hash::error::StructuredError for RebuildResult {
@@ -260,6 +319,7 @@ impl<'a> GraphReader<'a, '_> {
         match kind {
             FrameType::Chunk | FrameType::Blob => {
                 let declared = UnitDeclaration::read(&mut content, kind == FrameType::Blob)?;
+                segment.unit_usage.unit(declared, location.0, None)?;
                 if let UnitKind::Blob(media_type) = declared.kind {
                     self.claim_blob(
                         ValueName {
@@ -451,10 +511,13 @@ impl<'a> GraphReader<'a, '_> {
         name: ValueName,
         kind: RecipeKind<Cow<'a, str>>,
         entries: &[Entry],
-        segment: &Segment<'a>,
+        segment: &mut Segment<'a>,
         pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
         (offset, member): (usize, Option<usize>),
     ) -> Result<(), ReadFailure> {
+        for (entry, _) in entries {
+            segment.unit_usage.reference(entry.digest)?;
+        }
         let is_value = matches!(kind, RecipeKind::Value);
         if let RecipeKind::Blob(media_type) = &kind {
             let media_type = match media_type {
@@ -607,6 +670,7 @@ impl<'a> GraphReader<'a, '_> {
         let mut units = FastMap::default();
         for (member_index, member) in members.iter_mut().enumerate() {
             if let Member::Unit(unit, bytes) = member {
+                segment.unit_usage.unit(*unit, offset, Some(member_index))?;
                 segment
                     .index_content
                     .record_unit(unit.digest, position, member_index)?;
