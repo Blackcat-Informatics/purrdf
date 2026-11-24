@@ -3,9 +3,11 @@
 
 use core::num::NonZeroU64;
 use std::collections::TryReserveError;
+use std::io::{self, Write};
+
+use purrdf_lex::cbor::head;
 
 use super::fields::{Fields, OptionShape, push};
-use super::rows::graph_name;
 use super::terms::read_enum;
 use super::{
     ContentError, DIGEST_LENGTH, FrameCheck, FrameEnvelope, FrameField, FrameType, LinkState,
@@ -15,10 +17,15 @@ use super::{
 type Digest = [u8; DIGEST_LENGTH];
 const LAST_FRAME_TYPE: u64 = FrameType::Parity as u64;
 
+mod content;
+
+pub(super) use content::IndexContent;
+use content::{check_graph_directory, check_pack_members};
+
 /// Comparisons of an index's claims with the observed ordinary prefix.
 ///
-/// Each result is independent. The directory, statistics, content digest
-/// and pack member claims require additional fold evidence.
+/// Each result is independent. Statistics and the content digest require
+/// labelling the segment's fold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct IndexPrefixCheck {
@@ -28,12 +35,54 @@ pub struct IndexPrefixCheck {
     pub root_matches: bool,
     /// The declared runs match the maximal runs of frame types.
     pub type_runs_match: bool,
+    /// The graph directory matches the written rows of the covered frames.
+    /// Absent when the covered row payloads were unavailable.
+    pub graph_directory_matches: Option<bool>,
+    /// The pack-member locations match the covered pack directories.
+    /// Absent when the covered pack payloads were unavailable.
+    pub pack_members_match: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct IndexStatistics {
+    counts: [u64; 3],
+    predicates_match: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct IndexFoldClaims {
+    statistics: IndexStatistics,
+    content_digest: Option<Digest>,
+}
+
+impl IndexFoldClaims {
+    pub(super) const fn content_digest(self) -> Option<Digest> {
+        self.content_digest
+    }
+
+    pub(super) fn compare(self, counts: [u64; 3], digest: Option<Digest>) -> (bool, bool) {
+        (
+            self.statistics.counts == counts && self.statistics.predicates_match == Some(true),
+            self.content_digest == digest,
+        )
+    }
 }
 
 #[derive(Debug, Default)]
 pub(super) struct TypeRuns(Vec<(Option<u64>, u64)>);
 
 impl TypeRuns {
+    pub(super) fn write(&self, output: &mut impl Write) -> io::Result<()> {
+        head::write_head(output, head::ARRAY, self.0.len() as u64)?;
+        for &(code, count) in &self.0 {
+            let code = code.ok_or_else(|| io::Error::other("a written GTS frame has no type"))?;
+            head::write_head(output, head::ARRAY, 2)?;
+            head::write_head(output, head::UNSIGNED, code)?;
+            head::write_head(output, head::UNSIGNED, count)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn reserve_next(&mut self, frame_type: Option<u64>) -> Result<(), TryReserveError> {
         if self.0.last().is_none_or(|(code, _)| *code != frame_type) {
             self.0.try_reserve(1)?;
@@ -59,14 +108,15 @@ impl TypeRuns {
         registry: NonZeroU64,
         head: &Digest,
         range: &Range,
-    ) -> Option<Result<IndexPrefixCheck, ContentError>> {
+        content: Option<&IndexContent>,
+    ) -> Option<Result<(IndexPrefixCheck, IndexFoldClaims), ContentError>> {
         if checked.malformed.is_some() || checked.link.state == LinkState::Broken {
             return None;
         }
         let PayloadState::Verified(payload) = &checked.payload.state else {
             return None;
         };
-        Some(self.check(frame, payload, registry, head, range))
+        Some(self.check(frame, payload, registry, head, range, content))
     }
 
     fn check(
@@ -76,22 +126,32 @@ impl TypeRuns {
         registry: NonZeroU64,
         head: &Digest,
         range: &Range,
-    ) -> Result<IndexPrefixCheck, ContentError> {
+        content: Option<&IndexContent>,
+    ) -> Result<(IndexPrefixCheck, IndexFoldClaims), ContentError> {
         let (count, claimed_head) = frame.read_field(FrameField::Content).count_and_digest()?;
         let mut fields = Fields::new(payload);
         fields.record(6)?;
         let type_runs_match = self.compare(&mut fields, registry)?;
-        check_graph_directory(&mut fields, registry)?;
-        check_statistics(&mut fields)?;
+        let graph_directory_matches = check_graph_directory(&mut fields, registry, content)?;
+        let statistics = check_statistics(&mut fields, content.and_then(IndexContent::predicates))?;
         let root = fields.fixed_bytes::<DIGEST_LENGTH>()?;
-        check_content_digest(&mut fields, registry)?;
-        check_pack_members(&mut fields)?;
+        let content_digest = read_content_digest(&mut fields, registry)?;
+        let pack_members_match = check_pack_members(&mut fields, content)?;
         fields.finish()?;
-        Ok(IndexPrefixCheck {
+        let prefix = IndexPrefixCheck {
             head_matches: count == range.count().get() - 1 && claimed_head == head,
             root_matches: *root == range.root(),
             type_runs_match,
-        })
+            graph_directory_matches,
+            pack_members_match,
+        };
+        Ok((
+            prefix,
+            IndexFoldClaims {
+                statistics,
+                content_digest,
+            },
+        ))
     }
 
     fn compare(&self, fields: &mut Fields<'_>, registry: NonZeroU64) -> Result<bool, ContentError> {
@@ -114,43 +174,39 @@ impl TypeRuns {
     }
 }
 
-fn check_graph_directory(
+fn check_statistics(
+    fields: &mut Fields<'_>,
+    predicates: Option<&crate::FastMap<u64, u128>>,
+) -> Result<IndexStatistics, WireError> {
+    fields.record(4)?;
+    let counts = [fields.uint()?, fields.uint()?, fields.uint()?];
+    let entries = fields.array()?;
+    let mut matches = predicates.is_some_and(|values| values.len() as u64 == entries);
+    let mut last = None;
+    for _ in 0..entries {
+        fields.record(2)?;
+        let predicate = fields.uint()?;
+        let rows = u128::from(fields.uint()?);
+        matches &= last.is_none_or(|last| last < predicate)
+            && predicates
+                .and_then(|values| values.get(&predicate))
+                .copied()
+                == Some(rows);
+        last = Some(predicate);
+    }
+    Ok(IndexStatistics {
+        counts,
+        predicates_match: predicates.map(|_| matches),
+    })
+}
+
+fn read_content_digest(
     fields: &mut Fields<'_>,
     registry: NonZeroU64,
-) -> Result<(), ContentError> {
-    for _ in 0..fields.array()? {
-        fields.record(2)?;
-        graph_name(fields, registry)?;
-        for _ in 0..fields.array()? {
-            fields.record(4)?;
-            read_enum(fields, LAST_FRAME_TYPE, registry)?;
-            fields.uint()?;
-            fields.uint()?;
-            fields.uint()?;
-        }
-    }
-    Ok(())
-}
-
-fn check_statistics(fields: &mut Fields<'_>) -> Result<(), WireError> {
-    fields.record(4)?;
-    fields.uint()?;
-    fields.uint()?;
-    fields.uint()?;
-    for _ in 0..fields.array()? {
-        fields.record(2)?;
-        fields.uint()?;
-        fields.uint()?;
-    }
-    Ok(())
-}
-
-fn check_content_digest(fields: &mut Fields<'_>, registry: NonZeroU64) -> Result<(), ContentError> {
-    match fields.option_shape()? {
-        OptionShape::Absent => {}
-        OptionShape::Present => {
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
-        }
+) -> Result<Option<Digest>, ContentError> {
+    Ok(match fields.option_shape()? {
+        OptionShape::Absent => None,
+        OptionShape::Present => Some(*fields.fixed_bytes::<DIGEST_LENGTH>()?),
         OptionShape::Unknown {
             code, tag_offset, ..
         } if code != 0 && registry.get() > REGISTRY_VERSION => {
@@ -162,18 +218,7 @@ fn check_content_digest(fields: &mut Fields<'_>, registry: NonZeroU64) -> Result
         OptionShape::Unknown { tag_offset, .. } => {
             return Err(WireError::new(MalformedReason::UnregisteredValue, tag_offset).into());
         }
-    }
-    Ok(())
-}
-
-fn check_pack_members(fields: &mut Fields<'_>) -> Result<(), WireError> {
-    for _ in 0..fields.array()? {
-        fields.record(3)?;
-        fields.fixed_bytes::<DIGEST_LENGTH>()?;
-        fields.uint()?;
-        fields.uint()?;
-    }
-    Ok(())
+    })
 }
 
 /// An accelerator item outside the frame chain and parity stream.
@@ -194,6 +239,8 @@ pub enum IndexStorageProblem {
     ClaimMismatch,
     /// The item is out of order or repeated within its segment.
     Misplaced,
+    /// A placed item breaks its wire grammar.
+    Malformed(WireError),
 }
 
 /// A diagnostic for an offsets item or locator read in segment order.
@@ -212,7 +259,7 @@ struct StorageClaim {
     offset: usize,
     position: usize,
     item: IndexStorageItem,
-    matches: bool,
+    claim: Result<bool, WireError>,
 }
 
 #[derive(Default)]
@@ -236,7 +283,7 @@ impl StorageIndex {
         offset: usize,
         position: usize,
         item: IndexStorageItem,
-        matches: bool,
+        claim: Result<bool, WireError>,
     ) -> Result<(), TryReserveError> {
         push(
             &mut self.claims,
@@ -244,7 +291,7 @@ impl StorageIndex {
                 offset,
                 position,
                 item,
-                matches,
+                claim,
             },
         )
     }
@@ -276,10 +323,12 @@ impl StorageIndex {
             };
             let problem = if !placed {
                 IndexStorageProblem::Misplaced
-            } else if !claim.matches {
-                IndexStorageProblem::ClaimMismatch
             } else {
-                continue;
+                match claim.claim {
+                    Ok(true) => continue,
+                    Ok(false) => IndexStorageProblem::ClaimMismatch,
+                    Err(error) => IndexStorageProblem::Malformed(error),
+                }
             };
             push(
                 findings,

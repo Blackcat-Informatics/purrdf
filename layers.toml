@@ -132,6 +132,7 @@ deps = [
 [[crate]]
 name = "purrdf-gts"
 deps = [
+    "purrdf-core",
     "purrdf-deflate",
     "purrdf-ed25519",
     "purrdf-events",

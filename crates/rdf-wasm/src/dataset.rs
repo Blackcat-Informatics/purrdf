@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::dataset_view::{DatasetMut, GraphMatchValue};
+use purrdf::gts::{GtsDatasetReadError, read_gts_dataset};
 use purrdf::ir::{GraphExistenceMode, MutableDataset};
 use purrdf::{
     JsonLdSerializeOptions, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, SerializeGraph,
@@ -559,6 +560,29 @@ impl Dataset {
         .map_err(crate::operation::diagnostic_to_js)?
         .dataset;
         Self::from_frozen_in(dataset.into(), Self::mode_of(remember_empty_graphs))
+    }
+
+    /// Load a complete RDF dataset from GTS v1 or v2 bytes.
+    #[wasm_bindgen(js_name = fromGts)]
+    pub fn from_gts(bytes: &[u8]) -> Result<Self, JsValue> {
+        let dataset = read_gts_dataset(bytes).map_err(|error| match error {
+            GtsDatasetReadError::Legacy(diagnostic)
+            | GtsDatasetReadError::GenerationTwo(diagnostic) => {
+                crate::operation::native_diagnostic_to_js(diagnostic)
+            }
+            error => JsError::new(&error.to_string()).into(),
+        })?;
+        Self::from_frozen(dataset.into())
+    }
+
+    /// Encode this dataset as one committed GTS v2 segment in arrival order.
+    #[wasm_bindgen(js_name = toGtsV2)]
+    pub fn to_gts_v2(&self) -> Result<Vec<u8>, JsValue> {
+        let frozen = self
+            .inner
+            .freeze()
+            .map_err(crate::operation::native_diagnostic_to_js)?;
+        purrdf::gts_write::to_gts_v2(&frozen).map_err(crate::operation::native_diagnostic_to_js)
     }
 
     /// `serialize(format, base?)` → the dataset rendered in `format` (a UTF-8 string).

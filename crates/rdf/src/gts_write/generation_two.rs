@@ -6,8 +6,8 @@ use std::borrow::Cow;
 use std::io::Write;
 
 use purrdf_gts::v2::{
-    FoldError, Line, LiteralDirection, RdfFold, SegmentWriteError, SegmentWriter, Term,
-    TermId as WireId,
+    FoldError, Line, LiteralDirection, RdfFold, Term, TermId as WireId, rdf_segment_bytes,
+    write_rdf_segment,
 };
 use purrdf_hash::error::NativeError;
 use purrdf_lex::allocation::{Memory, Resident, retain_native_cause};
@@ -19,12 +19,31 @@ use crate::{QuadIds, RdfDataset, RdfDiagnostic, RdfTextDirection, TermId, TermRe
 ///
 /// The segment carries ordinary quads, reifier bindings, annotations and
 /// explicitly empty named graphs. Blank-node identities remain distinct
-/// across all scopes of the input dataset.
+/// across all scopes of the input dataset. Reached composite literals require
+/// valid lexical forms and blank-free contents.
 ///
 /// # Errors
 /// Returns a diagnostic if the dataset cannot be represented or the sink
 /// cannot accept the segment.
 pub fn write_gts_v2(dataset: &RdfDataset, sink: impl Write) -> Result<(), RdfDiagnostic> {
+    let fold = fold_for_dataset(dataset)?;
+    write_rdf_segment(&fold, sink).map_err(diagnostic)?;
+    Ok(())
+}
+
+/// Encode the dataset as one committed GTS generation 2 segment.
+///
+/// Uses the same arrival order and statement representation as [`write_gts_v2`].
+///
+/// # Errors
+/// Returns a diagnostic if the dataset cannot be represented or the output
+/// buffer cannot be allocated.
+pub fn to_gts_v2(dataset: &RdfDataset) -> Result<Vec<u8>, RdfDiagnostic> {
+    let fold = fold_for_dataset(dataset)?;
+    rdf_segment_bytes(&fold).map_err(diagnostic)
+}
+
+fn fold_for_dataset(dataset: &RdfDataset) -> Result<RdfFold, RdfDiagnostic> {
     let mut fold = RdfFold::default();
     let ids = intern_terms(dataset, &mut fold)?;
     let map = |id: TermId| ids[id.index()].expect("the whole dictionary was interned");
@@ -51,17 +70,8 @@ pub fn write_gts_v2(dataset: &RdfDataset, sink: impl Write) -> Result<(), RdfDia
         fold.add_line(Line::EmptyGraph(map(graph)))
             .map_err(diagnostic)?;
     }
-    let mut writer = SegmentWriter::new(sink)
-        .map_err(SegmentWriteError::from)
-        .map_err(diagnostic)?;
-    writer.add_rdf(&fold).map_err(diagnostic)?;
-    writer.add_commit().map_err(diagnostic)?;
-    writer
-        .into_inner()
-        .flush()
-        .map_err(SegmentWriteError::from)
-        .map_err(diagnostic)?;
-    Ok(())
+    crate::gts::validate_v2_composites(&fold)?;
+    Ok(fold)
 }
 
 fn intern_terms(

@@ -9,6 +9,10 @@ use purrdf_lex::xml::Document;
 
 const CASES: &[(&str, &[&str])] = &[
     (
+        "gts-dataset.test.mjs",
+        &["GTS dataset methods transfer owned bytes and a native read cause"],
+    ),
+    (
         "reasoning-positive-host.test.mjs",
         &["positive world proofs preserve frozen native bytes and retained cause handles"],
     ),

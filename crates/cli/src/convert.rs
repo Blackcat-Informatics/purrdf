@@ -19,13 +19,9 @@
 //!   generalization of it — `RdfDataset::union` re-scopes blank nodes even for a single
 //!   input, so routing one source through the merge lane would relabel blank nodes in
 //!   every ordinary conversion.
-//! * **A GTS source** is folded by `purrdf_rdf::import_gts_events`, the authoritative
-//!   importer that preserves per-segment blank-node scope, and the ENVELOPE it could not
-//!   carry into an RDF dataset (segment ledger, sidecars, metadata, blob references,
-//!   suppressions, opaque nodes, signatures) is reported as loss-ledger entries with the
-//!   counts and segment head ids the importer actually returned. See
-//!   [`source`] for why the `bnode-scope-flatten` contract entry is NOT
-//!   attached on this path.
+//! * **A GTS source** is folded by the reader for its generation. Both readers preserve
+//!   per-segment blank-node scope. See [`source`] for the loss ledger each generation
+//!   produces when projecting the transport into RDF.
 //! * **Two or more sources** — the positional `IN` plus each repeatable `--input`, in
 //!   command-line order — are merged with `RdfDataset::union`: order-independent,
 //!   duplicate-collapsing at freeze, and standardize-apart per source. See
@@ -189,7 +185,7 @@ pub(crate) fn run(
         );
     }
 
-    let target_format = format::resolve_target(options.to, output, "the --to target")?;
+    let target_format = resolve_target(options.to, output)?;
     refuse_unconsumable_base(
         &sources,
         &formats,
@@ -233,6 +229,11 @@ pub(crate) fn run(
         merged.record(entry.clone());
     }
     ledger::surface(ledger_target, &merged)
+}
+
+fn resolve_target(explicit: Option<CliRdfFormat>, output: &str) -> Result<SourceFormat, CliError> {
+    format::refuse_transport_target(output, "the --to target")?;
+    format::resolve(explicit, output)
 }
 
 /// The single-source native/pack lane, byte-for-byte what it has always been.
@@ -401,7 +402,7 @@ fn run_with_transforms(
         )?;
         None
     } else {
-        let target = format::resolve_target(options.to, output, "the --to target")?;
+        let target = resolve_target(options.to, output)?;
         refuse_unconsumable_base(sources, formats, target, "the --to target", options)?;
         sink::validate_jsonld_options(target, options.jsonld_options)?;
         Some(target)

@@ -1,0 +1,271 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+use core::num::NonZeroU64;
+use std::collections::TryReserveError;
+use std::io::{self, Write};
+
+use purrdf_lex::cbor::head;
+
+use super::{ContentError, Digest, Fields, FrameType, LAST_FRAME_TYPE, WireError, push};
+use crate::v2::Row;
+use crate::v2::rows::graph_name;
+use crate::v2::terms::read_enum;
+use crate::{FastMap, FastSet};
+
+type PackLocation = (Digest, u64, u64);
+type GraphName = Option<u64>;
+type RunStart = (GraphName, usize);
+
+#[derive(Debug, PartialEq, Eq)]
+struct DirectoryRange {
+    kind: u64,
+    frame: u64,
+    row: u64,
+    count: u128,
+}
+
+#[derive(Debug, Default)]
+struct GraphDirectory {
+    ranges: FastMap<GraphName, Vec<DirectoryRange>>,
+    last: [Option<RunStart>; 4],
+    predicates: FastMap<u64, u128>,
+}
+
+impl GraphDirectory {
+    fn record(
+        &mut self,
+        rows: impl IntoIterator<Item = Row>,
+        frame: u64,
+    ) -> Result<(), TryReserveError> {
+        for (position, row) in rows.into_iter().enumerate() {
+            if let Row::Quad([_, predicate, _], _) = row {
+                if !self.predicates.contains_key(&predicate) {
+                    self.predicates.try_reserve(1)?;
+                }
+                *self.predicates.entry(predicate).or_default() += 1;
+            }
+            let (slot, kind, graph) = match row {
+                Row::Quad(_, graph) => (0, FrameType::Quads, graph),
+                Row::ReifierBinding(_, graph) => (1, FrameType::ReifierBindings, graph),
+                Row::Annotation(_, _, graph) => (2, FrameType::Annotations, graph),
+                Row::EmptyGraph(graph) => (3, FrameType::EmptyGraphs, Some(graph)),
+            };
+            if let Some((preceding, index)) = self.last[slot]
+                && preceding == graph
+            {
+                self.ranges
+                    .get_mut(&graph)
+                    .expect("a run belongs to its recorded graph")[index]
+                    .count += 1;
+                continue;
+            }
+            if !self.ranges.contains_key(&graph) {
+                self.ranges.try_reserve(1)?;
+            }
+            let ranges = self.ranges.entry(graph).or_default();
+            let index = ranges.len();
+            push(
+                ranges,
+                DirectoryRange {
+                    kind: kind as u64,
+                    frame,
+                    row: position as u64,
+                    count: 1,
+                },
+            )?;
+            self.last[slot] = Some((graph, index));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub(in crate::v2) struct IndexContent {
+    directory: Option<GraphDirectory>,
+    pack_members: Option<FastSet<PackLocation>>,
+}
+
+impl Default for IndexContent {
+    fn default() -> Self {
+        Self {
+            directory: Some(GraphDirectory::default()),
+            pack_members: Some(FastSet::default()),
+        }
+    }
+}
+
+impl IndexContent {
+    pub(super) fn predicates(&self) -> Option<&FastMap<u64, u128>> {
+        Some(&self.directory.as_ref()?.predicates)
+    }
+
+    pub(in crate::v2) fn opaque_frame(&mut self, kind: Option<FrameType>) {
+        match kind {
+            Some(
+                FrameType::Quads
+                | FrameType::ReifierBindings
+                | FrameType::Annotations
+                | FrameType::EmptyGraphs,
+            ) => self.directory = None,
+            Some(FrameType::Pack) => self.pack_members = None,
+            _ => {}
+        }
+    }
+
+    pub(in crate::v2) fn record_rows(
+        &mut self,
+        rows: impl IntoIterator<Item = Row>,
+        frame: u64,
+    ) -> Result<(), TryReserveError> {
+        if let Some(directory) = &mut self.directory {
+            directory.record(rows, frame)?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::v2) fn record_unit(
+        &mut self,
+        digest: Digest,
+        frame: u64,
+        member: usize,
+    ) -> Result<(), TryReserveError> {
+        if let Some(members) = &mut self.pack_members {
+            members.try_reserve(1)?;
+            members.insert((digest, frame, member as u64));
+        }
+        Ok(())
+    }
+
+    pub(in crate::v2) fn write_directory(&self, output: &mut impl Write) -> io::Result<()> {
+        let directory = self.written_directory()?;
+        let mut graphs = Vec::new();
+        graphs
+            .try_reserve_exact(directory.ranges.len())
+            .map_err(io::Error::other)?;
+        graphs.extend(directory.ranges.iter());
+        graphs.sort_unstable_by_key(|(graph, _)| **graph);
+        head::write_head(output, head::ARRAY, graphs.len() as u64)?;
+        for (&graph, runs) in graphs {
+            head::write_head(output, head::ARRAY, 2)?;
+            super::super::fields::write_option(output, graph, |output, id| {
+                head::write_head(output, head::UNSIGNED, id)
+            })?;
+            head::write_head(output, head::ARRAY, runs.len() as u64)?;
+            for run in runs {
+                head::write_head(output, head::ARRAY, 4)?;
+                let count = u64::try_from(run.count).map_err(io::Error::other)?;
+                for value in [run.kind, run.frame, run.row, count] {
+                    head::write_head(output, head::UNSIGNED, value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::v2) fn write_statistics(
+        &self,
+        output: &mut impl Write,
+        counts: [u64; 3],
+    ) -> io::Result<()> {
+        let directory = self.written_directory()?;
+        let mut predicates = Vec::new();
+        predicates
+            .try_reserve_exact(directory.predicates.len())
+            .map_err(io::Error::other)?;
+        predicates.extend(directory.predicates.iter());
+        predicates.sort_unstable_by_key(|(predicate, _)| **predicate);
+        head::write_head(output, head::ARRAY, 4)?;
+        for count in counts {
+            head::write_head(output, head::UNSIGNED, count)?;
+        }
+        head::write_head(output, head::ARRAY, predicates.len() as u64)?;
+        for (&predicate, &count) in predicates {
+            head::write_head(output, head::ARRAY, 2)?;
+            head::write_head(output, head::UNSIGNED, predicate)?;
+            head::write_head(
+                output,
+                head::UNSIGNED,
+                u64::try_from(count).map_err(io::Error::other)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::v2) fn write_pack_members(&self, output: &mut impl Write) -> io::Result<()> {
+        let members = self
+            .pack_members
+            .as_ref()
+            .ok_or_else(|| io::Error::other("GTS pack observations are incomplete"))?;
+        let mut sorted: Vec<&PackLocation> = Vec::new();
+        sorted
+            .try_reserve_exact(members.len())
+            .map_err(io::Error::other)?;
+        sorted.extend(members);
+        sorted.sort_unstable();
+        head::write_head(output, head::ARRAY, sorted.len() as u64)?;
+        for (digest, frame, member) in sorted {
+            head::write_head(output, head::ARRAY, 3)?;
+            head::write_bytes(output, digest)?;
+            head::write_head(output, head::UNSIGNED, *frame)?;
+            head::write_head(output, head::UNSIGNED, *member)?;
+        }
+        Ok(())
+    }
+
+    fn written_directory(&self) -> io::Result<&GraphDirectory> {
+        self.directory
+            .as_ref()
+            .ok_or_else(|| io::Error::other("GTS row observations are incomplete"))
+    }
+}
+
+pub(super) fn check_graph_directory(
+    fields: &mut Fields<'_>,
+    registry: NonZeroU64,
+    history: Option<&IndexContent>,
+) -> Result<Option<bool>, ContentError> {
+    let directory = history.and_then(|history| history.directory.as_ref());
+    let count = fields.array()?;
+    let mut matches = directory.is_some_and(|directory| count == directory.ranges.len() as u64);
+    let mut last_graph = None;
+    for _ in 0..count {
+        fields.record(2)?;
+        let graph = graph_name(fields, registry)?;
+        matches &= last_graph.is_none_or(|last| last < graph);
+        last_graph = Some(graph);
+        let expected = directory.and_then(|directory| directory.ranges.get(&graph));
+        let count = fields.array()?;
+        matches &= expected.is_some_and(|ranges| count == ranges.len() as u64);
+        let mut runs = expected.into_iter().flatten();
+        for _ in 0..count {
+            fields.record(4)?;
+            let observed = DirectoryRange {
+                kind: read_enum(fields, LAST_FRAME_TYPE, registry)?,
+                frame: fields.uint()?,
+                row: fields.uint()?,
+                count: u128::from(fields.uint()?),
+            };
+            matches &= runs.next() == Some(&observed);
+        }
+    }
+    Ok(directory.map(|_| matches))
+}
+
+pub(super) fn check_pack_members(
+    fields: &mut Fields<'_>,
+    history: Option<&IndexContent>,
+) -> Result<Option<bool>, WireError> {
+    let members = history.and_then(|history| history.pack_members.as_ref());
+    let count = fields.array()?;
+    let mut matches = members.is_some_and(|members| count == members.len() as u64);
+    let mut previous = None;
+    for _ in 0..count {
+        fields.record(3)?;
+        let location = (*fields.fixed_bytes()?, fields.uint()?, fields.uint()?);
+        matches &= previous.is_none_or(|previous| previous < location)
+            && members.is_some_and(|members| members.contains(&location));
+        previous = Some(location);
+    }
+    Ok(members.map(|_| matches))
+}

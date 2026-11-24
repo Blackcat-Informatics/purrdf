@@ -14,6 +14,13 @@ pub use crate::gts_verify::{
     ContentChainVerification, verify_content_chain, verify_content_chain_with_limits,
 };
 
+mod generation_two;
+pub(crate) use generation_two::validate_v2_composites;
+pub use generation_two::{
+    GtsDatasetReadError, GtsV2Dataset, GtsV2DatasetError, dataset_from_gts_v2_fold,
+    dataset_from_gts_v2_fold_with_losses, has_gts_v2_opener, read_gts_dataset, read_gts_v2_dataset,
+};
+
 use crate::RdfDiagnostic;
 use crate::gts_resolve::ensure_terms_terminate;
 use crate::native_codecs::ser_model::{SerGraph, SerReifierRow, SerTerm, SerTermKind};

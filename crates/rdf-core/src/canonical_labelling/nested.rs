@@ -29,7 +29,7 @@
 
 use purrdf_hash::Domain;
 use purrdf_lex::cbor::head::{
-    ARRAY, UNSIGNED, push_head, read_argument, read_bytes, write_bytes, write_text,
+    ARRAY, UNSIGNED, head_len, push_head, read_argument, read_bytes, write_bytes, write_text,
 };
 
 use super::digest_of;
@@ -249,10 +249,11 @@ pub(crate) fn is_term_node_source(source: &[u8]) -> bool {
 
 /// The text form of the source identifier of the blank node `(label, scope)`
 /// of scope ordinal `ordinal`: `E([ordinal, label])`, the label a byte string.
-pub(crate) fn text_blank_source(ordinal: u32, label: &[u8]) -> Vec<u8> {
-    let mut source = Vec::with_capacity(16 + label.len());
+pub(crate) fn text_blank_source(ordinal: u64, label: &[u8]) -> Vec<u8> {
+    let mut source =
+        Vec::with_capacity(1 + head_len(ordinal) + head_len(label.len() as u64) + label.len());
     push_head(&mut source, ARRAY, 2);
-    push_head(&mut source, UNSIGNED, u64::from(ordinal));
+    push_head(&mut source, UNSIGNED, ordinal);
     push_bytes(&mut source, label);
     source
 }
@@ -270,36 +271,51 @@ pub(crate) fn parse_text_blank_source(source: &[u8]) -> Option<(u32, &[u8])> {
 /// for a blank node or a triple term, whose sources are formed from digests.
 /// Every text is taken whole, as the view holds it: no case is folded.
 pub(crate) fn leaf_source(value: &TermValue) -> Option<Box<[u8]>> {
-    let mut v = Vec::new();
-    match value {
-        TermValue::Iri(iri) => {
-            push_head(&mut v, ARRAY, 2);
-            push_head(&mut v, UNSIGNED, 1);
-            push_text(&mut v, iri);
-        }
+    Some(match value {
+        TermValue::Iri(iri) => iri_source(iri),
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
             direction,
-        } => {
-            let (form, x) = match (language, direction) {
-                (None, _) => (FORM_TYPED, datatype),
-                (Some(language), None) => (FORM_LANGUAGE, language),
-                (Some(language), Some(RdfTextDirection::Ltr)) => (FORM_LANGUAGE_LTR, language),
-                (Some(language), Some(RdfTextDirection::Rtl)) => (FORM_LANGUAGE_RTL, language),
-            };
-            push_head(&mut v, ARRAY, 4);
-            push_head(&mut v, UNSIGNED, 2);
-            push_text(&mut v, lexical_form);
-            push_head(&mut v, UNSIGNED, form);
-            push_text(&mut v, x);
-        }
+        } => literal_source(lexical_form, datatype, language.as_deref(), *direction),
         TermValue::Blank { .. } | TermValue::Triple { .. } => return None,
-    }
-    let mut source = Vec::with_capacity(9 + v.len());
-    push_bytes(&mut source, &v);
-    Some(source.into_boxed_slice())
+    })
+}
+
+pub(super) fn iri_source(iri: &str) -> Box<[u8]> {
+    let mut v = Vec::new();
+    push_head(&mut v, ARRAY, 2);
+    push_head(&mut v, UNSIGNED, 1);
+    push_text(&mut v, iri);
+    bytes_source(&v)
+}
+
+pub(super) fn literal_source(
+    lexical: &str,
+    datatype: &str,
+    language: Option<&str>,
+    direction: Option<RdfTextDirection>,
+) -> Box<[u8]> {
+    let (form, x) = match (language, direction) {
+        (None, _) => (FORM_TYPED, datatype),
+        (Some(language), None) => (FORM_LANGUAGE, language),
+        (Some(language), Some(RdfTextDirection::Ltr)) => (FORM_LANGUAGE_LTR, language),
+        (Some(language), Some(RdfTextDirection::Rtl)) => (FORM_LANGUAGE_RTL, language),
+    };
+    let mut v = Vec::new();
+    push_head(&mut v, ARRAY, 4);
+    push_head(&mut v, UNSIGNED, 2);
+    push_text(&mut v, lexical);
+    push_head(&mut v, UNSIGNED, form);
+    push_text(&mut v, x);
+    bytes_source(&v)
+}
+
+fn bytes_source(value: &[u8]) -> Box<[u8]> {
+    let mut source = Vec::with_capacity(9 + value.len());
+    push_bytes(&mut source, value);
+    source.into_boxed_slice()
 }
 
 /// Append `bytes` as a CBOR byte string.

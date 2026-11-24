@@ -213,12 +213,13 @@ pub(crate) struct Cli {
         value_name = "DEST"
     )]
     pub(crate) canonicalization_receipts: Option<PathBuf>,
-    /// Apply finite host-safe limits while reading GTS input. Omit this only
-    /// for trusted artifacts, including admitted datasets above that profile.
+    /// Bound GTS input and transport expansion before parsing either generation.
     #[arg(long, global = true)]
     pub(crate) gts_safe_read: bool,
-    /// Override one host-safe GTS ceiling as `RESOURCE=MAX`. Repeat for
+    /// Override a bounded GTS read ceiling as `RESOURCE=MAX`. Repeat for
     /// multiple resources; supplying any override selects bounded reading.
+    /// `encoded-input-bytes` applies to both generations. Other overrides are
+    /// for generation 1.
     /// Resources are `encoded-input-bytes`, `items`, `encoded-frame-bytes`,
     /// `decoded-frame-bytes`, `decoded-blob-bytes`, `total-decoded-bytes`,
     /// `terms`, `rows`, `metadata-entries`, `diagnostics`, and `work`.
@@ -2786,10 +2787,7 @@ pub(crate) enum CliRdfFormat {
     // variant IS the pack container's clap spelling, so it is not re-declared as a
     // literal here — the identifier lives once, in `purrdf_rdf::PACK_EXTENSIONS`.
     Pack,
-    /// The GTS transport container. INPUT only: it is read through the authoritative
-    /// event importer (per-segment blank-node scope preserved), and named as a `--to`
-    /// target it is refused by name rather than silently written as something else —
-    /// see `crate::format::refuse_gts_target`.
+    /// Read GTS v1 or v2. With convert, write one committed GTS v2 segment.
     // Same rule as `Pack`: clap's kebab-case rendering IS the spelling, so the literal
     // lives once, in `purrdf_rdf::GTS_EXTENSIONS`.
     Gts,

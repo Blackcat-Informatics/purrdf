@@ -22,8 +22,9 @@
 //!
 //! # Verification contract
 //!
-//! There is one verification rule, [`VerifyingKey::verify_strict`]
-//! ([`VerifyingKey::verify`] is the same function). A (key, message,
+//! [`VerifyingKey::verify_strict`] and [`VerifyingKey::verify`] check a
+//! decoded key. [`VerifyingKey::verify_encoded_strict`] gives the same
+//! acceptance with GTS generation 2 diagnostic order. A (key, message,
 //! signature) triple is refused exactly when one of these holds:
 //!
 //! * **the key does not decode** ([`VerifyingKey::from_bytes`],
@@ -89,6 +90,6 @@ pub use ct::bytes_eq as constant_time_eq;
 mod strictness_tests;
 
 pub use keys::{
-    PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH, Signature, SignatureError, SigningKey,
-    VerifyingKey,
+    EncodedVerificationError, PUBLIC_KEY_LENGTH, SECRET_KEY_LENGTH, SIGNATURE_LENGTH, Signature,
+    SignatureError, SigningKey, VerifyingKey,
 };

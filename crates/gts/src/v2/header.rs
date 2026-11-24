@@ -54,6 +54,12 @@ pub struct Lineage<D> {
     pub ordinal: NonZeroU64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::v2) struct ResyncDeclaration<'a> {
+    pub(in crate::v2) offset: u64,
+    pub(in crate::v2) past: Option<&'a [u8]>,
+}
+
 /// An accepted P1 §2.4 header and its original lineage digest bytes.
 ///
 /// A newer registry can name an unavailable hash algorithm. Such a header
@@ -66,6 +72,7 @@ pub struct Header<'a> {
     profile: Option<NonZeroU64>,
     canonical: Option<NonZeroU64>,
     lineage: Option<Lineage<&'a [u8]>>,
+    resync: Option<ResyncDeclaration<'a>>,
     identifier: Option<[u8; DIGEST_LENGTH]>,
 }
 
@@ -93,6 +100,7 @@ impl<'a> Header<'a> {
             profile,
             canonical,
             lineage,
+            resync: None,
             identifier: holds_hash
                 .then(|| purrdf_hash::blake3::derive_key(HEADER_CONTEXT, item.bytes())),
         })
@@ -126,6 +134,10 @@ impl<'a> Header<'a> {
     #[must_use]
     pub const fn lineage(self) -> Option<Lineage<&'a [u8]>> {
         self.lineage
+    }
+
+    pub(in crate::v2) const fn resync(self) -> Option<ResyncDeclaration<'a>> {
+        self.resync
     }
 
     /// The segment's opening identifier when its hash algorithm is available.

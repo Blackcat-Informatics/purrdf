@@ -8,8 +8,11 @@ use std::sync::OnceLock;
 use purrdf_hash::blake3::Hasher;
 use purrdf_lex::cbor::head;
 
-use super::{FrameType, RangeFull, SegmentWriteError, SegmentWriter, ValueName, write_option};
-use crate::v2::rdf::unit_hasher;
+use crate::v2::rdf::UNIT_CONTEXT;
+
+use super::{
+    Buffer, FrameType, RangeFull, SegmentWriteError, SegmentWriter, ValueName, write_option,
+};
 
 const WINDOW: usize = 64;
 const MIN_CHUNK: usize = 16_384;
@@ -19,6 +22,12 @@ const STRICT_MASK_LIMIT: u64 = 1 << 46;
 const LOOSE_MASK_LIMIT: u64 = 1 << 50;
 
 static GEAR_TABLE: OnceLock<[u64; 256]> = OnceLock::new();
+
+#[derive(Clone, Copy)]
+pub(super) enum RecipeKind<'a> {
+    Blob(Option<&'a str>),
+    Value,
+}
 
 impl<W: Write> SegmentWriter<W> {
     /// Append a blob chunked by the generation 2 cut rule.
@@ -100,7 +109,7 @@ impl<W: Write> SegmentWriter<W> {
             return Ok(ValueName { digest, length });
         }
         let mut parts = Vec::new();
-        let mut hasher = unit_hasher();
+        let mut hasher = Hasher::new_derive_key(UNIT_CONTEXT);
         let mut filled = buffer.len();
         while filled > 0 {
             if parts.len() == limit {
@@ -127,14 +136,11 @@ impl<W: Write> SegmentWriter<W> {
             digest: *hasher.finalize().as_bytes(),
             length,
         };
-        let payload = recipe_payload(parts.iter())?;
-        self.append_recipe(
-            FrameType::Recipe,
-            name,
-            parts.len() as u64,
-            media_type,
-            &payload,
-        )?;
+        let payload = recipe_payload(parts.iter().copied())?;
+        let recipe = RecipeKind::Blob(media_type);
+        self.append(FrameType::Recipe, &payload.0, |output| {
+            recipe_content(output, name, recipe, parts.len() as u64)
+        })?;
         Ok(name)
     }
 
@@ -175,53 +181,21 @@ impl<W: Write> SegmentWriter<W> {
         if u128::from(self.range.count().get()) + u128::from(count) + 1 > u128::from(u64::MAX) {
             return Err(SegmentWriteError::RangeFull(RangeFull));
         }
-        let payload = recipe_payload(parts.iter().map(|(name, _)| name))?;
+        let payload = recipe_payload(parts.iter().map(|&(part, _)| part))?;
         for (part, unit) in parts {
             self.append_chunk(unit, &part.digest)?;
         }
         let name = ValueName::of(bytes);
-        self.append_recipe(kind, name, count, media_type, &payload)?;
+        let recipe = if kind == FrameType::Recipe {
+            RecipeKind::Blob(media_type)
+        } else {
+            RecipeKind::Value
+        };
+        self.append(kind, &payload.0, |output| {
+            recipe_content(output, name, recipe, count)
+        })?;
         Ok(name)
     }
-
-    fn append_recipe(
-        &mut self,
-        kind: FrameType,
-        name: ValueName,
-        count: u64,
-        media_type: Option<&str>,
-        payload: &[u8],
-    ) -> Result<(), SegmentWriteError> {
-        let blob = kind == FrameType::Recipe;
-        self.append(kind, payload, |output| {
-            head::write_head(output, head::ARRAY, if blob { 4 } else { 3 })?;
-            head::write_bytes(output, &name.digest)?;
-            head::write_head(output, head::UNSIGNED, name.length)?;
-            if blob {
-                write_option(output, media_type, head::write_text)?;
-            }
-            head::write_head(output, head::UNSIGNED, count)
-        })?;
-        Ok(())
-    }
-}
-
-fn recipe_payload<'a>(
-    parts: impl ExactSizeIterator<Item = &'a ValueName>,
-) -> Result<Vec<u8>, io::Error> {
-    let count = parts.len();
-    let mut payload = Vec::new();
-    // One nine-byte array head and at most 44 bytes per recipe entry.
-    payload
-        .try_reserve_exact(count.saturating_mul(44).saturating_add(9))
-        .map_err(io::Error::other)?;
-    head::write_head(&mut payload, head::ARRAY, count as u64)?;
-    for part in parts {
-        head::write_head(&mut payload, head::ARRAY, 2)?;
-        head::write_bytes(&mut payload, &part.digest)?;
-        head::write_head(&mut payload, head::UNSIGNED, part.length)?;
-    }
-    Ok(payload)
 }
 
 fn require_source_end(source: &mut impl Read) -> Result<(), SegmentWriteError> {
@@ -235,7 +209,50 @@ fn require_source_end(source: &mut impl Read) -> Result<(), SegmentWriteError> {
     }
 }
 
-fn cut(bytes: &[u8]) -> usize {
+pub(super) fn recipe_payload(
+    parts: impl ExactSizeIterator<Item = ValueName>,
+) -> io::Result<Buffer> {
+    let count = parts.len();
+    let mut payload = Buffer::default();
+    // A CBOR head needs at most nine bytes. Each entry needs one byte for
+    // the array, 34 for the digest and up to nine for the length.
+    payload
+        .0
+        .try_reserve_exact(count.saturating_mul(44).saturating_add(9))
+        .map_err(io::Error::other)?;
+    head::write_head(&mut payload, head::ARRAY, count as u64)?;
+    for part in parts {
+        head::write_head(&mut payload, head::ARRAY, 2)?;
+        head::write_bytes(&mut payload, &part.digest)?;
+        head::write_head(&mut payload, head::UNSIGNED, part.length)?;
+    }
+    Ok(payload)
+}
+
+pub(super) fn recipe_content(
+    output: &mut impl Write,
+    name: ValueName,
+    kind: RecipeKind<'_>,
+    count: u64,
+) -> io::Result<()> {
+    head::write_head(
+        output,
+        head::ARRAY,
+        if matches!(kind, RecipeKind::Blob(_)) {
+            4
+        } else {
+            3
+        },
+    )?;
+    head::write_bytes(output, &name.digest)?;
+    head::write_head(output, head::UNSIGNED, name.length)?;
+    if let RecipeKind::Blob(media) = kind {
+        write_option(output, media, head::write_text)?;
+    }
+    head::write_head(output, head::UNSIGNED, count)
+}
+
+pub(super) fn cut(bytes: &[u8]) -> usize {
     if bytes.len() <= MIN_CHUNK {
         return bytes.len();
     }

@@ -1,35 +1,27 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `purrdf_from_gts` / `purrdf_to_gts`: GTS container read/write.
-//!
-//! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
-//! `gts_write` / `import_gts_events` core), so a language shim
-//! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
-//! "one shared library, not two" clause.
-//!
-//! Both the plain-graph data AND the full RDF-1.2 statement layer (quoted
-//! triples + reifier bindings) survive the round-trip. A language tag that is not
-//! lower case is read folded to lower case, and this entry point returns no loss
-//! report.
-//! The earlier `gts-missing-reifier-binding` gap was closed by the native
-//! text-codec work; see [`purrdf_from_gts`].
+//! GTS container read and write through the shared Rust RDF engine.
 
 use std::os::raw::c_char;
 
 use purrdf_core::RdfLookaside;
+use purrdf_lex::allocation::{Memory, Resident};
+use purrdf_rs::gts::{
+    GtsDatasetReadError, has_gts_v2_opener, read_gts_dataset as read_dataset_by_generation,
+};
 use purrdf_rs::gts::{read_graph, read_graph_with_limits, reader::GtsReadLimits};
-use purrdf_rs::gts_write::to_gts;
+use purrdf_rs::gts_write::{to_gts, to_gts_v2};
 use purrdf_rs::import_gts_graph;
 
 use crate::buffer::PurrdfBuffer;
 use crate::cstr_to_str;
 use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
-use crate::handles::into_handle;
+use crate::handles::{into_handle, publish_handle};
 use crate::status::PurrdfStatus;
 
-/// C-ABI whole-read limits for hostile GTS input.
+/// C-ABI whole-read limits for hostile GTS v1 input.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PurrdfGtsReadLimits {
@@ -90,14 +82,12 @@ pub unsafe extern "C" fn purrdf_gts_read_limits_init(out: *mut PurrdfGtsReadLimi
     }
 }
 
-/// Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
-/// caller-owned handle (free with `purrdf_dataset_free`).
+/// Read a GTS v1 or v2 container into a fresh frozen dataset.
+/// Release `*out_dataset` with `purrdf_dataset_free`.
 ///
-/// Keeps the RDF-1.2 statement layer: a reifier-bound quoted
-/// triple written by `to_gts` is read back intact via the canonical fold-back
-/// (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
-/// gap was closed by the native text-codec work. A language tag that is not lower
-/// case is read folded to lower case, and the envelope is not returned.
+/// This returns the complete RDF 1.2 dataset with native RDF set semantics.
+/// Unreadable v2 content or framing fails with diagnostic evidence. Transport
+/// metadata and language tag spelling are outside the dataset projection.
 ///
 /// # Safety
 /// `bytes` must be valid for `len` bytes; the out-params must be writable.
@@ -123,10 +113,10 @@ pub unsafe extern "C" fn purrdf_from_gts(
     }
 }
 
-/// Read a GTS container under caller-selected whole-read limits.
+/// Read a GTS v1 container under caller-selected whole-read limits.
 ///
 /// `limits == NULL` selects finite hostile-input defaults. The legacy
-/// [`purrdf_from_gts`] entry point retains its unbounded v4 contract.
+/// [`purrdf_from_gts`] entry point also reads GTS v2 with its finite limits.
 /// Zero is a valid inclusive ceiling in every field.
 ///
 /// # Safety
@@ -164,6 +154,22 @@ fn read_gts_dataset(
     bytes: &[u8],
     limits: Option<GtsReadLimits>,
 ) -> Result<PurrdfDataset, PurrdfError> {
+    if has_gts_v2_opener(bytes) {
+        if limits.is_some() {
+            return Err(PurrdfError::new(
+                PurrdfStatus::InvalidArgument,
+                "The requested limits apply to GTS v1. Use purrdf_from_gts for GTS v2 with its finite limits.",
+            ));
+        }
+        let dataset = read_dataset_by_generation(bytes).map_err(|error| match error {
+            GtsDatasetReadError::Legacy(diagnostic)
+            | GtsDatasetReadError::GenerationTwo(diagnostic) => {
+                PurrdfError::from_owned_diagnostic(PurrdfStatus::GtsError, diagnostic)
+            }
+            error => PurrdfError::new(PurrdfStatus::GtsError, error.to_string()),
+        })?;
+        return Ok(PurrdfDataset::new(dataset));
+    }
     // The canonical fold-back: read the GTS container into a graph, then import
     // it into the IR. `import_gts_graph` resolves forward reifier bindings.
     let graph = match limits {
@@ -200,7 +206,7 @@ fn native_limits(limits: &PurrdfGtsReadLimits) -> Result<GtsReadLimits, PurrdfEr
     })
 }
 
-/// Write a frozen dataset to canonical GTS container bytes under `profile`
+/// Write a frozen dataset to canonical GTS v1 bytes under `profile`
 /// (e.g. `"dist"`). The output goes to `*out_buffer` (free with
 /// `purrdf_buffer_free`).
 ///
@@ -232,6 +238,41 @@ pub unsafe extern "C" fn purrdf_to_gts(
                 PurrdfError::from_diagnostic(PurrdfStatus::GtsError, &diagnostic)
             })?;
             *out_buffer = into_handle(PurrdfBuffer::from(bytes));
+            Ok(PurrdfStatus::Ok)
+        })
+    }
+}
+
+/// Write a frozen dataset as one committed GTS v2 segment in arrival order.
+/// Release the returned `*out_buffer` with `purrdf_buffer_free`.
+///
+/// Preserves RDF 1.2 statements, scoped blank identities and empty named graphs.
+/// Used composite literals require valid lexical forms and blank-free contents.
+/// # Safety
+/// `dataset` must be a live handle and the out-params must be writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_to_gts_v2(
+    dataset: *const PurrdfDataset,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    unsafe {
+        ffi_try!(out_error, {
+            if dataset.is_null() || out_buffer.is_null() {
+                return Err(PurrdfError::new(
+                    PurrdfStatus::NullPointer,
+                    "null pointer argument to purrdf_to_gts_v2",
+                ));
+            }
+            let bytes = to_gts_v2(PurrdfDataset::dataset(dataset)).map_err(|diagnostic| {
+                PurrdfError::from_owned_diagnostic(PurrdfStatus::GtsError, diagnostic)
+            })?;
+            let buffer = Memory::new(&mut Resident)
+                .boxed(PurrdfBuffer::from(bytes))
+                .map_err(|cause| {
+                    PurrdfError::from_owned_diagnostic(PurrdfStatus::StorageError, cause.into())
+                })?;
+            *out_buffer = publish_handle(buffer);
             Ok(PurrdfStatus::Ok)
         })
     }

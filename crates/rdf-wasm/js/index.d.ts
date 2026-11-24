@@ -745,6 +745,10 @@ export class Dataset implements Iterable<Quad> {
   /** Omitted or true remembers empty named graphs; false selects row-driven existence. */
   constructor(rememberEmptyGraphs?: boolean);
   static parse(input: string, format: string, base?: string | null, rememberEmptyGraphs?: boolean, inputOptions?: string | null): Dataset;
+  /** Load a complete RDF dataset from GTS v1 or v2 bytes. */
+  static fromGts(bytes: Uint8Array): Dataset;
+  /** Encode one committed GTS v2 segment in arrival order. */
+  toGtsV2(): Uint8Array;
   /** The policy retained by snapshots, matches and applied synchronous/asynchronous UPDATEs. */
   readonly rememberEmptyGraphs: boolean;
   static from(quads?: Iterable<Quad> | null): Dataset;

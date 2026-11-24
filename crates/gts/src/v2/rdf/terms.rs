@@ -15,6 +15,10 @@ use crate::{FastMap, FastSet};
 pub struct TermId(usize);
 
 impl TermId {
+    pub(in crate::v2) const fn from_index(index: usize) -> Self {
+        Self(index)
+    }
+
     /// The index in this fold's term arena.
     #[must_use]
     pub const fn index(self) -> usize {
@@ -152,7 +156,9 @@ pub(super) struct TermArena {
 }
 
 impl TermArena {
-    pub(super) fn terms(&self) -> impl ExactSizeIterator<Item = &Term<'static>> {
+    pub(super) fn terms(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = &Term<'static>> + ExactSizeIterator {
         self.entries.iter().map(|entry| &entry.term)
     }
 
@@ -164,16 +170,26 @@ impl TermArena {
         &self.values
     }
 
-    pub(super) fn intern(&mut self, term: Term<'_>) -> Result<TermId, FoldError> {
-        let hash = hash_one(&term);
-        let mut candidate = self.buckets.get(&hash).copied();
-        let next = candidate;
+    pub(super) fn find(&self, term: &Term<'_>) -> Option<TermId> {
+        self.find_chain(term, self.buckets.get(&hash_one(term)).copied())
+    }
+
+    fn find_chain(&self, term: &Term<'_>, mut candidate: Option<TermId>) -> Option<TermId> {
         while let Some(id) = candidate {
             let entry = &self.entries[id.index()];
-            if entry.term == term {
-                return Ok(id);
+            if &entry.term == term {
+                return Some(id);
             }
             candidate = entry.next;
+        }
+        None
+    }
+
+    pub(super) fn intern(&mut self, term: Term<'_>) -> Result<TermId, FoldError> {
+        let hash = hash_one(&term);
+        let next = self.buckets.get(&hash).copied();
+        if let Some(id) = self.find_chain(&term, next) {
+            return Ok(id);
         }
         self.entries.try_reserve(1)?;
         self.buckets.try_reserve(1)?;

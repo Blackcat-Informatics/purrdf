@@ -3,6 +3,7 @@
 
 //! GTS generation 2 framing, segment verification and RDF graph transport.
 
+mod canonical;
 mod fields;
 mod frame;
 mod header;
@@ -14,11 +15,26 @@ mod payload;
 mod range;
 mod rdf;
 mod read;
+mod references;
 mod rows;
+
+pub use references::{
+    Binding, FrameLocation, GroundLeaf, GroundNode, GroundTerm, MissingReferent, ReferenceFindings,
+    ReferenceFold, ReferenceLocation, Referent, ResolvedLeaf, ResolvedReferent, StateLocation,
+    Suppression, SuppressionClaim, SuppressionKind, SuppressionUnmatched, VisibleFold,
+};
 mod segment;
+mod signature;
 mod terms;
 mod writer;
 
+pub use canonical::{
+    CanonicalDifference, CanonicalDifferenceReason, CanonicalLabellingCheck,
+    CanonicalLabellingDifference, CanonicalLabellingUnchecked, CanonicalStorageCheck,
+    CanonicalStructureCheck, CanonicalStructureDifference, ClosingIndexLabelling, ContentLabelling,
+    ContentLabellingRefusal, ReadContentLabelling, ReadLabellingError, SegmentCanonicalCheck,
+    SegmentContentLabelling,
+};
 pub use fields::WireError;
 pub use frame::{FrameCheck, FrameEnvelope, FrameField, FrameType, UnknownFrameType};
 pub use header::{
@@ -26,7 +42,7 @@ pub use header::{
     write_header,
 };
 pub use index::{IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexStorageProblem};
-pub use item::{Generation, Item, ItemKind};
+pub use item::{Generation, Item, ItemKind, names_second_generation};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
     ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParityPatch,
@@ -42,17 +58,29 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    DetectionCapacity, ExternalBlob, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph,
-    ReadCapacity, ReadError, ReadFailure, ReadGraph, ReadLimits, Resynchronization, VerifiedBlob,
-    read, read_with_limits,
+    BlobEntry, DetectionCapacity, ExternalBlob, FileEnd, FrameSignatures, FrameWireResult,
+    FramingDamage, GraphIndexCheck, ItemRefusal, LineageFinding, ParityRecovery, PayloadOutcome,
+    PayloadUnchecked, ProfileNotChecked, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph,
+    ReadLabellingLimits, ReadLimits, RebuildResult, RebuildState, RecoveryRefusal, ResyncOpener,
+    ResyncPast, ResyncReach, Resynchronization, SegmentDurability, SkippedSegment, StateFold,
+    UncommittedTail, UnreferencedUnit, VerifiedBlob, Visibility, read, read_with_limits,
+    read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
+pub use signature::{
+    Authenticity, HeldKey, SegmentAuthentication, SignatureCheck, SignatureInputs,
+    SignatureInvalid, SignatureStatus, SignatureUnverified,
+};
 pub use terms::{
     ContentError, DecodedTerms, FormedBudget, LiteralForm, TermDefinition, TermOrder,
     TermReservation, TermText, TermsHeader, TypedValue, ValueReference,
 };
-pub use writer::{SegmentWriteError, SegmentWriter};
+pub use writer::{
+    CoSignError, Compaction, CompactionOutcome, CompactionStop, SegmentWriteError, SegmentWriter,
+    SignatureWriteError, append_cosigned_commit, compact, compact_segment, rdf_segment_bytes,
+    write_indexed_rdf_segment, write_rdf_segment,
+};
 
 /// The reason a wire value violates the GTS v2 grammar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
