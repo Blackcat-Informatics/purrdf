@@ -291,9 +291,9 @@ mod tests {
         let status = Capture::read(&error).child("status");
         assert_eq!(status.code, "gts-v2-signature-invalid");
         assert_eq!(status.child("reason").code, "gts-v2-signature-value-length");
-        assert!(bytes.0.is_empty());
+        assert_eq!(bytes.0, [] as [u8; 0]);
         signer.sign(&header, &frame, &mut bytes).unwrap();
-        assert!(!bytes.0.is_empty());
+        assert_ne!(bytes.0, [] as [u8; 0]);
     }
 
     #[test]
