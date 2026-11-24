@@ -121,6 +121,13 @@ pub enum CliError {
         id: String,
         cause: purrdf::shapes::profile::ProfileRequestError,
     },
+    /// Original fixed-point recursion request refusal.
+    ShaclRecursionRequest(purrdf_validate::RecursionRequestError),
+    /// Native recursive validation refusal with its CLI context.
+    ShaclRecursion {
+        message: String,
+        cause: purrdf::shapes::RecursionRefusal,
+    },
     /// Original request/source acquisition refusal before document parsing.
     DocumentInput {
         /// File path or - for standard input.
@@ -211,9 +218,10 @@ impl CliError {
     pub(crate) fn exit_code(&self) -> i32 {
         match self {
             Self::WordId(error) if matches!(&**error, crate::WordIdFailure::Usage(_)) => 2,
-            Self::Usage(_) | Self::ShaclProfileRequest { .. } | Self::ContentIdentityRefused(_) => {
-                2
-            }
+            Self::Usage(_)
+            | Self::ShaclProfileRequest { .. }
+            | Self::ShaclRecursionRequest(_)
+            | Self::ContentIdentityRefused(_) => 2,
             Self::OutputPublication { .. }
             | Self::OutputIo(_)
             | Self::PartialOutputRemoved { .. }
@@ -222,6 +230,7 @@ impl CliError {
             | Self::Canonical { .. }
             | Self::ReceiptPublication { .. }
             | Self::Runtime(_)
+            | Self::ShaclRecursion { .. }
             | Self::ContentIdentityFailed(_)
             | Self::GlobCompile(_)
             | Self::GlobMatch(_)
@@ -258,6 +267,11 @@ impl fmt::Display for CliError {
             Self::FileIdentity(error) => error.fmt(f),
             Self::WordId(error) => error.fmt(f),
             Self::ShaclProfileRequest { id, cause } => write!(f, "--shacl-profile {id}: {cause}"),
+            Self::ShaclRecursionRequest(cause) => write!(
+                f,
+                "--recursion: {cause}. Supply --recursion lfp or gfp with --recursion-max-pairs and --recursion-max-iterations"
+            ),
+            Self::ShaclRecursion { message, .. } => f.write_str(message),
             Self::Usage(msg) | Self::Runtime(msg) => f.write_str(msg),
             Self::Canonical { message, .. } => f.write_str(message),
             Self::OutputPublication { original, failure } => {
@@ -304,6 +318,8 @@ impl std::error::Error for CliError {
             Self::YamlSource(error) => Some(&**error),
             Self::Diagnostic(error) => Some(error),
             Self::ShaclProfileRequest { cause, .. } => Some(cause),
+            Self::ShaclRecursionRequest(cause) => Some(cause),
+            Self::ShaclRecursion { cause, .. } => Some(cause),
             Self::OutputIo(error) => Some(error),
             Self::PartialOutputRemoved { original, .. } => Some(&**original),
             Self::FileIdentity(error) => Some(error),
@@ -342,12 +358,26 @@ impl CliError {
     }
 
     pub(crate) fn native(error: impl std::error::Error + 'static) -> Self {
-        match purrdf_validate::canonical::native_canonical_cause(&error) {
+        Self::native_in("", &error)
+    }
+
+    pub(crate) fn native_in(context: &str, error: &(dyn std::error::Error + 'static)) -> Self {
+        let mut source = Some(error);
+        while let Some(current) = source {
+            if let Some(cause) = current.downcast_ref::<purrdf::shapes::RecursionRefusal>() {
+                return Self::ShaclRecursion {
+                    message: format!("{context}{error}"),
+                    cause: cause.clone(),
+                };
+            }
+            source = current.source();
+        }
+        match purrdf_validate::canonical::native_canonical_cause(error) {
             Some(cause) => Self::Canonical {
-                message: error.to_string(),
+                message: format!("{context}{error}"),
                 cause: Box::new(cause.clone()),
             },
-            None => Self::Runtime(error.to_string()),
+            None => Self::Runtime(format!("{context}{error}")),
         }
     }
 }

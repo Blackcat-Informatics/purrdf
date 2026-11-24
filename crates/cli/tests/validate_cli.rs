@@ -107,6 +107,130 @@ fn conforms_triple(value: bool) -> String {
     )
 }
 
+/// A self-supporting shape separates the two fixed points through every input route.
+#[test]
+fn recursive_validation_reaches_documents_products_and_changes() {
+    let source = "
+        @prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+            sh:property [ sh:path ex:p ; sh:qualifiedValueShape ex:S ;
+                          sh:qualifiedMinCount 1 ] .";
+    let dir = purrdf_testkit::temp_dir!().expect("temporary inputs");
+    let document = write_file(dir.path(), "recursive.ttl", source);
+    let data = write_file(
+        dir.path(),
+        "self-loop.ttl",
+        " <http://example.org/a> <http://example.org/p> <http://example.org/a> .",
+    );
+    let empty = write_file(dir.path(), "empty.ttl", "");
+    let product = support::path(dir.path(), "recursive.product");
+    let request = purrdf_validate::requested_shacl_recursion(Some("gfp"), Some(8), Some(8))
+        .unwrap()
+        .unwrap();
+    let options = purrdf::shapes::engine::ValidationOptions::default().with_recursion(request);
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::CANON_CORPUS_POLICY, None);
+    let packed = purrdf_validate::pack_shapes_product_with_options(
+        source,
+        None,
+        None,
+        &[],
+        &options,
+        &mut control,
+    )
+    .expect("recursive shapes product");
+    std::fs::write(&product, packed).expect("write recursive shapes product");
+    let max = u64::MAX.to_string();
+
+    for shape_args in [
+        vec!["--shapes", document.as_str()],
+        vec!["--shapes-product", product.as_str()],
+        vec!["--shapes-product", product.as_str(), "--rebuild"],
+    ] {
+        for data_args in [vec![data.as_str()], vec!["--changes", &data, &empty]] {
+            let mut args = vec!["validate"];
+            args.extend(&shape_args);
+            args.extend(data_args);
+            let default = run(&args);
+            assert_eq!(code(&default), 1, "{}", stderr(&default));
+            assert_eq!(stdout(&default), "");
+
+            for (mode, conforms) in [("lfp", false), ("gfp", true)] {
+                let mut selected = args.clone();
+                selected.extend([
+                    "--recursion",
+                    mode,
+                    "--recursion-max-pairs",
+                    &max,
+                    "--recursion-max-iterations",
+                    &max,
+                ]);
+                let out = run(&selected);
+                assert_eq!(code(&out), 0, "{}", stderr(&out));
+                assert!(
+                    stdout(&out).contains(&conforms_triple(conforms)),
+                    "{}",
+                    stderr(&out)
+                );
+            }
+        }
+    }
+
+    let base = ["validate", "--shapes", &document, &data];
+    for flags in [
+        &["--recursion", "lfp", "--recursion-max-pairs", "8"][..],
+        &["--recursion-max-iterations", "8"][..],
+        &[
+            "--recursion",
+            "other",
+            "--recursion-max-pairs",
+            "8",
+            "--recursion-max-iterations",
+            "8",
+        ][..],
+    ] {
+        let refused = run(&[base.as_slice(), flags].concat());
+        assert_eq!(code(&refused), 2, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains("--recursion:"));
+        assert_eq!(stdout(&refused), "");
+    }
+
+    for (pairs, iterations, reason) in [
+        ("0", "8", "pair limit 0 exhausted after 0 pairs"),
+        ("8", "0", "iteration limit 0 exhausted after 0 rounds"),
+    ] {
+        let mut limited = base.to_vec();
+        limited.extend([
+            "--recursion",
+            "gfp",
+            "--recursion-max-pairs",
+            pairs,
+            "--recursion-max-iterations",
+            iterations,
+        ]);
+        let refused = run(&limited);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(stderr(&refused).contains(reason), "{}", stderr(&refused));
+        assert_eq!(stdout(&refused), "");
+    }
+
+    let admitted = run(&[
+        base.as_slice(),
+        &[
+            "--recursion",
+            "gfp",
+            "--recursion-max-pairs",
+            "8",
+            "--recursion-max-iterations",
+            "8",
+        ],
+    ]
+    .concat());
+    assert_eq!(code(&admitted), 0, "{}", stderr(&admitted));
+    assert!(stdout(&admitted).contains(&conforms_triple(true)));
+}
+
 /// Primary YAML selection feeds both validation routes and refuses before publication.
 #[test]
 fn configured_yamlld_primary_reaches_whole_and_incremental_validation() {

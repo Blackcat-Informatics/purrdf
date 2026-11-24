@@ -1816,6 +1816,17 @@ pub(crate) struct ValidateArgs {
     /// flag existed.
     #[arg(long = "shacl-profile", value_name = "ID")]
     pub shacl_profile: Option<String>,
+    /// Select least (`lfp`) or greatest (`gfp`) fixed-point SHACL recursion.
+    /// Requires both recursion limits. With all three flags omitted, recursive
+    /// shapes are refused. Applies to shapes documents, products and changes.
+    #[arg(long, value_name = "MODE")]
+    pub recursion: Option<String>,
+    /// Maximum number of shape and focus-node pairs in recursive validation.
+    #[arg(long, value_name = "COUNT")]
+    pub recursion_max_pairs: Option<u64>,
+    /// Maximum number of fixed-point iterations in recursive validation.
+    #[arg(long, value_name = "COUNT")]
+    pub recursion_max_iterations: Option<u64>,
     /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
     #[arg(value_name = "IN", default_value = "-")]
     pub input: String,
