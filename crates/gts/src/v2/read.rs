@@ -12,8 +12,11 @@ use core::ops::Range;
 use std::borrow::Cow;
 use std::collections::VecDeque;
 
+use purrdf_core::canonical_labelling::{LabellingCapacity, Limit};
+use purrdf_lex::allocation::try_boxed;
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError};
 
+use super::canonical::{ReadContentLabelling, ReadLabellingError};
 use super::index::{IndexContent, StorageIndex};
 use super::parity::{ParityResumption, ParityStream};
 use super::payload::CandidateRefusal;
@@ -133,6 +136,8 @@ pub struct ReadLimits {
     pub second_generation: ReadCapacity,
     /// Maximum arrays, maps and tags open while delimiting a generation 2 item.
     pub second_generation_nesting_depth: usize,
+    /// Collect the content digests and canonical checks during the whole read.
+    pub labelling: Option<ReadLabellingLimits>,
 }
 
 impl Default for ReadLimits {
@@ -142,6 +147,28 @@ impl Default for ReadLimits {
             first_generation: crate::reader::GtsReadLimits::DEFAULT,
             second_generation: ReadCapacity::default(),
             second_generation_nesting_depth: 256,
+            labelling: None,
+        }
+    }
+}
+
+/// Labelling limits for an evidence-bearing generation 2 whole read.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadLabellingLimits {
+    /// Maximum lines admitted for each fold before lowering.
+    pub lines_per_fold: u64,
+    /// Cumulative labelled weight across the own folds and the file fold.
+    pub bytes_per_read: u64,
+    /// Limited units available to the labeller for each fold.
+    pub work: Limit,
+}
+
+impl Default for ReadLabellingLimits {
+    fn default() -> Self {
+        Self {
+            lines_per_fold: 1 << 26,
+            bytes_per_read: 1 << 37,
+            work: Limit::new(0),
         }
     }
 }
@@ -248,6 +275,7 @@ pub struct RdfGraph<'a> {
     /// Suppression visibility over the retained items, including a checked prefix.
     pub visibility: Visibility,
     labelling_size: Option<u128>,
+    read_labelling: Option<Box<ReadContentLabelling>>,
     ordinary_folds: Vec<Option<bool>>,
     own_segments: OwnSegments<'a>,
     state_source: StateSource<'a>,
@@ -259,6 +287,12 @@ impl RdfGraph<'_> {
     #[must_use]
     pub const fn labelling_size(&self) -> Option<u128> {
         self.labelling_size
+    }
+
+    /// The canonical and labelling report collected with the read's limits.
+    #[must_use]
+    pub fn read_labelling(&self) -> Option<&ReadContentLabelling> {
+        self.read_labelling.as_deref()
     }
 
     /// Take the resolved RDF fold when the read omitted no content.
@@ -666,6 +700,8 @@ pub enum ReadFailure {
     MissingContent,
     /// Isolating this segment did not reproduce its original admission.
     SegmentOwnFold(u64),
+    /// The requested whole-read canonical and labelling report could not run.
+    Labelling(Box<ReadLabellingError>),
     /// Some definitions could not be read.
     Definitions(DefinitionFindings),
     /// Some rows could not be resolved.
@@ -713,6 +749,7 @@ impl fmt::Display for ReadError {
             ReadFailure::ParityRepair(error) => error.fmt(f),
             ReadFailure::Content(error) => error.fmt(f),
             ReadFailure::Fold(error) => error.fmt(f),
+            ReadFailure::Labelling(error) => error.fmt(f),
             ReadFailure::Signature(error) => error.fmt(f),
             ReadFailure::UnavailableHash(algorithm) => {
                 write!(
@@ -758,6 +795,7 @@ impl std::error::Error for ReadError {
             ReadFailure::ParityRepair(error) => Some(error),
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
+            ReadFailure::Labelling(error) => Some(error.as_ref()),
             ReadFailure::Signature(error) => Some(error),
             ReadFailure::DetectionDepth { cause, .. } | ReadFailure::ItemDepth { cause, .. } => {
                 Some(cause)
@@ -872,6 +910,35 @@ pub fn read_with_limits(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read_with_limits_and_signature_inputs<'a>(
+    bytes: &'a [u8],
+    limits: ReadLimits,
+    signatures: &SignatureInputs<'_>,
+) -> Result<ReadGraph<'a>, ReadError> {
+    let mut result = read_whole_graph(bytes, limits, signatures)?;
+    if let (Some(limits), ReadGraph::Second(graph)) = (limits.labelling, &mut result) {
+        let mut capacity = LabellingCapacity::new(limits.lines_per_fold, limits.bytes_per_read);
+        let report = graph
+            .label_read(limits.work, &mut capacity)
+            .map_err(|cause| {
+                let offset = match &cause {
+                    ReadLabellingError::Segment(error) => error.offset,
+                    _ => bytes.len(),
+                };
+                let failure = match try_boxed(cause) {
+                    Ok(cause) => ReadFailure::Labelling(cause),
+                    Err(error) => error.into(),
+                };
+                ReadError { offset, failure }
+            })?;
+        graph.read_labelling = Some(try_boxed(report).map_err(|error| ReadError {
+            offset: bytes.len(),
+            failure: error.into(),
+        })?);
+    }
+    Ok(result)
+}
+
+fn read_whole_graph<'a>(
     bytes: &'a [u8],
     limits: ReadLimits,
     signatures: &SignatureInputs<'_>,

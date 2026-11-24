@@ -346,6 +346,11 @@ fn first_counted(fold: &RdfGraph<'_>) -> Option<usize> {
         )
         .chain(fold.term_order_violations.iter().copied())
         .chain(fold.row_order_violations.iter().copied())
+        .chain(
+            fold.reference_findings
+                .iter()
+                .map(|finding| finding.at.offset),
+        )
         .chain(fold.blob_length_conflicts.iter().copied())
         .chain(fold.unreferenced_units.iter().map(|unit| unit.offset))
         .chain(fold.invalid_commits.iter().map(|&(offset, _)| offset))

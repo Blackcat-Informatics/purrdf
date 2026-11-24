@@ -61,9 +61,9 @@ pub use read::{
     BlobEntry, DetectionCapacity, ExternalBlob, FileEnd, FrameSignatures, FrameWireResult,
     FramingDamage, GraphIndexCheck, ItemRefusal, LineageFinding, ParityRecovery, PayloadOutcome,
     PayloadUnchecked, ProfileNotChecked, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph,
-    ReadLimits, RebuildResult, RebuildState, RecoveryRefusal, ResyncOpener, ResyncPast,
-    ResyncReach, Resynchronization, SegmentDurability, SkippedSegment, StateFold, UncommittedTail,
-    UnreferencedUnit, VerifiedBlob, Visibility, read, read_with_limits,
+    ReadLabellingLimits, ReadLimits, RebuildResult, RebuildState, RecoveryRefusal, ResyncOpener,
+    ResyncPast, ResyncReach, Resynchronization, SegmentDurability, SkippedSegment, StateFold,
+    UncommittedTail, UnreferencedUnit, VerifiedBlob, Visibility, read, read_with_limits,
     read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};

@@ -52,6 +52,8 @@ Held rows, bindings, and suppression entries leave the digest absent.
 Call `v2::RdfGraph::label_read` for each segment's own digest and its closing
 index comparisons as well as the file result. Labelling charges the same
 weight budget for the segments in file order, then for the file fold.
+Set `v2::ReadLimits::labelling` to collect this report during a whole read
+with `v2::read_with_limits`. Retrieve it through `v2::RdfGraph::read_labelling`.
 An item-limit refusal retains the observed segments without forming or
 charging their folds. Its file labelling and segment digests are absent.
 For a claimed canonical form, the segment report compares ordinary

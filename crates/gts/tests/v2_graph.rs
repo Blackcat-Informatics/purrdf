@@ -814,6 +814,50 @@ fn canonical_structure_keeps_complete_items_that_contain_a_resync() {
 }
 
 #[test]
+fn canonical_structure_counts_a_dropped_binding_at_its_frame() {
+    use purrdf_gts::v2::{
+        CanonicalForm, CanonicalStructureCheck, CanonicalStructureDifference, FrameType,
+    };
+
+    let source = include_bytes!("fixtures/v2/P3/bindings-forward-reference.bin");
+    let original = second(source);
+    let mut bytes = Vec::new();
+    write_header(&mut bytes, None, Some(CanonicalForm::V1), None).unwrap();
+    let header = Header::decode(Item::first(&bytes).unwrap().unwrap()).unwrap();
+    let mut predecessor = header.identifier().unwrap();
+    let mut binding_offset = 0;
+    for kind in [FrameType::Terms, FrameType::Bindings] {
+        let frame = original
+            .frame_wire
+            .iter()
+            .find(|frame| frame.frame_type == Some(kind as u64))
+            .unwrap();
+        let at = bytes.len();
+        bytes.extend_from_slice(&source[frame.offset..frame.offset + frame.length]);
+        predecessor = relink_frame(&mut bytes[at..], &predecessor);
+        if kind == FrameType::Bindings {
+            binding_offset = at;
+        }
+    }
+    let graph = second(&bytes);
+    assert!(graph.reference_findings[0].forward_reference);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: 2,
+            offset: binding_offset,
+            difference: CanonicalStructureDifference::Bindings,
+        }
+    );
+}
+
+#[test]
 fn canonical_structure_counts_an_unreferenced_packed_chunk_before_a_bad_commit() {
     use purrdf_gts::v2::{CanonicalForm, CanonicalStructureCheck, CanonicalStructureDifference};
 
@@ -4143,6 +4187,47 @@ fn the_item_limit_retains_canonical_claims_without_forming_a_fold() {
     assert_eq!(
         complete.segments[2].canonical.structure,
         CanonicalStructureCheck::Verified
+    );
+}
+
+#[test]
+fn whole_read_returns_the_requested_canonical_report() {
+    use purrdf_gts::v2::{CanonicalLabellingCheck, CanonicalStructureCheck, ReadLabellingLimits};
+
+    let bytes = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let mut limits = ReadLimits::default();
+    limits.labelling = Some(ReadLabellingLimits::default());
+    let ReadGraph::Second(graph) = read_with_limits(bytes, limits).unwrap() else {
+        panic!("the fixture opens a generation 2 file");
+    };
+    let report = graph.read_labelling().unwrap();
+    let [segment] = report.segments.as_slice() else {
+        panic!("the fixture holds one complete segment");
+    };
+    assert_eq!(
+        segment.canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+    assert_eq!(
+        segment.canonical.labelling,
+        CanonicalLabellingCheck::Verified
+    );
+    let file = report.file.as_ref().unwrap().as_ref().unwrap();
+    assert!(file.content_digest.is_some());
+    assert_eq!(
+        *segment.content_digest.as_ref().unwrap(),
+        file.content_digest
+    );
+
+    limits.second_generation.items = 1;
+    let ReadGraph::Second(graph) = read_with_limits(bytes, limits).unwrap() else {
+        panic!("the claimed segment's opener fits the item limit");
+    };
+    let report = graph.read_labelling().unwrap();
+    assert!(matches!(report.file, Ok(None)));
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::ExceedsCapacity
     );
 }
 

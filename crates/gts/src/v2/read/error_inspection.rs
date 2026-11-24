@@ -60,6 +60,7 @@ impl StructuredError for ReadFailure {
         SegmentOwnFold(segment) => "gts-v2-read-segment-own-fold" {
             "segment" => Unsigned(u128::from(*segment)),
         },
+        Labelling(cause) => "gts-v2-read-labelling" { "cause" => Cause(cause.as_ref()) },
         Definitions(findings) => "gts-v2-read-definitions" { "findings" => Record(findings) },
         Rows(findings) => "gts-v2-read-rows" { "findings" => Record(findings) },
         References(findings) => "gts-v2-read-references" { "findings" => Record(findings) },
