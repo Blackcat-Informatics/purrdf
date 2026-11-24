@@ -450,11 +450,20 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      - name: Install cargo-c (the pinned header-contract generator)
-        # Pinned to the exact cargo-c whose bundled cbindgen the committed
-        # purrdf.h contract expects (see crates/rdf-capi/cbindgen.toml). A
-        # different cargo-c would emit spurious enum-ordering/formatting drift.
-        run: cargo install cargo-c --version 0.10.23 --locked
+      - name: Install the pinned cargo-c release binary
+        env:
+          CARGO_C_VERSION: 0.10.23
+          CARGO_C_SHA256: 603d6a9a25710220d631f0f7ace0e9922d5a69425eb4f1fbcbf6339b357f6d5f
+        run: |
+          tools="$RUNNER_TEMP/cargo-c"
+          archive="$RUNNER_TEMP/cargo-c-x86_64-unknown-linux-musl.tar.gz"
+          mkdir -p "$tools"
+          curl --fail --location --retry 3 --output "$archive" \
+            "https://github.com/lu-zero/cargo-c/releases/download/v$CARGO_C_VERSION/${archive##*/}"
+          sha256sum --strict --check <<< "$CARGO_C_SHA256  $archive"
+          tar -xzf "$archive" -C "$tools" cargo-capi cargo-cbuild cargo-cinstall cargo-ctest
+          test "$("$tools/cargo-capi" --version)" = "cargo-c $CARGO_C_VERSION+cargo-0.97.1"
+          printf '%s\n' "$tools" >> "$GITHUB_PATH"
 
       - name: Verify purrdf.h is current + the C smoke links and runs
         run: make capi-check
