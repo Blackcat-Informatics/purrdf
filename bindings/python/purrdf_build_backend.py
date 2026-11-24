@@ -241,7 +241,32 @@ def configured() -> None:
         )
 
 
-def qualify(path: Path) -> None:
+def sdist_cargo_lock(path: Path, archive_root: str, original: bytes) -> bytes:
+    def pins(lock: bytes) -> set[tuple[str, str, str | None, str | None]]:
+        return {
+            (item["name"], item["version"], item.get("source"), item.get("checksum"))
+            for item in tomllib.loads(lock.decode())["package"]
+        }
+
+    # Maturin reduces workspace membership and copies the full workspace lock.
+    # Let Cargo trim the lock against the actual archived manifests.
+    with tempfile.TemporaryDirectory(prefix="purrdf-sdist-") as directory:
+        with tarfile.open(path) as archive:
+            archive.extractall(directory, filter="data")
+        project = Path(directory) / archive_root
+        subprocess.run(
+            ["cargo", "metadata", "--offline", "--format-version", "1"],
+            cwd=project,
+            stdout=subprocess.DEVNULL,
+            check=True,
+        )
+        resolved = (project / "Cargo.lock").read_bytes()
+    if pins(resolved) - pins(original):
+        raise ValueError("source archive resolution changed a workspace dependency pin")
+    return resolved
+
+
+def qualify(path: Path, *, reconcile_lock: bool = False) -> None:
     configured()
     if zipfile.is_zipfile(path):
         with zipfile.ZipFile(path) as archive:
@@ -335,6 +360,10 @@ def qualify(path: Path) -> None:
         if len(candidates) != 1:
             raise ValueError("sdist must contain one core metadata file")
         name = candidates[0]
+        if reconcile_lock:
+            root = name.removesuffix("/PKG-INFO")
+            lock = f"{root}/Cargo.lock"
+            contents[lock] = sdist_cargo_lock(path, root, contents[lock])
         contents[name] = metadata_bytes(
             contents[name], source_expression(contents), source=True
         )
@@ -494,7 +523,7 @@ def _build_wheel(wheel_directory, config_settings, metadata_directory, *, editab
 
 def build_sdist(sdist_directory, config_settings=None):
     name = backend().build_sdist(sdist_directory, config_settings)
-    qualify(Path(sdist_directory) / name)
+    qualify(Path(sdist_directory) / name, reconcile_lock=True)
     return name
 
 

@@ -18,7 +18,7 @@ shadow_output="$output/purrdf-rdflib"
 mkdir -p "$main_output" "$shadow_output"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" uv build --no-create-gitignore --sdist --project bindings/python --out-dir "$main_output"
 RUSTUP_TOOLCHAIN="${RUSTUP_TOOLCHAIN:-stable}" uv build --no-create-gitignore --wheel "$main_output"/purrdf-[0-9]*.tar.gz --out-dir "$main_output" \
-  --config-setting 'maturin.build-args=--compatibility manylinux_2_34'
+  --config-setting 'maturin.build-args=--locked --compatibility manylinux_2_34'
 uv build --no-create-gitignore --project bindings/python-rdflib-shadow --out-dir "$shadow_output"
 python3 bindings/python/purrdf_build_backend.py "$main_output"/purrdf-[0-9]*.whl "$main_output"/purrdf-[0-9]*.tar.gz
 python3 scripts/package-licenses.py --profile python \
