@@ -3313,6 +3313,45 @@ export function shaclValidateChangesToSarif(
   xpathRegex?: XPathRegexLaw,
 ): ShaclChangeValidation;
 
+/** Select the least (`lfp`) or greatest (`gfp`) positive fixed point. */
+export type ShaclRecursionMode = "lfp" | "gfp";
+
+/**
+ * Validate the whole graph with an explicit fixed point. Supply both work limits
+ * as unsigned bigints or nonnegative safe integers.
+ */
+export function shaclValidateToSarifWithRecursion(
+  shapesTtl: string,
+  dataNt: string,
+  shapesBase: string | null | undefined,
+  conformanceDisallows: readonly ShaclSeverity[] | null | undefined,
+  importIris: readonly string[] | null | undefined,
+  importDocuments: readonly string[] | null | undefined,
+  shapesGraph: string | null | undefined,
+  subClassOfInShapesGraph: boolean | null | undefined,
+  xpathRegex: XPathRegexLaw | null | undefined,
+  shaclProfile: ShaclLaw | null | undefined,
+  recursion: ShaclRecursionMode,
+  recursionMaxPairs: bigint | number,
+  recursionMaxIterations: bigint | number,
+): string;
+
+/** Validate a graph change with an explicit fixed point and retain the reported scope. */
+export function shaclValidateChangesToSarifWithRecursion(
+  shapesTtl: string,
+  dataNt: string,
+  addedNt: string | null | undefined,
+  removedNt: string | null | undefined,
+  shapesBase: string | null | undefined,
+  importIris: readonly string[] | null | undefined,
+  importDocuments: readonly string[] | null | undefined,
+  shapesGraph: string | null | undefined,
+  xpathRegex: XPathRegexLaw | null | undefined,
+  recursion: ShaclRecursionMode,
+  recursionMaxPairs: bigint | number,
+  recursionMaxIterations: bigint | number,
+): ShaclChangeValidation;
+
 /**
  * A refusal from the prepared-shapes-product admission boundary, thrown by every
  * `shaclProduct*` function and by `shaclPackProduct`.
@@ -3524,6 +3563,16 @@ export interface AsyncShaclValidationOptions extends AsyncShaclOptions {
 }
 
 /**
+ * Options for the two text validators. Supply the mode and both limits together.
+ * Limits accept unsigned bigints or nonnegative safe integers.
+ */
+export interface AsyncShaclTextValidationOptions extends AsyncShaclValidationOptions {
+  readonly recursion?: ShaclRecursionMode | null;
+  readonly recursionMaxPairs?: bigint | number | null;
+  readonly recursionMaxIterations?: bigint | number | null;
+}
+
+/**
  * The asynchronous twin of `shaclValidateToSarif`, over exactly its arguments: resolves
  * to the same SARIF 2.1.0 JSON string, byte for byte, or rejects with the same error —
  * a `ShaclImportError` for an `owl:imports` closure not in hand.
@@ -3547,7 +3596,7 @@ export function shaclValidateToSarifAsync(
   importDocuments?: readonly string[] | null,
   shapesGraph?: string | null,
   subClassOfInShapesGraph?: boolean | null,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclTextValidationOptions | null,
 ): Promise<string>;
 
 /**
@@ -3564,7 +3613,7 @@ export function shaclValidateChangesToSarifAsync(
   importIris?: readonly string[] | null,
   importDocuments?: readonly string[] | null,
   shapesGraph?: string | null,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclTextValidationOptions | null,
 ): Promise<ShaclChangeValidation>;
 
 /**

@@ -3518,12 +3518,15 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 29] = [
+const OPTION_SHAPES: [(&str, OptionShape); 32] = [
     ("now", OptionShape::Text),
     ("entropySeed", OptionShape::Limit),
     ("base", OptionShape::Text),
     ("xpathRegex", OptionShape::Text),
     ("shaclProfile", OptionShape::Text),
+    ("recursion", OptionShape::Text),
+    ("recursionMaxPairs", OptionShape::Limit),
+    ("recursionMaxIterations", OptionShape::Limit),
     ("format", OptionShape::Text),
     ("provenanceNamespace", OptionShape::Provenance),
     ("optionsJson", OptionShape::Text),
@@ -3703,7 +3706,18 @@ impl AsyncOperationKind {
             // no ceiling: only the host options, and the dated XPath law of an entry that
             // takes one, which the synchronous twin takes as its trailing argument.
             // `shaclProfile` is the exact dated SHACL law, taken by the validation twin.
-            Self::Shacl => spec("shacl", &["xpathRegex", "shaclProfile"], false, None),
+            Self::Shacl => spec(
+                "shacl",
+                &[
+                    "xpathRegex",
+                    "shaclProfile",
+                    "recursion",
+                    "recursionMaxPairs",
+                    "recursionMaxIterations",
+                ],
+                false,
+                None,
+            ),
         }
     }
 
@@ -3816,6 +3830,9 @@ pub struct AsyncJobOptions {
     accept: Option<String>,
     xpath_regex: Option<Profile>,
     shacl_profile: Option<String>,
+    recursion: Option<String>,
+    recursion_max_pairs: Option<u64>,
+    recursion_max_iterations: Option<u64>,
     ceilings: GovernorArgs,
     quantum: u32,
     catalog: Option<NativeServiceCatalog>,
@@ -4192,6 +4209,13 @@ impl AsyncJobOptions {
                         crate::xpath_regex::parse(Some(&name)).map_err(OptionsError::refused)?;
                 }
                 ("shaclProfile", OptionValue::Text(id)) => options.shacl_profile = Some(id),
+                ("recursion", OptionValue::Text(mode)) => options.recursion = Some(mode),
+                ("recursionMaxPairs", OptionValue::Limit(limit)) => {
+                    options.recursion_max_pairs = Some(limit);
+                }
+                ("recursionMaxIterations", OptionValue::Limit(limit)) => {
+                    options.recursion_max_iterations = Some(limit);
+                }
                 ("format", OptionValue::Text(text)) => options.format = Some(text),
                 ("optionsJson", OptionValue::Text(text)) => options.options_json = Some(text),
                 ("yamlSchemaUrl", OptionValue::Text(text)) => options.yaml_schema_url = Some(text),
@@ -4723,6 +4747,14 @@ fn begin_shacl_job(
     request.select_xpath_regex(options.xpath_regex.map(|profile| profile.name().to_owned()));
     request
         .select_shacl_profile(options.shacl_profile.clone())
+        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
+    let recursion = crate::shacl::decode_recursion(
+        options.recursion.as_deref(),
+        options.recursion_max_pairs,
+        options.recursion_max_iterations,
+    )?;
+    request
+        .select_recursion(recursion)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     let coordinates = purrdf_validate::query::CoordinateInputs::from_time_and_seed(
         options.now.as_deref(),
@@ -7911,6 +7943,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -8024,7 +8057,7 @@ mod tests {
         );
         assert_eq!(status, RunStatus::Outcome);
         let (s, d, a, r, b, i, docs, g) = changes();
-        let sync = requests::validate_changes_to_sarif(s, d, a, r, b, i, docs, g, None)
+        let sync = requests::validate_changes_to_sarif(s, d, a, r, b, i, docs, g, None, None)
             .expect("sync entry");
         let changed = job
             .take_shacl_change_validation()
@@ -8397,7 +8430,7 @@ mod tests {
         let (s, d, b, c, i, docs, g, sub) = resolved();
         assert_eq!(
             raw_text(&job),
-            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub, None, None)
+            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub, None, None, None)
                 .expect("sync entry")
         );
         assert!(job.take_shacl_import_error().is_none());
@@ -8910,6 +8943,7 @@ ex:PatternShape a sh:NodeShape ;
                 None,
                 law.map(str::to_owned),
                 None,
+                None,
             )
             .expect("sync entry");
             assert_eq!(raw_text(&job), expected, "{law:?}");
@@ -8948,6 +8982,7 @@ ex:PatternShape a sh:NodeShape ;
                 None,
                 None,
                 law.map(str::to_owned),
+                None,
             )
             .expect("sync entry");
             assert_eq!(change.sarif(), sync.sarif(), "{law:?}");
