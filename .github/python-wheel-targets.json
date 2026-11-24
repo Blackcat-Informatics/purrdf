@@ -1,0 +1,40 @@
+{
+  "include": [
+    {
+      "name": "manylinux-x86_64", "runner": "ubuntu-24.04", "arch": "x64",
+      "target": "x86_64-unknown-linux-gnu", "platform": "manylinux_2_34_x86_64",
+      "image": "quay.io/pypa/manylinux_2_34_x86_64@sha256:994ad4b59d4eb3be4b84f177b001ef8d5fea57b81e83b4f9171dfcc4a6d6bdee"
+    },
+    {
+      "name": "manylinux-aarch64", "runner": "ubuntu-24.04-arm", "arch": "arm64",
+      "target": "aarch64-unknown-linux-gnu", "platform": "manylinux_2_34_aarch64",
+      "image": "quay.io/pypa/manylinux_2_34_aarch64@sha256:2027d9b991e2e9f87541b78d8dd28968984f82796b08449890ac04aaf2ae044f"
+    },
+    {
+      "name": "musllinux-x86_64", "runner": "ubuntu-24.04", "arch": "x64",
+      "target": "x86_64-unknown-linux-musl", "platform": "musllinux_1_2_x86_64",
+      "image": "quay.io/pypa/musllinux_1_2_x86_64@sha256:43f81b5440015302cd0b0671d3d05d1961a2a0995cb7ff3d1725ce62990498a8"
+    },
+    {
+      "name": "musllinux-aarch64", "runner": "ubuntu-24.04-arm", "arch": "arm64",
+      "target": "aarch64-unknown-linux-musl", "platform": "musllinux_1_2_aarch64",
+      "image": "quay.io/pypa/musllinux_1_2_aarch64@sha256:83734eadb0172f639c75221229f42298568e63ea74e6d827ee3f91fb3a17e5b3"
+    },
+    {
+      "name": "macos-x86_64", "runner": "macos-15-intel", "arch": "x64",
+      "target": "x86_64-apple-darwin", "platform": "macosx_10_15_x86_64", "deployment": "10.15"
+    },
+    {
+      "name": "macos-arm64", "runner": "macos-15", "arch": "arm64",
+      "target": "aarch64-apple-darwin", "platform": "macosx_11_0_arm64", "deployment": "11.0"
+    },
+    {
+      "name": "windows-amd64", "runner": "windows-2025", "arch": "x64",
+      "target": "x86_64-pc-windows-msvc", "platform": "win_amd64"
+    },
+    {
+      "name": "windows-arm64", "runner": "windows-11-arm", "arch": "arm64",
+      "target": "aarch64-pc-windows-msvc", "platform": "win_arm64"
+    }
+  ]
+}

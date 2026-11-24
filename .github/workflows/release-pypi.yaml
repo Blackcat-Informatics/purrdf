@@ -12,194 +12,45 @@ name: Publish coordinated PurRDF Python distributions
 
 permissions: {}
 
+concurrency:
+  # Rehearsals use their own group and cannot replace a pending publish.
+  group: python-release-${{ github.event_name == 'workflow_dispatch' && (inputs.publish && 'py-v5.0.1' || 'rehearsal-py-v5.0.1') || github.ref_name }}
+  cancel-in-progress: false
+
 on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish missing wheels for the existing 5.0.1 release
+        type: boolean
+        default: false
   push:
     tags:
       - "py-v*"
 
-# Release artifacts are built on STABLE, not on the nightly channel that
-# `rust-toolchain.toml` pins for development and CI gates. This env var is load
-# bearing: the `dtolnay/rust-toolchain` action selects with `rustup default`,
-# which ranks BELOW `rust-toolchain.toml` in rustup's precedence order, so
-# without `RUSTUP_TOOLCHAIN` every cargo invocation here would silently use the
-# nightly channel no matter what the install step says.
-env:
-  RUSTUP_TOOLCHAIN: stable
-
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - project: purrdf
-            directory: bindings/python
-            profile: python
-          - project: purrdf-rdflib
-            directory: bindings/python-rdflib-shadow
-            profile: python-rdflib
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+  qualify:
+    uses: ./.github/workflows/qualify-python-release.yaml
     permissions:
       contents: read
       actions: write
       id-token: write
       attestations: write
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.13"
-          architecture: x64
-
-      # Stable, not the nightly in rust-toolchain.toml: this step builds
-      # the wheels that ship to PyPI consumers. See the workflow-level `env`
-      # above for why RUSTUP_TOOLCHAIN, not this input, actually selects it.
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
-        with:
-          toolchain: stable
-
-      - id: version
-        name: Verify tag matches both Python distributions and all suite versions
-        run: |
-          python3 scripts/check-versions.py
-          python_version="$(python3 -c "import tomllib; print(tomllib.load(open('bindings/python/pyproject.toml','rb'))['project']['version'])")"
-          test "${GITHUB_REF_NAME#py-v}" = "$python_version"
-          echo "version=${python_version}" >> "$GITHUB_OUTPUT"
-
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
-        with:
-          enable-cache: false
-
-      - name: Verify recipient notices before building
-        run: |
-          python3 scripts/fetch-locked-deps.py
-          python3 scripts/package-licenses.py --profile '${{ matrix.profile }}' --check
-
-      - name: Build native Python distributions
-        if: matrix.project == 'purrdf'
-        run: |
-          uv build --no-create-gitignore --sdist --project bindings/python --out-dir bindings/python/dist
-          uv build --no-create-gitignore --wheel bindings/python/dist/*.tar.gz --out-dir bindings/python/dist \
-            --config-setting 'maturin.build-args=--compatibility manylinux_2_34'
-
-      - name: Build rdflib shadow wheel and sdist
-        if: matrix.project == 'purrdf-rdflib'
-        run: uv build --no-create-gitignore --project bindings/python-rdflib-shadow --out-dir bindings/python-rdflib-shadow/dist
-
-      - name: Qualify native distribution license metadata
-        if: matrix.project == 'purrdf'
-        run: python3 bindings/python/purrdf_build_backend.py bindings/python/dist/*
-
-      - name: Audit actual wheel and sdist recipient notices
-        run: >
-          python3 scripts/package-licenses.py --profile '${{ matrix.profile }}'
-          --audit ${{ matrix.directory }}/dist/*
-          --receipt license-receipt-${{ matrix.project }}.json
-
-      - name: Validate distributions with the locked publisher tooling
-        run: |
-          publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
-          uv venv --python 3.13 "$publisher_env"
-          uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
-            scripts/python-publisher-requirements.txt
-          "$publisher_env/bin/python" -I scripts/publish-python.py --self-test
-          "$publisher_env/bin/python" -I scripts/publish-python.py check \
-            --project '${{ matrix.project }}' --version '${{ steps.version.outputs.version }}' \
-            --dist-dir '${{ matrix.directory }}/dist'
-
-      - name: Retain built distributions when validation fails
-        if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dist-pypi-${{ matrix.project }}
-          path: |
-            ${{ matrix.directory }}/dist/*.whl
-            ${{ matrix.directory }}/dist/*.tar.gz
-          if-no-files-found: ignore
-          overwrite: true
-
-      - name: Upload license evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: license-evidence-pypi-${{ matrix.project }}
-          path: license-receipt-${{ matrix.project }}.json
-
-      - name: Attest build provenance
-        id: attest
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: ${{ matrix.directory }}/dist/*
-
-      - name: Generate SBOM
-        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
-        with:
-          path: ${{ matrix.directory }}
-          format: spdx-json
-          output-file: sbom-pypi-${{ matrix.project }}.spdx.json
-          upload-artifact: false
-
-      - name: Attest SBOM for Python distributions
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
-        with:
-          subject-path: ${{ matrix.directory }}/dist/*
-          sbom-path: sbom-pypi-${{ matrix.project }}.spdx.json
-
-      - name: Upload attestation bundle
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: attestation-pypi-${{ matrix.project }}
-          path: ${{ steps.attest.outputs.bundle-path }}
-
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: sbom-pypi-${{ matrix.project }}
-          path: sbom-pypi-${{ matrix.project }}.spdx.json
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dist-pypi-${{ matrix.project }}
-          path: ${{ matrix.directory }}/dist/*
-          overwrite: true
-
-  install:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: "3.13"
-      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        with:
-          pattern: dist-pypi-*
-          path: dist
-          merge-multiple: true
-      - name: Install both exact candidate wheels in a clean environment
-        run: |
-          python3 -m venv candidate
-          candidate/bin/python -m pip install --no-deps dist/*.whl
-          candidate/bin/python scripts/check-python-release-install.py "${GITHUB_REF_NAME#py-v}"
 
   publish-main:
-    needs: [build, install]
+    needs: qualify
+    if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
       actions: read
+      attestations: read
+    env:
+      RELEASE_VERSION: ${{ needs.qualify.outputs.version }}
+      RELEASE_TAG: ${{ needs.qualify.outputs.release_tag }}
+      RELEASE_SHA: ${{ needs.qualify.outputs.release_sha }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -213,25 +64,49 @@ jobs:
           enable-cache: false
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
-          name: dist-pypi-purrdf
-          path: dist
+          name: dist-pypi-native-release
+          path: release-dist
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: dist-pypi-shadow-release
+          path: release-shadow
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: evidence-pypi-release
+          path: evidence
+      - name: Recheck assembled native files and source evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify evidence/release-source.json --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/qualify-python-release.yaml" \
+            --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" \
+            --rawfile checksums evidence/release.sha256 \
+            '.tag == $tag and .commit == $sha and .checksums == $checksums' evidence/release-source.json
+          sha256sum --strict --check evidence/release.sha256
       - name: Publish the main distribution with Trusted Publishing and attestations
         run: |
           publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
           uv venv --python 3.13 "$publisher_env"
           uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
             scripts/python-publisher-requirements.txt
-          "$publisher_env/bin/python" -I scripts/publish-python.py publish \
-            --project purrdf --version "${GITHUB_REF_NAME#py-v}" --dist-dir dist
+          bash scripts/publish-python-release.sh purrdf "$RELEASE_VERSION" release-dist \
+            "$publisher_env/bin/python"
 
   publish-shadow:
-    needs: [build, install, publish-main]
+    needs: [qualify, publish-main]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       contents: read
       id-token: write
       actions: read
+      attestations: read
+    env:
+      RELEASE_VERSION: ${{ needs.qualify.outputs.version }}
+      RELEASE_TAG: ${{ needs.qualify.outputs.release_tag }}
+      RELEASE_SHA: ${{ needs.qualify.outputs.release_sha }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -245,13 +120,29 @@ jobs:
           enable-cache: false
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
-          name: dist-pypi-purrdf-rdflib
-          path: dist
+          name: dist-pypi-shadow-release
+          path: release-shadow
+      - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: evidence-pypi-release
+          path: evidence
+      - name: Recheck assembled shadow files and source evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh attestation verify evidence/release-source.json --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/qualify-python-release.yaml" \
+            --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA"
+          jq -e --arg tag "$RELEASE_TAG" --arg sha "$RELEASE_SHA" \
+            --rawfile checksums evidence/release.sha256 \
+            '.tag == $tag and .commit == $sha and .checksums == $checksums' evidence/release-source.json
+          sed -n '/  release-shadow\//p' evidence/release.sha256 > expected.sha256
+          sha256sum --strict --check expected.sha256
       - name: Publish the rdflib shadow with Trusted Publishing and attestations
         run: |
           publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
           uv venv --python 3.13 "$publisher_env"
           uv pip sync --python "$publisher_env/bin/python" --require-hashes --only-binary :all: \
             scripts/python-publisher-requirements.txt
-          "$publisher_env/bin/python" -I scripts/publish-python.py publish \
-            --project purrdf-rdflib --version "${GITHUB_REF_NAME#py-v}" --dist-dir dist
+          bash scripts/publish-python-release.sh purrdf-rdflib "$RELEASE_VERSION" release-shadow \
+            "$publisher_env/bin/python"
