@@ -296,7 +296,7 @@ impl<'a> RdfGraph<'a> {
         capacity: &mut LabellingCapacity,
         segments: &mut Vec<SegmentContentLabelling>,
     ) -> Result<Result<ContentLabelling, ContentLabellingRefusal>, ReadLabellingError> {
-        self.for_labelled_segments(limit, capacity, |segment, fold, labelled| {
+        self.for_labelled_segments(limit, capacity, None, |segment, fold, labelled| {
             let closing_index = labelled.as_ref().ok().and_then(|result| {
                 let (offset, check) = segment.closing_index(self)?;
                 let (statistics_match, content_digest_matches) =
@@ -333,21 +333,36 @@ impl<'a> RdfGraph<'a> {
         limit: Limit,
         capacity: &mut LabellingCapacity,
     ) -> Result<Result<ContentLabelling, ContentLabellingRefusal>, ReadLabellingError> {
-        self.for_labelled_segments(limit, capacity, |_, _, _| Ok(()))?;
+        self.for_labelled_segments(limit, capacity, None, |_, _, _| Ok(()))?;
         read_labelling(self.label_content(limit, capacity))
+    }
+
+    pub(super) fn label_segment_for_compaction(
+        &self,
+        ordinal: u64,
+        fold: &Self,
+        limit: Limit,
+        capacity: &mut LabellingCapacity,
+    ) -> Result<Result<ContentLabelling, ContentLabellingRefusal>, ReadLabellingError> {
+        self.for_labelled_segments(limit, capacity, Some(ordinal), |_, _, _| Ok(()))?;
+        read_labelling(fold.label_scoped(limit, capacity, Some(0)))
     }
 
     fn for_labelled_segments(
         &self,
         limit: Limit,
         capacity: &mut LabellingCapacity,
+        before: Option<u64>,
         mut visit: impl FnMut(
             &OwnSegment<'a>,
             &Self,
             Result<ContentLabelling, ContentLabellingRefusal>,
         ) -> Result<(), ReadLabellingError>,
     ) -> Result<(), ReadLabellingError> {
-        for segment in self.own_segments() {
+        for segment in self
+            .own_segments()
+            .take_while(|segment| before.is_none_or(|end| segment.ordinal < end))
+        {
             let fold = segment.fold(self).map_err(ReadLabellingError::Segment)?;
             let labelled = read_labelling(fold.label_scoped(limit, capacity, Some(0)))?;
             visit(segment, &fold, labelled)?;

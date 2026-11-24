@@ -10,8 +10,8 @@ use crate::FastMap;
 use crate::v2::canonical::PackRegion;
 use crate::v2::parity::Recorder;
 use crate::v2::{
-    BlobEntry, CanonicalForm, ContentError, ContentLabellingRefusal, FileEnd, Profile, RdfGraph,
-    ReadFailure, RebuildState,
+    BlobEntry, CanonicalForm, ContentError, ContentLabelling, ContentLabellingRefusal, FileEnd,
+    Profile, RdfGraph, ReadFailure, ReadLabellingError, RebuildState,
 };
 
 use super::dictionary::Dictionary;
@@ -33,7 +33,7 @@ pub struct Compaction<W> {
     pub end: FileEnd,
 }
 
-/// The result of attempting to compact a whole-file fold.
+/// The result of attempting to compact a file fold or a segment's own fold.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum CompactionOutcome<W> {
@@ -81,12 +81,69 @@ pub fn compact<W: Write>(
     capacity: &mut LabellingCapacity,
     sink: W,
 ) -> Result<Compaction<W>, SegmentWriteError> {
+    compact_fold(graph, graph, profile, None, sink, || {
+        graph
+            .label_for_compaction(limit, capacity)
+            .map_err(compaction_error)
+    })
+}
+
+/// Compact one segment's own fold from a whole-file read.
+///
+/// Resolve references within the segment and label its blank nodes in local
+/// scope. Earlier own folds charge the fresh weight account before the
+/// selected segment. The returned coverage describes the original file read.
+/// Returns `None` when that read has no own fold for the requested ordinal.
+///
+/// # Errors
+/// Returns a replay, labelling, allocation, range or sink failure. A sink
+/// can contain a partial segment when writing fails.
+pub fn compact_segment<W: Write>(
+    graph: &RdfGraph<'_>,
+    ordinal: u64,
+    profile: Option<Profile>,
+    limit: Limit,
+    capacity: &mut LabellingCapacity,
+    sink: W,
+) -> Result<Option<Compaction<W>>, SegmentWriteError> {
+    let Some(segment) = graph
+        .own_segments()
+        .find(|segment| segment.ordinal == ordinal)
+    else {
+        return Ok(None);
+    };
+    let fold = segment
+        .fold(graph)
+        .map_err(|error| compaction_error(ReadLabellingError::Segment(error)))?;
+    compact_fold(&fold, graph, profile, Some(0), sink, || {
+        graph
+            .label_segment_for_compaction(ordinal, &fold, limit, capacity)
+            .map_err(compaction_error)
+    })
+    .map(Some)
+}
+
+fn compaction_error(error: ReadLabellingError) -> SegmentWriteError {
+    match try_boxed(error) {
+        Ok(cause) => SegmentWriteError::SourceLabelling(cause),
+        Err(cause) => SegmentWriteError::Io(io::Error::other(cause)),
+    }
+}
+
+fn compact_fold<W: Write>(
+    graph: &RdfGraph<'_>,
+    source: &RdfGraph<'_>,
+    profile: Option<Profile>,
+    blank_scope: Option<u64>,
+    sink: W,
+    label: impl FnOnce() -> Result<Result<ContentLabelling, ContentLabellingRefusal>, SegmentWriteError>,
+) -> Result<Compaction<W>, SegmentWriteError> {
     use CompactionOutcome::{Stopped, Written};
 
     let report = |outcome| Compaction {
         outcome,
-        left_out: graph.left_out,
-        end: graph.end,
+        left_out: source.left_out,
+        end: source.end,
     };
     if graph.frame_failures.iter().any(|item| {
         matches!(
@@ -107,14 +164,7 @@ pub fn compact<W: Write>(
     if graph.labelling_size().is_none() {
         return Err(SegmentWriteError::IncompleteFold);
     }
-    let source = match graph.label_for_compaction(limit, capacity) {
-        Ok(source) => source,
-        Err(error) => {
-            let cause = try_boxed(error).map_err(io::Error::other)?;
-            return Err(SegmentWriteError::SourceLabelling(cause));
-        }
-    };
-    let labelled = match source {
+    let labelled = match label()? {
         Ok(labelled) => labelled,
         Err(refusal) => return Ok(report(Stopped(CompactionStop::Labelling(refusal)))),
     };
@@ -125,7 +175,7 @@ pub fn compact<W: Write>(
     let positions = labelled.blank_positions()?;
     let dictionary = Dictionary::new(graph, |segment, label| {
         positions
-            .get(&(segment, label))
+            .get(&(blank_scope.unwrap_or(segment), label))
             .copied()
             .map(BlankLabel::position)
             .ok_or(SegmentWriteError::IncompleteFold)
@@ -152,7 +202,7 @@ type BlobPlan<'a, 'file> = Vec<(&'a BlobEntry<'file>, Option<&'a [u8]>)>;
 // complete expected frame so it can compare the decoded content in place.
 pub(in crate::v2) fn write_structure<W: Write>(
     graph: &RdfGraph<'_>,
-    labelled: Option<&crate::v2::ContentLabelling>,
+    labelled: Option<&ContentLabelling>,
     opener: Digest,
     sink: W,
     region: impl Fn(&mut W, PackRegion),
@@ -163,7 +213,7 @@ pub(in crate::v2) fn write_structure<W: Write>(
     let mut writer = SegmentWriter::from_opener(sink, opener, index);
     write_prefix(graph, dictionary, &blobs, &mut writer, region)?;
     writer.append_index(
-        labelled.map_or([0; 3], crate::v2::ContentLabelling::index_counts),
+        labelled.map_or([0; 3], ContentLabelling::index_counts),
         labelled.and_then(|labels| labels.content_digest.as_ref()),
     )?;
     Ok(writer.into_inner())

@@ -33,7 +33,7 @@ mod references;
 mod signature;
 
 pub(super) use compact::write_structure;
-pub use compact::{Compaction, CompactionOutcome, CompactionStop, compact};
+pub use compact::{Compaction, CompactionOutcome, CompactionStop, compact, compact_segment};
 pub use cosign::{CoSignError, append_cosigned_commit};
 pub use index::write_indexed_rdf_segment;
 pub use rdf::{rdf_segment_bytes, write_rdf_segment};

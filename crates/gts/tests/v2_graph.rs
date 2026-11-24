@@ -331,7 +331,7 @@ fn own_fold_only_resolves_values_from_its_segment() {
 
 #[test]
 fn own_folds_charge_the_shared_weight_before_the_file() {
-    use purrdf_gts::v2::{CompactionOutcome, CompactionStop, compact};
+    use purrdf_gts::v2::{CompactionOutcome, CompactionStop, compact, compact_segment};
 
     let graph = second(include_bytes!(
         "fixtures/v2/P3/labelling-weight-segments.bin"
@@ -383,6 +383,73 @@ fn own_folds_charge_the_shared_weight_before_the_file() {
         }
         assert_eq!(fresh.total(), admitted);
     }
+
+    for weight in [119, 120] {
+        let mut capacity = LabellingCapacity::new(u64::MAX, weight);
+        let mut sink = Vec::new();
+        let result = compact_segment(&graph, 1, None, Limit::new(0), &mut capacity, &mut sink)
+            .unwrap()
+            .unwrap();
+        if weight == 119 {
+            assert!(matches!(
+                result.outcome,
+                CompactionOutcome::Stopped(CompactionStop::Labelling(
+                    ContentLabellingRefusal::Lowering(LoweringRefusal::Weight { total: 60, .. })
+                ))
+            ));
+            assert_eq!(sink, [] as [u8; 0]);
+            assert_eq!(capacity.total(), 60);
+        } else {
+            assert!(matches!(result.outcome, CompactionOutcome::Written(_)));
+            assert_eq!(capacity.total(), 120);
+            let graph = second_at_capacity(&sink, ReadCapacity::default());
+            let report = graph
+                .label_read(
+                    Limit::new(0),
+                    &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+                )
+                .unwrap();
+            assert_eq!(report.file.unwrap().unwrap().content_digest, second);
+        }
+    }
+}
+
+#[test]
+fn compacting_an_own_fold_preserves_local_blank_nodes_and_reports_file_coverage() {
+    use purrdf_gts::v2::{
+        CanonicalLabellingCheck, CanonicalStructureCheck, CompactionOutcome, compact_segment,
+    };
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__labels-automorphic.bin");
+    let input = [fixture.as_slice(), fixture.as_slice(), &[0x82]].concat();
+    let graph = second(&input);
+    let limit = Limit::new(u64::MAX);
+    let mut budget = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let report = graph.label_read(limit, &mut budget).unwrap();
+    let expected = *report.segments[1].content_digest.as_ref().unwrap();
+    assert!(expected.is_some());
+    assert_ne!(report.file.unwrap().unwrap().content_digest, expected);
+
+    let mut budget = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let compacted = compact_segment(&graph, 1, None, limit, &mut budget, Vec::new())
+        .unwrap()
+        .unwrap();
+    assert_eq!((compacted.end, compacted.left_out), (FileEnd::Torn, 1));
+    let CompactionOutcome::Written(bytes) = compacted.outcome else {
+        panic!("the selected own fold is fully readable");
+    };
+    let report = second(&bytes)
+        .label_read(limit, &mut LabellingCapacity::new(u64::MAX, u64::MAX))
+        .unwrap();
+    assert_eq!(report.file.unwrap().unwrap().content_digest, expected);
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+    assert_eq!(
+        report.segments[0].canonical.labelling,
+        CanonicalLabellingCheck::Verified
+    );
 }
 
 #[test]

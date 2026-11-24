@@ -42,6 +42,8 @@ Use `v2::compact` to write canonical form 1 from a whole-file fold. It
 preserves hidden content and blob declarations, reports typed refusals
 before writing, and returns the source read's coverage alongside the outcome.
 It uses PurRDF's native zstd encoder for stored payloads.
+Use `v2::compact_segment` to compact a selected segment's own fold from
+the same read, with segment-local references and blank-node scope.
 
 Call `v2::RdfGraph::label_content` on the original read result to obtain the
 canonical lines, placements, statistics, and content digest of the file fold.

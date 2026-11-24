@@ -78,7 +78,7 @@ pub use terms::{
 };
 pub use writer::{
     CoSignError, Compaction, CompactionOutcome, CompactionStop, SegmentWriteError, SegmentWriter,
-    SignatureWriteError, append_cosigned_commit, compact, rdf_segment_bytes,
+    SignatureWriteError, append_cosigned_commit, compact, compact_segment, rdf_segment_bytes,
     write_indexed_rdf_segment, write_rdf_segment,
 };
 
