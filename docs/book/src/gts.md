@@ -46,9 +46,10 @@ can also append resolved RDF folds, whole or chunked blobs, values and
 external declarations to a caller-owned sink.
 
 Use `purrdf convert --to gts input.trig output.gts` to write a file from the
-CLI. Python `RdfDataset` and WebAssembly `Dataset` expose `from_gts` and
-`to_gts_v2`. The corresponding C functions are `purrdf_from_gts` and
-`purrdf_to_gts_v2`. The dataset loaders accept both generations.
+CLI. Python `RdfDataset` exposes `from_gts` and `to_gts_v2`. JavaScript's
+WebAssembly `Dataset` exposes `fromGts` and `toGtsV2`. The corresponding C
+functions are `purrdf_from_gts` and `purrdf_to_gts_v2`. The dataset loaders
+accept both generations.
 
 ## The container model, at a high level
 
