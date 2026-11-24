@@ -314,7 +314,23 @@ fn exact_endpoint<'a>(pat: &'a Pat, bound: &'a Binding) -> Option<Cow<'a, TermVa
     match pat {
         Pat::Ground(term) => Some(Cow::Borrowed(term)),
         Pat::Var(var) => bound.get(var).map(Cow::Borrowed),
-        Pat::Triple(_) => substitute(pat, bound).map(Cow::Owned),
+        Pat::Triple(_) => {
+            // Do not clone ground prefixes of a compound endpoint that remains open.
+            let ready = pat
+                .visit(|part| {
+                    if matches!(part, Pat::Var(var) if !bound.contains_key(var)) {
+                        ControlFlow::Break(())
+                    } else {
+                        ControlFlow::Continue(())
+                    }
+                })
+                .is_continue();
+            if ready {
+                substitute(pat, bound).map(Cow::Owned)
+            } else {
+                None
+            }
+        }
     }
 }
 
@@ -914,6 +930,41 @@ mod tests {
             rows.into_iter().collect::<Vec<_>>(),
             vec![vec![iri("p")], vec![iri("q")]]
         );
+    }
+
+    /// A compound endpoint with an unbound variable cannot be looked up by value.
+    /// Reaching it in a join must not clone its ground prefix on every branch.
+    #[test]
+    fn an_open_triple_endpoint_does_not_copy_its_ground_prefix() {
+        let closure = closure_of(&[
+            ["s1", "p", "a1"],
+            ["s1", "p", "a2"],
+            ["s2", "p", "b1"],
+            ["s2", "p", "b2"],
+            ["s1", "q", "marker"],
+            ["s2", "q", "marker"],
+        ]);
+        let vars = [VarKey::Projected("s".to_owned())];
+        let query_bytes = |prefix_length| {
+            let patterns = vec![
+                [projected("s"), ground("q"), ground("marker")],
+                [
+                    projected("s"),
+                    ground("p"),
+                    Pat::Triple(Box::new([
+                        ground(&"i".repeat(prefix_length)),
+                        ground("p"),
+                        projected("open"),
+                    ])),
+                ],
+            ];
+            let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+            let rows = find_all(patterns, &closure, &vars).expect("within budget");
+            let measured = window.close();
+            assert!(rows.is_empty());
+            measured.requested_bytes
+        };
+        assert_eq!(query_bytes(64), query_bytes(64 * 1024));
     }
 
     /// How many levels the depth tests below drive the search to.
