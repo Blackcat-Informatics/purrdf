@@ -19,6 +19,8 @@ mod fold;
 mod resolution;
 mod visibility;
 
+pub(super) use visibility::Matches;
+
 pub(super) use admission::{EntryAdmission, LocalTerms, ScopedLeaf, ScopedNode};
 pub(super) use arrival::PendingReferences;
 pub use arrival::ReferenceFindings;

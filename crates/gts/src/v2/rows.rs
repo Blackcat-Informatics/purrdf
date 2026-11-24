@@ -50,6 +50,10 @@ pub struct DecodedRows {
 pub(super) struct OrderKey(Option<u64>, [u64; 3]);
 
 impl Row {
+    pub(super) const fn graph_id(self) -> Option<u64> {
+        self.order_key().0
+    }
+
     pub(super) const fn order_key(self) -> OrderKey {
         match self {
             Self::Quad([s, p, o], graph) => OrderKey(graph, [p, o, s]),
@@ -101,18 +105,26 @@ impl RowHeader {
         {
             return None;
         }
-        let kind = match frame.frame_type.and_then(FrameType::from_code)? {
+        Self::read_verified(
+            frame.frame_type.and_then(FrameType::from_code)?,
+            envelope.read_field(FrameField::Content),
+            registry,
+        )
+    }
+
+    pub(super) fn read_verified(
+        kind: FrameType,
+        mut fields: Fields<'_>,
+        registry: NonZeroU64,
+    ) -> Option<Result<Self, ContentError>> {
+        let kind = match kind {
             FrameType::Quads => Kind::Quad,
             FrameType::ReifierBindings => Kind::ReifierBinding,
             FrameType::Annotations => Kind::Annotation,
             FrameType::EmptyGraphs => Kind::EmptyGraph,
             _ => return None,
         };
-        Some(Self::read(
-            kind,
-            &mut envelope.read_field(FrameField::Content),
-            registry,
-        ))
+        Some(Self::read(kind, &mut fields, registry))
     }
 
     fn read(

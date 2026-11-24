@@ -209,13 +209,13 @@ enum UnitKind<M> {
 }
 
 #[derive(Clone, Copy)]
-struct UnitDeclaration<'a> {
-    digest: Digest,
+pub(in crate::v2) struct UnitDeclaration<'a> {
+    pub(in crate::v2) digest: Digest,
     kind: UnitKind<&'a str>,
 }
 
 impl<'a> UnitDeclaration<'a> {
-    fn read(fields: &mut Fields<'a>, blob: bool) -> Result<Self, WireError> {
+    pub(in crate::v2) fn read(fields: &mut Fields<'a>, blob: bool) -> Result<Self, WireError> {
         fields.record(if blob { 2 } else { 1 })?;
         let digest = *fields.fixed_bytes()?;
         let kind = if blob {
@@ -246,7 +246,7 @@ impl<'a> RecipeKind<&'a str> {
 }
 
 #[derive(Clone, Copy)]
-struct RecipeDeclaration<'a> {
+pub(in crate::v2) struct RecipeDeclaration<'a> {
     name: ValueName,
     kind: RecipeKind<&'a str>,
     entry_count: u64,
@@ -736,21 +736,21 @@ struct DirectoryEntry<'a> {
     length_offset: usize,
 }
 
-enum Member<'a> {
+pub(in crate::v2) enum Member<'a> {
     Unit(UnitDeclaration<'a>, &'a [u8]),
     DamagedUnit,
     Recipe(RecipeDeclaration<'a>, Vec<Entry>),
 }
 
-struct Pack<'a> {
+pub(in crate::v2) struct Pack<'a> {
     directory: Vec<DirectoryEntry<'a>>,
     bodies: &'a [u8],
     body_offset: usize,
-    unit_length: u128,
+    pub(in crate::v2) unit_length: u128,
 }
 
 impl<'a> Pack<'a> {
-    fn read(
+    pub(in crate::v2) fn read(
         bytes: &'a [u8],
         declared_count: u64,
         registry: NonZeroU64,
@@ -804,7 +804,7 @@ impl<'a> Pack<'a> {
         })
     }
 
-    fn members(self) -> Result<Vec<Member<'a>>, ReadFailure> {
+    pub(in crate::v2) fn members(self) -> Result<Vec<Member<'a>>, ReadFailure> {
         let mut members = Vec::new();
         members.try_reserve_exact(self.directory.len())?;
         let mut bodies = self.bodies;

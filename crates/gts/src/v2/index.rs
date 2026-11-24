@@ -20,6 +20,7 @@ const LAST_FRAME_TYPE: u64 = FrameType::Parity as u64;
 mod content;
 
 pub(super) use content::IndexContent;
+pub(super) use content::{DirectoryRange, read_graph_entry, read_pack_member};
 use content::{check_graph_directory, check_pack_members};
 
 /// Comparisons of an index's claims with the observed ordinary prefix.
@@ -44,7 +45,7 @@ pub struct IndexPrefixCheck {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct IndexStatistics {
+pub(super) struct IndexStatistics {
     counts: [u64; 3],
     predicates_match: Option<bool>,
 }
@@ -159,22 +160,28 @@ impl TypeRuns {
         let mut matches = count == self.0.len() as u64;
         let mut expected = self.0.iter().copied();
         for _ in 0..count {
-            fields.record(2)?;
-            // A newer registry's type runs can describe unknown ordinary
-            // frames by the code at their envelope's frame type field.
-            let code = if registry.get() > REGISTRY_VERSION {
-                fields.positive(MalformedReason::UnregisteredValue)?.get()
-            } else {
-                read_enum(fields, LAST_FRAME_TYPE, registry)?
-            };
-            let length = fields.uint()?;
+            let (code, length) = read_type_run(fields, registry)?;
             matches &= expected.next() == Some((Some(code), length));
         }
         Ok(matches)
     }
 }
 
-fn check_statistics(
+pub(super) fn read_type_run(
+    fields: &mut Fields<'_>,
+    registry: NonZeroU64,
+) -> Result<(u64, u64), ContentError> {
+    fields.record(2)?;
+    // A newer registry's type runs can describe unknown ordinary frames.
+    let code = if registry.get() > REGISTRY_VERSION {
+        fields.positive(MalformedReason::UnregisteredValue)?.get()
+    } else {
+        read_enum(fields, LAST_FRAME_TYPE, registry)?
+    };
+    Ok((code, fields.uint()?))
+}
+
+pub(super) fn check_statistics(
     fields: &mut Fields<'_>,
     predicates: Option<&crate::FastMap<u64, u128>>,
 ) -> Result<IndexStatistics, WireError> {
@@ -200,7 +207,7 @@ fn check_statistics(
     })
 }
 
-fn read_content_digest(
+pub(super) fn read_content_digest(
     fields: &mut Fields<'_>,
     registry: NonZeroU64,
 ) -> Result<Option<Digest>, ContentError> {

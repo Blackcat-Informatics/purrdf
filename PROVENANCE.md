@@ -147,6 +147,8 @@ Compaction follows P7 sections 4.2 through 4.5 for the canonical item
 sequence and refusal order, using P3 section 11 for terms and rows and P4
 section 7 for value and blob packs. Stored payloads use the native zstd
 encoder with the level, window and size rule of P7 section 4.2.
+Indexed range reads follow [P7 section 3.9](https://github.com/Blackcat-Informatics/gmeow-gts/blob/06b9c13e20b914166846d2893460b467e45dbc90/docs/v2/P7.md#39-reading-by-range).
+The range fixtures come from that revision's `vectors/v2/P7` directory.
 The binary fixtures in `crates/gts/tests/fixtures/v2`
 preserve their upstream paths and bytes from `vectors/v2`. Their SHA-256
 values match the upstream manifests. The `P1/frame-test-array-long-form.bin`

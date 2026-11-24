@@ -110,7 +110,7 @@ fn own_text(text: Cow<'_, str>) -> Result<Cow<'static, str>, FoldError> {
 }
 
 /// The original typed value paired with its generated literal.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum LiteralValue {
     /// Boolean.
@@ -126,7 +126,7 @@ pub enum LiteralValue {
 }
 
 impl LiteralValue {
-    fn copy(value: TypedValue<'_>) -> Result<Self, FoldError> {
+    pub(super) fn copy(value: TypedValue<'_>) -> Result<Self, FoldError> {
         Ok(match value {
             TypedValue::Boolean(value) => Self::Boolean(value),
             TypedValue::Unsigned(value) => Self::Unsigned(value),
@@ -211,6 +211,18 @@ impl TermArena {
             self.value_ids.insert(id);
         }
         Ok(id)
+    }
+
+    pub(super) fn find_value(&self, value: TypedValue<'_>) -> Result<Option<TermId>, FoldError> {
+        if let TypedValue::Octets(octets) = value {
+            return Ok(self.values.iter().find_map(|(id, value)| {
+                matches!(value, LiteralValue::Octets(stored) if stored == octets).then_some(*id)
+            }));
+        }
+        let (datatype, lexical) = value_lexical(value)?;
+        Ok(self
+            .find(&Term::Iri(Cow::Borrowed(datatype)))
+            .and_then(|datatype| self.find(&Term::Typed { lexical, datatype })))
     }
 
     pub(super) const fn checkpoint(&self) -> (usize, usize) {

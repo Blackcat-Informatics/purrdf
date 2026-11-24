@@ -159,9 +159,9 @@ pub struct FrameEnvelope<'a> {
 pub(super) struct FrameWire<'a> {
     frame_type: Option<u64>,
     unknown_type: Option<UnknownFrameType>,
-    link: LinkCheck,
+    pub(super) link: LinkCheck,
     payload: PayloadWire<'a>,
-    malformed: Option<WireError>,
+    pub(super) malformed: Option<WireError>,
     parity_envelope_damaged: bool,
     signatures_valid: bool,
 }
@@ -369,17 +369,8 @@ impl<'a> FrameEnvelope<'a> {
 
     fn check_type_length(&self, known: Option<FrameType>) -> Option<WireError> {
         let length = self.read_field(FrameField::DecodedLength).uint().ok()?;
-        let invalid = match known? {
-            FrameType::Chunk => length == 0,
-            FrameType::External | FrameType::Commit => length != 0,
-            _ => false,
-        };
-        invalid.then(|| {
-            WireError::new(
-                MalformedReason::OutOfRange,
-                self.start(FrameField::DecodedLength),
-            )
-        })
+        let offset = self.start(FrameField::DecodedLength);
+        check_type_length(known?, length, offset).err()
     }
 
     fn check_signatures(&self, registry: NonZeroU64) -> Result<(), WireError> {
@@ -410,10 +401,44 @@ impl<'a> FrameEnvelope<'a> {
             .fixed_bytes::<DIGEST_LENGTH>()?;
         Ok(())
     }
+
+    pub(super) fn check_range_head(&self, registry: NonZeroU64) -> Result<(), WireError> {
+        let frame_type = self.read_field(FrameField::FrameType).uint();
+        let known = frame_type.ok().and_then(FrameType::from_code);
+        self.check_outer_fields(
+            frame_type,
+            known,
+            self.read_field(FrameField::Critical).boolean(),
+            self.read_field(FrameField::Transparent).boolean(),
+            registry,
+        )?;
+        self.check_identity_shape()?;
+        self.check_range_storage(registry)?;
+        self.check_type_length(known).map_or(Ok(()), Err)
+    }
+}
+
+pub(super) fn check_type_length(
+    kind: FrameType,
+    length: u64,
+    offset: usize,
+) -> Result<(), WireError> {
+    let invalid = match kind {
+        FrameType::Chunk => length == 0,
+        FrameType::External | FrameType::Commit => length != 0,
+        _ => false,
+    };
+    if invalid {
+        return Err(WireError::new(MalformedReason::OutOfRange, offset));
+    }
+    Ok(())
 }
 
 /// The registry version 1 shapes, with value checks left to the content phase.
-fn check_content_shape(frame_type: u64, fields: &mut Fields<'_>) -> Result<(), WireError> {
+pub(super) fn check_content_shape(
+    frame_type: u64,
+    fields: &mut Fields<'_>,
+) -> Result<(), WireError> {
     let Some(frame_type) = FrameType::from_code(frame_type) else {
         return fields.closed_value();
     };

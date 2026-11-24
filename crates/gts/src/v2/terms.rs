@@ -192,16 +192,46 @@ pub(super) fn reserve<'a>(
     content_readable: bool,
     stopped: bool,
 ) -> Result<TermReservation<'a>, StructuralError> {
+    if !content_readable {
+        return Ok(TermReservation {
+            start,
+            end: start,
+            content: None,
+            runs: None,
+        });
+    }
+    reserve_content(
+        frame.read_field(FrameField::Content),
+        start,
+        registry,
+        !stopped
+            && checked.malformed.is_none()
+            && checked.link.state != LinkState::Broken
+            && matches!(checked.payload.state, PayloadState::Verified(_)),
+    )
+}
+
+pub(super) fn reserve_verified(
+    fields: Fields<'_>,
+    start: u128,
+    registry: NonZeroU64,
+) -> Result<TermReservation<'_>, StructuralError> {
+    reserve_content(fields, start, registry, true)
+}
+
+fn reserve_content(
+    mut fields: Fields<'_>,
+    start: u128,
+    registry: NonZeroU64,
+    verified: bool,
+) -> Result<TermReservation<'_>, StructuralError> {
     let mut observed = TermReservation {
         start,
         end: start,
         content: None,
         runs: None,
     };
-    if !content_readable {
-        return Ok(observed);
-    }
-    let mut fields = frame.read_field(FrameField::Content);
+    let content = fields.remaining();
     let record_start = fields.offset();
     let mut base_offset = record_start;
     let claimed_base = fields.record(4).and_then(|()| {
@@ -211,7 +241,7 @@ pub(super) fn reserve<'a>(
     if claimed_base.is_err() {
         // A malformed field ahead of the runs can still leave a delimited
         // runs field. The framing walker locates it without admitting that field.
-        if let Some(item) = Item::first(frame.field(FrameField::Content))?
+        if let Some(item) = Item::first(content)?
             && let Some((offset, runs)) = item.array_element(1)?
             && let Ok(runs) = read_runs(
                 &mut Fields::at(runs, record_start + offset),
@@ -232,11 +262,7 @@ pub(super) fn reserve<'a>(
         observed.end = runs.end;
         observed.runs = Some(runs);
     }
-    if !stopped
-        && checked.malformed.is_none()
-        && checked.link.state != LinkState::Broken
-        && matches!(checked.payload.state, PayloadState::Verified(_))
-    {
+    if verified {
         observed.content = Some(
             if u128::from(claimed_base.expect("the first field was read")) != start {
                 Err(WireError::new(MalformedReason::InconsistentCounts, base_offset).into())
