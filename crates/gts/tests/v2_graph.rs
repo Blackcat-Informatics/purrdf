@@ -1493,10 +1493,30 @@ fn external_blobs_round_trip_as_declarations() {
 #[test]
 fn authored_blob_recipes_use_the_specification_cut_points() {
     let source = include_bytes!("fixtures/v2/P4/chunker-cut-loose.bin");
+    let media_type = Some("application/octet-stream");
     let mut writer = SegmentWriter::new(Vec::new()).unwrap();
-    let expected = writer
-        .add_chunked_blob(source, Some("application/octet-stream"))
+    let expected = writer.add_chunked_blob(source, media_type).unwrap();
+    let mut streamed = SegmentWriter::new(Vec::new()).unwrap();
+    let limit = std::num::NonZeroUsize::new(64).unwrap();
+    let actual = streamed
+        .add_chunked_blob_from_reader(source.as_slice(), source.len() as u64, limit, media_type)
         .unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(streamed.head(), writer.head());
+    let mut refused = SegmentWriter::new(Vec::new()).unwrap();
+    assert!(matches!(
+        refused.add_chunked_blob_from_reader(
+            source.as_slice(),
+            source.len() as u64 - 1,
+            limit,
+            media_type,
+        ),
+        Err(SegmentWriteError::BlobSource(_))
+    ));
+    assert!(matches!(
+        refused.add_commit(),
+        Err(SegmentWriteError::IncompleteFrame)
+    ));
     let before = writer.head().copied();
     assert!(matches!(
         writer.add_value(&[]),
@@ -1529,6 +1549,39 @@ fn authored_blob_recipes_use_the_specification_cut_points() {
     assert_eq!(blob.name, expected);
     assert_eq!(blob.media_type.as_deref(), Some("application/octet-stream"));
     assert_eq!(&*blob.bytes, source);
+}
+
+/// The streaming writer can consume an oversized blob through bounded reads.
+#[test]
+fn oversized_blob_authoring_uses_bounded_source_reads() {
+    use std::io::{self, Read};
+
+    struct Source(u64);
+
+    impl Read for Source {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            assert!(output.len() <= 256 * 1024);
+            let count = self.0.min(output.len() as u64) as usize;
+            output[..count].fill(0xa5);
+            self.0 -= count as u64;
+            Ok(count)
+        }
+    }
+
+    let length = 128 * 1024 * 1024 + 1;
+    let mut source = Source(length);
+    let mut writer = SegmentWriter::new(io::sink()).unwrap();
+    let name = writer
+        .add_chunked_blob_from_reader(
+            &mut source,
+            length,
+            std::num::NonZeroUsize::new(8193).unwrap(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(source.0, 0);
+    assert_eq!(name.length, length);
+    writer.add_commit().unwrap();
 }
 
 #[test]

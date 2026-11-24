@@ -12,8 +12,8 @@ mod values;
 pub use dictionary::{DefinitionFindings, RowDisposition, RowFindings, SegmentDictionary};
 pub use lines::{Line, RdfFold};
 pub use terms::{LiteralDirection, LiteralValue, Term, TermId};
-pub(super) use values::unit_digest;
 pub use values::{ValueName, ValueStore};
+pub(super) use values::{unit_digest, unit_hasher};
 
 /// A resource refusal or inconsistent input supplied to the RDF fold.
 #[derive(Debug)]

@@ -30,6 +30,10 @@ type Digest = [u8; DIGEST_LENGTH];
 pub enum SegmentWriteError {
     /// The sink reported an error. The stream may end inside a frame.
     Io(io::Error),
+    /// The source failed or its length differed from the declaration.
+    BlobSource(io::Error),
+    /// The number of chunks exceeds the caller's recipe capacity.
+    BlobChunkLimit(usize),
     /// An earlier frame write failed and the sink may contain a partial item.
     IncompleteFrame,
     /// The segment has reached the maximum range leaf count.
@@ -46,6 +50,8 @@ impl fmt::Display for SegmentWriteError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(error) => write!(f, "could not write the GTS v2 frame ({error})"),
+            Self::BlobSource(error) => write!(f, "could not read the GTS v2 blob source ({error})"),
+            Self::BlobChunkLimit(limit) => write!(f, "GTS v2 blob exceeds {limit} chunks"),
             Self::IncompleteFrame => f.write_str("an earlier GTS v2 frame write did not complete"),
             Self::RangeFull(error) => error.fmt(f),
             Self::DictionaryFull => f.write_str("GTS v2 term IDs exceed the wire range"),
@@ -60,9 +66,10 @@ impl fmt::Display for SegmentWriteError {
 impl std::error::Error for SegmentWriteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Io(error) => Some(error),
+            Self::Io(error) | Self::BlobSource(error) => Some(error),
             Self::RangeFull(error) => Some(error),
             Self::IncompleteFrame
+            | Self::BlobChunkLimit(_)
             | Self::DictionaryFull
             | Self::IncompleteFold
             | Self::EmptyValue => None,
@@ -73,6 +80,8 @@ impl std::error::Error for SegmentWriteError {
 impl purrdf_hash::error::StructuredError for SegmentWriteError {
     purrdf_hash::error_visit! {
         Io(cause) => "gts-v2-segment-write" { "cause" => Cause(cause) },
+        BlobSource(cause) => "gts-v2-blob-source" { "cause" => Cause(cause) },
+        BlobChunkLimit(limit) => "gts-v2-blob-chunks" { "limit" => Unsigned(*limit as u128) },
         IncompleteFrame => "gts-v2-incomplete-write" {},
         RangeFull(cause) => "gts-v2-segment-range-full" { "cause" => Cause(cause) },
         DictionaryFull => "gts-v2-dictionary-full" {},

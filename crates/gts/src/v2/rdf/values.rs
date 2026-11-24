@@ -3,14 +3,18 @@
 
 use core::fmt;
 
-use purrdf_hash::{blake3::derive_key, hex::Lower};
+use purrdf_hash::{blake3::Hasher, hex::Lower};
 
 use super::FoldError;
 use crate::FastMap;
 use crate::v2::{DIGEST_LENGTH, ValueReference};
 
 pub(in crate::v2) fn unit_digest(bytes: &[u8]) -> [u8; DIGEST_LENGTH] {
-    derive_key("gts2 unit", bytes)
+    *unit_hasher().update(bytes).finalize().as_bytes()
+}
+
+pub(in crate::v2) fn unit_hasher() -> Hasher {
+    Hasher::new_derive_key("gts2 unit")
 }
 
 /// The digest and length of a GTS v2 reconstructed value.
