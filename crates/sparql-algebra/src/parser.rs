@@ -3797,20 +3797,6 @@ fn join_with_memory<S: Admission + ?Sized>(
     })
 }
 
-impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
-    /// A nested source group remains a separate operand under contextual admission.
-    fn group_join(&mut self, left: GraphPattern, right: GraphPattern) -> Result<GraphPattern> {
-        if RDFLIB && !left.is_empty_bgp() && !right.is_empty_bgp() {
-            Ok(GraphPattern::Join {
-                left: Child::try_new(left, self.memory)?,
-                right: Child::try_new(right, self.memory)?,
-            })
-        } else {
-            Ok(join_with_memory(left, right, self.memory)?)
-        }
-    }
-}
-
 /// Lift a run of template triples into quad patterns, all scoped to `graph`
 /// (`None` = the default graph).
 fn scope_triples<S: Admission + ?Sized>(

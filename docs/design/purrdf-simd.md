@@ -1045,6 +1045,7 @@ and an identical warm-up remain outside each process-local allocation window.
 | `crates/shex/benches/prepared_validate.rs` | shex.matcher |
 | `crates/slice/benches/ownership.rs` | slice.ownership |
 | `crates/sparql-algebra/benches/algebra_walks.rs` | sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, lex.scan-trivia, lex.scan-iri-body |
+| `crates/sparql-algebra/benches/bgp_assembly.rs` | sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, lex.scan-trivia, lex.scan-iri-body |
 | `crates/sparql-algebra/benches/parse.rs` | lex.find-byte2-sparql-string, sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, lex.scan-trivia, lex.scan-iri-body |
 | `crates/sparql-algebra/benches/scope_checks.rs` | sparql.scope-admission |
 | `crates/sparql-algebra/benches/tokenize.rs` | lex.find-byte2-sparql-string, sparql.lexer-trivia, sparql.lexer-iri, sparql.lexer-cursor, lex.scan-trivia, lex.scan-iri-body |

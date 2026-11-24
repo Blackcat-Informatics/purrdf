@@ -35,6 +35,10 @@ use crate::error::{ParseError, Result};
 use crate::lexer::Token;
 use crate::tree::Child;
 
+mod bgp;
+
+use bgp::{Bgp, ChunkArena, Pattern};
+
 use super::{
     ExistsScopeBasis, Modifiers, Parser, PendingExistsScopeCheck, ScopeConstruct, SelectPosition,
     VarScope, aggregate_function, builtin_function, collect_vars, empty_modifier_clause,
@@ -385,13 +389,18 @@ enum Ctl {
 /// A finished group graph pattern: the pattern, the variables it puts in scope in the
 /// group around it, in first-appearance order (what [`collect_vars`] would note walking
 /// it), and whether it holds a fresh binding [`find_scope_conflict`] could report.
-pub(super) struct GroupValue {
-    pub(super) pattern: GraphPattern,
-    pub(super) scope: VarScope,
-    pub(super) intro: bool,
+struct GroupValue {
+    pattern: Pattern,
+    scope: VarScope,
+    intro: bool,
     /// Filters belonging to this group, rather than a nested group whose
     /// empty-BGP join was simplified. OPTIONAL must lift only its own filters.
-    pub(super) filter_count: usize,
+    filter_count: usize,
+}
+
+pub(super) struct ParsedGroup {
+    pub(super) pattern: GraphPattern,
+    pub(super) scope: VarScope,
 }
 
 /// What a finished production hands to the one it was nested in.
@@ -454,7 +463,7 @@ enum Step {
 /// An open group graph pattern.
 struct GroupState {
     /// The pattern the elements read so far build.
-    g: GraphPattern,
+    g: Pattern,
     /// The `FILTER`s, applied over the whole group once it closes.
     filters: Vec<Expression>,
     /// The variables `g` puts in scope, kept in step with it.
@@ -475,7 +484,7 @@ struct GroupState {
 impl GroupState {
     fn new() -> Self {
         Self {
-            g: GraphPattern::Bgp { patterns: vec![] },
+            g: Pattern::Bgp(Bgp::Rows(Vec::new())),
             filters: Vec::new(),
             scope: VarScope::default(),
             open_bgp: None,
@@ -528,6 +537,7 @@ pub(super) struct Machine {
     groups: Vec<GroupState>,
     selects: Vec<SelectState>,
     modifiers: Vec<ModState>,
+    chunks: ChunkArena,
     /// One aggregate list per expression whose sink is not [`Sink::Shared`].
     sinks: Vec<Vec<Lifted>>,
 }
@@ -548,7 +558,8 @@ impl Machine {
         memory.release_vec(self.groups)?;
         memory.release_vec(self.selects)?;
         memory.release_vec(self.modifiers)?;
-        memory.release_vec(self.sinks)
+        memory.release_vec(self.sinks)?;
+        self.chunks.release(memory)
     }
 }
 
@@ -556,9 +567,13 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
     // ── entry points ─────────────────────────────────────────────────────────
 
     /// Read a braced group graph pattern.
-    pub(super) fn parse_group(&mut self) -> Result<GroupValue> {
+    pub(super) fn parse_group(&mut self) -> Result<ParsedGroup> {
         let step = self.start_group()?;
-        Ok(self.run(step)?.group())
+        let group = self.run(step)?.group();
+        Ok(ParsedGroup {
+            pattern: self.finish_pattern(group.pattern)?,
+            scope: group.scope,
+        })
     }
 
     /// Read a group graph pattern, discarding what it puts in scope.
@@ -1588,6 +1603,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             ..
         } = body;
         scope.release(self.memory)?;
+        let body = self.finish_pattern(body)?;
         if !intro || RDFLIB {
             return Ok(body);
         }
@@ -1679,6 +1695,30 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
 
     // ── group graph patterns (§18.2.2) ───────────────────────────────────────
 
+    fn finish_pattern(&mut self, pattern: Pattern) -> Result<GraphPattern> {
+        Ok(pattern.finish(&mut self.machine.chunks, self.memory)?)
+    }
+
+    fn group_join(&mut self, left: Pattern, right: Pattern) -> Result<Pattern> {
+        Ok(match (left, right) {
+            (Pattern::Bgp(Bgp::Rows(rows)), right) if rows.is_empty() => {
+                self.memory.release_vec(rows)?;
+                right
+            }
+            (left, Pattern::Bgp(Bgp::Rows(rows))) if rows.is_empty() => {
+                self.memory.release_vec(rows)?;
+                left
+            }
+            (Pattern::Bgp(left), Pattern::Bgp(right)) if !RDFLIB => {
+                Pattern::Bgp(self.machine.chunks.join(left, right, self.memory)?)
+            }
+            (left, right) => Pattern::Algebra(GraphPattern::Join {
+                left: Child::try_new(self.finish_pattern(left)?, self.memory)?,
+                right: Child::try_new(self.finish_pattern(right)?, self.memory)?,
+            }),
+        })
+    }
+
     /// A group graph pattern, at its `{`: a sub-`SELECT`, or a group whose elements are
     /// read next.
     fn start_group(&mut self) -> Result<Step> {
@@ -1749,7 +1789,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     scope
                 };
                 Ok(GroupValue {
-                    pattern,
+                    pattern: pattern.into(),
                     scope,
                     intro,
                     filter_count: 0,
@@ -1804,8 +1844,9 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 for expr in filters {
                     g = GraphPattern::Filter {
                         expr,
-                        inner: Child::try_new(g, self.memory)?,
-                    };
+                        inner: Child::try_new(self.finish_pattern(g)?, self.memory)?,
+                    }
+                    .into();
                 }
                 return Ok(Step::Return(Val::Group(GroupValue {
                     pattern: g,
@@ -1877,7 +1918,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 let values = self.parse_inline_data()?;
                 collect_vars(&values, &mut group.scope, self.memory)?;
                 self.note_exists_scope(&values)?;
-                group.g = self.group_join(group.g, values)?;
+                group.g = self.group_join(group.g, values.into())?;
                 group.intro = true;
                 group.dot_ok = true;
                 continue;
@@ -1903,7 +1944,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 let block = block?;
                 collect_vars(&block, &mut group.scope, self.memory)?;
                 self.note_exists_scope(&block)?;
-                group.g = self.group_join(group.g, block)?;
+                group.g = self.group_join(group.g, block.into())?;
                 group.dot_ok = false;
                 continue;
             };
@@ -1946,10 +1987,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                         arm.scope.release(self.memory)?;
                         GroupValue {
                             pattern: GraphPattern::union_with_memory(
-                                chain.pattern,
-                                arm.pattern,
+                                self.finish_pattern(chain.pattern)?,
+                                self.finish_pattern(arm.pattern)?,
                                 self.memory,
-                            )?,
+                            )?
+                            .into(),
                             scope: chain.scope,
                             intro: chain.intro || arm.intro,
                             filter_count: 0,
@@ -1977,18 +2019,24 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
             }
             Element::Optional => {
                 let inner = val.group();
-                let (right, expression) =
-                    split_trailing_filters(inner.pattern, inner.filter_count, self.memory)?;
+                let (right, expression) = split_trailing_filters(
+                    self.finish_pattern(inner.pattern)?,
+                    inner.filter_count,
+                    self.memory,
+                )?;
                 self.note_element_vars(&mut group.scope, inner.scope)?;
                 group.g = GraphPattern::LeftJoin {
-                    left: Child::try_new(group.g, self.memory)?,
+                    left: Child::try_new(self.finish_pattern(group.g)?, self.memory)?,
                     right: Child::try_new(right, self.memory)?,
                     expression,
-                };
+                }
+                .into();
                 group.intro |= inner.intro;
             }
             Element::Lateral { at } => {
                 let right = val.group();
+                let left = self.finish_pattern(group.g)?;
+                let right_pattern = self.finish_pattern(right.pattern)?;
                 // A genuine PRODUCTION consultation (once per `LATERAL` keyword, never
                 // per element inside `right`): the incremental set built so far — `g`'s
                 // vars, NOT yet `right`'s — is the left-hand side's scope. Verified
@@ -2005,7 +2053,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     .unwrap_or_else(|| group.scope.as_slice());
                 #[cfg(debug_assertions)]
                 {
-                    let checked = compute_lateral_left_scope(&group.g, self.memory)?;
+                    let checked = compute_lateral_left_scope(&left, self.memory)?;
                     debug_assert_eq!(
                         left_scope,
                         checked.as_slice(),
@@ -2014,7 +2062,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     self.memory.release_vec(checked)?;
                 }
                 let conflict = if right.intro {
-                    find_scope_conflict(left_scope, &right.pattern, self.memory)
+                    find_scope_conflict(left_scope, &right_pattern, self.memory)
                 } else {
                     Ok(None)
                 };
@@ -2036,9 +2084,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 }
                 self.note_element_vars(&mut group.scope, right.scope)?;
                 group.g = GraphPattern::Lateral {
-                    left: Child::try_new(group.g, self.memory)?,
-                    right: Child::try_new(right.pattern, self.memory)?,
-                };
+                    left: Child::try_new(left, self.memory)?,
+                    right: Child::try_new(right_pattern, self.memory)?,
+                }
+                .into();
                 group.intro |= right.intro;
             }
             Element::Minus => {
@@ -2053,9 +2102,10 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING to the
                 // enclosing group's scope, and `find_scope_conflict` never walks it.
                 group.g = GraphPattern::Minus {
-                    left: Child::try_new(group.g, self.memory)?,
-                    right: Child::try_new(right.pattern, self.memory)?,
-                };
+                    left: Child::try_new(self.finish_pattern(group.g)?, self.memory)?,
+                    right: Child::try_new(self.finish_pattern(right.pattern)?, self.memory)?,
+                }
+                .into();
             }
             Element::Graph(name) => {
                 let inner = val.group();
@@ -2066,9 +2116,9 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 self.note_element_vars(&mut group.scope, inner.scope)?;
                 let graph = GraphPattern::Graph {
                     name,
-                    inner: Child::try_new(inner.pattern, self.memory)?,
+                    inner: Child::try_new(self.finish_pattern(inner.pattern)?, self.memory)?,
                 };
-                group.g = self.group_join(group.g, graph)?;
+                group.g = self.group_join(group.g, graph.into())?;
                 group.intro |= inner.intro;
             }
             Element::Service { silent, name } => {
@@ -2081,7 +2131,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 self.note_element_vars(&mut group.scope, inner.scope)?;
                 let service = GraphPattern::Service {
                     name,
-                    inner: Child::try_new(inner.pattern, self.memory)?,
+                    inner: Child::try_new(self.finish_pattern(inner.pattern)?, self.memory)?,
                     silent,
                 };
                 // A variable endpoint (`SERVICE ?g`) is correlated with the enclosing
@@ -2090,11 +2140,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // stays a plain join.
                 group.g = if is_var_endpoint {
                     GraphPattern::Lateral {
-                        left: Child::try_new(group.g, self.memory)?,
+                        left: Child::try_new(self.finish_pattern(group.g)?, self.memory)?,
                         right: Child::try_new(service, self.memory)?,
                     }
+                    .into()
                 } else {
-                    self.group_join(group.g, service)?
+                    self.group_join(group.g, service.into())?
                 };
                 group.intro |= inner.intro;
             }
@@ -2107,6 +2158,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 self.expect_kw("AS")?;
                 let variable = self.expect_var()?;
                 self.expect(&Token::RParen)?;
+                let inner = self.finish_pattern(group.g)?;
                 // §19.6: the variable introduced by BIND must not already be in-scope in
                 // the group graph pattern up to this point — a re-binding is a hard
                 // syntax error, not a silent shadow (vendored W3C `syntax-query`
@@ -2117,7 +2169,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 // through the free-function (non-counting) `visible_variables`.
                 #[cfg(debug_assertions)]
                 if group.scope.star_snapshot.is_empty() {
-                    let checked = visible_variables_with_memory(&group.g, self.memory)?;
+                    let checked = visible_variables_with_memory(&inner, self.memory)?;
                     debug_assert_eq!(
                         group.scope.contains(&variable),
                         checked.contains(&variable),
@@ -2138,10 +2190,11 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                 group.scope.note(&variable, self.memory)?;
                 self.note_exists_scope_var(&variable)?;
                 group.g = GraphPattern::Extend {
-                    inner: Child::try_new(group.g, self.memory)?,
+                    inner: Child::try_new(inner, self.memory)?,
                     variable,
                     expression,
-                };
+                }
+                .into();
                 group.intro = true;
             }
             Element::Unfold => {
@@ -2154,11 +2207,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     None
                 };
                 self.expect(&Token::RParen)?;
+                let inner = self.finish_pattern(group.g)?;
                 // `BIND`'s §19.6 scope rule, verbatim, on BOTH targets.
                 for variable in std::iter::once(&element).chain(companion.as_ref()) {
                     #[cfg(debug_assertions)]
                     if group.scope.star_snapshot.is_empty() {
-                        let checked = visible_variables_with_memory(&group.g, self.memory)?;
+                        let checked = visible_variables_with_memory(&inner, self.memory)?;
                         debug_assert_eq!(
                             group.scope.contains(variable),
                             checked.contains(variable),
@@ -2197,11 +2251,12 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     self.note_exists_scope_var(variable)?;
                 }
                 group.g = GraphPattern::Unfold {
-                    inner: Child::try_new(group.g, self.memory)?,
+                    inner: Child::try_new(inner, self.memory)?,
                     expression,
                     element,
                     companion,
-                };
+                }
+                .into();
                 group.intro = true;
             }
         }
@@ -2461,6 +2516,7 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                         self.note_exists_scope_var(v)?;
                     }
                 }
+                let pattern = self.finish_pattern(pattern)?;
                 let state = self.machine.selects.last_mut().expect("active SELECT");
                 state.where_pattern = Some((pattern, intro, scope));
                 let aggregates = std::mem::take(&mut state.aggregates);
@@ -2755,7 +2811,8 @@ impl<const RDFLIB: bool> Parser<'_, '_, '_, '_, RDFLIB> {
                     where_scope.note(variable, self.memory)?;
                 }
             }
-            self.group_join(where_pat, values)?
+            let joined = self.group_join(where_pat.into(), values.into())?;
+            self.finish_pattern(joined)?
         } else {
             where_pat
         };
