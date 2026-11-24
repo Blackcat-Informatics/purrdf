@@ -699,6 +699,27 @@ fn a_linear_sequence_a_hundred_thousand_levels_deep_stays_connected() {
     .expect("spawn a small-stack thread");
 }
 
+/// Parent prefixes and suffixes stay in written order around child BGPs.
+#[test]
+fn nested_joins_match_the_same_flat_bgp_in_written_order() {
+    let parser = SparqlParser::new();
+    let nested = parser
+        .parse_query(
+            "PREFIX e: <https://example.org/> SELECT * WHERE {
+            ?s e:a ?o { ?s e:b ?o { ?s e:c ?o } ?s e:d ?o } { ?s e:e ?o { ?s e:f ?o } } ?s e:g ?o
+        }",
+        )
+        .expect("nested BGP parses");
+    let flat = parser
+        .parse_query(
+            "PREFIX e: <https://example.org/> SELECT * WHERE {
+            ?s e:a ?o . ?s e:b ?o . ?s e:c ?o . ?s e:d ?o . ?s e:e ?o . ?s e:f ?o . ?s e:g ?o
+        }",
+        )
+        .expect("flat BGP parses");
+    assert_eq!(nested, flat);
+}
+
 /// Every construct of the grammar parses a hundred thousand levels deep on a 128 KiB
 /// stack, with every level present in the algebra, and the tree is formatted and
 /// dropped on that stack too.

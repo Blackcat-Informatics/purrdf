@@ -103,3 +103,8 @@ harness = false
 # check`.
 name = "parse"
 harness = false
+
+[[bench]]
+# Joined groups versus a flat control, with native work and allocation counters.
+name = "bgp_assembly"
+harness = false
