@@ -13,13 +13,13 @@ use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main, black_b
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-struct Account {
+struct AssemblyAdmission {
     ceiling: usize,
     peak: usize,
     work: u64,
 }
 
-impl Admission for Account {
+impl Admission for AssemblyAdmission {
     fn progress_enabled(&self) -> bool {
         true
     }
@@ -38,7 +38,7 @@ impl Admission for Account {
     }
 }
 
-impl ParserAdmission for Account {
+impl ParserAdmission for AssemblyAdmission {
     fn text(&mut self, text: &dyn core::fmt::Display) -> Result<SharedText, StorageError> {
         // Shared lexical owners have their own account. The physical allocator
         // window counts those alongside the parser's admitted containers.
@@ -65,44 +65,42 @@ fn query_text(depth: usize, nested: bool) -> String {
     query
 }
 
-fn profile(text: &str, ceiling: usize) -> (Result<Query, ParseError>, Account, usize) {
-    let mut account = Account {
+fn profile(text: &str, ceiling: usize) -> (Result<Query, ParseError>, AssemblyAdmission, usize) {
+    let mut admission = AssemblyAdmission {
         ceiling,
         peak: 0,
         work: 0,
     };
-    let mut memory = Memory::new(&mut account as &mut dyn ParserAdmission);
+    let mut memory = Memory::new(&mut admission as &mut dyn ParserAdmission);
     let query =
         SparqlParser::parse_query_admitted(text, &ParserOptions::default(), None, &[], &mut memory);
     let retained = memory.admitted_bytes();
-    (query, account, retained)
+    (query, admission, retained)
 }
 
 fn report(kind: &str, depth: usize, text: &str) {
     let window = CurrentThreadWindow::open();
-    let (query, account, retained) = profile(text, usize::MAX);
+    let (query, AssemblyAdmission { work, peak, .. }, retained) = profile(text, usize::MAX);
     let query = query.expect("the admitted query parses");
     let allocation = window.close();
     println!(
-        "{kind} depth={depth} work={} peak_admitted_bytes={} retained_admitted_bytes={retained} {allocation}",
-        account.work, account.peak,
+        "{kind} depth={depth} work={work} peak_admitted_bytes={peak} retained_admitted_bytes={retained} {allocation}",
     );
 
     if kind == "nested" && depth == 2_048 {
         assert!(matches!(
-            profile(text, account.peak - 1).0,
+            profile(text, peak - 1).0,
             Err(ParseError::Storage(StorageError::AdmissionFailed))
         ));
         assert_eq!(
-            profile(text, account.peak)
+            profile(text, peak)
                 .0
                 .expect("adjacent capacity admits the same query"),
             query,
         );
         println!(
-            "nested capacity refusal at {} bytes and acceptance at {} bytes",
-            account.peak - 1,
-            account.peak,
+            "nested capacity refusal at {} bytes and acceptance at {peak} bytes",
+            peak - 1,
         );
     }
 }
