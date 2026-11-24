@@ -306,24 +306,99 @@ pub(super) fn predecessor(
     let transparent = frame
         .field(FrameField::Transparent)
         .expect("frame heads store the transparent flag");
-    let transparent = item.bytes(
-        input,
-        transparent.start,
-        transparent.end - transparent.start,
-        invalid,
-    )?;
+    let transparent = transparent.end - transparent.start == 1
+        && item.bytes(input, transparent.start, 1, invalid)? == [0xf5];
     let mut predecessor = identifier.bytes();
     let anchor;
-    match (frame.kind, transparent.as_slice()) {
-        (Some(FrameType::Parity), [0xf5]) => {
+    match (frame.kind, transparent) {
+        (Some(FrameType::Parity), true) => {
             let extent = frame.anchor.ok_or(Stop::Unknown(invalid))?;
             anchor = item.bytes(input, extent.start, extent.end - extent.start, invalid)?;
             predecessor = &anchor;
         }
-        (_, [0xf5]) => return Err(Stop::Unknown(invalid)),
+        (_, true) => return Err(Stop::Unknown(invalid)),
         _ => {}
     }
     permissive_identifier(predecessor).ok_or(Stop::Unknown(invalid))
+}
+
+#[cfg(test)]
+mod tests {
+    use core::ops::Range;
+
+    use crate::v2::SegmentWriter;
+
+    use super::{
+        DIGEST_LENGTH, FrameField, Input, Item, ItemInput, RangeReason, Stop, predecessor,
+    };
+
+    #[test]
+    fn predecessor_checks_transparency_without_reading_an_opaque_string_body() {
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"one unit", None).unwrap();
+        let bytes = writer.into_inner();
+        let opener_length = Item::first(&bytes).unwrap().unwrap().bytes().len();
+        let bytes = &bytes[opener_length..];
+        let frame = Item::first(bytes)
+            .unwrap()
+            .unwrap()
+            .frame()
+            .unwrap()
+            .unwrap();
+        let expected = frame
+            .read_field(FrameField::Identifier)
+            .fixed_bytes()
+            .unwrap();
+        let transparent = frame.start(FrameField::Transparent);
+        let mut invalid = bytes.to_vec();
+        invalid.splice(
+            transparent..transparent + 1,
+            [0x58, 32].into_iter().chain([0; 32]),
+        );
+        let skipped = transparent as u64 + 2..transparent as u64 + 34;
+        assert_eq!(&bounded_predecessor(&invalid, skipped).unwrap(), expected);
+    }
+
+    #[test]
+    fn a_non_bytes_parity_anchor_does_not_request_its_nested_string_body() {
+        let fixture = include_bytes!("../../../tests/fixtures/v2/P5/parity-base.bin");
+        let frame = Item::first(&fixture[481..])
+            .unwrap()
+            .unwrap()
+            .frame()
+            .unwrap()
+            .unwrap();
+        let mut record = frame.read_field(FrameField::Content);
+        record.record(5).unwrap();
+        for _ in 0..3 {
+            record.uint().unwrap();
+        }
+        let at = record.offset();
+        let anchor = record.fixed_bytes().unwrap();
+        assert_eq!(&bounded_predecessor(frame.bytes(), 0..0).unwrap(), anchor);
+
+        let mut invalid = frame.bytes().to_vec();
+        invalid.insert(at, 0x81);
+        let skipped = at as u64 + 3..at as u64 + 35;
+        assert!(matches!(
+            bounded_predecessor(&invalid, skipped),
+            Err(Stop::Unknown(RangeReason::Identifier))
+        ));
+    }
+
+    fn bounded_predecessor(bytes: &[u8], skipped: Range<u64>) -> Result<[u8; DIGEST_LENGTH], Stop> {
+        let mut input = Input::new(
+            |at, destination: &mut [u8]| {
+                let end = at + destination.len() as u64;
+                assert!(end <= skipped.start || at >= skipped.end);
+                destination.copy_from_slice(&bytes[at as usize..end as usize]);
+                Ok(())
+            },
+            u64::MAX,
+        );
+        let mut item = ItemInput::new(0..bytes.len() as u64);
+        predecessor(&mut input, &mut item)
+    }
 }
 
 enum Decoded {
@@ -425,13 +500,14 @@ fn parity_anchor_head(
     let mut offset = head.end;
     let mut anchor = None;
     for element in 0..5 {
-        let scan = if element == 3 {
+        let is_anchor = element == 3 && head_at(input, item, offset, invalid)?.major == head::BYTES;
+        let scan = if is_anchor {
             ScanStrings::Keep
         } else {
             ScanStrings::Skip
         };
         let end = item.scan(input, offset, through, scan, invalid)?.end();
-        if element == 3 {
+        if is_anchor {
             anchor = Some(offset..end);
         }
         offset = end;

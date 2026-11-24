@@ -3131,7 +3131,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         let decoded = match decoded.and_then(|decoded| {
             segment
                 .dictionary
-                .check_annotations(&decoded.rows)
+                .check_annotations(&self.graph.rdf, &decoded.rows)
                 .map_err(|error| match error {
                     FoldError::RepeatedAnnotation => ReadFailure::Content(
                         WireError::new(MalformedReason::UnorderedOrRepeated, 0).into(),

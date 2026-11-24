@@ -177,7 +177,7 @@ where
             let scope = dictionary.scope(covered.item);
             dictionary
                 .observed
-                .check_scoped_annotations(&decoded.rows, scope)
+                .check_scoped_annotations(&dictionary.arena, &decoded.rows, scope)
                 .map_err(Stop::fold_error)?;
             let ranges = claims.rows(ordinal, covered.kind, decoded.rows.len() as u64)?;
             let mut assigned = ranges.into_iter().flatten().peekable();

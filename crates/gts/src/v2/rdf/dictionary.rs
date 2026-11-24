@@ -14,6 +14,7 @@ use crate::{FastMap, FastSet};
 
 mod by_reference;
 mod order;
+mod written;
 
 #[cfg(test)]
 mod tests {
@@ -45,22 +46,78 @@ mod tests {
                 languages: Vec::new(),
             };
             let mut dictionary = SegmentDictionary::new(0);
+            let mut fold = RdfFold::default();
             let findings = dictionary
-                .observe_terms(
-                    &mut RdfFold::default(),
-                    &reservation,
-                    Some(terms),
-                    &ValueStore::default(),
-                )
+                .observe_terms(&mut fold, &reservation, Some(terms), &ValueStore::default())
                 .unwrap();
             assert!(findings.ill_formed_term);
-            let duplicates = dictionary.check_annotations(&annotations);
+            let duplicates = dictionary.check_annotations(&fold, &annotations);
             if repeated {
                 assert!(matches!(duplicates, Err(FoldError::RepeatedAnnotation)));
             } else {
                 duplicates.unwrap();
             }
         }
+    }
+
+    #[test]
+    fn annotation_repetition_uses_later_written_aliases_only_once_they_are_defined() {
+        let first = [
+            0x84, 0, 0x84, 0x82, 1, 2, 0x82, 4, 1, 0x82, 1, 1, 0x82, 4, 3, 1, 1,
+        ];
+        let later = [0x84, 7, 0x81, 0x82, 1, 1, 1, 1];
+        let annotations = [
+            Row::Annotation([0, 1, 5], NonZeroU64::MIN, None),
+            Row::Annotation([0, 1, 6], NonZeroU64::MIN, None),
+        ];
+        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
+        let mut fold = RdfFold::default();
+        let mut dictionary = SegmentDictionary::new(0);
+        let reservation =
+            crate::v2::terms::reserve_verified(Fields::new(&first), 0, NonZeroU64::MIN).unwrap();
+        let findings = dictionary
+            .observe_terms(
+                &mut fold,
+                &reservation,
+                Some(DecodedTerms {
+                    terms: vec![
+                        iri("https://example.org/a"),
+                        iri("https://example.org/p"),
+                        TermDefinition::Triple([7, 0, 1]),
+                        iri("https://example.org/s"),
+                        TermDefinition::Triple([3, 0, 1]),
+                        TermDefinition::Triple([0, 1, 2]),
+                        TermDefinition::Triple([0, 1, 4]),
+                    ],
+                    languages: Vec::new(),
+                }),
+                &ValueStore::default(),
+            )
+            .unwrap();
+        assert!(findings.forward_reference);
+        let before = dictionary.row_scope();
+        dictionary.check_annotations(&fold, &annotations).unwrap();
+
+        let reservation =
+            crate::v2::terms::reserve_verified(Fields::new(&later), 7, NonZeroU64::MIN).unwrap();
+        dictionary
+            .observe_terms(
+                &mut fold,
+                &reservation,
+                Some(DecodedTerms {
+                    terms: vec![iri("https://example.org/s")],
+                    languages: Vec::new(),
+                }),
+                &ValueStore::default(),
+            )
+            .unwrap();
+        dictionary
+            .check_scoped_annotations(&fold, &annotations, before)
+            .unwrap();
+        assert!(matches!(
+            dictionary.check_annotations(&fold, &annotations),
+            Err(FoldError::RepeatedAnnotation)
+        ));
     }
 }
 
@@ -183,6 +240,7 @@ pub struct SegmentDictionary {
     references: FastMap<(ValueName, ReferenceForm), u64>,
     reference_languages: FastMap<String, usize>,
     aliases: FastMap<u64, u64>,
+    first_forward_definition: Option<u64>,
     order: order::History,
     in_doubt: bool,
     broken_prefix: u128,
@@ -201,6 +259,7 @@ impl SegmentDictionary {
             references: FastMap::default(),
             reference_languages: FastMap::default(),
             aliases: FastMap::default(),
+            first_forward_definition: None,
             order: order::History::default(),
             in_doubt: false,
             broken_prefix: 0,
@@ -303,6 +362,7 @@ impl SegmentDictionary {
         )?;
         let runs_before = self.runs.len();
         let languages_before = self.reference_languages.len();
+        let forward_before = self.first_forward_definition;
         let terms_before = fold.terms.checkpoint();
         let mut run_end = start;
         for (kind, count) in reservation.runs() {
@@ -336,6 +396,7 @@ impl SegmentDictionary {
                 self.reference_languages
                     .retain(|_, id| *id < languages_before);
                 self.aliases.retain(|id, _| u128::from(*id) < start);
+                self.first_forward_definition = forward_before;
                 fold.terms.rollback(terms_before);
                 for value in findings.missing_values {
                     fold.missing_values.remove(&value);
@@ -370,6 +431,9 @@ impl SegmentDictionary {
         for (index, definition) in decoded.terms.into_iter().enumerate() {
             let id =
                 u64::try_from(self.next + index as u128).expect("definition fits its admitted run");
+            if self.first_forward_definition.is_none() && uses_later_id(&definition, id) {
+                self.first_forward_definition = Some(id);
+            }
             let kind = definition_kind(&definition);
             let components = match &definition {
                 TermDefinition::Triple(ids) => Some(ids.map(|id| self.definition_id(id))),
@@ -426,6 +490,14 @@ impl SegmentDictionary {
 
     fn definition_id(&self, id: u64) -> u64 {
         self.aliases.get(&id).copied().unwrap_or(id)
+    }
+
+    fn scoped_definition_id(&self, raw: u64, scope: RowScope) -> u64 {
+        if scope.defines(raw) {
+            self.definition_id(raw)
+        } else {
+            raw
+        }
     }
 
     fn reference_key(
@@ -729,7 +801,7 @@ impl SegmentDictionary {
         fold: &mut RdfFold,
         decoded: &DecodedRows,
     ) -> Result<RowFindings, FoldError> {
-        self.check_annotations(&decoded.rows)?;
+        self.check_annotations(fold, &decoded.rows)?;
         self.fold_scoped_rows(fold, &decoded.rows, self.row_scope())
     }
 
@@ -766,35 +838,53 @@ impl SegmentDictionary {
         Ok(findings)
     }
 
-    pub(in crate::v2) fn check_annotations(&self, rows: &[Row]) -> Result<(), FoldError> {
-        self.check_scoped_annotations(rows, self.row_scope())
+    pub(in crate::v2) fn check_annotations(
+        &self,
+        fold: &RdfFold,
+        rows: &[Row],
+    ) -> Result<(), FoldError> {
+        self.check_scoped_annotations(fold, rows, self.row_scope())
     }
 
     pub(in crate::v2) fn check_scoped_annotations(
         &self,
+        fold: &RdfFold,
         rows: &[Row],
         scope: RowScope,
     ) -> Result<(), FoldError> {
-        if !matches!(rows.first(), Some(Row::Annotation(..))) {
+        if rows.len() < 2 || !matches!(rows.first(), Some(Row::Annotation(..))) {
             return Ok(());
         }
+        let aliases = self
+            .first_forward_definition
+            .filter(|&id| scope.defines(id))
+            .map(|_| written::Aliases::new(self, fold, scope))
+            .transpose()?;
         let mut keys = FastSet::default();
         keys.try_reserve(rows.len())?;
+        let id = |raw| {
+            let base = self.scoped_definition_id(raw, scope);
+            aliases
+                .as_ref()
+                .map_or(base, |aliases| aliases.representative(base))
+        };
         for &row in rows {
-            if let Row::Annotation(terms, _, graph) = row {
-                let id = |raw| {
-                    if scope.defines(raw) {
-                        self.definition_id(raw)
-                    } else {
-                        raw
-                    }
-                };
-                if !keys.insert((terms.map(id), graph.map(id))) {
-                    return Err(FoldError::RepeatedAnnotation);
-                }
+            if let Row::Annotation(terms, _, graph) = row
+                && !keys.insert((terms.map(id), graph.map(id)))
+            {
+                return Err(FoldError::RepeatedAnnotation);
             }
         }
         Ok(())
+    }
+}
+
+fn uses_later_id(definition: &TermDefinition<'_>, id: u64) -> bool {
+    match definition {
+        TermDefinition::Triple(ids) => ids.iter().any(|&component| component >= id),
+        TermDefinition::Literal(_, LiteralForm::Typed(datatype))
+        | TermDefinition::LiteralRef(_, LiteralForm::Typed(datatype)) => *datatype >= id,
+        _ => false,
     }
 }
 
