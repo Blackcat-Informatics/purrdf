@@ -51,9 +51,11 @@
 //!
 //! # Determinism
 //!
-//! The index is a `BTreeMap` keyed by the predicate IRI, each bucket in the closure's own
-//! frozen order; patterns are visited in a stably-sorted, most-constrained-first order; and
-//! the trail undoes exactly the bindings an attempt introduced. Two runs over one closure
+//! Candidate ordinals order the closure by predicate key and then frozen input order.
+//! Subject and object postings retain those ordinals, so skipping candidates that cannot
+//! unify does not change the order of the remaining ones. Patterns are visited in a stable
+//! most-constrained-first order, and the trail undoes exactly the bindings an attempt
+//! introduced. Two runs over one closure
 //! and one question therefore visit the same candidates in the same order and return the
 //! same binding — the FIRST one in that order, not an arbitrary one. The frame stack is
 //! the call stack written down, so it visits that same order: a frame's candidates are
@@ -62,8 +64,10 @@
 //! unit per candidate in the order the candidates are reached.
 
 use purrdf_core::TermBox;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Range};
+use std::sync::Arc;
 
 use purrdf_core::{TermValue, visit_nested};
 
@@ -73,8 +77,8 @@ use crate::entails::pattern::{Pat, PatTriple, VarKey, var_count};
 
 /// The match budget, in candidate triples visited.
 ///
-/// Sized so that no well-formed question reaches it — the search visits one candidate per
-/// (pattern, closure triple sharing its predicate) pair per backtracking branch, and a
+/// Sized so that no typical well-formed question reaches it — the search visits one unit per
+/// candidate admitted by the selected posting per backtracking branch, and a
 /// conclusion graph is typically a handful of triples — while a pathological question over
 /// a large closure still stops. It is a STEP count and never a clock reading, so the
 /// refusal is reproducible on every target including `wasm32`, where there is no clock to
@@ -84,20 +88,16 @@ pub const MATCH_BUDGET: u64 = 5_000_000;
 /// A solution: what each variable of the question was bound to.
 pub type Binding = BTreeMap<VarKey, TermValue>;
 
-/// The closure, indexed by predicate — the one position that is ground in almost every
-/// question, and the one RDF guarantees is an IRI.
-type Index = BTreeMap<String, Vec<Triple>>;
-
 /// The index key of a term.
 ///
 /// An IRI keys by itself. Nothing else can occupy a predicate position in RDF 1.2, so the
 /// remaining arm exists only to keep the function total; keying such a term by its debug
 /// rendering means both sides of a comparison compute the same key, so a generalized-RDF
 /// triple that somehow reached here matches itself and nothing else.
-fn index_key(term: &TermValue) -> String {
+fn index_key(term: &TermValue) -> Cow<'_, str> {
     match term {
-        TermValue::Iri(iri) => iri.clone(),
-        other => format!("{other:?}"),
+        TermValue::Iri(iri) => Cow::Borrowed(iri),
+        other => Cow::Owned(format!("{other:?}")),
     }
 }
 
@@ -108,46 +108,118 @@ fn index_key(term: &TermValue) -> String {
 /// it and has to be re-checkable without re-running the chase.
 #[derive(Debug, Clone)]
 pub(crate) struct Closure {
-    /// Every default-graph triple, as a set, for membership in `O(log n)`.
-    members: BTreeSet<Triple>,
-    /// The same triples bucketed by predicate, for candidate enumeration.
-    index: Index,
+    store: Arc<ClosureStore>,
+}
+
+#[derive(Debug)]
+struct ClosureStore {
+    /// Every input triple, owned here and referred to by input position.
+    triples: Vec<Triple>,
+    /// One input position per distinct triple, ordered by the triple for membership tests.
+    members: Vec<usize>,
+    /// Input positions in witness order. An index into this vector is a witness ordinal.
+    order: Vec<usize>,
+    /// Contiguous witness ordinals for each predicate.
+    predicates: BTreeMap<String, Range<usize>>,
+    /// Witness ordinals ordered by subject, then by ordinal.
+    subjects: Vec<usize>,
+    /// Witness ordinals ordered by object, then by ordinal.
+    objects: Vec<usize>,
 }
 
 impl Closure {
     /// Index `triples`.
     pub(crate) fn of(triples: Vec<Triple>) -> Self {
-        let mut index: Index = BTreeMap::new();
-        let mut members = BTreeSet::new();
-        for triple in triples {
-            index
-                .entry(index_key(&triple[1]))
-                .or_default()
-                .push(triple.clone());
-            members.insert(triple);
+        let mut members: Vec<_> = (0..triples.len()).collect();
+        members.sort_unstable_by(|&a, &b| triples[a].cmp(&triples[b]));
+        members.dedup_by(|a, b| triples[*a] == triples[*b]);
+
+        let mut order: Vec<_> = (0..triples.len()).collect();
+        order.sort_unstable_by(|&a, &b| {
+            index_key(&triples[a][1])
+                .cmp(&index_key(&triples[b][1]))
+                .then(a.cmp(&b))
+        });
+        let mut start = 0;
+        let predicates = order
+            .chunk_by(|&a, &b| index_key(&triples[a][1]) == index_key(&triples[b][1]))
+            .map(|bucket| {
+                let end = start + bucket.len();
+                let key = index_key(&triples[bucket[0]][1]).into_owned();
+                let span = start..end;
+                start = end;
+                (key, span)
+            })
+            .collect();
+
+        let posting = |position| {
+            let mut ordinals: Vec<_> = (0..order.len()).collect();
+            ordinals.sort_unstable_by(|&a, &b| {
+                (&triples[order[a]][position], a).cmp(&(&triples[order[b]][position], b))
+            });
+            ordinals
+        };
+        let (subjects, objects) = (posting(0), posting(2));
+        Self {
+            store: Arc::new(ClosureStore {
+                triples,
+                members,
+                order,
+                predicates,
+                subjects,
+                objects,
+            }),
         }
-        Self { members, index }
     }
 
     /// Whether the closure holds `triple`.
     pub(crate) fn contains(&self, triple: &Triple) -> bool {
-        self.members.contains(triple)
+        self.store
+            .members
+            .binary_search_by(|&index| self.store.triples[index].cmp(triple))
+            .is_ok()
     }
 
     /// How many distinct triples the closure holds.
     pub(crate) fn len(&self) -> usize {
-        self.members.len()
+        self.store.members.len()
     }
 
-    /// Every triple whose predicate is `iri`, in the closure's own frozen order.
-    ///
-    /// The index is already bucketed by predicate for candidate enumeration, so this is a
-    /// lookup rather than a scan — which matters because [`datarange`] asks it once per
-    /// recognized conclusion triple.
-    ///
-    /// [`datarange`]: super::datarange
-    pub(crate) fn with_predicate(&self, iri: &str) -> &[Triple] {
-        self.index.get(iri).map_or(&[][..], Vec::as_slice)
+    /// Every triple whose predicate is `iri` and subject is `subject`, in witness order.
+    pub(crate) fn with_subject_predicate(
+        &self,
+        subject: &TermValue,
+        iri: &str,
+    ) -> impl Iterator<Item = &Triple> {
+        let span = self.predicate_span(iri);
+        self.endpoint_span(&self.store.subjects, 0, subject, &span)
+            .iter()
+            .map(|&ordinal| self.at(ordinal))
+    }
+
+    /// Find the witness range for the predicate key.
+    fn predicate_span(&self, key: &str) -> Range<usize> {
+        self.store.predicates.get(key).cloned().unwrap_or_default()
+    }
+
+    /// Resolve a witness ordinal to the only owned triple.
+    fn at(&self, ordinal: usize) -> &Triple {
+        &self.store.triples[self.store.order[ordinal]]
+    }
+
+    /// Restrict an endpoint posting by both exact term and predicate ordinal range.
+    fn endpoint_span<'a>(
+        &self,
+        posting: &'a [usize],
+        position: usize,
+        term: &TermValue,
+        span: &Range<usize>,
+    ) -> &'a [usize] {
+        let before = |ordinal, boundary| (&self.at(ordinal)[position], ordinal) < (term, boundary);
+        let start = posting.partition_point(|&ordinal| before(ordinal, span.start));
+        let rest = &posting[start..];
+        let end = rest.partition_point(|&ordinal| before(ordinal, span.end));
+        &rest[..end]
     }
 
     /// This closure plus `extra`, as a new closure.
@@ -158,7 +230,12 @@ impl Closure {
     ///
     /// [`comprehension`]: super::comprehension
     pub(crate) fn extended_with(&self, extra: Vec<Triple>) -> Self {
-        let mut triples: Vec<Triple> = self.members.iter().cloned().collect();
+        let mut triples: Vec<_> = self
+            .store
+            .members
+            .iter()
+            .map(|&index| self.store.triples[index].clone())
+            .collect();
         triples.extend(extra);
         Self::of(triples)
     }
@@ -205,56 +282,69 @@ fn try_unify(pat: &Pat, ground: &TermValue, bound: &mut Binding, trail: &mut Vec
     .is_continue()
 }
 
-/// The bucket a ground predicate term reads, if the closure has one.
-///
-/// The IRI arm borrows rather than allocating a key, because this runs once per pattern per
-/// backtracking branch; the remaining arm cannot occur in RDF 1.2 and pays for its own
-/// impossibility.
-fn bucket_for<'a>(term: &TermValue, index: &'a Index) -> Option<&'a Vec<Triple>> {
-    match term {
-        TermValue::Iri(iri) => index.get(iri.as_str()),
-        other => index.get(format!("{other:?}").as_str()),
-    }
+/// Two borrowed ways to select a subsequence of the witness order.
+enum CandidateView<'a> {
+    /// A predicate's contiguous ordinal range, or the whole closure.
+    Range(Range<usize>),
+    /// Ordinals within a subject or object posting.
+    Posting(std::slice::Iter<'a, usize>),
 }
 
-/// The closure buckets a pattern's candidates can come from.
-///
-/// An iterator rather than a collected `Vec`, so the overwhelmingly common case — a ground
-/// predicate, one bucket — allocates nothing at all inside the search.
-enum Buckets<'a> {
-    /// A ground (or already-bound) predicate: exactly the bucket it names, if any.
-    One(Option<&'a Vec<Triple>>),
-    /// An open predicate variable: every bucket, in the index's own key order.
-    Every(std::collections::btree_map::Values<'a, String, Vec<Triple>>),
+/// A candidate cursor borrowing the immutable closure.
+struct Candidates<'a> {
+    closure: &'a Closure,
+    view: CandidateView<'a>,
 }
 
-impl<'a> Iterator for Buckets<'a> {
-    type Item = &'a Vec<Triple>;
+impl<'a> Iterator for Candidates<'a> {
+    type Item = &'a Triple;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::One(slot) => slot.take(),
-            Self::Every(values) => values.next(),
-        }
+        let ordinal = match &mut self.view {
+            CandidateView::Range(range) => range.next(),
+            CandidateView::Posting(posting) => posting.next().copied(),
+        }?;
+        Some(self.closure.at(ordinal))
     }
 }
 
-/// The closure triples that could satisfy `pat` given what is already bound.
-///
-/// A pattern whose predicate is ground — or is a variable already bound to one — reads one
-/// bucket. A pattern whose predicate is still open has to consider every bucket, because a
-/// predicate variable ranges over the closure's whole predicate vocabulary. A pattern whose
-/// predicate is a triple TERM matches nothing: RDF 1.2 predicates are IRIs, so no bucket
-/// can hold one.
-fn candidates<'a>(pat: &PatTriple, index: &'a Index, bound: &Binding) -> Buckets<'a> {
-    match &pat[1] {
-        Pat::Ground(term) => Buckets::One(bucket_for(term, index)),
-        Pat::Var(var) => match bound.get(var) {
-            Some(term) => Buckets::One(bucket_for(term, index)),
-            None => Buckets::Every(index.values()),
-        },
-        Pat::Triple(_) => Buckets::One(None),
+/// The exact endpoint if all its variables are bound. Borrow single terms
+/// and resolve a compound pattern only when it can narrow the search.
+fn exact_endpoint<'a>(pat: &'a Pat, bound: &'a Binding) -> Option<Cow<'a, TermValue>> {
+    match pat {
+        Pat::Ground(term) => Some(Cow::Borrowed(term)),
+        Pat::Var(var) => bound.get(var).map(Cow::Borrowed),
+        Pat::Triple(_) => substitute(pat, bound).map(Cow::Owned),
     }
+}
+
+/// Choose the shortest applicable posting. Every posting is ordered by
+/// the same witness ordinal once constrained by its key, so selectivity
+/// never reorders candidates that can unify.
+fn candidates<'a>(pat: &PatTriple, closure: &'a Closure, bound: &Binding) -> Candidates<'a> {
+    let span = match &pat[1] {
+        Pat::Ground(term) => closure.predicate_span(index_key(term).as_ref()),
+        Pat::Var(var) => bound.get(var).map_or(0..closure.store.order.len(), |term| {
+            closure.predicate_span(index_key(term).as_ref())
+        }),
+        // RDF predicates cannot be triple terms.
+        Pat::Triple(_) => 0..0,
+    };
+    let mut len = span.len();
+    let mut view = CandidateView::Range(span.clone());
+    for (position, posting) in [(0, &closure.store.subjects), (2, &closure.store.objects)] {
+        if len <= 1 {
+            break;
+        }
+        if let Some(term) = exact_endpoint(&pat[position], bound) {
+            let selection = closure.endpoint_span(posting, position, term.as_ref(), &span);
+            if selection.len() < len {
+                len = selection.len();
+                view = CandidateView::Posting(selection.iter());
+            }
+        }
+    }
+    Candidates { closure, view }
 }
 
 /// What a solver does with a solution it reached.
@@ -298,10 +388,8 @@ fn record(collect: &mut Collect<'_>, bound: &Binding) {
 struct Frame<'a> {
     /// The pattern this level consumes, as an index into the solver's pattern list.
     pattern: usize,
-    /// The buckets this level's candidates come from, fixed when the frame was pushed.
-    buckets: Buckets<'a>,
-    /// The remainder of the bucket currently being walked.
-    bucket: std::slice::Iter<'a, Triple>,
+    /// The remaining candidates, selected when the frame was pushed.
+    candidates: Candidates<'a>,
     /// The bindings the attempt in flight introduced, to be undone when it is abandoned.
     ///
     /// Reused across this frame's attempts rather than reallocated per candidate, which is
@@ -312,24 +400,13 @@ struct Frame<'a> {
 }
 
 impl<'a> Frame<'a> {
-    /// A frame for `pattern`, drawing candidates from `buckets`.
-    fn new(pattern: usize, buckets: Buckets<'a>) -> Self {
+    /// A frame for `pattern`, drawing from the selected candidates.
+    fn new(pattern: usize, candidates: Candidates<'a>) -> Self {
         Self {
             pattern,
-            buckets,
-            bucket: [].iter(),
+            candidates,
             trail: Vec::new(),
             found: false,
-        }
-    }
-
-    /// The next candidate at this level, walking into the next bucket when one runs out.
-    fn next_candidate(&mut self) -> Option<&'a Triple> {
-        loop {
-            if let Some(candidate) = self.bucket.next() {
-                return Some(candidate);
-            }
-            self.bucket = self.buckets.next()?.iter();
         }
     }
 }
@@ -343,7 +420,7 @@ enum Step<'a> {
     Exhausted(bool),
 }
 
-/// Solve `pats` against `index`, backtracking over variable bindings.
+/// Solve `pats` against `closure`, backtracking over variable bindings.
 ///
 /// Returns whether at least one solution was reached. Under [`Collect::All`] the search
 /// continues past the first, so the answer is "the row set is now complete" rather than
@@ -357,7 +434,7 @@ enum Step<'a> {
 /// [`EntailError::MatchBudget`] when `budget` runs out before the search finishes.
 fn solve(
     pats: &[PatTriple],
-    index: &Index,
+    closure: &Closure,
     bound: &mut Binding,
     budget: &mut u64,
     collect: &mut Collect<'_>,
@@ -367,7 +444,7 @@ fn solve(
         record(collect, bound);
         return Ok(true);
     };
-    let mut stack = vec![Frame::new(0, candidates(first, index, bound))];
+    let mut stack = vec![Frame::new(0, candidates(first, closure, bound))];
     // The answer a just-finished level reported, waiting to be folded into its parent — the
     // value the recursive form read straight out of its `solve(…)?` call.
     let mut reported: Option<bool> = None;
@@ -389,7 +466,7 @@ fn solve(
                     bound.remove(&undo);
                 }
             }
-            match frame.next_candidate() {
+            match frame.candidates.next() {
                 Some(candidate) => Step::Try(candidate),
                 None => Step::Exhausted(frame.found),
             }
@@ -429,7 +506,7 @@ fn solve(
         // Descend, or — with no pattern left to place — report the complete solution back
         // into the frame that just made it complete.
         match pats.get(pattern + 1) {
-            Some(next) => stack.push(Frame::new(pattern + 1, candidates(next, index, bound))),
+            Some(next) => stack.push(Frame::new(pattern + 1, candidates(next, closure, bound))),
             None => {
                 record(collect, bound);
                 reported = Some(true);
@@ -501,13 +578,7 @@ pub(crate) fn find_one(
     let pats = most_constrained_first(pats);
     let mut bound = Binding::new();
     let mut budget = MATCH_BUDGET;
-    if solve(
-        &pats,
-        &closure.index,
-        &mut bound,
-        &mut budget,
-        &mut Collect::First,
-    )? {
+    if solve(&pats, closure, &mut bound, &mut budget, &mut Collect::First)? {
         return Ok(Ok(bound));
     }
     // Diagnose. A pattern that cannot be satisfied even on its own names a conclusion the
@@ -519,7 +590,7 @@ pub(crate) fn find_one(
         let mut solo_budget = MATCH_BUDGET;
         if !solve(
             std::slice::from_ref(pat),
-            &closure.index,
+            closure,
             &mut solo_bound,
             &mut solo_budget,
             &mut Collect::First,
@@ -554,7 +625,7 @@ pub(crate) fn find_all(
     let mut rows = BTreeSet::new();
     solve(
         &pats,
-        &closure.index,
+        closure,
         &mut bound,
         &mut budget,
         &mut Collect::All {
@@ -618,7 +689,7 @@ pub(crate) fn show_pattern(pat: &PatTriple) -> String {
 mod tests {
     use purrdf_core::BlankScope;
 
-    use super::{Closure, MissReason, find_all, find_one};
+    use super::{Binding, Closure, Collect, MissReason, TermBox, find_all, find_one, solve};
     use crate::entails::pattern::{Pat, PatTriple, VarKey};
     use purrdf_core::TermValue;
 
@@ -794,13 +865,47 @@ mod tests {
         );
     }
 
-    /// A variable in PREDICATE position ranges over the whole predicate vocabulary — the
-    /// case the predicate index cannot answer with one bucket.
+    /// An open predicate ranges over every bucket. Resolving an embedded
+    /// endpoint must still preserve the first witness and deduplicate rows.
     #[test]
-    fn a_variable_predicate_scans_every_bucket() {
-        let closure = closure_of(&[["s", "p", "o"], ["s", "q", "o"]]);
+    fn a_resolved_triple_endpoint_preserves_predicate_and_witness_order() {
+        let embedded = TermValue::Triple {
+            s: TermBox::new(iri("nested-subject")),
+            p: TermBox::new(iri("nested-predicate")),
+            o: TermBox::new(iri("nested-object")),
+        };
+        let closure = Closure::of(vec![
+            [iri("q-subject"), iri("q"), embedded.clone()],
+            [iri("noise"), iri("a"), iri("other-object")],
+            [iri("first"), iri("p"), embedded.clone()],
+            [iri("first"), iri("p"), embedded.clone()],
+            [iri("last"), iri("p"), embedded],
+        ]);
+        let question = [
+            projected("s"),
+            projected("r"),
+            Pat::Triple(Box::new([
+                ground("nested-subject"),
+                ground("nested-predicate"),
+                ground("nested-object"),
+            ])),
+        ];
+        let mut bound = Binding::new();
+        // The unrelated earlier predicate would exhaust this budget if visited.
+        assert!(
+            solve(
+                std::slice::from_ref(&question),
+                &closure,
+                &mut bound,
+                &mut 1,
+                &mut Collect::First,
+            )
+            .expect("one visit suffices")
+        );
+        assert_eq!(bound[&VarKey::Projected("s".to_owned())], iri("first"));
+        assert_eq!(bound[&VarKey::Projected("r".to_owned())], iri("p"));
         let rows = find_all(
-            vec![[ground("s"), projected("r"), ground("o")]],
+            vec![question],
             &closure,
             &[VarKey::Projected("r".to_owned())],
         )
