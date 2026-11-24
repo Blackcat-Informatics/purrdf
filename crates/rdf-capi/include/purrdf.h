@@ -4742,6 +4742,31 @@ int32_t purrdf_shapes_product_encode(const char *shapes_ttl,
                                      PurrdfError **out_error);
 
 /**
+ * Encode a prepared product with the fixed-point request from
+ * [`purrdf_shacl_validate_to_sarif_with_recursion`].
+ * The product records the shapes, while validation supplies its own request.
+ *
+ * # Safety
+ * As [`purrdf_shapes_product_encode`]. The mode must be null or a live,
+ * NUL-terminated UTF-8 string. Each limit must be null or point to a live,
+ * aligned and readable `uint64_t`.
+ */
+int32_t purrdf_shapes_product_encode_with_recursion(const char *shapes_ttl,
+                                                    const char *shapes_base_iri,
+                                                    const char *shapes_graph_iri,
+                                                    const char *const *import_iris,
+                                                    const char *const *import_documents,
+                                                    size_t import_count,
+                                                    const char *recursion_mode,
+                                                    const uint64_t *recursion_max_pairs,
+                                                    const uint64_t *recursion_max_iterations,
+                                                    PurrdfBuffer **out_buffer,
+                                                    const char *canonical_search,
+                                                    const PurrdfCancellation *cancellation,
+                                                    PurrdfBuffer **out_canonicalization_json,
+                                                    PurrdfError **out_error);
+
+/**
  * OPEN a prepared product — verify its envelope and decode what it says it was
  * compiled from — and write that description to `*out_buffer` (free with
  * `purrdf_buffer_free`). Nothing is admitted.
@@ -4814,6 +4839,32 @@ int32_t purrdf_shapes_product_admit_xpath_regex(const uint8_t *product,
                                                 const char *regex_profile,
                                                 PurrdfBuffer **out_buffer,
                                                 PurrdfError **out_error);
+
+/**
+ * Validate a prepared product with the fixed-point request from
+ * [`purrdf_shacl_validate_to_sarif_with_recursion`].
+ * Set `rebuild` to derive preparation from the carried shapes graph.
+ * Supply an expected identity to bind validation to that product. A null
+ * expected identity leaves this check unspecified. The XPath law follows
+ * [`purrdf_shapes_product_admit_xpath_regex`].
+ *
+ * # Safety
+ * As [`purrdf_shapes_product_admit`]. Each string pointer specific to this
+ * entry must be null or a live, NUL-terminated UTF-8 string. Each limit
+ * must be null or point to a live, aligned and readable `uint64_t`. The
+ * report and error output slots must be distinct.
+ */
+int32_t purrdf_shapes_product_validate_with_recursion(const uint8_t *product,
+                                                      size_t product_len,
+                                                      const char *data_nt,
+                                                      bool rebuild,
+                                                      const char *expect_identity,
+                                                      const char *regex_profile,
+                                                      const char *recursion_mode,
+                                                      const uint64_t *recursion_max_pairs,
+                                                      const uint64_t *recursion_max_iterations,
+                                                      PurrdfBuffer **out_buffer,
+                                                      PurrdfError **out_error);
 
 /**
  * ADMIT a prepared product ONLY IF its input binding is `expect_identity`, validate

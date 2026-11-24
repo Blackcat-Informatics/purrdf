@@ -596,6 +596,15 @@ Zero is a real limit. Read the typed cause through
 `purrdf_error_native_cause_json` when a request or validation is refused.
 Both functions leave the report and change-scope outputs untouched on refusal.
 
+Use `purrdf_shapes_product_encode_with_recursion` to prepare a recursive
+catalog. Supply a fixed-point request on each call to
+`purrdf_shapes_product_validate_with_recursion`. The same product can serve
+either fixed point. Set `rebuild` to re-derive its preparation from the
+carried shapes graph. Pass an expected identity from
+`purrdf_shapes_product_open` to bind validation to that product. Pass a dated
+XPath law when the request needs one. Recursion refusals carry their native
+cause through the product error handle and leave the report output untouched.
+
 ## Governed execution
 
 `purrdf_query_governed` returns either a complete query result or a typed exhausted

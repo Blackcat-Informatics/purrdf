@@ -57,6 +57,202 @@ const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 #[test]
+fn recursive_products_carry_fixed_point_requests_through_both_restore_paths() {
+    use purrdf::error::purrdf_error_native_cause_json;
+    use purrdf::shacl::{
+        purrdf_shapes_product_encode_with_recursion, purrdf_shapes_product_error_dimension,
+        purrdf_shapes_product_validate_with_recursion,
+    };
+
+    let shapes = c"@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property ex:P,
+            [ sh:path ex:name ; sh:pattern \"^(?:a)b$\" ] .
+        ex:P sh:path ex:p ; sh:property ex:P .";
+    let data = c"<http://example.org/a> <http://example.org/p> <http://example.org/a> .
+        <http://example.org/a> <http://example.org/name> \"ab\" .";
+    let lfp = c"lfp";
+    let gfp = c"gfp";
+    let xpath20 = c"xpath-2.0-2010-12-14";
+    let xpath31 = c"xpath-3.1-2017-03-21";
+    let missing = std::ptr::null();
+    let no_limit = std::ptr::null::<u64>();
+    let max = u64::MAX;
+    let zero = 0_u64;
+
+    let encode_request = |mode: &std::ffi::CStr, iterations| {
+        let mut result = std::ptr::dangling_mut();
+        let mut canonical_receipt = std::ptr::dangling_mut();
+        let mut error = std::ptr::null_mut();
+        // SAFETY: Strings and limits are live and the output slots are distinct.
+        let status = unsafe {
+            purrdf_shapes_product_encode_with_recursion(
+                shapes.as_ptr(),
+                missing,
+                missing,
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                mode.as_ptr(),
+                &raw const max,
+                iterations,
+                &raw mut result,
+                c"1000000".as_ptr(),
+                std::ptr::null(),
+                &raw mut canonical_receipt,
+                &raw mut error,
+            )
+        };
+        (status, result, canonical_receipt, error)
+    };
+    let encode = |mode: &std::ffi::CStr| {
+        let (status, result, canonical_receipt, error) = encode_request(mode, &raw const max);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        assert!(!canonical_receipt.is_null());
+        assert_ne!(canonical_receipt, std::ptr::dangling_mut());
+        let _receipt = receipt::Output(canonical_receipt);
+        // SAFETY: Successful encoding transferred the product buffer to this caller.
+        unsafe {
+            let bytes = buffer_bytes(result);
+            purrdf_buffer_free(result);
+            bytes
+        }
+    };
+    let product = encode(gfp);
+    assert_eq!(product, encode(lfp));
+    let (status, result, canonical_receipt, error) = encode_request(gfp, no_limit);
+    assert_eq!(status, PurrdfStatus::InvalidArgument as i32);
+    assert_eq!(result, std::ptr::dangling_mut());
+    assert_eq!(canonical_receipt, std::ptr::dangling_mut());
+    // SAFETY: A refused request returned an owned error with a borrowed native cause.
+    unsafe {
+        let cause = purrdf_error_native_cause_json(error);
+        assert!(!cause.is_null());
+        let cause = std::ffi::CStr::from_ptr(cause)
+            .to_str()
+            .expect("native cause");
+        assert!(
+            cause.contains("shacl-recursion-request-missing-limit"),
+            "{cause}"
+        );
+        purrdf_error_free(error);
+    }
+    let description =
+        purrdf_validate::explain_shapes_product(&product).expect("product description");
+    let identity = CString::new(
+        description
+            .lines()
+            .find_map(|line| line.strip_prefix("identity-digest "))
+            .expect("product identity"),
+    )
+    .expect("identity selector");
+
+    for rebuild in [false, true] {
+        let call = |mode: &std::ffi::CStr, regex, pairs, iterations, expected| {
+            let mut report = std::ptr::dangling_mut();
+            let mut error = std::ptr::null_mut();
+            // SAFETY: The product, string and limit storage outlive the call.
+            let status = unsafe {
+                purrdf_shapes_product_validate_with_recursion(
+                    product.as_ptr(),
+                    product.len(),
+                    data.as_ptr(),
+                    rebuild,
+                    expected,
+                    regex,
+                    mode.as_ptr(),
+                    pairs,
+                    iterations,
+                    &raw mut report,
+                    &raw mut error,
+                )
+            };
+            (status, report, error)
+        };
+        for (mode, law, expected) in [
+            (lfp, xpath31, false),
+            (gfp, xpath31, true),
+            (gfp, xpath20, false),
+        ] {
+            let (status, report, error) = call(
+                mode,
+                law.as_ptr(),
+                &raw const max,
+                &raw const max,
+                identity.as_ptr(),
+            );
+            assert_eq!(status, PurrdfStatus::Ok as i32);
+            assert!(error.is_null());
+            // SAFETY: Success transfers the report buffer to this caller.
+            let bytes = unsafe {
+                let bytes = buffer_bytes(report);
+                purrdf_buffer_free(report);
+                bytes
+            };
+            let sarif = purrdf_lex::json::read_slice(&bytes, purrdf_lex::json::Limits::DEFAULT)
+                .expect("SARIF report");
+            assert_eq!(sarif["runs"][0]["properties"]["shaclConforms"], expected);
+        }
+        for (law, pairs, iterations, status, reason) in [
+            (
+                missing,
+                &raw const max,
+                no_limit,
+                PurrdfStatus::InvalidArgument,
+                "shacl-recursion-request-missing-limit",
+            ),
+            (
+                xpath31.as_ptr(),
+                &raw const zero,
+                &raw const max,
+                PurrdfStatus::ShapesProductError,
+                "shacl-recursion-pair-limit",
+            ),
+            (
+                missing,
+                &raw const max,
+                &raw const zero,
+                PurrdfStatus::ShapesProductError,
+                "shacl-recursion-iteration-limit",
+            ),
+        ] {
+            let (actual, report, error) = call(gfp, law, pairs, iterations, missing);
+            assert_eq!(actual, status as i32);
+            assert_eq!(report, std::ptr::dangling_mut());
+            // SAFETY: Refusal transfers the error with its borrowed cause to this caller.
+            unsafe {
+                let cause = purrdf_error_native_cause_json(error);
+                assert!(!cause.is_null());
+                let cause = std::ffi::CStr::from_ptr(cause)
+                    .to_str()
+                    .expect("native cause");
+                assert!(cause.contains(reason), "{cause}");
+                purrdf_error_free(error);
+            }
+        }
+
+        let wrong = c"0000000000000000000000000000000000000000000000000000000000000000";
+        let (status, report, error) = call(
+            gfp,
+            xpath31.as_ptr(),
+            &raw const max,
+            &raw const max,
+            wrong.as_ptr(),
+        );
+        assert_eq!(status, PurrdfStatus::ShapesProductError as i32);
+        assert_eq!(report, std::ptr::dangling_mut());
+        // SAFETY: The refused call returned the error to this caller.
+        unsafe {
+            let dimension = purrdf_shapes_product_error_dimension(error);
+            assert!(!dimension.is_null());
+            assert_eq!(std::ffi::CStr::from_ptr(dimension), c"shapes-graph");
+            purrdf_error_free(error);
+        }
+    }
+}
+
+#[test]
 fn shacl_c_fixed_points_and_refusals_match_across_validation_routes() {
     use purrdf::error::purrdf_error_native_cause_json;
     use purrdf::shacl::{
