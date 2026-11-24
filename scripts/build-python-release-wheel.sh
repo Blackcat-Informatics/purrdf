@@ -24,6 +24,12 @@ shadow=("$output"/release-input/shadow/*.whl)
 [[ ${#shadow[@]} == 1 ]]
 [[ ${shadow[0]##*/} == "purrdf_rdflib-$version-py3-none-any.whl" ]]
 
+(
+  cd -- "$source_dir"
+  "$minimum" scripts/fetch-locked-deps.py
+  "$minimum" scripts/package-licenses.py --profile python --check
+)
+
 build_args="--locked --target $target"
 case "$target" in
   *-linux-gnu) build_args+=" --compatibility manylinux_2_34" ;;
@@ -63,7 +69,6 @@ done
 
 (
   cd -- "$source_dir"
-  "$minimum" scripts/fetch-locked-deps.py
   "$minimum" scripts/package-licenses.py --profile python --audit "${wheel[0]}" \
     --receipt "$output/release-wheel-license.json"
 )

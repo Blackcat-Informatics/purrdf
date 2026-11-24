@@ -249,6 +249,11 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        env:
+          # The license audit compares original file bytes on every runner.
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: "false"
         with:
           ref: ${{ needs.targets.outputs.release_sha }}
           path: release-source
@@ -261,7 +266,7 @@ jobs:
           name: ${{ github.event_name == 'workflow_dispatch' && 'historical-pypi-shadow' || 'dist-pypi-purrdf-rdflib' }}
           path: release-input/shadow
       - uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
-        if: matrix.name == 'manylinux-x86_64'
+        if: github.event_name != 'workflow_dispatch' && matrix.name == 'manylinux-x86_64'
         with:
           name: dist-pypi-purrdf
           path: release-input/native
@@ -270,7 +275,7 @@ jobs:
         shell: bash
         env:
           POLICY_IMAGE: ${{ matrix.image }}
-          PURRDF_WHEEL_SDIST: ${{ matrix.name == 'manylinux-x86_64' && format('release-input/native/purrdf-{0}.tar.gz', needs.targets.outputs.version) || '' }}
+          PURRDF_WHEEL_SDIST: ${{ github.event_name != 'workflow_dispatch' && matrix.name == 'manylinux-x86_64' && format('release-input/native/purrdf-{0}.tar.gz', needs.targets.outputs.version) || '' }}
         run: |
           docker run --rm --user "$(id -u):$(id -g)" \
             --mount "type=bind,source=$PWD,target=/release" --workdir /release \
