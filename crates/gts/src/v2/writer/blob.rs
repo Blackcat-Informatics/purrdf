@@ -199,13 +199,18 @@ impl<W: Write> SegmentWriter<W> {
 }
 
 fn require_source_end(source: &mut impl Read) -> Result<(), SegmentWriteError> {
-    match source.read_exact(&mut [0; 1]) {
-        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
-        Err(error) => Err(SegmentWriteError::BlobSource(error)),
-        Ok(()) => Err(SegmentWriteError::BlobSource(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "blob source exceeds its declared length",
-        ))),
+    loop {
+        match source.read(&mut [0; 1]) {
+            Ok(0) => return Ok(()),
+            Ok(_) => {
+                return Err(SegmentWriteError::BlobSource(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "blob source exceeds its declared length",
+                )));
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(SegmentWriteError::BlobSource(error)),
+        }
     }
 }
 

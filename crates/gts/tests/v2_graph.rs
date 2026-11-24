@@ -4382,6 +4382,16 @@ fn blob_declarations_union_by_digest_and_keep_the_smallest_length() {
 
 #[test]
 fn authored_blob_recipes_use_the_specification_cut_points() {
+    use std::io::{self, Read};
+
+    struct BrokenSourceEnd;
+
+    impl Read for BrokenSourceEnd {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::ErrorKind::UnexpectedEof.into())
+        }
+    }
+
     let source = include_bytes!("fixtures/v2/P4/chunker-cut-loose.bin");
     let media_type = Some("application/octet-stream");
     let mut writer = SegmentWriter::new(Vec::new()).unwrap();
@@ -4407,6 +4417,20 @@ fn authored_blob_recipes_use_the_specification_cut_points() {
         refused.add_commit(),
         Err(SegmentWriteError::IncompleteFrame)
     ));
+    let mut source_failed = SegmentWriter::new(Vec::new()).unwrap();
+    assert!(matches!(
+        source_failed.add_chunked_blob_from_reader(
+            source.as_slice().chain(BrokenSourceEnd),
+            source.len() as u64,
+            limit,
+            media_type,
+        ),
+        Err(SegmentWriteError::BlobSource(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+    ));
+    assert!(matches!(
+        source_failed.add_commit(),
+        Err(SegmentWriteError::IncompleteFrame)
+    ));
     let before = writer.head().copied();
     assert!(matches!(
         writer.add_value(&[]),
@@ -4417,6 +4441,7 @@ fn authored_blob_recipes_use_the_specification_cut_points() {
     assert_eq!(value, ValueName::of(b"lexical value"));
     writer.add_commit().unwrap();
     let bytes = writer.into_inner();
+    assert!(bytes.starts_with(&streamed.into_inner()));
     let mut items = bytes.as_slice();
     let mut lengths = Vec::new();
     while let Some(item) = Item::first(items).unwrap() {
