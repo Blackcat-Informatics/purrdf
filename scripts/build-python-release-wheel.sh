@@ -33,7 +33,11 @@ case "$target" in
     ;;
 esac
 
-uv build --python "$minimum" --no-create-gitignore --wheel --project "$source_dir/bindings/python" \
+build_source=(--project "$source_dir/bindings/python")
+if [[ -n "${PURRDF_WHEEL_SDIST:-}" ]]; then
+  build_source=("$PURRDF_WHEEL_SDIST")
+fi
+uv build --python "$minimum" --no-create-gitignore --wheel "${build_source[@]}" \
   --out-dir "$output/release-wheel" --config-setting "maturin.build-args=$build_args"
 wheel=("$output"/release-wheel/*.whl)
 if [[ ${#wheel[@]} != 1 || ${wheel[0]##*/} != "purrdf-$version-cp313-abi3-$platform.whl" ]]; then

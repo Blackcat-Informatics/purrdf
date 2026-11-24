@@ -60,10 +60,14 @@ fi
 expected=$baseline
 for candidate in "$directory"/*; do
   name=${candidate##*/}
+  read -r digest _ < <(sha256sum -- "$candidate")
   if jq -e --arg name "$name" 'has($name)' <<< "$baseline" >/dev/null; then
+    if [[ "$(jq -r --arg name "$name" '.[$name]' <<< "$baseline")" != "$digest" ]]; then
+      printf 'Local file differs from the PyPI baseline for %s\n' "$name" >&2
+      exit 1
+    fi
     continue
   fi
-  read -r digest _ < <(sha256sum -- "$candidate")
   expected=$(jq -cS --arg name "$name" --arg digest "$digest" '. + {($name): $digest}' <<< "$expected")
   published=$(jq -r --arg name "$name" '.[$name] // empty' <<< "$before")
   if [[ -z "$published" ]]; then
@@ -90,9 +94,23 @@ if ((${#missing[@]})); then
     --project "$project" --version "$version" --dist-dir "$work/missing"
 fi
 
-after=$(inventory)
-if [[ "$after" != "$expected" ]]; then
-  printf 'PyPI file list or digests differ for %s %s\n' "$project" "$version" >&2
-  exit 1
-fi
-printf '%s %s: verified PyPI filenames and SHA-256 digests\n' "$project" "$version"
+# Warehouse makes newly uploaded files visible asynchronously. Retry only an
+# incomplete inventory and never repeat the upload.
+for delay in 0 2 4 8 16 32 60; do
+  if ((delay)); then
+    sleep "$delay"
+  fi
+  after=$(inventory)
+  if [[ "$after" == "$expected" ]]; then
+    printf '%s %s: verified PyPI filenames and SHA-256 digests\n' "$project" "$version"
+    exit 0
+  fi
+  if ! jq -en --argjson after "$after" --argjson expected "$expected" \
+    'all($after | to_entries[]; $expected[.key] == .value)' >/dev/null; then
+    printf 'PyPI has an unexpected filename or digest for %s %s\n' "$project" "$version" >&2
+    exit 1
+  fi
+done
+printf 'PyPI still lacks expected files for %s %s after upload. Check the inventory before retrying.\n' \
+  "$project" "$version" >&2
+exit 1

@@ -355,8 +355,10 @@ The two Python distributions are published by `.github/workflows/release-pypi.ya
 from one `py-v<version>` source tag. The native `purrdf` distribution and the
 `purrdf-rdflib` shadow distribution share the suite version and exact reciprocal
 requirements. Build one source distribution per project and one universal
-shadow wheel. The native wheels build from the locked release checkout using
-one stable Rust toolchain. The matrix covers Linux x86-64 and 64-bit Arm under
+shadow wheel. The native wheels use the exact stable Rust version selected by
+the release plan. The Linux x86-64 manylinux lane builds from the qualified
+native source archive. The other lanes build from the locked release checkout.
+The matrix covers Linux x86-64 and 64-bit Arm under
 manylinux 2.34 and musllinux 1.2, macOS Intel and Apple silicon, and Windows
 x86-64 and 64-bit Arm.
 
@@ -365,7 +367,9 @@ wheel and shadow wheel together on CPython 3.13, 3.14 and 3.15 in clean
 environments. The shadow’s `rdflib` import must resolve to the native binding’s
 classes. The release workflow verifies every candidate's provenance and SHA-256
 digest before publishing `purrdf` ahead of `purrdf-rdflib` through separate OIDC
-jobs.
+jobs. Build and attestation jobs run in the reusable
+`qualify-python-release.yaml` workflow, whose job identity is separate from the
+registered publisher in `release-pypi.yaml`.
 
 Both publisher jobs install the official Twine, pypi-attestations and Sigstore
 tools, including their HTTP dependencies, from the fully hash-locked
@@ -392,6 +396,9 @@ The workflow compares the remote `py-v5.0.1` tag with the pinned commit and
 checks out that commit for all builds. The dispatch rehearses the build and
 verification by default. Enable `publish` to add the missing wheels while
 preserving the four original PyPI files and their recorded digests.
+The backfill installs the already published shadow wheel in every platform
+lane after verifying its pinned digest. Rehearsals have a separate concurrency
+group from publication.
 
 Configure a matching publisher separately for **each** PyPI project; use a
 pending publisher if the project does not yet exist. The main project’s publisher

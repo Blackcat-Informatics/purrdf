@@ -21,17 +21,20 @@ def main():
             parser.error(f"{args.wheel.name} must contain exactly one {member}")
         raw = wheel.read(member)
     document = json.loads(raw)
-    if document.get("bomFormat") != "CycloneDX":
-        parser.error("the native wheel SBOM must be CycloneDX")
+    if document.get("bomFormat") != "CycloneDX" or document.get("specVersion") != "1.5":
+        parser.error("the native wheel SBOM must use CycloneDX 1.5")
     root = document["metadata"]["component"]
-    if root["name"] != "purrdf-python" or root["version"] != args.version:
+    if (root.get("type"), root["name"], root["version"]) != ("library", "purrdf-python", args.version):
         parser.error("the SBOM describes another distribution or version")
     if not any(
-        target["name"] == "purrdf_native" and target["version"] == args.version
+        (target.get("type"), target["name"], target["version"]) == (
+            "library", "purrdf_native", args.version,
+        )
         for target in root["components"]
     ):
         parser.error("the SBOM does not describe the native Python extension")
-    components = {component["name"] for component in document["components"]}
+    components = {component["name"] for component in document["components"]
+                  if component.get("type") == "library"}
     if not {"purrdf", "pyo3"} <= components:
         parser.error("the SBOM is missing required native dependencies")
     args.output.write_bytes(raw)
