@@ -636,6 +636,22 @@ pub(crate) fn verified_pack_input(
     Ok(input)
 }
 
+/// The input budget and the scope of explicit CLI overrides.
+#[derive(Clone, Copy)]
+pub(crate) struct GtsInputLimits {
+    pub(crate) legacy: GtsReadLimits,
+    pub(crate) requires_generation_one: bool,
+}
+
+impl Default for GtsInputLimits {
+    fn default() -> Self {
+        Self {
+            legacy: GtsReadLimits::UNBOUNDED,
+            requires_generation_one: false,
+        }
+    }
+}
+
 /// Fold a GTS source into its dataset AND the ledger of what the read dropped: the
 /// envelope material and every language tag the dataset folded to lower case.
 ///
@@ -645,21 +661,31 @@ pub(crate) fn verified_pack_input(
 pub(crate) fn load_gts(
     path: &str,
     policy: TransportPolicy,
-    limits: GtsReadLimits,
+    limits: GtsInputLimits,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
-    let bytes = if limits == GtsReadLimits::UNBOUNDED {
-        read_bytes_with_transport(path, policy)?
+    let bounded = limits.legacy != GtsReadLimits::UNBOUNDED;
+    let bytes = if bounded {
+        read_gts_bytes_with_transport(path, policy, limits.legacy.encoded_input_bytes)?
     } else {
-        read_gts_bytes_with_transport(path, policy, limits.encoded_input_bytes)?
+        read_bytes_with_transport(path, policy)?
     };
     let source = display_path(path);
     if has_gts_v2_opener(&bytes) {
-        if limits != GtsReadLimits::UNBOUNDED {
+        if limits.requires_generation_one {
             return Err(CliError::Runtime(format!(
-                "{source}: the requested GTS read limits apply to generation 1. Generation 2 uses its own finite read limits."
+                "{source}: a GTS read limit override requires generation 1. For generation 2, use --gts-safe-read or override encoded-input-bytes."
             )));
         }
-        let read = purrdf::gts::v2::read_with_limits(&bytes, ReadLimits::default())
+        let mut graph_limits = ReadLimits::default();
+        if bounded {
+            let total = limits.legacy.total_decoded_bytes as u64;
+            let capacity = &mut graph_limits.second_generation;
+            capacity.payload.decoded_bytes_per_read = total;
+            capacity.formed_bytes = total;
+            capacity.rebuilt_bytes = total;
+            capacity.items = limits.legacy.items as u64;
+        }
+        let read = purrdf::gts::v2::read_with_limits(&bytes, graph_limits)
             .map_err(|cause| CliError::gts_input(source, cause))?;
         let ReadGraph::Second(graph) = read else {
             return Err(CliError::Runtime(format!(
@@ -677,7 +703,7 @@ pub(crate) fn load_gts(
         }
         return Ok((dataset, ledger));
     }
-    let bundle = import_gts_events_with_limits(&bytes, limits)
+    let bundle = import_gts_events_with_limits(&bytes, limits.legacy)
         .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
     let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, source);
     for entry in bundle.envelope.losses.entries() {

@@ -213,12 +213,13 @@ pub(crate) struct Cli {
         value_name = "DEST"
     )]
     pub(crate) canonicalization_receipts: Option<PathBuf>,
-    /// Apply finite host-safe limits to GTS v1 input. GTS v2 reads use separate
-    /// finite limits.
+    /// Bound GTS input and transport expansion before parsing either generation.
     #[arg(long, global = true)]
     pub(crate) gts_safe_read: bool,
-    /// Override one host-safe GTS v1 ceiling as `RESOURCE=MAX`. Repeat for
+    /// Override a bounded GTS read ceiling as `RESOURCE=MAX`. Repeat for
     /// multiple resources; supplying any override selects bounded reading.
+    /// `encoded-input-bytes` applies to both generations. Other overrides are
+    /// for generation 1.
     /// Resources are `encoded-input-bytes`, `items`, `encoded-frame-bytes`,
     /// `decoded-frame-bytes`, `decoded-blob-bytes`, `total-decoded-bytes`,
     /// `terms`, `rows`, `metadata-entries`, `diagnostics`, and `work`.

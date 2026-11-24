@@ -467,9 +467,31 @@ fn gts_v2_round_trip_preserves_dataset_and_reports_segment_loss() {
 
     let limited = path(dir, "limited.trig");
     let output = run(&["convert", "--gts-safe-read", &inferred, &limited]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(canonical_of(dir, &[&seed]), canonical_of(dir, &[&limited]));
+
+    let exact = format!("encoded-input-bytes={}", bytes.len());
+    let admitted = path(dir, "admitted.trig");
+    let output = run(&["convert", "--gts-read-limit", &exact, &inferred, &admitted]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let short = format!("encoded-input-bytes={}", bytes.len() - 1);
+    let refused = path(dir, "refused.trig");
+    let output = run(&["convert", "--gts-read-limit", &short, &inferred, &refused]);
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("the requested GTS read limits apply to generation 1"));
-    assert!(!Path::new(&limited).exists());
+    assert!(stderr(&output).contains("encoded GTS transport input requires more than"));
+    assert!(!Path::new(&refused).exists());
+
+    let output = run(&[
+        "convert",
+        "--gts-read-limit",
+        "terms=2000000",
+        &inferred,
+        &refused,
+    ]);
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("a GTS read limit override requires generation 1"));
+    assert!(!Path::new(&refused).exists());
 
     let torn = write_bytes(dir, "torn.gts", &bytes[..bytes.len() - 1]);
     let absent = path(dir, "absent.trig");

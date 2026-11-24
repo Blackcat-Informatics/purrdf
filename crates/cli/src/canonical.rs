@@ -9,11 +9,12 @@ use std::path::{Path, PathBuf};
 use purrdf_core::CanonicalizationControl;
 
 use crate::error::CliError;
+use crate::source::GtsInputLimits;
 
 pub(crate) struct Request {
     control: Option<CanonicalizationControl<'static>>,
     destination: Option<PathBuf>,
-    gts_read_limits: purrdf::gts::reader::GtsReadLimits,
+    gts_read_limits: GtsInputLimits,
     demanded: bool,
     pending_reports: std::cell::RefCell<Vec<(crate::cli::ReportTarget, String)>>,
     published_runs: std::cell::Cell<Option<usize>>,
@@ -25,7 +26,7 @@ impl Request {
             (None, None) => Ok(Self {
                 control: None,
                 destination: None,
-                gts_read_limits: purrdf::gts::reader::GtsReadLimits::UNBOUNDED,
+                gts_read_limits: GtsInputLimits::default(),
                 demanded: false,
                 pending_reports: std::cell::RefCell::new(Vec::new()),
                 published_runs: std::cell::Cell::new(None),
@@ -36,7 +37,7 @@ impl Request {
                 Ok(Self {
                     control: Some(CanonicalizationControl::new(policy, None)),
                     destination: Some(destination.to_owned()),
-                    gts_read_limits: purrdf::gts::reader::GtsReadLimits::UNBOUNDED,
+                    gts_read_limits: GtsInputLimits::default(),
                     demanded: false,
                     pending_reports: std::cell::RefCell::new(Vec::new()),
                     published_runs: std::cell::Cell::new(None),
@@ -50,12 +51,12 @@ impl Request {
     }
 
     /// Select the whole-read contract carried to the centralized GTS source seam.
-    pub(crate) const fn set_gts_read_limits(&mut self, limits: purrdf::gts::reader::GtsReadLimits) {
+    pub(crate) const fn set_gts_read_limits(&mut self, limits: GtsInputLimits) {
         self.gts_read_limits = limits;
     }
 
     /// Return the GTS input contract selected for this command invocation.
-    pub(crate) const fn gts_read_limits(&self) -> purrdf::gts::reader::GtsReadLimits {
+    pub(crate) const fn gts_read_limits(&self) -> GtsInputLimits {
         self.gts_read_limits
     }
 

@@ -51,6 +51,12 @@ WebAssembly `Dataset` exposes `fromGts` and `toGtsV2`. The corresponding C
 functions are `purrdf_from_gts` and `purrdf_to_gts_v2`. The dataset loaders
 accept both generations.
 
+Use `--gts-safe-read` for untrusted CLI inputs in either generation. This
+mode bounds raw transport bytes and decompressed input before parsing.
+`--gts-read-limit encoded-input-bytes=MAX` sets both input bounds. The
+reader applies the selected generation's parser limits, and further
+`--gts-read-limit` resource overrides apply to generation 1.
+
 ## The container model, at a high level
 
 The container model below describes generation 1.
