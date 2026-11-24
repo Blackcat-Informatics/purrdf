@@ -3,6 +3,7 @@
 
 use core::num::NonZeroU64;
 use std::borrow::Cow;
+use std::collections::TryReserveError;
 
 use super::{GraphReader, ReadError, ReadFailure, Segment, Unit, VerifiedBlob};
 use crate::FastMap;
@@ -37,6 +38,106 @@ pub struct ExternalBlob<'a> {
     pub media_type: Option<&'a str>,
 }
 
+/// The union of declarations of one blob in the file fold.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct BlobEntry<'a> {
+    /// The qualified name and smallest declared length.
+    pub name: ValueName,
+    /// Whether any declaration carries or lists the blob's bytes.
+    pub present: bool,
+    /// Distinct declared media types in deterministic CBOR order.
+    pub media_types: Vec<Cow<'a, str>>,
+}
+
+/// The rebuild outcome of one recipe or value declaration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RebuildState {
+    /// Every unit and the completed bytes verified.
+    Verified,
+    /// No verified unit of a requested digest was available.
+    MissingUnit,
+    /// A verified unit had the wrong length.
+    BlobLength,
+    /// The completed bytes disagreed with the declared digest.
+    BlobDigest,
+    /// The read's total rebuild budget refused the declaration.
+    Refused {
+        /// The admitted total plus this declaration's length, saturated at `u64::MAX`.
+        count: u64,
+    },
+}
+
+/// The location and outcome of one recipe or value rebuild.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RebuildResult {
+    /// File offset of the frame containing the declaration.
+    pub offset: usize,
+    /// Zero-based position in the pack directory, if any.
+    pub member: Option<usize>,
+    /// Declared digest and length.
+    pub name: ValueName,
+    /// Result of checking and rebuilding the declaration.
+    pub state: RebuildState,
+}
+
+impl purrdf_hash::error::StructuredError for RebuildResult {
+    purrdf_hash::error_visit! {
+        @record self { offset, member, name, state } => "gts-v2-rebuild-result" {
+            "offset" => Unsigned(self.offset as u128),
+            "member" => Value(self.member.map_or(purrdf_hash::error::ErrorValue::Absent,
+                |member| purrdf_hash::error::ErrorValue::Unsigned(member as u128))),
+            "name" => Record(&self.name),
+            "state" => Record(&self.state),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for RebuildState {
+    purrdf_hash::error_visit! {
+        Verified => "gts-v2-rebuild-verified" {},
+        MissingUnit => "gts-v2-rebuild-missing-unit" {},
+        BlobLength => "gts-v2-rebuild-blob-length" {},
+        BlobDigest => "gts-v2-rebuild-blob-digest" {},
+        Refused { count } => "gts-v2-rebuild-refused" { "count" => ByteCount(u128::from(*count)) },
+    }
+}
+
+pub(super) struct RebuildBudget {
+    remaining: Option<u64>,
+    admitted: u64,
+}
+
+impl RebuildBudget {
+    pub(super) const fn new(limit: u64) -> Self {
+        Self {
+            remaining: Some(limit),
+            admitted: 0,
+        }
+    }
+
+    fn charge(&mut self, length: u64) -> Result<(), u64> {
+        self.remaining = self
+            .remaining
+            .and_then(|remaining| remaining.checked_sub(length));
+        let total = self.admitted.saturating_add(length);
+        if self.remaining.is_none() {
+            return Err(total);
+        }
+        self.admitted = total;
+        Ok(())
+    }
+}
+
+pub(super) struct BlobClaim<'a> {
+    name: ValueName,
+    present: bool,
+    media_type: Option<Cow<'a, str>>,
+    offset: usize,
+}
+
 #[derive(Clone, Copy)]
 enum UnitKind<M> {
     Chunk,
@@ -59,15 +160,6 @@ impl<'a> UnitDeclaration<'a> {
             UnitKind::Chunk
         };
         Ok(Self { digest, kind })
-    }
-
-    fn verify(self, bytes: &[u8]) -> Result<ValueName, ReadFailure> {
-        let name = ValueName::of(bytes);
-        if name.digest == self.digest {
-            Ok(name)
-        } else {
-            Err(ReadFailure::BlobDigest)
-        }
     }
 }
 
@@ -163,7 +255,20 @@ impl<'a> GraphReader<'a, '_> {
         match kind {
             FrameType::Chunk | FrameType::Blob => {
                 let declared = UnitDeclaration::read(&mut content, kind == FrameType::Blob)?;
-                let name = declared.verify(&bytes)?;
+                if let UnitKind::Blob(media_type) = declared.kind {
+                    self.claim_blob(
+                        ValueName {
+                            digest: declared.digest,
+                            length: bytes.len() as u64,
+                        },
+                        true,
+                        media_type.map(Cow::Borrowed),
+                        location.0,
+                    )?;
+                }
+                let Some(name) = self.verify_blob_unit(declared, &bytes, location.0)? else {
+                    return Ok(());
+                };
                 let media = match declared.kind {
                     UnitKind::Chunk => UnitKind::Chunk,
                     UnitKind::Blob(media) => UnitKind::Blob(media.map(Cow::Borrowed)),
@@ -179,7 +284,7 @@ impl<'a> GraphReader<'a, '_> {
                     &entries,
                     segment,
                     |_| None,
-                    location.0,
+                    (location.0, None),
                 )?;
             }
             FrameType::Pack => match bytes {
@@ -192,16 +297,91 @@ impl<'a> GraphReader<'a, '_> {
                     self.read_pack(content, &bytes, location, segment, copy_unit)?;
                 }
             },
-            FrameType::External => self.external(content, segment.registry)?,
+            FrameType::External => self.external(content, segment.registry, location.0)?,
             _ => return Err(ReadFailure::Frame(kind)),
         }
         Ok(())
+    }
+
+    fn claim_blob(
+        &mut self,
+        name: ValueName,
+        present: bool,
+        media_type: Option<Cow<'a, str>>,
+        offset: usize,
+    ) -> Result<(), TryReserveError> {
+        push(
+            &mut self.blob_claims,
+            BlobClaim {
+                name,
+                present,
+                media_type,
+                offset,
+            },
+        )
+    }
+
+    pub(super) fn fold_blob_claims(&mut self) -> Result<(), TryReserveError> {
+        self.blob_claims
+            .sort_unstable_by_key(|claim| (claim.name.digest, claim.name.length));
+        for claim in self.blob_claims.drain(..) {
+            let set = &mut self.graph.blob_set;
+            if set
+                .last()
+                .is_none_or(|entry| entry.name.digest != claim.name.digest)
+            {
+                push(
+                    set,
+                    BlobEntry {
+                        name: claim.name,
+                        present: false,
+                        media_types: Vec::new(),
+                    },
+                )?;
+            }
+            let entry = set
+                .last_mut()
+                .expect("each claim belongs to the current entry");
+            entry.present |= claim.present;
+            if claim.name.length != entry.name.length {
+                push(&mut self.graph.blob_length_conflicts, claim.offset)?;
+            }
+            if let Some(media_type) = claim.media_type {
+                push(&mut entry.media_types, media_type)?;
+            }
+        }
+        for entry in &mut self.graph.blob_set {
+            // Canonical CBOR text headers compare by byte length before text.
+            entry
+                .media_types
+                .sort_unstable_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+            entry.media_types.dedup();
+        }
+        self.graph.blob_length_conflicts.sort_unstable();
+        Ok(())
+    }
+
+    fn verify_blob_unit(
+        &mut self,
+        unit: UnitDeclaration<'_>,
+        bytes: &[u8],
+        offset: usize,
+    ) -> Result<Option<ValueName>, ReadFailure> {
+        let name = ValueName::of(bytes);
+        if name.digest == unit.digest {
+            Ok(Some(name))
+        } else {
+            self.graph
+                .retain_content_failure(offset, ReadFailure::BlobDigest)?;
+            Ok(None)
+        }
     }
 
     fn external(
         &mut self,
         mut content: Fields<'a>,
         registry: NonZeroU64,
+        offset: usize,
     ) -> Result<(), ReadFailure> {
         content.record(3)?;
         content.record(2)?;
@@ -209,12 +389,11 @@ impl<'a> GraphReader<'a, '_> {
         let digest = *content.fixed_bytes()?;
         let length = content.uint()?;
         let media_type = content.option(Fields::text)?;
+        let name = ValueName { digest, length };
+        self.claim_blob(name, false, media_type.map(Cow::Borrowed), offset)?;
         push(
             &mut self.graph.external_blobs,
-            ExternalBlob {
-                name: ValueName { digest, length },
-                media_type,
-            },
+            ExternalBlob { name, media_type },
         )?;
         Ok(())
     }
@@ -247,18 +426,11 @@ impl<'a> GraphReader<'a, '_> {
     }
 
     fn rebuild<'p>(
-        &mut self,
-        name: ValueName,
+        &self,
         entries: &[Entry],
         segment: &Segment<'a>,
         pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
     ) -> Result<Vec<u8>, ReadFailure> {
-        self.rebuilt_remaining = self
-            .rebuilt_remaining
-            .and_then(|remaining| remaining.checked_sub(name.length));
-        if self.rebuilt_remaining.is_none() {
-            return Err(ReadFailure::RebuildCapacity(name));
-        }
         let mut output = Vec::new();
         for &(entry, _) in entries {
             let bytes = match segment.units.get(&entry.digest) {
@@ -282,20 +454,39 @@ impl<'a> GraphReader<'a, '_> {
         entries: &[Entry],
         segment: &Segment<'a>,
         pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
-        offset: usize,
+        (offset, member): (usize, Option<usize>),
     ) -> Result<(), ReadFailure> {
         let is_value = matches!(kind, RecipeKind::Value);
-        let result = self
-            .rebuild(name, entries, segment, pack_unit)
-            .and_then(|bytes| self.store_rebuild(name, kind, bytes));
-        match result {
-            Err(
-                failure @ (ReadFailure::RebuildCapacity(_)
-                | ReadFailure::MissingUnit(_)
-                | ReadFailure::UnitLength(_)
-                | ReadFailure::BlobDigest
-                | ReadFailure::Fold(FoldError::ValueClaim { .. })),
-            ) => {
+        if let RecipeKind::Blob(media_type) = &kind {
+            let media_type = match media_type {
+                Some(Cow::Borrowed(text)) => Some(Cow::Borrowed(*text)),
+                Some(Cow::Owned(text)) => Some(copy_text(text)?),
+                None => None,
+            };
+            self.claim_blob(name, true, media_type, offset)?;
+        }
+        let refused = self.rebuilt.charge(name.length).err();
+        let result = match refused {
+            Some(_) => Err(ReadFailure::RebuildCapacity(name)),
+            None => self
+                .rebuild(entries, segment, pack_unit)
+                .and_then(|bytes| self.store_rebuild(name, kind, bytes)),
+        };
+        let state = match result {
+            Ok(()) => RebuildState::Verified,
+            Err(failure) => {
+                let state = match (&failure, refused) {
+                    (ReadFailure::RebuildCapacity(_), Some(count)) => {
+                        RebuildState::Refused { count }
+                    }
+                    (ReadFailure::MissingUnit(_), _) => RebuildState::MissingUnit,
+                    (ReadFailure::UnitLength(_), _) => RebuildState::BlobLength,
+                    (
+                        ReadFailure::BlobDigest | ReadFailure::Fold(FoldError::ValueClaim { .. }),
+                        _,
+                    ) => RebuildState::BlobDigest,
+                    _ => return Err(failure),
+                };
                 if is_value {
                     // The declaration remains a candidate for later terms.
                     self.values.record(name, None).map_err(ReadFailure::Fold)?;
@@ -306,10 +497,19 @@ impl<'a> GraphReader<'a, '_> {
                     &mut self.graph.frame_failures,
                     ReadError { offset, failure },
                 )?;
-                Ok(())
+                state
             }
-            result => result,
-        }
+        };
+        push(
+            &mut self.graph.rebuilds,
+            RebuildResult {
+                offset,
+                member,
+                name,
+                state,
+            },
+        )?;
+        Ok(())
     }
 
     fn store_rebuild(
@@ -356,20 +556,35 @@ impl<'a> GraphReader<'a, '_> {
         if pack.unit_length != u128::from(unit_length) {
             return Err(WireError::new(MalformedReason::InconsistentCounts, length_offset).into());
         }
-        let members = pack.members()?;
+        let mut members = pack.members()?;
         let mut units = FastMap::default();
-        for (member_index, member) in members.iter().enumerate() {
+        for (member_index, member) in members.iter_mut().enumerate() {
             if let Member::Unit(unit, bytes) = member {
-                unit.verify(bytes)?;
                 segment
                     .index_content
                     .record_unit(unit.digest, position, member_index)?;
-                units.try_reserve(1)?;
-                units.entry(unit.digest).or_insert(*bytes);
+                if let UnitKind::Blob(media_type) = unit.kind {
+                    self.claim_blob(
+                        ValueName {
+                            digest: unit.digest,
+                            length: bytes.len() as u64,
+                        },
+                        true,
+                        media_type.map(copy_text).transpose()?,
+                        offset,
+                    )?;
+                }
+                if self.verify_blob_unit(*unit, bytes, offset)?.is_some() {
+                    units.try_reserve(1)?;
+                    units.entry(unit.digest).or_insert(*bytes);
+                } else {
+                    *member = Member::DamagedUnit;
+                }
             }
         }
-        for member in members {
+        for (member_index, member) in members.into_iter().enumerate() {
             match member {
+                Member::DamagedUnit => {}
                 Member::Unit(unit, bytes) => {
                     let kind = match unit.kind {
                         UnitKind::Chunk if segment.units.contains_key(&unit.digest) => continue,
@@ -389,7 +604,7 @@ impl<'a> GraphReader<'a, '_> {
                         &entries,
                         segment,
                         |id| units.get(id).copied(),
-                        offset,
+                        (offset, Some(member_index)),
                     )?;
                 }
             }
@@ -412,6 +627,7 @@ struct DirectoryEntry<'a> {
 
 enum Member<'a> {
     Unit(UnitDeclaration<'a>, &'a [u8]),
+    DamagedUnit,
     Recipe(RecipeDeclaration<'a>, Vec<Entry>),
 }
 

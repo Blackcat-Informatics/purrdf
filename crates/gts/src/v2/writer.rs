@@ -372,8 +372,74 @@ impl<W: Write> Write for HashingWriter<'_, W> {
 
 #[cfg(test)]
 mod tests {
-    use super::{SegmentWriteError, SegmentWriter};
+    use std::io::Write;
+
+    use super::{FrameType, SegmentWriteError, SegmentWriter, head};
     use crate::v2::rdf::unit_digest;
+    use crate::v2::{
+        ContentError, MalformedReason, RdfFold, ReadCapacity, ReadFailure, ReadGraph, Term, read,
+    };
+
+    #[test]
+    fn annotations_compare_written_references_before_rebuilding_values() {
+        let digest = unit_digest(b"x");
+        for kind in [5, 7] {
+            for second_length in [1, 2] {
+                let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+                let mut fold = RdfFold::default();
+                fold.intern_term(Term::Iri("http://example.org/p".into()))
+                    .unwrap();
+                writer.add_rdf(&fold).unwrap();
+
+                // One block of two references with the same digest. Neither
+                // value is declared. For lexical references, both forms
+                // select the same datatype IRI.
+                let block = if kind == 5 { 0x86 } else { 0x83 };
+                let mut payload = vec![0x82, 0x81, block, kind, 0x82];
+                for _ in 0..2 {
+                    head::write_bytes(&mut payload, &digest).unwrap();
+                }
+                payload.extend_from_slice(&[0x82, 1, second_length]);
+                if kind == 5 {
+                    payload.extend_from_slice(&[0x82, 1, 1, 0x82, 0, 0, 0x80]);
+                }
+                payload.push(0x80);
+                writer
+                    .append(FrameType::Terms, &payload, |output| {
+                        output.write_all(&[0x84, 1, 0x81, 0x82, kind, 2, 2, 1])
+                    })
+                    .unwrap();
+
+                // Two rows in the default graph. The object IDs differ and
+                // every other column is the same.
+                let rows = [
+                    0x85, 0x81, 0x82, 0x81, 1, 2, 0x82, 0, 0, 0x82, 0, 0, 0x82, 1, 1, 0x82, 1, 0,
+                ];
+                writer
+                    .append(FrameType::Annotations, &rows, |output| {
+                        output.write_all(&[0x82, 2, 2])
+                    })
+                    .unwrap();
+                writer.add_commit().unwrap();
+                let bytes = writer.into_inner();
+                let ReadGraph::Second(graph) = read(&bytes, ReadCapacity::default()).unwrap()
+                else {
+                    panic!("the writer emits generation 2");
+                };
+                let duplicate = second_length == 1;
+                assert_eq!(graph.left_out, u64::from(duplicate));
+                assert_eq!(graph.rdf.has_held_rows(), !duplicate);
+                assert_eq!(
+                    graph.frame_failures.iter().any(|finding| matches!(
+                        finding.failure,
+                        ReadFailure::Content(ContentError::Malformed(wire))
+                            if wire.reason == MalformedReason::UnorderedOrRepeated
+                    )),
+                    duplicate
+                );
+            }
+        }
+    }
 
     #[test]
     fn parity_writer_matches_the_two_span_placement_vector() {

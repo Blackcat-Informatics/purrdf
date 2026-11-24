@@ -11,8 +11,9 @@ use purrdf_gts::v2::{
     SignatureUnverified, SignatureWriteError, append_cosigned_commit, read,
     read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
-use purrdf_hash::hex;
+use purrdf_hash::{error::ErrorValue, hex};
 use purrdf_lex::{cbor, json};
+use purrdf_testkit::error_capture::Capture;
 
 macro_rules! fixture {
     ($name:literal, $status:expr) => {
@@ -358,6 +359,27 @@ fn a_cosigner_leaves_torn_and_undelimitable_files_and_resync_scopes_untouched() 
     assert_eq!(file, intact.as_slice());
     append_cosigned_commit(&mut file, &signers).unwrap();
     assert!(file.len() > intact.len());
+
+    let mut unsupported = intact.to_vec();
+    assert_eq!(unsupported[2], 2);
+    unsupported[2] = 3;
+    let mut file = unsupported.clone();
+    let error = append_cosigned_commit(&mut file, &signers).unwrap_err();
+    let generation = Capture::read(&error).child("generation");
+    assert_eq!(generation.code, "unsupported_generation");
+    assert!(matches!(generation.field("code"), ErrorValue::Unsigned(3)));
+    assert_eq!(file, unsupported);
+
+    let incomplete = include_bytes!("fixtures/v2/P7/end-frame-no-effective-identifier.bin");
+    let mut file = incomplete.to_vec();
+    append_cosigned_commit(&mut file, &signers).unwrap();
+    assert_eq!(&file[..incomplete.len()], incomplete);
+    let ReadGraph::Second(graph) = read(&file, ReadCapacity::default()).unwrap() else {
+        panic!("a complete ordinary range can be signed");
+    };
+    assert_eq!(graph.invalid_commits, []);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+    assert!(!graph.frame_failures.is_empty());
 }
 
 #[test]

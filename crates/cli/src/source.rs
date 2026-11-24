@@ -660,7 +660,7 @@ pub(crate) fn load_gts(
             )));
         }
         let read = purrdf::gts::v2::read_with_limits(&bytes, ReadLimits::default())
-            .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
+            .map_err(|cause| CliError::gts_input(source, cause))?;
         let ReadGraph::Second(graph) = read else {
             return Err(CliError::Runtime(format!(
                 "{source}: the GTS opener did not select the generation 2 reader"
@@ -669,9 +669,9 @@ pub(crate) fn load_gts(
         let mut ledger = gts_v2_loss_ledger(&graph, source);
         let fold = graph
             .into_complete_rdf()
-            .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
+            .map_err(|cause| CliError::gts_input(source, cause))?;
         let (dataset, losses) = dataset_from_gts_v2_fold_with_losses(&fold)
-            .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
+            .map_err(|cause| CliError::gts_input(source, cause))?;
         for entry in losses.entries() {
             ledger.record(entry.clone());
         }

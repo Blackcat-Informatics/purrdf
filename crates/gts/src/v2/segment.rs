@@ -226,6 +226,12 @@ impl SegmentVerifier {
         Some(result)
     }
 
+    pub(super) fn omit_row_order(&mut self, frame: &SegmentFrame<'_>) {
+        if let Some((slot, _)) = frame.row_order {
+            self.last_rows[slot] = None;
+        }
+    }
+
     /// Verify a framed item and advance the ordinary prefix.
     ///
     /// Supply a witness only when the immediately following item is a frame

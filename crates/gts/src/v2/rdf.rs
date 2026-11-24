@@ -13,7 +13,7 @@ pub(super) use dictionary::RowScope;
 pub use dictionary::{DefinitionFindings, RowDisposition, RowFindings, SegmentDictionary};
 pub use lines::{Line, RdfFold};
 pub use terms::{LiteralDirection, LiteralValue, Term, TermId};
-pub(super) use values::unit_digest;
+pub(super) use values::{UNIT_CONTEXT, unit_digest};
 pub use values::{ValueName, ValueStore};
 
 /// A resource refusal or inconsistent input supplied to the RDF fold.

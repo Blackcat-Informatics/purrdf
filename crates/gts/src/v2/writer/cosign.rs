@@ -102,7 +102,7 @@ impl std::error::Error for CoSignError {
 impl purrdf_hash::error::StructuredError for CoSignError {
     purrdf_hash::error_visit! {
         Empty => "gts-v2-cosign-empty" {},
-        Generation(_generation) => "gts-v2-cosign-generation" {},
+        Generation(generation) => "gts-v2-cosign-generation" { "generation" => Record(generation) },
         Framing { offset, cause } => "gts-v2-cosign-framing" {
             "offset" => Unsigned(*offset as u128), "cause" => Cause(cause),
         },

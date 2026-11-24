@@ -74,7 +74,7 @@ impl purrdf_hash::error::StructuredError for SignatureWriteError {
         Preparation(cause) => "gts-v2-signature-preparation" { "cause" => Cause(cause) },
         Signing(cause) => "gts-v2-signing-operation" { "cause" => Cause(cause) },
         Verification(cause) => "gts-v2-signature-check-operation" { "cause" => Cause(cause) },
-        Rejected(_status) => "gts-v2-signature-self-check" {},
+        Rejected(status) => "gts-v2-signature-self-check" { "status" => Record(status) },
     }
 }
 
@@ -258,4 +258,92 @@ fn prepare_signatures(
         signer.sign(header, frame, &mut output)?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use purrdf_ed25519::SigningKey;
+    use purrdf_testkit::error_capture::Capture;
+
+    use crate::v2::{Item, ReadCapacity, ReadGraph, read_with_signature_inputs};
+
+    use super::{
+        Buffer, HeldKey, SegmentWriter, SignatureInputs, SignatureStatus, Signer, SigningKeyRef,
+        head,
+    };
+
+    #[test]
+    fn a_failed_self_check_exposes_its_native_status_before_writing() {
+        let key = SigningKey::from_bytes(&[7; 32]);
+        let signer = Signer::from_key(SigningKeyRef::Ed25519(&key));
+        let header = [1; 32];
+        let frame = [2; 32];
+        let mut bytes = Buffer::default();
+        let error = signer
+            .verify_record(
+                &header,
+                &frame,
+                key.verifying_key().as_bytes(),
+                &[0; 63],
+                &mut bytes,
+            )
+            .unwrap_err();
+        let status = Capture::read(&error).child("status");
+        assert_eq!(status.code, "gts-v2-signature-invalid");
+        assert_eq!(status.child("reason").code, "gts-v2-signature-value-length");
+        assert!(bytes.0.is_empty());
+        signer.sign(&header, &frame, &mut bytes).unwrap();
+        assert!(!bytes.0.is_empty());
+    }
+
+    #[test]
+    fn an_unidentified_item_preserves_non_commit_signature_coverage() {
+        let key = SigningKey::from_bytes(&[9; 32]);
+        let signer = Signer::from_key(SigningKeyRef::Ed25519(&key));
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"first", None).unwrap();
+        let second = writer.sink.len();
+        writer.add_blob(b"second", None).unwrap();
+        let mut signatures = Buffer::default();
+        head::write_head(&mut signatures, head::ARRAY, 1).unwrap();
+        signer
+            .sign(&writer.opener, writer.head().unwrap(), &mut signatures)
+            .unwrap();
+        let mut bytes = writer.into_inner();
+        assert_eq!(bytes.pop(), Some(0x80));
+        bytes.extend_from_slice(&signatures.0);
+
+        let mut remaining =
+            include_bytes!("../../../tests/fixtures/v2/P7/end-frame-no-effective-identifier.bin")
+                .as_slice();
+        let malformed = loop {
+            let item = Item::first(remaining).unwrap().unwrap();
+            if remaining.len() == item.bytes().len() {
+                break item.bytes();
+            }
+            remaining = &remaining[item.bytes().len()..];
+        };
+        let with_malformed = [&bytes[..second], malformed, &bytes[second..]].concat();
+        let public = key.verifying_key().to_bytes();
+        let inputs = SignatureInputs::new(
+            vec![signer.key_id],
+            vec![HeldKey {
+                algorithm: signer.algorithm,
+                key_id: signer.key_id,
+                public_key: &public,
+            }],
+        );
+        for input in [bytes.as_slice(), with_malformed.as_slice()] {
+            let ReadGraph::Second(graph) =
+                read_with_signature_inputs(input, ReadCapacity::default(), &inputs).unwrap()
+            else {
+                panic!("expected a generation 2 dataset");
+            };
+            let signature = graph.signatures[0].checks[0];
+            assert_eq!(signature.status, SignatureStatus::Valid);
+            assert!(signature.authenticated);
+            assert_eq!((signature.coverage_first, signature.coverage_end), (0, 2));
+            assert_eq!(graph.segment_authentication[0].authenticated_frames, 2);
+        }
+    }
 }

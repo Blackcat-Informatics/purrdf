@@ -184,6 +184,31 @@ pub enum SignatureStatus {
     Unverified(SignatureUnverified),
 }
 
+impl purrdf_hash::error::StructuredError for SignatureStatus {
+    purrdf_hash::error_visit! {
+        Valid => "gts-v2-signature-valid" {},
+        Invalid(reason) => "gts-v2-signature-invalid" { "reason" => Record(reason) },
+        Unverified(reason) => "gts-v2-signature-unverified" { "reason" => Record(reason) },
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SignatureInvalid {
+    purrdf_hash::error_visit! {
+        KeyMismatch => "gts-v2-signature-key-mismatch" {},
+        ValueLength => "gts-v2-signature-value-length" {},
+        Ed25519(cause) => "gts-v2-signature-ed25519" { "cause" => Cause(cause) },
+        CompositeClassical => "gts-v2-signature-composite-classical" {},
+        CompositePostQuantum => "gts-v2-signature-composite-post-quantum" {},
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SignatureUnverified {
+    purrdf_hash::error_visit! {
+        UnknownAlgorithm => "gts-v2-signature-unknown-algorithm" {},
+        KeyNotHeld => "gts-v2-signature-key-not-held" {},
+    }
+}
+
 /// The verification, coverage and authentication of one frame signature.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
