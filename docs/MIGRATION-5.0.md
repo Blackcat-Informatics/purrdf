@@ -134,11 +134,12 @@ the identifiers of their components and never expands a term that holds
 another. The lowered set of a chain of `n` nested statements is linear: one
 record of bounded size for each nested term. The bytes of leaf components are
 copied and hashed once for each distinct nested term they stand in, so a long
-leaf shared by every term of a chain is processed once per term. The labelling
-of the lowered chain has a linear walk, linear allocations and linear retained
-bytes, and the bytes it requests from the allocator and the instructions it
-executes grow quadratically in the labelling engine (the design document records the
-measurements at 1,000, 10,000 and 100,000 terms).
+leaf shared by every term of a chain is processed once per term. In the PurRDF
+5.0.1 benchmark, `label_view` requests 10,103,054 bytes for a chain of 1,000
+statements and 101,931,990 bytes for 10,000 statements. The allocator requests,
+walk units, allocation counts, retained bytes and peak working bytes all grow
+approximately tenfold between those sizes. The retired instruction counts
+cover the same two sizes. [Canonical labelling design](design/purrdf-canonical-labelling.md#36-nested-triple-terms-and-term-nodes)
 
 RDF 1.2 nests a triple term only in the object of another. A dataset refuses any
 other nesting when it is frozen, and the lowering refuses a triple term as the
