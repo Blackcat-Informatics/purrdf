@@ -1008,11 +1008,16 @@ pub fn validate_with_shapes_product_with_xpath_regex(
             options,
         )?);
     };
-    let prepared = match expected_identity {
-        None => admit_shapes_product(product),
-        Some(expected) => admit_shapes_product_expecting(product, expected),
-    }
-    .map_err(ShapesProductRefusal::from)?;
+    let prepared = if options.validation.recursion.is_some() {
+        restore_shapes_product_with_options(product, &options.validation, expected_identity, false)
+            .map_err(request_refusal)?
+    } else {
+        match expected_identity {
+            None => admit_shapes_product(product),
+            Some(expected) => admit_shapes_product_expecting(product, expected),
+        }
+        .map_err(ShapesProductRefusal::from)?
+    };
     validate_prepared_with_xpath_regex(prepared, data_nt, options, profile)
 }
 
@@ -1039,11 +1044,16 @@ pub fn validate_with_rebuilt_shapes_product_with_xpath_regex(
             options,
         )?);
     };
-    let prepared = match expected_identity {
-        None => rebuild_shapes_product(product),
-        Some(expected) => rebuild_shapes_product_expecting(product, expected),
-    }
-    .map_err(ShapesProductRefusal::from)?;
+    let prepared = if options.validation.recursion.is_some() {
+        restore_shapes_product_with_options(product, &options.validation, expected_identity, true)
+            .map_err(request_refusal)?
+    } else {
+        match expected_identity {
+            None => rebuild_shapes_product(product),
+            Some(expected) => rebuild_shapes_product_expecting(product, expected),
+        }
+        .map_err(ShapesProductRefusal::from)?
+    };
     validate_prepared_with_xpath_regex(prepared, data_nt, options, profile)
 }
 

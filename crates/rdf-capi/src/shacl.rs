@@ -2045,6 +2045,15 @@ fn product_error(refusal: &ShapesProductRefusal) -> PurrdfError {
     if let Some(error) = refusal.import_error() {
         return PurrdfError::shapes_import(error);
     }
+    if let ShapesProductRefusal::Shapes(error @ ShapesError::Recursion(_)) = refusal {
+        let diagnostic =
+            purrdf_validate::native_error::diagnostic("shapes-refused", error.clone(), None);
+        return PurrdfError::from_owned_diagnostic_with_message(
+            PurrdfStatus::ShapesProductError,
+            diagnostic,
+            &refusal.to_string(),
+        );
+    }
     PurrdfError::product(refusal.dimension_label(), refusal.to_string()).retaining_cause(refusal)
 }
 
@@ -2137,6 +2146,94 @@ pub unsafe extern "C" fn purrdf_shapes_product_encode(
     out_canonicalization_json: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
+    // SAFETY: The caller guarantees the document, cancellation and output pointer contracts.
+    unsafe {
+        product_encode_entry(
+            "purrdf_shapes_product_encode",
+            shapes_ttl,
+            shapes_base_iri,
+            shapes_graph_iri,
+            import_iris,
+            import_documents,
+            import_count,
+            None,
+            out_buffer,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            out_error,
+        )
+    }
+}
+
+/// Encode a prepared product with the fixed-point request from
+/// [`purrdf_shacl_validate_to_sarif_with_recursion`].
+/// The product records the shapes, while validation supplies its own request.
+///
+/// # Safety
+/// As [`purrdf_shapes_product_encode`]. The mode must be null or a live,
+/// NUL-terminated UTF-8 string. Each limit must be null or point to a live,
+/// aligned and readable `uint64_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_encode_with_recursion(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    recursion_mode: *const c_char,
+    recursion_max_pairs: *const u64,
+    recursion_max_iterations: *const u64,
+    out_buffer: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    // SAFETY: The caller guarantees the document, request and output pointer contracts.
+    unsafe {
+        product_encode_entry(
+            "purrdf_shapes_product_encode_with_recursion",
+            shapes_ttl,
+            shapes_base_iri,
+            shapes_graph_iri,
+            import_iris,
+            import_documents,
+            import_count,
+            Some(RecursionRequest {
+                mode: recursion_mode,
+                max_pairs: recursion_max_pairs,
+                max_iterations: recursion_max_iterations,
+            }),
+            out_buffer,
+            canonical_search,
+            cancellation,
+            out_canonicalization_json,
+            out_error,
+        )
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the C entry points' inputs and outputs, passed through unchanged"
+)]
+unsafe fn product_encode_entry(
+    entry: &str,
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    recursion: Option<RecursionRequest>,
+    out_buffer: *mut *mut PurrdfBuffer,
+    canonical_search: *const c_char,
+    cancellation: *const crate::governor::PurrdfCancellation,
+    out_canonicalization_json: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
     unsafe {
         ffi_canonical_try!(
             out_error,
@@ -2149,20 +2246,22 @@ pub unsafe extern "C" fn purrdf_shapes_product_encode(
                 if shapes_ttl.is_null() || out_buffer.is_null() {
                     return Err(PurrdfError::new(
                         PurrdfStatus::NullPointer,
-                        "null pointer argument to purrdf_shapes_product_encode",
+                        format!("null pointer argument to {entry}"),
                     ));
                 }
                 let shapes = cstr_to_str(shapes_ttl)?;
                 let base = opt_cstr_to_str(shapes_base_iri)?;
-                let imports = import_pairs(
-                    import_iris,
-                    import_documents,
-                    import_count,
-                    "purrdf_shapes_product_encode",
-                )?;
+                let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
                 let graph = opt_cstr_to_str(shapes_graph_iri)?;
-                let bytes = encode_product_bytes(shapes, base, graph, &imports, control)
-                    .map_err(|refusal| product_error(&refusal))?;
+                let bytes = if let Some(recursion) = RecursionRequest::decode(recursion)? {
+                    let options = ValidationOptions::default().with_recursion(recursion);
+                    purrdf_validate::pack_shapes_product_with_options(
+                        shapes, base, graph, &imports, &options, control,
+                    )
+                } else {
+                    encode_product_bytes(shapes, base, graph, &imports, control)
+                }
+                .map_err(|refusal| product_error(&refusal))?;
                 *out_buffer = into_handle(PurrdfBuffer::from(bytes));
                 Ok(PurrdfStatus::Ok)
             }
@@ -2263,6 +2362,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit(
                 data_nt,
                 None,
                 std::ptr::null(),
+                None,
                 out_buffer,
             )
         })
@@ -2301,6 +2401,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit_xpath_regex(
                 data_nt,
                 None,
                 regex_profile,
+                None,
                 out_buffer,
             )
         })
@@ -2316,7 +2417,60 @@ enum Restore {
     Rebuild,
 }
 
-/// The one body of the eight product-validation entry points: admit or rebuild, with
+/// Validate a prepared product with the fixed-point request from
+/// [`purrdf_shacl_validate_to_sarif_with_recursion`].
+/// Set `rebuild` to derive preparation from the carried shapes graph.
+/// Supply an expected identity to bind validation to that product. A null
+/// expected identity leaves this check unspecified. The XPath law follows
+/// [`purrdf_shapes_product_admit_xpath_regex`].
+///
+/// # Safety
+/// As [`purrdf_shapes_product_admit`]. Each string pointer specific to this
+/// entry must be null or a live, NUL-terminated UTF-8 string. Each limit
+/// must be null or point to a live, aligned and readable `uint64_t`. The
+/// report and error output slots must be distinct.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shapes_product_validate_with_recursion(
+    product: *const u8,
+    product_len: usize,
+    data_nt: *const c_char,
+    rebuild: bool,
+    expect_identity: *const c_char,
+    regex_profile: *const c_char,
+    recursion_mode: *const c_char,
+    recursion_max_pairs: *const u64,
+    recursion_max_iterations: *const u64,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    let restore = if rebuild {
+        Restore::Rebuild
+    } else {
+        Restore::Admit
+    };
+    // SAFETY: The caller guarantees every document, request and output pointer contract.
+    unsafe {
+        ffi_try!(out_error, {
+            product_entry(
+                "purrdf_shapes_product_validate_with_recursion",
+                restore,
+                product,
+                product_len,
+                data_nt,
+                (!expect_identity.is_null()).then_some(expect_identity),
+                regex_profile,
+                Some(RecursionRequest {
+                    mode: recursion_mode,
+                    max_pairs: recursion_max_pairs,
+                    max_iterations: recursion_max_iterations,
+                }),
+                out_buffer,
+            )
+        })
+    }
+}
+
+/// The one body of the product-validation entry points: admit or rebuild, with
 /// or without an expected identity (`expect_identity` is `None` for the entry points
 /// that take none), and under the compatibility regular expressions (null
 /// `regex_profile`) or a dated XPath law.
@@ -2332,6 +2486,7 @@ unsafe fn product_entry(
     data_nt: *const c_char,
     expect_identity: Option<*const c_char>,
     regex_profile: *const c_char,
+    recursion: Option<RecursionRequest>,
     out_buffer: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     unsafe {
@@ -2354,8 +2509,9 @@ unsafe fn product_entry(
             None => None,
         };
         let regex = decode_regex_profile(regex_profile)?;
-        let sarif = match regex {
-            None => match (restore, &expected) {
+        let recursion = RecursionRequest::decode(recursion)?;
+        let sarif = match (regex, recursion) {
+            (None, None) => match (restore, &expected) {
                 (Restore::Admit, None) => admit_product_bytes(bytes, data),
                 (Restore::Admit, Some(expected)) => {
                     admit_product_bytes_expecting(bytes, data, expected)
@@ -2366,8 +2522,11 @@ unsafe fn product_entry(
                 }
             }
             .map_err(|refusal| product_error(&refusal))?,
-            Some(profile) => {
-                let options = SarifOptions::default();
+            (regex, recursion) => {
+                let mut options = SarifOptions::default();
+                if let Some(recursion) = recursion {
+                    options.validation = options.validation.with_recursion(recursion);
+                }
                 match restore {
                     Restore::Admit => {
                         purrdf_validate::validate_with_shapes_product_with_xpath_regex(
@@ -2375,7 +2534,7 @@ unsafe fn product_entry(
                             data,
                             expected.as_ref(),
                             &options,
-                            Some(profile),
+                            regex,
                         )
                     }
                     Restore::Rebuild => {
@@ -2384,7 +2543,7 @@ unsafe fn product_entry(
                             data,
                             expected.as_ref(),
                             &options,
-                            Some(profile),
+                            regex,
                         )
                     }
                 }
@@ -2472,6 +2631,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit_expecting(
                 data_nt,
                 Some(expect_identity),
                 std::ptr::null(),
+                None,
                 out_buffer,
             )
         })
@@ -2506,6 +2666,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_admit_expecting_xpath_regex(
                 data_nt,
                 Some(expect_identity),
                 regex_profile,
+                None,
                 out_buffer,
             )
         })
@@ -2568,6 +2729,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild(
                 data_nt,
                 None,
                 std::ptr::null(),
+                None,
                 out_buffer,
             )
         })
@@ -2600,6 +2762,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_xpath_regex(
                 data_nt,
                 None,
                 regex_profile,
+                None,
                 out_buffer,
             )
         })
@@ -2674,6 +2837,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting(
                 data_nt,
                 Some(expect_identity),
                 std::ptr::null(),
+                None,
                 out_buffer,
             )
         })
@@ -2708,6 +2872,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_rebuild_expecting_xpath_regex(
                 data_nt,
                 Some(expect_identity),
                 regex_profile,
+                None,
                 out_buffer,
             )
         })
