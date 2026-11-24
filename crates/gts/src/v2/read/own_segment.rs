@@ -113,13 +113,10 @@ pub(in crate::v2) struct OwnSegment<'a> {
 
 impl<'a> OwnSegment<'a> {
     pub(in crate::v2) fn input(&self, original: &RdfGraph<'a>) -> Option<(usize, &'a [u8])> {
-        // A scanned opener may start inside the preceding complete item.
-        // That item still belongs to this segment's canonical comparison.
-        let end = match original.frame_wire.get(self.wire.clone())?.last() {
-            Some(frame) => self.end.max(frame.offset.checked_add(frame.length)?),
-            None => self.end,
-        };
-        let bytes = original.state_source.input()?.get(self.opener.start..end)?;
+        let bytes = original
+            .state_source
+            .input()?
+            .get(self.opener.start..self.end)?;
         Some((self.opener.start, bytes))
     }
 

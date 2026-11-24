@@ -1672,7 +1672,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 Some(FramingDamage::TornTail { offset, .. }) => offset,
                 _ => start,
             };
-            self.finish_segment(previous, preceding_end)?;
+            self.finish_segment(previous, preceding_end, Some(offset))?;
             if self.stop_after_segment {
                 return Ok(None);
             }
@@ -2089,7 +2089,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 let Some(candidate) = candidate else {
                     if failed.opener {
                         if let Some(mut previous) = segment.take() {
-                            self.finish_segment(&mut previous, offset)?;
+                            self.finish_segment(&mut previous, offset, None)?;
                             if self.stop_after_segment {
                                 break;
                             }
@@ -2145,7 +2145,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             if self.state_commit_witness.is_some() {
                 self.deliver_held(held.take(), current)?;
             }
-            self.finish_segment(current, offset)?;
+            self.finish_segment(current, offset, None)?;
         }
         self.graph.end = match (self.graph.item_refusal, self.graph.framing_tail) {
             (Some(_), _) => {
@@ -2207,6 +2207,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         &mut self,
         segment: &mut Segment<'a>,
         offset: usize,
+        complete_prefix_end: Option<usize>,
     ) -> Result<(), ReadError> {
         self.flush_rows(segment, false)?;
         self.settle_reference_frames(segment, false, offset)?;
@@ -2219,7 +2220,9 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         ) {
             self.bytes.len()
         } else {
-            offset
+            // A scanned opener can start inside the complete item immediately
+            // before framing failed. Compare that item at its full extent.
+            complete_prefix_end.map_or(offset, |end| end.max(offset))
         };
         self.graph.own_segments.finish(
             segment.file_ordinal,
@@ -2250,12 +2253,10 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 &mut self.graph.index_storage_findings,
             )
             .map_err(read_error)?;
-        if self.graph.item_refusal.is_none() {
-            segment
-                .unit_usage
-                .report(&mut self.graph.unreferenced_units)
-                .map_err(read_error)?;
-        }
+        segment
+            .unit_usage
+            .report(&mut self.graph.unreferenced_units)
+            .map_err(read_error)?;
         super::fields::push(
             &mut self.graph.segment_authentication,
             segment.authentication.summary(segment.file_ordinal),
@@ -2422,7 +2423,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             };
             if let Some(previous) = active.as_mut() {
                 self.deliver_held(held.take(), previous)?;
-                self.finish_segment(previous, offset)?;
+                self.finish_segment(previous, offset, None)?;
                 if self.stop_after_segment {
                     return Ok(None);
                 }

@@ -752,7 +752,7 @@ fn canonical_structure_counts_only_segment_items_when_the_file_ends_torn() {
 }
 
 #[test]
-fn canonical_structure_keeps_a_complete_parity_item_that_contains_a_resync() {
+fn canonical_structure_keeps_complete_items_that_contain_a_resync() {
     use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
 
     let intact = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
@@ -786,6 +786,31 @@ fn canonical_structure_keeps_a_complete_parity_item_that_contains_a_resync() {
             difference: CanonicalStructureDifference::FrameSequence,
         }
     );
+
+    let mut input = intact[..parity_end].to_vec();
+    // The first four octets of the resync are the offsets list's sole length.
+    input.extend_from_slice(&[0x82, 0x04, 0x81, 0x1a]);
+    let start = input.len();
+    input.extend_from_slice(&resync_opener_at(u16::try_from(start).unwrap()));
+    let graph = second(&input);
+    assert_eq!(graph.resynchronizations[0].offset, start);
+    assert!(graph.index_storage_findings.iter().any(|finding| {
+        finding.offset == parity_end && finding.item == IndexStorageItem::Offsets
+    }));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: parity.position + 2,
+            offset: start + 4,
+            difference: CanonicalStructureDifference::FrameSequence,
+        }
+    );
 }
 
 #[test]
@@ -811,6 +836,15 @@ fn canonical_structure_counts_an_unreferenced_packed_chunk_before_a_bad_commit()
         panic!("the folded pack has one unreferenced member");
     };
     assert_eq!((unit.offset, unit.member), (pack_offset, Some(0)));
+    let limited = second_at_capacity(
+        &bytes,
+        ReadCapacity {
+            items: 2,
+            ..ReadCapacity::default()
+        },
+    );
+    assert_eq!(limited.item_refusal.unwrap().offset, commit_offset);
+    assert_eq!(limited.unreferenced_units, [*unit]);
     let report = graph
         .label_read(
             Limit::new(0),
