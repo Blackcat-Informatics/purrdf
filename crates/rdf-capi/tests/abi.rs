@@ -57,6 +57,143 @@ const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";
 
 #[test]
+fn shacl_c_fixed_points_and_refusals_match_across_validation_routes() {
+    use purrdf::error::purrdf_error_native_cause_json;
+    use purrdf::shacl::{
+        purrdf_shacl_validate_changes_to_sarif_with_recursion,
+        purrdf_shacl_validate_to_sarif_with_recursion,
+    };
+
+    let shapes = c"@prefix sh: <http://www.w3.org/ns/shacl#> .
+        @prefix ex: <http://example.org/> .
+        ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property ex:P .
+        ex:P sh:path ex:p ; sh:property ex:P .";
+    let data = c"<http://example.org/a> <http://example.org/p> <http://example.org/a> .";
+    let null = std::ptr::null();
+    let absent = std::ptr::null::<u64>();
+    let zero = 0_u64;
+    let max = u64::MAX;
+    let cases = [
+        (c"lfp", &raw const max, &raw const max, Ok(false)),
+        (c"gfp", &raw const max, &raw const max, Ok(true)),
+        (
+            c"gfp",
+            &raw const max,
+            absent,
+            Err((
+                PurrdfStatus::InvalidArgument,
+                "shacl-recursion-request-missing-limit",
+            )),
+        ),
+        (
+            c"gfp",
+            &raw const zero,
+            &raw const max,
+            Err((PurrdfStatus::ParseError, "shacl-recursion-pair-limit")),
+        ),
+        (
+            c"gfp",
+            &raw const max,
+            &raw const zero,
+            Err((PurrdfStatus::ParseError, "shacl-recursion-iteration-limit")),
+        ),
+    ];
+    for change in [false, true] {
+        for (mode, pairs, iterations, expected) in cases {
+            let mut report = std::ptr::dangling_mut();
+            let mut reason = std::ptr::dangling_mut();
+            let mut scope = -1;
+            let mut focus_nodes = usize::MAX;
+            let mut error = std::ptr::null_mut();
+            // SAFETY: Strings, supplied limits and output slots are live for the calls.
+            unsafe {
+                let status = if change {
+                    purrdf_shacl_validate_changes_to_sarif_with_recursion(
+                        shapes.as_ptr(),
+                        null,
+                        null,
+                        c"".as_ptr(),
+                        data.as_ptr(),
+                        null,
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        0,
+                        false,
+                        null,
+                        mode.as_ptr(),
+                        pairs,
+                        iterations,
+                        &raw mut report,
+                        &raw mut scope,
+                        &raw mut focus_nodes,
+                        &raw mut reason,
+                        &raw mut error,
+                    )
+                } else {
+                    purrdf_shacl_validate_to_sarif_with_recursion(
+                        shapes.as_ptr(),
+                        null,
+                        null,
+                        data.as_ptr(),
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        0,
+                        false,
+                        null,
+                        null,
+                        mode.as_ptr(),
+                        pairs,
+                        iterations,
+                        &raw mut report,
+                        &raw mut error,
+                    )
+                };
+                match expected {
+                    Ok(conforms) => {
+                        assert_eq!(status, PurrdfStatus::Ok as i32);
+                        assert!(error.is_null());
+                        let log = purrdf_lex::json::read_slice(
+                            &buffer_bytes(report),
+                            purrdf_lex::json::Limits::DEFAULT,
+                        )
+                        .expect("SARIF report");
+                        assert_eq!(
+                            log["runs"][0]["properties"]["shaclConforms"], conforms,
+                            "change={change}, mode={mode:?}: {log}"
+                        );
+                        purrdf_buffer_free(report);
+                        if change && !reason.is_null() {
+                            purrdf_buffer_free(reason);
+                        }
+                    }
+                    Err((code, variant)) => {
+                        assert_eq!(status, code as i32);
+                        assert_eq!(report, std::ptr::dangling_mut());
+                        assert_eq!(reason, std::ptr::dangling_mut());
+                        assert_eq!(scope, -1);
+                        assert_eq!(focus_nodes, usize::MAX);
+                        let cause = purrdf_error_native_cause_json(error);
+                        assert!(!cause.is_null());
+                        let cause = std::ffi::CStr::from_ptr(cause)
+                            .to_str()
+                            .expect("native cause");
+                        assert!(
+                            cause.contains(variant),
+                            "change={change}, mode={mode:?}: {cause}"
+                        );
+                        purrdf_error_free(error);
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn document_operations_own_buffers_and_retain_native_refusals() {
     use purrdf::document_expansion::{
         purrdf_document_compact, purrdf_document_expand, purrdf_document_flatten,
