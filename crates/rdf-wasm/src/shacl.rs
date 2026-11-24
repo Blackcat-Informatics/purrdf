@@ -54,6 +54,7 @@ use wasm_bindgen::prelude::*;
 
 use purrdf_core::xsd_regex::xpath::Profile;
 use purrdf_shapes::ShaclProfile;
+use purrdf_shapes::recursion::RecursionOptions;
 use purrdf_validate::{
     SelectedProductError, ShapesError, ShapesProductRefusal, XPathValidationError,
 };
@@ -354,6 +355,7 @@ pub(crate) fn validate_to_sarif_impl(
         false,
         None,
         None,
+        None,
     )
     .map_err(|error| match error {
         XPathValidationError::Shapes(error) => error,
@@ -385,12 +387,16 @@ pub(crate) fn validate_to_sarif_with_options_impl(
     subclass_of_in_shapes_graph: bool,
     profile: Option<Profile>,
     shacl_profile: Option<ShaclProfile>,
+    recursion: Option<RecursionOptions>,
 ) -> Result<String, XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
     let mut base_options = purrdf_validate::ValidationOptions::default()
         .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
     if let Some(law) = shacl_profile {
         base_options = base_options.with_profile(law);
+    }
+    if let Some(recursion) = recursion {
+        base_options = base_options.with_recursion(recursion);
     }
     let validation = match conformance_disallows {
         None => base_options,
@@ -511,8 +517,13 @@ pub(crate) fn validate_changes_to_sarif_impl(
     import_documents: &[String],
     shapes_graph: Option<&str>,
     profile: Option<Profile>,
+    recursion: Option<RecursionOptions>,
 ) -> Result<(String, purrdf_validate::ChangeScope), XPathValidationError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
+    let mut options = purrdf_validate::SarifOptions::default();
+    if let Some(recursion) = recursion {
+        options.validation = options.validation.with_recursion(recursion);
+    }
     purrdf_validate::validate_changes_to_sarif_string_with_xpath_regex(
         shapes_ttl,
         shapes_base,
@@ -520,7 +531,7 @@ pub(crate) fn validate_changes_to_sarif_impl(
         data_nt,
         added_nt,
         removed_nt,
-        &purrdf_validate::SarifOptions::default(),
+        &options,
         &imports,
         profile,
     )
@@ -1599,6 +1610,128 @@ macro_rules! shacl_decode_coordinates {
     };
 }
 
+/// Decode a text-validation recursion request and keep the native refusal.
+pub(crate) fn decode_recursion(
+    mode: Option<&str>,
+    max_pairs: Option<u64>,
+    max_iterations: Option<u64>,
+) -> Result<Option<RecursionOptions>, JobError> {
+    purrdf_validate::requested_shacl_recursion(mode, max_pairs, max_iterations).map_err(|cause| {
+        JobError::diagnostic_message(purrdf_validate::native_error::diagnostic(
+            "shacl-recursion-request",
+            cause,
+            None,
+        ))
+    })
+}
+
+fn host_recursion(
+    mode: Option<&JsValue>,
+    max_pairs: Option<&JsValue>,
+    max_iterations: Option<&JsValue>,
+) -> Result<Option<RecursionOptions>, JsValue> {
+    use crate::async_query::{read_limit, read_text};
+
+    let mode = mode
+        .filter(|value| !value.is_null())
+        .map(|value| read_text("recursion", value).map_err(|error| error.to_js()))
+        .transpose()?;
+    let limit = |key, value: Option<&JsValue>| {
+        value
+            .filter(|value| !value.is_null())
+            .map(|value| read_limit(key, value).map_err(|error| error.to_js()))
+            .transpose()
+    };
+    decode_recursion(
+        mode.as_deref(),
+        limit("recursionMaxPairs", max_pairs)?,
+        limit("recursionMaxIterations", max_iterations)?,
+    )
+    .map_err(|error| error.to_js())
+}
+
+macro_rules! shacl_default_recursion {
+    ($recursion:ident) => {
+        None
+    };
+}
+
+/// Validate the whole graph with an explicit SHACL fixed-point request.
+#[wasm_bindgen(js_name = shaclValidateToSarifWithRecursion)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
+pub fn shacl_validate_to_sarif_with_recursion(
+    shapes_ttl: String,
+    data_nt: String,
+    shapes_base: Option<String>,
+    conformance_disallows: Option<Vec<String>>,
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
+    subclass_of_in_shapes_graph: Option<bool>,
+    xpath_regex: Option<String>,
+    shacl_profile: Option<String>,
+    recursion: Option<JsValue>,
+    recursion_max_pairs: Option<JsValue>,
+    recursion_max_iterations: Option<JsValue>,
+) -> Result<String, JsValue> {
+    let recursion = host_recursion(
+        recursion.as_ref(),
+        recursion_max_pairs.as_ref(),
+        recursion_max_iterations.as_ref(),
+    )?;
+    shacl_sync_entry!(requests::validate_to_sarif(
+        shapes_ttl,
+        data_nt,
+        shapes_base,
+        conformance_disallows,
+        import_iris,
+        import_documents,
+        shapes_graph,
+        subclass_of_in_shapes_graph,
+        xpath_regex,
+        shacl_profile,
+        recursion,
+    ))
+}
+
+/// Validate a graph change with an explicit SHACL fixed-point request.
+#[wasm_bindgen(js_name = shaclValidateChangesToSarifWithRecursion)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
+pub fn shacl_validate_changes_to_sarif_with_recursion(
+    shapes_ttl: String,
+    data_nt: String,
+    added_nt: Option<String>,
+    removed_nt: Option<String>,
+    shapes_base: Option<String>,
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
+    xpath_regex: Option<String>,
+    recursion: Option<JsValue>,
+    recursion_max_pairs: Option<JsValue>,
+    recursion_max_iterations: Option<JsValue>,
+) -> Result<ShaclChangeValidation, JsValue> {
+    let recursion = host_recursion(
+        recursion.as_ref(),
+        recursion_max_pairs.as_ref(),
+        recursion_max_iterations.as_ref(),
+    )?;
+    shacl_sync_entry!(requests::validate_changes_to_sarif(
+        shapes_ttl,
+        data_nt,
+        added_nt,
+        removed_nt,
+        shapes_base,
+        import_iris,
+        import_documents,
+        shapes_graph,
+        xpath_regex,
+        recursion,
+    ))
+}
+
 macro_rules! shacl_entries {
     ($(
         $(#[$meta:meta])*
@@ -1606,6 +1739,7 @@ macro_rules! shacl_entries {
             selecting $selection:ident $(law $law:ident)?
             $(coordinates($now:ident, $seed:ident) as $coordinates:ident)?
             $(canonical($policy:ident, $control:ident, $cancel:ident))?
+            $(recursion($recursion:ident))?
             -> Result<$out:ty, $err:ty>
             => $variant:ident, $ctor_js:ident / $ctor:ident
             $body:block
@@ -1625,6 +1759,7 @@ macro_rules! shacl_entries {
                     $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
                     $(, $coordinates: purrdf_validate::query::CoordinateInputs)?
                     $(, $control: &mut purrdf_core::CanonicalizationControl<'_>)?
+                    $(, $recursion: Option<RecursionOptions>)?
                 ) -> Result<$out, $err> $body
             )*
         }
@@ -1636,7 +1771,8 @@ macro_rules! shacl_entries {
             $(
                 #[doc = concat!("`", stringify!($js), "`'s arguments.")]
                 $variant { $($param: $ty,)* $selection: Option<String>, $($law: Option<String>,)?
-                    $($coordinates: purrdf_validate::query::CoordinateInputs,)? $($policy: String,)? },
+                    $($coordinates: purrdf_validate::query::CoordinateInputs,)? $($policy: String,)?
+                    $($recursion: Option<RecursionOptions>,)? },
             )*
         }
 
@@ -1645,8 +1781,8 @@ macro_rules! shacl_entries {
             /// carried as the value its synchronous entry returns or throws.
             pub(crate) fn run_job(self, stop: Option<&dyn purrdf_core::StopSignal>) -> JobOutcome {
                 match self {
-                    $(Self::$variant { $($param,)* $selection, $($law,)? $($coordinates,)? $($policy,)? } => {
-                        shacl_job_entry!(stop, requests::$ctor($($param,)* $selection $(, $law)? $(, $coordinates)? $(, $control)?)
+                    $(Self::$variant { $($param,)* $selection, $($law,)? $($coordinates,)? $($policy,)? $($recursion,)? } => {
+                        shacl_job_entry!(stop, requests::$ctor($($param,)* $selection $(, $law)? $(, $coordinates)? $(, $control)? $(, $recursion)?)
                             $(, canonical($policy, $control))?)
                     })*
                 }
@@ -1656,6 +1792,22 @@ macro_rules! shacl_entries {
             pub(crate) fn select_xpath_regex(&mut self, name: Option<String>) {
                 match self {
                     $(Self::$variant { $selection, .. } => *$selection = name,)*
+                }
+            }
+
+            /// Admit explicit recursion settings for text validation.
+            pub(crate) fn select_recursion(
+                &mut self,
+                options: Option<RecursionOptions>,
+            ) -> Result<(), &'static str> {
+                match self {
+                    $($(Self::$variant { $recursion, .. } => {
+                        *$recursion = options;
+                        Ok(())
+                    },)?)*
+                    _ => options.map_or(Ok(()), |_| {
+                        Err("recursion options apply only to SHACL text validation")
+                    }),
                 }
             }
 
@@ -1712,9 +1864,10 @@ macro_rules! shacl_entries {
                 $(, $policy: String, $cancel: Option<crate::query::CancellationToken>)?
             ) -> Result<$out, JsValue> {
                 shacl_decode_coordinates!(($($coordinates, $now, $seed)?), ($($policy)?));
-                shacl_sync_entry!(requests::$ctor($($param,)* $selection $(, $law)? $(, $coordinates)? $(, $control)?)
+                shacl_sync_entry!(requests::$ctor($($param,)* $selection $(, $law)? $(, $coordinates)? $(, $control)? $(, shacl_default_recursion!($recursion))?)
                     $(, canonical($policy, $cancel, $control))?)
             }
+
         )*
 
         /// A SHACL request an asynchronous twin hands `AsyncJob.beginShacl`: built by the
@@ -1749,6 +1902,7 @@ macro_rules! shacl_entries {
                             $($param,)* $selection: None, $($law: None,)?
                             $($coordinates: purrdf_validate::query::CoordinateInputs::default(),)?
                             $($policy,)?
+                            $($recursion: None,)?
                         },
                     }
                 }
@@ -1818,7 +1972,9 @@ shacl_entries! {
         import_documents: Option<Vec<String>>,
         shapes_graph: Option<String>,
         subclass_of_in_shapes_graph: Option<bool>,
-    ) selecting xpath_regex law shacl_profile -> Result<String, XPathValidationError> => ValidateToSarif, validateToSarif / validate_to_sarif
+    ) selecting xpath_regex law shacl_profile
+      recursion(recursion)
+      -> Result<String, XPathValidationError> => ValidateToSarif, validateToSarif / validate_to_sarif
     {
         let xpath_profile = shapes_profile(xpath_regex.as_deref())?;
         validate_to_sarif_with_options_impl(
@@ -1832,6 +1988,7 @@ shacl_entries! {
             subclass_of_in_shapes_graph.unwrap_or(false),
             xpath_profile,
             requested_law(shacl_profile.as_deref(), xpath_profile)?,
+            recursion,
         )
     }
 
@@ -1879,7 +2036,9 @@ shacl_entries! {
         import_iris: Option<Vec<String>>,
         import_documents: Option<Vec<String>>,
         shapes_graph: Option<String>,
-    ) selecting xpath_regex -> Result<ShaclChangeValidation, XPathValidationError> => ValidateChangesToSarif, validateChangesToSarif / validate_changes_to_sarif
+    ) selecting xpath_regex
+      recursion(recursion)
+      -> Result<ShaclChangeValidation, XPathValidationError> => ValidateChangesToSarif, validateChangesToSarif / validate_changes_to_sarif
     {
         let (sarif, scope) = validate_changes_to_sarif_impl(
             &shapes_ttl,
@@ -1891,6 +2050,7 @@ shacl_entries! {
             import_documents.as_deref().unwrap_or_default(),
             shapes_graph.as_deref(),
             shapes_profile(xpath_regex.as_deref())?,
+            recursion,
         )?;
         Ok(ShaclChangeValidation::new(sarif, scope))
     }
@@ -2546,6 +2706,7 @@ pub(crate) mod tests {
                 on,
                 None,
                 None,
+                None,
             )
             .expect("validates")
         };
@@ -2614,6 +2775,7 @@ pub(crate) mod tests {
             false,
             xpath,
             requested_law(law, xpath)?,
+            None,
         )
     }
 
@@ -2714,6 +2876,7 @@ pub(crate) mod tests {
             &[],
             None,
             None,
+            None,
         )
         .expect("the change validates");
         assert_eq!(scope.focus_nodes(), Some(1));
@@ -2745,6 +2908,7 @@ pub(crate) mod tests {
             &[],
             None,
             None,
+            None,
         )
         .expect("the retraction validates");
         assert!(scope.is_bounded());
@@ -2771,6 +2935,7 @@ pub(crate) mod tests {
             None,
             &[],
             &[],
+            None,
             None,
             None,
         )
@@ -2800,6 +2965,7 @@ pub(crate) mod tests {
             &[],
             None,
             None,
+            None,
         )
         .expect("the change validates");
         let bounded = ShaclChangeValidation { sarif, scope };
@@ -2821,6 +2987,7 @@ pub(crate) mod tests {
                 &[],
                 None,
                 None,
+                None,
             )
             .is_err()
         );
@@ -2833,6 +3000,7 @@ pub(crate) mod tests {
             None,
             &[],
             &[],
+            None,
             None,
             None,
         )
@@ -4038,6 +4206,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 &[],
                 &[],
                 graph,
+                None,
                 None,
             )
             .expect("the change validates");

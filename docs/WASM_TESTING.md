@@ -179,6 +179,14 @@ Run these named cases with `node --test --test-name-pattern` against the actual
 `make wasm-pkg` output. The type-only `async-coordinates.types.ts` checks the
 declarations without executing query semantics on WASM.
 
+The optimized package's `shacl-recursion.test.mjs` selects two host-interface
+cases. Native Rust owns fixed-point and change-scope semantics.
+
+| Exact package case | Host obligation |
+| --- | --- |
+| `SHACL fixed-point text requests cross sync and async Wasm routes` | Whole-graph and change validators carry both modes and unsigned limits, return the expected verdicts, and preserve the owned change scope. |
+| `SHACL fixed-point host refusals preserve native cause and unsigned limits` | Missing and zero limits retain their native causes. The request error carries the largest unsigned 64-bit value exactly across both routes. |
+
 The optimized package's `rule-coordinates.test.mjs` selects these host-interface
 cases. Native rule suites own inference semantics; these selections verify only
 JavaScript transport, ownership and JSPI behavior against the actual release package.
