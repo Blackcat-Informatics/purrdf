@@ -43,24 +43,13 @@
 //!
 //! ## GTS sources, the envelope and the tag fold
 //!
-//! A GTS file is folded by [`import_gts_events_with_limits`] — the AUTHORITATIVE importer, which
-//! drives the reader in per-segment mode so **per-segment blank-node scope survives**
-//! (C2.a) and which hard-fails on any reader diagnostic or dangling term reference.
-//! It is deliberately not `import_gts_graph`, whose own documentation records that it
-//! flattens those scopes. Because scope is preserved, the `bnode-scope-flatten` contract
-//! entry of `purrdf_core::gts_to_rdf_loss_ledger` describes a loss that **did not
-//! happen** on this path and is never attached here.
-//!
-//! A GTS read genuinely drops two kinds of material. The first is the ENVELOPE: the segment ledger, sidecar
-//! resources, scoped metadata, blob references, suppression directives, opaque nodes and
-//! signature records that travel beside the hot graph and have no home in an RDF dataset.
-//! [`gts_envelope_ledger`] records exactly those, with counts read off the bundle the
-//! importer actually returned — never a count this module assumed.
-//!
-//! The second is the written spelling of a language tag that is not lower case: a GTS
-//! file compares tags bytewise and a dataset holds them folded, so the importer records
-//! one `language-tag-case-folded` entry per affected literal in the envelope's loss
-//! ledger, and [`load_gts`] adds those entries to the ledger it returns.
+//! [`load_gts`] selects a reader from the opening item and preserves per-segment
+//! blank-node scopes. For generation 1, [`import_gts_events_with_limits`] requires a diagnostic-free
+//! read. The loss ledger records the envelope fields and language tag case folds.
+//! For generation 2, the transport reader requires a complete RDF fold. The ledger
+//! records segment records, blob declarations, signatures, typed value definitions
+//! and non-unit annotation counts omitted by RDF projection, as well as language tag
+//! case folds.
 //!
 //! ## Transport encoding
 //!
@@ -123,10 +112,12 @@ use std::io::Read;
 use std::sync::Arc;
 
 use purrdf::gts::reader::GtsReadLimits;
+use purrdf::gts::v2::{Line, RdfGraph, ReadGraph, ReadLimits};
 use purrdf_core::{
     DatasetView, LossDetail, LossEntry, LossLedger, LossSite, LossSubject, PackView, RdfDataset,
     RdfDiagnostic, RdfLookaside, dataset_from_view, verify_pack,
 };
+use purrdf_rdf::gts::{dataset_from_gts_v2_fold_with_losses, has_gts_v2_opener};
 use purrdf_rdf::{
     NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
     TransportError, decode_transport, detect_transport, import_gts_events_with_limits,
@@ -645,30 +636,132 @@ pub(crate) fn verified_pack_input(
     Ok(input)
 }
 
+/// The input budget and the scope of explicit CLI overrides.
+#[derive(Clone, Copy)]
+pub(crate) struct GtsInputLimits {
+    pub(crate) legacy: GtsReadLimits,
+    pub(crate) requires_generation_one: bool,
+}
+
+impl Default for GtsInputLimits {
+    fn default() -> Self {
+        Self {
+            legacy: GtsReadLimits::UNBOUNDED,
+            requires_generation_one: false,
+        }
+    }
+}
+
 /// Fold a GTS source into its dataset AND the ledger of what the read dropped: the
 /// envelope material and every language tag the dataset folded to lower case.
 ///
-/// This is the one GTS ingestion seam in the CLI. It calls [`import_gts_events_with_limits`], the
-/// authoritative importer that preserves per-segment blank-node scope and hard-fails on
-/// a reader diagnostic or a dangling term reference — never `import_gts_graph`, which
-/// flattens those scopes.
+/// Both generation readers preserve per-segment blank-node scope. The generation 2
+/// path requires a complete RDF fold and records the transport material and annotation
+/// multiplicities omitted by the RDF projection.
 pub(crate) fn load_gts(
     path: &str,
     policy: TransportPolicy,
-    limits: GtsReadLimits,
+    limits: GtsInputLimits,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
-    let bytes = if limits == GtsReadLimits::UNBOUNDED {
-        read_bytes_with_transport(path, policy)?
+    let bounded = limits.legacy != GtsReadLimits::UNBOUNDED;
+    let bytes = if bounded {
+        read_gts_bytes_with_transport(path, policy, limits.legacy.encoded_input_bytes)?
     } else {
-        read_gts_bytes_with_transport(path, policy, limits.encoded_input_bytes)?
+        read_bytes_with_transport(path, policy)?
     };
-    let bundle = import_gts_events_with_limits(&bytes, limits)
-        .map_err(|diagnostic| CliError::Runtime(format!("{}: {diagnostic}", display_path(path))))?;
-    let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, display_path(path));
+    let source = display_path(path);
+    if has_gts_v2_opener(&bytes) {
+        if limits.requires_generation_one {
+            return Err(CliError::Runtime(format!(
+                "{source}: a GTS read limit override requires generation 1. For generation 2, use --gts-safe-read or override encoded-input-bytes."
+            )));
+        }
+        let mut graph_limits = ReadLimits::default();
+        if bounded {
+            let total = limits.legacy.total_decoded_bytes as u64;
+            let capacity = &mut graph_limits.second_generation;
+            capacity.payload.decoded_bytes_per_read = total;
+            capacity.formed_bytes = total;
+            capacity.rebuilt_bytes = total;
+            capacity.items = limits.legacy.items as u64;
+        }
+        let read = purrdf::gts::v2::read_with_limits(&bytes, graph_limits)
+            .map_err(|cause| CliError::gts_input(source, cause))?;
+        let ReadGraph::Second(graph) = read else {
+            return Err(CliError::Runtime(format!(
+                "{source}: the GTS opener did not select the generation 2 reader"
+            )));
+        };
+        let mut ledger = gts_v2_loss_ledger(&graph, source);
+        let fold = graph
+            .into_complete_rdf()
+            .map_err(|cause| CliError::gts_input(source, cause))?;
+        let (dataset, losses) = dataset_from_gts_v2_fold_with_losses(&fold)
+            .map_err(|cause| CliError::gts_input(source, cause))?;
+        for entry in losses.entries() {
+            ledger.record(entry.clone());
+        }
+        return Ok((dataset, ledger));
+    }
+    let bundle = import_gts_events_with_limits(&bytes, limits.legacy)
+        .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
+    let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, source);
     for entry in bundle.envelope.losses.entries() {
         ledger.record(entry.clone());
     }
     Ok((bundle.dataset, ledger))
+}
+
+fn gts_v2_loss_ledger(graph: &RdfGraph<'_>, source: &str) -> LossLedger {
+    let annotation_rows = graph
+        .rdf
+        .lines()
+        .filter(|line| matches!(line, Line::Annotation(_, count, _) if count.get() > 1))
+        .count();
+    let signature_records = graph
+        .signatures
+        .iter()
+        .map(|frame| frame.checks.len())
+        .sum();
+    let counts = [
+        (
+            GTS_LOSS_CODES[0].0,
+            "GTS segment framing and authentication summaries are omitted from the RDF dataset.",
+            graph.segment_authentication.len(),
+        ),
+        (
+            GTS_LOSS_CODES[3].0,
+            "GTS inline and external blob declarations are omitted from the RDF dataset.",
+            graph.blobs.len() + graph.external_blobs.len(),
+        ),
+        (
+            GTS_LOSS_CODES[6].0,
+            "The retained GTS signature check records are omitted from the RDF dataset.",
+            signature_records,
+        ),
+        (
+            "gts-v2-typed-values-dropped",
+            "GTS typed value definitions are omitted. RDF literal lexical forms are preserved.",
+            graph.rdf.values().len(),
+        ),
+        (
+            "gts-v2-annotation-multiplicity-dropped",
+            "RDF projection represents each annotation with set semantics.",
+            annotation_rows,
+        ),
+    ];
+    let mut ledger = LossLedger::new();
+    for (code, note, count) in counts {
+        if count != 0 {
+            ledger.record(gts_loss_entry(
+                code,
+                note,
+                source,
+                vec![LossDetail::count("count", count as u64)],
+            ));
+        }
+    }
+    ledger
 }
 
 fn read_gts_bytes_with_transport(
@@ -864,21 +957,30 @@ fn gts_envelope_ledger(lookaside: &RdfLookaside, source: &str) -> LossLedger {
                     }),
             );
         }
-        ledger.record(LossEntry {
-            code: Cow::Borrowed(code),
-            from: Cow::Borrowed("gts"),
-            to: Cow::Borrowed("rdf-1.2-dataset"),
-            note: Cow::Borrowed(note),
-            site: LossSite::Document {
-                path: Some(source.to_owned()),
-                line: None,
-                column: None,
-            },
-            subject: LossSubject::Absent,
-            detail,
-        });
+        ledger.record(gts_loss_entry(code, note, source, detail));
     }
     ledger
+}
+
+fn gts_loss_entry(
+    code: &'static str,
+    note: &'static str,
+    source: &str,
+    detail: Vec<LossDetail>,
+) -> LossEntry {
+    LossEntry {
+        code: Cow::Borrowed(code),
+        from: Cow::Borrowed("gts"),
+        to: Cow::Borrowed("rdf-1.2-dataset"),
+        note: Cow::Borrowed(note),
+        site: LossSite::Document {
+            path: Some(source.to_owned()),
+            line: None,
+            column: None,
+        },
+        subject: LossSubject::Absent,
+        detail,
+    }
 }
 
 /// Open `path` as the concrete view its `format` implies and run `op` over it.

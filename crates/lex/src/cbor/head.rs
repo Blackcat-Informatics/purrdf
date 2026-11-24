@@ -80,6 +80,11 @@ pub fn with_encoded_text<R>(text: &str, visit: impl FnOnce(&[u8], &[u8]) -> R) -
     with_encoded_head(TEXT, text.len() as u64, |head| visit(head, text.as_bytes()))
 }
 
+/// Visit a definite byte string's shortest head and its borrowed bytes.
+pub fn with_encoded_bytes<R>(bytes: &[u8], visit: impl FnOnce(&[u8], &[u8]) -> R) -> R {
+    with_encoded_head(BYTES, bytes.len() as u64, |head| visit(head, bytes))
+}
+
 /// Append the shortest head of `major` with `argument` to `out`.
 ///
 /// ```rust
@@ -122,8 +127,10 @@ pub fn write_text<W: Write + ?Sized>(writer: &mut W, text: &str) -> io::Result<(
 ///
 /// The writer's error.
 pub fn write_bytes<W: Write + ?Sized>(writer: &mut W, bytes: &[u8]) -> io::Result<()> {
-    write_head(writer, BYTES, bytes.len() as u64)?;
-    writer.write_all(bytes)
+    with_encoded_bytes(bytes, |head, body| {
+        writer.write_all(head)?;
+        writer.write_all(body)
+    })
 }
 
 /// Read one definite head of major type `major` from the front of `input`,

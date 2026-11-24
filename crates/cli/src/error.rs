@@ -128,6 +128,13 @@ pub enum CliError {
         /// Original I/O, byte limit or physical storage refusal.
         cause: crate::source::RawReadError,
     },
+    /// A GTS input could not be read or projected as an RDF dataset.
+    GtsInput {
+        /// File path or - for standard input.
+        path: String,
+        /// Original reader or RDF admission failure.
+        cause: Box<dyn std::error::Error + Send + Sync>,
+    },
     /// Original source-carrier boundary, acquisition or RDF refusal.
     YamlSource(Box<crate::YamlSourceFailure>),
     /// Original RDF parse or serialization diagnostic and native cause.
@@ -223,7 +230,10 @@ impl CliError {
             | Self::GlobSetMatch(_)
             | Self::GlobRdf(_)
             | Self::GlobRdfStorage(_) => 1,
-            Self::YamlSource(_) | Self::Diagnostic(_) | Self::DocumentInput { .. } => 1,
+            Self::YamlSource(_)
+            | Self::Diagnostic(_)
+            | Self::DocumentInput { .. }
+            | Self::GtsInput { .. } => 1,
             Self::Fingerprint(_) => 1,
             Self::DownstreamClosed => 0,
         }
@@ -236,6 +246,7 @@ impl fmt::Display for CliError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::DocumentInput { path, cause } => write!(f, "{path}: {cause}"),
+            Self::GtsInput { path, cause } => write!(f, "{path}: {cause}"),
             Self::YamlSource(error) => error.fmt(f),
             Self::Diagnostic(error) => error.fmt(f),
             Self::OutputIo(error) => error.fmt(f),
@@ -289,6 +300,7 @@ impl std::error::Error for CliError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::DocumentInput { cause, .. } => Some(cause),
+            Self::GtsInput { cause, .. } => Some(cause.as_ref()),
             Self::YamlSource(error) => Some(&**error),
             Self::Diagnostic(error) => Some(error),
             Self::ShaclProfileRequest { cause, .. } => Some(cause),
@@ -319,6 +331,16 @@ impl std::error::Error for CliError {
 }
 
 impl CliError {
+    pub(crate) fn gts_input(
+        path: &str,
+        cause: impl std::error::Error + Send + Sync + 'static,
+    ) -> Self {
+        Self::GtsInput {
+            path: path.to_owned(),
+            cause: Box::new(cause),
+        }
+    }
+
     pub(crate) fn native(error: impl std::error::Error + 'static) -> Self {
         match purrdf_validate::canonical::native_canonical_cause(&error) {
             Some(cause) => Self::Canonical {

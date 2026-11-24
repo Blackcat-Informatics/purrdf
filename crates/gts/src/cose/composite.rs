@@ -96,6 +96,45 @@ pub fn representative(message: &[u8]) -> [u8; REPRESENTATIVE_LENGTH] {
     output
 }
 
+pub(crate) enum ComponentVerificationError {
+    Length,
+    Classical,
+    PostQuantum,
+    Operation(mldsa65::Error),
+}
+
+pub(crate) fn verify_components(
+    key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<(), ComponentVerificationError> {
+    use ComponentVerificationError as Failure;
+
+    let (pq_key, ed_key) = key
+        .split_last_chunk::<{ ed25519::PUBLIC_KEY_LENGTH }>()
+        .filter(|(prefix, _)| prefix.len() == mldsa65::PUBLIC_KEY_LENGTH)
+        .ok_or(Failure::Length)?;
+    let (pq_signature, ed_signature) = signature
+        .split_last_chunk::<{ ed25519::SIGNATURE_LENGTH }>()
+        .filter(|(prefix, _)| prefix.len() == mldsa65::SIGNATURE_LENGTH)
+        .ok_or(Failure::Length)?;
+    let message = representative(message);
+    ed25519::VerifyingKey::verify_encoded_strict(
+        ed_key,
+        &message,
+        &ed25519::Signature::from_bytes(ed_signature),
+    )
+    .map_err(|_| Failure::Classical)?;
+    let key = mldsa65::VerifyingKey::from_bytes(pq_key).map_err(Failure::Operation)?;
+    let pq_failure = |error| match error {
+        mldsa65::Error::InvalidSignature => Failure::PostQuantum,
+        error => Failure::Operation(error),
+    };
+    let signature = mldsa65::Signature::from_bytes(pq_signature).map_err(pq_failure)?;
+    key.verify(&message, LABEL.as_bytes(), &signature)
+        .map_err(pq_failure)
+}
+
 /// Caller-supplied composite public key, with no discovery or trust policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyingKey {

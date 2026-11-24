@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+use super::signature::SignatureRecord;
 use core::num::NonZeroU64;
 
 use super::fields::{Fields, OptionShape};
@@ -116,6 +117,7 @@ pub struct FrameCheck<'a> {
     pub commit_claim: Option<CommitClaim<'a>>,
     /// A recognized parity frame violates its envelope rules.
     pub parity_envelope_damaged: bool,
+    pub(super) signatures_valid: bool,
 }
 
 /// Fields of a GTS v2 frame after the item kind, in wire order.
@@ -161,6 +163,7 @@ pub(super) struct FrameWire<'a> {
     payload: PayloadWire<'a>,
     malformed: Option<WireError>,
     parity_envelope_damaged: bool,
+    signatures_valid: bool,
 }
 
 impl FrameWire<'_> {
@@ -251,6 +254,7 @@ impl<'a> FrameEnvelope<'a> {
             malformed,
             commit_claim,
             parity_envelope_damaged: wire.parity_envelope_damaged,
+            signatures_valid: wire.signatures_valid,
         })
     }
 
@@ -327,6 +331,7 @@ impl<'a> FrameEnvelope<'a> {
             payload,
             malformed,
             parity_envelope_damaged,
+            signatures_valid: signature_error.is_none(),
         }
     }
 
@@ -385,17 +390,7 @@ impl<'a> FrameEnvelope<'a> {
         let mut previous = None;
         for _ in 0..count {
             let start = fields.offset();
-            fields.record(3)?;
-            let algorithm = fields.offset();
-            let code = fields.uint()?;
-            if code == 0 || (code > 2 && registry.get() <= REGISTRY_VERSION) {
-                return Err(WireError::new(
-                    MalformedReason::UnregisteredValue,
-                    algorithm,
-                ));
-            }
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
-            fields.bytes()?;
+            SignatureRecord::read(&mut fields, registry)?;
             let record = &bytes[start - base..fields.offset() - base];
             if previous.is_some_and(|previous| previous >= record) {
                 return Err(WireError::new(MalformedReason::UnorderedOrRepeated, start));

@@ -7,19 +7,654 @@ use core::num::NonZeroU64;
 
 use purrdf_gts::reader::GtsReadResource;
 use purrdf_gts::v2::{
-    ContentError, DetectionCapacity, FrameField, FramingDamage, IndexStorageItem,
-    IndexStorageProblem, Item, ItemKind, Line, Lineage, MalformedReason, ParityFindingKind,
-    ParityRepairFailure, PayloadDamage, PayloadRefusal, RdfGraph, ReadCapacity, ReadFailure,
-    ReadGraph, ReadLimits, SegmentWriteError, SegmentWriter, Term, ValueName, read,
-    read_with_limits, write_header,
+    ContentError, DetectionCapacity, FileEnd, FrameField, FramingDamage, Header, IndexStorageItem,
+    IndexStorageProblem, Item, ItemKind, Line, Lineage, LineageFinding, LinkState, MalformedReason,
+    ParityFindingKind, ParityRepairFailure, PayloadDamage, PayloadOutcome, PayloadRefusal,
+    PayloadUnchecked, RdfGraph, ReadCapacity, ReadFailure, ReadGraph, ReadLimits, RebuildState,
+    ResyncPast, ResyncReach, SegmentWriteError, SegmentWriter, SignatureStatus,
+    SignatureUnverified, Term, UnknownFrameType, ValueName, read, read_with_limits, write_header,
 };
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
 fn second(bytes: &[u8]) -> RdfGraph<'_> {
-    let ReadGraph::Second(graph) = read(bytes, ReadCapacity::default()).unwrap() else {
+    second_at_capacity(bytes, ReadCapacity::default())
+}
+
+fn second_at_capacity(bytes: &[u8], capacity: ReadCapacity) -> RdfGraph<'_> {
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
         panic!("the fixture opens a generation 2 file");
     };
     graph
+}
+
+fn relink_frame(bytes: &mut [u8], predecessor: &[u8; 32]) -> [u8; 32] {
+    let item = Item::first(bytes).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let identifier = frame
+        .check_link(predecessor, None)
+        .computed_identifier
+        .unwrap();
+    let end = item.bytes().len() - frame.field(FrameField::Signatures).len();
+    bytes[end - identifier.len()..end].copy_from_slice(&identifier);
+    identifier
+}
+
+#[test]
+fn unreadable_openers_and_unavailable_hashes_delimit_their_own_segments() {
+    let malformed = include_bytes!("fixtures/v2/P1/header-outcome-unreadable-first.bin");
+    let unavailable = include_bytes!("fixtures/v2/P1/lineage-previous-links-unavailable.bin");
+    let first = Item::first(unavailable).unwrap().unwrap();
+    let opener_end = first.bytes().len();
+    let supported = &unavailable[opener_end..];
+
+    let version = NonZeroU64::new(2).unwrap();
+    for (opener, unavailable_hash) in [(malformed.as_slice(), false), (first.bytes(), true)] {
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"skipped blob", None).unwrap();
+        let written = writer.into_inner();
+        let written_opener = Item::first(&written).unwrap().unwrap();
+        let mut bytes = opener.to_vec();
+        bytes.extend_from_slice(&written[written_opener.bytes().len()..]);
+        bytes.push(0);
+        bytes.extend_from_slice(supported);
+        let graph = second(&bytes);
+
+        let [segment] = graph.skipped_segments.as_slice() else {
+            panic!("expected one skipped segment");
+        };
+        assert_eq!(
+            (segment.ordinal, segment.opener.offset, segment.items),
+            (0, 0, 3)
+        );
+        assert_eq!(graph.left_out, 2);
+        assert_eq!(graph.segment_authentication[0].segment, 1);
+        assert_eq!(graph.blobs.len(), 0);
+        assert_eq!(graph.frame_failures.len(), 0);
+        assert_eq!(graph.opaque_items.len(), 0);
+        assert_eq!(graph.lineage_findings, [] as [(usize, LineageFinding); 0]);
+        assert_eq!(graph.end, FileEnd::NoCommit);
+        if unavailable_hash {
+            assert_eq!(graph.unsupported_registries, [(0, version)]);
+        } else {
+            assert_eq!(graph.unsupported_registries, [] as [(usize, NonZeroU64); 0]);
+        }
+        let error = graph.into_complete_rdf().unwrap_err();
+        assert_eq!(error.offset, 0);
+        if unavailable_hash {
+            assert!(matches!(error.failure, ReadFailure::UnavailableHash(code) if code.get() == 9));
+        } else {
+            assert!(matches!(
+                error.failure,
+                ReadFailure::Wire(wire) if wire.reason == MalformedReason::UnregisteredValue
+            ));
+        }
+    }
+
+    let graph = second(include_bytes!(
+        "fixtures/v2/P1/links-unavailable-lineage-not-compared.bin"
+    ));
+    assert_eq!(graph.rdf.lines().count(), 1);
+    assert_eq!(graph.skipped_segments[0].ordinal, 1);
+    assert_eq!(graph.lineage_findings, [] as [(usize, LineageFinding); 0]);
+    assert_eq!(graph.end, FileEnd::NoCommit);
+
+    let mut prefix = malformed.to_vec();
+    prefix.push(0xff);
+    let mut limits = ReadLimits::default();
+    limits.second_generation.items = 2;
+    let ReadGraph::Second(graph) = read_with_limits(&prefix, limits).unwrap() else {
+        panic!("the unreadable opener still selects generation 2");
+    };
+    assert_eq!(graph.end, FileEnd::Undelimitable);
+    assert!(graph.item_refusal.is_none());
+    assert_eq!(graph.left_out, 1);
+    assert_eq!(graph.skipped_segments[0].items, 2);
+
+    let valid = include_bytes!("fixtures/v2/P1/header-minimal.bin");
+    let mut bytes = valid.to_vec();
+    bytes.extend_from_slice(first.bytes());
+    assert_eq!(
+        second(&bytes).lineage_findings,
+        [(valid.len(), LineageFinding::Begins)]
+    );
+}
+
+#[test]
+fn skipped_segments_count_only_the_retained_undelimitable_regions() {
+    let unavailable = include_bytes!("fixtures/v2/P1/lineage-previous-links-unavailable.bin");
+    let opener = Item::first(unavailable).unwrap().unwrap();
+    let clean = include_bytes!("fixtures/v2/P1/resync-isolation-links-unavailable.clean-300.bin");
+    let mut prefix = opener.bytes().to_vec();
+    prefix.extend([0x82, 6]);
+    head::write_bytes(&mut prefix, &[0; 273]).unwrap();
+    assert_eq!(prefix.len(), 289);
+
+    let mut clean_item = [0; 11];
+    clean_item[..3].copy_from_slice(&[0x82, 6, 0x48]);
+    // This string is torn at the join and rejects the array that follows.
+    let mut torn = [0x40; 11];
+    torn[0] = 0x5f;
+    for (region, items, damage) in [
+        (clean_item, 3, None),
+        (
+            [0xff; 11],
+            3,
+            Some(FramingDamage::Undelimitable {
+                offset: 289,
+                length: 11,
+            }),
+        ),
+        (
+            torn,
+            2,
+            Some(FramingDamage::TornTail {
+                offset: 289,
+                length: 11,
+            }),
+        ),
+    ] {
+        let mut bytes = prefix.clone();
+        bytes.extend(region);
+        bytes.extend_from_slice(&clean[300..]);
+        let graph = second(&bytes);
+        assert_eq!(graph.skipped_segments[0].items, items);
+        assert_eq!(graph.rdf.lines().count(), 1);
+        assert_eq!(
+            graph.resynchronizations.len(),
+            usize::from(damage.is_some())
+        );
+        if let Some(resumed) = graph.resynchronizations.first() {
+            assert_eq!(resumed.offset, 300);
+            assert_eq!(resumed.damage, damage);
+        }
+    }
+}
+
+#[test]
+fn newer_registry_reports_opaque_items_and_checks_unknown_signature_algorithms() {
+    let opener = include_bytes!("fixtures/v2/P1/header-registry-newer.bin");
+    let version = NonZeroU64::new(2).unwrap();
+    let graph = second(opener);
+    assert_eq!(graph.unsupported_registries, [(0, version)]);
+    graph.into_complete_rdf().unwrap();
+
+    let signed = include_bytes!("fixtures/v2/P2/registry__signature__unknown.bin");
+    let mut bytes = opener.to_vec();
+    bytes.extend_from_slice(&[0x81, 6]);
+    bytes.extend_from_slice(&signed[opener.len()..]);
+    let graph = second(&bytes);
+    assert_eq!(graph.unsupported_registries, [(0, version)]);
+    let [opaque] = graph.opaque_items.as_slice() else {
+        panic!("expected one opaque item");
+    };
+    assert_eq!(opaque.offset, opener.len());
+    assert!(matches!(
+        opaque.failure,
+        ReadFailure::Item(ItemKind::Unknown(6))
+    ));
+    assert_eq!(graph.blobs.len(), 1);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+    assert_eq!(
+        graph.signatures[0].checks[0].status,
+        SignatureStatus::Unverified(SignatureUnverified::UnknownAlgorithm)
+    );
+    assert!(graph.into_complete_rdf().is_err());
+
+    bytes[opener.len() + 1] = 0;
+    let graph = second(&bytes);
+    assert!(matches!(
+        graph.opaque_items[0].failure,
+        ReadFailure::Classification(MalformedReason::UnregisteredValue)
+    ));
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+}
+
+#[test]
+fn unknown_critical_frame_stops_only_its_segment_and_keeps_payload_checks() {
+    let blob_file = include_bytes!("fixtures/v2/P2/registry__signature__unknown.bin");
+    let opener = Item::first(blob_file).unwrap().unwrap();
+    let blob = Item::first(&blob_file[opener.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let envelope = blob.frame().unwrap().unwrap();
+    let digest = blob.bytes().len() - envelope.field(FrameField::Signatures).len() - 32;
+    let mut next = SegmentWriter::new(Vec::new()).unwrap();
+    let after_reset = ValueName::of(b"next segment");
+    next.add_blob(b"next segment", None).unwrap();
+    next.add_commit().unwrap();
+    let next = next.into_inner();
+
+    for (source, expected) in [
+        (
+            include_bytes!("fixtures/v2/P1/frame-unknown-noncritical.bin").as_slice(),
+            UnknownFrameType::Noncritical(99),
+        ),
+        (
+            include_bytes!("fixtures/v2/P1/frame-unknown-critical.bin").as_slice(),
+            UnknownFrameType::Critical(99),
+        ),
+    ] {
+        let fixture = second(source);
+        let [frame] = fixture.frame_failures.as_slice() else {
+            panic!("expected one unsupported frame type");
+        };
+        assert!(matches!(frame.failure, ReadFailure::UnknownFrame(kind) if kind == expected));
+
+        let unknown = Item::first(&source[frame.offset..]).unwrap().unwrap();
+        let unknown_envelope = unknown.frame().unwrap().unwrap();
+        let predecessor = unknown_envelope.field(FrameField::Identifier)[2..]
+            .try_into()
+            .unwrap();
+        let blob_offset = frame.offset + unknown.bytes().len();
+        let mut bytes = source[..blob_offset].to_vec();
+        bytes.extend_from_slice(blob.bytes());
+        relink_frame(&mut bytes[blob_offset..], predecessor);
+        bytes.extend_from_slice(&next);
+        let graph = second(&bytes);
+        assert_eq!(graph.blobs.last().unwrap().name, after_reset);
+        assert_eq!(graph.end, FileEnd::AtValidCommit);
+        if matches!(expected, UnknownFrameType::Noncritical(_)) {
+            assert_eq!(graph.stopped_frames, [] as [usize; 0]);
+            assert_eq!(graph.blobs.len(), 2);
+            continue;
+        }
+        assert_eq!(graph.stopped_frames, [blob_offset]);
+        assert_eq!(graph.blobs.len(), 1);
+
+        let payload_end = blob_offset + digest - 2;
+        bytes[payload_end - 1] ^= 1;
+        let graph = second(&bytes);
+        assert_eq!(graph.stopped_frames, [blob_offset]);
+        assert!(graph.frame_failures.iter().any(|failure| {
+            failure.offset == blob_offset
+                && matches!(
+                    failure.failure,
+                    ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+                )
+        }));
+        assert_eq!(graph.blobs.len(), 1);
+        assert_eq!(graph.blobs[0].name, after_reset);
+    }
+}
+
+#[test]
+fn invalid_flags_do_not_stop_the_fold_and_stopped_indexes_are_checked() {
+    let malformed =
+        include_bytes!("fixtures/v2/P1/frame-unknown-transparent-not-bool.critical-true.bin");
+    let opener = Item::first(malformed).unwrap().unwrap();
+    let frame = Item::first(&malformed[opener.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let malformed_end = opener.bytes().len() + frame.bytes().len();
+    let mut bytes = malformed[..malformed_end].to_vec();
+    let predecessor = frame
+        .frame()
+        .unwrap()
+        .unwrap()
+        .field(FrameField::Identifier)[2..]
+        .try_into()
+        .unwrap();
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"still folded", None).unwrap();
+    let written = writer.into_inner();
+    let written_opener = Item::first(&written).unwrap().unwrap();
+    bytes.extend_from_slice(&written[written_opener.bytes().len()..]);
+    relink_frame(&mut bytes[malformed_end..], predecessor);
+    let graph = second(&bytes);
+    assert_eq!(graph.stopped_frames, [] as [usize; 0]);
+    assert_eq!(graph.blobs.len(), 1);
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [error] if matches!(error.failure, ReadFailure::Wire(wire) if wire.reason == MalformedReason::WrongType)
+    ));
+
+    for (bytes, type_runs_match) in [
+        (
+            include_bytes!("fixtures/v2/P5/index-after-stop.exact.bin").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-after-stop.wrong-type-runs.bin").as_slice(),
+            false,
+        ),
+    ] {
+        let graph = second(bytes);
+        let [index] = graph.index_checks.as_slice() else {
+            panic!("expected the stopped segment's index check");
+        };
+        assert!(graph.stopped_frames.contains(&index.offset));
+        let prefix = index.prefix.as_ref().unwrap();
+        assert!(prefix.head_matches);
+        assert!(prefix.root_matches);
+        assert_eq!(prefix.type_runs_match, type_runs_match);
+    }
+}
+
+#[test]
+fn a_stopped_newer_parity_geometry_is_opaque_without_a_geometry_finding() {
+    let graph = second(include_bytes!(
+        "fixtures/v2/P1/parity-later-version-after-stop.bin"
+    ));
+    assert_eq!(graph.stopped_frames, [289]);
+    assert!(!graph.parity_findings.iter().any(|finding| {
+        matches!(
+            finding.kind,
+            ParityFindingKind::UnknownGeometry(_) | ParityFindingKind::Damaged
+        )
+    }));
+}
+
+#[test]
+fn newer_enumerations_in_critical_blob_content_stop_the_current_segment() {
+    let original = include_bytes!("fixtures/v2/P4/external-ok.bin");
+    let original_header = Item::first(original).unwrap().unwrap();
+    let external = Item::first(&original[original_header.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let content = external
+        .frame()
+        .unwrap()
+        .unwrap()
+        .field(FrameField::Content);
+    let algorithm = content.as_ptr().addr() - external.bytes().as_ptr().addr() + 2;
+    assert_eq!(external.bytes()[algorithm], 1);
+
+    let newer = include_bytes!("fixtures/v2/P1/header-registry-newer.bin");
+    let header = Header::decode(Item::first(newer).unwrap().unwrap()).unwrap();
+    let predecessor = header.identifier().unwrap();
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"still folded", None).unwrap();
+    let written = writer.into_inner();
+    let written_opener = Item::first(&written).unwrap().unwrap();
+    let blob = &written[written_opener.bytes().len()..];
+    let blob_offset = newer.len() + external.bytes().len();
+    for code in 0..=2 {
+        let mut bytes = newer.to_vec();
+        bytes.extend_from_slice(external.bytes());
+        let frame = &mut bytes[newer.len()..];
+        frame[algorithm] = code;
+        let identifier = relink_frame(frame, &predecessor);
+        bytes.extend_from_slice(blob);
+        relink_frame(&mut bytes[blob_offset..], &identifier);
+        if code == 0 {
+            let graph = second(&bytes);
+            assert!(graph.external_blobs.is_empty());
+            assert_eq!(graph.blobs.len(), 1);
+            let error = graph.into_complete_rdf().unwrap_err();
+            assert!(matches!(
+                error.failure,
+                ReadFailure::Wire(wire) if wire.reason == MalformedReason::UnregisteredValue
+            ));
+        } else {
+            let graph = second(&bytes);
+            if code == 1 {
+                assert_eq!(graph.external_blobs.len(), 1);
+                assert_eq!(graph.blobs.len(), 1);
+                graph.into_complete_rdf().unwrap();
+            } else {
+                assert_eq!(graph.external_blobs.len(), 0);
+                assert_eq!(graph.blobs.len(), 0);
+                assert_eq!(graph.stopped_frames, [blob_offset]);
+                assert!(matches!(
+                    graph.into_complete_rdf().unwrap_err().failure,
+                    ReadFailure::Content(ContentError::UnknownEnumeration { code: 2, .. })
+                ));
+            }
+        }
+    }
+
+    let original = include_bytes!("fixtures/v2/P2/registry__unknown__member_kind.bin");
+    let original_header = Item::first(original).unwrap().unwrap();
+    let pack = Item::first(&original[original_header.bytes().len()..])
+        .unwrap()
+        .unwrap();
+    let graph = second(original);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+    assert!(graph.blobs.is_empty());
+    let error = graph.into_complete_rdf().unwrap_err();
+    assert!(matches!(
+        error.failure,
+        ReadFailure::Wire(wire) if wire.reason == MalformedReason::UnregisteredValue
+    ));
+    let mut bytes = newer.to_vec();
+    bytes.extend_from_slice(pack.bytes());
+    relink_frame(&mut bytes[newer.len()..], &predecessor);
+    assert!(matches!(
+        second(&bytes).into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Content(ContentError::UnknownEnumeration { code: 5, .. })
+    ));
+}
+
+#[test]
+fn durability_counts_the_last_commit_and_the_following_ordinary_frames() {
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_commit().unwrap();
+    writer.add_blob(b"covered", None).unwrap();
+    writer.add_commit().unwrap();
+    writer.add_blob(b"tail", None).unwrap();
+    writer.add_blob(b"second", None).unwrap();
+    let mut bytes = writer.into_inner();
+    let mut uncommitted = SegmentWriter::new(Vec::new()).unwrap();
+    uncommitted.add_blob(b"first", None).unwrap();
+    bytes.extend_from_slice(&uncommitted.into_inner());
+
+    let graph = second(&bytes);
+    let [committed, uncommitted] = graph.segment_durability.as_slice() else {
+        panic!("expected durability for two segments");
+    };
+    assert_eq!((committed.segment, committed.committed_frames), (0, 3));
+    let tail = committed.uncommitted_tail.unwrap();
+    assert_eq!((tail.position, tail.count), (4, 2));
+    assert_eq!((uncommitted.segment, uncommitted.committed_frames), (1, 0));
+    let tail = uncommitted.uncommitted_tail.unwrap();
+    assert_eq!((tail.position, tail.count), (1, 1));
+    assert_eq!(graph.blobs.len(), 4);
+}
+
+#[test]
+fn walked_resync_past_uses_its_own_decoded_byte_count() {
+    let bytes = include_bytes!("fixtures/v2/P1/resync-past-not-checked-count.bin");
+    let offset = 209;
+    for (limit, past) in [(208, ResyncPast::NotChecked), (209, ResyncPast::Matches)] {
+        let mut capacity = ReadCapacity::default();
+        capacity.payload.decoded_bytes_per_read = limit;
+        let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+            panic!("expected a generation 2 graph");
+        };
+        let [opener] = graph.resync_openers.as_slice() else {
+            panic!("expected one resync opener");
+        };
+        assert_eq!(
+            (opener.segment, opener.offset, opener.declared_offset),
+            (1, offset, offset as u64)
+        );
+        assert_eq!(opener.reach, ResyncReach::Walked);
+        assert_eq!(opener.past, past);
+        assert_eq!(graph.left_out, 0);
+        assert_eq!(graph.rdf.lines().count(), 1);
+    }
+
+    let mut extended = bytes.to_vec();
+    // Copy the opener, replacing its two-byte offset and retaining the digest
+    // of the original prefix. Walking accepts the computed opener identifier.
+    extended.extend_from_slice(&bytes[offset..235]);
+    head::write_head(&mut extended, head::UNSIGNED, bytes.len() as u64).unwrap();
+    extended.extend_from_slice(&bytes[237..308]);
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_read = bytes.len() as u64;
+    let ReadGraph::Second(graph) = read(&extended, capacity).unwrap() else {
+        panic!("expected a generation 2 graph");
+    };
+    assert!(
+        graph
+            .resync_openers
+            .iter()
+            .map(|opener| opener.past)
+            .eq([ResyncPast::Matches, ResyncPast::Differs,])
+    );
+
+    let mut empty_past = bytes.to_vec();
+    empty_past.extend_from_slice(&bytes[offset..235]);
+    head::write_head(&mut empty_past, head::UNSIGNED, 0).unwrap();
+    empty_past.extend_from_slice(&bytes[237..308]);
+    for (limit, expected) in [
+        (208, [ResyncPast::NotChecked, ResyncPast::NotChecked]),
+        (209, [ResyncPast::Matches, ResyncPast::Differs]),
+    ] {
+        capacity.payload.decoded_bytes_per_read = limit;
+        let ReadGraph::Second(graph) = read(&empty_past, capacity).unwrap() else {
+            panic!("expected a generation 2 graph");
+        };
+        assert!(
+            graph
+                .resync_openers
+                .iter()
+                .map(|opener| opener.past)
+                .eq(expected)
+        );
+    }
+
+    let displaced = second(&bytes[offset..]);
+    let opener = &displaced.resync_openers[0];
+    assert_eq!((opener.offset, opener.declared_offset), (0, offset as u64));
+    assert_eq!(opener.past, ResyncPast::NotChecked);
+    assert_eq!(displaced.rdf.lines().count(), 1);
+}
+
+#[test]
+fn file_end_uses_the_last_valid_commit_and_retained_item_classes() {
+    for (input, expected_end, expected_left_out) in [
+        (
+            include_bytes!("fixtures/v2/P7/file-end-no-commit.bin").as_slice(),
+            FileEnd::NoCommit,
+            0,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/file-end-at-valid-commit.bin").as_slice(),
+            FileEnd::AtValidCommit,
+            0,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/file-end-opaque-after-commit.bin").as_slice(),
+            FileEnd::AfterCommit,
+            3,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/file-end-region-after-commit.bin").as_slice(),
+            FileEnd::AfterCommit,
+            1,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/end-locator-own-grammar.bin").as_slice(),
+            FileEnd::AtValidCommit,
+            0,
+        ),
+        (
+            include_bytes!("fixtures/v2/P7/end-frame-no-effective-identifier.bin").as_slice(),
+            FileEnd::AfterCommit,
+            1,
+        ),
+    ] {
+        let graph = second(input);
+        assert_eq!(
+            (graph.end, graph.left_out),
+            (expected_end, expected_left_out)
+        );
+    }
+
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_commit().unwrap();
+    let mut bytes = writer.into_inner();
+    bytes.extend_from_slice(&[0x98, 0x02, 0x03, 0x01]);
+    let graph = second(&bytes);
+    assert_eq!(graph.opaque_items.len(), 1);
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+    assert_eq!(graph.left_out, 1);
+    graph.into_complete_rdf().unwrap();
+
+    let no_identifier = second(include_bytes!(
+        "fixtures/v2/P7/end-frame-no-effective-identifier.bin"
+    ));
+    assert_eq!(no_identifier.segment_durability[0].uncommitted_tail, None);
+
+    let source = include_bytes!("fixtures/v2/P7/file-end-at-valid-commit.bin");
+    let mut malformed_commit = source.to_vec();
+    assert_eq!(malformed_commit.pop(), Some(0x80));
+    malformed_commit.extend_from_slice(&[0x81, 0x00]);
+    let graph = second(&malformed_commit);
+    assert!(
+        matches!(graph.frame_failures.as_slice(), [error] if matches!(error.failure, ReadFailure::Wire(_)))
+    );
+    assert_eq!(
+        graph
+            .into_complete_rdf()
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>(),
+        second(source).rdf.lines().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_malformed_envelope_keeps_an_independent_payload_failure() {
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"verified blob", None).unwrap();
+    let mut bytes = writer.into_inner();
+    let graph = second(&bytes);
+    assert_eq!(graph.blobs.len(), 1);
+    assert_eq!(graph.frame_wire[0].link, LinkState::Linked);
+    assert_eq!(graph.frame_wire[0].payload, PayloadOutcome::Verified);
+    drop(graph);
+
+    let header = Item::first(&bytes).unwrap().unwrap();
+    let frame_offset = header.bytes().len();
+    let item = Item::first(&bytes[frame_offset..]).unwrap().unwrap();
+    let payload = item.frame().unwrap().unwrap().field(FrameField::Payload);
+    let payload_end = payload.as_ptr_range().end.addr() - bytes.as_ptr().addr();
+    bytes[payload_end - 1] ^= 1;
+    let graph = second(&bytes);
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [error] if matches!(error.failure, ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest))
+    ));
+
+    assert_eq!(bytes.pop(), Some(0x80));
+    bytes.extend_from_slice(&[0x81, 0]);
+    let graph = second(&bytes);
+    let [envelope, payload] = graph.frame_failures.as_slice() else {
+        panic!("expected independent envelope and payload findings");
+    };
+    let [wire] = graph.frame_wire.as_slice() else {
+        panic!("expected the retained damaged frame");
+    };
+    assert_eq!(
+        (wire.segment, wire.position, wire.offset),
+        (0, 1, frame_offset)
+    );
+    assert_eq!(wire.length, bytes.len() - frame_offset);
+    assert_eq!(
+        wire.frame_type,
+        Some(purrdf_gts::v2::FrameType::Blob as u64)
+    );
+    assert_eq!(wire.link, LinkState::Linked);
+    assert_eq!(wire.payload, PayloadOutcome::Damaged);
+    assert_eq!(wire.stored, None);
+    assert_eq!(
+        (envelope.offset, payload.offset),
+        (frame_offset, frame_offset)
+    );
+    assert!(matches!(
+        envelope.failure,
+        ReadFailure::Wire(wire) if wire.reason == MalformedReason::WrongType
+    ));
+    assert!(matches!(
+        payload.failure,
+        ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+    ));
+    assert!(matches!(
+        graph.into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Wire(_)
+    ));
 }
 
 #[test]
@@ -53,6 +688,69 @@ fn offsets_and_locators_compare_against_the_walked_sequence() {
 }
 
 #[test]
+fn index_content_claims_compare_against_their_covered_rows_and_members() {
+    let intact = include_bytes!("fixtures/v2/P5/index-intact.bin");
+    let pack = include_bytes!("fixtures/v2/P7/idx-unit-pack.bin");
+    for (bytes, directory, members) in [
+        (intact.as_slice(), true, true),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.graph_directory.bin").as_slice(),
+            false,
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.pack_members.bin").as_slice(),
+            true,
+            false,
+        ),
+        (pack.as_slice(), true, true),
+    ] {
+        let graph = second(bytes);
+        let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+        assert_eq!(
+            (prefix.graph_directory_matches, prefix.pack_members_match),
+            (Some(directory), Some(members))
+        );
+    }
+
+    let (_, damaged_pack) = damage_first_payload(pack);
+    let graph = second(&damaged_pack);
+    let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+    assert_eq!(
+        (prefix.graph_directory_matches, prefix.pack_members_match),
+        (Some(true), None)
+    );
+
+    let damaged_rows = damage_payload_at(intact, 152);
+    let graph = second(&damaged_rows);
+    let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+    assert_eq!(
+        (prefix.graph_directory_matches, prefix.pack_members_match),
+        (None, Some(true))
+    );
+    let refusal = graph.into_complete_rdf().unwrap_err();
+    assert_eq!(refusal.offset, 152);
+    assert!(matches!(refusal.failure, ReadFailure::PayloadDamage(_)));
+
+    let rows = Item::first(&intact[152..]).unwrap().unwrap();
+    let mut excluded = rows.bytes().to_vec();
+    assert_eq!(excluded[4], 0xf4);
+    excluded[4] = 0xf5;
+    let index = second(intact).index_checks[0].offset;
+    let extended = [&intact[..index], &excluded, &intact[index..]].concat();
+    let graph = second(&extended);
+    let prefix = graph.index_checks[0].prefix.as_ref().unwrap();
+    assert_eq!(prefix.graph_directory_matches, Some(true));
+    assert_eq!(prefix.pack_members_match, Some(true));
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .any(|finding| finding.offset == index)
+    );
+}
+
+#[test]
 fn a_locator_names_the_closing_index_even_if_it_does_not_verify() {
     let bytes = include_bytes!("fixtures/v2/P5/index-intact.bin");
     let index_offset = 468;
@@ -77,6 +775,24 @@ fn a_locator_names_the_closing_index_even_if_it_does_not_verify() {
             ));
         } else {
             assert!(matches!(index.prefix, Err(ReadFailure::BrokenLink)));
+            let mut capacity = ReadCapacity::default();
+            capacity.payload.decoded_bytes_per_read = 90;
+            let ReadGraph::Second(graph) = read(&changed, capacity).unwrap() else {
+                panic!("expected both checks of the broken index");
+            };
+            assert!(matches!(
+                graph.index_checks[0].prefix,
+                Err(ReadFailure::BrokenLink)
+            ));
+            assert!(graph.frame_failures.iter().any(|error| {
+                error.offset == index_offset
+                    && matches!(
+                        error.failure,
+                        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(206))
+                    )
+            }));
+            assert_eq!(graph.index_storage_findings, []);
+            graph.into_complete_rdf().unwrap();
         }
     }
 }
@@ -227,6 +943,94 @@ fn the_graph_reader_admits_a_closing_index_before_parity() {
 }
 
 #[test]
+fn an_unrecoverable_tail_preserves_the_checked_prefix_and_its_repairs() {
+    let damaged = include_bytes!("fixtures/v2/P5/parity-damaged-shard.bin");
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let offset = damaged.len();
+    for (tail, expected, end) in [
+        (
+            [0x8b, 0x02],
+            FramingDamage::TornTail { offset, length: 2 },
+            FileEnd::Torn,
+        ),
+        (
+            [0xff, 0x00],
+            FramingDamage::Undelimitable { offset, length: 2 },
+            FileEnd::Undelimitable,
+        ),
+    ] {
+        let input = [damaged.as_slice(), tail.as_slice()].concat();
+        let graph = second(&input);
+        assert_eq!(graph.framing_tail, Some(expected));
+        assert_eq!(graph.end, end);
+        assert_eq!(graph.blobs.len(), 1);
+        assert_eq!(graph.parity_recoveries, []);
+        let repaired = [intact.as_slice(), tail.as_slice()].concat();
+        assert_eq!(graph.repaired.as_deref(), Some(repaired.as_slice()));
+    }
+}
+
+#[test]
+fn a_tail_can_overlap_a_preceding_segments_retained_parity_frame() {
+    let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
+    let opener_offset = 970_u16;
+    let opener = resync_opener_at(opener_offset);
+    let start = usize::from(opener_offset);
+    let end = start + opener.len();
+    let mut input = intact.to_vec();
+    input[start..end].copy_from_slice(&opener);
+    input[end] = 0xff;
+    input.push(0);
+
+    let graph = second(&input);
+    let [resync] = graph.resynchronizations.as_slice() else {
+        panic!("expected the opener embedded in the retained parity frame");
+    };
+    assert_eq!(resync.offset, start);
+    assert_eq!(
+        graph.framing_tail,
+        Some(FramingDamage::Undelimitable {
+            offset: end,
+            length: input.len() - end,
+        })
+    );
+    let mut expected = intact.to_vec();
+    expected.push(0);
+    assert_eq!(graph.repaired.as_deref(), Some(expected.as_slice()));
+
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_read = 589;
+    for suffix in [&[0][..], &[0x82, 0x03, 0x01]] {
+        input.truncate(intact.len());
+        input.extend_from_slice(suffix);
+        let ReadGraph::Second(graph) = read(&input, capacity).unwrap() else {
+            panic!("expected the retained parity item after the opener was refused");
+        };
+        let refusal = graph.recovery_refusal.unwrap();
+        assert_eq!(
+            (
+                refusal.segment,
+                refusal.position,
+                refusal.offset,
+                refusal.length,
+                refusal.requested_total,
+            ),
+            (0, 4, start, 4096, 4685)
+        );
+        assert_eq!(graph.resynchronizations, []);
+        if suffix.len() == 3 {
+            let [finding] = graph.index_storage_findings.as_slice() else {
+                panic!("expected the complete malformed locator to retain its class");
+            };
+            assert_eq!(finding.offset, intact.len());
+            assert_eq!(finding.item, IndexStorageItem::Locator);
+            assert!(matches!(finding.problem, IndexStorageProblem::Malformed(_)));
+            assert_eq!(graph.opaque_items.len(), 0);
+        }
+    }
+}
+
+#[test]
 fn repaired_data_requires_rechecking_its_frame_with_the_shared_budget() {
     let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
     let mut damaged = intact.to_vec();
@@ -282,6 +1086,56 @@ fn a_damaged_ordinary_payload_remains_opaque_through_parity_repair() {
 }
 
 #[test]
+fn a_formed_capacity_refusal_reserves_unreadable_terms_for_later_rows() {
+    let bytes = include_bytes!("fixtures/v2/P7/canonical__compaction__formed-refused.bin");
+    let accepted = second(bytes);
+    assert_eq!(accepted.into_complete_rdf().unwrap().lines().count(), 1);
+
+    let capacity = ReadCapacity {
+        formed_bytes: 8,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected a generation 2 graph with held rows");
+    };
+    assert!(graph.rdf.has_held_rows());
+    assert_eq!(graph.rdf.lines().count(), 0);
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [terms, row]
+            if matches!(terms.failure, ReadFailure::Content(ContentError::FormedCapacity(9)))
+                && matches!(row.failure, ReadFailure::Rows(findings) if findings.opaque_term)
+    ));
+    assert_eq!(graph.left_out, 1);
+    assert!(matches!(
+        graph.into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Content(ContentError::FormedCapacity(9))
+    ));
+}
+
+#[test]
+fn a_malformed_terms_frame_leaves_formed_capacity_for_later_definitions() {
+    let bytes = include_bytes!("fixtures/v2/P3/terms-formed-malformed-first.bin");
+    let capacity = ReadCapacity {
+        formed_bytes: 5,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected a generation 2 graph with later readable terms");
+    };
+    assert!(graph.rdf.terms().next().is_some());
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [error]
+            if matches!(
+                error.failure,
+                ReadFailure::Content(ContentError::Malformed(wire))
+                    if wire.reason == MalformedReason::InconsistentCounts
+            )
+    ));
+}
+
+#[test]
 fn a_damaged_terms_payload_reserves_the_ids_named_by_later_rows() {
     let source =
         include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.undelimitable.bin");
@@ -302,6 +1156,22 @@ fn a_damaged_terms_payload_reserves_the_ids_named_by_later_rows() {
     ));
     assert!(matches!(&rows.failure, ReadFailure::Rows(finding)
         if finding.opaque_term && !finding.forward_reference));
+
+    let mut longer = damaged;
+    longer.push(0);
+    let stopped = second_at_capacity(
+        &longer,
+        ReadCapacity {
+            items: 3,
+            ..ReadCapacity::default()
+        },
+    );
+    assert_eq!(stopped.end, FileEnd::NotRead);
+    assert_eq!(stopped.left_out, 1);
+    assert!(matches!(
+        stopped.frame_failures.as_slice(),
+        [error] if matches!(error.failure, ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest))
+    ));
 }
 
 #[test]
@@ -339,13 +1209,27 @@ fn a_complete_opaque_item_puts_the_dictionary_in_doubt_after_the_scan() {
         if finding.opaque_term && !finding.forward_reference));
 
     capacity.items -= 1;
-    let refusal = read(&damaged, capacity).unwrap_err();
+    let graph = second_at_capacity(&damaged, capacity);
+    assert_eq!(graph.end, FileEnd::NotRead);
+    assert_eq!(graph.opaque_items[0].offset, row_offset);
+    assert_eq!(graph.rdf.terms().len(), 0);
+    let item_refusal = graph.item_refusal.unwrap();
+    assert_eq!(
+        (item_refusal.offset, item_refusal.limit),
+        (row_offset + 1, 3)
+    );
+    assert_eq!(item_refusal.length, damaged.len() - item_refusal.offset);
+    let refusal = graph.into_complete_rdf().unwrap_err();
     assert_eq!(refusal.offset, row_offset + 1);
     assert!(matches!(refusal.failure, ReadFailure::ItemCapacity(3)));
 }
 
 fn damage_first_payload(intact: &[u8]) -> (usize, Vec<u8>) {
     let offset = Item::first(intact).unwrap().unwrap().bytes().len();
+    (offset, damage_payload_at(intact, offset))
+}
+
+fn damage_payload_at(intact: &[u8], offset: usize) -> Vec<u8> {
     let frame = Item::first(&intact[offset..])
         .unwrap()
         .unwrap()
@@ -356,13 +1240,14 @@ fn damage_first_payload(intact: &[u8]) -> (usize, Vec<u8>) {
     let last_payload_byte = payload.as_ptr().addr() - intact.as_ptr().addr() + payload.len() - 1;
     let mut damaged = intact.to_vec();
     damaged[last_payload_byte] ^= 1;
-    (offset, damaged)
+    damaged
 }
 
 #[test]
 fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
     let intact = include_bytes!("fixtures/v2/P5/parity-base.bin");
-    let index_offset = second(intact).index_checks[0].offset;
+    let intact_graph = second(intact);
+    let index_offset = intact_graph.index_checks[0].offset;
     let parity_offset = 481;
     let mut damaged = intact.to_vec();
     damaged[index_offset] = 0xff;
@@ -372,6 +1257,19 @@ fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
     };
     assert_eq!(recovery.offset, parity_offset);
     assert!(recovery.detached);
+    let ordinary = intact_graph
+        .frame_wire
+        .iter()
+        .find(|wire| wire.offset == parity_offset)
+        .unwrap();
+    let rescanned = graph
+        .frame_wire
+        .iter()
+        .find(|wire| wire.offset == parity_offset)
+        .unwrap();
+    assert_eq!(rescanned, ordinary);
+    assert_eq!(rescanned.link, LinkState::Linked);
+    assert_eq!(rescanned.payload, PayloadOutcome::Verified);
     assert_eq!(
         recovery.damage,
         FramingDamage::Undelimitable {
@@ -455,12 +1353,13 @@ fn a_parity_candidate_resumes_across_a_lost_item_and_repairs_its_bytes() {
             }),
         )
         .unwrap();
-        let result = read(&next_segment, ReadCapacity::default());
-        if valid {
-            assert!(matches!(result, Ok(ReadGraph::Second(_))));
-        } else {
-            assert!(matches!(result.unwrap_err().failure, ReadFailure::Lineage));
-        }
+        let graph = second(&next_segment);
+        let finding = graph
+            .lineage_findings
+            .iter()
+            .find(|(offset, _)| *offset == damaged.len())
+            .map(|(_, finding)| *finding);
+        assert_eq!(finding, (!valid).then_some(LineageFinding::HeadMismatch));
     }
 }
 
@@ -471,7 +1370,10 @@ fn parity_recovery_uses_the_resync_opener_and_counts_each_region_as_one_item() {
     let undelimitable =
         include_bytes!("fixtures/v2/P5/recovery-parity-in-resync-segment.undelimitable.bin");
     let mut repaired = None;
-    for bytes in [incomplete.as_slice(), undelimitable.as_slice()] {
+    for (bytes, torn) in [
+        (incomplete.as_slice(), true),
+        (undelimitable.as_slice(), false),
+    ] {
         let mut capacity = ReadCapacity {
             items: 6,
             ..ReadCapacity::default()
@@ -500,25 +1402,55 @@ fn parity_recovery_uses_the_resync_opener_and_counts_each_region_as_one_item() {
         assert_eq!(repaired.get_or_insert_with(|| output.clone()), &output);
 
         capacity.items -= 1;
-        assert!(matches!(
-            read(bytes, capacity).unwrap_err().failure,
-            ReadFailure::Framing(_)
-        ));
+        let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+            panic!("expected the checked prefix at the item limit");
+        };
+        let offset = 274;
+        let length = bytes.len() - offset;
+        let tail = if torn {
+            FramingDamage::TornTail { offset, length }
+        } else {
+            FramingDamage::Undelimitable { offset, length }
+        };
+        assert_eq!(graph.framing_tail, Some(tail));
+        assert_eq!(graph.parity_recoveries, []);
     }
 
     let mut capacity = ReadCapacity::default();
     capacity.payload.decoded_bytes_per_read = 462;
-    let refusal = read(incomplete, capacity).unwrap_err();
-    assert_eq!(refusal.offset, 586);
-    assert!(matches!(
-        refusal.failure,
-        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(463))
-    ));
+    let ReadGraph::Second(graph) = read(incomplete, capacity).unwrap() else {
+        panic!("expected the checked prefix after the parity candidate was refused");
+    };
+    let refusal = graph.recovery_refusal.unwrap();
+    let length = Item::first(&incomplete[586..])
+        .unwrap()
+        .unwrap()
+        .bytes()
+        .len();
+    assert_eq!(
+        (
+            refusal.segment,
+            refusal.position,
+            refusal.offset,
+            refusal.length,
+            refusal.requested_total
+        ),
+        (1, 1, 586, length, 463)
+    );
+    assert_eq!(
+        graph.framing_tail,
+        Some(FramingDamage::TornTail {
+            offset: 274,
+            length: incomplete.len() - 274,
+        })
+    );
+    assert_eq!(graph.parity_recoveries, []);
     capacity.payload.decoded_bytes_per_read = 463;
-    assert!(matches!(
-        read(incomplete, capacity),
-        Ok(ReadGraph::Second(_))
-    ));
+    let ReadGraph::Second(graph) = read(incomplete, capacity).unwrap() else {
+        panic!("expected the candidate to pass at the budget boundary");
+    };
+    assert!(graph.recovery_refusal.is_none());
+    assert_eq!(graph.parity_recoveries.len(), 1);
 }
 
 #[test]
@@ -866,8 +1798,15 @@ fn bounded_recovery_and_body_framing_apply_their_nesting_limits() {
         read_with_limits(source, limits).unwrap(),
         ReadGraph::Second(_)
     ));
-    let error = read_with_limits(&damaged, limits).unwrap_err();
-    assert!(matches!(error.failure, ReadFailure::BrokenLink));
+    let ReadGraph::Second(graph) = read_with_limits(&damaged, limits).unwrap() else {
+        panic!("the bounded reader recognizes generation 2");
+    };
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .any(|error| matches!(error.failure, ReadFailure::BrokenLink))
+    );
     limits.detection.nesting_depth -= 1;
     let error = read_with_limits(&damaged, limits).unwrap_err();
     assert!(matches!(
@@ -934,11 +1873,15 @@ fn bounded_framing_reports_the_item_start_and_retains_the_native_offset() {
 
     let mut malformed = opener.to_vec();
     malformed.extend_from_slice(&[0x82, 0x00, 0xff]);
-    let error = read_with_limits(&malformed, ReadLimits::default()).unwrap_err();
-    assert_eq!(error.offset, opener.len());
-    let ReadFailure::Framing(cause) = &error.failure else {
-        panic!("the malformed body item must retain its framing refusal");
+    let ReadGraph::Second(graph) = read_with_limits(&malformed, ReadLimits::default()).unwrap()
+    else {
+        panic!("the bounded reader recognizes generation 2");
     };
+    let error = graph.into_complete_rdf().unwrap_err();
+    assert_eq!(error.offset, opener.len());
+    let cause = std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<StructuralError>())
+        .expect("the malformed body item retains its native framing refusal");
     assert_eq!(cause.offset(), 2);
 }
 
@@ -1007,8 +1950,11 @@ fn scanned_openers_preserve_the_difference_between_torn_and_undelimitable_prefix
             items: items - 1,
             ..capacity
         };
+        let graph = second_at_capacity(bytes, capacity);
+        assert_eq!(graph.end, FileEnd::NotRead);
+        assert_eq!(graph.item_refusal.unwrap().limit, items - 1);
         assert!(matches!(
-            read(bytes, capacity).unwrap_err().failure,
+            graph.into_complete_rdf().unwrap_err().failure,
             ReadFailure::ItemCapacity(_)
         ));
     }
@@ -1115,13 +2061,43 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     ));
     limits.detection = ReadLimits::default().detection;
 
+    limits.second_generation.items = 4;
+    limits.second_generation.payload.decoded_bytes_per_read = 4095;
+    let ReadGraph::Second(graph) = read_with_limits(complete, limits).unwrap() else {
+        panic!("expected the first malformed opener to survive the refusal");
+    };
+    assert_eq!(graph.skipped_segments[0].items, 3);
+    let refusal = graph.recovery_refusal.unwrap();
+    assert_eq!(
+        (
+            refusal.segment,
+            refusal.position,
+            refusal.offset,
+            refusal.requested_total
+        ),
+        (0, 0, 10, 4096)
+    );
+    assert!(matches!(
+        graph.into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Wire(_)
+    ));
+
     limits.second_generation.items = 3;
-    let error = read_with_limits(complete, limits).unwrap_err();
+    let ReadGraph::Second(graph) = read_with_limits(complete, limits).unwrap() else {
+        panic!("expected a skipped generation 2 segment");
+    };
+    assert_eq!(graph.skipped_segments[0].items, 3);
+    let error = graph.into_complete_rdf().unwrap_err();
     assert_eq!(error.offset, 0);
     assert!(matches!(error.failure, ReadFailure::Wire(_)));
 
     limits.second_generation.items = 2;
-    let error = read_with_limits(complete, limits).unwrap_err();
+    let ReadGraph::Second(graph) = read_with_limits(complete, limits).unwrap() else {
+        panic!("the bounded reader retains the checked prefix");
+    };
+    assert_eq!(graph.end, FileEnd::NotRead);
+    assert_eq!(graph.skipped_segments[0].items, 2);
+    let error = graph.into_complete_rdf().unwrap_err();
     assert_eq!(error.offset, 177);
     assert!(matches!(error.failure, ReadFailure::ItemCapacity(2)));
 
@@ -1132,7 +2108,12 @@ fn a_resync_opener_in_a_damaged_prefix_respects_the_read_limits() {
     );
     limits.second_generation.payload = ReadCapacity::default().payload;
     limits.second_generation.items = 1;
-    let error = read_with_limits(incomplete, limits).unwrap_err();
+    let ReadGraph::Second(graph) = read_with_limits(incomplete, limits).unwrap() else {
+        panic!("the bounded reader retains the checked prefix");
+    };
+    assert_eq!(graph.end, FileEnd::NotRead);
+    assert_eq!(graph.resynchronizations.len(), 1);
+    let error = graph.into_complete_rdf().unwrap_err();
     assert_eq!(error.offset, 264);
     assert!(matches!(error.failure, ReadFailure::ItemCapacity(1)));
 }
@@ -1154,9 +2135,17 @@ fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
         ..ReadCapacity::default()
     };
     capacity.payload.decoded_bytes_per_read = 17;
-    let error = read(bytes, capacity).unwrap_err();
-    assert_eq!(error.offset, 114);
-    assert!(matches!(error.failure, ReadFailure::Framing(_)));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the checked prefix at the item limit");
+    };
+    assert_eq!(graph.resynchronizations, []);
+    assert_eq!(
+        graph.framing_tail,
+        Some(FramingDamage::Undelimitable {
+            offset: 114,
+            length: bytes.len() - 114
+        })
+    );
 
     // The segment before the damage spends 17 bytes. The scan adds
     // another 4,096 and the resumed terms and row frames add 31.
@@ -1179,9 +2168,45 @@ fn a_later_undelimitable_region_consumes_one_item_before_recovery() {
     assert!(matches!(graph.rdf.lines().next(), Some(Line::Quad(..))));
 
     capacity.payload.decoded_bytes_per_read = 4143;
-    let refused = read(bytes, capacity).unwrap_err();
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the result with a refused row payload");
+    };
+    assert!(graph.recovery_refusal.is_none());
+    assert_eq!(graph.resynchronizations.len(), 1);
+    let [refused] = graph.frame_failures.as_slice() else {
+        panic!("expected one payload refusal");
+    };
     assert!(matches!(
         refused.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4144))
+    ));
+
+    let offset = refused.offset;
+    let item = Item::first(&bytes[offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let signature_start = offset + item.bytes().len() - frame.field(FrameField::Signatures).len();
+    let mut broken = bytes.to_vec();
+    broken[signature_start - 1] ^= 1;
+    let ReadGraph::Second(graph) = read(&broken, capacity).unwrap() else {
+        panic!("expected both checks of the broken row frame");
+    };
+    let [link, payload] = graph.frame_failures.as_slice() else {
+        panic!("expected independent link and payload findings");
+    };
+    let wire = graph
+        .frame_wire
+        .iter()
+        .find(|frame| frame.offset == offset)
+        .unwrap();
+    assert_eq!(wire.link, LinkState::Broken);
+    assert_eq!(
+        wire.payload,
+        PayloadOutcome::Unchecked(PayloadUnchecked::ExceedsCapacity)
+    );
+    assert_eq!((link.offset, payload.offset), (offset, offset));
+    assert!(matches!(link.failure, ReadFailure::BrokenLink));
+    assert!(matches!(
+        payload.failure,
         ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4144))
     ));
 }
@@ -1247,37 +2272,174 @@ fn a_complete_failed_frame_charges_its_payload_before_scanning() {
     assert_eq!(resumed.offset, 370);
 
     capacity.payload.decoded_bytes_per_read = 4113;
-    let refused = read(bytes, capacity).unwrap_err();
-    assert_eq!(refused.offset, 370);
-    assert!(matches!(
-        refused.failure,
-        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4114))
-    ));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the complete items after the refused candidate");
+    };
+    let refused = graph.recovery_refusal.unwrap();
+    assert_eq!(
+        (
+            refused.segment,
+            refused.position,
+            refused.offset,
+            refused.length,
+            refused.requested_total
+        ),
+        (0, 2, 370, 4096, 4114)
+    );
+    assert_eq!(graph.resynchronizations, []);
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .any(|error| { error.offset == 114 && matches!(error.failure, ReadFailure::Wire(_)) })
+    );
+    assert!(graph.frame_failures.iter().any(|error| matches!(
+        error.failure,
+        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(_))
+    )));
 
     // The failed frame and both held items reach the item limit at EOF.
     // The candidate is never charged and the original failure survives.
     capacity.items = 5;
-    let refused = read(bytes, capacity).unwrap_err();
-    assert_eq!(refused.offset, 114);
-    assert!(matches!(refused.failure, ReadFailure::Wire(_)));
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the complete items at the exact item limit");
+    };
+    assert!(graph.recovery_refusal.is_none());
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .any(|error| { error.offset == 114 && matches!(error.failure, ReadFailure::Wire(_)) })
+    );
 }
 
 #[test]
 fn a_replaced_healing_witness_leaves_the_previous_frame_broken() {
     let bytes = include_bytes!("fixtures/v2/P1/resync-heal-witness-removed.ample-whole.bin");
     let mut capacity = ReadCapacity::default();
-    let broken = read(bytes, capacity).unwrap_err();
+    let graph = second(bytes);
+    let [broken] = graph.frame_failures.as_slice() else {
+        panic!("expected the replaced witness to leave one broken frame");
+    };
     assert_eq!(broken.offset, 114);
     assert!(matches!(broken.failure, ReadFailure::BrokenLink));
+    assert_eq!(graph.resynchronizations.len(), 1);
 
     // When the scan cannot admit the new opener, the witness remains.
     capacity.payload.decoded_bytes_per_read = 4114;
-    let refused = read(bytes, capacity).unwrap_err();
-    assert_eq!(refused.offset, 316);
-    assert!(matches!(
-        refused.failure,
-        ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(4184))
+    let ReadGraph::Second(graph) = read(bytes, capacity).unwrap() else {
+        panic!("expected the retained healing witness after the refusal");
+    };
+    let refused = graph.recovery_refusal.unwrap();
+    assert_eq!(
+        (
+            refused.segment,
+            refused.position,
+            refused.offset,
+            refused.length,
+            refused.requested_total
+        ),
+        (0, 3, 316, 4096, 4184)
+    );
+    assert!(
+        graph
+            .frame_failures
+            .iter()
+            .all(|failure| failure.offset != 114)
+    );
+    let [healed] = graph.blobs.as_slice() else {
+        panic!(
+            "expected the healed blob to fold, failures: {:?}",
+            graph.frame_failures
+        );
+    };
+    assert_eq!(healed.bytes.as_ref(), b"xx");
+    let [witness] = graph.frame_failures.as_slice() else {
+        panic!("expected the witness's signature grammar finding");
+    };
+    assert_eq!(witness.offset, 231);
+    assert!(
+        matches!(
+            witness.failure,
+            ReadFailure::Wire(error)
+                if error.reason == MalformedReason::WrongType && error.offset == 186
+        ),
+        "{witness:?}"
+    );
+}
+
+#[test]
+fn a_later_commit_exempts_rows_from_the_broken_link_rule() {
+    let intact = include_bytes!("fixtures/v2/P3/broken-link-commit-ends.whole.bin");
+    let committed = second(intact);
+    let no_commit = second(include_bytes!(
+        "fixtures/v2/P3/broken-link-commit-ends.no-commit.bin"
     ));
+    let doubt_stays = second(include_bytes!(
+        "fixtures/v2/P3/broken-link-commit-doubt-stays.whole.bin"
+    ));
+    assert!(!committed.rdf.has_held_rows());
+    assert_eq!(committed.rdf.lines().count(), 3);
+    assert!(no_commit.rdf.has_held_rows());
+    assert_eq!(no_commit.rdf.lines().count(), 1);
+    assert!(doubt_stays.rdf.has_held_rows());
+    assert_eq!(doubt_stays.rdf.lines().count(), 2);
+    assert!(doubt_stays.frame_failures.iter().any(|failure| {
+        failure.offset == 402
+            && matches!(&failure.failure, ReadFailure::Rows(findings) if findings.opaque_term)
+    }));
+    for graph in [&committed, &no_commit, &doubt_stays] {
+        assert!(
+            graph
+                .frame_failures
+                .iter()
+                .any(|failure| matches!(failure.failure, ReadFailure::BrokenLink))
+        );
+    }
+
+    // A commit's count and range root can hold even if its empty payload's
+    // digest is wrong. Recompute its link after changing the payload digest.
+    let last_quad_offset = 399;
+    let last_quad = Item::first(&intact[last_quad_offset..]).unwrap().unwrap();
+    let commit_offset = last_quad_offset + last_quad.bytes().len();
+    let quad = last_quad.frame().unwrap().unwrap();
+    let mut identifier = quad.field(FrameField::Identifier);
+    let predecessor = head::read_bytes(&mut identifier)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let commit = Item::first(&intact[commit_offset..])
+        .unwrap()
+        .unwrap()
+        .frame()
+        .unwrap()
+        .unwrap();
+    let digest = commit.field(FrameField::PayloadDigest);
+    let digest_end = digest.as_ptr().addr() - intact.as_ptr().addr() + digest.len();
+    let mut wrong_payload = intact.to_vec();
+    wrong_payload[digest_end - 1] ^= 1;
+    let changed = Item::first(&wrong_payload[commit_offset..])
+        .unwrap()
+        .unwrap()
+        .frame()
+        .unwrap()
+        .unwrap();
+    let identifier = changed
+        .check_link(predecessor, None)
+        .computed_identifier
+        .unwrap();
+    let identifier_end = wrong_payload.len() - 1;
+    wrong_payload[identifier_end - identifier.len()..identifier_end].copy_from_slice(&identifier);
+    let graph = second(&wrong_payload);
+    assert!(!graph.rdf.has_held_rows());
+    assert_eq!(graph.rdf.lines().count(), 3);
+    assert!(graph.frame_failures.iter().any(|failure| {
+        failure.offset == commit_offset
+            && matches!(
+                &failure.failure,
+                ReadFailure::PayloadDamage(PayloadDamage::PayloadDigest)
+            )
+    }));
 }
 
 #[test]
@@ -1297,11 +2459,113 @@ fn value_rebuild_precedes_term_resolution_across_segments() {
             .as_slice(),
         include_bytes!("fixtures/v2/P3/terms-literal-ref-length-cross-segment.bin").as_slice(),
     ] {
-        let error = read(bytes, ReadCapacity::default()).unwrap_err();
+        let error = second(bytes).into_complete_rdf().unwrap_err();
         assert!(matches!(
             error.failure,
             ReadFailure::Definitions(findings) if findings.missing_values.len() == 1
         ));
+    }
+}
+
+#[test]
+fn a_forward_reference_drops_its_row_and_retains_the_readable_rows() {
+    let graph = second(include_bytes!("fixtures/v2/P3/rows-forward-reference.bin"));
+    assert_eq!(graph.rdf.lines().count(), 2);
+    assert!(!graph.rdf.has_held_rows());
+    assert!(matches!(
+        graph.frame_failures.as_slice(),
+        [error] if matches!(
+            error.failure,
+            ReadFailure::Rows(findings) if findings.forward_reference && !findings.opaque_term
+        )
+    ));
+    assert!(matches!(
+        graph.into_complete_rdf().unwrap_err().failure,
+        ReadFailure::Rows(findings) if findings.forward_reference
+    ));
+}
+
+#[test]
+fn refused_value_remains_a_candidate_for_later_terms() {
+    let bytes = include_bytes!("fixtures/v2/P4/rebuild-charge-value-term.bin");
+    let admitted = second(bytes);
+    assert_eq!(admitted.rdf.lines().count(), 1);
+    assert!(!admitted.rdf.has_held_rows());
+    assert_eq!(admitted.rebuilds[0].state, RebuildState::Verified);
+
+    let capacity = ReadCapacity {
+        rebuilt_bytes: 2,
+        ..ReadCapacity::default()
+    };
+    let ReadGraph::Second(refused) = read(bytes, capacity).unwrap() else {
+        panic!("the fixture is generation 2");
+    };
+    assert!(refused.rdf.has_held_rows());
+    let [declaration, row] = refused.frame_failures.as_slice() else {
+        panic!("expected the value refusal and the held row");
+    };
+    assert!(matches!(
+        declaration.failure,
+        ReadFailure::RebuildCapacity(name) if name.length > 2
+    ));
+    assert!(matches!(&row.failure, ReadFailure::Rows(findings) if findings.opaque_term));
+    assert!(declaration.offset < row.offset);
+    let result = refused.rebuilds[0];
+    assert_eq!(result.offset, declaration.offset);
+    assert_eq!(result.member, None);
+    assert_eq!(
+        result.state,
+        RebuildState::Refused {
+            count: result.name.length
+        }
+    );
+
+    let recipe = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.units-first.bin");
+    let mut writer = SegmentWriter::new(recipe.to_vec()).unwrap();
+    let later = writer.add_value(b"d").unwrap();
+    writer.add_commit().unwrap();
+    let bytes = writer.into_inner();
+    assert!(second(&bytes).frame_failures.is_empty());
+    let ReadGraph::Second(refused) = read(&bytes, capacity).unwrap() else {
+        panic!("the writer emits generation 2");
+    };
+    let [first_refusal, later_refusal] = refused.frame_failures.as_slice() else {
+        panic!("both declarations are refused after the budget stops");
+    };
+    assert!(matches!(
+        first_refusal.failure,
+        ReadFailure::RebuildCapacity(name) if name.length > 2
+    ));
+    assert!(matches!(
+        later_refusal.failure,
+        ReadFailure::RebuildCapacity(name) if name == later
+    ));
+    assert_eq!(
+        refused.rebuilds[1].state,
+        RebuildState::Refused { count: 1 }
+    );
+
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    for value in [b"abcdef".as_slice(), b"vwxyz", b"g"] {
+        writer.add_value(value).unwrap();
+    }
+    let bytes = writer.into_inner();
+    let graph = second_at_capacity(
+        &bytes,
+        ReadCapacity {
+            rebuilt_bytes: 10,
+            ..capacity
+        },
+    );
+    let [admitted, refused, latched] = graph.rebuilds.as_slice() else {
+        panic!("expected one outcome for each declaration");
+    };
+    assert_eq!(admitted.state, RebuildState::Verified);
+    for (rebuild, count) in [(refused, 11), (latched, 7)] {
+        let state = purrdf_testkit::error_capture::Capture::read(rebuild).child("state");
+        assert!(
+            matches!(state.field("count"), purrdf_hash::error::ErrorValue::ByteCount(actual) if actual == count)
+        );
     }
 }
 
@@ -1334,13 +2598,39 @@ fn rdf_writer_preserves_resolved_rows_and_typed_values() {
 }
 
 #[test]
+fn annotation_width_refusal_keeps_the_fold_and_its_saturated_count() {
+    let bytes = include_bytes!("fixtures/v2/P3/annotations-count-overflow.bin");
+    let overflowing_frame = 273;
+    let exact = second(&bytes[..overflowing_frame]);
+    assert!(!exact.rdf.annotation_width_exceeded());
+    let exact = exact.into_complete_rdf().unwrap();
+    assert!(exact.lines().any(|line| matches!(
+        line, Line::Annotation(_, count, _) if count.get() == u64::MAX
+    )));
+
+    let refused = second(bytes);
+    assert!(refused.rdf.annotation_width_exceeded());
+    assert_eq!(refused.end, FileEnd::AtValidCommit);
+    assert_eq!(refused.left_out, 0);
+    assert_eq!(
+        refused.rdf.lines().collect::<Vec<_>>(),
+        exact.lines().collect::<Vec<_>>()
+    );
+    let error = refused.into_complete_rdf().unwrap_err();
+    assert_eq!(error.offset, overflowing_frame);
+    assert!(matches!(error.failure, ReadFailure::AnnotationWidth));
+}
+
+#[test]
 fn one_annotation_frame_rejects_repeated_written_definitions() {
     for bytes in [
         include_bytes!("fixtures/v2/P3/annotations-repeat.bin").as_slice(),
         include_bytes!("fixtures/v2/P3/annotations-repeat-after-resolution.bin").as_slice(),
         include_bytes!("fixtures/v2/P3/annotations-triple-components-written-alike.components-written-alike.bin").as_slice(),
     ] {
-        let error = read(bytes, ReadCapacity::default()).unwrap_err();
+        let graph = second(bytes);
+        assert!(!graph.rdf.lines().any(|line| matches!(line, Line::Annotation(..))));
+        let error = graph.into_complete_rdf().unwrap_err();
         assert!(matches!(
             error.failure,
             ReadFailure::Content(ContentError::Malformed(wire))
@@ -1431,10 +2721,29 @@ fn the_item_limit_applies_before_framing_an_opener() {
     let mut invalid = bytes.to_vec();
     invalid[0] = 0x88;
     invalid.push(0xf6);
-    let error = read_with_limits(&invalid, ReadLimits::default()).unwrap_err();
+    let ReadGraph::Second(graph) = read_with_limits(&invalid, ReadLimits::default()).unwrap()
+    else {
+        panic!("the invalid opener still declares generation 2");
+    };
+    let error = graph.into_complete_rdf().unwrap_err();
     assert!(matches!(error.failure, ReadFailure::Wire(_)));
     let error = read_with_limits(&invalid, limits).unwrap_err();
     assert!(matches!(error.failure, ReadFailure::ItemCapacity(0)));
+
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"checked prefix", None).unwrap();
+    writer.add_commit().unwrap();
+    let bytes = writer.into_inner();
+    let stopped = second_at_capacity(
+        &bytes,
+        ReadCapacity {
+            items: 2,
+            ..capacity
+        },
+    );
+    assert_eq!(stopped.end, FileEnd::NotRead);
+    assert!(stopped.blobs.is_empty());
+    assert_eq!(second(&bytes).blobs[0].bytes.as_ref(), b"checked prefix");
 }
 
 #[test]
@@ -1448,25 +2757,83 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
         "fixtures/v2/P4/rebuild-unit-after-recipe.units-first.bin"
     ));
     assert_eq!(earlier.blobs.len(), 1);
-    for bytes in [
-        include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-first.bin").as_slice(),
-        include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-last.bin").as_slice(),
+    for (bytes, member) in [
+        (
+            include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-first.bin")
+                .as_slice(),
+            0,
+        ),
+        (
+            include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-last.bin")
+                .as_slice(),
+            2,
+        ),
     ] {
         let packed = second(bytes);
         assert_eq!(packed.blobs.len(), 1);
+        let [result] = packed.rebuilds.as_slice() else {
+            panic!("expected one rebuild from the pack");
+        };
+        assert_eq!(
+            (result.member, result.state),
+            (Some(member), RebuildState::Verified)
+        );
         assert_eq!(packed.blobs[0].name, earlier.blobs[0].name);
         assert_eq!(packed.blobs[0].bytes, earlier.blobs[0].bytes);
     }
     let later = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.recipe-first.bin");
-    let error = read(later, ReadCapacity::default()).unwrap_err();
+    let graph = second(later);
+    assert!(graph.blobs.is_empty());
+    let [error] = graph.frame_failures.as_slice() else {
+        panic!("expected one unavailable unit finding");
+    };
     assert!(matches!(error.failure, ReadFailure::MissingUnit(_)));
+    assert_eq!(graph.rebuilds[0].state, RebuildState::MissingUnit);
 
     let malformed = include_bytes!("fixtures/v2/P4/pack-recipe-trailing-count.bin");
-    let error = read(malformed, ReadCapacity::default()).unwrap_err();
+    let graph = second(malformed);
+    assert!(graph.blobs.is_empty());
+    assert!(graph.blob_set.is_empty());
+    assert_eq!(graph.end, FileEnd::AtValidCommit);
+    let error = graph.into_complete_rdf().unwrap_err();
     assert!(matches!(
         error.failure,
         ReadFailure::Wire(wire) if wire.reason == MalformedReason::WrongLength
     ));
+}
+
+#[test]
+fn failed_pack_unit_digests_leave_other_declarations_and_the_commit_readable() {
+    let one = include_bytes!("fixtures/v2/P4/pack-member-digest.one-failing.bin");
+    let named_blob = second(one).blobs[0].name;
+    for (bytes, failed, verified) in [
+        (one.as_slice(), 1, 1),
+        (
+            include_bytes!("fixtures/v2/P4/pack-member-digest.two-failing.bin").as_slice(),
+            2,
+            0,
+        ),
+    ] {
+        let graph = second(bytes);
+        assert_eq!(graph.frame_failures.len(), failed);
+        assert!(graph.frame_failures.iter().all(|finding| {
+            finding.offset == graph.frame_failures[0].offset
+                && matches!(finding.failure, ReadFailure::BlobDigest)
+        }));
+        assert_eq!(graph.blobs.len(), verified);
+        assert_eq!(graph.left_out, 0);
+        assert!(
+            graph
+                .blob_set
+                .iter()
+                .any(|entry| entry.name == named_blob && entry.present)
+        );
+        assert_eq!(graph.end, FileEnd::AtValidCommit);
+        assert!(matches!(
+            graph.into_complete_rdf().unwrap_err().failure,
+            ReadFailure::BlobDigest
+        ));
+    }
 }
 
 #[test]
@@ -1488,6 +2855,38 @@ fn external_blobs_round_trip_as_declarations() {
     };
     assert_eq!(actual.name, expected.name);
     assert_eq!(actual.media_type, expected.media_type);
+    assert_eq!(decoded.blob_set[0].name, expected.name);
+    assert!(!decoded.blob_set[0].present);
+}
+
+#[test]
+fn blob_declarations_union_by_digest_and_keep_the_smallest_length() {
+    let body = b"named blob";
+    let name = ValueName::of(body);
+    let conflicting = ValueName {
+        length: name.length + 1,
+        ..name
+    };
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer
+        .add_external_blob(conflicting, Some("a/long"))
+        .unwrap();
+    writer.add_blob(body, Some("z/b")).unwrap();
+    writer.add_external_blob(name, Some("a/a")).unwrap();
+    writer.add_external_blob(name, Some("a/a")).unwrap();
+    writer.add_commit().unwrap();
+    let bytes = writer.into_inner();
+    let graph = second(&bytes);
+    let [entry] = graph.blob_set.as_slice() else {
+        panic!("expected declarations of the same digest to form one entry");
+    };
+    assert_eq!(entry.name, name);
+    assert!(entry.present);
+    assert_eq!(entry.media_types, ["a/a", "z/b", "a/long"]);
+    assert_eq!(
+        graph.blob_length_conflicts,
+        [Item::first(&bytes).unwrap().unwrap().bytes().len()]
+    );
 }
 
 #[test]
@@ -1550,7 +2949,7 @@ fn walked_resync_uses_the_computed_identifier_for_frame_links() {
     assert_eq!(second(&changed).rdf.lines().count(), rows);
 
     changed[offset + 4] ^= 1;
-    let error = read(&changed, ReadCapacity::default()).unwrap_err();
+    let error = second(&changed).into_complete_rdf().unwrap_err();
     assert!(matches!(
         error.failure,
         ReadFailure::Wire(wire) if wire.reason == MalformedReason::OutOfRange
@@ -1579,7 +2978,7 @@ fn walked_resync_checks_mark_order_and_grammar_before_the_byte_limit() {
             MalformedReason::NotDeterministic,
         ),
     ] {
-        let error = read(bytes, ReadCapacity::default()).unwrap_err();
+        let error = second(bytes).into_complete_rdf().unwrap_err();
         assert!(
             matches!(error.failure, ReadFailure::Wire(wire) if wire.reason == reason),
             "{error:?}"
@@ -1611,7 +3010,7 @@ fn a_duplicate_resync_mark_is_reported_at_its_start() {
     ));
 
     let bytes = build(2);
-    let err = read(&bytes, ReadCapacity::default()).unwrap_err();
+    let err = second(&bytes).into_complete_rdf().unwrap_err();
     assert!(matches!(err.failure, ReadFailure::Wire(wire)
         if wire.reason == MalformedReason::UnorderedOrRepeated
             && wire.offset == opener.len() + 1 + mark.len()));

@@ -16,6 +16,7 @@ mod rdf;
 mod read;
 mod rows;
 mod segment;
+mod signature;
 mod terms;
 mod writer;
 
@@ -26,7 +27,7 @@ pub use header::{
     write_header,
 };
 pub use index::{IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexStorageProblem};
-pub use item::{Generation, Item, ItemKind};
+pub use item::{Generation, Item, ItemKind, names_second_generation};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
     ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParityPatch,
@@ -42,17 +43,27 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    DetectionCapacity, ExternalBlob, FramingDamage, GraphIndexCheck, ParityRecovery, RdfGraph,
-    ReadCapacity, ReadError, ReadFailure, ReadGraph, ReadLimits, Resynchronization, VerifiedBlob,
-    read, read_with_limits,
+    BlobEntry, DetectionCapacity, ExternalBlob, FileEnd, FrameSignatures, FrameWireResult,
+    FramingDamage, GraphIndexCheck, ItemRefusal, LineageFinding, ParityRecovery, PayloadOutcome,
+    PayloadUnchecked, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, ReadLimits,
+    RebuildResult, RebuildState, RecoveryRefusal, ResyncOpener, ResyncPast, ResyncReach,
+    Resynchronization, SegmentDurability, SkippedSegment, UncommittedTail, VerifiedBlob, read,
+    read_with_limits, read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
+pub use signature::{
+    Authenticity, HeldKey, SegmentAuthentication, SignatureCheck, SignatureInputs,
+    SignatureInvalid, SignatureStatus, SignatureUnverified,
+};
 pub use terms::{
     ContentError, DecodedTerms, FormedBudget, LiteralForm, TermDefinition, TermOrder,
     TermReservation, TermText, TermsHeader, TypedValue, ValueReference,
 };
-pub use writer::{SegmentWriteError, SegmentWriter};
+pub use writer::{
+    CoSignError, SegmentWriteError, SegmentWriter, SignatureWriteError, append_cosigned_commit,
+    rdf_segment_bytes, write_rdf_segment,
+};
 
 /// The reason a wire value violates the GTS v2 grammar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -45,6 +45,18 @@ Use `purrdf_rdf::gts_write::write_gts_v2` to send an RDF dataset to a
 can also append resolved RDF folds, whole or chunked blobs, values and
 external declarations to a caller-owned sink.
 
+Use `purrdf convert --to gts input.trig output.gts` to write a file from the
+CLI. Python `RdfDataset` exposes `from_gts` and `to_gts_v2`. JavaScript's
+WebAssembly `Dataset` exposes `fromGts` and `toGtsV2`. The corresponding C
+functions are `purrdf_from_gts` and `purrdf_to_gts_v2`. The dataset loaders
+accept both generations.
+
+Use `--gts-safe-read` for untrusted CLI inputs in either generation. This
+mode bounds raw transport bytes and decompressed input before parsing.
+`--gts-read-limit encoded-input-bytes=MAX` sets both input bounds. The
+reader applies the selected generation's parser limits, and further
+`--gts-read-limit` resource overrides apply to generation 1.
+
 ## The container model, at a high level
 
 The container model below describes generation 1.

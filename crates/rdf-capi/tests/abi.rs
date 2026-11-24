@@ -28,7 +28,7 @@ use purrdf::graph::{
 };
 use purrdf::gts::{
     PurrdfGtsReadLimits, purrdf_from_gts, purrdf_from_gts_with_limits, purrdf_gts_read_limits_init,
-    purrdf_to_gts,
+    purrdf_to_gts, purrdf_to_gts_v2,
 };
 use purrdf::handles::{
     PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
@@ -759,7 +759,7 @@ fn abi_version_is_the_current_minor() {
     // from the previous, differently-shaped one. `tests/abi_signatures.rs` holds the
     // exact prototype list this triple describes, so *which* signature moved is
     // reported there rather than as an opaque digest mismatch.
-    assert_eq!((version.major, version.minor, version.patch), (0, 20, 0));
+    assert_eq!((version.major, version.minor, version.patch), (0, 21, 0));
 }
 
 /// Every place this crate SPELLS the ABI version in prose agrees with the constants.
@@ -3022,6 +3022,79 @@ fn gts_round_trips_a_plain_graph() {
         assert_eq!(quad_count(restored), 3);
         purrdf_dataset_free(restored);
         purrdf_dataset_free(dataset);
+    }
+}
+
+#[test]
+fn gts_v2_abi_admits_complete_rdf_and_reports_a_torn_tail() {
+    use purrdf::error::purrdf_error_native_cause_json;
+    use purrdf_rs::gts::v2::{Generation, Item};
+
+    // Each returned buffer, dataset and error has a matching ABI free call.
+    unsafe {
+        let dataset = parse("application/n-triples", THREE_QUADS);
+        let mut output = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = purrdf_to_gts_v2(dataset, &raw mut output, &raw mut error);
+        assert_eq!(status, PurrdfStatus::Ok as i32);
+        assert!(error.is_null());
+        let bytes = buffer_bytes(output);
+        purrdf_buffer_free(output);
+        purrdf_dataset_free(dataset);
+        assert_eq!(
+            Item::first(&bytes).unwrap().unwrap().generation().unwrap(),
+            Generation::Second
+        );
+
+        let restored = from_gts(&bytes);
+        assert_eq!(quad_count(restored), 3);
+        purrdf_dataset_free(restored);
+
+        let mut restored = std::ptr::null_mut();
+        let status = purrdf_from_gts_with_limits(
+            bytes.as_ptr(),
+            bytes.len(),
+            std::ptr::null(),
+            &raw mut restored,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::InvalidArgument as i32);
+        assert!(restored.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+            .to_str()
+            .unwrap();
+        assert!(
+            message.contains("The requested limits apply to GTS v1"),
+            "{message}"
+        );
+        purrdf_error_free(error);
+
+        for (source, is_v2) in [(&bytes[..bytes.len() - 1], true), (&[0xff][..], false)] {
+            let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            let status = purrdf_from_gts(
+                source.as_ptr(),
+                source.len(),
+                &raw mut restored,
+                &raw mut error,
+            );
+            assert_eq!(status, PurrdfStatus::GtsError as i32);
+            assert!(restored.is_null());
+            assert!(!error.is_null());
+            let native = purrdf_error_native_cause_json(error);
+            if is_v2 {
+                assert!(!native.is_null());
+                let cause = std::ffi::CStr::from_ptr(native).to_str().unwrap();
+                assert!(cause.contains("gts-v2-torn-tail"), "{cause}");
+            } else {
+                assert!(native.is_null());
+                let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+                    .to_str()
+                    .unwrap();
+                assert!(message.starts_with("[gts-fold-diagnostic]"), "{message}");
+            }
+            purrdf_error_free(error);
+        }
     }
 }
 

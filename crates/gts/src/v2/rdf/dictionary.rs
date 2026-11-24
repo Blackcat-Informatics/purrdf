@@ -50,6 +50,27 @@ pub struct RowFindings {
     pub position_constraint: bool,
 }
 
+/// The dictionary constraints at the original position of a row frame.
+#[derive(Clone, Copy)]
+pub(in crate::v2) struct RowScope {
+    next: u128,
+    broken_prefix: u128,
+    in_doubt: bool,
+}
+
+impl RowScope {
+    pub(in crate::v2) const fn waits_for_commit(self) -> bool {
+        self.broken_prefix != 0 && !self.in_doubt
+    }
+
+    pub(in crate::v2) const fn below_commit(self) -> Self {
+        Self {
+            broken_prefix: 0,
+            ..self
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Run {
     end: u128,
@@ -60,6 +81,13 @@ struct Run {
 enum DefinitionKey {
     Atom(u64, TermId),
     Triple([u64; 3]),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum ReferenceForm {
+    Typed(u64),
+    Language(usize, Option<LiteralDirection>),
+    TypedValue,
 }
 
 /// A segment's reserved IDs and their readable definitions.
@@ -73,6 +101,8 @@ pub struct SegmentDictionary {
     runs: Vec<Run>,
     readable: FastMap<u64, TermId>,
     definitions: FastMap<DefinitionKey, u64>,
+    references: FastMap<(ValueName, ReferenceForm), u64>,
+    reference_languages: FastMap<String, usize>,
     aliases: FastMap<u64, u64>,
     in_doubt: bool,
     broken_prefix: u128,
@@ -88,6 +118,8 @@ impl SegmentDictionary {
             runs: Vec::new(),
             readable: FastMap::default(),
             definitions: FastMap::default(),
+            references: FastMap::default(),
+            reference_languages: FastMap::default(),
             aliases: FastMap::default(),
             in_doubt: false,
             broken_prefix: 0,
@@ -107,8 +139,7 @@ impl SegmentDictionary {
 
     /// Apply the dictionary rule for an ordinary broken link at this position.
     ///
-    /// Apply it before observing the broken frame's own reservation. A
-    /// whole-file reader applies the commit exception before calling this.
+    /// Apply it before observing the broken frame's own reservation.
     pub const fn mark_broken_link(&mut self) {
         self.broken_prefix = self.next;
     }
@@ -155,6 +186,7 @@ impl SegmentDictionary {
             usize::try_from(reservation.run_count()).map_err(|_| FoldError::Definitions)?,
         )?;
         let runs_before = self.runs.len();
+        let languages_before = self.reference_languages.len();
         let terms_before = fold.terms.checkpoint();
         let mut run_end = start;
         for (kind, count) in reservation.runs() {
@@ -168,6 +200,9 @@ impl SegmentDictionary {
                 self.runs.truncate(runs_before);
                 self.readable.retain(|id, _| u128::from(*id) < start);
                 self.definitions.retain(|_, id| u128::from(*id) < start);
+                self.references.retain(|_, id| u128::from(*id) < start);
+                self.reference_languages
+                    .retain(|_, id| *id < languages_before);
                 self.aliases.retain(|id, _| u128::from(*id) < start);
                 fold.terms.rollback(terms_before);
                 for value in findings.missing_values {
@@ -199,18 +234,27 @@ impl SegmentDictionary {
                 TermDefinition::Triple(ids) => Some(ids.map(|id| self.definition_id(id))),
                 _ => None,
             };
-            if let Some(term) = self.resolve_definition(fold, id, definition, &context, findings)? {
+            // Repeated annotation rows compare the written name and form even
+            // when no declaration supplies bytes for the reference.
+            let reference = self.reference_key(&definition, context.languages)?;
+            let term = self.resolve_definition(fold, id, definition, &context, findings)?;
+            if let Some(term) = term {
                 self.readable.insert(id, term);
-                // Within a storage form, a readable atom's term uniquely
-                // identifies its fields. Verified reference bytes determine
-                // the digest and length. A triple also needs the storage
-                // identities of its components.
-                let key = components.map_or(DefinitionKey::Atom(kind, term), DefinitionKey::Triple);
-                let first = *self.definitions.entry(key).or_insert(id);
-                if first != id {
-                    self.aliases.try_reserve(1)?;
-                    self.aliases.insert(id, first);
-                }
+            }
+            let first = if let Some(reference) = reference {
+                self.references.try_reserve(1)?;
+                *self.references.entry(reference).or_insert(id)
+            } else if let Some(key) = components
+                .map(DefinitionKey::Triple)
+                .or_else(|| term.map(|term| DefinitionKey::Atom(kind, term)))
+            {
+                *self.definitions.entry(key).or_insert(id)
+            } else {
+                id
+            };
+            if first != id {
+                self.aliases.try_reserve(1)?;
+                self.aliases.insert(id, first);
             }
         }
         Ok(())
@@ -218,6 +262,40 @@ impl SegmentDictionary {
 
     fn definition_id(&self, id: u64) -> u64 {
         self.aliases.get(&id).copied().unwrap_or(id)
+    }
+
+    fn reference_key(
+        &mut self,
+        definition: &TermDefinition<'_>,
+        languages: &[&str],
+    ) -> Result<Option<(ValueName, ReferenceForm)>, FoldError> {
+        let key = match definition {
+            TermDefinition::LiteralRef(reference, form) => {
+                let form = match LiteralFields::read(*form, languages)? {
+                    LiteralFields::Typed(datatype) => {
+                        ReferenceForm::Typed(self.definition_id(datatype))
+                    }
+                    LiteralFields::Language(text, direction) => {
+                        let id = if let Some(&id) = self.reference_languages.get(text) {
+                            id
+                        } else {
+                            let mut owned = String::new();
+                            owned.try_reserve_exact(text.len())?;
+                            owned.push_str(text);
+                            self.reference_languages.try_reserve(1)?;
+                            let id = self.reference_languages.len();
+                            self.reference_languages.insert(owned, id);
+                            id
+                        };
+                        ReferenceForm::Language(id, direction)
+                    }
+                };
+                ((*reference).into(), form)
+            }
+            TermDefinition::ValueRef(reference) => ((*reference).into(), ReferenceForm::TypedValue),
+            _ => return Ok(None),
+        };
+        Ok(Some(key))
     }
 
     fn resolve_definition(
@@ -311,21 +389,14 @@ impl SegmentDictionary {
         languages: &'a [&'a str],
         findings: &mut DefinitionFindings,
     ) -> Result<Option<ResolvedForm<'a>>, FoldError> {
-        let (index, direction) = match form {
-            LiteralForm::Typed(datatype) => {
-                return Ok(self
-                    .dependencies(id, [datatype], [Position::Iri], findings)
-                    .map(|[datatype]| ResolvedForm::Typed(datatype)));
+        Ok(match LiteralFields::read(form, languages)? {
+            LiteralFields::Typed(datatype) => self
+                .dependencies(id, [datatype], [Position::Iri], findings)
+                .map(|[datatype]| ResolvedForm::Typed(datatype)),
+            LiteralFields::Language(language, direction) => {
+                Some(ResolvedForm::Language(language, direction))
             }
-            LiteralForm::Language(index) => (index, None),
-            LiteralForm::LeftToRight(index) => (index, Some(LiteralDirection::LeftToRight)),
-            LiteralForm::RightToLeft(index) => (index, Some(LiteralDirection::RightToLeft)),
-        };
-        let language = usize::try_from(index)
-            .ok()
-            .and_then(|index| languages.get(index))
-            .ok_or(FoldError::Definitions)?;
-        Ok(Some(ResolvedForm::Language(language, direction)))
+        })
     }
 
     fn dependencies<const N: usize>(
@@ -364,17 +435,29 @@ impl SegmentDictionary {
     /// Resolve one row before applying line union.
     #[must_use]
     pub fn resolve_row(&self, row: Row) -> RowDisposition {
+        self.resolve_scoped_row(row, self.row_scope())
+    }
+
+    pub(in crate::v2) const fn row_scope(&self) -> RowScope {
+        RowScope {
+            next: self.next,
+            broken_prefix: self.broken_prefix,
+            in_doubt: self.in_doubt,
+        }
+    }
+
+    fn resolve_scoped_row(&self, row: Row, scope: RowScope) -> RowDisposition {
         let references = row_references(row);
         if references
             .iter()
             .flatten()
-            .any(|(id, _)| u128::from(*id) >= self.next)
+            .any(|(id, _)| u128::from(*id) >= scope.next)
         {
             return RowDisposition::ForwardReference;
         }
-        if self.in_doubt
+        if scope.in_doubt
             || references.iter().flatten().any(|(id, _)| {
-                u128::from(*id) < self.broken_prefix || self.readable_term(*id).is_none()
+                u128::from(*id) < scope.broken_prefix || self.readable_term(*id).is_none()
             })
         {
             return RowDisposition::Held;
@@ -413,13 +496,22 @@ impl SegmentDictionary {
         fold: &mut RdfFold,
         decoded: &DecodedRows,
     ) -> Result<RowFindings, FoldError> {
-        if matches!(decoded.rows.first(), Some(Row::Annotation(..))) {
-            self.check_annotations(&decoded.rows)?;
-        }
+        self.check_annotations(&decoded.rows)?;
+        self.fold_scoped_rows(fold, &decoded.rows, self.row_scope())
+    }
+
+    pub(in crate::v2) fn fold_scoped_rows(
+        &self,
+        fold: &mut RdfFold,
+        rows: &[Row],
+        scope: RowScope,
+    ) -> Result<RowFindings, FoldError> {
         let mut findings = RowFindings::default();
         let mut lines = Vec::new();
-        for &row in &decoded.rows {
-            match self.resolve_row(row) {
+        for &row in rows {
+            // Earlier reservations and readable IDs are immutable. The scope
+            // excludes every definition that arrived after this frame.
+            match self.resolve_scoped_row(row, scope) {
                 RowDisposition::Accepted(line) => {
                     for (id, _) in row_references(row).into_iter().flatten() {
                         let term = self
@@ -441,7 +533,10 @@ impl SegmentDictionary {
         Ok(findings)
     }
 
-    fn check_annotations(&self, rows: &[Row]) -> Result<(), FoldError> {
+    pub(in crate::v2) fn check_annotations(&self, rows: &[Row]) -> Result<(), FoldError> {
+        if !matches!(rows.first(), Some(Row::Annotation(..))) {
+            return Ok(());
+        }
         let mut keys = FastSet::default();
         keys.try_reserve(rows.len())?;
         for &row in rows {
@@ -459,6 +554,27 @@ impl SegmentDictionary {
 struct Definitions<'a> {
     languages: &'a [&'a str],
     values: &'a ValueStore,
+}
+
+enum LiteralFields<'a> {
+    Typed(u64),
+    Language(&'a str, Option<LiteralDirection>),
+}
+
+impl<'a> LiteralFields<'a> {
+    fn read(form: LiteralForm, languages: &'a [&'a str]) -> Result<Self, FoldError> {
+        let (index, direction) = match form {
+            LiteralForm::Typed(datatype) => return Ok(Self::Typed(datatype)),
+            LiteralForm::Language(index) => (index, None),
+            LiteralForm::LeftToRight(index) => (index, Some(LiteralDirection::LeftToRight)),
+            LiteralForm::RightToLeft(index) => (index, Some(LiteralDirection::RightToLeft)),
+        };
+        let language = usize::try_from(index)
+            .ok()
+            .and_then(|index| languages.get(index))
+            .ok_or(FoldError::Definitions)?;
+        Ok(Self::Language(language, direction))
+    }
 }
 
 enum ResolvedForm<'a> {

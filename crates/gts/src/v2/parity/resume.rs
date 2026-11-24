@@ -3,10 +3,9 @@
 
 use super::{Digest, Fields, GEOMETRY_ONE, Geometry, ParityClaim, ParityHistory, ParityTable};
 use crate::v2::link::frame_hasher;
-use crate::v2::payload::payload_digest;
-use crate::v2::{
-    FRAME_FIELDS, FRAME_KIND, FrameType, Item, PayloadBudget, PayloadRefusal, ReadFailure,
-};
+use crate::v2::payload::{CandidateRefusal, payload_digest};
+use crate::v2::read::{RecoveryDepth, RecoveryFailure};
+use crate::v2::{FRAME_FIELDS, FRAME_KIND, FrameType, Item, PayloadBudget, PayloadRefusal};
 use purrdf_lex::cbor::DecodeErrorKind;
 
 pub(in crate::v2) struct ParityResumption<'a> {
@@ -79,9 +78,10 @@ impl ParityHistory {
     pub(in crate::v2) fn scan_at<'a>(
         &self,
         bytes: &'a [u8],
+        offset: usize,
         budget: &mut PayloadBudget,
         nesting_depth: Option<usize>,
-    ) -> Result<Option<ParityResumption<'a>>, ReadFailure> {
+    ) -> Result<Option<ParityResumption<'a>>, RecoveryFailure> {
         let Some(candidate) = Candidate::read(bytes, self) else {
             return Ok(None);
         };
@@ -89,11 +89,12 @@ impl ParityHistory {
             match Item::first_with_depth(&bytes[..candidate.length], limit) {
                 Ok(Some(item)) if item.bytes().len() == candidate.length => {}
                 Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
-                    return Err(ReadFailure::ItemDepth {
-                        required: limit.saturating_add(1),
+                    return Err(RecoveryFailure::Depth(RecoveryDepth {
+                        offset,
                         limit,
                         cause: error,
-                    });
+                        detection: false,
+                    }));
                 }
                 Ok(_) | Err(_) => return Ok(None),
             }
@@ -105,10 +106,12 @@ impl ParityHistory {
         }
         match budget.charge_parity_candidate(candidate.payload.len() as u64) {
             Ok(()) => {}
-            Err(PayloadRefusal::TotalDecoded(count)) => {
-                return Err(ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
-                    count,
-                )));
+            Err(PayloadRefusal::TotalDecoded(requested_total)) => {
+                return Err(RecoveryFailure::Capacity(CandidateRefusal {
+                    offset,
+                    length: candidate.length,
+                    requested_total,
+                }));
             }
             Err(_) => return Ok(None),
         }

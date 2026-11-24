@@ -6,7 +6,10 @@ use core::{fmt, ops::Range};
 use purrdf_hash::blake3::Hasher;
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
-use super::{HEADER_CONTEXT, Header, read_digest, read_lineage, read_profile, read_registry_hash};
+use super::{
+    HEADER_CONTEXT, Header, ResyncDeclaration, read_digest, read_lineage, read_profile,
+    read_registry_hash,
+};
 use crate::v2::fields::Fields;
 use crate::v2::{
     BLAKE3_256, GENERATION, Item, MalformedReason, PayloadBudget, RESYNC_KIND, RESYNC_MAX_BYTES,
@@ -231,6 +234,7 @@ impl<'a> ResyncPrefix<'a> {
             profile,
             canonical: None,
             lineage,
+            resync: None,
             identifier: None,
         };
         Ok(Self {
@@ -242,8 +246,13 @@ impl<'a> ResyncPrefix<'a> {
 
     fn read_tail(mut self, bytes: &[u8]) -> Result<(Header<'a>, &'a [u8], usize), WireError> {
         let holds_hash = self.header.hash_algorithm.get() == BLAKE3_256;
-        self.fields
+        let past = self
+            .fields
             .option(|fields| read_digest(fields, holds_hash))?;
+        self.header.resync = Some(ResyncDeclaration {
+            offset: self.place,
+            past,
+        });
         read_marks(&mut self.fields)?;
         let identifier_offset = self.fields.offset();
         let stored = read_digest(&mut self.fields, holds_hash)?;

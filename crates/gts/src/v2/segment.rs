@@ -7,7 +7,7 @@ use std::collections::TryReserveError;
 
 use purrdf_lex::cbor::StructuralError;
 
-use super::index::TypeRuns;
+use super::index::{IndexContent, TypeRuns};
 use super::parity::ParityHistory;
 use super::rows::OrderKey;
 use super::{
@@ -148,6 +148,10 @@ impl SegmentVerifier {
         self.incomplete_prefix
     }
 
+    pub(super) const fn ordinary_count(&self) -> u64 {
+        self.range.count().get() - 1
+    }
+
     pub(super) fn predecessor(&self) -> &Digest {
         self.resume_anchor.as_ref().unwrap_or(&self.head)
     }
@@ -172,6 +176,10 @@ impl SegmentVerifier {
     #[must_use]
     pub const fn content_stopped(&self) -> bool {
         self.content_stopped
+    }
+
+    pub(super) fn stop_content(&mut self) {
+        self.content_stopped = true;
     }
 
     /// Interpret the current checked terms frame before advancing to the next item.
@@ -218,6 +226,12 @@ impl SegmentVerifier {
         Some(result)
     }
 
+    pub(super) fn omit_row_order(&mut self, frame: &SegmentFrame<'_>) {
+        if let Some((slot, _)) = frame.row_order {
+            self.last_rows[slot] = None;
+        }
+    }
+
     /// Verify a framed item and advance the ordinary prefix.
     ///
     /// Supply a witness only when the immediately following item is a frame
@@ -235,7 +249,7 @@ impl SegmentVerifier {
         let checked = frame
             .check(self.predecessor(), witness, self.registry, &mut next_budget)
             .map_err(SegmentCheckError::Payload)?;
-        let accepted = self.accept_checked(frame, checked, budget)?;
+        let accepted = self.accept_checked(frame, checked, budget, None)?;
         *budget = next_budget;
         Ok(accepted)
     }
@@ -245,6 +259,7 @@ impl SegmentVerifier {
         frame: &FrameEnvelope<'a>,
         checked: FrameCheck<'a>,
         budget: &PayloadBudget,
+        index_content: Option<&IndexContent>,
     ) -> Result<SegmentFrame<'a>, SegmentCheckError> {
         let commit = checked.commit_claim.map(|claim| {
             let mut commit = self.range.check_commit(claim, checked.link.state);
@@ -256,8 +271,16 @@ impl SegmentVerifier {
         });
         let frame_type = checked.frame_type.and_then(FrameType::from_code);
         let index = if frame_type == Some(FrameType::Index) {
+            let content = index_content.filter(|_| !self.incomplete_prefix);
             self.types
-                .inspect(frame, &checked, self.registry, &self.head, &self.range)
+                .inspect(
+                    frame,
+                    &checked,
+                    self.registry,
+                    &self.head,
+                    &self.range,
+                    content,
+                )
                 .map(|result| {
                     result.map(|mut index| {
                         if self.incomplete_prefix {

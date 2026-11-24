@@ -3,13 +3,13 @@
 
 //! The unified output sink: serialize a view to a target format and write it.
 //!
-//! [`write_rdf`] is the one place the pipeline emits a dataset. It handles both
-//! target kinds:
+//! [`write_rdf`] is the one place the pipeline emits a dataset.
 //!
 //! * an RDF syntax → `serialize_dataset_to_format` over the borrowed view (a
 //!   `PackView` serializes with zero materialization), then write the bytes;
 //! * the pack container → reconstruct a concrete dataset via
-//!   [`dataset_from_view`] and build the pack bytes with [`PackBuilder`].
+//!   [`dataset_from_view`] and build the pack bytes with [`PackBuilder`];
+//! * GTS v2 → encode the dataset as one committed segment in arrival order.
 //!
 //! It returns the [`LossLedger`] for the conversion so `main` can surface it under
 //! `--loss-ledger`. The ledger combines the **contract** losses for the
@@ -399,12 +399,12 @@ pub(crate) fn write_rdf<D: DatasetView>(
             // entries.
             Ok(LossLedger::new())
         }
-        // GTS is a READ-ONLY target for this pipeline: `format::refuse_gts_target`
-        // declines `--to gts` at resolution time, with the reason. This arm keeps the
-        // match total and fails closed rather than writing something that is not GTS,
-        // for the caller who reaches the sink by some other route.
-        SourceFormat::Gts => Err(format::refuse_gts_target(target, "the output target")
-            .expect_err("refuse_gts_target rejects SourceFormat::Gts")),
+        SourceFormat::Gts => {
+            let dataset = dataset_from_view(view)?;
+            let bytes = purrdf_rdf::gts_write::to_gts_v2(&dataset)?;
+            write_out_with_request(out, &bytes, canonical)?;
+            Ok(LossLedger::new())
+        }
         _ => Err(format::unsupported_format(target, "the output target")),
     }
 }

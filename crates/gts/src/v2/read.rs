@@ -14,23 +14,33 @@ use std::collections::VecDeque;
 
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError};
 
-use super::frame::FrameWire;
-use super::index::StorageIndex;
+use super::index::{IndexContent, StorageIndex};
 use super::parity::{ParityResumption, ParityStream};
+use super::payload::CandidateRefusal;
+use super::rdf::RowScope;
+use super::signature::{AuthenticationProgress, SignatureRecord};
 use super::{
     CommitCheck, ContentError, DIGEST_LENGTH, DefinitionFindings, FoldError, FormedBudget,
     FrameCheck, FrameEnvelope, FrameField, FrameType, Generation, Header, IndexPrefixCheck,
     IndexStorageFinding, IndexStorageItem, Item, ItemKind, LinkState, MalformedReason, ParityCheck,
     ParityFinding, ParitySolveError, PayloadBudget, PayloadCapacity, PayloadDamage, PayloadRefusal,
-    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncScan, RowFindings,
-    SegmentCheckError, SegmentDictionary, SegmentVerifier, StoredState, ValueName, ValueStore,
-    WireError,
+    PayloadState, RESYNC_MAX_BYTES, RdfFold, ResyncCandidate, ResyncRefusal, ResyncScan, Row,
+    RowFindings, SegmentAuthentication, SegmentCheckError, SegmentDictionary, SegmentFrame,
+    SegmentVerifier, SignatureCheck, SignatureInputs, SignatureStatus, StoredState,
+    UnknownFrameType, ValueName, ValueStore, WireError,
 };
 use crate::{FastMap, model::Graph};
 
 mod blob;
+mod error_inspection;
+mod frame_wire;
+mod resync;
 
-pub use blob::ExternalBlob;
+use blob::{BlobClaim, RebuildBudget};
+pub use blob::{BlobEntry, ExternalBlob, RebuildResult, RebuildState};
+pub use frame_wire::{FrameWireResult, PayloadOutcome, PayloadUnchecked};
+use resync::PastChecks;
+pub use resync::{ResyncOpener, ResyncPast, ResyncReach};
 
 /// Generation-neutral bounds applied before an opener selects its reader.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -124,6 +134,10 @@ impl Default for ReadLimits {
 /// A GTS file decoded into the graph model of its generation.
 #[derive(Debug)]
 #[non_exhaustive]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the public variants return their graph by value without an extra allocation"
+)]
 pub enum ReadGraph<'a> {
     /// The legacy reader's original result, including its diagnostics.
     First(Graph),
@@ -135,26 +149,56 @@ pub enum ReadGraph<'a> {
 #[derive(Debug, Default)]
 #[non_exhaustive]
 pub struct RdfGraph<'a> {
-    /// Readable RDF terms and resolved RDF lines.
+    /// Readable RDF terms and resolved RDF lines. Empty after an item refusal.
     pub rdf: RdfFold,
-    /// Verified blob declarations in file order.
+    /// Where the supplied bytes end relative to framing and commits.
+    pub end: FileEnd,
+    /// Independent wire checks of the retained frames, in file order.
+    pub frame_wire: Vec<FrameWireResult>,
+    /// Number of opaque frames, omitted items and framing regions in the checked prefix.
+    pub left_out: u64,
+    /// Verified blob declarations in file order. Empty after an item refusal.
     pub blobs: Vec<VerifiedBlob<'a>>,
-    /// References to named blobs declared without inline bytes.
+    /// References to named blobs declared without inline bytes. Empty after an item refusal.
     pub external_blobs: Vec<ExternalBlob<'a>>,
+    /// Folded blob declarations grouped by name, including blobs without verified bytes.
+    pub blob_set: Vec<BlobEntry<'a>>,
+    /// Frame offsets of declarations that disagree with their blob entry's minimum length.
+    pub blob_length_conflicts: Vec<usize>,
+    /// Recipe and value rebuild outcomes in declaration order.
+    pub rebuilds: Vec<RebuildResult>,
     /// File offsets of row frames whose declared order differs from their rows.
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
     pub stored_digest_mismatches: Vec<usize>,
-    /// Damaged payloads and rows held by unreadable term definitions.
+    /// Findings for opaque frames, unavailable rebuilds and held rows.
     pub frame_failures: Vec<ReadError>,
     /// Complete items that could not be classified in their segment.
     pub opaque_items: Vec<ReadError>,
+    /// Opener offsets and declared versions of segments with newer registries.
+    pub unsupported_registries: Vec<(usize, NonZeroU64)>,
+    /// Segments whose opener prevents link and content checks.
+    pub skipped_segments: Vec<SkippedSegment>,
+    /// Lineage findings at segment openers in file order.
+    pub lineage_findings: Vec<(usize, LineageFinding)>,
+    /// Frame offsets where an earlier unsupported critical value stopped the fold.
+    pub stopped_frames: Vec<usize>,
     /// Scanned resync openers and the framing damage before them, in file order.
     pub resynchronizations: Vec<Resynchronization>,
+    /// Decoded resync openers and their independent past checks, in file order.
+    pub resync_openers: Vec<ResyncOpener>,
     /// Damaged regions ended by verified parity frames, in file order.
     pub parity_recoveries: Vec<ParityRecovery>,
+    /// The first recovery candidate refused by the total decoded-byte budget.
+    pub recovery_refusal: Option<RecoveryRefusal>,
+    /// Trailing bytes of the input with no accepted recovery point in the final segment.
+    pub framing_tail: Option<FramingDamage>,
+    /// The first position left unread when the item limit is reached.
+    pub item_refusal: Option<ItemRefusal>,
     /// Commits that cannot verify the ordinary prefix across a parity recovery.
     pub interrupted_commits: Vec<(usize, CommitCheck)>,
+    /// Commit checks that failed on a fully walked ordinary prefix.
+    pub invalid_commits: Vec<(usize, CommitCheck)>,
     /// Parity diagnostics and repair outcomes, followed by each segment's tail.
     pub parity_findings: Vec<ParityFinding>,
     /// A repaired copy when any span passes verification.
@@ -163,6 +207,208 @@ pub struct RdfGraph<'a> {
     pub index_checks: Vec<GraphIndexCheck>,
     /// False or misplaced offsets items and locators.
     pub index_storage_findings: Vec<IndexStorageFinding>,
+    /// Signature checks on retained frames, in file order.
+    pub signatures: Vec<FrameSignatures>,
+    /// Authentication of each readable segment, in file order.
+    pub segment_authentication: Vec<SegmentAuthentication>,
+    /// Commit coverage and uncommitted tails of readable segments, in file order.
+    pub segment_durability: Vec<SegmentDurability>,
+    first_content_omission: Option<usize>,
+    framing_tail_cause: Option<StructuralError>,
+    annotation_width_offset: Option<usize>,
+}
+
+impl RdfGraph<'_> {
+    /// Take the resolved RDF fold when the read omitted no content.
+    ///
+    /// Use this at dataset-only boundaries that cannot return the read
+    /// evidence. A false index or commit claim over readable content and a
+    /// complete uncommitted suffix do not prevent projection.
+    ///
+    /// # Errors
+    /// Retains the cause of the omission, width refusal, item refusal, recovery or trailing damage.
+    pub fn into_complete_rdf(self) -> Result<RdfFold, ReadError> {
+        if let Some(refused) = self.item_refusal {
+            return Err(ReadError {
+                offset: refused.offset,
+                failure: ReadFailure::ItemCapacity(refused.limit),
+            });
+        }
+        if let Some(offset) = self.annotation_width_offset {
+            return Err(ReadError {
+                offset,
+                failure: ReadFailure::AnnotationWidth,
+            });
+        }
+        if let Some(offset) = self.first_content_omission {
+            let cause = self
+                .frame_failures
+                .into_iter()
+                .chain(self.opaque_items)
+                .chain(
+                    self.skipped_segments
+                        .into_iter()
+                        .map(|segment| segment.opener),
+                )
+                .find(|error| error.offset == offset);
+            return Err(cause.unwrap_or(ReadError {
+                offset,
+                failure: ReadFailure::OmittedContent,
+            }));
+        }
+        if let Some(damage) = self.framing_tail {
+            return Err(ReadError {
+                offset: damage.offset(),
+                failure: ReadFailure::FramingTail {
+                    damage,
+                    cause: self.framing_tail_cause,
+                },
+            });
+        }
+        if let Some(recovery) = self.resynchronizations.first() {
+            return Err(ReadError {
+                offset: recovery.offset,
+                failure: ReadFailure::RecoveredResync(*recovery),
+            });
+        }
+        if let Some(recovery) = self.parity_recoveries.first() {
+            return Err(ReadError {
+                offset: recovery.damage.offset(),
+                failure: ReadFailure::RecoveredParity(*recovery),
+            });
+        }
+        if let Some(refusal) = self.recovery_refusal {
+            return Err(ReadError {
+                offset: refusal.offset,
+                failure: ReadFailure::RecoveryRefused(refusal),
+            });
+        }
+        if self.rdf.has_held_rows() || self.rdf.annotation_width_exceeded() {
+            return Err(ReadError {
+                offset: 0,
+                failure: ReadFailure::OmittedContent,
+            });
+        }
+        Ok(self.rdf)
+    }
+
+    fn note_content_omission(&mut self, offset: usize) {
+        self.first_content_omission = Some(
+            self.first_content_omission
+                .map_or(offset, |earlier| earlier.min(offset)),
+        );
+    }
+
+    fn retain_content_failure(
+        &mut self,
+        offset: usize,
+        failure: ReadFailure,
+    ) -> Result<(), std::collections::TryReserveError> {
+        self.note_content_omission(offset);
+        super::fields::push(&mut self.frame_failures, ReadError { offset, failure })
+    }
+}
+
+/// A segment whose complete items were framed without link or content checks.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct SkippedSegment {
+    /// File-relative segment ordinal.
+    pub ordinal: u64,
+    /// The opener's position and the reason the segment was skipped.
+    pub opener: ReadError,
+    /// Item count including the opener and each undelimitable region.
+    pub items: usize,
+}
+
+/// A lineage finding at a segment opener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineageFinding {
+    /// A later segment begins a lineage without a predecessor.
+    Begins,
+    /// The declared previous head differs from the preceding segment's head.
+    HeadMismatch,
+    /// The declared ordinal has no preceding segment or is out of sequence.
+    OrdinalMismatch,
+}
+
+/// The end of a readable GTS v2 file under P7 §1.2.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum FileEnd {
+    /// The item limit prevented reading the rest of the file.
+    NotRead,
+    /// The input ends in an undelimitable region.
+    Undelimitable,
+    /// The input ends inside an item.
+    Torn,
+    /// The last segment holds no valid commit.
+    #[default]
+    NoCommit,
+    /// Uncommitted ordinary material follows the last valid commit.
+    AfterCommit,
+    /// The last valid commit carries an authenticating signature.
+    AtAuthenticatedCommit,
+    /// The end is at a valid commit.
+    AtValidCommit,
+}
+
+/// An unread suffix caused by the read-wide item limit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ItemRefusal {
+    /// The first unread byte.
+    pub offset: usize,
+    /// Length of the unread suffix.
+    pub length: usize,
+    /// The caller's item limit.
+    pub limit: u64,
+}
+
+impl FileEnd {
+    const fn observe_uncommitted(&mut self) {
+        if matches!(self, Self::AtAuthenticatedCommit | Self::AtValidCommit) {
+            *self = Self::AfterCommit;
+        }
+    }
+}
+
+/// The checked signatures of an ordinary frame.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct FrameSignatures {
+    /// File-relative segment ordinal of the frame.
+    pub segment: u64,
+    /// Item position within the segment, counting the opener as zero.
+    pub position: usize,
+    /// File-relative byte offset of the frame.
+    pub offset: usize,
+    /// Signature results in their original record order.
+    pub checks: Vec<SignatureCheck>,
+}
+
+/// Commit coverage of one readable segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct SegmentDurability {
+    /// File-relative segment ordinal.
+    pub segment: u64,
+    /// Ordinary frames through the last valid commit, including the commit.
+    pub committed_frames: u64,
+    /// Counted ordinary frames after the last valid commit, or from the opener
+    /// when no valid commit was found.
+    pub uncommitted_tail: Option<UncommittedTail>,
+}
+
+/// Ordinary frames outside a segment's committed prefix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UncommittedTail {
+    /// Item position of the first counted frame, with the opener at zero.
+    pub position: usize,
+    /// Ordinary frames with an effective identifier, excluding indexes.
+    pub count: u64,
 }
 
 /// The prefix check of an index encountered during a graph read.
@@ -197,7 +443,23 @@ pub struct ParityRecovery {
     pub detached: bool,
 }
 
-/// The extent and kind of bytes skipped when resynchronizing.
+/// A recovery scan reached the total decoded-byte limit in a readable segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct RecoveryRefusal {
+    /// File-relative ordinal of the segment whose recovery scan was refused.
+    pub segment: u64,
+    /// Item position where the candidate begins, counting the opener as zero.
+    pub position: usize,
+    /// Byte offset of the refused candidate.
+    pub offset: usize,
+    /// Encoded size of a parity candidate or the fixed resync charge.
+    pub length: usize,
+    /// Total decoded bytes including the refused charge, saturated at the wire limit.
+    pub requested_total: u64,
+}
+
+/// The extent and kind of a framing break in the input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FramingDamage {
@@ -215,6 +477,14 @@ pub enum FramingDamage {
         /// Number of skipped bytes.
         length: usize,
     },
+}
+
+impl FramingDamage {
+    const fn offset(self) -> usize {
+        match self {
+            Self::TornTail { offset, .. } | Self::Undelimitable { offset, .. } => offset,
+        }
+    }
 }
 
 /// The declared media type and verified bytes of an embedded blob.
@@ -294,12 +564,16 @@ pub enum ReadFailure {
     Wire(WireError),
     /// The registry code is newer than this graph reader.
     Registry(u64),
+    /// The link hash of a newer registry is unavailable.
+    UnavailableHash(NonZeroU64),
     /// Lineage does not match the previous segment.
     Lineage,
     /// An item kind requires additional interpretation.
     Item(ItemKind),
     /// A frame type requires additional interpretation.
     Frame(FrameType),
+    /// An unknown frame type in a newer registry.
+    UnknownFrame(UnknownFrameType),
     /// The link to the preceding frame is broken.
     BrokenLink,
     /// The decoded payload failed verification.
@@ -332,6 +606,23 @@ pub enum ReadFailure {
     RebuildCapacity(ValueName),
     /// The graph could not retain the verified content.
     Fold(FoldError),
+    /// An ML-DSA verification operation could not complete.
+    Signature(crate::mldsa65::Error),
+    /// A strict RDF projection cannot use a recovered resync prefix.
+    RecoveredResync(Resynchronization),
+    /// A strict RDF projection cannot use a prefix with a parity resumption.
+    RecoveredParity(ParityRecovery),
+    /// A strict RDF projection cannot use a prefix with a refused recovery.
+    RecoveryRefused(RecoveryRefusal),
+    /// A strict RDF projection requires the file to end at an item boundary.
+    FramingTail {
+        /// The unchecked range of the supplied input.
+        damage: FramingDamage,
+        /// The native CBOR framing failure, when the reader observed it.
+        cause: Option<StructuralError>,
+    },
+    /// The graph records an omission without a more specific retained cause.
+    OmittedContent,
 }
 
 impl fmt::Display for ReadError {
@@ -344,6 +635,31 @@ impl fmt::Display for ReadError {
             ReadFailure::ParityRepair(error) => error.fmt(f),
             ReadFailure::Content(error) => error.fmt(f),
             ReadFailure::Fold(error) => error.fmt(f),
+            ReadFailure::Signature(error) => error.fmt(f),
+            ReadFailure::UnavailableHash(algorithm) => {
+                write!(
+                    f,
+                    "the segment uses unavailable link hash algorithm {algorithm}"
+                )
+            }
+            ReadFailure::RecoveredResync(_) => {
+                f.write_str("the RDF fold omits material before a resync opener")
+            }
+            ReadFailure::RecoveredParity(_) => {
+                f.write_str("the RDF fold omits material before a parity resumption")
+            }
+            ReadFailure::RecoveryRefused(_) => {
+                f.write_str("the decoded-byte limit prevented recovery")
+            }
+            ReadFailure::FramingTail {
+                damage: FramingDamage::TornTail { .. },
+                ..
+            } => f.write_str("the file ends inside an item"),
+            ReadFailure::FramingTail {
+                damage: FramingDamage::Undelimitable { .. },
+                ..
+            } => f.write_str("the file ends with undelimitable bytes"),
+            ReadFailure::OmittedContent => f.write_str("the RDF fold omits content"),
             failure => write!(f, "{failure:?}"),
         }
     }
@@ -358,6 +674,7 @@ impl std::error::Error for ReadError {
             ReadFailure::ParityRepair(error) => Some(error),
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
+            ReadFailure::Signature(error) => Some(error),
             ReadFailure::DetectionDepth { cause, .. } | ReadFailure::ItemDepth { cause, .. } => {
                 Some(cause)
             }
@@ -365,6 +682,9 @@ impl std::error::Error for ReadError {
                 cause: Some(cause), ..
             }
             | ReadFailure::DetectionWork {
+                cause: Some(cause), ..
+            }
+            | ReadFailure::FramingTail {
                 cause: Some(cause), ..
             } => Some(cause),
             ReadFailure::FirstGenerationCapacity(error) => Some(error),
@@ -382,24 +702,43 @@ impl std::error::Error for ReadError {
 /// definitions stay outside the fold and carry findings. Complete opaque items
 /// put subsequent term resolution in doubt. An item that requires unsupported
 /// content interpretation prevents a complete graph projection.
+/// An unreadable opener or unavailable link hash leaves its segment's items
+/// delimited and counted until the next opener.
+/// Reaching the item limit after opening a segment preserves the checks on
+/// the prefix and leaves the file fold empty.
 /// The reader can recover at a verified resync opener after failure of the
 /// framing test or opening generation recognition. A verified parity frame
-/// can resume a readable segment after undelimitable bytes. An ordinary frame
-/// whose healing witness is discarded prevents a complete graph projection.
+/// can resume a readable segment after undelimitable bytes. Broken frames
+/// retain their original link findings even when the reader recovers.
+/// If the final segment ends inside or outside the item grammar, the reader
+/// returns the checked prefix and the extent of the trailing bytes.
+/// A recovery candidate refused by the total decoded-byte budget is reported
+/// with its input location. Later complete frames retain their wire checks.
 /// Parity findings describe the supplied bytes before any repair.
 /// Indexes report comparisons against the observed prefix and never supply
 /// graph content.
-/// The graph carries no assertion about file authenticity or canonical form.
+/// Signatures are checked with empty held-key and trust sets.
 ///
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadError> {
-    if capacity.items == 0 && !bytes.is_empty() {
-        return Err(ReadError {
-            offset: 0,
-            failure: ReadFailure::ItemCapacity(0),
-        });
-    }
+    read_with_signature_inputs(bytes, capacity, &SignatureInputs::default())
+}
+
+/// Read a GTS file using caller-held keys and caller trust for generation 2.
+///
+/// Signature results use the final effective identifier of each retained
+/// frame. The generation 1 result is produced by its original reader.
+/// Use [`read_with_limits_and_signature_inputs`] for finite detection and
+/// item nesting limits.
+/// # Errors
+/// Returns the byte position and reason when a graph cannot be produced.
+pub fn read_with_signature_inputs<'a>(
+    bytes: &'a [u8],
+    capacity: ReadCapacity,
+    signatures: &SignatureInputs<'_>,
+) -> Result<ReadGraph<'a>, ReadError> {
+    require_second_generation_item(bytes, capacity)?;
     let opener = match delimit(bytes, 0) {
         Ok(Some(item)) => item,
         Ok(None) => {
@@ -409,7 +748,7 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
             });
         }
         Err(error) => {
-            return GraphReader::new(bytes, capacity, None, None, None)
+            return GraphReader::new(bytes, capacity, None, None, signatures)
                 .recover_initial(error, None)
                 .map(ReadGraph::Second);
         }
@@ -421,7 +760,7 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
     match generation {
         Generation::First => Ok(ReadGraph::First(crate::reader::read(bytes, true, None))),
         Generation::Second | Generation::Unrecognized => {
-            GraphReader::new(bytes, capacity, None, None, None)
+            GraphReader::new(bytes, capacity, None, None, signatures)
                 .read_first(opener, generation)
                 .map(ReadGraph::Second)
         }
@@ -441,10 +780,18 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read_with_limits(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
-    read_bounded(bytes, limits)
+    read_with_limits_and_signature_inputs(bytes, limits, &SignatureInputs::default())
 }
 
-fn read_bounded(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
+/// Decode a GTS file with finite read limits and caller-supplied signature inputs.
+///
+/// # Errors
+/// Returns the byte position and reason when a graph cannot be produced.
+pub fn read_with_limits_and_signature_inputs<'a>(
+    bytes: &'a [u8],
+    limits: ReadLimits,
+    signatures: &SignatureInputs<'_>,
+) -> Result<ReadGraph<'a>, ReadError> {
     let capacity = limits.second_generation;
     let mut detection_work = 0;
     let (opener, generation) = match detect_opener(bytes, limits.detection, &mut detection_work) {
@@ -463,9 +810,9 @@ fn read_bounded(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadE
             return GraphReader::new(
                 bytes,
                 capacity,
-                Some(limits.detection),
-                Some(detection_work),
+                Some((limits.detection, detection_work)),
                 Some(limits.second_generation_nesting_depth),
+                signatures,
             )
             .recover_initial(error, None)
             .map(ReadGraph::Second);
@@ -487,9 +834,9 @@ fn read_bounded(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadE
             GraphReader::new(
                 bytes,
                 capacity,
-                Some(limits.detection),
-                Some(detection_work),
+                Some((limits.detection, detection_work)),
                 Some(limits.second_generation_nesting_depth),
+                signatures,
             )
             .read_first(opener, generation)
             .map(ReadGraph::Second)
@@ -596,14 +943,34 @@ fn delimit(bytes: &[u8], offset: usize) -> Result<Option<Item<'_>>, ReadError> {
     })
 }
 
+fn framing_damage(error: &ReadError, end: usize) -> Option<FramingDamage> {
+    let ReadFailure::Framing(cause) = &error.failure else {
+        return None;
+    };
+    let offset = error.offset;
+    let length = end - offset;
+    match cause.kind() {
+        DecodeErrorKind::Truncated => Some(FramingDamage::TornTail { offset, length }),
+        DecodeErrorKind::Malformed(_) => Some(FramingDamage::Undelimitable { offset, length }),
+        _ => None,
+    }
+}
+
 struct Segment<'a> {
+    registry: NonZeroU64,
     verifier: SegmentVerifier,
     dictionary: SegmentDictionary,
     ordinal: Option<u64>,
     file_ordinal: u64,
+    header_identifier: [u8; DIGEST_LENGTH],
+    authentication: AuthenticationProgress,
+    durability: SegmentDurability,
+    end: FileEnd,
     units: FastMap<[u8; 32], Unit<'a>>,
     parity: ParityStream<'a>,
     index_storage: StorageIndex,
+    index_content: IndexContent,
+    pending_rows: Vec<PendingRows>,
 }
 
 enum Unit<'a> {
@@ -619,7 +986,25 @@ struct GraphFrame<'a> {
 
 struct FailedItem<'a> {
     failure: ReadFailure,
-    accelerator: Option<GraphFrame<'a>>,
+    retained_frame: Option<GraphFrame<'a>>,
+    storage_item: Option<IndexStorageItem>,
+    opener: bool,
+}
+
+impl From<ResyncRefusal> for CandidateRefusal {
+    fn from(refused: ResyncRefusal) -> Self {
+        Self {
+            offset: refused.offset,
+            length: RESYNC_MAX_BYTES,
+            requested_total: refused.requested_total,
+        }
+    }
+}
+
+struct PendingRows {
+    offset: usize,
+    scope: RowScope,
+    rows: Vec<Row>,
 }
 
 enum Recovery<'a> {
@@ -631,6 +1016,44 @@ enum Recovery<'a> {
     },
 }
 
+pub(super) enum RecoveryFailure {
+    Capacity(CandidateRefusal),
+    Depth(RecoveryDepth),
+}
+
+pub(super) struct RecoveryDepth {
+    pub(super) offset: usize,
+    pub(super) limit: usize,
+    pub(super) cause: StructuralError,
+    pub(super) detection: bool,
+}
+
+impl From<RecoveryDepth> for ReadError {
+    fn from(depth: RecoveryDepth) -> Self {
+        let RecoveryDepth {
+            offset,
+            limit,
+            cause,
+            detection,
+        } = depth;
+        let required = limit.saturating_add(1);
+        let failure = if detection {
+            ReadFailure::DetectionDepth {
+                required,
+                limit,
+                cause,
+            }
+        } else {
+            ReadFailure::ItemDepth {
+                required,
+                limit,
+                cause,
+            }
+        };
+        Self { offset, failure }
+    }
+}
+
 #[derive(Default)]
 struct HeldItems<'a> {
     complete: VecDeque<Item<'a>>,
@@ -640,7 +1063,7 @@ struct HeldItems<'a> {
 }
 
 impl<'a> HeldItems<'a> {
-    fn peek(&mut self, reader: &GraphReader<'a>, offset: usize) -> Option<Item<'a>> {
+    fn peek(&mut self, reader: &GraphReader<'a, '_>, offset: usize) -> Option<Item<'a>> {
         if let Some(item) = self.complete.front() {
             return Some(*item);
         }
@@ -653,7 +1076,7 @@ impl<'a> HeldItems<'a> {
 
     fn take(
         &mut self,
-        reader: &mut GraphReader<'a>,
+        reader: &mut GraphReader<'a, '_>,
         offset: usize,
     ) -> Result<Option<Item<'a>>, ReadError> {
         if let Some(item) = self.complete.pop_front() {
@@ -670,19 +1093,7 @@ impl<'a> HeldItems<'a> {
     }
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "keep the prepared frame on the stack without allocating for each item"
-)]
-enum ItemCheck<'a> {
-    Frame(FrameEnvelope<'a>, FrameWire<'a>),
-    Opener(Header<'a>),
-    StorageClaim(IndexStorageItem, bool),
-    Unsupported(ItemKind),
-    FramingFailure(ReadFailure),
-}
-
-struct GraphReader<'a> {
+struct GraphReader<'a, 'keys> {
     bytes: &'a [u8],
     scan: ResyncScan<'a>,
     initial_scan: Option<ResyncScan<'a>>,
@@ -694,60 +1105,61 @@ struct GraphReader<'a> {
     graph: RdfGraph<'a>,
     values: ValueStore,
     payload: PayloadBudget,
+    past: PastChecks<'a>,
     formed: FormedBudget,
     items: u64,
     item_limit: u64,
-    rebuilt_remaining: u64,
+    rebuilt: RebuildBudget,
+    blob_claims: Vec<BlobClaim<'a>>,
+    signature_inputs: &'keys SignatureInputs<'keys>,
 }
 
-impl<'a> GraphReader<'a> {
+impl<'a, 'keys> GraphReader<'a, 'keys> {
     fn new(
         bytes: &'a [u8],
         capacity: ReadCapacity,
-        detection: Option<DetectionCapacity>,
-        detection_work: Option<usize>,
+        detection: Option<(DetectionCapacity, usize)>,
         item_nesting_depth: Option<usize>,
+        signature_inputs: &'keys SignatureInputs<'keys>,
     ) -> Self {
         let (initial_scan, initial_end, initial_refusal) =
-            detection
-                .zip(detection_work)
-                .map_or((None, None, None), |(detection, used)| {
-                    let remaining = detection.work.saturating_sub(used);
-                    let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
-                    let byte_end = detection.encoded_opener_bytes;
-                    let end = bytes.len().min(work_end).min(byte_end);
-                    let refusal = (end < bytes.len()).then(|| {
-                        let failure = if byte_end <= work_end {
-                            ReadFailure::DetectionBytes {
-                                required: end.saturating_add(1),
-                                limit: byte_end,
-                                cause: None,
-                            }
-                        } else {
-                            ReadFailure::DetectionWork {
-                                required: used.saturating_add(
-                                    end.saturating_add(1)
-                                        .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
-                                ),
-                                limit: detection.work,
-                                cause: None,
-                            }
-                        };
-                        ReadError {
-                            offset: end,
-                            failure,
+            detection.map_or((None, None, None), |(detection, used)| {
+                let remaining = detection.work.saturating_sub(used);
+                let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
+                let byte_end = detection.encoded_opener_bytes;
+                let end = bytes.len().min(work_end).min(byte_end);
+                let refusal = (end < bytes.len()).then(|| {
+                    let failure = if byte_end <= work_end {
+                        ReadFailure::DetectionBytes {
+                            required: end.saturating_add(1),
+                            limit: byte_end,
+                            cause: None,
                         }
-                    });
-                    (
-                        Some(ResyncScan::with_depth(
-                            &bytes[..end],
-                            detection.nesting_depth,
-                        )),
-                        Some(end),
-                        refusal,
-                    )
+                    } else {
+                        ReadFailure::DetectionWork {
+                            required: used.saturating_add(
+                                end.saturating_add(1)
+                                    .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
+                            ),
+                            limit: detection.work,
+                            cause: None,
+                        }
+                    };
+                    ReadError {
+                        offset: end,
+                        failure,
+                    }
                 });
-        let initial_nesting_depth = detection.map(|capacity| capacity.nesting_depth);
+                (
+                    Some(ResyncScan::with_depth(
+                        &bytes[..end],
+                        detection.nesting_depth,
+                    )),
+                    Some(end),
+                    refusal,
+                )
+            });
+        let initial_nesting_depth = detection.map(|(capacity, _)| capacity.nesting_depth);
         let scan = item_nesting_depth.map_or_else(
             || ResyncScan::new(bytes),
             |depth| ResyncScan::with_depth(bytes, depth),
@@ -764,10 +1176,13 @@ impl<'a> GraphReader<'a> {
             graph: RdfGraph::default(),
             values: ValueStore::default(),
             payload: PayloadBudget::new(capacity.payload),
+            past: PastChecks::new(capacity.payload.decoded_bytes_per_read),
             formed: FormedBudget::new(capacity.formed_bytes),
             items: 0,
             item_limit: capacity.items,
-            rebuilt_remaining: capacity.rebuilt_bytes,
+            rebuilt: RebuildBudget::new(capacity.rebuilt_bytes),
+            blob_claims: Vec::new(),
+            signature_inputs,
         }
     }
 
@@ -831,24 +1246,75 @@ impl<'a> GraphReader<'a> {
         initial: ReadError,
         framed_end: Option<usize>,
     ) -> Result<RdfGraph<'a>, ReadError> {
-        let candidate = if let Some(end) = framed_end {
+        let mut items = HeldItems::default();
+        let unreadable_opener =
+            framed_end.filter(|_| matches!(initial.failure, ReadFailure::Wire(_)));
+        let end = if let Some(end) = framed_end {
             self.count_item(0)?;
-            self.count_held_items(end, &mut HeldItems::default())?;
-            self.scan_resync(0, end)?
+            if let Err(error) = self.count_held_items(end, &mut items) {
+                if let Some(opener_end) = unreadable_opener
+                    && matches!(error.failure, ReadFailure::ItemCapacity(_))
+                {
+                    return self.read_skipped_initial(initial, opener_end, items, None);
+                }
+                return Err(error);
+            }
+            end
         } else if self.count_undelimited(&initial, false)?.is_some() {
-            self.scan_resync(0, self.scan_end())?
+            self.scan_end()
         } else {
-            None
+            return Err(initial);
         };
-        let Some(candidate) = candidate else {
-            return Err(self.detection_refusal(&initial).unwrap_or(initial));
+        let refusal = match self.scan_resync(0, end) {
+            Ok(Some(candidate)) => {
+                let start = candidate.offset;
+                let end = start + candidate.bytes.len();
+                self.admit_body_nesting(candidate.bytes, start)?;
+                self.finish_detection();
+                let segment = self.resume_segment(initial, &candidate, None)?;
+                return self.read_segment(segment, start, end, HeldItems::default());
+            }
+            Ok(None) => None,
+            Err(RecoveryFailure::Capacity(refused)) => Some(refused),
+            Err(RecoveryFailure::Depth(depth)) => return Err(depth.into()),
         };
-        let start = candidate.offset;
-        let end = start + candidate.bytes.len();
-        self.admit_body_nesting(candidate.bytes, start)?;
+        if let Some(refusal) = self.detection_refusal(&initial) {
+            return Err(refusal);
+        }
+        if let Some(opener_end) = unreadable_opener {
+            return self.read_skipped_initial(initial, opener_end, items, refusal);
+        }
+        Err(refusal.map_or(initial, |refused| ReadError {
+            offset: refused.offset,
+            failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
+                refused.requested_total,
+            )),
+        }))
+    }
+
+    fn read_skipped_initial(
+        mut self,
+        initial: ReadError,
+        opener_end: usize,
+        mut items: HeldItems<'a>,
+        refusal: Option<CandidateRefusal>,
+    ) -> Result<RdfGraph<'a>, ReadError> {
         self.finish_detection();
-        let segment = self.resume_segment(initial, &candidate, None)?;
-        self.read_segment(segment, start, end)
+        let mut offset = opener_end;
+        for item in &items.complete {
+            self.admit_body_nesting(item.bytes(), offset)?;
+            offset += item.bytes().len();
+        }
+        // The lookahead already charged an undelimitable region. Delimit it
+        // under the body bounds without attempting to acquire another slot.
+        items.next = items
+            .region_counted
+            .then(|| self.delimit_item(self.bytes.len(), offset));
+        self.skip_segment(initial)?;
+        if let Some(refused) = refusal {
+            self.observe_recovery_refusal(refused, opener_end, None);
+        }
+        self.read_segment(None, 0, opener_end, items)
     }
 
     fn count_undelimited(
@@ -876,7 +1342,7 @@ impl<'a> GraphReader<'a> {
         &mut self,
         start: usize,
         end: usize,
-    ) -> Result<Option<ResyncCandidate<'a>>, ReadError> {
+    ) -> Result<Option<ResyncCandidate<'a>>, RecoveryFailure> {
         if self.items == self.item_limit {
             return Ok(None);
         }
@@ -896,31 +1362,15 @@ impl<'a> GraphReader<'a> {
         match (scanned, depth_refusal) {
             (Ok(None), Some((candidate_offset, limit, error))) => {
                 let error_offset = usize::try_from(error.offset()).unwrap_or(usize::MAX);
-                let failure = if initial {
-                    ReadFailure::DetectionDepth {
-                        required: limit.saturating_add(1),
-                        limit,
-                        cause: error,
-                    }
-                } else {
-                    ReadFailure::ItemDepth {
-                        required: limit.saturating_add(1),
-                        limit,
-                        cause: error,
-                    }
-                };
-                Err(ReadError {
+                Err(RecoveryFailure::Depth(RecoveryDepth {
                     offset: candidate_offset.saturating_add(error_offset),
-                    failure,
-                })
+                    limit,
+                    cause: error,
+                    detection: initial,
+                }))
             }
             (Ok(candidate), _) => Ok(candidate),
-            (Err(refused), _) => Err(ReadError {
-                offset: refused.offset,
-                failure: ReadFailure::PayloadRefusal(PayloadRefusal::TotalDecoded(
-                    refused.requested_total,
-                )),
-            }),
+            (Err(refused), _) => Err(RecoveryFailure::Capacity(refused.into())),
         }
     }
 
@@ -929,7 +1379,7 @@ impl<'a> GraphReader<'a> {
         failure: &ReadError,
         scan_start: usize,
         region_counted: bool,
-        segment: &Segment<'a>,
+        segment: Option<&Segment<'a>>,
     ) -> Result<Option<Recovery<'a>>, ReadError> {
         let Some(region_counted) = self.count_undelimited(failure, region_counted)? else {
             return Ok(None);
@@ -937,13 +1387,32 @@ impl<'a> GraphReader<'a> {
         if self.items == self.item_limit || self.payload.total_refused() {
             return Ok(None);
         }
-        if let Some(candidate) = self.scan_resync(scan_start, failure.offset)? {
+        let damaged_start = failure.offset;
+        match self.search_recovery(scan_start, damaged_start, region_counted, segment) {
+            Ok(candidate) => Ok(candidate),
+            Err(RecoveryFailure::Capacity(refused)) => {
+                self.observe_recovery_refusal(refused, damaged_start, segment);
+                Ok(None)
+            }
+            Err(RecoveryFailure::Depth(depth)) => Err(depth.into()),
+        }
+    }
+
+    fn search_recovery(
+        &mut self,
+        scan_start: usize,
+        damaged_start: usize,
+        region_counted: bool,
+        segment: Option<&Segment<'a>>,
+    ) -> Result<Option<Recovery<'a>>, RecoveryFailure> {
+        if let Some(candidate) = self.scan_resync(scan_start, damaged_start)? {
             return Ok(Some(Recovery::Resync(candidate)));
         }
         let parity_slots = if region_counted { 1 } else { 2 };
-        let parity_allowed = self.item_limit - self.items >= parity_slots;
-        let history = segment.verifier.parity_history();
-        for offset in failure.offset..self.bytes.len() {
+        let history = segment
+            .filter(|_| self.item_limit - self.items >= parity_slots)
+            .map(|segment| segment.verifier.parity_history());
+        for offset in damaged_start..self.bytes.len() {
             // Both candidate types start with a deterministic 11-field array.
             let bytes = &self.bytes[offset..];
             if bytes.first() != Some(&0x8b) {
@@ -952,12 +1421,9 @@ impl<'a> GraphReader<'a> {
             if let Some(candidate) = self.scan_resync(offset, offset + 1)? {
                 return Ok(Some(Recovery::Resync(candidate)));
             }
-            if !parity_allowed {
-                continue;
-            }
-            if let Some(candidate) = history
-                .scan_at(bytes, &mut self.payload, self.item_nesting_depth)
-                .map_err(|failure| ReadError { offset, failure })?
+            if let Some(history) = &history
+                && let Some(candidate) =
+                    history.scan_at(bytes, offset, &mut self.payload, self.item_nesting_depth)?
             {
                 return Ok(Some(Recovery::Parity {
                     offset,
@@ -967,6 +1433,32 @@ impl<'a> GraphReader<'a> {
             }
         }
         Ok(None)
+    }
+
+    fn observe_recovery_refusal(
+        &mut self,
+        refused: CandidateRefusal,
+        damaged_start: usize,
+        segment: Option<&Segment<'a>>,
+    ) {
+        let (ordinal, items) = if let Some(segment) = segment {
+            (segment.file_ordinal, segment.parity.item_count())
+        } else {
+            let segment = self
+                .graph
+                .skipped_segments
+                .last()
+                .expect("an unlinked walk begins by recording its skipped opener");
+            (segment.ordinal, segment.items)
+        };
+        let position = items - usize::from(refused.offset < damaged_start);
+        self.graph.recovery_refusal = Some(RecoveryRefusal {
+            segment: ordinal,
+            position,
+            offset: refused.offset,
+            length: refused.length,
+            requested_total: refused.requested_total,
+        });
     }
 
     fn resume_parity(
@@ -985,12 +1477,27 @@ impl<'a> GraphReader<'a> {
             offset: region.start,
             length: region.len(),
         };
+        self.graph.left_out += 1;
         let accept = || {
             segment.parity.opaque_extent(region)?;
             segment.dictionary.mark_doubt();
+            segment.end.observe_uncommitted();
             let detached = segment
                 .verifier
                 .resume_parity(candidate.anchor, &candidate.table)?;
+            super::fields::push(
+                &mut self.graph.frame_wire,
+                FrameWireResult {
+                    segment: segment.file_ordinal,
+                    position: segment.parity.item_count(),
+                    offset,
+                    length: candidate.length,
+                    frame_type: Some(FrameType::Parity as u64),
+                    link: LinkState::Linked,
+                    payload: PayloadOutcome::Verified,
+                    stored: None,
+                },
+            )?;
             segment
                 .parity
                 .other_item(offset..offset + candidate.length)?;
@@ -1022,33 +1529,22 @@ impl<'a> GraphReader<'a> {
         original: ReadError,
         candidate: &ResyncCandidate<'a>,
         previous: Option<&mut Segment<'a>>,
-    ) -> Result<Segment<'a>, ReadError> {
+    ) -> Result<Option<Segment<'a>>, ReadError> {
         let offset = original.offset;
         let damage = if candidate.offset > offset {
-            let length = candidate.offset - offset;
             let Err(prefix) = self.delimit_item(candidate.offset, offset) else {
                 return Err(original);
             };
-            let ReadFailure::Framing(error) = &prefix.failure else {
-                return Err(prefix);
-            };
-            Some(match error.kind() {
-                DecodeErrorKind::Truncated => FramingDamage::TornTail { offset, length },
-                DecodeErrorKind::Malformed(_) => FramingDamage::Undelimitable { offset, length },
-                _ => return Err(prefix),
-            })
+            Some(framing_damage(&prefix, candidate.offset).ok_or(prefix)?)
         } else {
             None
         };
         let start = candidate.offset;
         let end = start + candidate.bytes.len();
-        let segment = segment_from_header(candidate.header, start..end, previous.as_deref())
-            .map_err(|failure| ReadError {
-                offset: candidate.offset,
-                failure,
-            })?;
         self.count_item(candidate.offset)?;
-        if let Some(previous) = previous {
+        self.graph.left_out += u64::from(damage.is_some());
+        let mut previous = previous;
+        if let Some(previous) = previous.as_deref_mut() {
             if let Some(FramingDamage::Undelimitable { offset, length }) = damage {
                 previous
                     .parity
@@ -1059,7 +1555,17 @@ impl<'a> GraphReader<'a> {
                     })?;
             }
             self.finish_segment(previous, start)?;
+        } else if !self.graph.skipped_segments.is_empty()
+            && matches!(damage, Some(FramingDamage::Undelimitable { .. }))
+        {
+            self.count_skipped_item();
         }
+        let segment = self.open_segment(
+            candidate.header,
+            start..end,
+            previous.as_deref(),
+            ResyncReach::Scanned,
+        )?;
         super::fields::push(
             &mut self.graph.resynchronizations,
             Resynchronization {
@@ -1144,40 +1650,171 @@ impl<'a> GraphReader<'a> {
         end: usize,
     ) -> Result<RdfGraph<'a>, ReadError> {
         self.count_item(start)?;
-        let segment =
-            segment_from_header(opener, start..end, None).map_err(|failure| ReadError {
-                offset: start,
-                failure,
+        let segment = self.open_segment(opener, start..end, None, ResyncReach::Walked)?;
+        self.read_segment(segment, start, end, HeldItems::default())
+    }
+
+    fn open_segment(
+        &mut self,
+        header: Header<'a>,
+        extent: Range<usize>,
+        previous: Option<&Segment<'a>>,
+        reach: ResyncReach,
+    ) -> Result<Option<Segment<'a>>, ReadError> {
+        let offset = extent.start;
+        let registry = header.registry_version();
+        let file_ordinal = self.next_segment_ordinal();
+        if let Some(declaration) = header.resync() {
+            let past = self
+                .past
+                .admit(
+                    self.graph.resync_openers.len(),
+                    offset,
+                    declaration,
+                    header.identifier().is_some(),
+                )
+                .map_err(|error| ReadError {
+                    offset,
+                    failure: error.into(),
+                })?;
+            super::fields::push(
+                &mut self.graph.resync_openers,
+                ResyncOpener {
+                    segment: file_ordinal,
+                    offset,
+                    declared_offset: declaration.offset,
+                    reach,
+                    past,
+                },
+            )
+            .map_err(|error| ReadError {
+                offset,
+                failure: error.into(),
             })?;
-        self.read_segment(segment, start, end)
+        }
+        self.observe_lineage(header, offset, file_ordinal, previous)?;
+        if registry.get() > super::REGISTRY_VERSION {
+            super::fields::push(&mut self.graph.unsupported_registries, (offset, registry))
+                .map_err(|error| ReadError {
+                    offset,
+                    failure: error.into(),
+                })?;
+        }
+        let Some(identifier) = header.identifier() else {
+            self.skip_segment(ReadError {
+                offset,
+                failure: ReadFailure::UnavailableHash(header.hash_algorithm()),
+            })?;
+            return Ok(None);
+        };
+        segment_from_header(header, identifier, extent, file_ordinal)
+            .map(Some)
+            .map_err(|failure| ReadError { offset, failure })
+    }
+
+    fn observe_lineage(
+        &mut self,
+        header: Header<'a>,
+        offset: usize,
+        file_ordinal: u64,
+        previous: Option<&Segment<'a>>,
+    ) -> Result<(), ReadError> {
+        let lineage = header.lineage();
+        let (head_mismatch, ordinal_mismatch) = match (lineage, header.identifier(), previous) {
+            (Some(lineage), Some(_), Some(previous)) => (
+                lineage.previous_head != previous.verifier.head(),
+                previous
+                    .ordinal
+                    .is_some_and(|ordinal| ordinal.checked_add(1) != Some(lineage.ordinal.get())),
+            ),
+            (Some(_), Some(_), None) => (false, file_ordinal == 0),
+            _ => (false, false),
+        };
+        for (finding, applies) in [
+            (
+                LineageFinding::Begins,
+                file_ordinal > 0 && lineage.is_none(),
+            ),
+            (LineageFinding::HeadMismatch, head_mismatch),
+            (LineageFinding::OrdinalMismatch, ordinal_mismatch),
+        ] {
+            if applies {
+                super::fields::push(&mut self.graph.lineage_findings, (offset, finding)).map_err(
+                    |error| ReadError {
+                        offset,
+                        failure: error.into(),
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    fn next_segment_ordinal(&self) -> u64 {
+        (self.graph.segment_authentication.len() + self.graph.skipped_segments.len()) as u64
+    }
+
+    fn skip_segment(&mut self, opener: ReadError) -> Result<(), ReadError> {
+        let offset = opener.offset;
+        let ordinal = self.next_segment_ordinal();
+        self.graph.note_content_omission(offset);
+        super::fields::push(
+            &mut self.graph.skipped_segments,
+            SkippedSegment {
+                ordinal,
+                opener,
+                items: 1,
+            },
+        )
+        .map_err(|error| ReadError {
+            offset,
+            failure: error.into(),
+        })
+    }
+
+    fn count_skipped_item(&mut self) {
+        let segment = self
+            .graph
+            .skipped_segments
+            .last_mut()
+            .expect("an unlinked walk begins by recording its skipped opener");
+        segment.items += 1;
     }
 
     fn read_segment(
         mut self,
-        mut segment: Segment<'a>,
+        mut segment: Option<Segment<'a>>,
         mut previous_start: usize,
         mut offset: usize,
+        mut items: HeldItems<'a>,
     ) -> Result<RdfGraph<'a>, ReadError> {
-        let mut items = HeldItems::default();
         let mut held: Option<GraphFrame<'a>> = None;
         loop {
             let item = match items.take(&mut self, offset) {
                 Ok(Some(item)) => item,
-                Ok(None) => {
-                    self.finish_segment(&segment, offset)?;
-                    return Ok(self.graph);
+                Ok(None) => break,
+                Err(ReadError {
+                    offset,
+                    failure: ReadFailure::ItemCapacity(limit),
+                }) => {
+                    self.graph.item_refusal = Some(ItemRefusal {
+                        offset,
+                        length: self.bytes.len() - offset,
+                        limit,
+                    });
+                    break;
                 }
                 Err(error) => {
                     match self.scan_recovery(
                         &error,
                         previous_start + 1,
                         items.region_counted,
-                        &segment,
+                        segment.as_ref(),
                     )? {
                         Some(Recovery::Resync(candidate)) => {
                             previous_start = candidate.offset;
                             offset = candidate.offset + candidate.bytes.len();
-                            segment = self.resume_segment(error, &candidate, Some(&mut segment))?;
+                            segment = self.resume_segment(error, &candidate, segment.as_mut())?;
                         }
                         Some(Recovery::Parity {
                             offset: start,
@@ -1186,35 +1823,41 @@ impl<'a> GraphReader<'a> {
                         }) => {
                             previous_start = start;
                             offset = start + candidate.length;
+                            let current = segment.as_mut().ok_or(ReadError {
+                                offset: start,
+                                failure: ReadFailure::MissingContent,
+                            })?;
                             self.resume_parity(
                                 error.offset..start,
                                 region_counted,
                                 candidate,
-                                &mut segment,
+                                current,
                             )?;
                         }
-                        None => return Err(error),
+                        None => {
+                            let Some(damage) = framing_damage(&error, self.bytes.len()) else {
+                                return Err(error);
+                            };
+                            if segment.is_none()
+                                && matches!(damage, FramingDamage::Undelimitable { .. })
+                            {
+                                self.count_skipped_item();
+                            }
+                            self.graph.framing_tail = Some(damage);
+                            if let ReadFailure::Framing(cause) = error.failure {
+                                self.graph.framing_tail_cause = Some(cause);
+                            }
+                            self.graph.left_out += 1;
+                            break;
+                        }
                     }
                     items = HeldItems::default();
                     continue;
                 }
             };
             let end = offset + item.bytes().len();
-            let head = held
-                .as_ref()
-                .and_then(|frame| frame.checked.link.effective_identifier.as_ref())
-                .unwrap_or_else(|| segment.verifier.predecessor());
-            // The current frame already links under a held predecessor's
-            // computed ID. Its successor cannot heal it in that case.
-            let witness = if held.is_none() {
-                items.peek(&self, end)
-            } else {
-                None
-            };
-            let checked = Self::inspect_item(item, witness, head, offset, &segment)
-                .map_err(|failure| ReadError { offset, failure })?;
             if let Some(failed) =
-                self.observe_item(checked, offset..end, &mut held, &mut segment)?
+                self.observe_item(item, offset..end, &mut held, &mut items, &mut segment)?
             {
                 let scan_start = if held.is_some() {
                     offset
@@ -1222,22 +1865,33 @@ impl<'a> GraphReader<'a> {
                     previous_start + 1
                 };
                 let candidate = match self.count_held_items(end, &mut items) {
-                    Err(error) if matches!(&error.failure, ReadFailure::ItemCapacity(_)) => {
-                        Err(error)
-                    }
-                    counted => {
-                        counted?;
-                        self.scan_resync(scan_start, end)
-                    }
+                    Ok(()) => match self.scan_resync(scan_start, end) {
+                        Ok(candidate) => candidate,
+                        Err(RecoveryFailure::Capacity(refused)) => {
+                            if let Some(current) = segment.as_mut() {
+                                self.deliver_held(held.take(), current)?;
+                            }
+                            self.observe_recovery_refusal(refused, offset, segment.as_ref());
+                            None
+                        }
+                        Err(RecoveryFailure::Depth(depth)) => return Err(depth.into()),
+                    },
+                    Err(error) if matches!(error.failure, ReadFailure::ItemCapacity(_)) => None,
+                    Err(error) => return Err(error),
                 };
-                if !matches!(candidate, Ok(Some(_))) {
-                    self.deliver_held(held.take(), &mut segment)?;
-                }
-                if let Some(accelerator) = failed.accelerator
-                    && (matches!(candidate, Ok(None))
-                        || matches!(&candidate, Err(error) if matches!(error.failure, ReadFailure::ItemCapacity(_))))
+                if candidate.is_none()
+                    && let Some(current) = segment.as_mut()
                 {
-                    self.deliver_frame(accelerator, &mut segment)?;
+                    self.deliver_held(held.take(), current)?;
+                }
+                if let Some(frame) = failed.retained_frame
+                    && candidate.is_none()
+                {
+                    let current = segment.as_mut().ok_or(ReadError {
+                        offset,
+                        failure: ReadFailure::MissingContent,
+                    })?;
+                    self.deliver_frame(frame, current)?;
                     previous_start = offset;
                     offset = end;
                     continue;
@@ -1246,46 +1900,101 @@ impl<'a> GraphReader<'a> {
                     offset,
                     failure: failed.failure,
                 };
-                let Some(candidate) = candidate? else {
-                    if matches!(original.failure, ReadFailure::Classification(_)) {
-                        self.retain_opaque_item(original, end, &mut segment)?;
-                        previous_start = offset;
-                        offset = end;
-                        continue;
+                let Some(candidate) = candidate else {
+                    if failed.opener {
+                        if let Some(mut previous) = segment.take() {
+                            self.finish_segment(&mut previous, offset)?;
+                        }
+                        self.skip_segment(original)?;
+                    } else if let Some(current) = segment.as_mut() {
+                        match (failed.storage_item, &original.failure) {
+                            (Some(item), ReadFailure::Wire(error)) => {
+                                Self::observe_storage_claim(
+                                    offset..end,
+                                    item,
+                                    Err(*error),
+                                    current,
+                                )?;
+                            }
+                            (_, ReadFailure::Classification(_)) => {
+                                self.retain_opaque_item(original, end, current)?;
+                                self.graph.left_out += 1;
+                                if !item.names_closing_hint() {
+                                    self.graph.note_content_omission(offset);
+                                    current.end.observe_uncommitted();
+                                }
+                            }
+                            _ => return Err(original),
+                        }
+                    } else {
+                        self.count_skipped_item();
+                        self.graph.left_out += 1;
                     }
-                    return Err(original);
+                    previous_start = offset;
+                    offset = end;
+                    continue;
                 };
-                if let Some(mut frame) = held.take() {
+                if let (Some(mut frame), Some(current)) = (held.take(), segment.as_mut()) {
                     // The accepted opener replaces this frame's only witness.
-                    if frame.checked.frame_type.and_then(FrameType::from_code)
-                        != Some(FrameType::Index)
-                    {
-                        let failure = frame
-                            .checked
-                            .malformed
-                            .map_or(ReadFailure::BrokenLink, ReadFailure::Wire);
-                        return Err(ReadError {
-                            offset: frame.offset,
-                            failure,
-                        });
-                    }
                     let link = &mut frame.checked.link;
                     link.state = LinkState::Broken;
-                    link.effective_identifier = link.stored_identifier;
-                    self.deliver_frame(frame, &mut segment)?;
+                    link.effective_identifier = link.stored_identifier.or(link.computed_identifier);
+                    self.deliver_frame(frame, current)?;
                 }
                 previous_start = candidate.offset;
                 offset = candidate.offset + candidate.bytes.len();
-                segment = self.resume_segment(original, &candidate, Some(&mut segment))?;
+                segment = self.resume_segment(original, &candidate, segment.as_mut())?;
                 items = HeldItems::default();
                 continue;
             }
             previous_start = offset;
             offset = end;
         }
+        if let Some(current) = segment.as_mut() {
+            self.finish_segment(current, offset)?;
+        }
+        self.graph.end = match (self.graph.item_refusal, self.graph.framing_tail) {
+            (Some(_), _) => {
+                self.graph.rdf = RdfFold::default();
+                self.graph.annotation_width_offset = None;
+                self.graph.blobs.clear();
+                self.graph.external_blobs.clear();
+                self.graph.frame_failures.retain(|error| {
+                    !matches!(
+                        error.failure,
+                        ReadFailure::Definitions(_) | ReadFailure::Rows(_)
+                    )
+                });
+                FileEnd::NotRead
+            }
+            (_, Some(FramingDamage::Undelimitable { .. })) => FileEnd::Undelimitable,
+            (_, Some(FramingDamage::TornTail { .. })) => FileEnd::Torn,
+            (_, None) => segment.map_or(FileEnd::NoCommit, |segment| segment.end),
+        };
+        if self.graph.item_refusal.is_none() {
+            self.fold_blob_claims().map_err(|error| ReadError {
+                offset,
+                failure: error.into(),
+            })?;
+        }
+        self.graph.frame_failures.sort_unstable_by_key(|error| {
+            let detail = match error.failure {
+                ReadFailure::UnknownFrame(_) => 2,
+                ReadFailure::PayloadDamage(_) | ReadFailure::PayloadRefusal(_) => 1,
+                _ => 0,
+            };
+            (error.offset, detail)
+        });
+        self.past.finish(self.bytes, &mut self.graph.resync_openers);
+        Ok(self.graph)
     }
 
-    fn finish_segment(&mut self, segment: &Segment<'a>, offset: usize) -> Result<(), ReadError> {
+    fn finish_segment(
+        &mut self,
+        segment: &mut Segment<'a>,
+        offset: usize,
+    ) -> Result<(), ReadError> {
+        self.flush_rows(segment, false)?;
         let read_error = |error: std::collections::TryReserveError| ReadError {
             offset,
             failure: error.into(),
@@ -1306,6 +2015,13 @@ impl<'a> GraphReader<'a> {
                 segment.parity.item_count(),
                 &mut self.graph.index_storage_findings,
             )
+            .map_err(read_error)?;
+        super::fields::push(
+            &mut self.graph.segment_authentication,
+            segment.authentication.summary(segment.file_ordinal),
+        )
+        .map_err(read_error)?;
+        super::fields::push(&mut self.graph.segment_durability, segment.durability)
             .map_err(read_error)
     }
 
@@ -1324,6 +2040,23 @@ impl<'a> GraphReader<'a> {
             .map_err(|cause| ReadError {
                 offset,
                 failure: cause.into(),
+            })
+    }
+
+    fn observe_storage_claim(
+        extent: Range<usize>,
+        item: IndexStorageItem,
+        claim: Result<bool, WireError>,
+        segment: &mut Segment<'a>,
+    ) -> Result<(), ReadError> {
+        let offset = extent.start;
+        segment
+            .index_storage
+            .observe(offset, segment.parity.item_count(), item, claim)
+            .and_then(|()| segment.parity.other_item(extent))
+            .map_err(|error| ReadError {
+                offset,
+                failure: error.into(),
             })
     }
 
@@ -1412,83 +2145,79 @@ impl<'a> GraphReader<'a> {
         }
     }
 
-    fn inspect_item(
+    fn observe_item(
+        &mut self,
         item: Item<'a>,
-        next: Option<Item<'a>>,
-        predecessor: &[u8; DIGEST_LENGTH],
-        offset: usize,
-        segment: &Segment<'a>,
-    ) -> Result<ItemCheck<'a>, ReadFailure> {
-        // The graph reader admits only registry version 1 segment openers.
-        let registry = NonZeroU64::MIN;
+        extent: Range<usize>,
+        held: &mut Option<GraphFrame<'a>>,
+        items: &mut HeldItems<'a>,
+        active: &mut Option<Segment<'a>>,
+    ) -> Result<Option<FailedItem<'a>>, ReadError> {
+        let offset = extent.start;
+        let registry = active
+            .as_ref()
+            .map_or(NonZeroU64::MAX, |segment| segment.registry);
         let kind = match item.classify(registry) {
             Ok(kind) => kind,
             Err(error) => {
-                return Ok(ItemCheck::FramingFailure(ReadFailure::Classification(
-                    error,
-                )));
+                return Ok(Some(FailedItem {
+                    failure: ReadFailure::Classification(error),
+                    retained_frame: None,
+                    storage_item: None,
+                    opener: false,
+                }));
             }
         };
-        match kind {
-            ItemKind::Header | ItemKind::Resync => Ok(match decode_opener(item) {
-                Ok(header) => ItemCheck::Opener(header),
-                Err(error) => ItemCheck::FramingFailure(error),
-            }),
-            ItemKind::Frame => {
-                let envelope = item
-                    .frame()
-                    .map_err(ReadFailure::Framing)?
-                    .ok_or(ReadFailure::MissingContent)?;
-                let witness = next
-                    .map(Item::frame)
-                    .transpose()
-                    .map_err(ReadFailure::Framing)?
-                    .flatten();
-                let wire = envelope.check_wire(predecessor, witness.as_ref(), registry);
-                Ok(ItemCheck::Frame(envelope, wire))
+        if matches!(kind, ItemKind::Header | ItemKind::Resync) {
+            let header = match decode_opener(item) {
+                Ok(header) => header,
+                Err(failure) => {
+                    return Ok(Some(FailedItem {
+                        failure,
+                        retained_frame: None,
+                        storage_item: None,
+                        opener: true,
+                    }));
+                }
+            };
+            if let Some(previous) = active.as_mut() {
+                self.deliver_held(held.take(), previous)?;
+                self.finish_segment(previous, offset)?;
             }
-            kind @ (ItemKind::Offsets | ItemKind::Locator) => {
-                let (storage_item, claim) = if kind == ItemKind::Offsets {
-                    (
-                        IndexStorageItem::Offsets,
-                        item.offsets_match(segment.parity.item_lengths()),
-                    )
-                } else {
-                    (
-                        IndexStorageItem::Locator,
-                        item.locator_distance().map(|distance| {
-                            segment.index_storage.locator_matches(offset, distance)
-                        }),
-                    )
-                };
-                Ok(match claim {
-                    Ok(matches) => ItemCheck::StorageClaim(storage_item, matches),
-                    Err(error) => ItemCheck::FramingFailure(ReadFailure::Wire(error)),
-                })
-            }
-            _ => {
-                let framed = item
-                    .passes_framing_test(Some((registry, predecessor)), None)
-                    .map_err(ReadFailure::Framing)?;
-                Ok(if framed {
-                    ItemCheck::Unsupported(kind)
-                } else {
-                    ItemCheck::FramingFailure(ReadFailure::Item(kind))
-                })
-            }
+            *active = self.open_segment(header, extent, active.as_ref(), ResyncReach::Walked)?;
+            return Ok(None);
         }
-    }
-
-    fn observe_item(
-        &mut self,
-        item: ItemCheck<'a>,
-        extent: Range<usize>,
-        held: &mut Option<GraphFrame<'a>>,
-        segment: &mut Segment<'a>,
-    ) -> Result<Option<FailedItem<'a>>, ReadError> {
-        let offset = extent.start;
-        match item {
-            ItemCheck::Frame(envelope, wire) => {
+        let Some(segment) = active.as_mut() else {
+            self.count_skipped_item();
+            self.graph.left_out += 1;
+            return Ok(None);
+        };
+        match kind {
+            ItemKind::Frame => {
+                let framing_error = |error| ReadError {
+                    offset,
+                    failure: ReadFailure::Framing(error),
+                };
+                let envelope = item.frame().map_err(framing_error)?.ok_or(ReadError {
+                    offset,
+                    failure: ReadFailure::MissingContent,
+                })?;
+                let predecessor = held
+                    .as_ref()
+                    .and_then(|frame| frame.checked.link.effective_identifier.as_ref())
+                    .unwrap_or_else(|| segment.verifier.predecessor());
+                // A frame under a held predecessor cannot heal from its successor.
+                let witness = if held.is_none() {
+                    items
+                        .peek(self, extent.end)
+                        .map(Item::frame)
+                        .transpose()
+                        .map_err(framing_error)?
+                        .flatten()
+                } else {
+                    None
+                };
+                let wire = envelope.check_wire(predecessor, witness.as_ref(), registry);
                 let framed = wire.passes_framing();
                 if framed {
                     self.deliver_held(held.take(), segment)?;
@@ -1508,20 +2237,21 @@ impl<'a> GraphReader<'a> {
                 if !framed {
                     // Independent payload checks occur before an attempted scan.
                     let kind = frame.checked.frame_type.and_then(FrameType::from_code);
-                    let failed = if let Some(kind @ (FrameType::Index | FrameType::Parity)) = kind {
-                        FailedItem {
-                            failure: ReadFailure::Frame(kind),
-                            accelerator: Some(frame),
+                    let failure = match kind {
+                        Some(kind @ (FrameType::Index | FrameType::Parity)) => {
+                            ReadFailure::Frame(kind)
                         }
-                    } else {
-                        FailedItem {
-                            failure: admit_checked(frame.checked)
-                                .err()
-                                .unwrap_or(ReadFailure::MissingContent),
-                            accelerator: None,
-                        }
+                        _ => frame
+                            .checked
+                            .malformed
+                            .map_or(ReadFailure::BrokenLink, ReadFailure::Wire),
                     };
-                    return Ok(Some(failed));
+                    return Ok(Some(FailedItem {
+                        failure,
+                        retained_frame: Some(frame),
+                        storage_item: None,
+                        opener: false,
+                    }));
                 }
                 if frame.checked.link.state == LinkState::Healed {
                     // Only the next item's framing can make this link final.
@@ -1530,41 +2260,47 @@ impl<'a> GraphReader<'a> {
                     self.deliver_frame(frame, segment)?;
                 }
             }
-            ItemCheck::Opener(header) => {
-                self.deliver_held(held.take(), segment)?;
-                let opened = segment_from_header(header, extent, Some(segment))
-                    .map_err(|failure| ReadError { offset, failure })?;
-                self.finish_segment(segment, offset)?;
-                *segment = opened;
-            }
-            ItemCheck::StorageClaim(item, matches) => {
-                self.deliver_held(held.take(), segment)?;
-                let record = || {
-                    segment.index_storage.observe(
-                        offset,
-                        segment.parity.item_count(),
-                        item,
-                        matches,
-                    )?;
-                    segment.parity.other_item(extent)
+            ItemKind::Offsets | ItemKind::Locator => {
+                let (item, claim) = if kind == ItemKind::Offsets {
+                    (
+                        IndexStorageItem::Offsets,
+                        item.offsets_match(segment.parity.item_lengths()),
+                    )
+                } else {
+                    (
+                        IndexStorageItem::Locator,
+                        item.locator_distance().map(|distance| {
+                            segment.index_storage.locator_matches(offset, distance)
+                        }),
+                    )
                 };
-                record().map_err(|error| ReadError {
-                    offset,
-                    failure: error.into(),
-                })?;
-            }
-            ItemCheck::Unsupported(kind) => {
+                if let Err(error) = claim {
+                    return Ok(Some(FailedItem {
+                        failure: ReadFailure::Wire(error),
+                        retained_frame: None,
+                        storage_item: Some(item),
+                        opener: false,
+                    }));
+                }
                 self.deliver_held(held.take(), segment)?;
-                return Err(ReadError {
-                    offset,
-                    failure: ReadFailure::Item(kind),
-                });
+                Self::observe_storage_claim(extent, item, claim, segment)?;
             }
-            ItemCheck::FramingFailure(failure) => {
-                return Ok(Some(FailedItem {
-                    failure,
-                    accelerator: None,
-                }));
+            ItemKind::Unknown(_) => {
+                self.deliver_held(held.take(), segment)?;
+                self.retain_opaque_item(
+                    ReadError {
+                        offset,
+                        failure: ReadFailure::Item(kind),
+                    },
+                    extent.end,
+                    segment,
+                )?;
+                self.graph.left_out += 1;
+                self.graph.note_content_omission(offset);
+                segment.end.observe_uncommitted();
+            }
+            ItemKind::Header | ItemKind::Resync => {
+                unreachable!("the segment walk opens a new segment before checking content");
             }
         }
         Ok(None)
@@ -1591,8 +2327,46 @@ impl<'a> GraphReader<'a> {
             envelope,
             checked,
         } = frame;
-        self.observe_frame(envelope, checked, offset, segment)
-            .map_err(|failure| ReadError { offset, failure })
+        super::fields::push(
+            &mut self.graph.frame_wire,
+            FrameWireResult {
+                segment: segment.file_ordinal,
+                position: segment.parity.item_count(),
+                offset,
+                length: envelope.bytes().len(),
+                frame_type: checked.frame_type,
+                link: checked.link.state,
+                payload: PayloadOutcome::from(&checked.payload.state),
+                stored: checked.payload.stored,
+            },
+        )
+        .map_err(|error| ReadError {
+            offset,
+            failure: error.into(),
+        })?;
+        let kind = checked.frame_type.and_then(FrameType::from_code);
+        let covered = checked.link.effective_identifier.is_some();
+        match self.observe_frame(envelope, checked, offset, segment) {
+            Ok(true) => self.flush_rows(segment, true)?,
+            Ok(false) => {}
+            Err(failure @ ReadFailure::Content(ContentError::UnknownEnumeration { .. })) => {
+                if kind.is_some_and(FrameType::critical) {
+                    segment.verifier.stop_content();
+                }
+                if covered {
+                    segment.index_content.opaque_frame(kind);
+                }
+                self.graph.left_out += 1;
+                self.graph
+                    .retain_content_failure(offset, failure)
+                    .map_err(|error| ReadError {
+                        offset,
+                        failure: error.into(),
+                    })?;
+            }
+            Err(failure) => return Err(ReadError { offset, failure }),
+        }
+        Ok(())
     }
 
     fn observe_frame(
@@ -1601,28 +2375,94 @@ impl<'a> GraphReader<'a> {
         checked: FrameCheck<'a>,
         offset: usize,
         segment: &mut Segment<'a>,
-    ) -> Result<(), ReadFailure> {
+    ) -> Result<bool, ReadFailure> {
         let kind = checked.frame_type.and_then(FrameType::from_code);
         let accelerator = matches!(kind, Some(FrameType::Index | FrameType::Parity));
-        let damaged_payload = !accelerator
-            && checked
-                .malformed
-                .is_none_or(|error| error.reason == MalformedReason::CodecConstraint)
-            && checked.link.state != LinkState::Broken
-            && matches!(checked.payload.state, PayloadState::Damaged(_));
-        let checked = if accelerator || damaged_payload {
-            checked
-        } else {
-            admit_checked(checked)?
-        };
+        let broken = checked.link.state == LinkState::Broken;
+        let failed_wire = broken || checked.malformed.is_some();
+        let opaque = !accelerator
+            && (failed_wire || !matches!(checked.payload.state, PayloadState::Verified(_)));
+        if kind == Some(FrameType::Index)
+            && failed_wire
+            && let PayloadState::Unchecked(refusal @ PayloadRefusal::TotalDecoded(_)) =
+                checked.payload.state
+        {
+            super::fields::push(
+                &mut self.graph.frame_failures,
+                ReadError {
+                    offset,
+                    failure: ReadFailure::PayloadRefusal(refusal),
+                },
+            )?;
+        }
         if kind != Some(FrameType::Parity) && checked.payload.stored == Some(StoredState::Mismatch)
         {
             super::fields::push(&mut self.graph.stored_digest_mismatches, offset)?;
         }
+        let position = segment.verifier.ordinary_count();
+        // The frame consumes the current anchor. Consecutive recoveries can
+        // change it before another ordinary frame is retained.
+        if checked.link.effective_identifier.is_some()
+            && segment.verifier.predecessor() != segment.verifier.head()
+        {
+            segment.authentication.begin_run(position);
+        }
+        let stopped = segment.verifier.content_stopped();
         let mut checked = segment
             .verifier
-            .accept_checked(&frame, checked, &self.payload)
+            .accept_checked(&frame, checked, &self.payload, Some(&segment.index_content))
             .map_err(ReadFailure::Segment)?;
+        let omitted = if kind == Some(FrameType::Parity) {
+            matches!(checked.parity, Some(ParityCheck::UnknownGeometry { .. }))
+        } else {
+            stopped
+                || (broken && !frame.transparent())
+                || checked.frame.malformed.is_some()
+                || checked.frame.unknown_type.is_some()
+                || !matches!(checked.frame.payload.state, PayloadState::Verified(_))
+                || checked.index.as_ref().is_some_and(Result::is_err)
+        };
+        self.graph.left_out += u64::from(omitted);
+        let committed = checked.commit.is_some_and(|commit| commit.valid);
+        let authenticates = self.observe_signatures(frame, &checked, offset, position, segment)?;
+        let covered = checked.frame.link.effective_identifier.is_some();
+        let counted = covered && kind != Some(FrameType::Index);
+        if counted {
+            segment.authentication.count_frame(!broken);
+        }
+        if authenticates {
+            segment.authentication.authenticate(committed);
+        }
+        if committed {
+            segment.durability.committed_frames = segment.verifier.ordinary_count();
+            segment.durability.uncommitted_tail = None;
+            segment.end = if authenticates {
+                FileEnd::AtAuthenticatedCommit
+            } else {
+                FileEnd::AtValidCommit
+            };
+        } else if !frame.transparent() && kind != Some(FrameType::Index) {
+            segment.end.observe_uncommitted();
+            if counted {
+                let tail =
+                    segment
+                        .durability
+                        .uncommitted_tail
+                        .get_or_insert_with(|| UncommittedTail {
+                            position: segment.parity.item_count(),
+                            count: 0,
+                        });
+                tail.count += 1;
+            }
+        }
+        if let Some(commit) = checked.commit.filter(|commit| !commit.valid) {
+            let findings = if segment.verifier.incomplete_prefix() {
+                &mut self.graph.interrupted_commits
+            } else {
+                &mut self.graph.invalid_commits
+            };
+            super::fields::push(findings, (offset, commit))?;
+        }
         if !frame.transparent() {
             let wire = &checked.frame;
             let passes = wire.malformed.is_none()
@@ -1643,26 +2483,72 @@ impl<'a> GraphReader<'a> {
                 .parity
                 .other_item(offset..offset + frame.bytes().len())?;
         }
-        if damaged_payload {
-            if let Some(reservation) = &checked.terms {
+        if broken && !frame.transparent() {
+            segment.dictionary.mark_broken_link();
+        }
+        let unknown = checked.frame.unknown_type;
+        if stopped
+            && (kind != Some(FrameType::Parity)
+                || matches!(checked.parity, Some(ParityCheck::UnknownGeometry { .. })))
+        {
+            super::fields::push(&mut self.graph.stopped_frames, offset)?;
+        }
+        if let Some(unknown) = unknown {
+            self.graph.note_content_omission(offset);
+            super::fields::push(
+                &mut self.graph.frame_failures,
+                ReadError {
+                    offset,
+                    failure: ReadFailure::UnknownFrame(unknown),
+                },
+            )?;
+        }
+        if opaque {
+            if covered {
+                segment.index_content.opaque_frame(kind);
+            }
+            if kind != Some(FrameType::Commit) {
+                self.graph.note_content_omission(offset);
+            }
+            if !stopped && let Some(reservation) = &checked.terms {
                 segment
                     .dictionary
                     .observe_terms(&mut self.graph.rdf, reservation, None, &self.values)
                     .map_err(ReadFailure::Fold)?;
             }
-            super::fields::push(
-                &mut self.graph.frame_failures,
-                ReadError {
-                    offset,
-                    failure: checked.frame.malformed.map_or_else(
-                        || payload_failure(checked.frame.payload.state),
-                        ReadFailure::Wire,
-                    ),
-                },
-            )?;
-            return Ok(());
+            let primary = checked
+                .frame
+                .malformed
+                .map(ReadFailure::Wire)
+                .or_else(|| broken.then_some(ReadFailure::BrokenLink));
+            let payload = match checked.frame.payload.state {
+                PayloadState::Verified(_) => None,
+                PayloadState::Damaged(PayloadDamage::Malformed) if primary.is_some() => None,
+                state => Some(payload_failure(state)),
+            };
+            for failure in [primary, payload].into_iter().flatten() {
+                super::fields::push(
+                    &mut self.graph.frame_failures,
+                    ReadError { offset, failure },
+                )?;
+            }
+            return Ok(committed);
+        }
+        if unknown.is_some() {
+            return Ok(committed);
         }
         let kind = kind.ok_or(ReadFailure::MissingContent)?;
+        if stopped
+            && !matches!(
+                kind,
+                FrameType::Commit | FrameType::Parity | FrameType::Index
+            )
+        {
+            if covered {
+                segment.index_content.opaque_frame(Some(kind));
+            }
+            return Ok(committed);
+        }
         match kind {
             FrameType::Parity => {
                 let check = checked.parity.take().ok_or(ReadFailure::MissingContent)?;
@@ -1673,41 +2559,13 @@ impl<'a> GraphReader<'a> {
                 )?;
             }
             FrameType::Terms => {
-                let reservation = checked.terms.as_mut().ok_or(ReadFailure::MissingContent)?;
-                reservation.content = reservation
-                    .content
-                    .take()
-                    .transpose()
-                    .map_err(ReadFailure::Content)?
-                    .map(Ok);
-                let decoded = segment
-                    .verifier
-                    .decode_terms(&checked, &mut self.formed)
-                    .ok_or(ReadFailure::MissingContent)?
-                    .map_err(ReadFailure::Content)?;
-                let reservation = checked.terms.as_ref().ok_or(ReadFailure::MissingContent)?;
-                let findings = segment
-                    .dictionary
-                    .observe_terms(
-                        &mut self.graph.rdf,
-                        reservation,
-                        Some(decoded),
-                        &self.values,
-                    )
-                    .map_err(ReadFailure::Fold)?;
-                if findings.ill_formed_term
-                    || findings.forward_reference
-                    || findings.position_constraint
-                    || !findings.missing_values.is_empty()
-                {
-                    return Err(ReadFailure::Definitions(findings));
-                }
+                self.observe_terms_frame(&mut checked, offset, segment)?;
             }
             FrameType::Quads
             | FrameType::ReifierBindings
             | FrameType::Annotations
             | FrameType::EmptyGraphs => {
-                self.observe_rows(checked, offset, segment)?;
+                self.observe_rows(checked, offset, position, segment)?;
             }
             FrameType::Blob
             | FrameType::Chunk
@@ -1716,19 +2574,24 @@ impl<'a> GraphReader<'a> {
             | FrameType::External
             | FrameType::Pack => {
                 let bytes = verified_payload(checked.frame.payload.state)?;
-                self.observe_blob_frame(
+                let result = self.observe_blob_frame(
                     kind,
                     frame.read_field(FrameField::Content),
                     bytes,
+                    (offset, position),
                     segment,
-                )?;
+                );
+                match result {
+                    Err(failure @ ReadFailure::Wire(_)) => {
+                        segment.index_content.opaque_frame(Some(kind));
+                        self.graph.left_out += 1;
+                        self.graph.retain_content_failure(offset, failure)?;
+                    }
+                    result => result?,
+                }
             }
-            FrameType::Commit if checked.commit.is_some_and(|commit| commit.valid) => {}
-            FrameType::Commit
-                if segment.verifier.incomplete_prefix() && checked.commit.is_some() =>
-            {
-                let commit = checked.commit.ok_or(ReadFailure::MissingContent)?;
-                super::fields::push(&mut self.graph.interrupted_commits, (offset, commit))?;
+            FrameType::Commit if checked.commit.is_some() => {
+                return Ok(committed);
             }
             FrameType::Commit => return Err(ReadFailure::Commit),
             FrameType::Index => {
@@ -1748,49 +2611,228 @@ impl<'a> GraphReader<'a> {
             }
             kind => return Err(ReadFailure::Frame(kind)),
         }
+        Ok(false)
+    }
+
+    fn observe_terms_frame(
+        &mut self,
+        checked: &mut SegmentFrame<'_>,
+        offset: usize,
+        segment: &mut Segment<'_>,
+    ) -> Result<(), ReadFailure> {
+        let reservation = checked.terms.as_mut().ok_or(ReadFailure::MissingContent)?;
+        let decoded = match reservation.content.take() {
+            Some(Err(error)) => Err(error),
+            content => {
+                reservation.content = content;
+                segment
+                    .verifier
+                    .decode_terms(checked, &mut self.formed)
+                    .ok_or(ReadFailure::MissingContent)?
+            }
+        };
+        let (terms, failure) = match decoded {
+            Ok(terms) => (Some(terms), None),
+            Err(error @ (ContentError::Malformed(_) | ContentError::FormedCapacity(_))) => {
+                (None, Some(ReadFailure::Content(error)))
+            }
+            Err(error) => return Err(ReadFailure::Content(error)),
+        };
+        let reservation = checked.terms.as_ref().ok_or(ReadFailure::MissingContent)?;
+        let findings = segment
+            .dictionary
+            .observe_terms(&mut self.graph.rdf, reservation, terms, &self.values)
+            .map_err(ReadFailure::Fold)?;
+        if let Some(failure) = failure {
+            self.graph.left_out += 1;
+            self.graph.retain_content_failure(offset, failure)?;
+        }
+        if findings.ill_formed_term
+            || findings.forward_reference
+            || findings.position_constraint
+            || !findings.missing_values.is_empty()
+        {
+            self.graph
+                .retain_content_failure(offset, ReadFailure::Definitions(findings))?;
+        }
         Ok(())
     }
 
     fn observe_rows(
         &mut self,
-        checked: super::SegmentFrame<'_>,
+        mut checked: SegmentFrame<'_>,
         offset: usize,
+        position: u64,
         segment: &mut Segment<'_>,
     ) -> Result<(), ReadFailure> {
-        if let Some(Err(error)) = checked.rows {
-            return Err(ReadFailure::Content(error));
-        }
-        let decoded = segment
-            .verifier
-            .decode_rows(&checked)
-            .ok_or(ReadFailure::MissingContent)?
-            .map_err(ReadFailure::Content)?;
+        let decoded = match checked.rows.take() {
+            Some(Err(error)) => Err(ReadFailure::Content(error)),
+            rows => {
+                checked.rows = rows;
+                segment
+                    .verifier
+                    .decode_rows(&checked)
+                    .ok_or(ReadFailure::MissingContent)?
+                    .map_err(ReadFailure::Content)
+            }
+        };
+        let decoded = match decoded.and_then(|decoded| {
+            segment
+                .dictionary
+                .check_annotations(&decoded.rows)
+                .map_err(|error| match error {
+                    FoldError::RepeatedAnnotation => ReadFailure::Content(
+                        WireError::new(MalformedReason::UnorderedOrRepeated, 0).into(),
+                    ),
+                    error => ReadFailure::Fold(error),
+                })?;
+            Ok(decoded)
+        }) {
+            Ok(decoded) => decoded,
+            Err(failure @ ReadFailure::Content(ContentError::Malformed(_))) => {
+                segment.verifier.omit_row_order(&checked);
+                segment
+                    .index_content
+                    .opaque_frame(checked.frame.frame_type.and_then(FrameType::from_code));
+                self.graph.left_out += 1;
+                self.graph.retain_content_failure(offset, failure)?;
+                return Ok(());
+            }
+            Err(failure) => return Err(failure),
+        };
+        segment.index_content.record_rows(&decoded.rows, position)?;
         if decoded.declared_order_violated {
             super::fields::push(&mut self.graph.row_order_violations, offset)?;
         }
-        let findings = segment
-            .dictionary
-            .fold_rows(&mut self.graph.rdf, &decoded)
-            .map_err(|error| match error {
-                FoldError::RepeatedAnnotation => ReadFailure::Content(
-                    WireError::new(MalformedReason::UnorderedOrRepeated, 0).into(),
-                ),
-                error => ReadFailure::Fold(error),
-            })?;
-        if findings.forward_reference || findings.position_constraint {
-            return Err(ReadFailure::Rows(findings));
-        }
-        if findings.opaque_term {
-            super::fields::push(
-                &mut self.graph.frame_failures,
-                ReadError {
+        let scope = segment.dictionary.row_scope();
+        if scope.waits_for_commit() || !segment.pending_rows.is_empty() {
+            return super::fields::push(
+                &mut segment.pending_rows,
+                PendingRows {
                     offset,
-                    failure: ReadFailure::Rows(findings),
+                    scope,
+                    rows: decoded.rows,
+                },
+            )
+            .map_err(ReadFailure::from);
+        }
+        self.fold_rows(&segment.dictionary, &decoded.rows, scope, offset)
+    }
+
+    fn observe_signatures(
+        &mut self,
+        frame: FrameEnvelope<'a>,
+        checked: &SegmentFrame<'a>,
+        offset: usize,
+        ordinary: u64,
+        segment: &mut Segment<'a>,
+    ) -> Result<bool, ReadFailure> {
+        if frame.transparent() {
+            return Ok(false);
+        }
+        let Some(identifier) = checked.frame.link.effective_identifier else {
+            return Ok(false);
+        };
+        let link_holds = checked.frame.link.state != LinkState::Broken;
+        if !link_holds {
+            segment
+                .authentication
+                .begin_run(segment.verifier.ordinary_count());
+        }
+        if !checked.frame.signatures_valid
+            || !self
+                .payload
+                .admits_content(frame.field(FrameField::Signatures).len() as u64)
+        {
+            return Ok(false);
+        }
+        let mut fields = frame.read_field(FrameField::Signatures);
+        let count = fields.array().map_err(ReadFailure::Wire)?;
+        if count == 0 {
+            return Ok(false);
+        }
+        let mut checks = Vec::new();
+        let mut authenticates = false;
+        let eligible = checked.frame.frame_type != Some(FrameType::Commit as u64)
+            || checked.commit.is_some_and(|commit| commit.valid);
+        for _ in 0..count {
+            let signature =
+                SignatureRecord::read(&mut fields, segment.registry).map_err(ReadFailure::Wire)?;
+            let status = self
+                .signature_inputs
+                .verify(&signature, &segment.header_identifier, &identifier)
+                .map_err(ReadFailure::Signature)?;
+            let covered = status == SignatureStatus::Valid && link_holds;
+            let authenticated = covered
+                && eligible
+                && self
+                    .signature_inputs
+                    .trusted_keys()
+                    .binary_search(signature.key_id)
+                    .is_ok();
+            authenticates |= authenticated;
+            super::fields::push(
+                &mut checks,
+                SignatureCheck {
+                    algorithm: signature.algorithm,
+                    key_id: *signature.key_id,
+                    status,
+                    coverage_first: if covered {
+                        segment.authentication.run_start
+                    } else {
+                        ordinary
+                    },
+                    coverage_end: ordinary + u64::from(covered),
+                    authenticated,
                 },
             )?;
         }
+        super::fields::push(
+            &mut self.graph.signatures,
+            FrameSignatures {
+                segment: segment.file_ordinal,
+                position: segment.parity.item_count(),
+                offset,
+                checks,
+            },
+        )?;
+        Ok(authenticates)
+    }
+
+    fn flush_rows(&mut self, segment: &mut Segment<'_>, committed: bool) -> Result<(), ReadError> {
+        for PendingRows {
+            offset,
+            scope,
+            rows,
+        } in segment.pending_rows.drain(..)
+        {
+            let scope = if committed {
+                scope.below_commit()
+            } else {
+                scope
+            };
+            self.fold_rows(&segment.dictionary, &rows, scope, offset)
+                .map_err(|failure| ReadError { offset, failure })?;
+        }
+        Ok(())
+    }
+
+    fn fold_rows(
+        &mut self,
+        dictionary: &SegmentDictionary,
+        rows: &[Row],
+        scope: RowScope,
+        offset: usize,
+    ) -> Result<(), ReadFailure> {
+        let findings = dictionary
+            .fold_scoped_rows(&mut self.graph.rdf, rows, scope)
+            .map_err(ReadFailure::Fold)?;
+        if findings.forward_reference || findings.position_constraint || findings.opaque_term {
+            self.graph
+                .retain_content_failure(offset, ReadFailure::Rows(findings))?;
+        }
         if self.graph.rdf.annotation_width_exceeded() {
-            return Err(ReadFailure::AnnotationWidth);
+            self.graph.annotation_width_offset.get_or_insert(offset);
         }
         Ok(())
     }
@@ -1847,35 +2889,31 @@ fn decode_opener(opener: Item<'_>) -> Result<Header<'_>, ReadFailure> {
     }
 }
 
-fn segment_from_header<'a>(
-    header: Header<'a>,
+fn segment_from_header(
+    header: Header<'_>,
+    identifier: [u8; DIGEST_LENGTH],
     extent: Range<usize>,
-    previous: Option<&Segment<'a>>,
-) -> Result<Segment<'a>, ReadFailure> {
+    file_ordinal: u64,
+) -> Result<Segment<'_>, ReadFailure> {
     let registry = header.registry_version();
-    if registry.get() != super::REGISTRY_VERSION {
-        return Err(ReadFailure::Registry(registry.get()));
-    }
-    let lineage = header.lineage();
-    if let Some(lineage) = lineage
-        && previous.is_none_or(|previous| {
-            lineage.previous_head != previous.verifier.head()
-                || previous
-                    .ordinal
-                    .is_some_and(|ordinal| ordinal.checked_add(1) != Some(lineage.ordinal.get()))
-        })
-    {
-        return Err(ReadFailure::Lineage);
-    }
-    let file_ordinal = previous.map_or(0, |previous| previous.file_ordinal + 1);
-    let identifier = header.identifier().ok_or(ReadFailure::MissingContent)?;
     Ok(Segment {
-        ordinal: lineage.map(|lineage| lineage.ordinal.get()),
+        registry,
+        ordinal: header.lineage().map(|lineage| lineage.ordinal.get()),
         verifier: SegmentVerifier::new(identifier, registry),
         dictionary: SegmentDictionary::new(file_ordinal),
         file_ordinal,
+        header_identifier: identifier,
+        authentication: AuthenticationProgress::default(),
+        durability: SegmentDurability {
+            segment: file_ordinal,
+            committed_frames: 0,
+            uncommitted_tail: None,
+        },
+        end: FileEnd::NoCommit,
         units: FastMap::default(),
         index_storage: StorageIndex::default(),
+        index_content: IndexContent::default(),
+        pending_rows: Vec::new(),
         parity: ParityStream::new(extent, identifier, registry)?,
     })
 }

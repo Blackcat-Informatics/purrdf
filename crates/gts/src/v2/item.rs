@@ -144,7 +144,7 @@ impl<'a> Item<'a> {
     /// # Errors
     /// Returns the reason an item fails classification and is opaque.
     pub fn classify(self, registry_version: NonZeroU64) -> Result<ItemKind, MalformedReason> {
-        let prefix = self.record_prefix().ok_or(MalformedReason::WrongType)?;
+        let prefix = RecordPrefix::read(self.bytes).ok_or(MalformedReason::WrongType)?;
         match prefix.kind {
             HEADER_KIND => Ok(ItemKind::Header),
             RESYNC_KIND => Ok(ItemKind::Resync),
@@ -157,6 +157,13 @@ impl<'a> Item<'a> {
             kind if registry_version.get() > REGISTRY_VERSION => Ok(ItemKind::Unknown(kind)),
             _ => Err(MalformedReason::UnregisteredValue),
         }
+    }
+
+    pub(super) fn names_closing_hint(self) -> bool {
+        matches!(
+            RecordPrefix::read(self.bytes).map(|prefix| prefix.kind),
+            Some(OFFSETS_KIND | LOCATOR_KIND)
+        )
     }
 
     /// Decide whether this complete item passes the P1 §6.7 framing test.
@@ -257,16 +264,8 @@ impl<'a> Item<'a> {
     /// # Errors
     /// Propagates native structural errors while visiting the opener.
     pub fn generation(self) -> Result<Generation, StructuralError> {
-        if let Some(prefix) = self.record_prefix() {
-            if !matches!(prefix.kind, HEADER_KIND | RESYNC_KIND) {
-                return Ok(Generation::Unrecognized);
-            }
-            let mut tail = prefix.tail;
-            return Ok(match head::read_argument(&mut tail, head::UNSIGNED) {
-                Some(GENERATION) => Generation::Second,
-                Some(generation @ 3..) => Generation::Unsupported(generation),
-                _ => Generation::Unrecognized,
-            });
+        if let Some(prefix) = RecordPrefix::read(self.bytes) {
+            return Ok(prefix.opener_generation());
         }
 
         let mut source = Cursor::new(self.bytes);
@@ -290,9 +289,27 @@ impl<'a> Item<'a> {
         }
         Ok(Generation::Unrecognized)
     }
+}
 
-    fn record_prefix(self) -> Option<RecordPrefix<'a>> {
-        let mut fields = self.bytes;
+/// Whether the opening array fields declare a generation 2 header or resync.
+///
+/// This reads at most three CBOR heads. Use a generation 2 reader to admit
+/// and validate the complete opener before using its contents.
+#[must_use]
+pub fn names_second_generation(bytes: &[u8]) -> bool {
+    RecordPrefix::read(bytes).is_some_and(|prefix| prefix.opener_generation() == Generation::Second)
+}
+
+struct RecordPrefix<'a> {
+    count: Option<u64>,
+    kind: u64,
+    shortest: bool,
+    tail: &'a [u8],
+}
+
+impl<'a> RecordPrefix<'a> {
+    fn read(bytes: &'a [u8]) -> Option<Self> {
+        let mut fields = bytes;
         let count = if let Some(tail) = fields.strip_prefix(&[0x9f]) {
             fields = tail;
             None
@@ -302,22 +319,29 @@ impl<'a> Item<'a> {
         let mut tail = fields;
         let kind = head::read_argument(&mut tail, head::UNSIGNED)?;
         let shortest = count
-            .is_some_and(|count| self.bytes.len() - fields.len() == head::head_len(count))
+            .is_some_and(|count| bytes.len() - fields.len() == head::head_len(count))
             && fields.len() - tail.len() == head::head_len(kind);
-        Some(RecordPrefix {
+        Some(Self {
             count,
             kind,
             shortest,
             tail,
         })
     }
-}
 
-struct RecordPrefix<'a> {
-    count: Option<u64>,
-    kind: u64,
-    shortest: bool,
-    tail: &'a [u8],
+    fn opener_generation(self) -> Generation {
+        if self.count.is_some_and(|count| count < 2)
+            || !matches!(self.kind, HEADER_KIND | RESYNC_KIND)
+        {
+            return Generation::Unrecognized;
+        }
+        let mut tail = self.tail;
+        match head::read_argument(&mut tail, head::UNSIGNED) {
+            Some(GENERATION) => Generation::Second,
+            Some(generation @ 3..) => Generation::Unsupported(generation),
+            _ => Generation::Unrecognized,
+        }
+    }
 }
 
 fn item_slice(bytes: &[u8], range: StructuralRange) -> &[u8] {

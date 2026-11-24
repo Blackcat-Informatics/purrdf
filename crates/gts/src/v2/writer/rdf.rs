@@ -5,11 +5,33 @@ use std::io::{self, Write};
 
 use purrdf_lex::cbor::head::{self, write_bytes, write_text};
 
-use super::{FrameType, SegmentWriteError, SegmentWriter};
+use super::{Buffer, FrameType, SegmentWriteError, SegmentWriter};
 use crate::FastMap;
 use crate::v2::{Line, LiteralDirection, LiteralValue, RdfFold, Term, TermId, TermOrder};
 
 const FRAME_ROWS: usize = 4096;
+
+/// Write one committed RDF segment and flush the sink.
+///
+/// # Errors
+/// Returns a fold, capacity, or sink failure. A sink can contain a partial
+/// segment when writing fails.
+pub fn write_rdf_segment<W: Write>(fold: &RdfFold, sink: W) -> Result<W, SegmentWriteError> {
+    let mut writer = SegmentWriter::new(sink)?;
+    writer.add_rdf(fold)?;
+    writer.add_commit()?;
+    let mut sink = writer.into_inner();
+    sink.flush()?;
+    Ok(sink)
+}
+
+/// Encode one committed RDF segment into an owned buffer.
+///
+/// # Errors
+/// Returns a fold or capacity failure, including a refused byte reservation.
+pub fn rdf_segment_bytes(fold: &RdfFold) -> Result<Vec<u8>, SegmentWriteError> {
+    Ok(write_rdf_segment(fold, Buffer::default())?.0)
+}
 
 impl<W: Write> SegmentWriter<W> {
     /// Append a resolved RDF fold in arrival order.
@@ -463,19 +485,4 @@ fn int(output: &mut impl Write, value: i128) -> io::Result<()> {
     };
     let argument = u64::try_from(magnitude).map_err(io::Error::other)?;
     head::write_head(output, format, argument)
-}
-
-#[derive(Default)]
-struct Buffer(Vec<u8>);
-
-impl Write for Buffer {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        self.0.try_reserve(bytes.len()).map_err(io::Error::other)?;
-        self.0.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
 }

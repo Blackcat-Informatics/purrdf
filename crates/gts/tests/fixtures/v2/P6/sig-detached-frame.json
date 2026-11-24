@@ -1,0 +1,25 @@
+{
+ "name": "sig-detached-frame",
+ "section": "P6",
+ "status": "derived from the text",
+ "note": "a valid signature on the frame that takes the anchor of a parity frame at which reading resumes, the anchor not being the identifier of the frame before the damaged region: the frame is detached, the coverage is [1, 2), one of two frames is authenticated and anchored_frames is 1",
+ "cases": [
+  {
+   "label": "",
+   "input_file": "sig-detached-frame.bin",
+   "capacity": {
+    "stored_bytes_per_frame": 67108864,
+    "decoded_bytes_per_frame": 67108864,
+    "labelling_units": 0,
+    "labelled_lines": 67108864,
+    "decoded_bytes_per_read": 68719476736,
+    "items_per_read": 67108864,
+    "rebuilt_bytes_per_read": 137438953472,
+    "formed_bytes_per_read": 137438953472,
+    "labelled_bytes_per_read": 137438953472,
+    "access": "whole"
+   },
+   "read_result": "870101808a1a040000001a04000000001a040000001b00000010000000001a040000001b00000020000000001b00000020000000001b0000002000000000018101828158200b79463c662fe28d890dfbe7b32d86575c87ea6caa17891d3b37cbbffc3b905c818358200b79463c662fe28d890dfbe7b32d86575c87ea6caa17891d3b37cbbffc3b905c01582003a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b88702819200001903c0810182025820e9dc54662899695160ab279ede7b16ce9807b2d696e097645943288916e3fedc82020182020181010302010001810385f48202058202058202058101820258206d6a71ca82eae1e41ddca2c47a5ae522fea37d643710248d071c0a43e7dd0d7c838b010b18a282020901810181018081018081871181018101820201810181018202028b0318ae190218820210018101810180810280808b041902c618fa820209018101810181870181010158200b79463c662fe28d890dfbe7b32d86575c87ea6caa17891d3b37cbbffc3b905c0102f5810180808187182481018101810182021902c6820218fa8101818708810181018101820218ad8202018101820258206d6a71ca82eae1e41ddca2c47a5ae522fea37d643710248d071c0a43e7dd0d7c8201000401"
+  }
+ ]
+}

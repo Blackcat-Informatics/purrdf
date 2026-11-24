@@ -362,8 +362,13 @@
  * Adds `purrdf_yaml_source_export` and `purrdf_yaml_source_reconstruct` with
  * existing dataset/buffer ownership. The `purrdf_parse` signature stays unchanged.
  * The native-cause accessor also exposes original YAML source refusals.
+ *
+ * # `0.21.0`: GTS v2
+ *
+ * Adds `purrdf_to_gts_v2` for a committed segment in arrival order.
+ * `purrdf_from_gts` loads complete datasets from both generations.
  */
-#define PURRDF_ABI_MINOR 20
+#define PURRDF_ABI_MINOR 21
 
 /**
  * ABI patch version. Reset to `0` by the MINOR bump documented above.
@@ -1257,7 +1262,7 @@ typedef struct {
 } PurrdfQueryGovernors;
 
 /**
- * C-ABI whole-read limits for hostile GTS input.
+ * C-ABI whole-read limits for hostile GTS v1 input.
  */
 typedef struct {
     /**
@@ -2820,14 +2825,12 @@ void purrdf_graph_free(PurrdfGraph *graph);
 int32_t purrdf_gts_read_limits_init(PurrdfGtsReadLimits *out);
 
 /**
- * Read a GTS container into a fresh frozen dataset. `*out_dataset` is a
- * caller-owned handle (free with `purrdf_dataset_free`).
+ * Read a GTS v1 or v2 container into a fresh frozen dataset.
+ * Release `*out_dataset` with `purrdf_dataset_free`.
  *
- * Keeps the RDF-1.2 statement layer: a reifier-bound quoted
- * triple written by `to_gts` is read back intact via the canonical fold-back
- * (`read_graph` → `import_gts_graph`). The earlier `gts-missing-reifier-binding`
- * gap was closed by the native text-codec work. A language tag that is not lower
- * case is read folded to lower case, and the envelope is not returned.
+ * This returns the complete RDF 1.2 dataset with native RDF set semantics.
+ * Unreadable v2 content or framing fails with diagnostic evidence. Transport
+ * metadata and language tag spelling are outside the dataset projection.
  *
  * # Safety
  * `bytes` must be valid for `len` bytes; the out-params must be writable.
@@ -2838,10 +2841,10 @@ int32_t purrdf_from_gts(const uint8_t *bytes,
                         PurrdfError **out_error);
 
 /**
- * Read a GTS container under caller-selected whole-read limits.
+ * Read a GTS v1 container under caller-selected whole-read limits.
  *
  * `limits == NULL` selects finite hostile-input defaults. The legacy
- * [`purrdf_from_gts`] entry point retains its unbounded v4 contract.
+ * [`purrdf_from_gts`] entry point also reads GTS v2 with its finite limits.
  * Zero is a valid inclusive ceiling in every field.
  *
  * # Safety
@@ -2855,7 +2858,7 @@ int32_t purrdf_from_gts_with_limits(const uint8_t *bytes,
                                     PurrdfError **out_error);
 
 /**
- * Write a frozen dataset to canonical GTS container bytes under `profile`
+ * Write a frozen dataset to canonical GTS v1 bytes under `profile`
  * (e.g. `"dist"`). The output goes to `*out_buffer` (free with
  * `purrdf_buffer_free`).
  *
@@ -2867,6 +2870,19 @@ int32_t purrdf_to_gts(const PurrdfDataset *dataset,
                       const char *profile,
                       PurrdfBuffer **out_buffer,
                       PurrdfError **out_error);
+
+/**
+ * Write a frozen dataset as one committed GTS v2 segment in arrival order.
+ * Release the returned `*out_buffer` with `purrdf_buffer_free`.
+ *
+ * Preserves RDF 1.2 statements, scoped blank identities and empty named graphs.
+ * Used composite literals require valid lexical forms and blank-free contents.
+ * # Safety
+ * `dataset` must be a live handle and the out-params must be writable.
+ */
+int32_t purrdf_to_gts_v2(const PurrdfDataset *dataset,
+                         PurrdfBuffer **out_buffer,
+                         PurrdfError **out_error);
 
 /**
  * Release a dataset handle. No-op on null.

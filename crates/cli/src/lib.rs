@@ -222,13 +222,14 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     canonical.finish(result)
 }
 
-fn cli_gts_read_limits(cli: &Cli) -> Result<purrdf::gts::reader::GtsReadLimits, CliError> {
+fn cli_gts_read_limits(cli: &Cli) -> Result<source::GtsInputLimits, CliError> {
     use purrdf::gts::reader::GtsReadLimits;
 
     if !cli.gts_safe_read && cli.gts_read_limit.is_empty() {
-        return Ok(GtsReadLimits::UNBOUNDED);
+        return Ok(source::GtsInputLimits::default());
     }
     let mut limits = GtsReadLimits::DEFAULT;
+    let mut requires_generation_one = false;
     let mut seen = Vec::with_capacity(cli.gts_read_limit.len());
     for setting in &cli.gts_read_limit {
         let Some((resource, raw_maximum)) = setting.split_once('=') else {
@@ -269,9 +270,13 @@ fn cli_gts_read_limits(cli: &Cli) -> Result<purrdf::gts::reader::GtsReadLimits, 
                 )));
             }
         }
+        requires_generation_one |= resource != "encoded-input-bytes";
         seen.push(resource);
     }
-    Ok(limits)
+    Ok(source::GtsInputLimits {
+        legacy: limits,
+        requires_generation_one,
+    })
 }
 
 fn dispatch_with_request(

@@ -148,21 +148,11 @@ pub(crate) fn refuse_transport_target(path: &str, role: &str) -> Result<(), CliE
 
 /// Refuse [`SourceFormat::Gts`] as an output target.
 ///
-/// GTS INPUT is admitted through `purrdf_rdf::import_gts_events`, the authoritative
-/// importer. There is no matching one-shot authoring surface: emitting a GTS file
-/// requires segment boundaries, a profile, and (optionally) a signing identity — choices
-/// a `convert` command line does not carry and this pipeline must not invent, because a
-/// fabricated segmentation is a different transport than the one a caller meant. The
-/// refusal names the flag rather than letting clap accept `--to gts` and the sink write
-/// something else.
+/// Commands that emit RDF use this check to reserve GTS authoring for `convert`.
 pub(crate) fn refuse_gts_target(format: SourceFormat, role: &str) -> Result<(), CliError> {
     if format.is_gts() {
         return Err(CliError::Usage(format!(
-            "{role} names the GTS container, which this pipeline READS but does not write: \
-             authoring a GTS file requires segment boundaries, a profile, and a signing \
-             identity that a convert command line does not carry, and inventing them would \
-             emit a transport nobody asked for. Convert to a native syntax or the pack \
-             container instead"
+            "{role} names the GTS container. Use 'purrdf convert --to gts' to write GTS v2"
         )));
     }
     Ok(())

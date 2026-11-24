@@ -99,6 +99,7 @@ and results so an empty JSON envelope cannot satisfy result transport.
 
 | Target / exact case | Concrete host obligation |
 | --- | --- |
+| `gts-dataset.test.mjs` / `GTS dataset methods transfer owned bytes and a native read cause` | The package returns owned GTS bytes from the dataset handle, accepts them in a static constructor, and carries the typed framing refusal across wasm-bindgen |
 | `roundtrip.test.mjs` / `DatasetCore.add/delete chain (RDF/JS return-this)` | JavaScript mutation methods return the same dataset wrapper for chaining |
 | `roundtrip.test.mjs` / `Term.equals does not consume its argument` | wasm-bindgen comparison borrows the supplied term handle, which remains usable afterward |
 | `roundtrip.test.mjs` / `Quad.equals does not consume its argument` | wasm-bindgen comparison preserves the supplied quad handle for access and subsequent dataset insertion |
