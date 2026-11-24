@@ -18,253 +18,6 @@ mod by_reference;
 mod order;
 mod written;
 
-#[cfg(test)]
-mod tests {
-    use core::num::NonZeroU64;
-    use std::borrow::Cow;
-
-    use crate::v2::fields::Fields;
-    use crate::v2::{
-        DecodedTerms, FoldError, LiteralForm, RdfFold, Row, Term, TermDefinition, TermText,
-        TypedValue, ValueStore,
-    };
-
-    use super::SegmentDictionary;
-
-    #[test]
-    fn annotation_repetition_compares_unreadable_iri_bytes() {
-        let content = [0x84, 0, 0x81, 0x82, 1, 4, 1, 1];
-        let reservation =
-            crate::v2::terms::reserve_verified(Fields::new(&content), 0, NonZeroU64::MIN).unwrap();
-        let annotations = [
-            Row::Annotation([0, 1, 2], NonZeroU64::MIN, None),
-            Row::Annotation([0, 1, 3], NonZeroU64::new(2).unwrap(), None),
-        ];
-        for (other, repeated) in [(&[0xff][..], true), (&[0xfe][..], false)] {
-            let terms = DecodedTerms {
-                terms: vec![
-                    TermDefinition::Iri(TermText::Text(Cow::Borrowed("https://example.org/r"))),
-                    TermDefinition::Iri(TermText::Text(Cow::Borrowed("https://example.org/p"))),
-                    TermDefinition::Iri(TermText::Invalid(Cow::Borrowed(&[0xff]))),
-                    TermDefinition::Iri(TermText::Invalid(Cow::Borrowed(other))),
-                ],
-                languages: Vec::new(),
-            };
-            let mut dictionary = SegmentDictionary::new(0);
-            let mut fold = RdfFold::default();
-            let findings = dictionary
-                .observe_terms(&mut fold, &reservation, Some(terms), &ValueStore::default())
-                .unwrap();
-            assert!(findings.ill_formed_term);
-            let duplicates = dictionary.check_annotations(&fold, &annotations);
-            if repeated {
-                assert!(matches!(duplicates, Err(FoldError::RepeatedAnnotation)));
-            } else {
-                duplicates.unwrap();
-            }
-        }
-    }
-
-    #[test]
-    fn annotation_repetition_compares_written_atoms_during_dictionary_doubt() {
-        let record = |start, count| {
-            [
-                0x84, start, 0x84, 0x82, 1, count, 0x82, 3, count, 0x82, 2, count, 0x82, 6, count,
-                1, 1,
-            ]
-        };
-        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
-        let literal = |text| {
-            TermDefinition::Literal(
-                TermText::Text(Cow::Borrowed(text)),
-                LiteralForm::Language(0),
-            )
-        };
-        let mut dictionary = SegmentDictionary::new(0);
-        let mut fold = RdfFold::default();
-        let first = record(0, 1);
-        let later = record(4, 3);
-        let values = [
-            (
-                &first[..],
-                vec![
-                    iri("https://example.org/a"),
-                    TermDefinition::Blank(b"a"),
-                    literal("a"),
-                    TermDefinition::Value(TypedValue::Octets(b"a")),
-                ],
-            ),
-            (
-                &later[..],
-                vec![
-                    iri("https://example.org/a"),
-                    iri("https://example.org/b"),
-                    iri("https://example.org/b"),
-                    TermDefinition::Blank(b"a"),
-                    TermDefinition::Blank(b"b"),
-                    TermDefinition::Blank(b"b"),
-                    literal("a"),
-                    literal("b"),
-                    literal("b"),
-                    TermDefinition::Value(TypedValue::Octets(b"a")),
-                    TermDefinition::Value(TypedValue::Octets(b"b")),
-                    TermDefinition::Value(TypedValue::Octets(b"b")),
-                ],
-            ),
-        ];
-        let mut arena_size = 0;
-        for (index, (content, terms)) in values.into_iter().enumerate() {
-            if index == 1 {
-                arena_size = fold.terms().len();
-                dictionary.mark_doubt();
-            }
-            let reservation = crate::v2::terms::reserve_verified(
-                Fields::new(content),
-                dictionary.next_id(),
-                NonZeroU64::MIN,
-            )
-            .unwrap();
-            dictionary
-                .observe_terms(
-                    &mut fold,
-                    &reservation,
-                    Some(DecodedTerms {
-                        terms,
-                        languages: vec!["en"],
-                    }),
-                    &ValueStore::default(),
-                )
-                .unwrap();
-        }
-        assert_eq!(fold.terms().len(), arena_size);
-        let row = |object| Row::Annotation([0, 0, object], NonZeroU64::MIN, None);
-        for (prior, equal) in (0..4).zip((4..16).step_by(3)) {
-            assert!(dictionary.readable_term(equal).is_none());
-            for (left, right) in [(prior, equal), (equal + 1, equal + 2)] {
-                assert!(matches!(
-                    dictionary.check_annotations(&fold, &[row(left), row(right)]),
-                    Err(FoldError::RepeatedAnnotation)
-                ));
-            }
-            dictionary
-                .check_annotations(&fold, &[row(prior), row(equal + 1)])
-                .unwrap();
-        }
-    }
-
-    #[test]
-    fn written_doubt_aliases_survive_external_fold_interning() {
-        let mut dictionary = SegmentDictionary::new(0);
-        let mut fold = RdfFold::default();
-        dictionary.mark_doubt();
-        let first = [0x84, 0, 0x81, 0x82, 1, 1, 1, 1];
-        let later = [0x84, 1, 0x81, 0x82, 1, 2, 1, 1];
-        let spelling = "https://example.org/a";
-        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
-        for (index, (content, terms)) in [
-            (&first[..], vec![iri(spelling)]),
-            (
-                &later[..],
-                vec![iri(spelling), iri("https://example.org/b")],
-            ),
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            if index == 1 {
-                fold.intern_term(Term::Iri(Cow::Borrowed(spelling)))
-                    .unwrap();
-            }
-            let reservation = crate::v2::terms::reserve_verified(
-                Fields::new(content),
-                dictionary.next_id(),
-                NonZeroU64::MIN,
-            )
-            .unwrap();
-            dictionary
-                .observe_terms(
-                    &mut fold,
-                    &reservation,
-                    Some(DecodedTerms {
-                        terms,
-                        languages: Vec::new(),
-                    }),
-                    &ValueStore::default(),
-                )
-                .unwrap();
-        }
-        let row = |object| Row::Annotation([0, 0, object], NonZeroU64::MIN, None);
-        assert!(matches!(
-            dictionary.check_annotations(&fold, &[row(0), row(1)]),
-            Err(FoldError::RepeatedAnnotation)
-        ));
-        dictionary
-            .check_annotations(&fold, &[row(0), row(2)])
-            .unwrap();
-        assert!(dictionary.readable_term(1).is_none());
-    }
-
-    #[test]
-    fn annotation_repetition_uses_later_written_aliases_only_once_they_are_defined() {
-        let first = [
-            0x84, 0, 0x84, 0x82, 1, 2, 0x82, 4, 1, 0x82, 1, 1, 0x82, 4, 3, 1, 1,
-        ];
-        let later = [0x84, 7, 0x81, 0x82, 1, 1, 1, 1];
-        let annotations = [
-            Row::Annotation([0, 1, 5], NonZeroU64::MIN, None),
-            Row::Annotation([0, 1, 6], NonZeroU64::MIN, None),
-        ];
-        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
-        let mut fold = RdfFold::default();
-        let mut dictionary = SegmentDictionary::new(0);
-        let reservation =
-            crate::v2::terms::reserve_verified(Fields::new(&first), 0, NonZeroU64::MIN).unwrap();
-        let findings = dictionary
-            .observe_terms(
-                &mut fold,
-                &reservation,
-                Some(DecodedTerms {
-                    terms: vec![
-                        iri("https://example.org/a"),
-                        iri("https://example.org/p"),
-                        TermDefinition::Triple([7, 0, 1]),
-                        iri("https://example.org/s"),
-                        TermDefinition::Triple([3, 0, 1]),
-                        TermDefinition::Triple([0, 1, 2]),
-                        TermDefinition::Triple([0, 1, 4]),
-                    ],
-                    languages: Vec::new(),
-                }),
-                &ValueStore::default(),
-            )
-            .unwrap();
-        assert!(findings.forward_reference);
-        let before = dictionary.row_scope();
-        dictionary.check_annotations(&fold, &annotations).unwrap();
-
-        let reservation =
-            crate::v2::terms::reserve_verified(Fields::new(&later), 7, NonZeroU64::MIN).unwrap();
-        dictionary
-            .observe_terms(
-                &mut fold,
-                &reservation,
-                Some(DecodedTerms {
-                    terms: vec![iri("https://example.org/s")],
-                    languages: Vec::new(),
-                }),
-                &ValueStore::default(),
-            )
-            .unwrap();
-        dictionary
-            .check_scoped_annotations(&fold, &annotations, before)
-            .unwrap();
-        assert!(matches!(
-            dictionary.check_annotations(&fold, &annotations),
-            Err(FoldError::RepeatedAnnotation)
-        ));
-    }
-}
-
 pub(in crate::v2) use by_reference::ByReferenceTerms;
 pub use by_reference::{ByReferenceForm, ByReferenceTerm};
 
@@ -1246,5 +999,252 @@ fn row_references(row: Row) -> [Option<(u64, Position)>; 4] {
         }
         Row::ReifierBinding([r, t], g) => [subject(r), Some((t, Position::Triple)), graph(g), None],
         Row::EmptyGraph(g) => [subject(g), None, None, None],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZeroU64;
+    use std::borrow::Cow;
+
+    use crate::v2::fields::Fields;
+    use crate::v2::{
+        DecodedTerms, FoldError, LiteralForm, RdfFold, Row, Term, TermDefinition, TermText,
+        TypedValue, ValueStore,
+    };
+
+    use super::SegmentDictionary;
+
+    #[test]
+    fn annotation_repetition_compares_unreadable_iri_bytes() {
+        let content = [0x84, 0, 0x81, 0x82, 1, 4, 1, 1];
+        let reservation =
+            crate::v2::terms::reserve_verified(Fields::new(&content), 0, NonZeroU64::MIN).unwrap();
+        let annotations = [
+            Row::Annotation([0, 1, 2], NonZeroU64::MIN, None),
+            Row::Annotation([0, 1, 3], NonZeroU64::new(2).unwrap(), None),
+        ];
+        for (other, repeated) in [(&[0xff][..], true), (&[0xfe][..], false)] {
+            let terms = DecodedTerms {
+                terms: vec![
+                    TermDefinition::Iri(TermText::Text(Cow::Borrowed("https://example.org/r"))),
+                    TermDefinition::Iri(TermText::Text(Cow::Borrowed("https://example.org/p"))),
+                    TermDefinition::Iri(TermText::Invalid(Cow::Borrowed(&[0xff]))),
+                    TermDefinition::Iri(TermText::Invalid(Cow::Borrowed(other))),
+                ],
+                languages: Vec::new(),
+            };
+            let mut dictionary = SegmentDictionary::new(0);
+            let mut fold = RdfFold::default();
+            let findings = dictionary
+                .observe_terms(&mut fold, &reservation, Some(terms), &ValueStore::default())
+                .unwrap();
+            assert!(findings.ill_formed_term);
+            let duplicates = dictionary.check_annotations(&fold, &annotations);
+            if repeated {
+                assert!(matches!(duplicates, Err(FoldError::RepeatedAnnotation)));
+            } else {
+                duplicates.unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn annotation_repetition_compares_written_atoms_during_dictionary_doubt() {
+        let record = |start, count| {
+            [
+                0x84, start, 0x84, 0x82, 1, count, 0x82, 3, count, 0x82, 2, count, 0x82, 6, count,
+                1, 1,
+            ]
+        };
+        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
+        let literal = |text| {
+            TermDefinition::Literal(
+                TermText::Text(Cow::Borrowed(text)),
+                LiteralForm::Language(0),
+            )
+        };
+        let mut dictionary = SegmentDictionary::new(0);
+        let mut fold = RdfFold::default();
+        let first = record(0, 1);
+        let later = record(4, 3);
+        let values = [
+            (
+                &first[..],
+                vec![
+                    iri("https://example.org/a"),
+                    TermDefinition::Blank(b"a"),
+                    literal("a"),
+                    TermDefinition::Value(TypedValue::Octets(b"a")),
+                ],
+            ),
+            (
+                &later[..],
+                vec![
+                    iri("https://example.org/a"),
+                    iri("https://example.org/b"),
+                    iri("https://example.org/b"),
+                    TermDefinition::Blank(b"a"),
+                    TermDefinition::Blank(b"b"),
+                    TermDefinition::Blank(b"b"),
+                    literal("a"),
+                    literal("b"),
+                    literal("b"),
+                    TermDefinition::Value(TypedValue::Octets(b"a")),
+                    TermDefinition::Value(TypedValue::Octets(b"b")),
+                    TermDefinition::Value(TypedValue::Octets(b"b")),
+                ],
+            ),
+        ];
+        let mut arena_size = 0;
+        for (index, (content, terms)) in values.into_iter().enumerate() {
+            if index == 1 {
+                arena_size = fold.terms().len();
+                dictionary.mark_doubt();
+            }
+            let reservation = crate::v2::terms::reserve_verified(
+                Fields::new(content),
+                dictionary.next_id(),
+                NonZeroU64::MIN,
+            )
+            .unwrap();
+            dictionary
+                .observe_terms(
+                    &mut fold,
+                    &reservation,
+                    Some(DecodedTerms {
+                        terms,
+                        languages: vec!["en"],
+                    }),
+                    &ValueStore::default(),
+                )
+                .unwrap();
+        }
+        assert_eq!(fold.terms().len(), arena_size);
+        let row = |object| Row::Annotation([0, 0, object], NonZeroU64::MIN, None);
+        for (prior, equal) in (0..4).zip((4..16).step_by(3)) {
+            assert!(dictionary.readable_term(equal).is_none());
+            for (left, right) in [(prior, equal), (equal + 1, equal + 2)] {
+                assert!(matches!(
+                    dictionary.check_annotations(&fold, &[row(left), row(right)]),
+                    Err(FoldError::RepeatedAnnotation)
+                ));
+            }
+            dictionary
+                .check_annotations(&fold, &[row(prior), row(equal + 1)])
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn written_doubt_aliases_survive_external_fold_interning() {
+        let mut dictionary = SegmentDictionary::new(0);
+        let mut fold = RdfFold::default();
+        dictionary.mark_doubt();
+        let first = [0x84, 0, 0x81, 0x82, 1, 1, 1, 1];
+        let later = [0x84, 1, 0x81, 0x82, 1, 2, 1, 1];
+        let spelling = "https://example.org/a";
+        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
+        for (index, (content, terms)) in [
+            (&first[..], vec![iri(spelling)]),
+            (
+                &later[..],
+                vec![iri(spelling), iri("https://example.org/b")],
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index == 1 {
+                fold.intern_term(Term::Iri(Cow::Borrowed(spelling)))
+                    .unwrap();
+            }
+            let reservation = crate::v2::terms::reserve_verified(
+                Fields::new(content),
+                dictionary.next_id(),
+                NonZeroU64::MIN,
+            )
+            .unwrap();
+            dictionary
+                .observe_terms(
+                    &mut fold,
+                    &reservation,
+                    Some(DecodedTerms {
+                        terms,
+                        languages: Vec::new(),
+                    }),
+                    &ValueStore::default(),
+                )
+                .unwrap();
+        }
+        let row = |object| Row::Annotation([0, 0, object], NonZeroU64::MIN, None);
+        assert!(matches!(
+            dictionary.check_annotations(&fold, &[row(0), row(1)]),
+            Err(FoldError::RepeatedAnnotation)
+        ));
+        dictionary
+            .check_annotations(&fold, &[row(0), row(2)])
+            .unwrap();
+        assert!(dictionary.readable_term(1).is_none());
+    }
+
+    #[test]
+    fn annotation_repetition_uses_later_written_aliases_only_once_they_are_defined() {
+        let first = [
+            0x84, 0, 0x84, 0x82, 1, 2, 0x82, 4, 1, 0x82, 1, 1, 0x82, 4, 3, 1, 1,
+        ];
+        let later = [0x84, 7, 0x81, 0x82, 1, 1, 1, 1];
+        let annotations = [
+            Row::Annotation([0, 1, 5], NonZeroU64::MIN, None),
+            Row::Annotation([0, 1, 6], NonZeroU64::MIN, None),
+        ];
+        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
+        let mut fold = RdfFold::default();
+        let mut dictionary = SegmentDictionary::new(0);
+        let reservation =
+            crate::v2::terms::reserve_verified(Fields::new(&first), 0, NonZeroU64::MIN).unwrap();
+        let findings = dictionary
+            .observe_terms(
+                &mut fold,
+                &reservation,
+                Some(DecodedTerms {
+                    terms: vec![
+                        iri("https://example.org/a"),
+                        iri("https://example.org/p"),
+                        TermDefinition::Triple([7, 0, 1]),
+                        iri("https://example.org/s"),
+                        TermDefinition::Triple([3, 0, 1]),
+                        TermDefinition::Triple([0, 1, 2]),
+                        TermDefinition::Triple([0, 1, 4]),
+                    ],
+                    languages: Vec::new(),
+                }),
+                &ValueStore::default(),
+            )
+            .unwrap();
+        assert!(findings.forward_reference);
+        let before = dictionary.row_scope();
+        dictionary.check_annotations(&fold, &annotations).unwrap();
+
+        let reservation =
+            crate::v2::terms::reserve_verified(Fields::new(&later), 7, NonZeroU64::MIN).unwrap();
+        dictionary
+            .observe_terms(
+                &mut fold,
+                &reservation,
+                Some(DecodedTerms {
+                    terms: vec![iri("https://example.org/s")],
+                    languages: Vec::new(),
+                }),
+                &ValueStore::default(),
+            )
+            .unwrap();
+        dictionary
+            .check_scoped_annotations(&fold, &annotations, before)
+            .unwrap();
+        assert!(matches!(
+            dictionary.check_annotations(&fold, &annotations),
+            Err(FoldError::RepeatedAnnotation)
+        ));
     }
 }

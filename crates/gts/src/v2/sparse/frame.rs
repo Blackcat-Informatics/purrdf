@@ -318,6 +318,120 @@ pub(super) fn predecessor(
     permissive_identifier(predecessor).ok_or(Stop::Unknown(invalid))
 }
 
+enum Decoded {
+    Plain(Range<usize>),
+    Compressed(Vec<u8>),
+}
+
+pub(super) struct LocalFrame {
+    bytes: Vec<u8>,
+    content: Range<usize>,
+    decoded: Decoded,
+}
+
+impl LocalFrame {
+    pub(super) fn content(&self) -> Fields<'_> {
+        Fields::new(&self.bytes[self.content.clone()])
+    }
+
+    pub(super) fn payload(&self) -> &[u8] {
+        match &self.decoded {
+            Decoded::Plain(extent) => &self.bytes[extent.clone()],
+            Decoded::Compressed(bytes) => bytes,
+        }
+    }
+}
+
+pub(super) fn verify(
+    input: &mut Input<impl FnMut(u64, &mut [u8]) -> io::Result<()>>,
+    item: &mut ItemInput,
+    head: &FrameHead,
+    previous: &[u8; DIGEST_LENGTH],
+    capacity: PayloadCapacity,
+    registry: NonZeroU64,
+) -> Result<LocalFrame, Stop> {
+    let invalid = RangeReason::Payload;
+    let extent = item.extent().clone();
+    let bytes = item.bytes(input, extent.start, extent.end - extent.start, invalid)?;
+    let frame = Item::first(&bytes)
+        .map_err(|_| Stop::Unknown(invalid))?
+        .filter(|item| item.bytes().len() == bytes.len())
+        .ok_or(Stop::Unknown(invalid))?
+        .frame()
+        .map_err(|_| Stop::Unknown(invalid))?
+        .ok_or(Stop::Unknown(invalid))?;
+    let wire = frame.check_wire(previous, None, registry);
+    if wire.malformed.is_some() {
+        return Err(Stop::Unknown(invalid));
+    }
+    if wire.link.state != LinkState::Linked {
+        return Err(Stop::Unknown(RangeReason::Identifier));
+    }
+    let payload = frame.payload_wire(registry);
+    if let Some(length) = payload.compressed_length() {
+        input.charge(length)?;
+    }
+    let mut budget = PayloadBudget::new(PayloadCapacity {
+        decoded_bytes_per_read: u64::MAX,
+        ..capacity
+    });
+    let checked = frame
+        .check_payload(payload, &mut budget)
+        .map_err(Stop::DecodeResource)?;
+    if checked.malformed.is_some() {
+        return Err(Stop::Unknown(invalid));
+    }
+    let PayloadState::Verified(payload) = checked.state else {
+        return Err(Stop::Unknown(invalid));
+    };
+    let decoded = match payload {
+        Cow::Borrowed(_) => {
+            let local =
+                |offset| usize::try_from(offset - extent.start).map_err(|_| Stop::AddressSpace);
+            Decoded::Plain(local(head.payload.start)?..local(head.payload.end)?)
+        }
+        Cow::Owned(bytes) => Decoded::Compressed(bytes),
+    };
+    let start = frame.start(FrameField::Content);
+    let content = start..start + frame.field(FrameField::Content).len();
+    Ok(LocalFrame {
+        bytes,
+        content,
+        decoded,
+    })
+}
+
+fn parity_anchor_head(
+    input: &mut Input<impl FnMut(u64, &mut [u8]) -> io::Result<()>>,
+    item: &mut ItemInput,
+    offset: u64,
+    through: u64,
+    invalid: RangeReason,
+) -> Result<(u64, Option<Range<u64>>), Stop> {
+    let head = head_at(input, item, offset, invalid)?;
+    if head.first != 0x85 {
+        return item
+            .scan(input, offset, through, ScanStrings::Skip, invalid)
+            .map(|range| (range.end(), None));
+    }
+    let mut offset = head.end;
+    let mut anchor = None;
+    for element in 0..5 {
+        let is_anchor = element == 3 && head_at(input, item, offset, invalid)?.major == head::BYTES;
+        let scan = if is_anchor {
+            ScanStrings::Keep
+        } else {
+            ScanStrings::Skip
+        };
+        let end = item.scan(input, offset, through, scan, invalid)?.end();
+        if is_anchor {
+            anchor = Some(offset..end);
+        }
+        offset = end;
+    }
+    Ok((offset, anchor))
+}
+
 #[cfg(test)]
 mod tests {
     use core::ops::Range;
@@ -442,7 +556,7 @@ mod tests {
         let transparent = frame.start(FrameField::Transparent);
         let mut invalid = bytes.to_vec();
         invalid.splice(
-            transparent..transparent + 1,
+            transparent..=transparent,
             [0x58, 32].into_iter().chain([0; 32]),
         );
         let skipped = transparent as u64 + 2..transparent as u64 + 34;
@@ -489,118 +603,4 @@ mod tests {
         let mut item = ItemInput::new(0..bytes.len() as u64);
         predecessor(&mut input, &mut item)
     }
-}
-
-enum Decoded {
-    Plain(Range<usize>),
-    Compressed(Vec<u8>),
-}
-
-pub(super) struct LocalFrame {
-    bytes: Vec<u8>,
-    content: Range<usize>,
-    decoded: Decoded,
-}
-
-impl LocalFrame {
-    pub(super) fn content(&self) -> Fields<'_> {
-        Fields::new(&self.bytes[self.content.clone()])
-    }
-
-    pub(super) fn payload(&self) -> &[u8] {
-        match &self.decoded {
-            Decoded::Plain(extent) => &self.bytes[extent.clone()],
-            Decoded::Compressed(bytes) => bytes,
-        }
-    }
-}
-
-pub(super) fn verify(
-    input: &mut Input<impl FnMut(u64, &mut [u8]) -> io::Result<()>>,
-    item: &mut ItemInput,
-    head: &FrameHead,
-    previous: &[u8; DIGEST_LENGTH],
-    capacity: PayloadCapacity,
-    registry: NonZeroU64,
-) -> Result<LocalFrame, Stop> {
-    let invalid = RangeReason::Payload;
-    let extent = item.extent().clone();
-    let bytes = item.bytes(input, extent.start, extent.end - extent.start, invalid)?;
-    let frame = Item::first(&bytes)
-        .map_err(|_| Stop::Unknown(invalid))?
-        .filter(|item| item.bytes().len() == bytes.len())
-        .ok_or(Stop::Unknown(invalid))?
-        .frame()
-        .map_err(|_| Stop::Unknown(invalid))?
-        .ok_or(Stop::Unknown(invalid))?;
-    let wire = frame.check_wire(previous, None, registry);
-    if wire.malformed.is_some() {
-        return Err(Stop::Unknown(invalid));
-    }
-    if wire.link.state != LinkState::Linked {
-        return Err(Stop::Unknown(RangeReason::Identifier));
-    }
-    let payload = frame.payload_wire(registry);
-    if let Some(length) = payload.compressed_length() {
-        input.charge(length)?;
-    }
-    let mut budget = PayloadBudget::new(PayloadCapacity {
-        decoded_bytes_per_read: u64::MAX,
-        ..capacity
-    });
-    let checked = frame
-        .check_payload(payload, &mut budget)
-        .map_err(Stop::DecodeResource)?;
-    if checked.malformed.is_some() {
-        return Err(Stop::Unknown(invalid));
-    }
-    let PayloadState::Verified(payload) = checked.state else {
-        return Err(Stop::Unknown(invalid));
-    };
-    let decoded = match payload {
-        Cow::Borrowed(_) => {
-            let local =
-                |offset| usize::try_from(offset - extent.start).map_err(|_| Stop::AddressSpace);
-            Decoded::Plain(local(head.payload.start)?..local(head.payload.end)?)
-        }
-        Cow::Owned(bytes) => Decoded::Compressed(bytes),
-    };
-    let start = frame.start(FrameField::Content);
-    let content = start..start + frame.field(FrameField::Content).len();
-    Ok(LocalFrame {
-        bytes,
-        content,
-        decoded,
-    })
-}
-
-fn parity_anchor_head(
-    input: &mut Input<impl FnMut(u64, &mut [u8]) -> io::Result<()>>,
-    item: &mut ItemInput,
-    offset: u64,
-    through: u64,
-    invalid: RangeReason,
-) -> Result<(u64, Option<Range<u64>>), Stop> {
-    let head = head_at(input, item, offset, invalid)?;
-    if head.first != 0x85 {
-        return item
-            .scan(input, offset, through, ScanStrings::Skip, invalid)
-            .map(|range| (range.end(), None));
-    }
-    let mut offset = head.end;
-    let mut anchor = None;
-    for element in 0..5 {
-        let is_anchor = element == 3 && head_at(input, item, offset, invalid)?.major == head::BYTES;
-        let scan = if is_anchor {
-            ScanStrings::Keep
-        } else {
-            ScanStrings::Skip
-        };
-        let end = item.scan(input, offset, through, scan, invalid)?.end();
-        if is_anchor {
-            anchor = Some(offset..end);
-        }
-        offset = end;
-    }
-    Ok((offset, anchor))
 }
