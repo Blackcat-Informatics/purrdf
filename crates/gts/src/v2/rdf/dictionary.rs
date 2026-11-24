@@ -4,7 +4,9 @@
 use std::borrow::Cow;
 
 use super::values::Candidate;
-use super::{FoldError, Line, LiteralDirection, RdfFold, Term, TermId, ValueName, ValueStore};
+use super::{
+    FoldError, Line, LiteralDirection, LiteralValue, RdfFold, Term, TermId, ValueName, ValueStore,
+};
 use crate::v2::fields::copy_bytes;
 use crate::v2::{
     DecodedRows, DecodedTerms, LiteralForm, Row, TermDefinition, TermOrder, TermReservation,
@@ -22,7 +24,10 @@ mod tests {
     use std::borrow::Cow;
 
     use crate::v2::fields::Fields;
-    use crate::v2::{DecodedTerms, FoldError, RdfFold, Row, TermDefinition, TermText, ValueStore};
+    use crate::v2::{
+        DecodedTerms, FoldError, LiteralForm, RdfFold, Row, Term, TermDefinition, TermText,
+        TypedValue, ValueStore,
+    };
 
     use super::SegmentDictionary;
 
@@ -58,6 +63,145 @@ mod tests {
                 duplicates.unwrap();
             }
         }
+    }
+
+    #[test]
+    fn annotation_repetition_compares_written_atoms_during_dictionary_doubt() {
+        let record = |start, count| {
+            [
+                0x84, start, 0x84, 0x82, 1, count, 0x82, 3, count, 0x82, 2, count, 0x82, 6, count,
+                1, 1,
+            ]
+        };
+        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
+        let literal = |text| {
+            TermDefinition::Literal(
+                TermText::Text(Cow::Borrowed(text)),
+                LiteralForm::Language(0),
+            )
+        };
+        let mut dictionary = SegmentDictionary::new(0);
+        let mut fold = RdfFold::default();
+        let first = record(0, 1);
+        let later = record(4, 3);
+        let values = [
+            (
+                &first[..],
+                vec![
+                    iri("https://example.org/a"),
+                    TermDefinition::Blank(b"a"),
+                    literal("a"),
+                    TermDefinition::Value(TypedValue::Octets(b"a")),
+                ],
+            ),
+            (
+                &later[..],
+                vec![
+                    iri("https://example.org/a"),
+                    iri("https://example.org/b"),
+                    iri("https://example.org/b"),
+                    TermDefinition::Blank(b"a"),
+                    TermDefinition::Blank(b"b"),
+                    TermDefinition::Blank(b"b"),
+                    literal("a"),
+                    literal("b"),
+                    literal("b"),
+                    TermDefinition::Value(TypedValue::Octets(b"a")),
+                    TermDefinition::Value(TypedValue::Octets(b"b")),
+                    TermDefinition::Value(TypedValue::Octets(b"b")),
+                ],
+            ),
+        ];
+        let mut arena_size = 0;
+        for (index, (content, terms)) in values.into_iter().enumerate() {
+            if index == 1 {
+                arena_size = fold.terms().len();
+                dictionary.mark_doubt();
+            }
+            let reservation = crate::v2::terms::reserve_verified(
+                Fields::new(content),
+                dictionary.next_id(),
+                NonZeroU64::MIN,
+            )
+            .unwrap();
+            dictionary
+                .observe_terms(
+                    &mut fold,
+                    &reservation,
+                    Some(DecodedTerms {
+                        terms,
+                        languages: vec!["en"],
+                    }),
+                    &ValueStore::default(),
+                )
+                .unwrap();
+        }
+        assert_eq!(fold.terms().len(), arena_size);
+        let row = |object| Row::Annotation([0, 0, object], NonZeroU64::MIN, None);
+        for (prior, equal) in (0..4).zip((4..16).step_by(3)) {
+            assert!(dictionary.readable_term(equal).is_none());
+            for (left, right) in [(prior, equal), (equal + 1, equal + 2)] {
+                assert!(matches!(
+                    dictionary.check_annotations(&fold, &[row(left), row(right)]),
+                    Err(FoldError::RepeatedAnnotation)
+                ));
+            }
+            dictionary
+                .check_annotations(&fold, &[row(prior), row(equal + 1)])
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn written_doubt_aliases_survive_external_fold_interning() {
+        let mut dictionary = SegmentDictionary::new(0);
+        let mut fold = RdfFold::default();
+        dictionary.mark_doubt();
+        let first = [0x84, 0, 0x81, 0x82, 1, 1, 1, 1];
+        let later = [0x84, 1, 0x81, 0x82, 1, 2, 1, 1];
+        let spelling = "https://example.org/a";
+        let iri = |text| TermDefinition::Iri(TermText::Text(Cow::Borrowed(text)));
+        for (index, (content, terms)) in [
+            (&first[..], vec![iri(spelling)]),
+            (
+                &later[..],
+                vec![iri(spelling), iri("https://example.org/b")],
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            if index == 1 {
+                fold.intern_term(Term::Iri(Cow::Borrowed(spelling)))
+                    .unwrap();
+            }
+            let reservation = crate::v2::terms::reserve_verified(
+                Fields::new(content),
+                dictionary.next_id(),
+                NonZeroU64::MIN,
+            )
+            .unwrap();
+            dictionary
+                .observe_terms(
+                    &mut fold,
+                    &reservation,
+                    Some(DecodedTerms {
+                        terms,
+                        languages: Vec::new(),
+                    }),
+                    &ValueStore::default(),
+                )
+                .unwrap();
+        }
+        let row = |object| Row::Annotation([0, 0, object], NonZeroU64::MIN, None);
+        assert!(matches!(
+            dictionary.check_annotations(&fold, &[row(0), row(1)]),
+            Err(FoldError::RepeatedAnnotation)
+        ));
+        dictionary
+            .check_annotations(&fold, &[row(0), row(2)])
+            .unwrap();
+        assert!(dictionary.readable_term(1).is_none());
     }
 
     #[test]
@@ -216,7 +360,9 @@ enum DefinitionKey {
     Atom(u64, TermId),
     Triple([u64; 3]),
     UnreadableIri(Vec<u8>),
+    UnreadableBlank(Vec<u8>),
     UnreadableLiteral(Vec<u8>, ReferenceForm),
+    UnreadableValue(LiteralValue),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -492,6 +638,11 @@ impl SegmentDictionary {
         self.aliases.get(&id).copied().unwrap_or(id)
     }
 
+    fn prior_atom(&self, kind: u64, handle: Option<TermId>) -> Option<DefinitionKey> {
+        let key = DefinitionKey::Atom(kind, handle?);
+        self.definitions.contains_key(&key).then_some(key)
+    }
+
     fn scoped_definition_id(&self, raw: u64, scope: RowScope) -> u64 {
         if scope.defines(raw) {
             self.definition_id(raw)
@@ -580,6 +731,20 @@ impl SegmentDictionary {
                     ));
                     return Ok(None);
                 };
+                if self.in_doubt {
+                    let term = form.term(Cow::Borrowed(&text));
+                    *unreadable_atom = Some(
+                        if let Some(key) = self.prior_atom(2, fold.terms.find(&term)) {
+                            key
+                        } else {
+                            DefinitionKey::UnreadableLiteral(
+                                copy_bytes(text.as_bytes())?,
+                                self.written_form(fields)?,
+                            )
+                        },
+                    );
+                    return Ok(None);
+                }
                 form.term(text)
             }
             TermDefinition::LiteralRef(reference, form) => {
@@ -617,7 +782,19 @@ impl SegmentDictionary {
                 };
                 form.term(Cow::Borrowed(text))
             }
-            TermDefinition::Value(value) => return self.intern_value(fold, value),
+            TermDefinition::Value(value) => {
+                if self.in_doubt {
+                    *unreadable_atom = Some(
+                        if let Some(key) = self.prior_atom(6, fold.terms.find_value(value)?) {
+                            key
+                        } else {
+                            DefinitionKey::UnreadableValue(LiteralValue::copy(value)?)
+                        },
+                    );
+                    return Ok(None);
+                }
+                return self.intern_value(fold, value);
+            }
             TermDefinition::ValueRef(reference) => {
                 let name = reference.into();
                 let (candidate, state_refused) = context.values.get(name);
@@ -630,6 +807,23 @@ impl SegmentDictionary {
             }
         };
         if self.in_doubt {
+            *unreadable_atom = match &term {
+                Term::Iri(text) => Some(
+                    if let Some(key) = self.prior_atom(1, fold.terms.find(&term)) {
+                        key
+                    } else {
+                        DefinitionKey::UnreadableIri(copy_bytes(text.as_bytes())?)
+                    },
+                ),
+                Term::Blank { label, .. } => Some(
+                    if let Some(key) = self.prior_atom(3, fold.terms.find(&term)) {
+                        key
+                    } else {
+                        DefinitionKey::UnreadableBlank(copy_bytes(label)?)
+                    },
+                ),
+                _ => None,
+            };
             Ok(None)
         } else {
             fold.terms.intern(term).map(Some)
@@ -855,11 +1049,12 @@ impl SegmentDictionary {
         if rows.len() < 2 || !matches!(rows.first(), Some(Row::Annotation(..))) {
             return Ok(());
         }
-        let aliases = self
-            .first_forward_definition
-            .filter(|&id| scope.defines(id))
-            .map(|_| written::Aliases::new(self, fold, scope))
-            .transpose()?;
+        let aliases = (scope.in_doubt
+            || self
+                .first_forward_definition
+                .is_some_and(|id| scope.defines(id)))
+        .then(|| written::Aliases::new(self, fold, scope))
+        .transpose()?;
         let mut keys = FastSet::default();
         keys.try_reserve(rows.len())?;
         let id = |raw| {
