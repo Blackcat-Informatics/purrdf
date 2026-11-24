@@ -188,6 +188,13 @@ Cutover staging:
   prerequisites (including the `purrdf-datalog` crates.io bootstrap), and the
   per-layer port order with its seams.
 
+## Rust CI cache
+
+The native test, Python test, and conformance jobs share a cache using
+rust-cache v2.9.3. Its cleanup recognizes Cargo's current package
+directories, including names that contain hyphens.
+[Layout fix](https://github.com/Swatinem/rust-cache/pull/371) · [Upstream release](https://github.com/Swatinem/rust-cache/releases/tag/v2.9.3)
+
 ## Datalog physical primitives
 
 A later snapshot than the original extraction above: `../gmeow-ontology` at
