@@ -109,7 +109,7 @@ pub(super) fn frame_hasher(predecessor: &Digest) -> Hasher {
 }
 
 /// P1 §3.4 uses an identifier of the digest length regardless of its head.
-fn permissive_identifier(mut field: &[u8]) -> Option<Digest> {
+pub(super) fn permissive_identifier(mut field: &[u8]) -> Option<Digest> {
     if let Some(bytes) = head::read_bytes(&mut field) {
         return bytes.try_into().ok();
     }

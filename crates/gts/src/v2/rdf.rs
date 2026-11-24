@@ -4,12 +4,13 @@
 use core::fmt;
 use std::collections::TryReserveError;
 
-mod dictionary;
+pub(super) mod dictionary;
 mod lines;
 mod terms;
 mod values;
 
 pub(super) use dictionary::RowScope;
+pub use dictionary::{ByReferenceForm, ByReferenceTerm};
 pub use dictionary::{DefinitionFindings, RowDisposition, RowFindings, SegmentDictionary};
 pub(super) use lines::LineKey;
 pub use lines::{Line, RdfFold};

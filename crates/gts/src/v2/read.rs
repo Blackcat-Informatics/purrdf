@@ -38,7 +38,7 @@ use super::{
 };
 use crate::{FastMap, model::Graph};
 
-mod blob;
+pub(super) mod blob;
 mod error_inspection;
 mod frame_wire;
 mod labelling_size;

@@ -5,13 +5,67 @@ use std::borrow::Cow;
 
 use super::values::Candidate;
 use super::{FoldError, Line, LiteralDirection, RdfFold, Term, TermId, ValueName, ValueStore};
+use crate::v2::fields::copy_bytes;
 use crate::v2::{
     DecodedRows, DecodedTerms, LiteralForm, Row, TermDefinition, TermOrder, TermReservation,
     TermText, TypedValue,
 };
 use crate::{FastMap, FastSet};
 
+mod by_reference;
 mod order;
+
+#[cfg(test)]
+mod tests {
+    use core::num::NonZeroU64;
+    use std::borrow::Cow;
+
+    use crate::v2::fields::Fields;
+    use crate::v2::{DecodedTerms, FoldError, RdfFold, Row, TermDefinition, TermText, ValueStore};
+
+    use super::SegmentDictionary;
+
+    #[test]
+    fn annotation_repetition_compares_unreadable_iri_bytes() {
+        let content = [0x84, 0, 0x81, 0x82, 1, 4, 1, 1];
+        let reservation =
+            crate::v2::terms::reserve_verified(Fields::new(&content), 0, NonZeroU64::MIN).unwrap();
+        let annotations = [
+            Row::Annotation([0, 1, 2], NonZeroU64::MIN, None),
+            Row::Annotation([0, 1, 3], NonZeroU64::new(2).unwrap(), None),
+        ];
+        for (other, repeated) in [(&[0xff][..], true), (&[0xfe][..], false)] {
+            let terms = DecodedTerms {
+                terms: vec![
+                    TermDefinition::Iri(TermText::Text(Cow::Borrowed("https://example.org/r"))),
+                    TermDefinition::Iri(TermText::Text(Cow::Borrowed("https://example.org/p"))),
+                    TermDefinition::Iri(TermText::Invalid(Cow::Borrowed(&[0xff]))),
+                    TermDefinition::Iri(TermText::Invalid(Cow::Borrowed(other))),
+                ],
+                languages: Vec::new(),
+            };
+            let mut dictionary = SegmentDictionary::new(0);
+            let findings = dictionary
+                .observe_terms(
+                    &mut RdfFold::default(),
+                    &reservation,
+                    Some(terms),
+                    &ValueStore::default(),
+                )
+                .unwrap();
+            assert!(findings.ill_formed_term);
+            let duplicates = dictionary.check_annotations(&annotations);
+            if repeated {
+                assert!(matches!(duplicates, Err(FoldError::RepeatedAnnotation)));
+            } else {
+                duplicates.unwrap();
+            }
+        }
+    }
+}
+
+pub(in crate::v2) use by_reference::ByReferenceTerms;
+pub use by_reference::{ByReferenceForm, ByReferenceTerm};
 
 /// Findings from the first failed condition of each definition in a terms frame.
 #[derive(Debug, Default)]
@@ -60,7 +114,7 @@ pub struct RowFindings {
 }
 
 /// The dictionary constraints at the original position of a row frame.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(in crate::v2) struct RowScope {
     next: u128,
     broken_prefix: u128,
@@ -68,6 +122,12 @@ pub(in crate::v2) struct RowScope {
 }
 
 impl RowScope {
+    pub(in crate::v2) const EMPTY: Self = Self {
+        next: 0,
+        broken_prefix: 0,
+        in_doubt: false,
+    };
+
     pub(in crate::v2) const fn defines(self, id: u64) -> bool {
         (id as u128) < self.next
     }
@@ -94,10 +154,12 @@ struct Run {
     kind: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, Hash)]
 enum DefinitionKey {
     Atom(u64, TermId),
     Triple([u64; 3]),
+    UnreadableIri(Vec<u8>),
+    UnreadableLiteral(Vec<u8>, ReferenceForm),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -187,6 +249,37 @@ impl SegmentDictionary {
         decoded: Option<DecodedTerms<'_>>,
         values: &ValueStore,
     ) -> Result<DefinitionFindings, FoldError> {
+        self.observe_definitions(
+            fold,
+            reservation,
+            decoded,
+            DefinitionValues::Rebuilt(values),
+        )
+    }
+
+    pub(in crate::v2) fn observe_referenced_terms(
+        &mut self,
+        fold: &mut RdfFold,
+        reservation: &TermReservation<'_>,
+        decoded: DecodedTerms<'_>,
+        terms: &mut ByReferenceTerms,
+        names_value: impl Fn(ValueName) -> bool,
+    ) -> Result<DefinitionFindings, FoldError> {
+        self.observe_definitions(
+            fold,
+            reservation,
+            Some(decoded),
+            DefinitionValues::Referenced(terms, &names_value),
+        )
+    }
+
+    fn observe_definitions(
+        &mut self,
+        fold: &mut RdfFold,
+        reservation: &TermReservation<'_>,
+        decoded: Option<DecodedTerms<'_>>,
+        mut values: DefinitionValues<'_>,
+    ) -> Result<DefinitionFindings, FoldError> {
         let start = reservation.start;
         let end = reservation.reserved_end();
         if start != self.next || end < start || end != reservation.end {
@@ -227,13 +320,16 @@ impl SegmentDictionary {
                 self.check_order(fold, &decoded, canonical)
                     .and_then(|(violated, last)| {
                         findings.declared_order_violated = violated;
-                        self.resolve_terms(fold, decoded, values, &mut findings, canonical)?;
+                        self.resolve_terms(fold, decoded, &mut values, &mut findings, canonical)?;
                         self.order.last = last;
                         Ok(())
                     });
             if let Err(error) = result {
                 self.runs.truncate(runs_before);
                 self.order.rollback(start);
+                if let DefinitionValues::Referenced(terms, _) = &mut values {
+                    terms.rollback(start);
+                }
                 self.readable.retain(|id, _| u128::from(*id) < start);
                 self.definitions.retain(|_, id| u128::from(*id) < start);
                 self.references.retain(|_, id| u128::from(*id) < start);
@@ -257,10 +353,15 @@ impl SegmentDictionary {
         &mut self,
         fold: &mut RdfFold,
         decoded: DecodedTerms<'_>,
-        values: &ValueStore,
+        values: &mut DefinitionValues<'_>,
         findings: &mut DefinitionFindings,
         canonical: bool,
     ) -> Result<(), FoldError> {
+        let empty = ValueStore::default();
+        let (values, mut references) = match values {
+            DefinitionValues::Rebuilt(values) => (*values, None),
+            DefinitionValues::Referenced(terms, names) => (&empty, Some((&mut **terms, *names))),
+        };
         let context = Definitions {
             languages: &decoded.languages,
             values,
@@ -277,7 +378,24 @@ impl SegmentDictionary {
             // Repeated annotation rows compare the written name and form even
             // when no declaration supplies bytes for the reference.
             let reference = self.reference_key(&definition, context.languages)?;
-            let term = self.resolve_definition(fold, id, definition, &context, findings)?;
+            let mut unreadable_atom = None;
+            let by_reference = if let Some((terms, names)) = &mut references {
+                terms.preserve(self, id, &definition, context.languages, *names, findings)?
+            } else {
+                false
+            };
+            let term = if by_reference {
+                None
+            } else {
+                self.resolve_definition(
+                    fold,
+                    id,
+                    definition,
+                    &context,
+                    findings,
+                    &mut unreadable_atom,
+                )?
+            };
             if let Some(term) = term {
                 self.readable.insert(id, term);
                 if canonical && !findings.declared_order_violated && matches!(kind, 2 | 5 | 6 | 7) {
@@ -290,8 +408,8 @@ impl SegmentDictionary {
             let first = if let Some(reference) = reference {
                 self.references.try_reserve(1)?;
                 *self.references.entry(reference).or_insert(id)
-            } else if let Some(key) = components
-                .map(DefinitionKey::Triple)
+            } else if let Some(key) = unreadable_atom
+                .or_else(|| components.map(DefinitionKey::Triple))
                 .or_else(|| term.map(|term| DefinitionKey::Atom(kind, term)))
             {
                 *self.definitions.entry(key).or_insert(id)
@@ -317,25 +435,7 @@ impl SegmentDictionary {
     ) -> Result<Option<(ValueName, ReferenceForm)>, FoldError> {
         let key = match definition {
             TermDefinition::LiteralRef(reference, form) => {
-                let form = match LiteralFields::read(*form, languages)? {
-                    LiteralFields::Typed(datatype) => {
-                        ReferenceForm::Typed(self.definition_id(datatype))
-                    }
-                    LiteralFields::Language(text, direction) => {
-                        let id = if let Some(&id) = self.reference_languages.get(text) {
-                            id
-                        } else {
-                            let mut owned = String::new();
-                            owned.try_reserve_exact(text.len())?;
-                            owned.push_str(text);
-                            self.reference_languages.try_reserve(1)?;
-                            let id = self.reference_languages.len();
-                            self.reference_languages.insert(owned, id);
-                            id
-                        };
-                        ReferenceForm::Language(id, direction)
-                    }
-                };
+                let form = self.written_form(LiteralFields::read(*form, languages)?)?;
                 ((*reference).into(), form)
             }
             TermDefinition::ValueRef(reference) => ((*reference).into(), ReferenceForm::TypedValue),
@@ -344,19 +444,40 @@ impl SegmentDictionary {
         Ok(Some(key))
     }
 
+    fn written_form(&mut self, form: LiteralFields<'_>) -> Result<ReferenceForm, FoldError> {
+        Ok(match form {
+            LiteralFields::Typed(datatype) => ReferenceForm::Typed(self.definition_id(datatype)),
+            LiteralFields::Language(text, direction) => {
+                let id = if let Some(&id) = self.reference_languages.get(text) {
+                    id
+                } else {
+                    let mut owned = String::new();
+                    owned.try_reserve_exact(text.len())?;
+                    owned.push_str(text);
+                    self.reference_languages.try_reserve(1)?;
+                    let id = self.reference_languages.len();
+                    self.reference_languages.insert(owned, id);
+                    id
+                };
+                ReferenceForm::Language(id, direction)
+            }
+        })
+    }
+
     fn resolve_definition(
-        &self,
+        &mut self,
         fold: &mut RdfFold,
         id: u64,
         definition: TermDefinition<'_>,
         context: &Definitions<'_>,
         findings: &mut DefinitionFindings,
+        unreadable_atom: &mut Option<DefinitionKey>,
     ) -> Result<Option<TermId>, FoldError> {
         let term = match definition {
             TermDefinition::Iri(TermText::Text(text)) => Term::Iri(text),
-            TermDefinition::Iri(TermText::Invalid(_))
-            | TermDefinition::Literal(TermText::Invalid(_), _) => {
+            TermDefinition::Iri(TermText::Invalid(bytes)) => {
                 findings.ill_formed_term = true;
+                *unreadable_atom = Some(DefinitionKey::UnreadableIri(copy_bytes(&bytes)?));
                 return Ok(None);
             }
             TermDefinition::Blank(label) => Term::Blank {
@@ -370,8 +491,21 @@ impl SegmentDictionary {
                 };
                 Term::Triple(terms)
             }
-            TermDefinition::Literal(TermText::Text(text), form) => {
-                let Some(form) = self.literal_form(id, form, context.languages, findings)? else {
+            TermDefinition::Literal(text, form) => {
+                let fields = LiteralFields::read(form, context.languages)?;
+                let TermText::Text(text) = text else {
+                    findings.ill_formed_term = true;
+                    *unreadable_atom = Some(DefinitionKey::UnreadableLiteral(
+                        copy_bytes(text.bytes())?,
+                        self.written_form(fields)?,
+                    ));
+                    return Ok(None);
+                };
+                let Some(form) = self.resolve_literal_form(id, fields, findings) else {
+                    *unreadable_atom = Some(DefinitionKey::UnreadableLiteral(
+                        copy_bytes(text.as_bytes())?,
+                        self.written_form(fields)?,
+                    ));
                     return Ok(None);
                 };
                 form.term(text)
@@ -449,14 +583,24 @@ impl SegmentDictionary {
         languages: &'a [&'a str],
         findings: &mut DefinitionFindings,
     ) -> Result<Option<ResolvedForm<'a>>, FoldError> {
-        Ok(match LiteralFields::read(form, languages)? {
+        let fields = LiteralFields::read(form, languages)?;
+        Ok(self.resolve_literal_form(id, fields, findings))
+    }
+
+    fn resolve_literal_form<'a>(
+        &self,
+        id: u64,
+        form: LiteralFields<'a>,
+        findings: &mut DefinitionFindings,
+    ) -> Option<ResolvedForm<'a>> {
+        match form {
             LiteralFields::Typed(datatype) => self
                 .dependencies(id, [datatype], [Position::Iri], findings)
                 .map(|[datatype]| ResolvedForm::Typed(datatype)),
             LiteralFields::Language(language, direction) => {
                 Some(ResolvedForm::Language(language, direction))
             }
-        })
+        }
     }
 
     fn dependencies<const N: usize>(
@@ -506,30 +650,12 @@ impl SegmentDictionary {
         }
     }
 
-    fn resolve_scoped_row(&self, row: Row, scope: RowScope) -> RowDisposition {
-        let references = row_references(row);
-        if references
-            .iter()
-            .flatten()
-            .any(|(id, _)| !scope.defines(*id))
-        {
-            return RowDisposition::ForwardReference;
+    pub(in crate::v2) fn resolve_scoped_row(&self, row: Row, scope: RowScope) -> RowDisposition {
+        if let Err(disposition) = self.admit_row(row_references(row), scope, |id| {
+            self.readable_term(id).is_some()
+        }) {
+            return disposition;
         }
-        if references
-            .iter()
-            .flatten()
-            .any(|(id, _)| !scope.admits(*id) || self.readable_term(*id).is_none())
-        {
-            return RowDisposition::Held;
-        }
-        if references
-            .into_iter()
-            .flatten()
-            .any(|(id, position)| self.wrong_kind(id, position))
-        {
-            return RowDisposition::PositionConstraint;
-        }
-
         let resolve = |id| {
             self.readable_term(id)
                 .expect("row definitions were admitted")
@@ -544,6 +670,53 @@ impl SegmentDictionary {
             }
             Row::EmptyGraph(id) => Line::EmptyGraph(resolve(id)),
         })
+    }
+
+    pub(in crate::v2) fn admit_referenced_row(
+        &self,
+        row: Row,
+        scope: RowScope,
+        terms: &ByReferenceTerms,
+    ) -> Result<bool, RowDisposition> {
+        let references = row_references(row);
+        let by_reference = |id| terms.get(id, scope).is_some();
+        self.admit_row(references, scope, |id| {
+            self.readable_term(id).is_some() || by_reference(id)
+        })?;
+        Ok(references
+            .into_iter()
+            .flatten()
+            .any(|(id, _)| by_reference(id)))
+    }
+
+    fn admit_row(
+        &self,
+        references: [Option<(u64, Position)>; 4],
+        scope: RowScope,
+        readable: impl Fn(u64) -> bool,
+    ) -> Result<(), RowDisposition> {
+        if references
+            .iter()
+            .flatten()
+            .any(|(id, _)| !scope.defines(*id))
+        {
+            return Err(RowDisposition::ForwardReference);
+        }
+        if references
+            .iter()
+            .flatten()
+            .any(|(id, _)| !scope.admits(*id) || !readable(*id))
+        {
+            return Err(RowDisposition::Held);
+        }
+        if references
+            .into_iter()
+            .flatten()
+            .any(|(id, position)| self.wrong_kind(id, position))
+        {
+            return Err(RowDisposition::PositionConstraint);
+        }
+        Ok(())
     }
 
     /// Resolve the rows of a folded frame and merge the accepted lines.
@@ -594,6 +767,14 @@ impl SegmentDictionary {
     }
 
     pub(in crate::v2) fn check_annotations(&self, rows: &[Row]) -> Result<(), FoldError> {
+        self.check_scoped_annotations(rows, self.row_scope())
+    }
+
+    pub(in crate::v2) fn check_scoped_annotations(
+        &self,
+        rows: &[Row],
+        scope: RowScope,
+    ) -> Result<(), FoldError> {
         if !matches!(rows.first(), Some(Row::Annotation(..))) {
             return Ok(());
         }
@@ -601,7 +782,13 @@ impl SegmentDictionary {
         keys.try_reserve(rows.len())?;
         for &row in rows {
             if let Row::Annotation(terms, _, graph) = row {
-                let id = |raw| self.definition_id(raw);
+                let id = |raw| {
+                    if scope.defines(raw) {
+                        self.definition_id(raw)
+                    } else {
+                        raw
+                    }
+                };
                 if !keys.insert((terms.map(id), graph.map(id))) {
                     return Err(FoldError::RepeatedAnnotation);
                 }
@@ -611,11 +798,17 @@ impl SegmentDictionary {
     }
 }
 
+enum DefinitionValues<'a> {
+    Rebuilt(&'a ValueStore),
+    Referenced(&'a mut ByReferenceTerms, &'a dyn Fn(ValueName) -> bool),
+}
+
 struct Definitions<'a> {
     languages: &'a [&'a str],
     values: &'a ValueStore,
 }
 
+#[derive(Clone, Copy)]
 enum LiteralFields<'a> {
     Typed(u64),
     Language(&'a str, Option<LiteralDirection>),

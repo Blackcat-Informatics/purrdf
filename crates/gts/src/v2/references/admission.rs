@@ -3,6 +3,7 @@
 
 use crate::v2::fields::push;
 use crate::v2::rdf::RowScope;
+use crate::v2::rdf::dictionary::ByReferenceTerms;
 use crate::v2::{FoldError, RdfFold, SegmentDictionary, Term, TermId};
 
 use super::{Binding, Digest, Leaf, LeafNode, Suppression};
@@ -74,7 +75,7 @@ impl<'a> LocalTerms<'a> {
         &self,
         binding: Binding<Leaf<'_>>,
     ) -> Result<EntryAdmission<Binding<ScopedLeaf>>, FoldError> {
-        self.admit([Some(binding.term), None, None, None], || {
+        self.admit([Some(binding.term), None, None, None], None, |_| {
             binding.try_map(|leaf| self.materialize(leaf))
         })
     }
@@ -83,7 +84,31 @@ impl<'a> LocalTerms<'a> {
         &self,
         suppression: Suppression<Leaf<'_>>,
     ) -> Result<EntryAdmission<Suppression<ScopedLeaf>>, FoldError> {
-        let leaves = match suppression {
+        self.admit(Self::suppression_leaves(suppression), None, |_| {
+            suppression.try_map(|leaf| self.materialize(leaf))
+        })
+    }
+
+    pub(in crate::v2) fn suppression_with_references(
+        &self,
+        suppression: Suppression<Leaf<'_>>,
+        references: &ByReferenceTerms,
+    ) -> Result<EntryAdmission<Option<Suppression<ScopedLeaf>>>, FoldError> {
+        self.admit(
+            Self::suppression_leaves(suppression),
+            Some(references),
+            |by_reference| {
+                if by_reference {
+                    Ok(None)
+                } else {
+                    suppression.try_map(|leaf| self.materialize(leaf)).map(Some)
+                }
+            },
+        )
+    }
+
+    fn suppression_leaves(suppression: Suppression<Leaf<'_>>) -> [Option<Leaf<'_>>; 4] {
+        match suppression {
             Suppression::Term(term) | Suppression::Reifier(term) | Suppression::Graph(term) => {
                 [Some(term), None, None, None]
             }
@@ -93,19 +118,18 @@ impl<'a> LocalTerms<'a> {
             Suppression::Blob(_) => [None; 4],
             Suppression::ReifierBinding([r, t], graph) => [Some(r), Some(t), graph, None],
             Suppression::Binding(binding) => [Some(binding.term), None, None, None],
-        };
-        self.admit(leaves, || {
-            suppression.try_map(|leaf| self.materialize(leaf))
-        })
+        }
     }
 
     fn admit<T>(
         &self,
         leaves: [Option<Leaf<'_>>; 4],
-        materialize: impl FnOnce() -> Result<T, FoldError>,
+        references: Option<&ByReferenceTerms>,
+        materialize: impl FnOnce(bool) -> Result<T, FoldError>,
     ) -> Result<EntryAdmission<T>, FoldError> {
         let mut held = false;
         let mut needs_commit = false;
+        let mut by_reference = false;
         let below_commit = self.scope.below_commit();
         for leaf in leaves.into_iter().flatten() {
             let mut position = Position::Object;
@@ -121,6 +145,12 @@ impl<'a> LocalTerms<'a> {
                             let term = self.fold.term(term).ok_or(FoldError::TermHandle(term))?;
                             held |= !position.admits(term);
                             needs_commit |= !self.scope.admits(id);
+                        } else if references
+                            .is_some_and(|terms| terms.get(id, below_commit).is_some())
+                        {
+                            held |= position != Position::Object;
+                            needs_commit |= !self.scope.admits(id);
+                            by_reference = true;
                         } else {
                             held = true;
                         }
@@ -140,9 +170,9 @@ impl<'a> LocalTerms<'a> {
         if held {
             Ok(EntryAdmission::OpaqueTerm)
         } else if needs_commit {
-            materialize().map(EntryAdmission::HeldUntilCommit)
+            materialize(by_reference).map(EntryAdmission::HeldUntilCommit)
         } else {
-            materialize().map(EntryAdmission::Accepted)
+            materialize(by_reference).map(EntryAdmission::Accepted)
         }
     }
 

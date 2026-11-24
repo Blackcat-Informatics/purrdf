@@ -200,13 +200,16 @@ struct TermOccurrence {
     occurs: bool,
 }
 
-struct Matches {
+pub(in crate::v2) struct Matches {
     targets: FastMap<Target, bool>,
     terms: Option<Vec<TermOccurrence>>,
 }
 
 impl Matches {
-    fn new(claims: &[SuppressionClaim], fold: &RdfFold) -> Result<Self, FoldError> {
+    pub(in crate::v2) fn new(
+        claims: &[SuppressionClaim],
+        fold: &RdfFold,
+    ) -> Result<Self, FoldError> {
         let mut targets = FastMap::default();
         targets.try_reserve(claims.len())?;
         targets.extend(
@@ -291,7 +294,7 @@ impl Matches {
         id.is_some_and(|id| self.term(id) | self.mark(Target::Graph(id)))
     }
 
-    fn line(&mut self, line: Line) -> bool {
+    pub(in crate::v2) fn line(&mut self, line: Line) -> bool {
         let exact = self.mark(Target::Line(line.key()));
         exact
             | match line {

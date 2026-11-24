@@ -17,12 +17,27 @@ type PackLocation = (Digest, u64, u64);
 type GraphName = Option<u64>;
 type RunStart = (GraphName, usize);
 
-#[derive(Debug, PartialEq, Eq)]
-struct DirectoryRange {
-    kind: u64,
-    frame: u64,
-    row: u64,
-    count: u128,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::v2) struct DirectoryRange {
+    pub(in crate::v2) kind: u64,
+    pub(in crate::v2) frame: u64,
+    pub(in crate::v2) row: u64,
+    pub(in crate::v2) count: u128,
+}
+
+impl DirectoryRange {
+    pub(in crate::v2) fn read(
+        fields: &mut Fields<'_>,
+        registry: NonZeroU64,
+    ) -> Result<Self, ContentError> {
+        fields.record(4)?;
+        Ok(Self {
+            kind: read_enum(fields, LAST_FRAME_TYPE, registry)?,
+            frame: fields.uint()?,
+            row: fields.uint()?,
+            count: u128::from(fields.uint()?),
+        })
+    }
 }
 
 #[derive(Debug, Default)]
@@ -230,22 +245,14 @@ pub(super) fn check_graph_directory(
     let mut matches = directory.is_some_and(|directory| count == directory.ranges.len() as u64);
     let mut last_graph = None;
     for _ in 0..count {
-        fields.record(2)?;
-        let graph = graph_name(fields, registry)?;
+        let (graph, count) = read_graph_entry(fields, registry)?;
         matches &= last_graph.is_none_or(|last| last < graph);
         last_graph = Some(graph);
         let expected = directory.and_then(|directory| directory.ranges.get(&graph));
-        let count = fields.array()?;
         matches &= expected.is_some_and(|ranges| count == ranges.len() as u64);
         let mut runs = expected.into_iter().flatten();
         for _ in 0..count {
-            fields.record(4)?;
-            let observed = DirectoryRange {
-                kind: read_enum(fields, LAST_FRAME_TYPE, registry)?,
-                frame: fields.uint()?,
-                row: fields.uint()?,
-                count: u128::from(fields.uint()?),
-            };
+            let observed = DirectoryRange::read(fields, registry)?;
             matches &= runs.next() == Some(&observed);
         }
     }
@@ -261,11 +268,23 @@ pub(super) fn check_pack_members(
     let mut matches = members.is_some_and(|members| count == members.len() as u64);
     let mut previous = None;
     for _ in 0..count {
-        fields.record(3)?;
-        let location = (*fields.fixed_bytes()?, fields.uint()?, fields.uint()?);
+        let location = read_pack_member(fields)?;
         matches &= previous.is_none_or(|previous| previous < location)
             && members.is_some_and(|members| members.contains(&location));
         previous = Some(location);
     }
     Ok(members.map(|_| matches))
+}
+
+pub(in crate::v2) fn read_graph_entry(
+    fields: &mut Fields<'_>,
+    registry: NonZeroU64,
+) -> Result<(GraphName, u64), ContentError> {
+    fields.record(2)?;
+    Ok((graph_name(fields, registry)?, fields.array()?))
+}
+
+pub(in crate::v2) fn read_pack_member(fields: &mut Fields<'_>) -> Result<PackLocation, WireError> {
+    fields.record(3)?;
+    Ok((*fields.fixed_bytes()?, fields.uint()?, fields.uint()?))
 }

@@ -25,6 +25,7 @@ pub use references::{
 };
 mod segment;
 mod signature;
+mod sparse;
 mod terms;
 mod writer;
 
@@ -54,8 +55,9 @@ pub use payload::{
 };
 pub use range::{CommitCheck, CommitClaim, Range, RangeFull};
 pub use rdf::{
-    DefinitionFindings, FoldError, Line, LiteralDirection, LiteralValue, RdfFold, RowDisposition,
-    RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
+    ByReferenceForm, ByReferenceTerm, DefinitionFindings, FoldError, Line, LiteralDirection,
+    LiteralValue, RdfFold, RowDisposition, RowFindings, SegmentDictionary, Term, TermId, ValueName,
+    ValueStore,
 };
 pub use read::{
     BlobEntry, DetectionCapacity, ExternalBlob, FileEnd, FrameSignatures, FrameWireResult,
@@ -71,6 +73,10 @@ pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};
 pub use signature::{
     Authenticity, HeldKey, SegmentAuthentication, SignatureCheck, SignatureInputs,
     SignatureInvalid, SignatureStatus, SignatureUnverified,
+};
+pub use sparse::{
+    RangeAnswer, RangeContent, RangeGraph, RangeQuery, RangeReadError, RangeReason, RangeRow,
+    RangeScope, RangeTarget, RangeTerm, RangeUnit, read_range,
 };
 pub use terms::{
     ContentError, DecodedTerms, FormedBudget, LiteralForm, TermDefinition, TermOrder,

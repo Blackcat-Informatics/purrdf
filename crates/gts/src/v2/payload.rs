@@ -15,7 +15,7 @@ use super::{
     DIGEST_LENGTH, FrameEnvelope, FrameField, MalformedReason, REGISTRY_VERSION, WireError,
 };
 
-const STORED_CHECK_LENGTH: usize = 16;
+pub(super) const STORED_CHECK_LENGTH: usize = 16;
 pub(super) const ZSTD: u64 = 1;
 
 /// Three byte limits used by the P1 payload check.
@@ -223,6 +223,12 @@ pub(super) struct PayloadWire<'a> {
 }
 
 impl PayloadWire<'_> {
+    pub(super) fn compressed_length(&self) -> Option<u64> {
+        self.fields.as_ref().ok().and_then(|fields| {
+            matches!(fields.storage, Storage::Compressed { .. }).then_some(fields.length)
+        })
+    }
+
     pub(super) fn stored_check(&self) -> Option<StoredState> {
         self.stored
             .map(|(codec, check, payload)| check_stored(codec, check, payload))
@@ -244,6 +250,21 @@ impl PayloadWire<'_> {
 }
 
 impl<'a> FrameEnvelope<'a> {
+    pub(super) fn check_range_storage(&self, registry: NonZeroU64) -> Result<(), WireError> {
+        let mut fields = self.read_field(FrameField::Storage);
+        let storage = read_storage(&mut fields, registry)?;
+        fields.finish()?;
+        if self.read_field(FrameField::DecodedLength).uint() == Ok(0)
+            && matches!(storage, Storage::Compressed { .. })
+        {
+            return Err(WireError::new(
+                MalformedReason::ForbiddenCombination,
+                self.start(FrameField::Storage),
+            ));
+        }
+        Ok(())
+    }
+
     pub(super) fn payload_wire(&self, registry: NonZeroU64) -> PayloadWire<'a> {
         let length = self.read_field(FrameField::DecodedLength).uint();
         let digest = self
