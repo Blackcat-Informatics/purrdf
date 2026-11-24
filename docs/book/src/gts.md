@@ -51,7 +51,9 @@ and its reference records together. Dataset-only loaders and the CLI use
 the visible RDF lines, applying the suppression record before projection.
 Rust callers can use `read_gts_v2_dataset` to inspect the whole fold
 alongside the native dataset and the read evidence. Use `RdfGraph::read_state`
-to read the fold of the run and commit named by a state binding.
+to read the fold of the run and commit named by a state binding. The
+returned state's reference findings identify rejected binding and
+suppression entries in otherwise folded frames.
 
 Use `purrdf convert --to gts input.trig output.gts` to write a file from the
 CLI. Python `RdfDataset` exposes `from_gts` and `to_gts_v2`. JavaScript's

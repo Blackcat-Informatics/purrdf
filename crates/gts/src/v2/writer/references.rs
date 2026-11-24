@@ -211,7 +211,49 @@ mod tests {
         Visibility, read, read_with_signature_inputs,
     };
 
-    use super::{Binding, RdfFold, SegmentWriter, Suppression};
+    use super::{
+        Binding, Buffer, FrameType, RdfFold, SegmentWriter, Suppression, TermId, TermIds, array,
+        uint, write_binding,
+    };
+
+    #[test]
+    fn state_replay_retains_findings_from_folded_reference_frames() {
+        let mut fold = RdfFold::default();
+        let term = fold
+            .intern_term(Term::Iri("https://example.org/term".into()))
+            .unwrap();
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_rdf(&fold).unwrap();
+        let digest = writer.add_blob(b"referent", None).unwrap();
+        let mut payload = Buffer::default();
+        array(&mut payload, 2).unwrap();
+        for term in [term, TermId::from_index(1)] {
+            write_binding(
+                &mut payload,
+                &Binding {
+                    term: ResolvedLeaf::Named(term),
+                    referent: Referent::Blob(digest),
+                },
+                TermIds { base: 0, len: 2 },
+            )
+            .unwrap();
+        }
+        writer
+            .append(FrameType::Bindings, &payload.0, |output| {
+                array(output, 1)?;
+                uint(output, 2)
+            })
+            .unwrap();
+        let commit = writer.add_commit().unwrap();
+        let bytes = writer.into_inner();
+        let ReadGraph::Second(graph) = read(&bytes, ReadCapacity::default()).unwrap() else {
+            panic!("writer emitted a generation 2 opener");
+        };
+        let state = graph.read_state(&commit).unwrap().unwrap();
+        assert_eq!(state.references.bindings.len(), 1);
+        assert_eq!(state.reference_findings, graph.reference_findings);
+        assert!(state.reference_findings[0].forward_reference);
+    }
 
     #[test]
     fn reemitted_references_use_the_appended_dictionary_and_keep_hidden_rows() {

@@ -46,6 +46,30 @@ pub enum ContentLabellingRefusal {
     Engine(Refusal),
 }
 
+impl fmt::Display for ContentLabellingRefusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Lowering(cause) => cause.fmt(f),
+            Self::Engine(refusal) => {
+                write!(
+                    f,
+                    "the GTS labelling refused the fold (code {})",
+                    refusal.code()
+                )
+            }
+        }
+    }
+}
+
+purrdf_hash::error_sources!(ContentLabellingRefusal, Lowering);
+
+impl purrdf_hash::error::StructuredError for ContentLabellingRefusal {
+    purrdf_hash::error_visit! {
+        Lowering(cause) => "gts-v2-content-lowering-refusal" { "cause" => Cause(cause) },
+        Engine(cause) => "gts-v2-content-engine-refusal" { "cause" => Cause(cause) },
+    }
+}
+
 /// Digest and labelling refusal for a readable segment's own fold.
 #[derive(Debug)]
 #[non_exhaustive]

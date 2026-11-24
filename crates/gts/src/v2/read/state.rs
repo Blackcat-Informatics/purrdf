@@ -7,8 +7,8 @@ use crate::FastMap;
 use crate::v2::references::StateCatalog;
 use crate::v2::{
     BlobEntry, DIGEST_LENGTH, ExternalBlob, FormedBudget, Item, PayloadBudget, RdfFold,
-    ReadCapacity, ReadError, ReadFailure, ReferenceFold, ResyncReach, SignatureInputs,
-    StateLocation, VerifiedBlob,
+    ReadCapacity, ReadError, ReadFailure, ReferenceFindings, ReferenceFold, ResyncReach,
+    SignatureInputs, StateLocation, VerifiedBlob,
 };
 
 use super::{GraphReader, HeldItems, RdfGraph, RebuildBudget, decode_opener};
@@ -21,6 +21,8 @@ pub struct StateFold<'a> {
     pub rdf: RdfFold,
     /// Reference records resolved using the run through that commit.
     pub references: ReferenceFold,
+    /// Rejected entries in the run's folded binding and suppression frames.
+    pub reference_findings: Vec<ReferenceFindings>,
     /// Verified inline bytes declared by the run.
     pub blobs: Vec<VerifiedBlob<'a>>,
     /// References to named blobs declared without inline bytes.
@@ -148,6 +150,7 @@ impl<'a> StateSource<'a> {
         Ok(StateFold {
             rdf: graph.rdf,
             references: graph.references,
+            reference_findings: graph.reference_findings,
             blobs: graph.blobs,
             external_blobs: graph.external_blobs,
             blob_set: graph.blob_set,
@@ -184,6 +187,8 @@ impl<'a> RdfGraph<'a> {
     /// Replays the run through the commit using the capacities left at the
     /// run's opener. Its blank nodes retain their original segment ordinals.
     /// A missing identifier or an unavailable state yields `None`.
+    /// Rejected reference entries in otherwise folded frames remain visible
+    /// in the returned state's findings.
     ///
     /// # Errors
     /// Returns a framing, fold, or storage failure during replay.

@@ -159,6 +159,7 @@ impl<L> Suppression<L> {
 
 impl Suppression<ResolvedLeaf> {
     fn target(&self) -> Option<Target> {
+        // P3 §9.2 leaves every suppression with an unnamed leaf unmatched.
         let graph = |leaf: &Option<ResolvedLeaf>| match leaf.as_ref() {
             None => Some(None),
             Some(leaf) => leaf.named().map(Some),
@@ -367,26 +368,41 @@ mod tests {
             fold.add_line(line).unwrap();
         }
         let name = [5; 32];
+        let ground_binding = || Binding {
+            term: ResolvedLeaf::Ground(GroundLeaf(vec![
+                GroundNode::Pair {
+                    frame: [6; 32],
+                    label: vec![0],
+                },
+                GroundNode::Triple([
+                    GroundTerm::Ground(0),
+                    GroundTerm::Named(predicate),
+                    GroundTerm::Named(inner),
+                ]),
+            ])),
+            referent: Referent::Blob(name),
+        };
         let bindings = [
             Binding {
                 term: ResolvedLeaf::Named(outer),
                 referent: Referent::Blob(name),
             },
-            Binding {
-                term: ResolvedLeaf::Ground(GroundLeaf(vec![
-                    GroundNode::Pair {
-                        frame: [6; 32],
-                        label: vec![0],
-                    },
-                    GroundNode::Triple([
-                        GroundTerm::Ground(0),
-                        GroundTerm::Named(predicate),
-                        GroundTerm::Named(inner),
-                    ]),
-                ])),
-                referent: Referent::Blob(name),
-            },
+            ground_binding(),
         ];
+        let unnamed = SuppressionClaim {
+            offset: 20,
+            entry: Suppression::Binding(ground_binding()),
+        };
+        let visible = VisibleFold::apply(&fold, &bindings, [], &[unnamed]).unwrap();
+        assert!(!visible.hides_binding(1));
+        assert_eq!(
+            visible.unmatched,
+            [SuppressionUnmatched {
+                offset: 20,
+                kind: SuppressionKind::Binding,
+            }]
+        );
+
         let named = ResolvedLeaf::Named;
         let claims = [
             SuppressionClaim {
