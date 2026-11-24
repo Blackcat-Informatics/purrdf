@@ -285,6 +285,9 @@ pub(crate) struct ValidateOptions<'a> {
     /// [`validation_options`] decodes it once through
     /// [`purrdf_validate::complete_profile`]. `None` keeps the compatibility law.
     pub(crate) shacl_profile: Option<&'a str>,
+    pub(crate) recursion: Option<&'a str>,
+    pub(crate) recursion_max_pairs: Option<u64>,
+    pub(crate) recursion_max_iterations: Option<u64>,
     /// Explicit JSON-LD/YAML-LD serialization configuration for a JSON-LD/YAML-LD `--format`.
     pub(crate) jsonld_options: Option<&'a JsonLdSerializeOptions>,
 }
@@ -406,19 +409,29 @@ impl ShapesSource {
 /// The validation-request options: `--shacl-profile` — the compatibility law when the
 /// flag is absent, the one exact dated law it names otherwise —
 /// `--conformance-disallows` — SHACL's default set when the flag is absent, exactly the
-/// named IRIs otherwise — and `--subclass-of-in-shapes-graph`.
+/// named IRIs otherwise — `--subclass-of-in-shapes-graph` and fixed-point recursion.
 ///
 /// # Errors
 ///
 /// A usage error when `--shacl-profile` names no supported law (the
 /// `unsupported-profile` status of [`purrdf_validate::complete_profile`]), when
 /// `--xpath-regex` names a law other than the one the selected dated law requires, or
-/// when a `--conformance-disallows` value is not an absolute IRI.
+/// when a `--conformance-disallows` value is not an absolute IRI or the recursion
+/// mode and limits do not form a valid request.
 fn validation_options(
     options: &ValidateOptions<'_>,
 ) -> Result<engine::ValidationOptions, CliError> {
     let mut validation = engine::ValidationOptions::default()
         .with_subclass_of_in_shapes_graph(options.subclass_of_in_shapes_graph);
+    if let Some(recursion) = purrdf_validate::requested_shacl_recursion(
+        options.recursion,
+        options.recursion_max_pairs,
+        options.recursion_max_iterations,
+    )
+    .map_err(CliError::ShaclRecursionRequest)?
+    {
+        validation = validation.with_recursion(recursion);
+    }
     if let Some(id) = options.shacl_profile {
         // The one reading every host shares: the id decoded once through
         // `complete_profile`, and the dated law's XPath bundle checked against
@@ -670,7 +683,7 @@ fn validate_native(
 /// reports: the law's stable name, then the engine's own typed cause.
 fn native_error(prepared: &XPathPreparedShapes, error: &XPathValidationError) -> CliError {
     let (profile, _) = prepared.selection();
-    CliError::Runtime(format!("--xpath-regex {}: {error}", profile.name()))
+    CliError::native_in(&format!("--xpath-regex {}: ", profile.name()), error)
 }
 
 /// The IRIs the DATA graph was loaded under: `--base`, or the retrieval IRI a syntax with
@@ -844,8 +857,7 @@ fn validate_change(
     )?;
 
     if !options.governors.is_engaged() {
-        let validation = engine::validate_change(&validator, snapshot)
-            .map_err(|error| CliError::Runtime(error.to_string()))?;
+        let validation = engine::validate_change(&validator, snapshot).map_err(CliError::native)?;
         render_expansion(validation.scope);
         return Ok(Some(validation.report));
     }
@@ -855,7 +867,7 @@ fn validate_change(
         snapshot,
         &options.governors.to_governors()?,
     )
-    .map_err(|error| CliError::Runtime(error.to_string()))?;
+    .map_err(CliError::native)?;
     // Before the trip or the report, so an operator reading a run that stopped still
     // learns the scope the verdict was about to describe.
     render_expansion(governed.scope);
@@ -1079,30 +1091,31 @@ fn load_shapes<D: DatasetView<ReadError = std::convert::Infallible>>(
     let box_role_vocab = options
         .box_role_vocab
         .map(purrdf::shapes::model::BoxRoleVocab::for_namespace);
-    let parsed = if validation.shacl_profile == ShaclProfile::LEGACY {
-        purrdf::shapes::shapes::from_dataset_with_base(
-            &root.dataset,
-            None,
-            &root.prefixes,
-            box_role_vocab,
-            None,
-            &table,
-        )
-    } else {
-        purrdf::shapes::shapes::from_dataset_with_options(
-            &root.dataset,
-            None,
-            &root.prefixes,
-            box_role_vocab,
-            None,
-            &table,
-            validation,
-        )
-        .map_err(|error| match error {
-            CompleteValidationError::Shapes(error) => error,
-            other => ShapesError::Invalid(other.to_string()),
-        })
-    };
+    let parsed =
+        if validation.shacl_profile == ShaclProfile::LEGACY && validation.recursion.is_none() {
+            purrdf::shapes::shapes::from_dataset_with_base(
+                &root.dataset,
+                None,
+                &root.prefixes,
+                box_role_vocab,
+                None,
+                &table,
+            )
+        } else {
+            purrdf::shapes::shapes::from_dataset_with_options(
+                &root.dataset,
+                None,
+                &root.prefixes,
+                box_role_vocab,
+                None,
+                &table,
+                validation,
+            )
+            .map_err(|error| match error {
+                CompleteValidationError::Shapes(error) => error,
+                other => ShapesError::Invalid(other.to_string()),
+            })
+        };
     parsed.map_err(|error| {
         crate::shapes_source::shapes_error(
             error,
@@ -1294,9 +1307,10 @@ impl<'a> ShapesPlan<'a> {
                 rebuild,
             } => {
                 let owner = source::acquire_product_input(path)?;
-                if validation.shacl_profile != ShaclProfile::LEGACY {
-                    // A prepared product stores no SHACL law: the restore takes the
-                    // law from this request, so one product answers under any of them.
+                if validation.shacl_profile != ShaclProfile::LEGACY
+                    || validation.recursion.is_some()
+                {
+                    // The restore takes the SHACL law and recursion selection from the request.
                     let prepared = purrdf_validate::restore_shapes_product_with_options(
                         owner.as_bytes(),
                         validation,
@@ -1347,7 +1361,7 @@ fn restore_error(path: &str, error: CompleteValidationError) -> CliError {
     let what = format!("--shapes-product {path}");
     match error {
         CompleteValidationError::Preparation(error) => crate::shacl::admission_error(&what, &error),
-        other => CliError::Runtime(format!("{what}: {other}")),
+        other => CliError::native_in(&format!("{what}: "), &other),
     }
 }
 

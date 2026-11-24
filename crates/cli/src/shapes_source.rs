@@ -256,7 +256,10 @@ pub(crate) fn shapes_error(
         }
         ShapesError::Imports(error) => error,
         ShapesError::Recursion(refusal) => {
-            return CliError::Runtime(format!("{context}: {refusal}"));
+            return CliError::ShaclRecursion {
+                message: format!("{context}: {refusal}"),
+                cause: refusal,
+            };
         }
         ShapesError::Preparation(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));
