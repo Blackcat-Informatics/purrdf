@@ -193,7 +193,7 @@ Cutover staging:
 The native test, Python test, and conformance jobs share a cache using
 rust-cache v2.9.3. Its cleanup recognizes Cargo's current package
 directories, including names that contain hyphens.
-[Layout fix](https://github.com/Swatinem/rust-cache/pull/371) · [Upstream release](https://github.com/Swatinem/rust-cache/releases/tag/v2.9.3)
+[Pinned cleanup source](https://github.com/Swatinem/rust-cache/blob/d1527c8f67ef9af357290475d4af4b0fab8f12e0/src/cleanup.ts) · [Upstream release](https://github.com/Swatinem/rust-cache/releases/tag/v2.9.3)
 
 ## Datalog physical primitives
 
