@@ -231,7 +231,8 @@ jobs:
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     name: Wheel (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 55
+    # Intel macOS needs more time for the native extension's full release LTO.
+    timeout-minutes: ${{ matrix.name == 'macos-x86_64' && 120 || 55 }}
     permissions:
       contents: read
       actions: read
