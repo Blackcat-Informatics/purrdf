@@ -27,7 +27,7 @@ pub use header::{
     write_header,
 };
 pub use index::{IndexPrefixCheck, IndexStorageFinding, IndexStorageItem, IndexStorageProblem};
-pub use item::{Generation, Item, ItemKind};
+pub use item::{Generation, Item, ItemKind, names_second_generation};
 pub use link::{LinkCheck, LinkState};
 pub use parity::{
     ParityCheck, ParityFinding, ParityFindingKind, ParityMismatches, ParityPatch,
@@ -43,9 +43,10 @@ pub use rdf::{
     RowFindings, SegmentDictionary, Term, TermId, ValueName, ValueStore,
 };
 pub use read::{
-    ExternalBlob, FileEnd, FrameSignatures, FramingDamage, GraphIndexCheck, LineageFinding,
-    ParityRecovery, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, RecoveryRefusal,
-    Resynchronization, SkippedSegment, VerifiedBlob, read, read_with_signature_inputs,
+    DetectionCapacity, ExternalBlob, FileEnd, FrameSignatures, FramingDamage, GraphIndexCheck,
+    LineageFinding, ParityRecovery, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph,
+    ReadLimits, RecoveryRefusal, Resynchronization, SkippedSegment, VerifiedBlob, read,
+    read_with_limits, read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};

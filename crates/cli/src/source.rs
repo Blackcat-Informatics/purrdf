@@ -44,7 +44,7 @@
 //! ## GTS sources, the envelope and the tag fold
 //!
 //! [`load_gts`] selects a reader from the opening item and preserves per-segment
-//! blank-node scopes. For generation 1, [`import_gts_events`] requires a diagnostic-free
+//! blank-node scopes. For generation 1, [`import_gts_events_with_limits`] requires a diagnostic-free
 //! read. The loss ledger records the envelope fields and language tag case folds.
 //! For generation 2, the transport reader requires a complete RDF fold. The ledger
 //! records segment records, blob declarations, signatures, typed value definitions
@@ -111,7 +111,8 @@ use std::borrow::Cow;
 use std::io::Read;
 use std::sync::Arc;
 
-use purrdf::gts::v2::{Line, RdfGraph, ReadCapacity, ReadGraph};
+use purrdf::gts::reader::GtsReadLimits;
+use purrdf::gts::v2::{Line, RdfGraph, ReadGraph, ReadLimits};
 use purrdf_core::{
     DatasetView, LossDetail, LossEntry, LossLedger, LossSite, LossSubject, PackView, RdfDataset,
     RdfDiagnostic, RdfLookaside, dataset_from_view, verify_pack,
@@ -119,8 +120,8 @@ use purrdf_core::{
 use purrdf_rdf::gts::{dataset_from_gts_v2_fold_with_losses, has_gts_v2_opener};
 use purrdf_rdf::{
     NativeRdfFormat, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
-    decode_transport, detect_transport, import_gts_events, parse_dataset_from_reader,
-    serialize_dataset_to_format, sniff_transport, transport_reader,
+    TransportError, decode_transport, detect_transport, import_gts_events_with_limits,
+    parse_dataset_from_reader, serialize_dataset_to_format, sniff_transport, transport_reader,
 };
 
 use crate::error::CliError;
@@ -256,6 +257,8 @@ fn open_raw_stream(path: &str) -> std::io::Result<Box<dyn Read>> {
 pub enum RawReadError {
     /// Original file or standard-input failure.
     Io(std::io::Error),
+    /// Original transport-wrapper construction failure.
+    Transport(TransportError),
     /// Original physical buffer admission/allocation refusal.
     Storage(purrdf_lex::allocation::StorageError),
     /// Input contained more bytes than the caller admitted.
@@ -263,13 +266,31 @@ pub enum RawReadError {
         /// Maximum source bytes, independent of buffer capacity.
         maximum: usize,
     },
+    /// Encoded GTS transport contained more source bytes than admitted.
+    GtsTransportLimit {
+        /// Maximum encoded transport bytes before decoder construction.
+        maximum: usize,
+    },
+    /// Decoded GTS transport contained more bytes than the caller admitted.
+    DecodedLimit {
+        /// Maximum decoded bytes, independent of buffer capacity.
+        maximum: usize,
+    },
 }
 impl std::fmt::Display for RawReadError {
     fn fmt(&self, out: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(cause) => cause.fmt(out),
+            Self::Transport(cause) => cause.fmt(out),
             Self::Storage(cause) => cause.fmt(out),
             Self::Limit { maximum } => write!(out, "raw input exceeds {maximum} bytes"),
+            Self::GtsTransportLimit { maximum } => write!(
+                out,
+                "encoded GTS transport input requires more than {maximum} bytes"
+            ),
+            Self::DecodedLimit { maximum } => {
+                write!(out, "decoded GTS input exceeds {maximum} bytes")
+            }
         }
     }
 }
@@ -277,24 +298,36 @@ impl std::error::Error for RawReadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io(cause) => Some(cause),
+            Self::Transport(cause) => Some(cause),
             Self::Storage(cause) => Some(cause),
-            Self::Limit { .. } => None,
+            Self::Limit { .. } | Self::GtsTransportLimit { .. } | Self::DecodedLimit { .. } => None,
         }
     }
 }
 impl purrdf_hash::error::StructuredError for RawReadError {
     purrdf_hash::error_visit! {
         Io(cause) => "raw-input-io" { "cause" => Cause(cause) },
+        Transport(cause) => "raw-input-transport" { "cause" => Cause(cause) },
         Storage(cause) => "raw-input-storage" { "cause" => Cause(cause) },
         Limit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
+        GtsTransportLimit { maximum } => "raw-input-limit" { "maximum" => ByteCount(*maximum as u128) },
+        DecodedLimit { maximum } => "decoded-gts-input-limit" { "maximum" => ByteCount(*maximum as u128) },
     }
 }
 
 /// Acquire at most `maximum` raw bytes, probing one further byte without retaining it.
 /// The content limit is separate from Vec capacity and other phase accounts.
 pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u8>, RawReadError> {
+    let input = open_raw_stream(path).map_err(RawReadError::Io)?;
+    read_stream_bounded(input, maximum, |maximum| RawReadError::Limit { maximum })
+}
+
+fn read_stream_bounded(
+    mut input: impl Read,
+    maximum: usize,
+    limit_error: impl FnOnce(usize) -> RawReadError + Copy,
+) -> Result<Vec<u8>, RawReadError> {
     use purrdf_lex::allocation::{Memory, Resident};
-    let mut input = open_raw_stream(path).map_err(RawReadError::Io)?;
     let mut bytes = Vec::new();
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
@@ -304,18 +337,46 @@ pub(crate) fn read_raw_bytes_bounded(path: &str, maximum: usize) -> Result<Vec<u
         let requested = remaining.saturating_add(1).min(chunk.len());
         let read = match input.read(&mut chunk[..requested]) {
             Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-            other => other.map_err(RawReadError::Io)?,
+            Err(error) => {
+                if let Some(limit) = gts_transport_input_limit(&error) {
+                    return Err(RawReadError::GtsTransportLimit {
+                        maximum: limit.maximum,
+                    });
+                }
+                return Err(RawReadError::Io(error));
+            }
+            Ok(read) => read,
         };
         if read == 0 {
             return Ok(bytes);
         }
         if read > remaining {
-            return Err(RawReadError::Limit { maximum });
+            return Err(limit_error(maximum));
         }
         memory
             .extend(&mut bytes, chunk[..read].iter().copied())
             .map_err(RawReadError::Storage)?;
     }
+}
+
+fn gts_transport_input_limit<'a>(
+    error: &'a (dyn std::error::Error + 'static),
+) -> Option<&'a GtsTransportInputLimit> {
+    let mut current = Some(error);
+    while let Some(cause) = current {
+        if let Some(limit) = cause.downcast_ref::<GtsTransportInputLimit>() {
+            return Some(limit);
+        }
+        if let Some(limit) = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .and_then(|inner| inner.downcast_ref::<GtsTransportInputLimit>())
+        {
+            return Some(limit);
+        }
+        current = cause.source();
+    }
+    None
 }
 
 /// The RFC-8089 `file://` IRI of a filesystem input — the document's **retrieval IRI**.
@@ -584,11 +645,21 @@ pub(crate) fn verified_pack_input(
 pub(crate) fn load_gts(
     path: &str,
     policy: TransportPolicy,
+    limits: GtsReadLimits,
 ) -> Result<(Arc<RdfDataset>, LossLedger), CliError> {
-    let bytes = read_bytes_with_transport(path, policy)?;
+    let bytes = if limits == GtsReadLimits::UNBOUNDED {
+        read_bytes_with_transport(path, policy)?
+    } else {
+        read_gts_bytes_with_transport(path, policy, limits.encoded_input_bytes)?
+    };
     let source = display_path(path);
     if has_gts_v2_opener(&bytes) {
-        let read = purrdf::gts::v2::read(&bytes, ReadCapacity::default())
+        if limits != GtsReadLimits::UNBOUNDED {
+            return Err(CliError::Runtime(format!(
+                "{source}: the requested GTS read limits apply to generation 1. Generation 2 uses its own finite read limits."
+            )));
+        }
+        let read = purrdf::gts::v2::read_with_limits(&bytes, ReadLimits::default())
             .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
         let ReadGraph::Second(graph) = read else {
             return Err(CliError::Runtime(format!(
@@ -606,7 +677,7 @@ pub(crate) fn load_gts(
         }
         return Ok((dataset, ledger));
     }
-    let bundle = import_gts_events(&bytes)
+    let bundle = import_gts_events_with_limits(&bytes, limits)
         .map_err(|diagnostic| CliError::Runtime(format!("{source}: {diagnostic}")))?;
     let mut ledger = gts_envelope_ledger(&bundle.envelope.lookaside, source);
     for entry in bundle.envelope.losses.entries() {
@@ -665,6 +736,113 @@ fn gts_v2_loss_ledger(graph: &RdfGraph<'_>, source: &str) -> LossLedger {
         }
     }
     ledger
+}
+
+fn read_gts_bytes_with_transport(
+    path: &str,
+    policy: TransportPolicy,
+    maximum: usize,
+) -> Result<Vec<u8>, CliError> {
+    let document_error = |cause| CliError::DocumentInput {
+        path: display_path(path).to_owned(),
+        cause,
+    };
+    let source = LimitedGtsTransport::new(
+        open_raw_stream(path).map_err(|error| document_error(RawReadError::Io(error)))?,
+        maximum,
+    );
+    let mut decoded: Box<dyn Read> = match policy {
+        TransportPolicy::Verbatim => Box::new(
+            transport_reader(source, None)
+                .map_err(|error| document_error(RawReadError::Transport(error)))?,
+        ),
+        TransportPolicy::Forced(encoding) => Box::new(
+            transport_reader(source, Some(encoding))
+                .map_err(|error| document_error(RawReadError::Transport(error)))?,
+        ),
+        TransportPolicy::Detect => {
+            let (encoding, source) = sniff_transport(source, transport_name(path))
+                .map_err(|error| document_error(RawReadError::Io(error)))?;
+            Box::new(
+                transport_reader(source, encoding)
+                    .map_err(|error| document_error(RawReadError::Transport(error)))?,
+            )
+        }
+    };
+    read_stream_bounded(&mut decoded, maximum, |maximum| {
+        RawReadError::DecodedLimit { maximum }
+    })
+    .map_err(document_error)
+}
+
+/// Raw transport input admitted before sniffing or decoder construction.
+///
+/// Zstandard skippable frames are consumed while the transport reader is
+/// constructed, so limiting only its decoded output would leave that work
+/// unbounded. This adapter permits exactly the configured source byte maximum
+/// and probes one adjacent byte only when a consumer asks whether the stream
+/// ended.
+struct LimitedGtsTransport<R> {
+    inner: R,
+    remaining: usize,
+    maximum: usize,
+}
+
+#[derive(Debug)]
+struct GtsTransportInputLimit {
+    maximum: usize,
+}
+
+impl std::fmt::Display for GtsTransportInputLimit {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "encoded GTS transport input requires more than {} bytes",
+            self.maximum
+        )
+    }
+}
+
+impl std::error::Error for GtsTransportInputLimit {}
+
+impl<R> LimitedGtsTransport<R> {
+    const fn new(inner: R, maximum: usize) -> Self {
+        Self {
+            inner,
+            remaining: maximum,
+            maximum,
+        }
+    }
+}
+
+impl<R: Read> Read for LimitedGtsTransport<R> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        if output.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining > 0 {
+            let width = self.remaining.min(output.len());
+            let count = self.inner.read(&mut output[..width])?;
+            self.remaining -= count;
+            return Ok(count);
+        }
+        let mut adjacent = [0_u8; 1];
+        loop {
+            match self.inner.read(&mut adjacent) {
+                Ok(0) => return Ok(0),
+                Ok(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        GtsTransportInputLimit {
+                            maximum: self.maximum,
+                        },
+                    ));
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 /// The GTS loss-ledger code family: what a GTS envelope carried and an RDF dataset
@@ -836,7 +1014,7 @@ pub(crate) fn run_over_input_with_transport<Op: ViewOp>(
             op.run(&view, canonical)
         }
         SourceFormat::Gts => {
-            let (dataset, _envelope_ledger) = load_gts(path, policy)?;
+            let (dataset, _envelope_ledger) = load_gts(path, policy, canonical.gts_read_limits())?;
             op.run(&*dataset, canonical)
         }
         _ => Err(crate::format::unsupported_format(
@@ -900,7 +1078,7 @@ pub(crate) fn load_dataset_reporting(
             let view = PackView::from_bytes(input.as_bytes())?;
             Ok((dataset_from_view(&view)?, LossLedger::new()))
         }
-        SourceFormat::Gts => load_gts(path, policy),
+        SourceFormat::Gts => load_gts(path, policy, canonical.gts_read_limits()),
         _ => Err(crate::format::unsupported_format(
             format,
             "the input source",
@@ -1014,5 +1192,38 @@ mod retrieval_tests {
                 .to_string(),
             format!("{}: {error}; pass --base explicitly", display_path(path))
         );
+    }
+}
+
+#[cfg(test)]
+mod transport_limit_tests {
+    use super::{LimitedGtsTransport, RawReadError, read_stream_bounded};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
+    #[test]
+    fn gts_transport_limit_retains_its_structured_resource_and_maximum() {
+        let exact = LimitedGtsTransport::new(std::io::Cursor::new(b"abc"), 3);
+        assert_eq!(
+            read_stream_bounded(exact, 16, |maximum| RawReadError::DecodedLimit { maximum })
+                .expect("the exact encoded transport input remains valid"),
+            b"abc"
+        );
+
+        let adjacent = LimitedGtsTransport::new(std::io::Cursor::new(b"abcd"), 3);
+        let error = read_stream_bounded(adjacent, 16, |maximum| RawReadError::DecodedLimit {
+            maximum,
+        })
+        .expect_err("the adjacent encoded transport byte is refused");
+        assert!(matches!(
+            error,
+            RawReadError::GtsTransportLimit { maximum: 3 }
+        ));
+        let captured = Capture::read(&error);
+        assert_eq!(captured.code, "raw-input-limit");
+        assert!(matches!(
+            captured.field("maximum"),
+            ErrorValue::ByteCount(3)
+        ));
     }
 }

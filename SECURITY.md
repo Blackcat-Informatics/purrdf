@@ -12,8 +12,8 @@ responsibly.
 
 | Version | Supported |
 | --- | --- |
-| `0.1.x` | Yes |
-| `< 0.1` | No |
+| `5.0.x` | Yes |
+| `< 5.0` | No |
 
 ## Reporting a vulnerability
 
@@ -76,8 +76,8 @@ Reporter credit should use the name, handle, or organization supplied by the rep
 If a reporter requests anonymity, release notes and advisories should state that the
 issue was reported privately without naming them.
 
-There are currently no publicly disclosed project vulnerabilities resolved in the last
-12 months.
+Published vulnerability records and reporter acknowledgements are listed in the
+[GitHub security advisories](https://github.com/Blackcat-Informatics/purrdf/security/advisories).
 
 ## Security updates
 

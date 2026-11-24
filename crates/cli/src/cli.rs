@@ -213,6 +213,17 @@ pub(crate) struct Cli {
         value_name = "DEST"
     )]
     pub(crate) canonicalization_receipts: Option<PathBuf>,
+    /// Apply finite host-safe limits to GTS v1 input. GTS v2 reads use separate
+    /// finite limits.
+    #[arg(long, global = true)]
+    pub(crate) gts_safe_read: bool,
+    /// Override one host-safe GTS v1 ceiling as `RESOURCE=MAX`. Repeat for
+    /// multiple resources; supplying any override selects bounded reading.
+    /// Resources are `encoded-input-bytes`, `items`, `encoded-frame-bytes`,
+    /// `decoded-frame-bytes`, `decoded-blob-bytes`, `total-decoded-bytes`,
+    /// `terms`, `rows`, `metadata-entries`, `diagnostics`, and `work`.
+    #[arg(long, global = true, value_name = "RESOURCE=MAX")]
+    pub(crate) gts_read_limit: Vec<String>,
 
     /// Surface the conversion/projection loss ledger: bare writes it to stderr,
     /// `--loss-ledger=PATH` writes it to PATH.

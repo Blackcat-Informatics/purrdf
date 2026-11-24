@@ -26,7 +26,10 @@ use purrdf::graph::{
     PurrdfGraph, purrdf_graph_free, purrdf_graph_freeze, purrdf_graph_from_dataset,
     purrdf_graph_insert, purrdf_graph_remove,
 };
-use purrdf::gts::{purrdf_from_gts, purrdf_to_gts, purrdf_to_gts_v2};
+use purrdf::gts::{
+    PurrdfGtsReadLimits, purrdf_from_gts, purrdf_from_gts_with_limits, purrdf_gts_read_limits_init,
+    purrdf_to_gts, purrdf_to_gts_v2,
+};
 use purrdf::handles::{
     PurrdfDataset, purrdf_dataset_free, purrdf_dataset_quad_count, purrdf_dataset_term_count,
 };
@@ -3047,6 +3050,25 @@ fn gts_v2_abi_admits_complete_rdf_and_reports_a_torn_tail() {
         assert_eq!(quad_count(restored), 3);
         purrdf_dataset_free(restored);
 
+        let mut restored = std::ptr::null_mut();
+        let status = purrdf_from_gts_with_limits(
+            bytes.as_ptr(),
+            bytes.len(),
+            std::ptr::null(),
+            &raw mut restored,
+            &raw mut error,
+        );
+        assert_eq!(status, PurrdfStatus::InvalidArgument as i32);
+        assert!(restored.is_null());
+        let message = std::ffi::CStr::from_ptr(purrdf_error_message(error))
+            .to_str()
+            .unwrap();
+        assert!(
+            message.contains("The requested limits apply to GTS v1"),
+            "{message}"
+        );
+        purrdf_error_free(error);
+
         for (source, is_v2) in [(&bytes[..bytes.len() - 1], true), (&[0xff][..], false)] {
             let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
             let mut error: *mut PurrdfError = std::ptr::null_mut();
@@ -3073,6 +3095,67 @@ fn gts_v2_abi_admits_complete_rdf_and_reports_a_torn_tail() {
             }
             purrdf_error_free(error);
         }
+    }
+}
+
+#[test]
+fn gts_read_limits_accept_exact_input_and_refuse_the_adjacent_excess() {
+    unsafe {
+        let source = parse("application/n-triples", THREE_QUADS);
+        let gts = to_gts(source);
+        let mut restored: *mut PurrdfDataset = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_from_gts_with_limits(
+                gts.as_ptr(),
+                gts.len(),
+                std::ptr::null(),
+                &raw mut restored,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        purrdf_dataset_free(restored);
+
+        let mut limits = std::mem::MaybeUninit::<PurrdfGtsReadLimits>::uninit();
+        assert_eq!(
+            purrdf_gts_read_limits_init(limits.as_mut_ptr()),
+            PurrdfStatus::Ok as i32
+        );
+        let mut limits = limits.assume_init();
+        limits.encoded_input_bytes = gts.len() as u64;
+
+        restored = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_from_gts_with_limits(
+                gts.as_ptr(),
+                gts.len(),
+                &raw const limits,
+                &raw mut restored,
+                &raw mut error,
+            ),
+            PurrdfStatus::Ok as i32
+        );
+        assert!(error.is_null());
+        purrdf_dataset_free(restored);
+
+        limits.encoded_input_bytes -= 1;
+        restored = std::ptr::null_mut();
+        assert_eq!(
+            purrdf_from_gts_with_limits(
+                gts.as_ptr(),
+                gts.len(),
+                &raw const limits,
+                &raw mut restored,
+                &raw mut error,
+            ),
+            PurrdfStatus::GtsError as i32
+        );
+        assert!(restored.is_null());
+        assert!(!error.is_null());
+        purrdf_error_free(error);
+        purrdf_dataset_free(source);
     }
 }
 

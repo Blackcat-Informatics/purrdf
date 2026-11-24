@@ -16,21 +16,18 @@ position — including the ones nested inside an RDF 1.2 quoted triple, which is
 the place a recursive walk is most likely to stop one level early.
 
 **The snapshot seam.** ``Shapes.validate_store`` borrows a frozen snapshot of a
-quad container rather than serialising it to N-Triples, and it reaches it through
-an internal capsule whose value is the address of a heap-boxed ``Arc``. Four
-things about that must hold from Python, and nothing else can check them: a
+quad container rather than serialising it to N-Triples, after authenticating its
+exact native class. Four things about that must hold from Python: a
 report already produced is unaffected by a later mutation of the container it
 came from (it holds a snapshot, not a live view); the dataset stays alive exactly
-as long as it is reachable — the capsule's destructor owns the one box, so a
-report outliving its producer is fine and neither end frees twice; BOTH
-containers on this surface answer the protocol, and either one validated gives
-the one answer the triples deserve; and a value that answers no such protocol is
-refused by name, because the seam is private and an ``AttributeError`` about it
-diagnoses nothing for the caller who never wrote that name.
+as long as it is reachable, so a report outliving its producer is fine; BOTH
+containers on this surface validate to the one answer the triples deserve; and
+neither a lookalike object nor a forged native capsule is accepted as a dataset.
 """
 
 from __future__ import annotations
 
+import ctypes
 import gc
 
 import pytest
@@ -255,10 +252,8 @@ def test_a_validation_report_holds_a_snapshot_and_not_a_live_store() -> None:
 def test_a_validation_report_outlives_the_store_it_was_taken_from() -> None:
     """The snapshot is owned for exactly as long as it is reachable.
 
-    The capsule that carries the snapshot across the boundary hands out the
-    address of a heap-boxed ``Arc`` and gives its destructor the only copy of
-    that box, so the dataset is freed once and only once. Repeating the borrow
-    and then dropping the producing store while holding every report is the
+    The authenticated native class freezes an owned dataset snapshot. Repeating
+    the borrow and then dropping the producing store while holding every report is the
     Python-visible shape of that: a use-after-free or a double free here is a
     crash, not a failed assertion, so the test is the run completing with the
     reports still readable.
@@ -267,8 +262,7 @@ def test_a_validation_report_outlives_the_store_it_was_taken_from() -> None:
     store = purrdf.Store()
     store.load(_violating_person("alice"), RdfFormat.N_TRIPLES)
 
-    # Repeated borrows of the same store: each takes its own snapshot and each
-    # destructor frees its own box.
+    # Repeated borrows of the same store: each takes its own snapshot.
     reports = [shapes.validate_store(store) for _ in range(8)]
     rendered = [report.to_ntriples() for report in reports]
     assert len(set(rendered)) == 1, "the same store validated eight times, one answer"
@@ -287,8 +281,7 @@ def test_validate_store_reads_a_mutable_dataset_through_the_same_seam() -> None:
     """``MutableDataset`` is a data graph validation can see, not one it must copy.
 
     Both quad containers on this surface hold a frozen native dataset behind a
-    copy-on-write overlay, so both can answer the snapshot protocol, and the
-    protocol is the only thing ``validate_store`` asks of its argument. A
+    copy-on-write overlay, so the exact native base class can freeze either. A
     ``MutableDataset`` that could not answer it would have to be serialised to
     N-Triples and parsed back to be validated at all — a full copy, and a round
     trip through a syntax, to reach a dataset that was already sitting there.
@@ -329,13 +322,9 @@ def test_validate_store_reads_a_mutable_dataset_through_the_same_seam() -> None:
 def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
     """A value that cannot hand over a dataset is refused by name, not by traceback.
 
-    ``validate_store`` reaches its argument through a private protocol method, so
-    an argument that does not implement it used to surface as a bare
-    ``AttributeError`` about ``_store_capsule`` — a name the caller never wrote,
-    from a call whose real problem is that it was handed no data graph. The
-    refusal names the type that arrived and the three things that are accepted,
-    including the one a caller holding TEXT wants (``validate_nt``), which is the
-    most likely way to arrive here by mistake.
+    ``validate_store`` extracts an exact native quad container, so the refusal
+    names the type that arrived and the accepted containers, including the exit
+    for a caller holding text (``validate_nt``).
 
     The neighbours that must keep working are the two containers themselves, and
     they are held by the tests above and by this one's second half.
@@ -346,7 +335,7 @@ def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
     with pytest.raises(TypeError) as refused:
         shapes.validate_store(text)
     message = str(refused.value)
-    assert f"a {type(text).__name__} exposes no" in message, (
+    assert f"a {type(text).__name__} is not" in message, (
         "the refusal names the type that arrived, read off the value"
     )
     # And read off THE value: a second refusal over a different type names that
@@ -356,7 +345,7 @@ def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
     with pytest.raises(TypeError) as refused_number:
         shapes.validate_store(number)
     number_message = str(refused_number.value)
-    assert f"a {type(number).__name__} exposes no" in number_message, (
+    assert f"a {type(number).__name__} is not" in number_message, (
         f"the arriving type is the value's, not a constant: {number_message}"
     )
     assert type(text).__name__ not in number_message, (
@@ -365,15 +354,6 @@ def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
     assert "purrdf.Store" in message and "purrdf.MutableDataset" in message
     assert "validate_nt" in message, "and the exit for a caller holding text"
 
-    # An object that answers the protocol with something that is not a capsule is
-    # refused the same way, rather than reading an address out of whatever it is.
-    class _Pretender:
-        def _store_capsule(self) -> str:
-            return "not a capsule"
-
-    with pytest.raises(TypeError, match="not honoured"):
-        shapes.validate_store(_Pretender())
-
     # The neighbour: both real containers still validate.
     store = purrdf.Store()
     store.load(_violating_person("carol"), RdfFormat.N_TRIPLES)
@@ -381,3 +361,23 @@ def test_validate_store_refuses_a_value_that_is_no_data_graph_by_name() -> None:
     dataset = purrdf.MutableDataset()
     dataset.load(_violating_person("carol"), RdfFormat.N_TRIPLES)
     assert shapes.validate_store(dataset).conforms is False
+
+
+def test_validate_store_refuses_a_correctly_named_forged_capsule() -> None:
+    """A capsule name does not authenticate its pointer or its producer.
+
+    The capsule carries address one. Reading it as a native dataset pointer could
+    crash; the supported boundary rejects the object before calling the lookalike method.
+    """
+    capsule_new = ctypes.pythonapi.PyCapsule_New
+    capsule_new.restype = ctypes.py_object
+    capsule_new.argtypes = (ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p)
+    forged_capsule = capsule_new(1, b"purrdf-validation-dataset", None)
+
+    class _Pretender:
+        def _store_capsule(self) -> object:
+            return forged_capsule
+
+    shapes = purrdf.shapes.Shapes(_SHAPES)
+    with pytest.raises(TypeError, match="_Pretender is not"):
+        shapes.validate_store(_Pretender())

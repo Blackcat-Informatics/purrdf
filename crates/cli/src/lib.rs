@@ -198,6 +198,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         cli.canonical_search.as_deref(),
         cli.canonicalization_receipts.as_deref(),
     )?;
+    canonical.set_gts_read_limits(cli_gts_read_limits(cli)?);
     if cli.canonical_search.is_some()
         && matches!(
             &cli.cmd,
@@ -219,6 +220,58 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
     canonical.protect(&cli.canonical_paths())?;
     let result = dispatch_with_request(cli, &mut canonical);
     canonical.finish(result)
+}
+
+fn cli_gts_read_limits(cli: &Cli) -> Result<purrdf::gts::reader::GtsReadLimits, CliError> {
+    use purrdf::gts::reader::GtsReadLimits;
+
+    if !cli.gts_safe_read && cli.gts_read_limit.is_empty() {
+        return Ok(GtsReadLimits::UNBOUNDED);
+    }
+    let mut limits = GtsReadLimits::DEFAULT;
+    let mut seen = Vec::with_capacity(cli.gts_read_limit.len());
+    for setting in &cli.gts_read_limit {
+        let Some((resource, raw_maximum)) = setting.split_once('=') else {
+            return Err(CliError::Usage(format!(
+                "--gts-read-limit expects RESOURCE=MAX, got {setting:?}"
+            )));
+        };
+        if seen.contains(&resource) {
+            return Err(CliError::Usage(format!(
+                "--gts-read-limit names {resource:?} more than once"
+            )));
+        }
+        let maximum = raw_maximum.parse::<usize>().map_err(|error| {
+            CliError::Usage(format!(
+                "--gts-read-limit {resource}: {raw_maximum:?} is not a host-sized unsigned decimal: {error}"
+            ))
+        })?;
+        if raw_maximum != maximum.to_string() {
+            return Err(CliError::Usage(format!(
+                "--gts-read-limit {resource}: use canonical unsigned decimal, got {raw_maximum:?}"
+            )));
+        }
+        match resource {
+            "encoded-input-bytes" => limits.encoded_input_bytes = maximum,
+            "items" => limits.items = maximum,
+            "encoded-frame-bytes" => limits.encoded_frame_bytes = maximum,
+            "decoded-frame-bytes" => limits.decoded_frame_bytes = maximum,
+            "decoded-blob-bytes" => limits.decoded_blob_bytes = maximum,
+            "total-decoded-bytes" => limits.total_decoded_bytes = maximum,
+            "terms" => limits.terms = maximum,
+            "rows" => limits.rows = maximum,
+            "metadata-entries" => limits.metadata_entries = maximum,
+            "diagnostics" => limits.diagnostics = maximum,
+            "work" => limits.work = maximum,
+            _ => {
+                return Err(CliError::Usage(format!(
+                    "--gts-read-limit resource {resource:?} is unknown"
+                )));
+            }
+        }
+        seen.push(resource);
+    }
+    Ok(limits)
 }
 
 fn dispatch_with_request(

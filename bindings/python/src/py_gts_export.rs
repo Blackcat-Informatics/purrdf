@@ -9,6 +9,9 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 use std::sync::Arc;
 
+use crate::py_gts_view::PyGtsReadLimits;
+use crate::py_store::presentation::native_error;
+
 mod stream;
 
 /// Caller-owned byte policy. Every field is explicit; None means unbounded.
@@ -233,18 +236,43 @@ fn limits_from(value: &Bound<'_, PyAny>) -> PyResult<GtsBlobLimits> {
     ))
 }
 
+fn columnar_error(error: purrdf::GtsColumnarError) -> PyErr {
+    match error {
+        purrdf::GtsColumnarError::Import(diagnostic) => {
+            Python::attach(|py| native_error(py, &diagnostic))
+        }
+        error => PyValueError::new_err(error.to_string()),
+    }
+}
+
 /// Canonical rows and their complete native admission report.
+///
+/// `read_limits=None` preserves v4 behavior; hostile input supplies limits.
 #[pyfunction]
-#[pyo3(signature = (data, *, blob_limits))]
+#[pyo3(signature = (data, *, blob_limits, read_limits = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts optional Python borrows by value"
+)]
 fn gts_columnar_rows_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<(Bound<'py, PyDict>, PyGtsBlobExportReport)> {
     let limits = limits_from(blob_limits)?;
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let (projection, report) = py
-        .detach(|| purrdf::prepare_gts_columnar(data, limits)?.project())
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        .detach(|| {
+            match read_limits {
+                Some(read_limits) => {
+                    purrdf::prepare_gts_columnar_with_read_limits(data, limits, read_limits)
+                }
+                None => purrdf::prepare_gts_columnar(data, limits),
+            }?
+            .project()
+        })
+        .map_err(columnar_error)?;
     Ok((
         crate::py_gts_view::columnar_rows_dict(py, &projection)?,
         PyGtsBlobExportReport::from_native(report),
@@ -252,20 +280,33 @@ fn gts_columnar_rows_from_bytes<'py>(
 }
 
 /// Native file bytes and their complete native admission/writer loss report.
+///
+/// `read_limits=None` preserves v4 behavior; hostile input supplies limits.
 #[pyfunction]
-#[pyo3(signature = (data, *, blob_limits))]
+#[pyo3(signature = (data, *, blob_limits, read_limits = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts optional Python borrows by value"
+)]
 fn gts_columnar_parquet_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<(Bound<'py, PyDict>, PyGtsBlobExportReport)> {
     let limits = limits_from(blob_limits)?;
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let (files, report) = py
         .detach(|| {
-            purrdf::prepare_gts_columnar(data, limits)?
-                .write(purrdf_columnar::Compression::Uncompressed)
+            match read_limits {
+                Some(read_limits) => {
+                    purrdf::prepare_gts_columnar_with_read_limits(data, limits, read_limits)
+                }
+                None => purrdf::prepare_gts_columnar(data, limits),
+            }?
+            .write(purrdf_columnar::Compression::Uncompressed)
         })
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        .map_err(columnar_error)?;
     Ok((
         crate::py_gts_view::columnar_parquet_dict(py, &files)?,
         PyGtsBlobExportReport::from_native(report),

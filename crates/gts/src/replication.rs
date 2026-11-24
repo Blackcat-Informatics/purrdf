@@ -17,7 +17,10 @@ use purrdf_lex::cbor::Value;
 
 pub use crate::model::ByteRange;
 use crate::model::{Diagnostic, StreamableInfo};
-use crate::reader::{is_header_item, read_file_segments};
+use crate::reader::{
+    GtsReadLimitError, GtsReadLimits, is_header_item, read_file_segments,
+    read_file_segments_with_limits,
+};
 use crate::wire::{
     blake3_256, canonical, content_id, header_id, iter_items, map_get, unwrap_header,
 };
@@ -239,9 +242,24 @@ fn collect_frames(
 
 /// Build a replication inventory from raw GTS bytes.
 pub fn inventory(data: &[u8]) -> Inventory {
+    inventory_with_segments(data, read_file_segments(data))
+}
+
+/// Build a replication inventory under an explicit whole-read contract.
+///
+/// # Errors
+/// Returns the first resource refusal without publishing a partial inventory.
+pub fn inventory_with_limits(
+    data: &[u8],
+    limits: GtsReadLimits,
+) -> Result<Inventory, GtsReadLimitError> {
+    let segments = read_file_segments_with_limits(data, limits)?;
+    Ok(inventory_with_segments(data, segments))
+}
+
+fn inventory_with_segments(data: &[u8], fs: crate::reader::FileSegments) -> Inventory {
     let (items, torn) = iter_items(data);
     let clean_end = torn.unwrap_or(data.len());
-    let fs = read_file_segments(data);
     if items.is_empty() || fs.fatal.is_some() {
         return Inventory {
             segments: Vec::new(),

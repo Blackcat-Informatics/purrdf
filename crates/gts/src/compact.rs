@@ -36,7 +36,7 @@ use purrdf_lex::cbor::Value;
 use crate::dict;
 use crate::mmr;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
-use crate::reader::{read, read_file_segments};
+use crate::reader::read_file_segments;
 use crate::stream;
 use crate::term_table::TermsRef;
 use crate::wire::{blake3_256, digest_label, digest_str, map_get};
@@ -266,8 +266,16 @@ fn target_text<'a>(target: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 /// Verify the input cleanly and return its union fold + single profile.
-fn refusal_gate(data: &[u8], seal_original: bool) -> Result<(Graph, String), CompactRefusedError> {
-    let fs = read_file_segments(data);
+fn refusal_gate(
+    data: &[u8],
+    seal_original: bool,
+    limits: Option<crate::reader::GtsReadLimits>,
+) -> Result<(Graph, String), CompactRefusedError> {
+    let fs = match limits {
+        Some(limits) => crate::reader::read_file_segments_with_limits(data, limits)
+            .map_err(CompactRefusedError::ReadLimit)?,
+        None => read_file_segments(data),
+    };
     if let Some(fatal) = &fs.fatal {
         return Err(CompactRefusedError::InputDiagnostic(fatal.clone()));
     }
@@ -301,7 +309,7 @@ fn refusal_gate(data: &[u8], seal_original: bool) -> Result<(Graph, String), Com
     if profile == "evidence" && !seal_original {
         return Err(CompactRefusedError::EvidenceProfile);
     }
-    let g = read(data, true, None);
+    let g = crate::reader::union_folded_segments(fs.segments);
     for sup in &g.suppressions {
         for target in &sup.targets {
             if target_text(target, "kind") == Some("frame") {
@@ -1304,6 +1312,27 @@ pub fn compact_streamable<S: PackagingSigner>(
     data: &[u8],
     params: CompactionParams<'_, S>,
 ) -> Result<Vec<u8>, CompactRefusedError> {
+    compact_streamable_impl(data, params, None)
+}
+
+/// Rewrite a GTS file under an explicit whole-read resource contract.
+///
+/// # Errors
+/// Returns the first resource refusal before authoring output, followed by the
+/// ordinary compaction refusals.
+pub fn compact_streamable_with_limits<S: PackagingSigner>(
+    data: &[u8],
+    params: CompactionParams<'_, S>,
+    limits: crate::reader::GtsReadLimits,
+) -> Result<Vec<u8>, CompactRefusedError> {
+    compact_streamable_impl(data, params, Some(limits))
+}
+
+fn compact_streamable_impl<S: PackagingSigner>(
+    data: &[u8],
+    params: CompactionParams<'_, S>,
+    limits: Option<crate::reader::GtsReadLimits>,
+) -> Result<Vec<u8>, CompactRefusedError> {
     let CompactionParams {
         timestamp,
         seal_original,
@@ -1316,7 +1345,7 @@ pub fn compact_streamable<S: PackagingSigner>(
         cause,
     })?;
     plan.validate()?;
-    let (mut g, profile) = refusal_gate(data, seal_original)?;
+    let (mut g, profile) = refusal_gate(data, seal_original, limits)?;
     // Malformed historical commitments must not become a successfully
     // re-authored artifact. This shares the certifier's strict root decoder,
     // while carried signature verification retains its separate crypto claim.
@@ -1326,12 +1355,13 @@ pub fn compact_streamable<S: PackagingSigner>(
     // tie-break; the sealed original (least significant) always travels last.
     // Decode once here so the streaming index and re-emission reuse cached
     // bytes instead of repeating lazy decode work.
+    let decode_limit = limits.map_or(usize::MAX, |limits| limits.decoded_blob_bytes);
     let mut keyed: Vec<(usize, String)> = g
         .blobs
         .iter_mut()
         .map(|(d, entry)| {
             entry
-                .decode()
+                .decode_bounded(decode_limit)
                 .map(|bytes| (bytes.len(), d.clone()))
                 .map_err(|err| CompactRefusedError::blob_decode(d.as_str(), err))
         })

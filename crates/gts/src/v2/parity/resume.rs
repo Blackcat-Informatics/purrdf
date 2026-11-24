@@ -4,7 +4,9 @@
 use super::{Digest, Fields, GEOMETRY_ONE, Geometry, ParityClaim, ParityHistory, ParityTable};
 use crate::v2::link::frame_hasher;
 use crate::v2::payload::{CandidateRefusal, payload_digest};
-use crate::v2::{FRAME_FIELDS, FRAME_KIND, FrameType, PayloadBudget, PayloadRefusal};
+use crate::v2::read::{RecoveryDepth, RecoveryFailure};
+use crate::v2::{FRAME_FIELDS, FRAME_KIND, FrameType, Item, PayloadBudget, PayloadRefusal};
+use purrdf_lex::cbor::DecodeErrorKind;
 
 pub(in crate::v2) struct ParityResumption<'a> {
     pub(in crate::v2) length: usize,
@@ -78,10 +80,25 @@ impl ParityHistory {
         bytes: &'a [u8],
         offset: usize,
         budget: &mut PayloadBudget,
-    ) -> Result<Option<ParityResumption<'a>>, CandidateRefusal> {
+        nesting_depth: Option<usize>,
+    ) -> Result<Option<ParityResumption<'a>>, RecoveryFailure> {
         let Some(candidate) = Candidate::read(bytes, self) else {
             return Ok(None);
         };
+        if let Some(limit) = nesting_depth {
+            match Item::first_with_depth(&bytes[..candidate.length], limit) {
+                Ok(Some(item)) if item.bytes().len() == candidate.length => {}
+                Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
+                    return Err(RecoveryFailure::Depth(RecoveryDepth {
+                        offset,
+                        limit,
+                        cause: error,
+                        detection: false,
+                    }));
+                }
+                Ok(_) | Err(_) => return Ok(None),
+            }
+        }
         let mut hasher = frame_hasher(candidate.claim.anchor);
         hasher.update(candidate.identity);
         if hasher.finalize().as_bytes() != candidate.identifier {
@@ -90,11 +107,11 @@ impl ParityHistory {
         match budget.charge_parity_candidate(candidate.payload.len() as u64) {
             Ok(()) => {}
             Err(PayloadRefusal::TotalDecoded(requested_total)) => {
-                return Err(CandidateRefusal {
+                return Err(RecoveryFailure::Capacity(CandidateRefusal {
                     offset,
                     length: candidate.length,
                     requested_total,
-                });
+                }));
             }
             Err(_) => return Ok(None),
         }

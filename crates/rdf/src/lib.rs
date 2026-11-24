@@ -116,12 +116,16 @@ pub use gts_import_blobs::{
     GtsBlobMetadataSource, GtsBlobOmission, GtsBlobOmissionKind, GtsBlobRecord,
     GtsBlobRetentionRefusal, GtsBlobSelector, GtsBlobStager, GtsBlobUsage, GtsImportWithBlobs,
     GtsImportedBlob, GtsInlineExport, GtsRefusedBlob, GtsStagedBlob, GtsStagedPayload,
-    import_gts_events_with_blobs, import_gts_inline_for_export, import_gts_inline_to,
+    import_gts_events_with_blobs, import_gts_events_with_blobs_and_read_limits,
+    import_gts_inline_for_export, import_gts_inline_for_export_with_read_limits,
+    import_gts_inline_to, import_gts_inline_to_with_read_limits,
 };
 pub use gts_import_graph::import_gts_graph;
 pub use gts_import_sink::{
-    GtsTextExport, export_gts_rdf_nquads_with_dictionary, import_gts_events,
-    import_gts_events_with_dictionary, import_gts_indexed_term,
+    GtsTextExport, export_gts_rdf_nquads_with_dictionary,
+    export_gts_rdf_nquads_with_dictionary_and_limits, import_gts_events,
+    import_gts_events_with_dictionary, import_gts_events_with_dictionary_and_limits,
+    import_gts_events_with_limits, import_gts_indexed_term,
 };
 pub use native_codecs::jsonld::{
     CompiledJsonLdContext, JSON_LD_SERIALIZE_OPTIONS_VERSION, JsonLdContainer, JsonLdContextLimits,

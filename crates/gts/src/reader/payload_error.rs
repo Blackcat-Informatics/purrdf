@@ -9,6 +9,7 @@ use purrdf_lex::cbor::{DecodeError, Value};
 
 #[derive(Debug)]
 pub(super) enum PayloadError {
+    Cancelled,
     Unavailable {
         reason: &'static str,
         detail: PayloadCause,
@@ -27,9 +28,26 @@ pub(super) enum PayloadCause {
     BlobNotBytes,
     BlobMissingIdentity,
     Cbor(DecodeError),
-    EncodedBlobLimit { actual: usize, limit: usize },
-    DecodedBlobLimit { actual: usize, limit: usize },
-    SnapshotBlobLimit { actual: usize, limit: usize },
+    DecodedCbor {
+        actual: usize,
+        cause: Box<DecodeError>,
+    },
+    EncodedBlobLimit {
+        actual: usize,
+        limit: usize,
+    },
+    DecodedFrameLimit {
+        actual: usize,
+        limit: usize,
+    },
+    DecodedBlobLimit {
+        actual: usize,
+        limit: usize,
+    },
+    SnapshotBlobLimit {
+        actual: usize,
+        limit: usize,
+    },
 }
 
 impl From<CodecError> for PayloadError {
@@ -97,6 +115,35 @@ fn classified(
 }
 
 impl PayloadError {
+    pub(super) const fn is_cancelled(&self) -> bool {
+        matches!(self, Self::Cancelled)
+    }
+    pub(super) fn decoded_extent(&self) -> Option<usize> {
+        match self {
+            Self::Damaged(PayloadCause::DecodedCbor { actual, .. }) => Some(*actual),
+            _ => None,
+        }
+    }
+
+    pub(super) fn decoded_limit_refusal(&self) -> Option<(usize, usize)> {
+        let mut source: Option<&(dyn std::error::Error + 'static)> = Some(self);
+        while let Some(error) = source {
+            if let Some(CodecError::Limit { limit }) = error.downcast_ref::<CodecError>() {
+                return Some((limit.saturating_add(1), *limit));
+            }
+            if let Some(
+                PayloadCause::DecodedFrameLimit { actual, limit }
+                | PayloadCause::DecodedBlobLimit { actual, limit }
+                | PayloadCause::SnapshotBlobLimit { actual, limit },
+            ) = error.downcast_ref::<PayloadCause>()
+            {
+                return Some((*actual, *limit));
+            }
+            source = error.source();
+        }
+        None
+    }
+
     pub(super) fn blob_refusal_kind(&self) -> Option<super::BlobRefusalKind> {
         match self {
             Self::Budget(_) => Some(super::BlobRefusalKind::ByteBudget),
@@ -116,6 +163,7 @@ impl PayloadError {
 
     pub(super) fn opaque_reason(&self) -> &'static str {
         match self {
+            Self::Cancelled => "cancelled",
             Self::Unavailable { reason, .. } => reason,
             Self::Damaged(_) => "damaged",
             Self::Budget(_) => "over-budget",
@@ -125,6 +173,7 @@ impl PayloadError {
 
     pub(super) fn diagnostic_code(&self, budget_code: &'static str) -> &'static str {
         match self {
+            Self::Cancelled => "Cancelled",
             Self::Unavailable { reason, .. } => super::diag_code_for(reason),
             Self::Damaged(_) => "DamagedFrame",
             Self::Budget(_) => budget_code,
@@ -134,6 +183,7 @@ impl PayloadError {
 
     pub(super) fn diagnostic_detail(&self) -> String {
         match self {
+            Self::Cancelled => "payload decode cancelled".to_owned(),
             Self::Damaged(_) => format!("payload decode failed: {self}"),
             Self::Unavailable { .. } | Self::Budget(_) | Self::Dictionary(_) => self.to_string(),
         }
@@ -143,6 +193,7 @@ impl PayloadError {
 impl fmt::Display for PayloadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => f.write_str("payload decode cancelled"),
             Self::Unavailable { detail, .. } | Self::Damaged(detail) | Self::Budget(detail) => {
                 detail.fmt(f)
             }
@@ -153,12 +204,13 @@ impl fmt::Display for PayloadError {
 
 impl std::error::Error for PayloadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(match self {
+        match self {
+            Self::Cancelled => None,
             Self::Unavailable { detail, .. } | Self::Damaged(detail) | Self::Budget(detail) => {
-                detail
+                Some(detail)
             }
-            Self::Dictionary(cause) => cause,
-        })
+            Self::Dictionary(cause) => Some(cause),
+        }
     }
 }
 
@@ -175,7 +227,11 @@ impl fmt::Display for PayloadCause {
                 f.write_str("external blob frame must declare a valid public digest")
             }
             Self::Cbor(error) => error.fmt(f),
+            Self::DecodedCbor { cause, .. } => cause.fmt(f),
             Self::EncodedBlobLimit { limit, .. } => write!(f, "encoded blob exceeds {limit} bytes"),
+            Self::DecodedFrameLimit { limit, .. } => {
+                write!(f, "decoded frame exceeds {limit} bytes")
+            }
             Self::DecodedBlobLimit { limit, .. } => write!(f, "decoded blob exceeds {limit} bytes"),
             Self::SnapshotBlobLimit { limit, .. } => {
                 write!(f, "snapshot blob exceeds {limit} bytes")
@@ -184,14 +240,16 @@ impl fmt::Display for PayloadCause {
     }
 }
 
-purrdf_lex::error_source!(PayloadCause {
-    Codec,
-    Stream,
-    Cbor
+purrdf_lex::error_source!(PayloadCause => {
+    Self::Codec(cause) => cause,
+    Self::Stream(cause) => cause,
+    Self::Cbor(cause) => cause,
+    Self::DecodedCbor { cause, .. } => cause.as_ref(),
 });
 
 impl purrdf_hash::error::StructuredError for PayloadError {
     purrdf_hash::error_visit! {
+        Cancelled => "gts-payload-cancelled" {},
         Unavailable { reason, detail } => "gts-payload-unavailable" {
             "reason" => Code(reason), "detail" => Cause(detail),
         },
@@ -210,7 +268,13 @@ impl purrdf_hash::error::StructuredError for PayloadCause {
         BlobNotBytes => "gts-payload-blob-not-bytes" {},
         BlobMissingIdentity => "gts-payload-blob-missing-identity" {},
         Cbor(error) => "gts-payload-cbor" { "cause" => Cause(error) },
+        DecodedCbor { actual, cause } => "gts-payload-cbor" {
+            "actual" => ByteCount(*actual as u128), "cause" => Cause(cause.as_ref()),
+        },
         EncodedBlobLimit { actual, limit } => "gts-payload-encoded-blob-limit" {
+            "actual" => ByteCount(*actual as u128), "limit" => ByteCount(*limit as u128),
+        },
+        DecodedFrameLimit { actual, limit } => "gts-payload-decoded-frame-limit" {
             "actual" => ByteCount(*actual as u128), "limit" => ByteCount(*limit as u128),
         },
         DecodedBlobLimit { actual, limit } => "gts-payload-decoded-blob-limit" {

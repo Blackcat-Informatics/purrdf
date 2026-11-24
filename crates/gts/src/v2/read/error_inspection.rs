@@ -25,6 +25,21 @@ impl StructuredError for ReadFailure {
         Empty => "gts-v2-read-empty" {},
         Generation(generation) => "gts-v2-read-generation" { "generation" => Record(generation) },
         Framing(cause) => "gts-v2-read-framing" { "cause" => Cause(cause) },
+        DetectionBytes { required, limit, cause } => "gts-read-detection-bytes" {
+            "required" => ByteCount(*required as u128), "limit" => ByteCount(*limit as u128),
+            "cause" => Value(cause.as_ref().map_or(ErrorValue::Absent, |cause| ErrorValue::Cause(cause))),
+        },
+        DetectionWork { required, limit, cause } => "gts-read-detection-work" {
+            "required" => Unsigned(*required as u128), "limit" => Unsigned(*limit as u128),
+            "cause" => Value(cause.as_ref().map_or(ErrorValue::Absent, |cause| ErrorValue::Cause(cause))),
+        },
+        DetectionDepth { required, limit, cause } => "gts-read-detection-depth" {
+            "required" => Unsigned(*required as u128), "limit" => Unsigned(*limit as u128), "cause" => Cause(cause),
+        },
+        ItemDepth { required, limit, cause } => "gts-v2-read-item-depth" {
+            "required" => Unsigned(*required as u128), "limit" => Unsigned(*limit as u128), "cause" => Cause(cause),
+        },
+        FirstGenerationCapacity(cause) => "gts-read-first-generation-capacity" { "cause" => Cause(cause) },
         ItemCapacity(limit) => "gts-v2-read-item-capacity" { "limit" => Unsigned(u128::from(*limit)) },
         Classification(reason) => "gts-v2-read-classification" { "reason" => Code(reason.code()) },
         Wire(cause) => "gts-v2-read-wire" { "cause" => Cause(cause) },
@@ -54,7 +69,10 @@ impl StructuredError for ReadFailure {
         RecoveredResync(recovery) => "gts-v2-read-recovered-resync" { "recovery" => Record(recovery) },
         RecoveredParity(recovery) => "gts-v2-read-recovered-parity" { "recovery" => Record(recovery) },
         RecoveryRefused(refusal) => "gts-v2-read-recovery-refused" { "refusal" => Record(refusal) },
-        FramingTail(damage) => "gts-v2-read-framing-tail" { "damage" => Record(damage) },
+        FramingTail { damage, cause } => "gts-v2-read-framing-tail" {
+            "damage" => Record(damage),
+            "cause" => Value(cause.as_ref().map_or(ErrorValue::Absent, |cause| ErrorValue::Cause(cause))),
+        },
         OmittedContent => "gts-v2-read-omitted-content" {},
     }
 }

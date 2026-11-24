@@ -12,8 +12,9 @@ use purrdf_core::cdt_blank::{
 };
 use purrdf_core::{FastMap, LossLedger};
 use purrdf_gts::v2::{
-    Generation, Item, Line, LiteralDirection, RdfFold, RdfGraph, ReadCapacity, ReadError,
-    ReadGraph, SignatureInputs, Term, TermId as WireId, read_with_signature_inputs,
+    Line, LiteralDirection, RdfFold, RdfGraph, ReadCapacity, ReadError, ReadGraph, ReadLimits,
+    SignatureInputs, Term, TermId as WireId, names_second_generation,
+    read_with_limits_and_signature_inputs,
 };
 use purrdf_hash::error::NativeError;
 use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError, retain_native_cause};
@@ -94,24 +95,20 @@ impl purrdf_hash::error::StructuredError for GtsDatasetReadError {
     }
 }
 
-/// Whether the first complete item identifies the generation 2 reader.
+/// Whether the opening array prefix identifies the generation 2 reader.
 ///
 /// This recognizes the opener by value. The selected reader still checks its
 /// encoding and contents.
 #[must_use]
 pub fn has_gts_v2_opener(bytes: &[u8]) -> bool {
-    Item::first(bytes)
-        .ok()
-        .flatten()
-        .and_then(|item| item.generation().ok())
-        == Some(Generation::Second)
+    names_second_generation(bytes)
 }
 
 /// Load the complete native RDF dataset of a GTS file.
 ///
 /// A generation 2 opener selects the native v2 fold with default capacity and
-/// no supplied signature keys. Legacy or ambiguous openings keep the original
-/// reader's behavior. Use [`read_gts_v2_dataset`] to inspect recovery evidence
+/// no supplied signature keys. Legacy and ambiguous openings use the bounded
+/// generation 1 reader. Use [`read_gts_v2_dataset`] to inspect recovery evidence
 /// or admit only the readable prefix of a generation 2 file.
 ///
 /// # Errors
@@ -126,9 +123,10 @@ pub fn read_gts_dataset(bytes: &[u8]) -> Result<Arc<RdfDataset>, GtsDatasetReadE
             .map_err(|cause| GtsDatasetReadError::GenerationTwo(read_diagnostic(cause)))?;
         dataset_from_gts_v2_fold(&fold).map_err(GtsDatasetReadError::GenerationTwo)
     } else {
-        let bundle = super::read_all_segments(bytes)
-            .and_then(crate::import_gts_graph)
-            .map_err(GtsDatasetReadError::Legacy)?;
+        let bundle =
+            super::read_graph_with_limits(bytes, true, purrdf_gts::reader::GtsReadLimits::DEFAULT)
+                .and_then(crate::import_gts_graph)
+                .map_err(GtsDatasetReadError::Legacy)?;
         Ok(bundle.dataset)
     }
 }
@@ -173,7 +171,10 @@ fn read_v2_graph<'a>(
     capacity: ReadCapacity,
     inputs: &SignatureInputs<'_>,
 ) -> Result<RdfGraph<'a>, GtsV2DatasetError> {
-    let ReadGraph::Second(graph) = read_with_signature_inputs(bytes, capacity, inputs)? else {
+    let mut limits = ReadLimits::default();
+    limits.second_generation = capacity;
+    let ReadGraph::Second(graph) = read_with_limits_and_signature_inputs(bytes, limits, inputs)?
+    else {
         return Err(GtsV2DatasetError::FirstGeneration);
     };
     Ok(graph)

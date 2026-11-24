@@ -6,9 +6,10 @@
 use purrdf_ed25519::{EncodedVerificationError, SigningKey};
 use purrdf_gts::cose::{SigningKeyRef, composite};
 use purrdf_gts::v2::{
-    Authenticity, CoSignError, FileEnd, HeldKey, ReadCapacity, ReadGraph, SegmentWriteError,
-    SegmentWriter, SignatureInputs, SignatureInvalid, SignatureStatus, SignatureUnverified,
-    SignatureWriteError, append_cosigned_commit, read, read_with_signature_inputs,
+    Authenticity, CoSignError, FileEnd, HeldKey, ReadCapacity, ReadGraph, ReadLimits,
+    SegmentWriteError, SegmentWriter, SignatureInputs, SignatureInvalid, SignatureStatus,
+    SignatureUnverified, SignatureWriteError, append_cosigned_commit, read,
+    read_with_limits_and_signature_inputs, read_with_signature_inputs,
 };
 use purrdf_hash::hex;
 use purrdf_lex::{cbor, json};
@@ -132,7 +133,7 @@ fn caller_trust_changes_authentication_without_changing_signature_status() {
     let held = inputs(&report);
     let untrusted = SignatureInputs::new(Vec::new(), held.held_keys().to_vec());
     let ReadGraph::Second(graph) =
-        read_with_signature_inputs(bytes, ReadCapacity::default(), &untrusted).unwrap()
+        read_with_limits_and_signature_inputs(bytes, ReadLimits::default(), &untrusted).unwrap()
     else {
         panic!("the vector uses generation 2");
     };

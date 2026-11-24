@@ -86,6 +86,71 @@ pub use storage::{
 /// context). Non-RDF events pass through with no-op defaults so a target that
 /// only cares about triples need not implement them.
 pub trait ResolvedSink {
+    /// Whether the reader should deliver another event.
+    fn continue_reading(&self) -> bool {
+        true
+    }
+    /// One complete CBOR sequence item before it is processed.
+    fn item(&mut self, _encoded_bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Encoded item parsing stopped at the first byte beyond its limit.
+    fn encoded_frame_refused(
+        &mut self,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Streaming input crossed its complete encoded-byte ceiling.
+    fn encoded_input_refused(
+        &mut self,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// One successfully decoded payload's exact extent.
+    fn decoded_payload(&mut self, _blob: bool, _bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// A bounded decoder refused the first byte beyond its effective limit.
+    fn decoded_payload_refused(
+        &mut self,
+        _blob: bool,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Aggregate retained reader metadata entries.
+    fn retained_metadata(&mut self, _entries: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Admit new retained metadata entries before storage.
+    fn metadata_entries(&mut self, _additional: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// Complete encoded-input bound for streaming readers.
+    fn encoded_input_limit(&self) -> Option<usize> {
+        None
+    }
+    /// Encoded bound for each header or frame.
+    fn encoded_frame_limit(&self) -> Option<usize> {
+        None
+    }
+    /// One embedded blob already included in its enclosing snapshot charge.
+    fn embedded_blob(&mut self, _bytes: usize) -> Result<(), Self::Error> {
+        Ok(())
+    }
+    /// An embedded blob exceeded its per-blob ceiling.
+    fn embedded_blob_refused(
+        &mut self,
+        _required: usize,
+        _limit: usize,
+    ) -> Result<(), Self::Error> {
+        Ok(())
+    }
     /// Caller-owned replay storage for transformed RDF frames, when supported.
     fn frame_scratch(
         &mut self,
@@ -203,6 +268,12 @@ pub trait ResolvedSink {
     /// Build the error for a gts id that no `term` event ever introduced —
     /// a genuinely dangling reference. `role` names the referencing position.
     fn err_dangling_term(&self, segment_index: u64, gts_id: usize, role: &str) -> Self::Error;
+
+    /// Build the error returned by selected-term resolution when the consumer
+    /// cancels before the requested term itself is complete.
+    fn err_cancelled_resolution(&self, segment_index: u64, gts_id: usize) -> Self::Error {
+        self.err_dangling_term(segment_index, gts_id, "resolution cancelled")
+    }
 
     /// Legacy structural-depth error factory, retained for source compatibility.
     /// Iterative resolution no longer calls it.
@@ -327,7 +398,14 @@ pub struct SegmentResolver<
     /// First latched error. Streaming callbacks are infallible, so a failure is
     /// parked here and surfaced after the reader returns.
     error: Option<S::Error>,
+    /// A consumer cancellation is terminal even when it carries no error.
+    cancelled: std::cell::Cell<bool>,
     failed: bool,
+}
+
+enum ResolveOutcome<Id> {
+    Resolved(Id),
+    Cancelled,
 }
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> std::fmt::Debug for SegmentResolver<S, D> {
@@ -341,6 +419,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> std::fmt::Debug for SegmentRe
             .field("buffered_reifier_bindings", &self.storage.counts().reifiers)
             .field("current_segment", &self.current_segment)
             .field("has_error", &self.error.is_some())
+            .field("cancelled", &self.cancelled.get())
             .field("failed", &self.failed)
             .finish_non_exhaustive()
     }
@@ -358,6 +437,17 @@ impl<S: ResolvedSink> SegmentResolver<S> {
 }
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
+    fn consumer_accepting(&self) -> bool {
+        if self.cancelled.get() {
+            return false;
+        }
+        let accepting = self.sink.continue_reading();
+        if !accepting {
+            self.cancelled.set(true);
+        }
+        accepting
+    }
+
     /// Wrap a consumer with explicit caller-owned resolution storage.
     ///
     /// The backend preserves source keys, admitted term leases and original
@@ -375,6 +465,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             raw_annotations: Rows::default(),
             current_segment: None,
             error: None,
+            cancelled: std::cell::Cell::new(false),
             failed: false,
         }
     }
@@ -470,13 +561,24 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// must use fresh resolution state rather than reuse another sink's ids.
     ///
     /// # Errors
-    /// Returns the original storage, consumer, missing-reference or active-cycle
-    /// failure. A failed selection poisons this resolver before another call.
+    /// Returns the original storage, consumer, cancellation, missing-reference
+    /// or active-cycle failure. A failed selection poisons this resolver before
+    /// another call.
     pub fn resolve_selected(&mut self, key: TermKey) -> Result<S::Id, S::Error> {
         if self.failed {
             return Err(self.previous_failure(key));
         }
-        let result = self.resolve_term(key.segment, key.term, "selected term");
+        if !self.consumer_accepting() {
+            self.failed = true;
+            return Err(self.sink.err_cancelled_resolution(key.segment, key.term));
+        }
+        let result = match self.resolve_term(key.segment, key.term, "selected term") {
+            Ok(ResolveOutcome::Resolved(id)) => Ok(id),
+            Ok(ResolveOutcome::Cancelled) => {
+                Err(self.sink.err_cancelled_resolution(key.segment, key.term))
+            }
+            Err(error) => Err(error),
+        };
         if result.is_err() {
             self.failed = true;
         }
@@ -494,6 +596,9 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// rows. Call once after [`crate::reader::read_to_sink`] returns (and after
     /// checking [`Self::take_error`]).
     pub fn finish(&mut self) -> Result<(), S::Error> {
+        if self.cancelled.get() {
+            return Ok(());
+        }
         if self.failed {
             return Err(self.previous_failure(TermKey {
                 segment: self.current_segment.unwrap_or_default(),
@@ -502,6 +607,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         }
         self.failed = true;
         self.resolve_buffered()?;
+        if self.cancelled.get() {
+            self.failed = false;
+            return Ok(());
+        }
         if let Err(error) = self.raw_quads.finish() {
             return Err(self.row_failure(error));
         }
@@ -527,8 +636,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         if self.failed {
             return;
         }
-        self.advance_segment(segment);
-        if self.failed {
+        if !self.advance_segment(segment) {
             return;
         }
         let pending = PendingResolution::new(Some(term));
@@ -546,17 +654,37 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// Note an incoming buffering event's segment. When it advances past the
     /// segment currently buffered, flush the completed segment (latching any
     /// error) before accepting the new one.
-    fn advance_segment(&mut self, segment_index: u64) {
+    fn advance_segment(&mut self, segment_index: u64) -> bool {
+        if self.failed || !self.consumer_accepting() {
+            return false;
+        }
         match self.current_segment {
             Some(current) if segment_index > current => {
                 if let Err(error) = self.resolve_buffered() {
                     self.fail(error);
+                    return false;
+                }
+                if !self.consumer_accepting() {
+                    return false;
                 }
                 self.current_segment = Some(segment_index);
             }
             None => self.current_segment = Some(segment_index),
             Some(_) => {}
         }
+        true
+    }
+
+    fn discard_buffered_rows(&mut self) {
+        self.raw_quads = std::mem::take(&mut self.raw_quads)
+            .into_iter()
+            .into_empty(true);
+        self.raw_reifiers = std::mem::take(&mut self.raw_reifiers)
+            .into_iter()
+            .into_empty(true);
+        self.raw_annotations = std::mem::take(&mut self.raw_annotations)
+            .into_iter()
+            .into_empty(true);
     }
 
     /// Phase 2 for the currently buffered segment: resolve every buffered term
@@ -564,6 +692,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
     /// single buffered segment) then push its quad / reifier / annotation rows
     /// in insertion order, draining the raw buffers.
     fn resolve_buffered(&mut self) -> Result<(), S::Error> {
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
         // Resolve every introduced term (idempotent through `remaps`). Iterate
         // in a deterministic order so the target's interner allocation order —
         // and thus any frozen term order — is reproducible for a fixed stream.
@@ -574,63 +706,156 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 .next_term(segment_index, previous)
                 .map_err(self.map_storage)?
             {
-                self.resolve_term(segment_index, gts_id, "term")?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
+                if matches!(
+                    self.resolve_term(segment_index, gts_id, "term")?,
+                    ResolveOutcome::Cancelled
+                ) {
+                    self.discard_buffered_rows();
+                    return Ok(());
+                }
                 previous = Some(gts_id);
             }
+        }
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
         }
 
         let mut quads = std::mem::take(&mut self.raw_quads).into_iter();
         let quad_result = (|| {
             for row in quads.by_ref() {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 let (segment, [s, p, o], g) = row.map_err(|error| self.row_failure(error))?;
-                let s = self.resolve_term(segment, s, "quad subject")?;
-                let p = self.resolve_term(segment, p, "quad predicate")?;
-                let o = self.resolve_term(segment, o, "quad object")?;
-                let g = g
-                    .map(|id| self.resolve_term(segment, id, "quad graph name"))
-                    .transpose()?;
+                let ResolveOutcome::Resolved(s) = self.resolve_term(segment, s, "quad subject")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(p) =
+                    self.resolve_term(segment, p, "quad predicate")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(o) = self.resolve_term(segment, o, "quad object")?
+                else {
+                    return Ok(());
+                };
+                let g = match g {
+                    Some(id) => match self.resolve_term(segment, id, "quad graph name")? {
+                        ResolveOutcome::Resolved(id) => Some(id),
+                        ResolveOutcome::Cancelled => return Ok(()),
+                    },
+                    None => None,
+                };
                 self.sink.push_quad(segment, s, p, o, g)?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
             }
             Ok(())
         })();
         self.raw_quads = quads.into_empty(quad_result.is_ok());
         quad_result?;
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
 
         let mut reifiers = std::mem::take(&mut self.raw_reifiers).into_iter();
         let reifier_result = (|| {
             for row in reifiers.by_ref() {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 let (segment, [reifier, s, p, o], g) =
                     row.map_err(|error| self.row_failure(error))?;
-                let reifier = self.resolve_term(segment, reifier, "reifier")?;
-                let s = self.resolve_term(segment, s, "reified subject")?;
-                let p = self.resolve_term(segment, p, "reified predicate")?;
-                let o = self.resolve_term(segment, o, "reified object")?;
-                let g = g
-                    .map(|id| self.resolve_term(segment, id, "reifier graph name"))
-                    .transpose()?;
+                let ResolveOutcome::Resolved(reifier) =
+                    self.resolve_term(segment, reifier, "reifier")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(s) =
+                    self.resolve_term(segment, s, "reified subject")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(p) =
+                    self.resolve_term(segment, p, "reified predicate")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(o) =
+                    self.resolve_term(segment, o, "reified object")?
+                else {
+                    return Ok(());
+                };
+                let g = match g {
+                    Some(id) => match self.resolve_term(segment, id, "reifier graph name")? {
+                        ResolveOutcome::Resolved(id) => Some(id),
+                        ResolveOutcome::Cancelled => return Ok(()),
+                    },
+                    None => None,
+                };
                 self.sink.push_reifier(segment, reifier, s, p, o, g)?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
             }
             Ok(())
         })();
         self.raw_reifiers = reifiers.into_empty(reifier_result.is_ok());
         reifier_result?;
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
 
         let mut annotations = std::mem::take(&mut self.raw_annotations).into_iter();
         let annotation_result = (|| {
             for row in annotations.by_ref() {
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
                 let (segment, [r, p, v], g) = row.map_err(|error| self.row_failure(error))?;
-                let r = self.resolve_term(segment, r, "annotation reifier")?;
-                let p = self.resolve_term(segment, p, "annotation predicate")?;
-                let v = self.resolve_term(segment, v, "annotation object")?;
-                let g = g
-                    .map(|id| self.resolve_term(segment, id, "annotation graph name"))
-                    .transpose()?;
+                let ResolveOutcome::Resolved(r) =
+                    self.resolve_term(segment, r, "annotation reifier")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(p) =
+                    self.resolve_term(segment, p, "annotation predicate")?
+                else {
+                    return Ok(());
+                };
+                let ResolveOutcome::Resolved(v) =
+                    self.resolve_term(segment, v, "annotation object")?
+                else {
+                    return Ok(());
+                };
+                let g = match g {
+                    Some(id) => match self.resolve_term(segment, id, "annotation graph name")? {
+                        ResolveOutcome::Resolved(id) => Some(id),
+                        ResolveOutcome::Cancelled => return Ok(()),
+                    },
+                    None => None,
+                };
                 self.sink.push_annotation(segment, r, p, v, g)?;
+                if !self.consumer_accepting() {
+                    return Ok(());
+                }
             }
             Ok(())
         })();
         self.raw_annotations = annotations.into_empty(annotation_result.is_ok());
         annotation_result?;
+        if !self.consumer_accepting() {
+            self.discard_buffered_rows();
+            return Ok(());
+        }
 
         // Bounded-memory streaming fold: both maps are segment-local — no
         // resolution ever crosses a segment boundary (reifier bindings, and
@@ -658,7 +883,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
         segment_index: u64,
         gts_id: usize,
         role: &str,
-    ) -> Result<S::Id, S::Error> {
+    ) -> Result<ResolveOutcome<S::Id>, S::Error> {
         let key = |term| TermKey {
             segment: segment_index,
             term,
@@ -668,7 +893,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             .resolved(key(gts_id))
             .map_err(self.map_storage)?
         {
-            return Ok(id);
+            return Ok(ResolveOutcome::Resolved(id));
         }
         let Some(mut root) = self
             .storage
@@ -776,16 +1001,22 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 .set_pending(key(current), held)
                 .map_err(self.map_storage)?;
             let resolved = self.intern_raw_term(segment_index, current, term, degraded)?;
+            if !self.consumer_accepting() {
+                return Ok(ResolveOutcome::Cancelled);
+            }
             self.storage
                 .set_resolved(key(current), resolved)
                 .map_err(self.map_storage)?;
             self.storage
                 .remove_pending(key(current))
                 .map_err(self.map_storage)?;
+            if !self.consumer_accepting() {
+                return Ok(ResolveOutcome::Cancelled);
+            }
             if let Some(parent) = parent {
                 current = parent;
             } else {
-                return Ok(resolved);
+                return Ok(ResolveOutcome::Resolved(resolved));
             }
         }
     }
@@ -1086,6 +1317,100 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
 }
 
 impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentResolver<S, D> {
+    fn continue_reading(&self) -> bool {
+        if self.failed {
+            return false;
+        }
+        self.consumer_accepting()
+    }
+
+    fn item(&mut self, encoded_bytes: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.item(encoded_bytes) {
+            self.fail(error);
+        }
+    }
+
+    fn encoded_frame_refused(&mut self, required: usize, limit: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.encoded_frame_refused(required, limit) {
+            self.fail(error);
+        }
+    }
+
+    fn encoded_input_refused(&mut self, required: usize, limit: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.encoded_input_refused(required, limit) {
+            self.fail(error);
+        }
+    }
+
+    fn decoded_payload(&mut self, blob: bool, bytes: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.decoded_payload(blob, bytes) {
+            self.fail(error);
+        }
+    }
+
+    fn decoded_payload_refused(&mut self, blob: bool, required: usize, limit: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.decoded_payload_refused(blob, required, limit) {
+            self.fail(error);
+        }
+    }
+
+    fn retained_metadata(&mut self, entries: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.retained_metadata(entries) {
+            self.fail(error);
+        }
+    }
+
+    fn metadata_entries(&mut self, additional: usize) {
+        if self.failed {
+            return;
+        }
+        if let Err(error) = self.sink.metadata_entries(additional) {
+            self.fail(error);
+        }
+    }
+
+    fn encoded_input_limit(&self) -> Option<usize> {
+        self.sink.encoded_input_limit()
+    }
+
+    fn encoded_frame_limit(&self) -> Option<usize> {
+        self.sink.encoded_frame_limit()
+    }
+
+    fn embedded_blob(&mut self, bytes: usize) {
+        if !self.failed
+            && let Err(error) = self.sink.embedded_blob(bytes)
+        {
+            self.fail(error);
+        }
+    }
+
+    fn embedded_blob_refused(&mut self, required: usize, limit: usize) {
+        if !self.failed
+            && let Err(error) = self.sink.embedded_blob_refused(required, limit)
+        {
+            self.fail(error);
+        }
+    }
+
     fn frame_scratch(
         &mut self,
     ) -> Option<std::io::Result<Box<dyn purrdf_lex::cbor::ReplayStorage>>> {
@@ -1123,8 +1448,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
         if self.failed {
             return;
         }
-        self.advance_segment(segment_index);
-        if self.failed {
+        if !self.advance_segment(segment_index) {
             return;
         }
         let (s, p, o, graph) = quad;
@@ -1137,8 +1461,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
         if self.failed {
             return;
         }
-        self.advance_segment(segment_index);
-        if self.failed {
+        if !self.advance_segment(segment_index) {
             return;
         }
         // Row-array `(reifier_id, (s, p, o), graph?)`. Record the reifier → (s,
@@ -1175,8 +1498,7 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> StreamingSink for SegmentReso
         if self.failed {
             return;
         }
-        self.advance_segment(segment_index);
-        if self.failed {
+        if !self.advance_segment(segment_index) {
             return;
         }
         // Row-array `(reifier, predicate, value, graph?)`.

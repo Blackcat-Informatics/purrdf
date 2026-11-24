@@ -10,6 +10,8 @@ use purrdf_lex::cbor::Value;
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum AppendError {
+    /// Whole-read admission refused the source before append state was read.
+    ReadLimit(super::GtsReadLimitError),
     /// An incomplete trailing item starts at this byte offset.
     Torn {
         /// Byte offset of the incomplete trailing item.
@@ -71,6 +73,7 @@ pub enum AppendError {
 impl fmt::Display for AppendError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::ReadLimit(cause) => write!(f, "cannot append: {cause}"),
             Self::Torn { offset, .. } => write!(
                 f,
                 "cannot append to a file with a torn append at byte {offset}"
@@ -100,12 +103,14 @@ impl fmt::Display for AppendError {
 }
 
 purrdf_lex::error_source!(AppendError => {
+    Self::ReadLimit(cause) => cause,
     Self::Header(cause) => cause,
     Self::Torn { cause, .. } => cause,
 });
 
 impl purrdf_hash::error::StructuredError for AppendError {
     purrdf_hash::error_visit! {
+        ReadLimit(cause) => "gts-append-read-limit" { "cause" => Cause(cause) },
         Torn { offset, cause } => "gts-append-torn" { "offset" => ByteCount(*offset as u128), "cause" => Cause(cause) },
         MissingHeader => "gts-append-missing-header" {},
         Header(cause) => "gts-append-header" { "cause" => Cause(cause) },

@@ -10,7 +10,8 @@ use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-use super::{PyGtsBlobExportReport, limits_from};
+use super::{PyGtsBlobExportReport, columnar_error, limits_from};
+use crate::py_gts_view::PyGtsReadLimits;
 
 struct Stager {
     begin: Py<PyAny>,
@@ -75,12 +76,18 @@ fn prepare(
     data: &[u8],
     limits: purrdf::GtsBlobLimits,
     mut stager: Stager,
+    read_limits: Option<purrdf_gts::reader::GtsReadLimits>,
 ) -> PyResult<purrdf::GtsStagedColumnarSource> {
-    let result = purrdf::prepare_gts_columnar_to(data, limits, &mut stager);
+    let result = match read_limits {
+        Some(read_limits) => {
+            purrdf::prepare_gts_columnar_to_with_read_limits(data, limits, &mut stager, read_limits)
+        }
+        None => purrdf::prepare_gts_columnar_to(data, limits, &mut stager),
+    };
     if let Some(error) = stager.failure {
         return Err(error);
     }
-    result.map_err(|error| PyValueError::new_err(error.to_string()))
+    result.map_err(columnar_error)
 }
 
 struct PayloadSource {
@@ -201,19 +208,25 @@ impl Read for PayloadReader {
 
 /// Stream native files through host callbacks; payload staging stays provisional.
 #[pyfunction(name = "_gts_columnar_stream_to")]
-#[pyo3(signature = (data, *, blob_limits, staging, emit))]
+#[pyo3(signature = (data, *, blob_limits, staging, emit, read_limits = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts optional Python borrows by value"
+)]
 fn gts_columnar_stream_to(
     py: Python<'_>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
     staging: &Bound<'_, PyAny>,
     emit: Py<PyAny>,
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<PyGtsBlobExportReport> {
     let limits = limits_from(blob_limits)?;
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let stager = Stager::from_host(staging)?;
     let read = Arc::clone(&stager.read);
     py.detach(move || {
-        let source = prepare(data, limits, stager)?;
+        let source = prepare(data, limits, stager, read_limits)?;
         let blobs: Vec<_> = source
             .blobs
             .into_iter()
@@ -252,17 +265,23 @@ type StagedRows<'py> = (
 
 /// Canonical RDF rows and replayable blob handles, without resident payload rows.
 #[pyfunction(name = "_gts_columnar_staged_from_bytes")]
-#[pyo3(signature = (data, *, blob_limits, staging))]
+#[pyo3(signature = (data, *, blob_limits, staging, read_limits = None))]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "PyO3 extracts optional Python borrows by value"
+)]
 fn gts_columnar_staged_from_bytes<'py>(
     py: Python<'py>,
     data: &[u8],
     blob_limits: &Bound<'_, PyAny>,
     staging: &Bound<'_, PyAny>,
+    read_limits: Option<PyRef<'_, PyGtsReadLimits>>,
 ) -> PyResult<StagedRows<'py>> {
     let limits = limits_from(blob_limits)?;
+    let read_limits = read_limits.as_ref().map(|limits| limits.inner);
     let stager = Stager::from_host(staging)?;
     let (projection, blobs, report) = py.detach(move || {
-        let source = prepare(data, limits, stager)?;
+        let source = prepare(data, limits, stager, read_limits)?;
         let projection = purrdf_columnar::project(&*source.dataset, &purrdf::ContentStore::new())
             .map_err(|error| PyValueError::new_err(error.to_string()))?;
         let blobs = source

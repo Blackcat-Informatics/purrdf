@@ -108,7 +108,9 @@ executes that example against the generated shared library and committed header.
 ## ABI contract (every entry point)
 
 ABI `0.21.0` adds `purrdf_to_gts_v2` for a committed v2 segment in arrival
-order. `purrdf_from_gts` loads complete datasets from either generation.
+order. `purrdf_from_gts` loads complete datasets from either generation and
+applies finite v2 limits. `purrdf_from_gts_with_limits` accepts v1 input under
+caller-selected limits.
 `purrdf_to_gts` writes profiled v1 containers. Free the returned handles
 with `purrdf_buffer_free` or `purrdf_dataset_free`.
 

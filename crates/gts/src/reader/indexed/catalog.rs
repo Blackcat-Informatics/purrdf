@@ -517,6 +517,8 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
             .decoded_payloads
             .checked_add(1)
             .ok_or(IndexedError::Overflow("payload decode observations"))?;
+        let mut admission =
+            payload::FixedTransformAdmission::new(self.input.limits().decoded_frame_bytes);
         let decoded = payload::PayloadContext {
             catalog: &codecs,
             content_key: Some(self.capabilities.resolver()),
@@ -525,7 +527,7 @@ impl<R: Read + Seek, C: FnMut(&R) -> io::Result<super::AccessBinding>> IndexedCa
             entries,
             false,
             map_get(entries, "d").map(ValueRef::Owned),
-            || Some(self.input.limits().decoded_frame_bytes),
+            &mut admission,
             || None,
         )
         .map_err(IndexedError::native)?;

@@ -69,13 +69,26 @@ impl<'a> Item<'a> {
         Self::first_examined(bytes).0
     }
 
+    /// Delimit the first item under a caller-owned structural depth ceiling.
+    pub(super) fn first_with_depth(
+        bytes: &'a [u8],
+        max_depth: usize,
+    ) -> Result<Option<Self>, StructuralError> {
+        Self::first_examined_with_depth(bytes, max_depth).0
+    }
+
     pub(super) fn first_examined(
         bytes: &'a [u8],
     ) -> (Result<Option<Self>, StructuralError>, usize) {
+        Self::first_examined_with_depth(bytes, bytes.len())
+    }
+
+    pub(super) fn first_examined_with_depth(
+        bytes: &'a [u8],
+        max_depth: usize,
+    ) -> (Result<Option<Self>, StructuralError>, usize) {
         let mut source = Cursor::new(bytes);
-        let limits = Limits {
-            max_depth: bytes.len(),
-        };
+        let limits = Limits { max_depth };
         let result = StructuralRange::scan(&mut source, 0, bytes.len() as u64, limits);
         let examined = source.position() as usize;
         (
@@ -131,7 +144,7 @@ impl<'a> Item<'a> {
     /// # Errors
     /// Returns the reason an item fails classification and is opaque.
     pub fn classify(self, registry_version: NonZeroU64) -> Result<ItemKind, MalformedReason> {
-        let prefix = self.record_prefix().ok_or(MalformedReason::WrongType)?;
+        let prefix = RecordPrefix::read(self.bytes).ok_or(MalformedReason::WrongType)?;
         match prefix.kind {
             HEADER_KIND => Ok(ItemKind::Header),
             RESYNC_KIND => Ok(ItemKind::Resync),
@@ -148,7 +161,7 @@ impl<'a> Item<'a> {
 
     pub(super) fn names_closing_hint(self) -> bool {
         matches!(
-            self.record_prefix().map(|prefix| prefix.kind),
+            RecordPrefix::read(self.bytes).map(|prefix| prefix.kind),
             Some(OFFSETS_KIND | LOCATOR_KIND)
         )
     }
@@ -251,16 +264,8 @@ impl<'a> Item<'a> {
     /// # Errors
     /// Propagates native structural errors while visiting the opener.
     pub fn generation(self) -> Result<Generation, StructuralError> {
-        if let Some(prefix) = self.record_prefix() {
-            if !matches!(prefix.kind, HEADER_KIND | RESYNC_KIND) {
-                return Ok(Generation::Unrecognized);
-            }
-            let mut tail = prefix.tail;
-            return Ok(match head::read_argument(&mut tail, head::UNSIGNED) {
-                Some(GENERATION) => Generation::Second,
-                Some(generation @ 3..) => Generation::Unsupported(generation),
-                _ => Generation::Unrecognized,
-            });
+        if let Some(prefix) = RecordPrefix::read(self.bytes) {
+            return Ok(prefix.opener_generation());
         }
 
         let mut source = Cursor::new(self.bytes);
@@ -284,9 +289,27 @@ impl<'a> Item<'a> {
         }
         Ok(Generation::Unrecognized)
     }
+}
 
-    fn record_prefix(self) -> Option<RecordPrefix<'a>> {
-        let mut fields = self.bytes;
+/// Whether the opening array fields declare a generation 2 header or resync.
+///
+/// This reads at most three CBOR heads. Use a generation 2 reader to admit
+/// and validate the complete opener before using its contents.
+#[must_use]
+pub fn names_second_generation(bytes: &[u8]) -> bool {
+    RecordPrefix::read(bytes).is_some_and(|prefix| prefix.opener_generation() == Generation::Second)
+}
+
+struct RecordPrefix<'a> {
+    count: Option<u64>,
+    kind: u64,
+    shortest: bool,
+    tail: &'a [u8],
+}
+
+impl<'a> RecordPrefix<'a> {
+    fn read(bytes: &'a [u8]) -> Option<Self> {
+        let mut fields = bytes;
         let count = if let Some(tail) = fields.strip_prefix(&[0x9f]) {
             fields = tail;
             None
@@ -296,22 +319,29 @@ impl<'a> Item<'a> {
         let mut tail = fields;
         let kind = head::read_argument(&mut tail, head::UNSIGNED)?;
         let shortest = count
-            .is_some_and(|count| self.bytes.len() - fields.len() == head::head_len(count))
+            .is_some_and(|count| bytes.len() - fields.len() == head::head_len(count))
             && fields.len() - tail.len() == head::head_len(kind);
-        Some(RecordPrefix {
+        Some(Self {
             count,
             kind,
             shortest,
             tail,
         })
     }
-}
 
-struct RecordPrefix<'a> {
-    count: Option<u64>,
-    kind: u64,
-    shortest: bool,
-    tail: &'a [u8],
+    fn opener_generation(self) -> Generation {
+        if self.count.is_some_and(|count| count < 2)
+            || !matches!(self.kind, HEADER_KIND | RESYNC_KIND)
+        {
+            return Generation::Unrecognized;
+        }
+        let mut tail = self.tail;
+        match head::read_argument(&mut tail, head::UNSIGNED) {
+            Some(GENERATION) => Generation::Second,
+            Some(generation @ 3..) => Generation::Unsupported(generation),
+            _ => Generation::Unrecognized,
+        }
+    }
 }
 
 fn item_slice(bytes: &[u8], range: StructuralRange) -> &[u8] {

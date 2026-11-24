@@ -4,7 +4,7 @@
 use core::{fmt, ops::Range};
 
 use purrdf_hash::blake3::Hasher;
-use purrdf_lex::cbor::head;
+use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
 use super::{HEADER_CONTEXT, Header, read_digest, read_lineage, read_profile, read_registry_hash};
 use crate::v2::fields::Fields;
@@ -73,6 +73,8 @@ impl purrdf_hash::error::StructuredError for ResyncRefusal {
 pub struct ResyncScan<'a> {
     bytes: &'a [u8],
     next: usize,
+    max_depth: usize,
+    depth_refusal: Option<(usize, usize, StructuralError)>,
 }
 
 impl fmt::Debug for ResyncScan<'_> {
@@ -80,6 +82,7 @@ impl fmt::Debug for ResyncScan<'_> {
         f.debug_struct("ResyncScan")
             .field("file_len", &self.bytes.len())
             .field("next", &self.next)
+            .field("max_depth", &self.max_depth)
             .finish()
     }
 }
@@ -88,7 +91,32 @@ impl<'a> ResyncScan<'a> {
     /// Start scanning runs in the original file.
     #[must_use]
     pub const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, next: 0 }
+        Self {
+            bytes,
+            next: 0,
+            max_depth: bytes.len(),
+            depth_refusal: None,
+        }
+    }
+
+    /// Start scanning runs under a caller-owned structural depth ceiling.
+    pub(in crate::v2) const fn with_depth(bytes: &'a [u8], max_depth: usize) -> Self {
+        Self {
+            bytes,
+            next: 0,
+            max_depth,
+            depth_refusal: None,
+        }
+    }
+
+    /// First prefix byte not yet examined by this scanner.
+    pub(in crate::v2) const fn next_offset(&self) -> usize {
+        self.next
+    }
+
+    /// Take the first candidate framing refusal caused by the depth ceiling.
+    pub(in crate::v2) fn take_depth_refusal(&mut self) -> Option<(usize, usize, StructuralError)> {
+        self.depth_refusal.take()
     }
 
     /// Find the first acceptable occurrence starting in the supplied run.
@@ -130,6 +158,17 @@ impl<'a> ResyncScan<'a> {
             if prefix.place != offset as u64 {
                 continue;
             }
+            let item = match Item::first_with_depth(bytes, self.max_depth) {
+                Ok(Some(item)) => item,
+                Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
+                    if self.depth_refusal.is_none() {
+                        self.depth_refusal = Some((offset, self.max_depth, error));
+                    }
+                    continue;
+                }
+                Ok(None) | Err(_) => continue,
+            };
+            let bytes = item.bytes();
             budget
                 .charge_resync(RESYNC_MAX_BYTES as u64)
                 .map_err(|requested_total| ResyncRefusal {
@@ -260,4 +299,24 @@ fn read_marks(fields: &mut Fields<'_>) -> Result<(), WireError> {
         previous = Some(&remaining[..fields.offset() - offset]);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ResyncScan;
+    use crate::v2::{Item, PayloadBudget, ReadCapacity};
+
+    #[test]
+    fn a_wrong_place_is_rejected_before_structural_depth_admission() {
+        let source =
+            include_bytes!("../../../tests/fixtures/v2/P1/resync-first-byte-foreign.whole.bin");
+        let candidate = Item::first(&source[2..]).unwrap().unwrap();
+        let mut budget = PayloadBudget::new(ReadCapacity::default().payload);
+        let mut decoy = ResyncScan::with_depth(candidate.bytes(), 0);
+        assert!(decoy.scan(0..1, &mut budget).unwrap().is_none());
+        assert!(decoy.take_depth_refusal().is_none());
+
+        let mut scanner = ResyncScan::with_depth(source, 2);
+        assert!(scanner.scan(0..3, &mut budget).unwrap().is_some());
+    }
 }

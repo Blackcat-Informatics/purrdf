@@ -3,14 +3,67 @@
 
 //! Window-bounded decoding through the existing native transform engines.
 
-use std::io::{self, Read};
+use std::{
+    cell::Cell,
+    io::{self, Read},
+    rc::Rc,
+};
 
 use super::{Codec, CodecError, CodecUnavailable};
+
+type ErasedReader<'a> = Box<dyn Read + 'a>;
+type ReaderWithWork<'a> = (ErasedReader<'a>, Option<DecodeWork>);
+type ReaderBuildResult<'a> = Result<ReaderWithWork<'a>, (io::Error, Option<DecodeWork>)>;
 
 struct Limited<R> {
     inner: R,
     remaining: usize,
     limit: usize,
+}
+
+#[derive(Clone)]
+pub(crate) struct DecodeWork {
+    total: Rc<Cell<usize>>,
+    limit: usize,
+}
+
+impl DecodeWork {
+    pub(crate) fn total(&self) -> usize {
+        self.total.get()
+    }
+
+    pub(crate) fn refused(&self) -> bool {
+        self.total.get() > self.limit
+    }
+}
+
+pub(crate) struct DecodeReaderError {
+    pub(crate) cause: io::Error,
+    pub(crate) work: DecodeWork,
+}
+
+struct WorkLimited<R> {
+    inner: R,
+    work: DecodeWork,
+}
+
+impl<R: Read> Read for WorkLimited<R> {
+    fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+        let remaining = self.work.limit.saturating_sub(self.work.total.get());
+        let width = output.len().min(remaining.saturating_add(1));
+        let read = self.inner.read(&mut output[..width])?;
+        let required = self.work.total.get().saturating_add(read);
+        self.work.total.set(required);
+        if required > self.work.limit {
+            return Err(purrdf_hash::error::io_error(
+                io::ErrorKind::InvalidData,
+                CodecError::Limit {
+                    limit: self.work.limit,
+                },
+            ));
+        }
+        Ok(read)
+    }
 }
 
 impl<R: Read> Read for Limited<R> {
@@ -37,6 +90,49 @@ pub fn decode_chain_reader<'a>(
     chain: &[Codec],
     source: impl Read + 'a,
     limit: usize,
+) -> io::Result<Box<dyn Read + 'a>> {
+    decode_chain_reader_impl(chain, source, limit, None)
+        .map(|(reader, _)| reader)
+        .map_err(|(cause, _)| cause)
+}
+
+pub(crate) fn decode_chain_reader_with_work_limit<'a>(
+    chain: &[Codec],
+    source: impl Read + 'a,
+    limit: usize,
+    work_limit: usize,
+) -> Result<(Box<dyn Read + 'a>, DecodeWork), DecodeReaderError> {
+    let work = DecodeWork {
+        total: Rc::new(Cell::new(0)),
+        limit: work_limit,
+    };
+    let (reader, _) = decode_chain_reader_impl(chain, source, limit, Some(work.clone())).map_err(
+        |(cause, retained_work)| DecodeReaderError {
+            cause,
+            work: retained_work.unwrap_or_else(|| work.clone()),
+        },
+    )?;
+    Ok((reader, work))
+}
+
+fn decode_chain_reader_impl<'a>(
+    chain: &[Codec],
+    source: impl Read + 'a,
+    limit: usize,
+    work: Option<DecodeWork>,
+) -> ReaderBuildResult<'a> {
+    let result = decode_chain_reader_build(chain, source, limit, work.as_ref());
+    match result {
+        Ok(reader) => Ok((reader, work)),
+        Err(cause) => Err((cause, work)),
+    }
+}
+
+fn decode_chain_reader_build<'a>(
+    chain: &[Codec],
+    source: impl Read + 'a,
+    limit: usize,
+    work: Option<&DecodeWork>,
 ) -> io::Result<Box<dyn Read + 'a>> {
     let mut reader: Box<dyn Read + 'a> = Box::new(source);
     for (index, codec) in chain.iter().rev().enumerate() {
@@ -66,6 +162,14 @@ pub fn decode_chain_reader<'a>(
                 ));
             }
         };
+        if codec.name != "identity"
+            && let Some(work) = work
+        {
+            reader = Box::new(WorkLimited {
+                inner: reader,
+                work: work.clone(),
+            });
+        }
         reader = Box::new(Limited {
             inner: reader,
             remaining: limit,

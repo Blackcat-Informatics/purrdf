@@ -13,6 +13,7 @@ use crate::error::CliError;
 pub(crate) struct Request {
     control: Option<CanonicalizationControl<'static>>,
     destination: Option<PathBuf>,
+    gts_read_limits: purrdf::gts::reader::GtsReadLimits,
     demanded: bool,
     pending_reports: std::cell::RefCell<Vec<(crate::cli::ReportTarget, String)>>,
     published_runs: std::cell::Cell<Option<usize>>,
@@ -24,6 +25,7 @@ impl Request {
             (None, None) => Ok(Self {
                 control: None,
                 destination: None,
+                gts_read_limits: purrdf::gts::reader::GtsReadLimits::UNBOUNDED,
                 demanded: false,
                 pending_reports: std::cell::RefCell::new(Vec::new()),
                 published_runs: std::cell::Cell::new(None),
@@ -34,6 +36,7 @@ impl Request {
                 Ok(Self {
                     control: Some(CanonicalizationControl::new(policy, None)),
                     destination: Some(destination.to_owned()),
+                    gts_read_limits: purrdf::gts::reader::GtsReadLimits::UNBOUNDED,
                     demanded: false,
                     pending_reports: std::cell::RefCell::new(Vec::new()),
                     published_runs: std::cell::Cell::new(None),
@@ -44,6 +47,16 @@ impl Request {
                     .to_owned(),
             )),
         }
+    }
+
+    /// Select the whole-read contract carried to the centralized GTS source seam.
+    pub(crate) const fn set_gts_read_limits(&mut self, limits: purrdf::gts::reader::GtsReadLimits) {
+        self.gts_read_limits = limits;
+    }
+
+    /// Return the GTS input contract selected for this command invocation.
+    pub(crate) const fn gts_read_limits(&self) -> purrdf::gts::reader::GtsReadLimits {
+        self.gts_read_limits
     }
 
     pub(crate) fn control(&mut self) -> Result<&mut CanonicalizationControl<'static>, CliError> {

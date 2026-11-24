@@ -150,7 +150,8 @@ pub use purrdf_lex::error;
 pub mod gts_columnar;
 pub use gts_columnar::{
     GtsBlobExportReport, GtsColumnarError, GtsColumnarSource, GtsStagedColumnarSource,
-    prepare_gts_columnar, prepare_gts_columnar_to,
+    prepare_gts_columnar, prepare_gts_columnar_to, prepare_gts_columnar_to_with_read_limits,
+    prepare_gts_columnar_with_read_limits,
 };
 
 pub mod profile;

@@ -9,14 +9,21 @@
 //! same bytes: both derive their per-frame `(content-id, byte range, wire
 //! type, valid)` from the same frames, so they must agree field-for-field.
 
+#[path = "support/tail_drain_failure.rs"]
+mod tail_drain_failure;
+
 use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{AnnotationRow, ByteRange, OpaqueNode, Quad, ReifierRow, Term};
-use purrdf_gts::reader::{FrameContext, StreamingSink, read_to_sink};
-use purrdf_gts::reader::{ReadOptions, read_to_sink_with_dictionary};
+use purrdf_gts::reader::{FrameContext, GtsReadLimits, StreamingSink, read_to_sink};
+use purrdf_gts::reader::{
+    ReadOptions, read_to_sink_from_reader_with_dictionary_and_limits, read_to_sink_with_dictionary,
+    read_to_sink_with_dictionary_and_limits,
+};
 use purrdf_gts::replication::inventory;
 use purrdf_gts::writer::Writer;
 use purrdf_lex::allocation::{Ceiling, Memory, OwnedAdmission, SharedOwned};
 use std::sync::Arc;
+use tail_drain_failure::TailDrainFailureReader;
 
 /// Owned copy of one streamed [`FrameContext`], captured for later assertion.
 struct CapturedFrame {
@@ -246,9 +253,13 @@ struct StoredTerms {
     refused_reads: usize,
     omit_read: bool,
     metadata: purrdf_gts::dictionary::ReaderMetadata,
+    metadata_calls: usize,
     refuse_metadata: bool,
     epoch: Option<Arc<std::sync::atomic::AtomicU64>>,
     advance_epoch: Option<Arc<std::sync::atomic::AtomicBool>>,
+    bind_refusal: Option<&'static str>,
+    encoded_frame_limit: Option<usize>,
+    commits: usize,
 }
 
 impl TermStorage for StoredTerms {
@@ -256,6 +267,7 @@ impl TermStorage for StoredTerms {
         &mut self,
         usage: purrdf_gts::dictionary::ReaderMetadata,
     ) -> Result<(), DictionaryError> {
+        self.metadata_calls += 1;
         if self.refuse_metadata {
             return Err(DictionaryError::Corrupt("original metadata refusal"));
         }
@@ -264,7 +276,7 @@ impl TermStorage for StoredTerms {
     }
     fn limits(&mut self) -> Result<purrdf_gts::dictionary::DictionaryLimits, DictionaryError> {
         Ok(purrdf_gts::dictionary::DictionaryLimits {
-            encoded_frame_bytes: 4096,
+            encoded_frame_bytes: self.encoded_frame_limit.unwrap_or(4096),
             decoded_frame_bytes: 4096,
             metadata_entries: 4096,
         })
@@ -336,6 +348,7 @@ impl TermStorage for StoredTerms {
         Ok(())
     }
     fn commit(&mut self) -> Result<(), DictionaryError> {
+        self.commits += 1;
         Ok(())
     }
 
@@ -351,9 +364,218 @@ impl TermStorage for StoredTerms {
         key: TermKey,
         triple: purrdf_gts::model::Triple3,
     ) -> Result<(), DictionaryError> {
+        if let Some(cause) = self.bind_refusal {
+            return Err(DictionaryError::Corrupt(cause));
+        }
         self.bindings.entry(key).or_insert(triple);
         Ok(())
     }
+}
+
+#[derive(Default)]
+struct StopOnceAfterStoredTerm {
+    stop_once: std::cell::Cell<bool>,
+    terms: usize,
+}
+
+impl StreamingSink for StopOnceAfterStoredTerm {
+    fn continue_reading(&self) -> bool {
+        !self.stop_once.replace(false)
+    }
+
+    fn stored_term(
+        &mut self,
+        _segment: u64,
+        _id: usize,
+        _term: TermLease,
+    ) -> Result<(), DictionaryError> {
+        self.terms += 1;
+        self.stop_once.set(true);
+        Ok(())
+    }
+}
+
+#[test]
+fn transient_cancellation_is_latched_before_metadata_and_commit() {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[Term::iri("https://example.org/term")]);
+    let bytes = writer.into_bytes();
+
+    let mut cancelled_storage = StoredTerms::default();
+    let mut cancelled_sink = StopOnceAfterStoredTerm::default();
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut cancelled_storage,
+        &mut cancelled_sink,
+    )
+    .expect("consumer cancellation remains a non-error stop");
+    assert_eq!(cancelled_sink.terms, 1);
+    assert_eq!(cancelled_storage.metadata_calls, 0);
+    assert_eq!(cancelled_storage.commits, 0);
+
+    let mut accepted_storage = StoredTerms::default();
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut accepted_storage,
+        &mut OrderingSink::default(),
+    )
+    .expect("a clean accepted read commits once");
+    assert_eq!(accepted_storage.commits, 1);
+}
+
+#[test]
+fn stored_reifier_is_delivered_only_after_binding_admission() {
+    let mut writer = Writer::new("generic");
+    writer.add_terms(&[
+        Term::iri("https://example.org/s"),
+        Term::iri("https://example.org/p"),
+        Term::literal("value", None),
+    ]);
+    writer.add_reifies(&[(0, (0, 1, 2), None)]);
+    let mut storage = StoredTerms {
+        bind_refusal: Some("original reifier binding refusal"),
+        ..StoredTerms::default()
+    };
+    let mut sink = OrderingSink::default();
+    read_to_sink_with_dictionary(
+        &writer.into_bytes(),
+        ReadOptions::default(),
+        &mut storage,
+        &mut sink,
+    )
+    .expect_err("the original binding refusal aborts the stored read");
+    assert!(!sink.log.iter().any(|event| event.starts_with("reifier:")));
+    assert_eq!(storage.commits, 0);
+}
+
+#[test]
+fn final_limit_refusal_never_commits_dictionary_storage() {
+    let bytes = three_frame_fixture();
+    let mut storage = StoredTerms::default();
+    let mut limits = GtsReadLimits::UNBOUNDED;
+    limits.diagnostics = 0;
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::new(false, Some(&[0; 32])),
+        limits,
+        &mut storage,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the expected-head diagnostic exceeds the final callback contract");
+    assert_eq!(storage.commits, 0);
+
+    read_to_sink_with_dictionary_and_limits(
+        &bytes,
+        ReadOptions::default(),
+        GtsReadLimits::UNBOUNDED,
+        &mut storage,
+        &mut OrderingSink::default(),
+    )
+    .expect("the matching neighbor commits");
+    assert_eq!(storage.commits, 1);
+}
+
+#[test]
+fn bounded_dictionary_tail_admission_precedes_commit() {
+    let first = three_frame_fixture();
+    let second_header = Writer::new("generic").into_bytes();
+    let mut second = Writer::new("generic");
+    second.add_terms(&[Term::iri(format!(
+        "https://example.org/{}",
+        "x".repeat(8192)
+    ))]);
+    let mut prefix = first.clone();
+    prefix.extend(second_header);
+    let mut complete = first;
+    complete.extend(second.into_bytes());
+    let options = ReadOptions::new(false, None);
+
+    let mut refused = StoredTerms::default();
+    let mut input_limited = GtsReadLimits::UNBOUNDED;
+    input_limited.encoded_input_bytes = prefix.len();
+    let error = read_to_sink_from_reader_with_dictionary_and_limits(
+        std::io::Cursor::new(&complete),
+        options,
+        input_limited,
+        &mut refused,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the unread segment tail exceeds the complete input contract");
+    assert!(matches!(
+        error,
+        DictionaryError::Limit {
+            resource: "encoded-input-bytes",
+            ..
+        }
+    ));
+    assert_eq!(refused.commits, 0);
+
+    let (items, torn) = purrdf_gts::wire::iter_items(&complete);
+    assert!(torn.is_none());
+    let tail_frame_bytes = complete.len() - items.last().expect("the tail frame exists").0;
+    let mut frame_refused = StoredTerms {
+        encoded_frame_limit: Some(tail_frame_bytes - 1),
+        ..StoredTerms::default()
+    };
+    let error = read_to_sink_from_reader_with_dictionary_and_limits(
+        std::io::Cursor::new(&complete),
+        options,
+        GtsReadLimits::UNBOUNDED,
+        &mut frame_refused,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the oversized tail frame is a typed dictionary refusal");
+    assert!(matches!(
+        error,
+        DictionaryError::Limit {
+            resource: "encoded-frame-bytes",
+            required,
+            limit,
+        } if required == tail_frame_bytes && limit == tail_frame_bytes - 1
+    ));
+    assert_eq!(frame_refused.commits, 0);
+
+    let mut exact = StoredTerms {
+        encoded_frame_limit: Some(tail_frame_bytes),
+        ..StoredTerms::default()
+    };
+    let mut exact_limits = GtsReadLimits::UNBOUNDED;
+    exact_limits.encoded_input_bytes = complete.len();
+    read_to_sink_from_reader_with_dictionary_and_limits(
+        std::io::Cursor::new(&complete),
+        options,
+        exact_limits,
+        &mut exact,
+        &mut OrderingSink::default(),
+    )
+    .expect("the exact complete tail boundary commits once");
+    assert_eq!(exact.commits, 1);
+
+    let mut malformed = prefix.clone();
+    malformed.push(0xff);
+    let mut failed = StoredTerms::default();
+    let error = read_to_sink_from_reader_with_dictionary_and_limits(
+        TailDrainFailureReader::new(malformed, prefix.len(), "distinct dictionary drain failure"),
+        options,
+        GtsReadLimits::UNBOUNDED,
+        &mut failed,
+        &mut OrderingSink::default(),
+    )
+    .expect_err("the item and drain failures remain typed together");
+    let DictionaryError::Tail { torn, drain } = error else {
+        panic!("expected combined dictionary tail failure");
+    };
+    assert_eq!(torn.offset, prefix.len() as u64);
+    assert!(
+        drain
+            .to_string()
+            .contains("distinct dictionary drain failure")
+    );
+    assert_eq!(failed.commits, 0);
 }
 
 type IndexedIdentity = Box<

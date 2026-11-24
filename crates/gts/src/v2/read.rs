@@ -36,7 +36,42 @@ mod error_inspection;
 
 pub use blob::ExternalBlob;
 
-/// Limits for materializing an RDF graph from a GTS v2 file.
+/// Generation-neutral bounds applied before an opener selects its reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DetectionCapacity {
+    /// Maximum encoded bytes in the opening item.
+    pub encoded_opener_bytes: usize,
+    /// Maximum arrays, maps and tags open while delimiting the opener.
+    pub nesting_depth: usize,
+    /// Maximum structural work. A complete opener charges
+    /// [`Self::OPENER_WORK_PER_BYTE`] units per encoded byte; damaged-prefix
+    /// recovery charges [`Self::RECOVERY_WORK_PER_BYTE`] units per scanned byte.
+    pub work: usize,
+}
+
+impl DetectionCapacity {
+    /// Delimiting, tagged-child inspection and generation inspection.
+    pub const OPENER_WORK_PER_BYTE: usize = 3;
+    /// Pattern matching plus worst-case candidate parsing for one recovery byte.
+    pub const RECOVERY_WORK_PER_BYTE: usize = RESYNC_MAX_BYTES * 2 + 3;
+
+    /// Conservative work charge for scanning this many damaged-prefix bytes.
+    pub const fn recovery_work(bytes: usize) -> usize {
+        bytes.saturating_mul(Self::RECOVERY_WORK_PER_BYTE)
+    }
+}
+
+impl Default for DetectionCapacity {
+    fn default() -> Self {
+        Self {
+            encoded_opener_bytes: 64 * 1024 * 1024,
+            nesting_depth: 256,
+            work: 192 * 1024 * 1024,
+        }
+    }
+}
+
+/// Limits for materializing a generation 2 RDF graph.
 #[derive(Clone, Copy, Debug)]
 pub struct ReadCapacity {
     /// Maximum stored and decoded payload lengths.
@@ -60,6 +95,32 @@ impl Default for ReadCapacity {
             formed_bytes: 1 << 37,
             rebuilt_bytes: 1 << 37,
             items: 1 << 26,
+        }
+    }
+}
+
+/// Complete limits for generation detection and the selected graph reader.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ReadLimits {
+    /// Bounds shared by every generation before dispatch.
+    pub detection: DetectionCapacity,
+    /// Complete generation 1 read contract when the opener delegates to the
+    /// legacy graph reader.
+    pub first_generation: crate::reader::GtsReadLimits,
+    /// Generation 2 graph materialization limits.
+    pub second_generation: ReadCapacity,
+    /// Maximum arrays, maps and tags open while delimiting a generation 2 item.
+    pub second_generation_nesting_depth: usize,
+}
+
+impl Default for ReadLimits {
+    fn default() -> Self {
+        Self {
+            detection: DetectionCapacity::default(),
+            first_generation: crate::reader::GtsReadLimits::DEFAULT,
+            second_generation: ReadCapacity::default(),
+            second_generation_nesting_depth: 256,
         }
     }
 }
@@ -131,6 +192,7 @@ pub struct RdfGraph<'a> {
     /// Authentication of each readable segment, in file order.
     pub segment_authentication: Vec<SegmentAuthentication>,
     first_content_omission: Option<usize>,
+    framing_tail_cause: Option<StructuralError>,
 }
 
 impl RdfGraph<'_> {
@@ -162,7 +224,10 @@ impl RdfGraph<'_> {
         if let Some(damage) = self.framing_tail {
             return Err(ReadError {
                 offset: damage.offset(),
-                failure: ReadFailure::FramingTail(damage),
+                failure: ReadFailure::FramingTail {
+                    damage,
+                    cause: self.framing_tail_cause,
+                },
             });
         }
         if let Some(recovery) = self.resynchronizations.first() {
@@ -374,6 +439,44 @@ pub enum ReadFailure {
     Framing(StructuralError),
     /// The item is outside the item count capacity.
     ItemCapacity(u64),
+    /// Generation detection needs more opener bytes than admitted.
+    DetectionBytes {
+        /// First encoded byte beyond the capacity.
+        required: usize,
+        /// Configured opener-byte ceiling.
+        limit: usize,
+        /// Native framing failure that led bounded recovery to this ceiling.
+        cause: Option<StructuralError>,
+    },
+    /// Generation detection needs more nesting than admitted.
+    DetectionDepth {
+        /// First nesting depth beyond the capacity.
+        required: usize,
+        /// Configured nesting ceiling.
+        limit: usize,
+        /// Native structural refusal at the first excess opening item.
+        cause: StructuralError,
+    },
+    /// A generation 2 item needs more nesting than admitted.
+    ItemDepth {
+        /// First nesting depth beyond the capacity.
+        required: usize,
+        /// Configured generation 2 item nesting ceiling.
+        limit: usize,
+        /// Native structural refusal at the first excess opening item.
+        cause: StructuralError,
+    },
+    /// Generation detection needs more structural work than admitted.
+    DetectionWork {
+        /// Conservative work charge required by the opener.
+        required: usize,
+        /// Configured structural-work ceiling.
+        limit: usize,
+        /// Native framing failure that led bounded recovery to this ceiling.
+        cause: Option<StructuralError>,
+    },
+    /// A generation 1 resource exceeded its explicit read capacity.
+    FirstGenerationCapacity(crate::reader::GtsReadLimitError),
     /// The item failed the structural classification rules.
     Classification(MalformedReason),
     /// A header or envelope field failed validation.
@@ -431,7 +534,12 @@ pub enum ReadFailure {
     /// A strict RDF projection cannot use a prefix with a refused recovery.
     RecoveryRefused(RecoveryRefusal),
     /// A strict RDF projection requires the file to end at an item boundary.
-    FramingTail(FramingDamage),
+    FramingTail {
+        /// The unchecked range of the supplied input.
+        damage: FramingDamage,
+        /// The native CBOR framing failure, when the reader observed it.
+        cause: Option<StructuralError>,
+    },
     /// The graph records an omission without a more specific retained cause.
     OmittedContent,
 }
@@ -462,12 +570,14 @@ impl fmt::Display for ReadError {
             ReadFailure::RecoveryRefused(_) => {
                 f.write_str("the decoded-byte limit prevented recovery")
             }
-            ReadFailure::FramingTail(FramingDamage::TornTail { .. }) => {
-                f.write_str("the file ends inside an item")
-            }
-            ReadFailure::FramingTail(FramingDamage::Undelimitable { .. }) => {
-                f.write_str("the file ends with undelimitable bytes")
-            }
+            ReadFailure::FramingTail {
+                damage: FramingDamage::TornTail { .. },
+                ..
+            } => f.write_str("the file ends inside an item"),
+            ReadFailure::FramingTail {
+                damage: FramingDamage::Undelimitable { .. },
+                ..
+            } => f.write_str("the file ends with undelimitable bytes"),
             ReadFailure::OmittedContent => f.write_str("the RDF fold omits content"),
             failure => write!(f, "{failure:?}"),
         }
@@ -484,6 +594,19 @@ impl std::error::Error for ReadError {
             ReadFailure::Content(error) => Some(error),
             ReadFailure::Fold(error) => Some(error),
             ReadFailure::Signature(error) => Some(error),
+            ReadFailure::DetectionDepth { cause, .. } | ReadFailure::ItemDepth { cause, .. } => {
+                Some(cause)
+            }
+            ReadFailure::DetectionBytes {
+                cause: Some(cause), ..
+            }
+            | ReadFailure::DetectionWork {
+                cause: Some(cause), ..
+            }
+            | ReadFailure::FramingTail {
+                cause: Some(cause), ..
+            } => Some(cause),
+            ReadFailure::FirstGenerationCapacity(error) => Some(error),
             ReadFailure::PayloadDamage(PayloadDamage::DecodeFailed(error)) => Some(error),
             _ => None,
         }
@@ -523,6 +646,8 @@ pub fn read(bytes: &[u8], capacity: ReadCapacity) -> Result<ReadGraph<'_>, ReadE
 ///
 /// Signature results use the final effective identifier of each retained
 /// frame. The generation 1 result is produced by its original reader.
+/// Use [`read_with_limits_and_signature_inputs`] for finite detection and
+/// item nesting limits.
 /// # Errors
 /// Returns the byte position and reason when a graph cannot be produced.
 pub fn read_with_signature_inputs<'a>(
@@ -530,12 +655,7 @@ pub fn read_with_signature_inputs<'a>(
     capacity: ReadCapacity,
     signatures: &SignatureInputs<'_>,
 ) -> Result<ReadGraph<'a>, ReadError> {
-    if capacity.items == 0 && !bytes.is_empty() {
-        return Err(ReadError {
-            offset: 0,
-            failure: ReadFailure::ItemCapacity(0),
-        });
-    }
+    require_second_generation_item(bytes, capacity)?;
     let opener = match delimit(bytes, 0) {
         Ok(Some(item)) => item,
         Ok(None) => {
@@ -545,7 +665,7 @@ pub fn read_with_signature_inputs<'a>(
             });
         }
         Err(error) => {
-            return GraphReader::new(bytes, capacity, signatures)
+            return GraphReader::new(bytes, capacity, None, None, signatures)
                 .recover_initial(error, None)
                 .map(ReadGraph::Second);
         }
@@ -557,7 +677,7 @@ pub fn read_with_signature_inputs<'a>(
     match generation {
         Generation::First => Ok(ReadGraph::First(crate::reader::read(bytes, true, None))),
         Generation::Second | Generation::Unrecognized => {
-            GraphReader::new(bytes, capacity, signatures)
+            GraphReader::new(bytes, capacity, None, None, signatures)
                 .read_first(opener, generation)
                 .map(ReadGraph::Second)
         }
@@ -565,6 +685,171 @@ pub fn read_with_signature_inputs<'a>(
             offset: 0,
             failure: ReadFailure::Generation(generation),
         }),
+    }
+}
+
+/// Decode a GTS file under one finite generation-neutral read contract.
+///
+/// Use this entry point for untrusted input. [`ReadLimits::default`] bounds
+/// generation detection and both generation readers; callers handling larger
+/// admitted datasets can raise the applicable finite fields.
+///
+/// # Errors
+/// Returns the byte position and reason when a graph cannot be produced.
+pub fn read_with_limits(bytes: &[u8], limits: ReadLimits) -> Result<ReadGraph<'_>, ReadError> {
+    read_with_limits_and_signature_inputs(bytes, limits, &SignatureInputs::default())
+}
+
+/// Decode a GTS file with finite read limits and caller-supplied signature inputs.
+///
+/// # Errors
+/// Returns the byte position and reason when a graph cannot be produced.
+pub fn read_with_limits_and_signature_inputs<'a>(
+    bytes: &'a [u8],
+    limits: ReadLimits,
+    signatures: &SignatureInputs<'_>,
+) -> Result<ReadGraph<'a>, ReadError> {
+    let capacity = limits.second_generation;
+    let mut detection_work = 0;
+    let (opener, generation) = match detect_opener(bytes, limits.detection, &mut detection_work) {
+        Ok(Some(detected)) => detected,
+        Ok(None) => {
+            return Err(ReadError {
+                offset: 0,
+                failure: ReadFailure::Empty,
+            });
+        }
+        Err(error) => {
+            if !matches!(error.failure, ReadFailure::Framing(_)) {
+                return Err(error);
+            }
+            require_second_generation_item(bytes, capacity)?;
+            return GraphReader::new(
+                bytes,
+                capacity,
+                Some((limits.detection, detection_work)),
+                Some(limits.second_generation_nesting_depth),
+                signatures,
+            )
+            .recover_initial(error, None)
+            .map(ReadGraph::Second);
+        }
+    };
+    match generation {
+        Generation::First => crate::reader::read_with_limits(
+            bytes,
+            crate::reader::ReadOptions::new(true, None),
+            limits.first_generation,
+        )
+        .map(ReadGraph::First)
+        .map_err(|error| ReadError {
+            offset: 0,
+            failure: ReadFailure::FirstGenerationCapacity(error),
+        }),
+        Generation::Second | Generation::Unrecognized => {
+            require_second_generation_item(bytes, capacity)?;
+            GraphReader::new(
+                bytes,
+                capacity,
+                Some((limits.detection, detection_work)),
+                Some(limits.second_generation_nesting_depth),
+                signatures,
+            )
+            .read_first(opener, generation)
+            .map(ReadGraph::Second)
+        }
+        generation => Err(ReadError {
+            offset: 0,
+            failure: ReadFailure::Generation(generation),
+        }),
+    }
+}
+
+fn require_second_generation_item(bytes: &[u8], capacity: ReadCapacity) -> Result<(), ReadError> {
+    if capacity.items == 0 && !bytes.is_empty() {
+        return Err(ReadError {
+            offset: 0,
+            failure: ReadFailure::ItemCapacity(0),
+        });
+    }
+    Ok(())
+}
+
+fn detect_opener<'a>(
+    bytes: &'a [u8],
+    capacity: DetectionCapacity,
+    work_used: &mut usize,
+) -> Result<Option<(Item<'a>, Generation)>, ReadError> {
+    let encoded_limit = capacity.encoded_opener_bytes.min(capacity.work);
+    let available = bytes.len().min(encoded_limit);
+    let refusal = |required_bytes: usize| {
+        let failure = if capacity.encoded_opener_bytes <= capacity.work {
+            ReadFailure::DetectionBytes {
+                required: required_bytes,
+                limit: capacity.encoded_opener_bytes,
+                cause: None,
+            }
+        } else {
+            ReadFailure::DetectionWork {
+                required: required_bytes,
+                limit: capacity.work,
+                cause: None,
+            }
+        };
+        ReadError { offset: 0, failure }
+    };
+    if available == 0 && !bytes.is_empty() {
+        return Err(refusal(1));
+    }
+    match Item::first_with_depth(&bytes[..available], capacity.nesting_depth) {
+        Ok(Some(item)) => {
+            let required = item
+                .bytes()
+                .len()
+                .saturating_mul(DetectionCapacity::OPENER_WORK_PER_BYTE);
+            if required > capacity.work {
+                return Err(ReadError {
+                    offset: 0,
+                    failure: ReadFailure::DetectionWork {
+                        required,
+                        limit: capacity.work,
+                        cause: None,
+                    },
+                });
+            }
+            *work_used = required;
+            let generation = item.generation().map_err(|error| ReadError {
+                offset: 0,
+                failure: ReadFailure::Framing(error),
+            })?;
+            Ok(Some((item, generation)))
+        }
+        Ok(None) => Ok(None),
+        Err(error)
+            if matches!(error.kind(), DecodeErrorKind::Truncated) && bytes.len() > available =>
+        {
+            Err(refusal(available.saturating_add(1)))
+        }
+        Err(error) => {
+            *work_used = usize::try_from(error.offset())
+                .unwrap_or(usize::MAX)
+                .saturating_add(1)
+                .min(available);
+            match error.kind() {
+                DecodeErrorKind::Depth { limit } => Err(ReadError {
+                    offset: usize::try_from(error.offset()).unwrap_or(usize::MAX),
+                    failure: ReadFailure::DetectionDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                }),
+                _ => Err(ReadError {
+                    offset: 0,
+                    failure: ReadFailure::Framing(error),
+                }),
+            }
+        }
     }
 }
 
@@ -647,6 +932,44 @@ enum Recovery<'a> {
     },
 }
 
+pub(super) enum RecoveryFailure {
+    Capacity(CandidateRefusal),
+    Depth(RecoveryDepth),
+}
+
+pub(super) struct RecoveryDepth {
+    pub(super) offset: usize,
+    pub(super) limit: usize,
+    pub(super) cause: StructuralError,
+    pub(super) detection: bool,
+}
+
+impl From<RecoveryDepth> for ReadError {
+    fn from(depth: RecoveryDepth) -> Self {
+        let RecoveryDepth {
+            offset,
+            limit,
+            cause,
+            detection,
+        } = depth;
+        let required = limit.saturating_add(1);
+        let failure = if detection {
+            ReadFailure::DetectionDepth {
+                required,
+                limit,
+                cause,
+            }
+        } else {
+            ReadFailure::ItemDepth {
+                required,
+                limit,
+                cause,
+            }
+        };
+        Self { offset, failure }
+    }
+}
+
 #[derive(Default)]
 struct HeldItems<'a> {
     complete: VecDeque<Item<'a>>,
@@ -689,6 +1012,12 @@ impl<'a> HeldItems<'a> {
 struct GraphReader<'a, 'keys> {
     bytes: &'a [u8],
     scan: ResyncScan<'a>,
+    initial_scan: Option<ResyncScan<'a>>,
+    initial_end: Option<usize>,
+    initial_refusal: Option<ReadError>,
+    initial_exhausted: bool,
+    initial_nesting_depth: Option<usize>,
+    item_nesting_depth: Option<usize>,
     graph: RdfGraph<'a>,
     values: ValueStore,
     payload: PayloadBudget,
@@ -703,11 +1032,61 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
     fn new(
         bytes: &'a [u8],
         capacity: ReadCapacity,
+        detection: Option<(DetectionCapacity, usize)>,
+        item_nesting_depth: Option<usize>,
         signature_inputs: &'keys SignatureInputs<'keys>,
     ) -> Self {
+        let (initial_scan, initial_end, initial_refusal) =
+            detection.map_or((None, None, None), |(detection, used)| {
+                let remaining = detection.work.saturating_sub(used);
+                let work_end = remaining / DetectionCapacity::RECOVERY_WORK_PER_BYTE;
+                let byte_end = detection.encoded_opener_bytes;
+                let end = bytes.len().min(work_end).min(byte_end);
+                let refusal = (end < bytes.len()).then(|| {
+                    let failure = if byte_end <= work_end {
+                        ReadFailure::DetectionBytes {
+                            required: end.saturating_add(1),
+                            limit: byte_end,
+                            cause: None,
+                        }
+                    } else {
+                        ReadFailure::DetectionWork {
+                            required: used.saturating_add(
+                                end.saturating_add(1)
+                                    .saturating_mul(DetectionCapacity::RECOVERY_WORK_PER_BYTE),
+                            ),
+                            limit: detection.work,
+                            cause: None,
+                        }
+                    };
+                    ReadError {
+                        offset: end,
+                        failure,
+                    }
+                });
+                (
+                    Some(ResyncScan::with_depth(
+                        &bytes[..end],
+                        detection.nesting_depth,
+                    )),
+                    Some(end),
+                    refusal,
+                )
+            });
+        let initial_nesting_depth = detection.map(|(capacity, _)| capacity.nesting_depth);
+        let scan = item_nesting_depth.map_or_else(
+            || ResyncScan::new(bytes),
+            |depth| ResyncScan::with_depth(bytes, depth),
+        );
         Self {
             bytes,
-            scan: ResyncScan::new(bytes),
+            scan,
+            initial_scan,
+            initial_end,
+            initial_refusal,
+            initial_exhausted: false,
+            initial_nesting_depth,
+            item_nesting_depth,
             graph: RdfGraph::default(),
             values: ValueStore::default(),
             payload: PayloadBudget::new(capacity.payload),
@@ -719,15 +1098,53 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         }
     }
 
+    fn scan_end(&self) -> usize {
+        self.initial_end.unwrap_or(self.bytes.len())
+    }
+
+    fn finish_detection(&mut self) {
+        self.initial_scan = None;
+        self.initial_end = None;
+        self.initial_refusal = None;
+        self.initial_exhausted = false;
+        self.initial_nesting_depth = None;
+    }
+
+    fn detection_exhausted(&self) -> bool {
+        self.initial_exhausted
+    }
+
+    fn detection_refusal(&mut self, initial: &ReadError) -> Option<ReadError> {
+        if !self.detection_exhausted() {
+            return None;
+        }
+        let mut refusal = self.initial_refusal.take()?;
+        let ReadFailure::Framing(cause) = &initial.failure else {
+            return Some(refusal);
+        };
+        match &mut refusal.failure {
+            ReadFailure::DetectionBytes { cause: slot, .. }
+            | ReadFailure::DetectionWork { cause: slot, .. } => {
+                *slot = Some(cause.clone());
+            }
+            _ => {}
+        }
+        Some(refusal)
+    }
+
     fn read_first(
-        self,
+        mut self,
         opener: Item<'a>,
         generation: Generation,
     ) -> Result<RdfGraph<'a>, ReadError> {
         let end = opener.bytes().len();
         let failure = if generation == Generation::Second {
+            self.admit_body_nesting(opener.bytes(), 0)?;
             match decode_opener(opener) {
-                Ok(header) => return self.read_opened(header, 0, end),
+                Ok(header) => {
+                    self.finish_detection();
+                    return self.read_opened(header, 0, end);
+                }
                 Err(failure) => failure,
             }
         } else {
@@ -747,7 +1164,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             self.count_held_items(end, &mut items)?;
             end
         } else if self.count_undelimited(&initial, false)?.is_some() {
-            self.bytes.len()
+            self.scan_end()
         } else {
             return Err(initial);
         };
@@ -755,18 +1172,33 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             Ok(Some(candidate)) => {
                 let start = candidate.offset;
                 let end = start + candidate.bytes.len();
+                self.admit_body_nesting(candidate.bytes, start)?;
+                self.finish_detection();
                 let segment = self.resume_segment(initial, &candidate, None)?;
                 return self.read_segment(segment, start, end, HeldItems::default());
             }
             Ok(None) => None,
-            Err(refused) => Some(refused),
+            Err(RecoveryFailure::Capacity(refused)) => Some(refused),
+            Err(RecoveryFailure::Depth(depth)) => return Err(depth.into()),
         };
-        if framed_end.is_some() && matches!(initial.failure, ReadFailure::Wire(_)) {
+        if let Some(refusal) = self.detection_refusal(&initial) {
+            return Err(refusal);
+        }
+        if let Some(opener_end) = framed_end
+            && matches!(initial.failure, ReadFailure::Wire(_))
+        {
+            self.finish_detection();
+            let mut offset = opener_end;
+            for item in &items.complete {
+                self.admit_body_nesting(item.bytes(), offset)?;
+                offset += item.bytes().len();
+            }
+            items.next = None;
             self.skip_segment(initial)?;
             if let Some(refused) = refusal {
-                self.observe_recovery_refusal(refused.into(), end, None);
+                self.observe_recovery_refusal(refused, opener_end, None);
             }
-            return self.read_segment(None, 0, end, items);
+            return self.read_segment(None, 0, opener_end, items);
         }
         Err(refusal.map_or(initial, |refused| ReadError {
             offset: refused.offset,
@@ -801,11 +1233,36 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         &mut self,
         start: usize,
         end: usize,
-    ) -> Result<Option<ResyncCandidate<'a>>, ResyncRefusal> {
+    ) -> Result<Option<ResyncCandidate<'a>>, RecoveryFailure> {
         if self.items == self.item_limit {
             return Ok(None);
         }
-        self.scan.scan(start..end, &mut self.payload)
+        let initial_end = self.initial_end;
+        let initial = self.initial_scan.is_some();
+        let (scanned, depth_refusal) = if let Some(scan) = &mut self.initial_scan {
+            let scanned = scan.scan(start..end, &mut self.payload);
+            self.initial_exhausted = scanned.as_ref().is_ok_and(Option::is_none)
+                && initial_end.is_some_and(|admitted| scan.next_offset() >= admitted);
+            let depth_refusal = scan.take_depth_refusal();
+            (scanned, depth_refusal)
+        } else {
+            let scanned = self.scan.scan(start..end, &mut self.payload);
+            let depth_refusal = self.scan.take_depth_refusal();
+            (scanned, depth_refusal)
+        };
+        match (scanned, depth_refusal) {
+            (Ok(None), Some((candidate_offset, limit, error))) => {
+                let error_offset = usize::try_from(error.offset()).unwrap_or(usize::MAX);
+                Err(RecoveryFailure::Depth(RecoveryDepth {
+                    offset: candidate_offset.saturating_add(error_offset),
+                    limit,
+                    cause: error,
+                    detection: initial,
+                }))
+            }
+            (Ok(candidate), _) => Ok(candidate),
+            (Err(refused), _) => Err(RecoveryFailure::Capacity(refused.into())),
+        }
     }
 
     fn scan_recovery(
@@ -824,10 +1281,11 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         let damaged_start = failure.offset;
         match self.search_recovery(scan_start, damaged_start, region_counted, segment) {
             Ok(candidate) => Ok(candidate),
-            Err(refused) => {
+            Err(RecoveryFailure::Capacity(refused)) => {
                 self.observe_recovery_refusal(refused, damaged_start, segment);
                 Ok(None)
             }
+            Err(RecoveryFailure::Depth(depth)) => Err(depth.into()),
         }
     }
 
@@ -837,7 +1295,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         damaged_start: usize,
         region_counted: bool,
         segment: Option<&Segment<'a>>,
-    ) -> Result<Option<Recovery<'a>>, CandidateRefusal> {
+    ) -> Result<Option<Recovery<'a>>, RecoveryFailure> {
         if let Some(candidate) = self.scan_resync(scan_start, damaged_start)? {
             return Ok(Some(Recovery::Resync(candidate)));
         }
@@ -855,7 +1313,8 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 return Ok(Some(Recovery::Resync(candidate)));
             }
             if let Some(history) = &history
-                && let Some(candidate) = history.scan_at(bytes, offset, &mut self.payload)?
+                && let Some(candidate) =
+                    history.scan_at(bytes, offset, &mut self.payload, self.item_nesting_depth)?
             {
                 return Ok(Some(Recovery::Parity {
                     offset,
@@ -950,7 +1409,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
     ) -> Result<Option<Segment<'a>>, ReadError> {
         let offset = original.offset;
         let damage = if candidate.offset > offset {
-            let Err(prefix) = delimit(&self.bytes[..candidate.offset], offset) else {
+            let Err(prefix) = self.delimit_item(candidate.offset, offset) else {
                 return Err(original);
             };
             Some(framing_damage(&prefix, candidate.offset).ok_or(prefix)?)
@@ -1000,9 +1459,8 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         if items.region_counted {
             return Ok(());
         }
-        let limit = failed_end
-            .saturating_add(RESYNC_MAX_BYTES)
-            .min(self.bytes.len());
+        let scan_end = self.scan_end();
+        let limit = failed_end.saturating_add(RESYNC_MAX_BYTES).min(scan_end);
         let mut offset = if items.complete.is_empty() {
             failed_end
         } else {
@@ -1011,11 +1469,11 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         while offset < limit && self.items < self.item_limit {
             // The immediate next item's extent can move the decision point
             // past the byte lookahead. Later items count only within it.
-            let full_input = offset == failed_end || limit == self.bytes.len();
+            let full_input = offset == failed_end || limit == scan_end;
             let next = if full_input {
                 items.next.take().unwrap_or_else(|| self.next_item(offset))
             } else {
-                delimit(&self.bytes[..limit], offset)
+                self.delimit_item(limit, offset)
             };
             match next {
                 Ok(Some(item)) => {
@@ -1208,13 +1666,18 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                             )?;
                         }
                         None => {
-                            let damage = framing_damage(&error, self.bytes.len()).ok_or(error)?;
+                            let Some(damage) = framing_damage(&error, self.bytes.len()) else {
+                                return Err(error);
+                            };
                             if segment.is_none()
                                 && matches!(damage, FramingDamage::Undelimitable { .. })
                             {
                                 self.count_skipped_item();
                             }
                             self.graph.framing_tail = Some(damage);
+                            if let ReadFailure::Framing(cause) = error.failure {
+                                self.graph.framing_tail_cause = Some(cause);
+                            }
                             break;
                         }
                     }
@@ -1239,17 +1702,14 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                         counted?;
                         match self.scan_resync(scan_start, end) {
                             Ok(candidate) => Ok(candidate),
-                            Err(refused) => {
+                            Err(RecoveryFailure::Capacity(refused)) => {
                                 if let Some(current) = segment.as_mut() {
                                     self.deliver_held(held.take(), current)?;
                                 }
-                                self.observe_recovery_refusal(
-                                    refused.into(),
-                                    offset,
-                                    segment.as_ref(),
-                                );
+                                self.observe_recovery_refusal(refused, offset, segment.as_ref());
                                 Ok(None)
                             }
+                            Err(RecoveryFailure::Depth(depth)) => Err(depth.into()),
                         }
                     }
                 };
@@ -1359,6 +1819,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                 &mut self.graph.parity_findings,
                 &mut self.graph.repaired,
                 &mut self.payload,
+                self.item_nesting_depth,
             )
             .map_err(|failure| ReadError { offset, failure })?;
         segment
@@ -1417,7 +1878,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
     }
 
     fn check_item_limit(&self, offset: usize) -> Result<(), ReadError> {
-        if self.items == self.item_limit && offset < self.bytes.len() {
+        if self.items == self.item_limit && offset < self.scan_end() {
             return Err(ReadError {
                 offset,
                 failure: ReadFailure::ItemCapacity(self.item_limit),
@@ -1428,7 +1889,71 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
 
     fn next_item(&self, offset: usize) -> Result<Option<Item<'a>>, ReadError> {
         self.check_item_limit(offset)?;
-        delimit(self.bytes, offset)
+        let end = self.scan_end();
+        if offset >= end {
+            return Ok(None);
+        }
+        self.delimit_item(end, offset)
+    }
+
+    fn delimit_item(&self, end: usize, offset: usize) -> Result<Option<Item<'a>>, ReadError> {
+        let Some(limit) = self.initial_nesting_depth.or(self.item_nesting_depth) else {
+            return delimit(&self.bytes[..end], offset);
+        };
+        Item::first_with_depth(&self.bytes[offset..end], limit).map_err(|error| {
+            let error_offset = usize::try_from(error.offset()).unwrap_or(usize::MAX);
+            let (reported_offset, failure) = match error.kind() {
+                DecodeErrorKind::Depth { limit } if self.initial_nesting_depth.is_some() => (
+                    offset.saturating_add(error_offset),
+                    ReadFailure::DetectionDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                ),
+                DecodeErrorKind::Depth { limit } => (
+                    offset.saturating_add(error_offset),
+                    ReadFailure::ItemDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                ),
+                _ => (offset, ReadFailure::Framing(error)),
+            };
+            ReadError {
+                offset: reported_offset,
+                failure,
+            }
+        })
+    }
+
+    fn admit_body_nesting(&self, bytes: &'a [u8], offset: usize) -> Result<(), ReadError> {
+        let Some(limit) = self.item_nesting_depth else {
+            return Ok(());
+        };
+        match Item::first_with_depth(bytes, limit) {
+            Ok(Some(_)) => Ok(()),
+            Err(error) if matches!(error.kind(), DecodeErrorKind::Depth { .. }) => {
+                let error_offset = usize::try_from(error.offset()).unwrap_or(usize::MAX);
+                Err(ReadError {
+                    offset: offset.saturating_add(error_offset),
+                    failure: ReadFailure::ItemDepth {
+                        required: limit.saturating_add(1),
+                        limit,
+                        cause: error,
+                    },
+                })
+            }
+            Err(error) => Err(ReadError {
+                offset,
+                failure: ReadFailure::Framing(error),
+            }),
+            Ok(_) => Err(ReadError {
+                offset,
+                failure: ReadFailure::Empty,
+            }),
+        }
     }
 
     fn observe_item(

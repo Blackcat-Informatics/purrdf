@@ -24,6 +24,11 @@ frames chained by BLAKE3 content id; the reader verifies the chain and folds
 the log into a container graph, degrading undecodable frames to opaque nodes
 instead of aborting — **the reader is total**.
 
+Use `v2::read_with_limits` for bounded generation detection and graph
+reading. `v2::SegmentWriter` writes generation 2 segments to a caller-owned
+sink. The `reader` and `writer` modules below provide the generation 1
+interfaces.
+
 The crate owns the wire-format machinery:
 
 - **`reader`** — chain-verified reading and deterministic folding of GTS bytes

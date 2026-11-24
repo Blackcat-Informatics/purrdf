@@ -64,12 +64,12 @@ use purrdf_lex::cbor::{Integer, Value};
 use purrdf_gts::compact::{self, CompactionParams, DictPlan, PackagingSigner};
 use purrdf_gts::cose::{self, SigStatus};
 use purrdf_gts::model::{Graph, Suppression};
-use purrdf_gts::reader::read;
+use purrdf_gts::reader::{GtsReadLimits, ReadOptions, read, read_with_limits};
 use purrdf_gts::verify::{SignatureKeyring, verify_file_with_keyring};
 use purrdf_gts::wire;
 
 use crate::gts::dataset_from_gts_graph;
-use crate::gts_core::diagnostics_to_error;
+use crate::gts_core::{diagnostics_to_error, read_limit_failure};
 use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 
 // ---------------------------------------------------------------------------
@@ -682,12 +682,35 @@ pub fn verify_compaction<K: SignatureKeyring + ?Sized>(
     keyring: &K,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<CompactionReport, CertifyError> {
-    verify_compaction_with(
+    verify_compaction_impl(
         pre_bytes,
         post_bytes,
         RefoldCanon::Rdfc10Sha256,
         keyring,
         control,
+        None,
+    )
+}
+
+/// Independently verify a claimed compaction under whole-read ceilings.
+///
+/// # Errors
+/// Returns the first resource, dataset or canonicalization refusal without a
+/// partial verification report.
+pub fn verify_compaction_with_limits<K: SignatureKeyring + ?Sized>(
+    pre_bytes: &[u8],
+    post_bytes: &[u8],
+    limits: GtsReadLimits,
+    keyring: &K,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<CompactionReport, CertifyError> {
+    verify_compaction_impl(
+        pre_bytes,
+        post_bytes,
+        RefoldCanon::Rdfc10Sha256,
+        keyring,
+        control,
+        Some(limits),
     )
 }
 
@@ -704,8 +727,35 @@ pub fn verify_compaction_with<K: SignatureKeyring + ?Sized>(
     keyring: &K,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<CompactionReport, CertifyError> {
-    let pre = read(pre_bytes, true, None);
-    let post = read(post_bytes, true, None);
+    verify_compaction_impl(pre_bytes, post_bytes, canon, keyring, control, None)
+}
+
+/// Verify a claimed compaction under an explicit canonicalization and
+/// whole-read resource contract.
+///
+/// # Errors
+/// As [`verify_compaction_with_limits`].
+pub fn verify_compaction_with_canon_and_limits<K: SignatureKeyring + ?Sized>(
+    pre_bytes: &[u8],
+    post_bytes: &[u8],
+    canon: RefoldCanon,
+    limits: GtsReadLimits,
+    keyring: &K,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<CompactionReport, CertifyError> {
+    verify_compaction_impl(pre_bytes, post_bytes, canon, keyring, control, Some(limits))
+}
+
+fn verify_compaction_impl<K: SignatureKeyring + ?Sized>(
+    pre_bytes: &[u8],
+    post_bytes: &[u8],
+    canon: RefoldCanon,
+    keyring: &K,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+    limits: Option<GtsReadLimits>,
+) -> Result<CompactionReport, CertifyError> {
+    let pre = certification_read(pre_bytes, limits)?;
+    let post = certification_read(post_bytes, limits)?;
 
     let refold_equivalent =
         refold_digest_with(&pre, canon, control)? == refold_digest_with(&post, canon, control)?;
@@ -723,6 +773,15 @@ pub fn verify_compaction_with<K: SignatureKeyring + ?Sized>(
         packaging_sig_ok,
         suppressions_ok,
     })
+}
+
+fn certification_read(bytes: &[u8], limits: Option<GtsReadLimits>) -> Result<Graph, CertifyError> {
+    match limits {
+        Some(limits) => read_with_limits(bytes, ReadOptions::new(true, None), limits)
+            .map_err(read_limit_failure)
+            .map_err(CertifyError::Dataset),
+        None => Ok(read(bytes, true, None)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1056,7 +1115,39 @@ pub fn compact_and_certify<S: PackagingSigner>(
         timestamp,
         seal_original,
         packaging_signer,
-        RefoldCanon::Rdfc10Sha256,
+        CertificationMode {
+            canon: RefoldCanon::Rdfc10Sha256,
+            limits: None,
+        },
+        control,
+    )
+    .map(|(pack, certified)| (pack, certified.certificate))
+}
+
+/// Compact and certify under explicit whole-read ceilings.
+///
+/// # Errors
+/// As [`compact_and_certify`], with resource refusals preserved as dataset or
+/// compaction failures before a certified result is returned.
+pub fn compact_and_certify_with_limits<S: PackagingSigner>(
+    pre_bytes: &[u8],
+    plan: DictPlan,
+    timestamp: &str,
+    seal_original: bool,
+    packaging_signer: S,
+    limits: GtsReadLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(Vec<u8>, CompactionCertificate), CertifyError> {
+    certify(
+        pre_bytes,
+        plan,
+        timestamp,
+        seal_original,
+        packaging_signer,
+        CertificationMode {
+            canon: RefoldCanon::Rdfc10Sha256,
+            limits: Some(limits),
+        },
         control,
     )
     .map(|(pack, certified)| (pack, certified.certificate))
@@ -1083,9 +1174,45 @@ pub fn compact_and_certify_versioned<S: PackagingSigner>(
         timestamp,
         seal_original,
         packaging_signer,
-        RefoldCanon::Nrl1LinesSha256,
+        CertificationMode {
+            canon: RefoldCanon::Nrl1LinesSha256,
+            limits: None,
+        },
         control,
     )
+}
+
+/// Author a versioned compaction certificate under whole-read ceilings.
+///
+/// # Errors
+/// As [`compact_and_certify_with_limits`].
+pub fn compact_and_certify_versioned_with_limits<S: PackagingSigner>(
+    pre_bytes: &[u8],
+    plan: DictPlan,
+    timestamp: &str,
+    seal_original: bool,
+    packaging_signer: S,
+    limits: GtsReadLimits,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<(Vec<u8>, VersionedCertificate), CertifyError> {
+    certify(
+        pre_bytes,
+        plan,
+        timestamp,
+        seal_original,
+        packaging_signer,
+        CertificationMode {
+            canon: RefoldCanon::Nrl1LinesSha256,
+            limits: Some(limits),
+        },
+        control,
+    )
+}
+
+#[derive(Clone, Copy)]
+struct CertificationMode {
+    canon: RefoldCanon,
+    limits: Option<GtsReadLimits>,
 }
 
 /// Compact `pre_bytes` and certify the rewrite under `canon`.
@@ -1095,10 +1222,11 @@ fn certify<S: PackagingSigner>(
     timestamp: &str,
     seal_original: bool,
     packaging_signer: S,
-    canon: RefoldCanon,
+    mode: CertificationMode,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<(Vec<u8>, VersionedCertificate), CertifyError> {
-    let pre_fold = read(pre_bytes, true, None);
+    let CertificationMode { canon, limits } = mode;
+    let pre_fold = certification_read(pre_bytes, limits)?;
     if !pre_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&pre_fold).into());
     }
@@ -1110,18 +1238,19 @@ fn certify<S: PackagingSigner>(
     };
 
     let kid = packaging_signer.kid().to_string();
-    let post_bytes = compact::compact_streamable(
-        pre_bytes,
-        CompactionParams {
-            timestamp,
-            seal_original,
-            plan,
-            content_digest: Some(&embedded),
-            packaging_signer,
-        },
-    )?;
+    let params = CompactionParams {
+        timestamp,
+        seal_original,
+        plan,
+        content_digest: Some(&embedded),
+        packaging_signer,
+    };
+    let post_bytes = match limits {
+        Some(limits) => compact::compact_streamable_with_limits(pre_bytes, params, limits),
+        None => compact::compact_streamable(pre_bytes, params),
+    }?;
 
-    let post_fold = read(&post_bytes, true, None);
+    let post_fold = certification_read(&post_bytes, limits)?;
     if !post_fold.diagnostics.is_empty() {
         return Err(diagnostics_to_error(&post_fold).into());
     }
