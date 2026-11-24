@@ -129,7 +129,19 @@ impl<'a> Aliases<'a> {
         Ok(())
     }
 
-    pub(super) fn representative(&self, id: u64) -> u64 {
+    pub(super) fn representatives(self) -> Result<FastMap<u64, u64>, FoldError> {
+        let mut representatives = FastMap::default();
+        for definition in &self.definitions {
+            let root = self.representative(definition.id);
+            if root != definition.id {
+                representatives.try_reserve(1)?;
+                representatives.insert(definition.id, root);
+            }
+        }
+        Ok(representatives)
+    }
+
+    fn representative(&self, id: u64) -> u64 {
         self.index
             .get(&id)
             .map_or(id, |&at| self.definitions[self.root(at)].id)

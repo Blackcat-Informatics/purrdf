@@ -435,7 +435,10 @@ pub(super) fn check_type_length(
 }
 
 /// The registry version 1 shapes, with value checks left to the content phase.
-fn check_content_shape(frame_type: u64, fields: &mut Fields<'_>) -> Result<(), WireError> {
+pub(super) fn check_content_shape(
+    frame_type: u64,
+    fields: &mut Fields<'_>,
+) -> Result<(), WireError> {
     let Some(frame_type) = FrameType::from_code(frame_type) else {
         return fields.closed_value();
     };

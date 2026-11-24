@@ -32,7 +32,7 @@ where
     }
 
     fn fetch(&mut self, offset: u64, output: &mut [u8]) -> Result<(), Stop> {
-        (self.reader)(offset, output).map_err(|_| Stop::Unknown(RangeReason::Read))
+        (self.reader)(offset, output).map_err(Stop::Read)
     }
 }
 
@@ -274,7 +274,7 @@ where
 {
     fn failed(&mut self, stop: Stop) -> io::Error {
         self.stopped = Some(stop);
-        io::Error::other("GTS range walk stopped")
+        io::Error::from(io::ErrorKind::Other)
     }
 
     fn byte(&mut self) -> Result<u8, Stop> {

@@ -4,11 +4,14 @@
 use std::collections::TryReserveError;
 use std::io;
 
-use purrdf_lex::{allocation::try_boxed, cbor::StructuralError};
+use purrdf_lex::{
+    allocation::try_boxed,
+    cbor::{DecodeErrorKind, StructuralError},
+};
 
 use crate::FastMap;
 use crate::v2::fields::{Fields, push};
-use crate::v2::read::blob::UnitDeclaration;
+use crate::v2::frame::check_content_shape;
 use crate::v2::{
     ContentError, DIGEST_LENGTH, FoldError, FrameField, FrameType, Header, Item, ItemKind,
     PayloadResourceError, ReadCapacity, ReadFailure, WireError,
@@ -68,6 +71,7 @@ pub enum RangeReason {
 #[derive(Debug)]
 enum Stop {
     Unknown(RangeReason),
+    Read(io::Error),
     AddressSpace,
     Structure(StructuralError),
     DecodeResource(PayloadResourceError),
@@ -163,6 +167,8 @@ pub struct RangeAnswer<'a> {
     pub scope: Option<RangeScope>,
     /// Locally verified items or the first condition that prevented an answer.
     pub outcome: Result<RangeContent, RangeReason>,
+    /// The holder failure when the outcome is `RangeReason::Read`.
+    pub read_error: Option<io::Error>,
 }
 
 /// A host failure that prevents a sparse reader from returning an answer.
@@ -196,10 +202,20 @@ purrdf_lex::error_source!(RangeReadError {
     Resource
 });
 
+impl purrdf_hash::error::StructuredError for RangeReadError {
+    purrdf_hash::error_visit! {
+        AddressSpace => "gts-v2-range-address-space" {},
+        Structure(cause) => "gts-v2-range-structure" { "cause" => Cause(cause) },
+        DecodeResource(cause) => "gts-v2-range-decode-resource" { "cause" => Cause(cause) },
+        Resource(cause) => "gts-v2-range-resource" { "cause" => Cause(cause) },
+    }
+}
+
 /// Use the closing index and short range reads to answer a GTS v2 query.
 ///
 /// The holder must return exactly the requested bytes from one immutable file
-/// of the supplied length. The result establishes local frame verification.
+/// of the supplied length. Verification covers the frames the index selects.
+/// Use a whole read to establish whether the index omitted matching content.
 /// # Errors
 /// Returns a host resource error when the read cannot produce an answer.
 pub fn read_range(
@@ -215,9 +231,10 @@ pub fn read_range(
         query,
         scope: None,
     };
-    let outcome = match read.answer() {
-        Ok(content) => Ok(content),
-        Err(Stop::Unknown(reason)) => Err(reason),
+    let (outcome, read_error) = match read.answer() {
+        Ok(content) => (Ok(content), None),
+        Err(Stop::Unknown(reason)) => (Err(reason), None),
+        Err(Stop::Read(cause)) => (Err(RangeReason::Read), Some(cause)),
         Err(Stop::AddressSpace) => return Err(RangeReadError::AddressSpace),
         Err(Stop::Structure(cause)) => return Err(RangeReadError::Structure(cause)),
         Err(Stop::DecodeResource(cause)) => return Err(RangeReadError::DecodeResource(cause)),
@@ -229,6 +246,7 @@ pub fn read_range(
         query,
         scope: read.scope,
         outcome,
+        read_error,
     })
 }
 
@@ -296,7 +314,10 @@ where
         let bytes =
             ItemInput::new(extent).bytes(&mut self.input, header_offset, length, invalid)?;
         let item = Item::first(&bytes)
-            .map_err(|_| Stop::Unknown(invalid))?
+            .map_err(|cause| match cause.kind() {
+                DecodeErrorKind::TooLong => Stop::Structure(cause),
+                _ => Stop::Unknown(invalid),
+            })?
             .filter(|item| item.bytes().len() == bytes.len())
             .ok_or(Stop::Unknown(invalid))?;
         let registry = core::num::NonZeroU64::MIN;
@@ -513,7 +534,9 @@ where
             RangeReason::Payload,
         )?;
         let mut fields = Fields::new(&bytes);
-        let declaration = UnitDeclaration::read(&mut fields, covered.kind == FrameType::Blob)?;
-        Ok(declaration.digest)
+        check_content_shape(covered.kind as u64, &mut fields)?;
+        let mut fields = Fields::new(&bytes);
+        fields.array()?;
+        Ok(*fields.fixed_bytes()?)
     }
 }

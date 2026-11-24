@@ -387,6 +387,7 @@ pub struct SegmentDictionary {
     reference_languages: FastMap<String, usize>,
     aliases: FastMap<u64, u64>,
     first_forward_definition: Option<u64>,
+    annotation_aliases: Option<(u128, FastMap<u64, u64>)>,
     order: order::History,
     in_doubt: bool,
     broken_prefix: u128,
@@ -406,6 +407,7 @@ impl SegmentDictionary {
             reference_languages: FastMap::default(),
             aliases: FastMap::default(),
             first_forward_definition: None,
+            annotation_aliases: None,
             order: order::History::default(),
             in_doubt: false,
             broken_prefix: 0,
@@ -995,8 +997,15 @@ impl SegmentDictionary {
         fold: &mut RdfFold,
         decoded: &DecodedRows,
     ) -> Result<RowFindings, FoldError> {
-        self.check_annotations(fold, &decoded.rows)?;
-        self.fold_scoped_rows(fold, &decoded.rows, self.row_scope())
+        let scope = self.row_scope();
+        if Self::has_annotations(&decoded.rows) {
+            let aliases = self
+                .compares_written_annotations(scope)
+                .then(|| written::Aliases::new(self, fold, scope)?.representatives())
+                .transpose()?;
+            self.check_annotation_keys(&decoded.rows, scope, aliases.as_ref())?;
+        }
+        self.fold_scoped_rows(fold, &decoded.rows, scope)
     }
 
     pub(in crate::v2) fn fold_scoped_rows(
@@ -1033,7 +1042,7 @@ impl SegmentDictionary {
     }
 
     pub(in crate::v2) fn check_annotations(
-        &self,
+        &mut self,
         fold: &RdfFold,
         rows: &[Row],
     ) -> Result<(), FoldError> {
@@ -1041,27 +1050,56 @@ impl SegmentDictionary {
     }
 
     pub(in crate::v2) fn check_scoped_annotations(
-        &self,
+        &mut self,
         fold: &RdfFold,
         rows: &[Row],
         scope: RowScope,
     ) -> Result<(), FoldError> {
-        if rows.len() < 2 || !matches!(rows.first(), Some(Row::Annotation(..))) {
+        if !Self::has_annotations(rows) {
             return Ok(());
         }
-        let aliases = (scope.in_doubt
+        let compare_written = self.compares_written_annotations(scope);
+        if compare_written
+            && self
+                .annotation_aliases
+                .as_ref()
+                .is_none_or(|(end, _)| *end != scope.next)
+        {
+            let aliases = written::Aliases::new(self, fold, scope)?.representatives()?;
+            self.annotation_aliases = Some((scope.next, aliases));
+        }
+        let aliases = self
+            .annotation_aliases
+            .as_ref()
+            .filter(|_| compare_written)
+            .map(|(_, aliases)| aliases);
+        self.check_annotation_keys(rows, scope, aliases)
+    }
+
+    fn has_annotations(rows: &[Row]) -> bool {
+        rows.len() >= 2 && matches!(rows.first(), Some(Row::Annotation(..)))
+    }
+
+    fn compares_written_annotations(&self, scope: RowScope) -> bool {
+        scope.in_doubt
             || self
                 .first_forward_definition
-                .is_some_and(|id| scope.defines(id)))
-        .then(|| written::Aliases::new(self, fold, scope))
-        .transpose()?;
+                .is_some_and(|id| scope.defines(id))
+    }
+
+    fn check_annotation_keys(
+        &self,
+        rows: &[Row],
+        scope: RowScope,
+        aliases: Option<&FastMap<u64, u64>>,
+    ) -> Result<(), FoldError> {
         let mut keys = FastSet::default();
         keys.try_reserve(rows.len())?;
         let id = |raw| {
             let base = self.scoped_definition_id(raw, scope);
             aliases
-                .as_ref()
-                .map_or(base, |aliases| aliases.representative(base))
+                .and_then(|aliases| aliases.get(&base).copied())
+                .unwrap_or(base)
         };
         for &row in rows {
             if let Row::Annotation(terms, _, graph) = row

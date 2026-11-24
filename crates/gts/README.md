@@ -41,8 +41,9 @@ the fold under a caller-supplied capacity before writing the opener.
 Use `v2::read_range` to fetch the rows of one graph or units of one digest
 through a segment's closing index. Supply the file length, segment end, read
 capacity, and a callback for exact byte ranges from an immutable source.
-The answer verifies the fetched frames locally. Use a whole read when
-you need the file's chain, committed content, or authentication.
+The answer verifies the fetched frames locally. Use a whole read to
+establish whether the index omitted matching content, or when you need the
+file's chain, committed content, or authentication.
 
 Use `v2::compact` to write canonical form 1 from a whole-file fold. It
 preserves hidden content and blob declarations, reports typed refusals

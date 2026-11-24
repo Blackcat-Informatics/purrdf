@@ -43,9 +43,23 @@ fn read_file<'a>(bytes: &[u8], target: RangeTarget<'a>, suppression: bool) -> Ra
 }
 
 #[test]
+fn sparse_read_refusal_preserves_the_holder_error() {
+    let bytes = include_bytes!("fixtures/v2/P7/idx-charges-once.compressed-R-plus-D.bin");
+    let answer = read(
+        bytes,
+        RangeTarget::Graph(None),
+        false,
+        ReadCapacity::default(),
+        |_, _| Err(io::ErrorKind::TimedOut.into()),
+    );
+    assert_eq!(answer.outcome.unwrap_err(), RangeReason::Read);
+    assert_eq!(answer.read_error.unwrap().kind(), io::ErrorKind::TimedOut);
+}
+
+#[test]
 fn sparse_budget_charges_ranges_once_and_also_charges_compressed_output() {
     let bytes = include_bytes!("fixtures/v2/P7/idx-charges-once.compressed-R-plus-D.bin");
-    for limit in [501, 515] {
+    for limit in [514, 515] {
         let mut capacity = ReadCapacity::default();
         capacity.payload.decoded_bytes_per_read = limit;
         let mut read_bytes = [false; 1095];
@@ -63,7 +77,7 @@ fn sparse_budget_charges_ranges_once_and_also_charges_compressed_output() {
             },
         );
         assert_eq!(read_bytes.into_iter().filter(|&read| read).count(), 501);
-        if limit == 501 {
+        if limit == 514 {
             assert_eq!(answer.outcome.unwrap_err(), RangeReason::Capacity);
         } else {
             let RangeContent::Graph(graph) = answer.outcome.unwrap() else {

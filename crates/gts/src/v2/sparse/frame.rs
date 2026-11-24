@@ -82,7 +82,6 @@ impl FrameHead {
         fields[2] = offset;
         for (field, end) in fields.iter_mut().enumerate().skip(3) {
             let element = field - 1;
-            let from = offset;
             offset = if element == FrameField::Content as usize
                 && kind == Some(FrameType::Parity)
                 && strings == Strings::Predecessor
@@ -91,21 +90,15 @@ impl FrameHead {
                 anchor = extent;
                 end
             } else {
-                let keep = matches!(strings, Strings::Full { .. })
-                    || (strings == Strings::Content && element == FrameField::Content as usize);
-                let scan = if keep {
-                    ScanStrings::Keep
-                } else {
-                    ScanStrings::Skip
+                let scan = match (strings, element == FrameField::Content as usize) {
+                    (Strings::Full { stored_limit }, true) => {
+                        ScanStrings::Limited(offset.saturating_add(stored_limit))
+                    }
+                    (Strings::Full { .. }, _) | (Strings::Content, true) => ScanStrings::Keep,
+                    _ => ScanStrings::Skip,
                 };
                 item.scan(input, offset, through, scan, invalid)?.end()
             };
-            if let Strings::Full { stored_limit } = strings
-                && element == FrameField::Content as usize
-                && offset - from > stored_limit
-            {
-                return Err(Stop::Unknown(RangeReason::Capacity));
-            }
             *end = offset;
         }
         let payload = head_at(input, item, offset, invalid)?;
@@ -178,14 +171,17 @@ impl FrameHead {
         let invalid = RangeReason::Payload;
         let mut read = |field| {
             let range = self.field(field).expect("the unit head locates this field");
-            item.bytes(input, range.start, range.end - range.start, invalid)
+            head_at(input, item, range.start, invalid).map(|head| (range.start, head))
         };
-        let critical = Fields::new(&read(FrameField::Critical)?).boolean()?;
-        let transparent = Fields::new(&read(FrameField::Transparent)?).boolean()?;
-        if critical != kind.critical() || transparent != kind.transparent() {
+        let (_, critical) = read(FrameField::Critical)?;
+        let (_, transparent) = read(FrameField::Transparent)?;
+        if critical.first != 0xf4 + u8::from(kind.critical())
+            || transparent.first != 0xf4 + u8::from(kind.transparent())
+        {
             return Err(Stop::Unknown(invalid));
         }
-        let length = Fields::new(&read(FrameField::DecodedLength)?).uint()?;
+        let (start, length) = read(FrameField::DecodedLength)?;
+        let length = length.uint(start).ok_or(Stop::Unknown(invalid))?;
         crate::v2::frame::check_type_length(kind, length, 0)?;
         let start = self
             .field(FrameField::PayloadDigest)
@@ -329,8 +325,102 @@ mod tests {
     use crate::v2::SegmentWriter;
 
     use super::{
-        DIGEST_LENGTH, FrameField, Input, Item, ItemInput, RangeReason, Stop, predecessor,
+        DIGEST_LENGTH, FrameField, FrameHead, FrameType, Input, Item, ItemInput, RangeReason, Stop,
+        Strings, predecessor,
     };
+
+    #[test]
+    fn full_frame_limits_content_before_acquiring_its_string_body() {
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"unit", Some(&"a".repeat(4096))).unwrap();
+        let bytes = writer.into_inner();
+        let opener = Item::first(&bytes).unwrap().unwrap().bytes().len();
+        let bytes = &bytes[opener..];
+        let frame = Item::first(bytes)
+            .unwrap()
+            .unwrap()
+            .frame()
+            .unwrap()
+            .unwrap();
+        let content_end = frame.start(FrameField::DecodedLength);
+        let media_body = content_end - 4096;
+        let encoded_content = (content_end - frame.start(FrameField::Content)) as u64;
+        for (stored_limit, admitted) in [(encoded_content - 1, false), (encoded_content, true)] {
+            let mut seen_body = false;
+            let mut input = Input::new(
+                |at, output: &mut [u8]| {
+                    let start = at as usize;
+                    let end = start + output.len();
+                    seen_body |= start < content_end && end > media_body;
+                    output.copy_from_slice(&bytes[start..end]);
+                    Ok(())
+                },
+                u64::MAX,
+            );
+            let mut item = ItemInput::new(0..bytes.len() as u64);
+            let result = FrameHead::read(
+                &mut input,
+                &mut item,
+                Some(FrameType::Blob),
+                Strings::Full { stored_limit },
+                RangeReason::Placement,
+            );
+            if admitted {
+                assert!(result.is_ok());
+            } else {
+                assert!(matches!(result, Err(Stop::Unknown(RangeReason::Capacity))));
+            }
+            assert_eq!(seen_body, admitted);
+        }
+    }
+
+    #[test]
+    fn unit_head_rejects_scalar_strings_without_fetching_their_bodies() {
+        let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+        writer.add_blob(b"one unit", None).unwrap();
+        let bytes = writer.into_inner();
+        let opener = Item::first(&bytes).unwrap().unwrap().bytes().len();
+        let bytes = &bytes[opener..];
+        let frame = Item::first(bytes)
+            .unwrap()
+            .unwrap()
+            .frame()
+            .unwrap()
+            .unwrap();
+
+        for field in [
+            FrameField::Critical,
+            FrameField::Transparent,
+            FrameField::DecodedLength,
+        ] {
+            let start = frame.start(field);
+            let mut malformed = bytes.to_vec();
+            malformed.splice(start..start + frame.field(field).len(), [0x42, 0, 0]);
+            let mut input = Input::new(
+                |at, output: &mut [u8]| {
+                    let at = at as usize;
+                    let end = at + output.len();
+                    assert!(end <= start + 1 || at >= start + 3);
+                    output.copy_from_slice(&malformed[at..end]);
+                    Ok(())
+                },
+                u64::MAX,
+            );
+            let mut item = ItemInput::new(0..malformed.len() as u64);
+            let head = FrameHead::read(
+                &mut input,
+                &mut item,
+                Some(FrameType::Blob),
+                Strings::Content,
+                RangeReason::Placement,
+            )
+            .unwrap();
+            assert!(matches!(
+                head.check_unit_head(&mut input, &mut item, FrameType::Blob),
+                Err(Stop::Unknown(RangeReason::Payload))
+            ));
+        }
+    }
 
     #[test]
     fn predecessor_checks_transparency_without_reading_an_opaque_string_body() {

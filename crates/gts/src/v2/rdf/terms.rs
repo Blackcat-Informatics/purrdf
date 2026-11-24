@@ -214,6 +214,11 @@ impl TermArena {
     }
 
     pub(super) fn find_value(&self, value: TypedValue<'_>) -> Result<Option<TermId>, FoldError> {
+        if let TypedValue::Octets(octets) = value {
+            return Ok(self.values.iter().find_map(|(id, value)| {
+                matches!(value, LiteralValue::Octets(stored) if stored == octets).then_some(*id)
+            }));
+        }
         let (datatype, lexical) = value_lexical(value)?;
         Ok(self
             .find(&Term::Iri(Cow::Borrowed(datatype)))
