@@ -583,6 +583,19 @@ too, while the same law (or NULL) runs. A shapes graph the law's text refuses is
 load as `PURRDF_STATUS_PARSE_ERROR`, never validated under another law. No existing
 signature changed: this is an additional export.
 
+### Fixed-point SHACL recursion
+
+Use `purrdf_shacl_validate_to_sarif_with_recursion` for a whole graph and
+`purrdf_shacl_validate_changes_to_sarif_with_recursion` for a change. Pass
+`"lfp"` or `"gfp"` with pointers to both `uint64_t` limits. The limits count
+shape and focus-node pairs and fixed-point iterations. Passing NULL for all
+three inputs selects the default behavior, which refuses recursive shapes.
+
+An incomplete request or unknown mode returns `PURRDF_STATUS_INVALID_ARGUMENT`.
+Zero is a real limit. Read the typed cause through
+`purrdf_error_native_cause_json` when a request or validation is refused.
+Both functions leave the report and change-scope outputs untouched on refusal.
+
 ## Governed execution
 
 `purrdf_query_governed` returns either a complete query result or a typed exhausted

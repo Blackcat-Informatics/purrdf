@@ -252,6 +252,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif(
                 subclass_of_in_shapes_graph,
                 std::ptr::null(),
                 std::ptr::null(),
+                None,
                 out_buffer,
             )
         })
@@ -310,6 +311,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif_xpath_regex(
                 subclass_of_in_shapes_graph,
                 regex_profile,
                 std::ptr::null(),
+                None,
                 out_buffer,
             )
         })
@@ -371,16 +373,102 @@ pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif_law(
                 subclass_of_in_shapes_graph,
                 regex_profile,
                 shacl_profile,
+                None,
                 out_buffer,
             )
         })
     }
 }
 
-/// The one body of [`purrdf_shacl_validate_to_sarif`],
-/// [`purrdf_shacl_validate_to_sarif_xpath_regex`] and [`purrdf_shacl_validate_to_sarif_law`].
-/// `regex_profile` and `shacl_profile` are null for an entry point that has no such
-/// parameter.
+/// Validate as [`purrdf_shacl_validate_to_sarif_law`] with explicit fixed-point recursion.
+///
+/// Pass NULL for all three recursion inputs to retain the default refusal of recursive
+/// shapes. Otherwise pass `lfp` or `gfp` and both work limits. Zero is a limit.
+/// An incomplete or unknown selection returns `PURRDF_STATUS_INVALID_ARGUMENT`.
+/// A recursion refusal leaves the report output untouched and carries a native diagnostic.
+///
+/// # Safety
+/// As [`purrdf_shacl_validate_to_sarif_law`]. The mode must be null or a live, NUL-terminated
+/// UTF-8 string. Each limit must be null or point to a live, aligned and readable `uint64_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_validate_to_sarif_with_recursion(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    shacl_profile: *const c_char,
+    recursion_mode: *const c_char,
+    recursion_max_pairs: *const u64,
+    recursion_max_iterations: *const u64,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    // SAFETY: The caller upholds the document, option and output pointer contracts.
+    unsafe {
+        ffi_try!(out_error, {
+            validate_entry(
+                "purrdf_shacl_validate_to_sarif_with_recursion",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                conformance_disallows,
+                conformance_disallows_count,
+                import_iris,
+                import_documents,
+                import_count,
+                subclass_of_in_shapes_graph,
+                regex_profile,
+                shacl_profile,
+                Some(RecursionRequest {
+                    mode: recursion_mode,
+                    max_pairs: recursion_max_pairs,
+                    max_iterations: recursion_max_iterations,
+                }),
+                out_buffer,
+            )
+        })
+    }
+}
+
+struct RecursionRequest {
+    mode: *const c_char,
+    max_pairs: *const u64,
+    max_iterations: *const u64,
+}
+
+impl RecursionRequest {
+    /// A present request carries the caller's pointer validity guarantees.
+    unsafe fn decode(
+        request: Option<Self>,
+    ) -> Result<Option<purrdf_rs::shapes::recursion::RecursionOptions>, PurrdfError> {
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        // SAFETY: The C entry point requires each pointer to be null or valid for this call.
+        let (mode, pairs, iterations) = unsafe {
+            (
+                opt_cstr_to_str(request.mode)?,
+                request.max_pairs.as_ref().copied(),
+                request.max_iterations.as_ref().copied(),
+            )
+        };
+        purrdf_validate::requested_shacl_recursion(mode, pairs, iterations).map_err(|cause| {
+            let diagnostic =
+                purrdf_validate::native_error::diagnostic("shacl-recursion-request", cause, None);
+            PurrdfError::from_owned_diagnostic(PurrdfStatus::InvalidArgument, diagnostic)
+        })
+    }
+}
+
+/// Shared implementation of the whole-graph validation entry points.
 #[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
@@ -399,6 +487,7 @@ unsafe fn validate_entry(
     subclass_of_in_shapes_graph: bool,
     regex_profile: *const c_char,
     shacl_profile: *const c_char,
+    recursion: Option<RecursionRequest>,
     out_buffer: *mut *mut PurrdfBuffer,
 ) -> Result<PurrdfStatus, PurrdfError> {
     unsafe {
@@ -435,8 +524,9 @@ unsafe fn validate_entry(
                     )
                 }
             })?;
-        let bytes = match (regex, law) {
-            (None, None) => validate_to_sarif_bytes(
+        let recursion = RecursionRequest::decode(recursion)?;
+        let bytes = match (regex, law, recursion) {
+            (None, None, None) => validate_to_sarif_bytes(
                 shapes,
                 base,
                 graph,
@@ -446,11 +536,14 @@ unsafe fn validate_entry(
                 subclass_of_in_shapes_graph,
             )
             .map_err(PurrdfError::shapes)?,
-            (regex, law) => {
+            (regex, law, recursion) => {
                 let mut options = sarif_options(&disallows, subclass_of_in_shapes_graph)
                     .map_err(PurrdfError::shapes)?;
                 if let Some(law) = law {
                     options.validation = options.validation.with_profile(law);
+                }
+                if let Some(recursion) = recursion {
+                    options.validation = options.validation.with_recursion(recursion);
                 }
                 validate_to_sarif_string_with_xpath_regex(
                     shapes, base, graph, data, &options, &imports, regex,
@@ -624,6 +717,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
                 import_count,
                 subclass_of_in_shapes_graph,
                 std::ptr::null(),
+                None,
                 out_buffer,
                 out_scope,
                 out_focus_nodes,
@@ -684,6 +778,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif_xpath_regex(
                 import_count,
                 subclass_of_in_shapes_graph,
                 regex_profile,
+                None,
                 out_buffer,
                 out_scope,
                 out_focus_nodes,
@@ -693,9 +788,72 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif_xpath_regex(
     }
 }
 
-/// The one body of [`purrdf_shacl_validate_changes_to_sarif`] and
-/// [`purrdf_shacl_validate_changes_to_sarif_xpath_regex`]. `regex_profile` is null for
-/// the entry point that has no such parameter.
+/// Validate a change as [`purrdf_shacl_validate_changes_to_sarif_xpath_regex`] with
+/// explicit fixed-point recursion. The mode and limits follow
+/// [`purrdf_shacl_validate_to_sarif_with_recursion`]. A recursion refusal leaves the
+/// report, scope, focus count and reason outputs untouched.
+///
+/// # Safety
+/// As [`purrdf_shacl_validate_changes_to_sarif_xpath_regex`]. The mode must be null or a
+/// live, NUL-terminated UTF-8 string. Each limit must be null or point to a live, aligned
+/// and readable `uint64_t`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif_with_recursion(
+    shapes_ttl: *const c_char,
+    shapes_base_iri: *const c_char,
+    shapes_graph_iri: *const c_char,
+    data_nt: *const c_char,
+    added_nt: *const c_char,
+    removed_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    subclass_of_in_shapes_graph: bool,
+    regex_profile: *const c_char,
+    recursion_mode: *const c_char,
+    recursion_max_pairs: *const u64,
+    recursion_max_iterations: *const u64,
+    out_buffer: *mut *mut PurrdfBuffer,
+    out_scope: *mut i32,
+    out_focus_nodes: *mut usize,
+    out_reason: *mut *mut PurrdfBuffer,
+    out_error: *mut *mut PurrdfError,
+) -> i32 {
+    // SAFETY: The caller upholds the document, option and output pointer contracts.
+    unsafe {
+        ffi_try!(out_error, {
+            validate_changes_entry(
+                "purrdf_shacl_validate_changes_to_sarif_with_recursion",
+                shapes_ttl,
+                shapes_base_iri,
+                shapes_graph_iri,
+                data_nt,
+                added_nt,
+                removed_nt,
+                conformance_disallows,
+                conformance_disallows_count,
+                import_iris,
+                import_documents,
+                import_count,
+                subclass_of_in_shapes_graph,
+                regex_profile,
+                Some(RecursionRequest {
+                    mode: recursion_mode,
+                    max_pairs: recursion_max_pairs,
+                    max_iterations: recursion_max_iterations,
+                }),
+                out_buffer,
+                out_scope,
+                out_focus_nodes,
+                out_reason,
+            )
+        })
+    }
+}
+
+/// Shared implementation of the change-validation entry points.
 #[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
@@ -715,6 +873,7 @@ unsafe fn validate_changes_entry(
     import_count: usize,
     subclass_of_in_shapes_graph: bool,
     regex_profile: *const c_char,
+    recursion: Option<RecursionRequest>,
     out_buffer: *mut *mut PurrdfBuffer,
     out_scope: *mut i32,
     out_focus_nodes: *mut usize,
@@ -747,8 +906,9 @@ unsafe fn validate_changes_entry(
         let imports = import_pairs(import_iris, import_documents, import_count, entry)?;
         let graph = opt_cstr_to_str(shapes_graph_iri)?;
         let regex = decode_regex_profile(regex_profile)?;
-        let (bytes, scope) = match regex {
-            None => validate_changes_to_sarif_bytes(
+        let recursion = RecursionRequest::decode(recursion)?;
+        let (bytes, scope) = match (regex, recursion) {
+            (None, None) => validate_changes_to_sarif_bytes(
                 shapes,
                 base,
                 graph,
@@ -760,18 +920,14 @@ unsafe fn validate_changes_entry(
                 subclass_of_in_shapes_graph,
             )
             .map_err(PurrdfError::complete)?,
-            Some(profile) => {
+            (regex, recursion) => {
+                let mut options = sarif_options(&disallows, subclass_of_in_shapes_graph)
+                    .map_err(PurrdfError::shapes)?;
+                if let Some(recursion) = recursion {
+                    options.validation = options.validation.with_recursion(recursion);
+                }
                 let (sarif, scope) = validate_changes_to_sarif_string_with_xpath_regex(
-                    shapes,
-                    base,
-                    graph,
-                    data,
-                    added,
-                    removed,
-                    &sarif_options(&disallows, subclass_of_in_shapes_graph)
-                        .map_err(PurrdfError::shapes)?,
-                    &imports,
-                    Some(profile),
+                    shapes, base, graph, data, added, removed, &options, &imports, regex,
                 )
                 .map_err(law_error)?;
                 (sarif.into_bytes(), scope)

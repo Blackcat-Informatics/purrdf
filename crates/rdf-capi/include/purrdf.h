@@ -4076,6 +4076,36 @@ int32_t purrdf_shacl_validate_to_sarif_law(const char *shapes_ttl,
                                            PurrdfError **out_error);
 
 /**
+ * Validate as [`purrdf_shacl_validate_to_sarif_law`] with explicit fixed-point recursion.
+ *
+ * Pass NULL for all three recursion inputs to retain the default refusal of recursive
+ * shapes. Otherwise pass `lfp` or `gfp` and both work limits. Zero is a limit.
+ * An incomplete or unknown selection returns `PURRDF_STATUS_INVALID_ARGUMENT`.
+ * A recursion refusal leaves the report output untouched and carries a native diagnostic.
+ *
+ * # Safety
+ * As [`purrdf_shacl_validate_to_sarif_law`]. The mode must be null or a live, NUL-terminated
+ * UTF-8 string. Each limit must be null or point to a live, aligned and readable `uint64_t`.
+ */
+int32_t purrdf_shacl_validate_to_sarif_with_recursion(const char *shapes_ttl,
+                                                      const char *shapes_base_iri,
+                                                      const char *shapes_graph_iri,
+                                                      const char *data_nt,
+                                                      const char *const *conformance_disallows,
+                                                      size_t conformance_disallows_count,
+                                                      const char *const *import_iris,
+                                                      const char *const *import_documents,
+                                                      size_t import_count,
+                                                      bool subclass_of_in_shapes_graph,
+                                                      const char *regex_profile,
+                                                      const char *shacl_profile,
+                                                      const char *recursion_mode,
+                                                      const uint64_t *recursion_max_pairs,
+                                                      const uint64_t *recursion_max_iterations,
+                                                      PurrdfBuffer **out_buffer,
+                                                      PurrdfError **out_error);
+
+/**
  * Validate a CHANGE to a data graph (N-Triples) against a shapes graph (Turtle),
  * writing the SARIF 2.1.0 report bytes to `*out_buffer` and the scope that report
  * describes to `*out_scope`, `*out_focus_nodes` and `*out_reason`.
@@ -4191,6 +4221,39 @@ int32_t purrdf_shacl_validate_changes_to_sarif_xpath_regex(const char *shapes_tt
                                                            size_t *out_focus_nodes,
                                                            PurrdfBuffer **out_reason,
                                                            PurrdfError **out_error);
+
+/**
+ * Validate a change as [`purrdf_shacl_validate_changes_to_sarif_xpath_regex`] with
+ * explicit fixed-point recursion. The mode and limits follow
+ * [`purrdf_shacl_validate_to_sarif_with_recursion`]. A recursion refusal leaves the
+ * report, scope, focus count and reason outputs untouched.
+ *
+ * # Safety
+ * As [`purrdf_shacl_validate_changes_to_sarif_xpath_regex`]. The mode must be null or a
+ * live, NUL-terminated UTF-8 string. Each limit must be null or point to a live, aligned
+ * and readable `uint64_t`.
+ */
+int32_t purrdf_shacl_validate_changes_to_sarif_with_recursion(const char *shapes_ttl,
+                                                              const char *shapes_base_iri,
+                                                              const char *shapes_graph_iri,
+                                                              const char *data_nt,
+                                                              const char *added_nt,
+                                                              const char *removed_nt,
+                                                              const char *const *conformance_disallows,
+                                                              size_t conformance_disallows_count,
+                                                              const char *const *import_iris,
+                                                              const char *const *import_documents,
+                                                              size_t import_count,
+                                                              bool subclass_of_in_shapes_graph,
+                                                              const char *regex_profile,
+                                                              const char *recursion_mode,
+                                                              const uint64_t *recursion_max_pairs,
+                                                              const uint64_t *recursion_max_iterations,
+                                                              PurrdfBuffer **out_buffer,
+                                                              int32_t *out_scope,
+                                                              size_t *out_focus_nodes,
+                                                              PurrdfBuffer **out_reason,
+                                                              PurrdfError **out_error);
 
 /**
  * Entail a data graph (N-Triples) under a shapes graph (Turtle) and write the
