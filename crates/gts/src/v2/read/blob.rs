@@ -6,13 +6,13 @@ use std::borrow::Cow;
 use std::collections::TryReserveError;
 
 use super::{GraphReader, ReadError, ReadFailure, Segment, Unit, VerifiedBlob};
-use crate::FastMap;
 use crate::v2::fields::{Fields, push};
 use crate::v2::terms::read_enum;
 use crate::v2::{
     BLAKE3_256, ContentError, DIGEST_LENGTH, FoldError, FrameType, MalformedReason, ValueName,
     WireError,
 };
+use crate::{FastMap, FastSet};
 
 type Digest = [u8; DIGEST_LENGTH];
 type Entry = (ValueName, usize);
@@ -81,16 +81,79 @@ pub struct RebuildResult {
     pub name: ValueName,
     /// Result of checking and rebuilding the declaration.
     pub state: RebuildState,
+    pub(in crate::v2) is_value: bool,
+    pub(in crate::v2) has_all_units: bool,
+}
+
+/// A chunk declaration whose digest has no reference in its segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct UnreferencedUnit {
+    /// File offset of the frame that declares the chunk.
+    pub offset: usize,
+    /// Zero-based position in the pack directory, if any.
+    pub member: Option<usize>,
+    /// The digest claimed by the chunk.
+    pub digest: Digest,
+}
+
+#[derive(Default)]
+pub(super) struct UnitUsage {
+    chunks: Vec<UnreferencedUnit>,
+    referenced: FastSet<Digest>,
+}
+
+impl UnitUsage {
+    fn unit(
+        &mut self,
+        unit: UnitDeclaration<'_>,
+        offset: usize,
+        member: Option<usize>,
+    ) -> Result<(), TryReserveError> {
+        match unit.kind {
+            UnitKind::Chunk => push(
+                &mut self.chunks,
+                UnreferencedUnit {
+                    offset,
+                    member,
+                    digest: unit.digest,
+                },
+            ),
+            UnitKind::Blob(_) => self.reference(unit.digest),
+        }
+    }
+
+    fn reference(&mut self, digest: Digest) -> Result<(), TryReserveError> {
+        if !self.referenced.contains(&digest) {
+            self.referenced.try_reserve(1)?;
+            self.referenced.insert(digest);
+        }
+        Ok(())
+    }
+
+    pub(super) fn report(
+        &mut self,
+        output: &mut Vec<UnreferencedUnit>,
+    ) -> Result<(), TryReserveError> {
+        for chunk in self.chunks.drain(..) {
+            if !self.referenced.contains(&chunk.digest) {
+                push(output, chunk)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl purrdf_hash::error::StructuredError for RebuildResult {
     purrdf_hash::error_visit! {
-        @record self { offset, member, name, state } => "gts-v2-rebuild-result" {
+        @record self { offset, member, name, state, is_value, has_all_units } => "gts-v2-rebuild-result" {
             "offset" => Unsigned(self.offset as u128),
             "member" => Value(self.member.map_or(purrdf_hash::error::ErrorValue::Absent,
                 |member| purrdf_hash::error::ErrorValue::Unsigned(member as u128))),
             "name" => Record(&self.name),
             "state" => Record(&self.state),
+            "is_value" => Boolean(self.is_value),
+            "has_all_units" => Boolean(self.has_all_units),
         }
     }
 }
@@ -105,6 +168,7 @@ impl purrdf_hash::error::StructuredError for RebuildState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(super) struct RebuildBudget {
     remaining: Option<u64>,
     admitted: u64,
@@ -255,6 +319,7 @@ impl<'a> GraphReader<'a, '_> {
         match kind {
             FrameType::Chunk | FrameType::Blob => {
                 let declared = UnitDeclaration::read(&mut content, kind == FrameType::Blob)?;
+                segment.unit_usage.unit(declared, location.0, None)?;
                 if let UnitKind::Blob(media_type) = declared.kind {
                     self.claim_blob(
                         ValueName {
@@ -426,18 +491,12 @@ impl<'a> GraphReader<'a, '_> {
     }
 
     fn rebuild<'p>(
-        &self,
         entries: &[Entry],
-        segment: &Segment<'a>,
-        pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
+        unit: impl Fn(&Digest) -> Option<&'p [u8]>,
     ) -> Result<Vec<u8>, ReadFailure> {
         let mut output = Vec::new();
         for &(entry, _) in entries {
-            let bytes = match segment.units.get(&entry.digest) {
-                Some(Unit::Blob(index)) => self.graph.blobs[*index].bytes.as_ref(),
-                Some(Unit::Chunk(bytes)) => bytes.as_ref(),
-                None => pack_unit(&entry.digest).ok_or(ReadFailure::MissingUnit(entry))?,
-            };
+            let bytes = unit(&entry.digest).ok_or(ReadFailure::MissingUnit(entry))?;
             if bytes.len() as u64 != entry.length {
                 return Err(ReadFailure::UnitLength(entry));
             }
@@ -452,10 +511,13 @@ impl<'a> GraphReader<'a, '_> {
         name: ValueName,
         kind: RecipeKind<Cow<'a, str>>,
         entries: &[Entry],
-        segment: &Segment<'a>,
+        segment: &mut Segment<'a>,
         pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
         (offset, member): (usize, Option<usize>),
     ) -> Result<(), ReadFailure> {
+        for (entry, _) in entries {
+            segment.unit_usage.reference(entry.digest)?;
+        }
         let is_value = matches!(kind, RecipeKind::Value);
         if let RecipeKind::Blob(media_type) = &kind {
             let media_type = match media_type {
@@ -466,11 +528,30 @@ impl<'a> GraphReader<'a, '_> {
             self.claim_blob(name, true, media_type, offset)?;
         }
         let refused = self.rebuilt.charge(name.length).err();
-        let result = match refused {
-            Some(_) => Err(ReadFailure::RebuildCapacity(name)),
-            None => self
-                .rebuild(entries, segment, pack_unit)
-                .and_then(|bytes| self.store_rebuild(name, kind, bytes)),
+        let (result, has_all_units) = if refused.is_some() {
+            (Err(ReadFailure::RebuildCapacity(name)), false)
+        } else {
+            let unit = |digest: &Digest| match segment.units.get(digest) {
+                Some(Unit::Blob(index)) => Some(self.graph.blobs[*index].bytes.as_ref()),
+                Some(Unit::Chunk(bytes)) => Some(bytes.as_ref()),
+                None => pack_unit(digest),
+            };
+            let rebuilt = Self::rebuild(entries, unit);
+            let has_all_units = match &rebuilt {
+                Ok(_) => true,
+                Err(ReadFailure::UnitLength(_)) if !is_value => {
+                    // A length failure stops the rebuild. Compaction still
+                    // needs to know whether all its units were available.
+                    entries
+                        .iter()
+                        .all(|(entry, _)| unit(&entry.digest).is_some())
+                }
+                Err(_) => false,
+            };
+            (
+                rebuilt.and_then(|bytes| self.store_rebuild(name, kind, bytes)),
+                has_all_units,
+            )
         };
         let state = match result {
             Ok(()) => RebuildState::Verified,
@@ -489,7 +570,12 @@ impl<'a> GraphReader<'a, '_> {
                 };
                 if is_value {
                     // The declaration remains a candidate for later terms.
-                    self.values.record(name, None).map_err(ReadFailure::Fold)?;
+                    if matches!(state, RebuildState::Refused { .. }) {
+                        self.values.record_refusal(name)
+                    } else {
+                        self.values.record(name, None)
+                    }
+                    .map_err(ReadFailure::Fold)?;
                 } else {
                     self.graph.note_content_omission(offset);
                 }
@@ -507,6 +593,8 @@ impl<'a> GraphReader<'a, '_> {
                 member,
                 name,
                 state,
+                is_value,
+                has_all_units,
             },
         )?;
         Ok(())
@@ -557,9 +645,32 @@ impl<'a> GraphReader<'a, '_> {
             return Err(WireError::new(MalformedReason::InconsistentCounts, length_offset).into());
         }
         let mut members = pack.members()?;
+        if self.stop_after_segment
+            && segment.canonical_claim
+            && let Some(region) = members.iter().find_map(|member| {
+                use crate::v2::canonical::PackRegion;
+                match member {
+                    Member::Unit(
+                        UnitDeclaration {
+                            kind: UnitKind::Blob(_),
+                            ..
+                        },
+                        _,
+                    ) => Some(PackRegion::Blob),
+                    Member::Recipe(recipe, _) => Some(match recipe.kind {
+                        RecipeKind::Blob(_) => PackRegion::Blob,
+                        RecipeKind::Value => PackRegion::Value,
+                    }),
+                    _ => None,
+                }
+            })
+        {
+            push(&mut self.graph.pack_regions, (offset, region))?;
+        }
         let mut units = FastMap::default();
         for (member_index, member) in members.iter_mut().enumerate() {
             if let Member::Unit(unit, bytes) = member {
+                segment.unit_usage.unit(*unit, offset, Some(member_index))?;
                 segment
                     .index_content
                     .record_unit(unit.digest, position, member_index)?;

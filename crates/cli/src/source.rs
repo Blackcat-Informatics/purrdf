@@ -716,7 +716,10 @@ fn gts_v2_loss_ledger(graph: &RdfGraph<'_>, source: &str) -> LossLedger {
     let annotation_rows = graph
         .rdf
         .lines()
-        .filter(|line| matches!(line, Line::Annotation(_, count, _) if count.get() > 1))
+        .filter(|&line| {
+            matches!(line, Line::Annotation(_, count, _) if count.get() > 1)
+                && !graph.references.visible.hides_line(line)
+        })
         .count();
     let signature_records = graph
         .signatures
@@ -743,6 +746,16 @@ fn gts_v2_loss_ledger(graph: &RdfGraph<'_>, source: &str) -> LossLedger {
             "gts-v2-typed-values-dropped",
             "GTS typed value definitions are omitted. RDF literal lexical forms are preserved.",
             graph.rdf.values().len(),
+        ),
+        (
+            "gts-v2-bindings-dropped",
+            "GTS transport bindings are omitted from the RDF dataset.",
+            graph.references.bindings.len(),
+        ),
+        (
+            "gts-v2-suppression-record-dropped",
+            "GTS suppression records determine the visible RDF lines and are omitted from the RDF dataset.",
+            graph.references.suppressions.len(),
         ),
         (
             "gts-v2-annotation-multiplicity-dropped",

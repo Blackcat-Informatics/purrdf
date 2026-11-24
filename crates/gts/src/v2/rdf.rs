@@ -11,6 +11,7 @@ mod values;
 
 pub(super) use dictionary::RowScope;
 pub use dictionary::{DefinitionFindings, RowDisposition, RowFindings, SegmentDictionary};
+pub(super) use lines::LineKey;
 pub use lines::{Line, RdfFold};
 pub use terms::{LiteralDirection, LiteralValue, Term, TermId};
 pub(super) use values::{UNIT_CONTEXT, unit_digest};

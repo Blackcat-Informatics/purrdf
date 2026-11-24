@@ -19,7 +19,10 @@ pub use payload::{
 };
 
 const TERM_ID_END: u128 = u64::MAX as u128 + 1;
-const LAST_TERM_KIND: u64 = 7;
+pub(super) const TRIPLE_KIND: u64 = 4;
+pub(super) const LITERAL_VALUE_KIND: u64 = 6;
+pub(super) const LITERAL_VALUE_REF_KIND: u64 = 7;
+const LAST_TERM_KIND: u64 = LITERAL_VALUE_REF_KIND;
 
 /// The declared order of the terms in a frame.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

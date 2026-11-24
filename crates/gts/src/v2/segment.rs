@@ -36,6 +36,8 @@ pub struct SegmentFrame<'a> {
     pub rows: Option<Result<RowHeader, ContentError>>,
     /// Parity frame and table admission before stream placement and shard checks.
     pub parity: Option<ParityCheck<'a>>,
+    pub(super) index_fold: Option<super::index::IndexFoldClaims>,
+    pub(super) index_declared_digest: Option<[u8; DIGEST_LENGTH]>,
     row_order: Option<(usize, Option<OrderKey>)>,
 }
 
@@ -270,6 +272,8 @@ impl SegmentVerifier {
             commit
         });
         let frame_type = checked.frame_type.and_then(FrameType::from_code);
+        let mut index_fold = None;
+        let mut index_declared_digest = None;
         let index = if frame_type == Some(FrameType::Index) {
             let content = index_content.filter(|_| !self.incomplete_prefix);
             self.types
@@ -282,11 +286,14 @@ impl SegmentVerifier {
                     content,
                 )
                 .map(|result| {
-                    result.map(|mut index| {
+                    result.map(|(mut index, claims)| {
+                        index_declared_digest = claims.content_digest();
                         if self.incomplete_prefix {
                             index.head_matches = false;
                             index.root_matches = false;
                             index.type_runs_match = false;
+                        } else {
+                            index_fold = Some(claims);
                         }
                         index
                     })
@@ -364,6 +371,8 @@ impl SegmentVerifier {
             terms,
             rows,
             parity: parity.map(|observation| self.parity.record(observation)),
+            index_fold,
+            index_declared_digest,
             row_order,
         })
     }

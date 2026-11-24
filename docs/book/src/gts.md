@@ -45,6 +45,16 @@ Use `purrdf_rdf::gts_write::write_gts_v2` to send an RDF dataset to a
 can also append resolved RDF folds, whole or chunked blobs, values and
 external declarations to a caller-owned sink.
 
+The generation 2 graph retains bindings and suppression records with the
+whole RDF fold. `SegmentWriter::add_rdf_with_references` writes the fold
+and its reference records together. Dataset-only loaders and the CLI use
+the visible RDF lines, applying the suppression record before projection.
+Rust callers can use `read_gts_v2_dataset` to inspect the whole fold
+alongside the native dataset and the read evidence. Use `RdfGraph::read_state`
+to read the fold of the run and commit named by a state binding. The
+returned state's reference findings identify rejected binding and
+suppression entries in otherwise folded frames.
+
 Use `purrdf convert --to gts input.trig output.gts` to write a file from the
 CLI. Python `RdfDataset` exposes `from_gts` and `to_gts_v2`. JavaScript's
 WebAssembly `Dataset` exposes `fromGts` and `toGtsV2`. The corresponding C

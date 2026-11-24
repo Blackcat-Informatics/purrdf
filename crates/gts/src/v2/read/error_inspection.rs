@@ -7,8 +7,8 @@ use super::{
     FramingDamage, ParityRecovery, ReadError, ReadFailure, RecoveryRefusal, Resynchronization,
 };
 use crate::v2::{
-    DefinitionFindings, Generation, ItemKind, PayloadDamage, PayloadRefusal, RowFindings,
-    UnknownFrameType,
+    DefinitionFindings, Generation, ItemKind, PayloadDamage, PayloadRefusal, ReferenceFindings,
+    RowFindings, UnknownFrameType,
 };
 
 impl StructuredError for ReadError {
@@ -57,8 +57,13 @@ impl StructuredError for ReadFailure {
         Commit => "gts-v2-read-invalid-commit" {},
         Content(cause) => "gts-v2-read-content" { "cause" => Cause(cause) },
         MissingContent => "gts-v2-read-missing-content" {},
+        SegmentOwnFold(segment) => "gts-v2-read-segment-own-fold" {
+            "segment" => Unsigned(u128::from(*segment)),
+        },
+        Labelling(cause) => "gts-v2-read-labelling" { "cause" => Cause(cause.as_ref()) },
         Definitions(findings) => "gts-v2-read-definitions" { "findings" => Record(findings) },
         Rows(findings) => "gts-v2-read-rows" { "findings" => Record(findings) },
+        References(findings) => "gts-v2-read-references" { "findings" => Record(findings) },
         AnnotationWidth => "gts-v2-read-annotation-width" {},
         BlobDigest => "gts-v2-read-blob-digest" {},
         MissingUnit(name) => "gts-v2-read-missing-unit" { "unit" => Record(name) },
@@ -126,11 +131,13 @@ impl StructuredError for PayloadRefusal {
 
 impl StructuredError for DefinitionFindings {
     purrdf_hash::error_visit! {
-        @record self { ill_formed_term, forward_reference, position_constraint, missing_values } =>
+        @record self { ill_formed_term, forward_reference, position_constraint, missing_values, capacity_refused_value, declared_order_violated } =>
         "gts-v2-definition-findings" {
             "ill_formed_term" => Boolean(self.ill_formed_term),
             "forward_reference" => Boolean(self.forward_reference),
+            "capacity_refused_value" => Boolean(self.capacity_refused_value),
             "position_constraint" => Boolean(self.position_constraint),
+            "declared_order_violated" => Boolean(self.declared_order_violated),
             "missing_values" => List(self.missing_values.iter().map(|value| ErrorValue::Record(value))),
         }
     }
@@ -142,6 +149,17 @@ impl StructuredError for RowFindings {
             "forward_reference" => Boolean(self.forward_reference),
             "opaque_term" => Boolean(self.opaque_term),
             "position_constraint" => Boolean(self.position_constraint),
+        }
+    }
+}
+
+impl StructuredError for ReferenceFindings {
+    purrdf_hash::error_visit! {
+        @record self { at, forward_reference, opaque_term } => "gts-v2-reference-findings" {
+            "segment" => Unsigned(u128::from(self.at.segment)),
+            "offset" => ByteCount(self.at.offset as u128),
+            "forward_reference" => Boolean(self.forward_reference),
+            "opaque_term" => Boolean(self.opaque_term),
         }
     }
 }

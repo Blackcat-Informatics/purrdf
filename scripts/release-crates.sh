@@ -55,8 +55,8 @@ PURRDF_RELEASE_CRATES=(
   purrdf-deflate
   purrdf-zstd
   purrdf-ed25519
-  purrdf-gts
   purrdf-core
+  purrdf-gts
   purrdf-geo-kernel
   purrdf-columnar
   purrdf-datalog

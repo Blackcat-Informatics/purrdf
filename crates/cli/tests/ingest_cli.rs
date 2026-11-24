@@ -501,6 +501,33 @@ fn gts_v2_round_trip_preserves_dataset_and_reports_segment_loss() {
     assert!(!Path::new(&absent).exists());
 }
 
+#[test]
+fn gts_v2_conversion_applies_suppression_and_reports_the_record_loss() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let fixture = include_bytes!("../../gts/tests/fixtures/v2/P3/suppress-order-free.after.bin");
+    let input = write_bytes(dir, "suppressed.gts", fixture);
+    let restored = path(dir, "visible.nt");
+    let ledger_path = path(dir, "losses.json");
+    let ledger_flag = format!("--loss-ledger={ledger_path}");
+
+    let output = run(&["convert", &ledger_flag, &input, &restored]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = std::fs::read_to_string(&restored).expect("read visible triples");
+    assert_eq!(text.lines().count(), 1, "{text}");
+    assert!(!text.contains("<http://e/p>"), "{text}");
+
+    let ledger = std::fs::read_to_string(ledger_path).expect("read loss ledger");
+    let parsed = purrdf_lex::json::read(&ledger).expect("ledger JSON");
+    let loss = parsed["losses"]
+        .as_array()
+        .expect("loss array")
+        .iter()
+        .find(|entry| entry["code"].as_str() == Some("gts-v2-suppression-record-dropped"))
+        .expect("suppression record omission");
+    assert_eq!(loss["detail"][0]["value"]["count"].as_u64(), Some(1));
+}
+
 /// A corrupt GTS source fails closed: the authoritative importer hard-fails on a reader
 /// diagnostic, and no partial output is written.
 #[test]

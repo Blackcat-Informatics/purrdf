@@ -288,10 +288,14 @@ impl LabellingCapacity {
         self.total
     }
 
-    const fn admit_size(&self, size: u64) -> Result<(), LoweringRefusal> {
-        if size > self.lines {
+    fn admit_size(&self, size: u64) -> Result<(), LoweringRefusal> {
+        self.admit_exact_size(u128::from(size))
+    }
+
+    pub(super) fn admit_exact_size(&self, size: u128) -> Result<(), LoweringRefusal> {
+        if size > u128::from(self.lines) {
             return Err(LoweringRefusal::Size {
-                size,
+                size: u64::try_from(size).unwrap_or(u64::MAX),
                 capacity: self.lines,
             });
         }
@@ -299,7 +303,14 @@ impl LabellingCapacity {
     }
 
     fn admit_weight(&mut self, weight: u64) -> Result<(), LoweringRefusal> {
-        match self.total.checked_add(weight) {
+        self.admit_exact_weight(u128::from(weight))
+    }
+
+    pub(super) fn admit_exact_weight(&mut self, weight: u128) -> Result<(), LoweringRefusal> {
+        match u64::try_from(weight)
+            .ok()
+            .and_then(|weight| self.total.checked_add(weight))
+        {
             Some(total) if !self.spent && total <= self.bytes => {
                 self.total = total;
                 Ok(())
@@ -307,7 +318,7 @@ impl LabellingCapacity {
             _ => {
                 self.spent = true;
                 Err(LoweringRefusal::Weight {
-                    weight,
+                    weight: u64::try_from(weight).unwrap_or(u64::MAX),
                     total: self.total,
                     capacity: self.bytes,
                 })
@@ -1119,57 +1130,11 @@ pub(super) fn lowered<D: DatasetView>(
             let Some((ordinal, label)) = source.split_first_chunk::<4>() else {
                 continue;
             };
-            let text = text_blank_source(u32::from_be_bytes(*ordinal), label);
+            let text = text_blank_source(u64::from(u32::from_be_bytes(*ordinal)), label);
             admit(&mut meter, text.len().saturating_sub(source.len()))?;
             interner.set.nodes[node] = text.into_boxed_slice();
         }
-        if is_stopped(stop) {
-            return Err(ViewError::Stopped);
-        }
-        admit(&mut meter, nested.digest_bytes())?;
-        let digests = nested
-            .digests(&interner.set.nodes, hash, stop)
-            .map_err(|refusal| match refusal {
-                DigestRefusal::Stopped => ViewError::Stopped,
-                DigestRefusal::Collision(digest) => {
-                    ViewError::Lowering(LoweringRefusal::TermNode { digest })
-                }
-            })?;
-        let mut payload = Vec::with_capacity(8 + NESTED_TERM_PAYLOAD.len());
-        push_bytes(&mut payload, &NESTED_TERM_PAYLOAD);
-        admit_constant(&mut meter, interner, &payload)?;
-        for (n, digest) in digests.iter().enumerate() {
-            if is_stopped(stop) {
-                return Err(ViewError::Stopped);
-            }
-            let source = term_node_source(digest);
-            admit(&mut meter, interned_bytes(source.len()))?;
-            interner.set.nodes[term_nodes[n]] = Box::new(source);
-        }
-        for (n, &node) in term_nodes.iter().enumerate() {
-            if is_stopped(stop) {
-                return Err(ViewError::Stopped);
-            }
-            let mut tokens = Vec::with_capacity(7);
-            admitter
-                .interner
-                .record_head(&NESTED_TERM_PAYLOAD, 4, &mut tokens);
-            tokens.push(Tok::Blank(node));
-            tokens.extend(nested.parts(n).map(|part| match part {
-                Part::Const(c) => Tok::Const(c),
-                Part::Blank(b) => Tok::Blank(b),
-                Part::Nested(m) => Tok::Blank(term_nodes[m]),
-            }));
-            admitter.push(
-                tokens,
-                Facts {
-                    slots_ok: true,
-                    zero_count: false,
-                    carried: None,
-                    held: None,
-                },
-            );
-        }
+        finish_nested(&mut admitter, &nested, &term_nodes, hash, stop, &mut meter)?;
     }
     Ok(Lowered {
         admission: admitter.finish(),
@@ -1177,6 +1142,68 @@ pub(super) fn lowered<D: DatasetView>(
         size,
         weight,
     })
+}
+
+/// Finish term nodes once admission has accepted the weight and the caller
+/// has put every blank node source in its CBOR form.
+pub(super) fn finish_nested<E>(
+    admitter: &mut Admitter,
+    nested: &NestedTerms,
+    term_nodes: &[usize],
+    hash: NestedHash,
+    stop: Option<&dyn StopSignal>,
+    meter: &mut Option<&mut Meter<'_>>,
+) -> Result<(), ViewError<E>> {
+    if is_stopped(stop) {
+        return Err(ViewError::Stopped);
+    }
+    let interner = &mut admitter.interner;
+    admit(meter, nested.digest_bytes())?;
+    let digests =
+        nested
+            .digests(&interner.set.nodes, hash, stop)
+            .map_err(|refusal| match refusal {
+                DigestRefusal::Stopped => ViewError::Stopped,
+                DigestRefusal::Collision(digest) => {
+                    ViewError::Lowering(LoweringRefusal::TermNode { digest })
+                }
+            })?;
+    let mut payload = Vec::with_capacity(8 + NESTED_TERM_PAYLOAD.len());
+    push_bytes(&mut payload, &NESTED_TERM_PAYLOAD);
+    admit_constant(meter, interner, &payload)?;
+    for (n, digest) in digests.iter().enumerate() {
+        if is_stopped(stop) {
+            return Err(ViewError::Stopped);
+        }
+        let source = term_node_source(digest);
+        admit(meter, interned_bytes(source.len()))?;
+        interner.set.nodes[term_nodes[n]] = Box::new(source);
+    }
+    for (n, &node) in term_nodes.iter().enumerate() {
+        if is_stopped(stop) {
+            return Err(ViewError::Stopped);
+        }
+        let mut tokens = Vec::with_capacity(7);
+        admitter
+            .interner
+            .record_head(&NESTED_TERM_PAYLOAD, 4, &mut tokens);
+        tokens.push(Tok::Blank(node));
+        tokens.extend(nested.parts(n).map(|part| match part {
+            Part::Const(c) => Tok::Const(c),
+            Part::Blank(b) => Tok::Blank(b),
+            Part::Nested(m) => Tok::Blank(term_nodes[m]),
+        }));
+        admitter.push(
+            tokens,
+            Facts {
+                slots_ok: true,
+                zero_count: false,
+                carried: None,
+                held: None,
+            },
+        );
+    }
+    Ok(())
 }
 
 /// The admitted lines of `view` and `records`: well formed, or the typed

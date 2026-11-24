@@ -102,7 +102,7 @@ impl<W: Write> SegmentWriter<W> {
 
         let predecessor = self.append_head()?;
         let commit = SignedCommit::prepare(&self.opener, &predecessor, &self.range, signers)?;
-        self.append_with(|sink, _| {
+        self.append_with(FrameType::Commit, |sink, _| {
             sink.write_all(commit.body())?;
             sink.write_all(commit.signatures())?;
             Ok(commit.identifier)

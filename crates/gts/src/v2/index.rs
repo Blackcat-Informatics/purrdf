@@ -3,6 +3,9 @@
 
 use core::num::NonZeroU64;
 use std::collections::TryReserveError;
+use std::io::{self, Write};
+
+use purrdf_lex::cbor::head;
 
 use super::fields::{Fields, OptionShape, push};
 use super::terms::read_enum;
@@ -40,10 +43,46 @@ pub struct IndexPrefixCheck {
     pub pack_members_match: Option<bool>,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct IndexStatistics {
+    counts: [u64; 3],
+    predicates_match: Option<bool>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct IndexFoldClaims {
+    statistics: IndexStatistics,
+    content_digest: Option<Digest>,
+}
+
+impl IndexFoldClaims {
+    pub(super) const fn content_digest(self) -> Option<Digest> {
+        self.content_digest
+    }
+
+    pub(super) fn compare(self, counts: [u64; 3], digest: Option<Digest>) -> (bool, bool) {
+        (
+            self.statistics.counts == counts && self.statistics.predicates_match == Some(true),
+            self.content_digest == digest,
+        )
+    }
+}
+
 #[derive(Debug, Default)]
 pub(super) struct TypeRuns(Vec<(Option<u64>, u64)>);
 
 impl TypeRuns {
+    pub(super) fn write(&self, output: &mut impl Write) -> io::Result<()> {
+        head::write_head(output, head::ARRAY, self.0.len() as u64)?;
+        for &(code, count) in &self.0 {
+            let code = code.ok_or_else(|| io::Error::other("a written GTS frame has no type"))?;
+            head::write_head(output, head::ARRAY, 2)?;
+            head::write_head(output, head::UNSIGNED, code)?;
+            head::write_head(output, head::UNSIGNED, count)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn reserve_next(&mut self, frame_type: Option<u64>) -> Result<(), TryReserveError> {
         if self.0.last().is_none_or(|(code, _)| *code != frame_type) {
             self.0.try_reserve(1)?;
@@ -70,7 +109,7 @@ impl TypeRuns {
         head: &Digest,
         range: &Range,
         content: Option<&IndexContent>,
-    ) -> Option<Result<IndexPrefixCheck, ContentError>> {
+    ) -> Option<Result<(IndexPrefixCheck, IndexFoldClaims), ContentError>> {
         if checked.malformed.is_some() || checked.link.state == LinkState::Broken {
             return None;
         }
@@ -88,24 +127,31 @@ impl TypeRuns {
         head: &Digest,
         range: &Range,
         content: Option<&IndexContent>,
-    ) -> Result<IndexPrefixCheck, ContentError> {
+    ) -> Result<(IndexPrefixCheck, IndexFoldClaims), ContentError> {
         let (count, claimed_head) = frame.read_field(FrameField::Content).count_and_digest()?;
         let mut fields = Fields::new(payload);
         fields.record(6)?;
         let type_runs_match = self.compare(&mut fields, registry)?;
         let graph_directory_matches = check_graph_directory(&mut fields, registry, content)?;
-        check_statistics(&mut fields)?;
+        let statistics = check_statistics(&mut fields, content.and_then(IndexContent::predicates))?;
         let root = fields.fixed_bytes::<DIGEST_LENGTH>()?;
-        check_content_digest(&mut fields, registry)?;
+        let content_digest = read_content_digest(&mut fields, registry)?;
         let pack_members_match = check_pack_members(&mut fields, content)?;
         fields.finish()?;
-        Ok(IndexPrefixCheck {
+        let prefix = IndexPrefixCheck {
             head_matches: count == range.count().get() - 1 && claimed_head == head,
             root_matches: *root == range.root(),
             type_runs_match,
             graph_directory_matches,
             pack_members_match,
-        })
+        };
+        Ok((
+            prefix,
+            IndexFoldClaims {
+                statistics,
+                content_digest,
+            },
+        ))
     }
 
     fn compare(&self, fields: &mut Fields<'_>, registry: NonZeroU64) -> Result<bool, ContentError> {
@@ -128,25 +174,39 @@ impl TypeRuns {
     }
 }
 
-fn check_statistics(fields: &mut Fields<'_>) -> Result<(), WireError> {
+fn check_statistics(
+    fields: &mut Fields<'_>,
+    predicates: Option<&crate::FastMap<u64, u128>>,
+) -> Result<IndexStatistics, WireError> {
     fields.record(4)?;
-    fields.uint()?;
-    fields.uint()?;
-    fields.uint()?;
-    for _ in 0..fields.array()? {
+    let counts = [fields.uint()?, fields.uint()?, fields.uint()?];
+    let entries = fields.array()?;
+    let mut matches = predicates.is_some_and(|values| values.len() as u64 == entries);
+    let mut last = None;
+    for _ in 0..entries {
         fields.record(2)?;
-        fields.uint()?;
-        fields.uint()?;
+        let predicate = fields.uint()?;
+        let rows = u128::from(fields.uint()?);
+        matches &= last.is_none_or(|last| last < predicate)
+            && predicates
+                .and_then(|values| values.get(&predicate))
+                .copied()
+                == Some(rows);
+        last = Some(predicate);
     }
-    Ok(())
+    Ok(IndexStatistics {
+        counts,
+        predicates_match: predicates.map(|_| matches),
+    })
 }
 
-fn check_content_digest(fields: &mut Fields<'_>, registry: NonZeroU64) -> Result<(), ContentError> {
-    match fields.option_shape()? {
-        OptionShape::Absent => {}
-        OptionShape::Present => {
-            fields.fixed_bytes::<DIGEST_LENGTH>()?;
-        }
+fn read_content_digest(
+    fields: &mut Fields<'_>,
+    registry: NonZeroU64,
+) -> Result<Option<Digest>, ContentError> {
+    Ok(match fields.option_shape()? {
+        OptionShape::Absent => None,
+        OptionShape::Present => Some(*fields.fixed_bytes::<DIGEST_LENGTH>()?),
         OptionShape::Unknown {
             code, tag_offset, ..
         } if code != 0 && registry.get() > REGISTRY_VERSION => {
@@ -158,8 +218,7 @@ fn check_content_digest(fields: &mut Fields<'_>, registry: NonZeroU64) -> Result
         OptionShape::Unknown { tag_offset, .. } => {
             return Err(WireError::new(MalformedReason::UnregisteredValue, tag_offset).into());
         }
-    }
-    Ok(())
+    })
 }
 
 /// An accelerator item outside the frame chain and parity stream.

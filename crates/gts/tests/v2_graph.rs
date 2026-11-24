@@ -5,14 +5,18 @@
 
 use core::num::NonZeroU64;
 
+use purrdf_core::canonical_labelling::{
+    LabellingCapacity, Limit, LoweringRefusal, Quantity, Refusal, ViewError,
+};
 use purrdf_gts::reader::GtsReadResource;
 use purrdf_gts::v2::{
-    ContentError, DetectionCapacity, FileEnd, FrameField, FramingDamage, Header, IndexStorageItem,
-    IndexStorageProblem, Item, ItemKind, Line, Lineage, LineageFinding, LinkState, MalformedReason,
-    ParityFindingKind, ParityRepairFailure, PayloadDamage, PayloadOutcome, PayloadRefusal,
-    PayloadUnchecked, RdfGraph, ReadCapacity, ReadFailure, ReadGraph, ReadLimits, RebuildState,
-    ResyncPast, ResyncReach, SegmentWriteError, SegmentWriter, SignatureStatus,
-    SignatureUnverified, Term, UnknownFrameType, ValueName, read, read_with_limits, write_header,
+    ContentError, ContentLabellingRefusal, DetectionCapacity, FileEnd, FrameField, FramingDamage,
+    Header, IndexStorageItem, IndexStorageProblem, Item, ItemKind, Line, Lineage, LineageFinding,
+    LinkState, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage,
+    PayloadOutcome, PayloadRefusal, PayloadUnchecked, RdfFold, RdfGraph, ReadCapacity, ReadFailure,
+    ReadGraph, ReadLimits, RebuildState, ResyncPast, ResyncReach, SegmentWriteError, SegmentWriter,
+    SignatureStatus, SignatureUnverified, Term, UnknownFrameType, ValueName, read,
+    read_with_limits, write_header, write_indexed_rdf_segment,
 };
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
@@ -37,6 +41,1318 @@ fn relink_frame(bytes: &mut [u8], predecessor: &[u8; 32]) -> [u8; 32] {
     let end = item.bytes().len() - frame.field(FrameField::Signatures).len();
     bytes[end - identifier.len()..end].copy_from_slice(&identifier);
     identifier
+}
+
+#[test]
+fn long_form_envelope_stays_opaque_and_preserves_the_opener_link() {
+    let fixture = include_bytes!("fixtures/v2/P1/frame-test-array-long-form.bin");
+    let opener = Item::first(fixture).unwrap().unwrap();
+    let identifier = Header::decode(opener).unwrap().identifier().unwrap();
+    let graph = second(fixture);
+    let [opaque] = graph.opaque_items.as_slice() else {
+        panic!("the long-form envelope is the only opaque item");
+    };
+    assert_eq!(opaque.offset, opener.bytes().len());
+    assert!(matches!(
+        opaque.failure,
+        ReadFailure::Classification(MalformedReason::NotDeterministic)
+    ));
+    assert!(graph.frame_failures.is_empty());
+    assert!(graph.segment_durability[0].uncommitted_tail.is_none());
+
+    let mut writer = SegmentWriter::new(Vec::new()).unwrap();
+    writer.add_blob(b"after opaque item", None).unwrap();
+    let written = writer.into_inner();
+    let written_opener = Item::first(&written).unwrap().unwrap();
+    let mut frame = written[written_opener.bytes().len()..].to_vec();
+    relink_frame(&mut frame, &identifier);
+    let mut extended = fixture.to_vec();
+    extended.extend_from_slice(&frame);
+    let graph = second(&extended);
+    assert!(graph.frame_failures.is_empty());
+    assert_eq!(graph.blobs.len(), 1);
+}
+
+#[test]
+fn unchecked_profiles_are_reported_once_per_readable_segment() {
+    let dist = include_bytes!("fixtures/v2/P7/profile__not-checked.profile-dist.bin");
+    let unknown = include_bytes!("fixtures/v2/P7/profile__not-checked.profile-99.bin");
+    let plain = SegmentWriter::new(Vec::new()).unwrap().into_inner();
+    let bytes = [dist.as_slice(), &plain, unknown.as_slice()].concat();
+    let graph = second(&bytes);
+    let [first, last] = graph.unchecked_profiles.as_slice() else {
+        panic!("the dist and unknown profiles are unchecked");
+    };
+    assert_eq!(
+        (first.segment, first.offset, first.profile.get()),
+        (0, 0, 1)
+    );
+    assert_eq!(
+        (last.segment, last.offset, last.profile.get()),
+        (2, dist.len() + plain.len(), 99),
+    );
+    assert_eq!(graph.unsupported_registries, [] as [(usize, NonZeroU64); 0]);
+    assert!(graph.into_complete_rdf().unwrap().lines().count() > 0);
+}
+
+#[test]
+fn labelling_size_counts_values_and_nested_candidates() {
+    for (fixture, expected) in [
+        (
+            include_bytes!("fixtures/v2/P3/labelling-size-values.bin").as_slice(),
+            3,
+        ),
+        (
+            include_bytes!("fixtures/v2/P3/labelling-size-at-capacity.bin").as_slice(),
+            8,
+        ),
+        (
+            include_bytes!("fixtures/v2/P3/lowering-shared-nested-term.bin").as_slice(),
+            4,
+        ),
+    ] {
+        assert_eq!(second(fixture).labelling_size(), Some(expected));
+    }
+}
+
+#[test]
+fn labelling_size_counts_rows_before_the_file_union() {
+    let once = include_bytes!("fixtures/v2/P3/labelling-size-equal-folds.a.bin").as_slice();
+    let twice = include_bytes!("fixtures/v2/P3/labelling-size-equal-folds.b.bin").as_slice();
+    for (fixture, expected) in [(once, 1), (twice, 2)] {
+        let graph = second(fixture);
+        assert_eq!(graph.rdf.lines().count(), 1);
+        assert_eq!(graph.labelling_size(), Some(expected));
+    }
+    let combined = [once, twice].concat();
+    let graph = second(&combined);
+    assert_eq!(graph.rdf.lines().count(), 1);
+    assert_eq!(graph.labelling_size(), Some(3));
+}
+
+#[test]
+fn canonical_fold_digests_match_the_frozen_rdf_and_record_cases() {
+    let cases: &[(&str, &[u8], &str)] = &[
+        (
+            "terms-language-case-distinct.bin",
+            include_bytes!("fixtures/v2/P3/terms-language-case-distinct.bin"),
+            "71882498cb465cd1899e49e1c5e95be6833190dead0f2bfc26d2eef007dd9185",
+        ),
+        (
+            "record-binding-payload.bin",
+            include_bytes!("fixtures/v2/P3/record-binding-payload.bin"),
+            "f61c86e9e46b46bb0e9e700d6eea2046414de00636197dd096ac781b6602e806",
+        ),
+        (
+            "record-blob-declaration-payload.bin",
+            include_bytes!("fixtures/v2/P3/record-blob-declaration-payload.bin"),
+            "9e465bb2fed64a5a232ddab87aea45d2f08eecbf559c2b2c2ce2414fadd2534f",
+        ),
+        (
+            "record-suppression-payload-each-kind.term.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.term.bin"),
+            "dcba7df16bea0b1060d6dbb93bae06cc4853d1deebf441b62efeb6caacb92737",
+        ),
+        (
+            "record-suppression-payload-each-kind.quad.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.quad.bin"),
+            "5e2f3c1ffcd2d196114610050215dcf2f5ed51a8cbaae53a30584e7993088f81",
+        ),
+        (
+            "record-suppression-payload-each-kind.reifier.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.reifier.bin"),
+            "ffa642259223eda7f41c2152c78684e2b1a395d8b6df41f5e92648b73b2dbbeb",
+        ),
+        (
+            "record-suppression-payload-each-kind.graph.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.graph.bin"),
+            "ef6b05f48eece7f2e0d6934180bc7f822722a4d98419c3688c2232216b06cc3f",
+        ),
+        (
+            "record-suppression-payload-each-kind.blob.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.blob.bin"),
+            "4abec9369e801e0340e826fba9c1cbe794ac033ad24555a24a7fabd16dc5b0b4",
+        ),
+        (
+            "record-suppression-payload-each-kind.reifier_binding.bin",
+            include_bytes!(
+                "fixtures/v2/P3/record-suppression-payload-each-kind.reifier_binding.bin"
+            ),
+            "e19a212bbbc470cef4db2fa4f12d0625a216d187463dc3ac0633bd3944dbf882",
+        ),
+        (
+            "record-suppression-payload-each-kind.annotation.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.annotation.bin"),
+            "762fd916c9588ca99e788c43f0cdd2aefe1476fba38660d9d45b794d9c42ad07",
+        ),
+        (
+            "record-suppression-payload-each-kind.binding.bin",
+            include_bytes!("fixtures/v2/P3/record-suppression-payload-each-kind.binding.bin"),
+            "c561c18521fe961a096ad606f2b51c19d3c9d46122606c93b61d350d80496435",
+        ),
+        (
+            "record-value-payload.bin",
+            include_bytes!("fixtures/v2/P3/record-value-payload.bin"),
+            "7e9b8b112bc850aea958dcf0ca078c6bc15765881f7c03bfa6ff34db504a31a6",
+        ),
+        (
+            "record-unnamed-slot.bin",
+            include_bytes!("fixtures/v2/P3/record-unnamed-slot.bin"),
+            "172c9494c28835931c353d53ad0a9c3d762e9ab9d1408398c3b80e9c7c63ec6f",
+        ),
+        (
+            "record-triple-slot.bin",
+            include_bytes!("fixtures/v2/P3/record-triple-slot.bin"),
+            "c485d86fd38be9ca53e5541cc22defa9521b9859d50576aeefdc1a9f8fa59475",
+        ),
+        (
+            "lowering-shared-nested-term.bin",
+            include_bytes!("fixtures/v2/P3/lowering-shared-nested-term.bin"),
+            "853c3df985fae8a03b883886688d4ee7e3b4cb6abfc5beb8754f7e3678e72226",
+        ),
+        (
+            "canonical-annotations-sum.source.bin",
+            include_bytes!("fixtures/v2/P3/canonical-annotations-sum.source.bin"),
+            "107d2c5c119361a3e38695dab12dc664188db3fbf048e683bbdf97b2fdb3bab6",
+        ),
+        (
+            "canonical-annotations-sum.canonical.bin",
+            include_bytes!("fixtures/v2/P3/canonical-annotations-sum.canonical.bin"),
+            "107d2c5c119361a3e38695dab12dc664188db3fbf048e683bbdf97b2fdb3bab6",
+        ),
+    ];
+    for &(name, bytes, digest) in cases {
+        let graph = second(bytes);
+        let mut capacity = LabellingCapacity::new(u64::MAX, u64::MAX);
+        let result = graph
+            .label_content(Limit::new(0), &mut capacity)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.content_digest,
+            Some(purrdf_hash::hex::decode_32_canonical(digest).unwrap()),
+            "{name}",
+        );
+        let emitted = result
+            .canonical_lines()
+            .iter()
+            .map(|line| line.len() as u64)
+            .sum::<u64>();
+        assert_eq!(capacity.total(), emitted, "{name}");
+    }
+}
+
+#[test]
+fn canonical_fold_checks_limits_in_order_and_labels_readable_held_content() {
+    let width = second(include_bytes!(
+        "fixtures/v2/P3/annotations-count-overflow.bin"
+    ));
+    assert!(matches!(
+        width.label_content(Limit::new(0), &mut LabellingCapacity::new(0, 0)),
+        Err(ViewError::Lowering(LoweringRefusal::Size { .. }))
+    ));
+    assert!(matches!(
+        width.label_content(Limit::new(0), &mut LabellingCapacity::new(u64::MAX, 0)),
+        Err(ViewError::Lowering(LoweringRefusal::Weight { .. }))
+    ));
+    assert!(matches!(
+        width.label_content(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX)
+        ),
+        Err(ViewError::Refused(Refusal::Width {
+            quantity: Quantity::Count
+        }))
+    ));
+
+    let nested = second(include_bytes!(
+        "fixtures/v2/P3/lowering-shared-nested-term.bin"
+    ));
+    let mut capacity = LabellingCapacity::new(4, 270);
+    let labelled = nested
+        .label_content(Limit::new(0), &mut capacity)
+        .unwrap()
+        .unwrap();
+    assert_eq!(labelled.lines.len(), 3);
+    assert_eq!(capacity.total(), 270);
+    assert!(matches!(
+        nested.label_content(Limit::new(0), &mut LabellingCapacity::new(4, 269)),
+        Err(ViewError::Lowering(LoweringRefusal::Weight {
+            weight: 270,
+            ..
+        }))
+    ));
+    let held = second(include_bytes!("fixtures/v2/P3/labelling-held-fold.bin"));
+    assert!(matches!(
+        held.label_content(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX)
+        ),
+        Err(ViewError::Refused(Refusal::Limit { .. }))
+    ));
+    let labelled = held
+        .label_content(
+            Limit::new(1 << 40),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(labelled.content_digest, None);
+    assert!(!labelled.lines.is_empty());
+}
+
+#[test]
+fn own_fold_only_resolves_values_from_its_segment() {
+    let graph = second(include_bytes!(
+        "fixtures/v2/P3/content-digest-own-fold-value-elsewhere.bin"
+    ));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    let [declaring, referencing] = report.segments.as_slice() else {
+        panic!("the vector has two readable segments");
+    };
+    assert_eq!(declaring.segment, 0);
+    assert_eq!(referencing.segment, 1);
+    let digest = purrdf_hash::hex::decode_32_canonical;
+    assert_eq!(
+        *declaring.content_digest.as_ref().unwrap(),
+        digest("bf4b40a613c1cc97ababeccefc1c1c810dde52818d8928603f2180376f06fb5e")
+    );
+    assert_eq!(*referencing.content_digest.as_ref().unwrap(), None);
+    assert_eq!(
+        report.file.unwrap().unwrap().content_digest,
+        digest("32eaa574d4ae4e3e6ac525138ba9413b07a0dffb9f03be55fb84d00196b223dd")
+    );
+}
+
+#[test]
+fn own_folds_charge_the_shared_weight_before_the_file() {
+    use purrdf_gts::v2::{CompactionOutcome, CompactionStop, compact, compact_segment};
+
+    let graph = second(include_bytes!(
+        "fixtures/v2/P3/labelling-weight-segments.bin"
+    ));
+    let digest = purrdf_hash::hex::decode_32_canonical;
+    let first = digest("f6647933b9cceeb3019f29a32e081a6f50e527cda08eabc85248469f4a1b1d7e");
+    let second = digest("a42ff597f065d0796001bc63dc89a1a2976520f81c82217a0c9bfe6793453b21");
+    let file = digest("3fcec7b269705554deedfa6e5a74cdce6f7969618664099f6640fb9b5b76e3a0");
+    for (limit, admitted) in [(240, 240), (239, 120), (119, 60)] {
+        let mut capacity = LabellingCapacity::new(u64::MAX, limit);
+        let report = graph.label_read(Limit::new(0), &mut capacity).unwrap();
+        assert_eq!(capacity.total(), admitted);
+        let [one, two] = report.segments.as_slice() else {
+            panic!("the vector has two readable segments");
+        };
+        assert_eq!(*one.content_digest.as_ref().unwrap(), first);
+        if limit == 119 {
+            assert!(matches!(
+                &two.content_digest,
+                Err(ContentLabellingRefusal::Lowering(LoweringRefusal::Weight {
+                    weight: 60,
+                    total: 60,
+                    ..
+                }))
+            ));
+        } else {
+            assert_eq!(*two.content_digest.as_ref().unwrap(), second);
+        }
+        if limit == 240 {
+            assert_eq!(report.file.unwrap().unwrap().content_digest, file);
+        } else {
+            assert!(matches!(report.file, Err(ContentLabellingRefusal::Lowering(
+                LoweringRefusal::Weight { weight: 120, total, .. }
+            )) if total == admitted));
+        }
+        let mut fresh = LabellingCapacity::new(u64::MAX, limit);
+        let mut sink = Vec::new();
+        let compacted = compact(&graph, None, Limit::new(0), &mut fresh, &mut sink).unwrap();
+        if limit == 240 {
+            assert!(matches!(compacted.outcome, CompactionOutcome::Written(_)));
+        } else {
+            assert!(matches!(
+                compacted.outcome,
+                CompactionOutcome::Stopped(CompactionStop::Labelling(
+                    ContentLabellingRefusal::Lowering(LoweringRefusal::Weight { total, .. })
+                )) if total == admitted
+            ));
+            assert_eq!(sink, [] as [u8; 0]);
+        }
+        assert_eq!(fresh.total(), admitted);
+    }
+
+    for weight in [119, 120] {
+        let mut capacity = LabellingCapacity::new(u64::MAX, weight);
+        let mut sink = Vec::new();
+        let result = compact_segment(&graph, 1, None, Limit::new(0), &mut capacity, &mut sink)
+            .unwrap()
+            .unwrap();
+        if weight == 119 {
+            assert!(matches!(
+                result.outcome,
+                CompactionOutcome::Stopped(CompactionStop::Labelling(
+                    ContentLabellingRefusal::Lowering(LoweringRefusal::Weight { total: 60, .. })
+                ))
+            ));
+            assert_eq!(sink, [] as [u8; 0]);
+            assert_eq!(capacity.total(), 60);
+        } else {
+            assert!(matches!(result.outcome, CompactionOutcome::Written(_)));
+            assert_eq!(capacity.total(), 120);
+            let graph = second_at_capacity(&sink, ReadCapacity::default());
+            let report = graph
+                .label_read(
+                    Limit::new(0),
+                    &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+                )
+                .unwrap();
+            assert_eq!(report.file.unwrap().unwrap().content_digest, second);
+        }
+    }
+}
+
+#[test]
+fn compacting_an_own_fold_preserves_local_blank_nodes_and_reports_file_coverage() {
+    use purrdf_gts::v2::{
+        CanonicalLabellingCheck, CanonicalStructureCheck, CompactionOutcome, compact_segment,
+    };
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__labels-automorphic.bin");
+    let input = [fixture.as_slice(), fixture.as_slice(), &[0x82]].concat();
+    let graph = second(&input);
+    let limit = Limit::new(u64::MAX);
+    let mut budget = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let report = graph.label_read(limit, &mut budget).unwrap();
+    let expected = *report.segments[1].content_digest.as_ref().unwrap();
+    assert!(expected.is_some());
+    assert_ne!(report.file.unwrap().unwrap().content_digest, expected);
+
+    let mut budget = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let compacted = compact_segment(&graph, 1, None, limit, &mut budget, Vec::new())
+        .unwrap()
+        .unwrap();
+    assert_eq!((compacted.end, compacted.left_out), (FileEnd::Torn, 1));
+    let CompactionOutcome::Written(bytes) = compacted.outcome else {
+        panic!("the selected own fold is fully readable");
+    };
+    let report = second(&bytes)
+        .label_read(limit, &mut LabellingCapacity::new(u64::MAX, u64::MAX))
+        .unwrap();
+    assert_eq!(report.file.unwrap().unwrap().content_digest, expected);
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+    assert_eq!(
+        report.segments[0].canonical.labelling,
+        CanonicalLabellingCheck::Verified
+    );
+}
+
+#[test]
+fn indexed_writer_closes_the_written_fold_and_checks_labelling_before_output() {
+    let mut fold = RdfFold::default();
+    let subject = fold
+        .intern_term(Term::Blank {
+            segment: 8,
+            label: b"source".as_slice().into(),
+        })
+        .unwrap();
+    let predicate = fold
+        .intern_term(Term::Iri("https://example.org/p".into()))
+        .unwrap();
+    let object = fold
+        .intern_term(Term::Iri("https://example.org/o".into()))
+        .unwrap();
+    let graph_name = fold
+        .intern_term(Term::Iri("https://example.org/g".into()))
+        .unwrap();
+    let row = [subject, predicate, object];
+    fold.add_line(Line::Quad(row, Some(graph_name))).unwrap();
+    fold.add_line(Line::Quad(row, None)).unwrap();
+
+    let mut output = Vec::new();
+    assert!(matches!(
+        write_indexed_rdf_segment(
+            &fold,
+            Limit::new(0),
+            &mut LabellingCapacity::new(1, u64::MAX),
+            &mut output
+        ),
+        Err(SegmentWriteError::Labelling(ViewError::Lowering(
+            LoweringRefusal::Size { .. }
+        )))
+    ));
+    assert_eq!(output, [] as [u8; 0]);
+
+    let bytes = write_indexed_rdf_segment(
+        &fold,
+        Limit::new(0),
+        &mut LabellingCapacity::new(2, u64::MAX),
+        output,
+    )
+    .unwrap();
+    let graph = second(&bytes);
+    assert_eq!(graph.rdf.lines().count(), 2);
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("one closing index was written");
+    };
+    let prefix = index.prefix.as_ref().unwrap();
+    assert!(prefix.head_matches && prefix.root_matches && prefix.type_runs_match);
+    assert_eq!(prefix.graph_directory_matches, Some(true));
+    assert_eq!(prefix.pack_members_match, Some(true));
+    let parity = graph.frame_wire.last().unwrap();
+    assert_eq!(
+        parity.frame_type,
+        Some(purrdf_gts::v2::FrameType::Parity as u64)
+    );
+    assert!(parity.offset > index.offset);
+    assert_eq!(graph.parity_findings, []);
+    assert_eq!(graph.index_storage_findings, []);
+    let locator_offset = bytes.len() - 11;
+    let locator = &bytes[locator_offset..];
+    assert_eq!(&locator[..3], &[0x82, 0x03, 0x1b]);
+    assert_eq!(
+        u64::from_be_bytes(locator[3..].try_into().unwrap()),
+        (locator_offset - index.offset) as u64,
+    );
+    let report = graph
+        .label_read(Limit::new(0), &mut LabellingCapacity::new(2, u64::MAX))
+        .unwrap();
+    let claims = report.segments[0].closing_index.unwrap();
+    assert!(claims.statistics_match && claims.content_digest_matches);
+}
+
+#[test]
+fn canonical_structure_locates_differences_at_the_upstream_positions() {
+    use purrdf_gts::v2::CanonicalStructureDifference::{
+        Bindings, BlobRegion, Commit, FrameSequence, Header, Index, Rows, Suppression, Terms,
+        ValueRegion,
+    };
+    use purrdf_gts::v2::{CanonicalDifferenceReason, CanonicalStructureCheck};
+
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_bytes!(concat!("fixtures/v2/P7/", $name, ".bin")).as_slice()
+        };
+    }
+    let check = |bytes: &[u8]| {
+        let graph = second(bytes);
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap();
+        report.segments[0].canonical
+    };
+    for (bytes, rule, at) in [
+        (
+            fixture!("canonical__check__first-difference__header.registry-version-two"),
+            Header,
+            0,
+        ),
+        (
+            fixture!("canonical__check__first-difference__frame_sequence.locator-removed"),
+            FrameSequence,
+            11,
+        ),
+        (
+            fixture!("canonical__check__first-difference__terms.terms-out-of-order"),
+            Terms,
+            2,
+        ),
+        (
+            fixture!("canonical__check__first-difference__rows.rows-out-of-order"),
+            Rows,
+            3,
+        ),
+        (
+            fixture!("canonical__check__first-difference__value_region.values-swapped"),
+            ValueRegion,
+            1,
+        ),
+        (
+            fixture!("canonical__check__first-difference__blob_region.members-reversed"),
+            BlobRegion,
+            1,
+        ),
+        (
+            fixture!("canonical__check__first-difference__bindings.entries-swapped"),
+            Bindings,
+            5,
+        ),
+        (
+            fixture!("canonical__check__first-difference__suppression.entries-swapped"),
+            Suppression,
+            6,
+        ),
+        (
+            fixture!("canonical__check__first-difference__commit.count-one-too-high"),
+            Commit,
+            7,
+        ),
+        (
+            fixture!("canonical__check__first-difference__index.frame-count-one-too-high"),
+            Index,
+            8,
+        ),
+        (
+            fixture!("canonical__check__two-differences.one-position"),
+            Index,
+            8,
+        ),
+        (
+            fixture!("canonical__check__parity-state.frame-removed"),
+            FrameSequence,
+            7,
+        ),
+    ] {
+        let actual = check(bytes);
+        assert!(
+            matches!(actual.structure, CanonicalStructureCheck::Failed { position, difference, .. }
+            if position == at && difference == rule),
+            "{rule:?} at {at}: {actual:?}"
+        );
+        let first = actual.first_difference.unwrap();
+        assert_eq!(
+            (first.position, first.reason),
+            (at, CanonicalDifferenceReason::Structure(rule))
+        );
+    }
+    for bytes in [
+        fixture!("canonical__check__parity-state.table-altered"),
+        fixture!("canonical__check__signature-added"),
+        fixture!("canonical__check__first-difference__labelling.label-of-no-position"),
+        fixture!("canonical__check__first-difference__content_digest.digest-of-zeros"),
+        fixture!("canonical__labels-automorphic"),
+    ] {
+        assert_eq!(check(bytes).structure, CanonicalStructureCheck::Verified);
+    }
+}
+
+#[test]
+fn canonical_structure_reports_short_parity_after_an_intermediate_index() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let source = second(fixture);
+    let index = source
+        .frame_wire
+        .iter()
+        .find(|frame| frame.frame_type == Some(FrameType::Index as u64))
+        .unwrap();
+    let parity = source
+        .frame_wire
+        .iter()
+        .find(|frame| frame.frame_type == Some(FrameType::Parity as u64))
+        .unwrap();
+    let item = Item::first(&fixture[index.offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let identifier = frame.field(FrameField::Identifier)[2..].try_into().unwrap();
+    let mut bytes = fixture.to_vec();
+    bytes.extend_from_slice(item.bytes());
+    relink_frame(&mut bytes[fixture.len()..], identifier);
+    let graph = second(&bytes);
+    assert_eq!(graph.index_checks.len(), 2);
+    assert!(!graph.index_checks[1].prefix.as_ref().unwrap().head_matches);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            offset: parity.offset,
+            position: parity.position,
+            difference: CanonicalStructureDifference::FrameSequence,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_reports_a_healed_ordinary_identifier() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let source = second(fixture);
+    let terms = source
+        .frame_wire
+        .iter()
+        .find(|frame| frame.frame_type == Some(FrameType::Terms as u64))
+        .unwrap();
+    let item = Item::first(&fixture[terms.offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let field = frame.field(FrameField::Identifier);
+    let last_byte = field.as_ptr().addr() - fixture.as_ptr().addr() + field.len() - 1;
+    let mut damaged = fixture.to_vec();
+    damaged[last_byte] ^= 1;
+    let graph = second(&damaged);
+    assert!(graph.frame_wire.iter().any(|frame| {
+        frame.offset == terms.offset
+            && frame.link == LinkState::Healed
+            && frame.payload == PayloadOutcome::Verified
+    }));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            offset: terms.offset,
+            position: terms.position,
+            difference: CanonicalStructureDifference::Terms,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_counts_only_segment_items_when_the_file_ends_torn() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference};
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let mut bytes = [fixture.as_slice(), fixture.as_slice()].concat();
+    let end = bytes.len();
+    bytes.push(0x82);
+    let read = |bytes| {
+        let graph = second(bytes);
+        assert_eq!(graph.end, FileEnd::Torn);
+        graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap()
+    };
+    let report = read(&bytes);
+    let [first, second] = report.segments.as_slice() else {
+        panic!("the complete openers delimit two segments");
+    };
+    assert_eq!(first.canonical.structure, CanonicalStructureCheck::Verified);
+    assert_eq!(
+        second.canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+
+    let truncated = read(&bytes[..end - 1]);
+    let missing_locator = end - 11;
+    assert!(
+        matches!(truncated.segments[1].canonical.structure, CanonicalStructureCheck::Failed {
+        offset, difference: CanonicalStructureDifference::FrameSequence, ..
+    } if offset == missing_locator)
+    );
+}
+
+#[test]
+fn canonical_structure_keeps_complete_items_that_contain_a_resync() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
+
+    let intact = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let graph = second(intact);
+    let parity = graph.frame_wire.last().unwrap();
+    assert_eq!(parity.frame_type, Some(FrameType::Parity as u64));
+    let parity_end = parity.offset + parity.length;
+    let mut input = intact[..parity_end].to_vec();
+    let start = parity.offset + 200;
+    let opener = resync_opener_at(u16::try_from(start).unwrap());
+    let end = start + opener.len();
+    input[start..end].copy_from_slice(&opener);
+    input[end] = 0xff;
+    input.push(0xff);
+    let graph = second(&input);
+    assert_eq!(graph.resynchronizations[0].offset, start);
+    assert!(graph.frame_wire.iter().any(|frame| frame.segment == 0
+        && frame.offset == parity.offset
+        && frame.length == parity.length));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: parity.position + 1,
+            offset: parity_end,
+            difference: CanonicalStructureDifference::FrameSequence,
+        }
+    );
+
+    let mut input = intact[..parity_end].to_vec();
+    // The first four octets of the resync are the offsets list's sole length.
+    input.extend_from_slice(&[0x82, 0x04, 0x81, 0x1a]);
+    let start = input.len();
+    input.extend_from_slice(&resync_opener_at(u16::try_from(start).unwrap()));
+    let graph = second(&input);
+    assert_eq!(graph.resynchronizations[0].offset, start);
+    assert!(graph.index_storage_findings.iter().any(|finding| {
+        finding.offset == parity_end && finding.item == IndexStorageItem::Offsets
+    }));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: parity.position + 2,
+            offset: start + 4,
+            difference: CanonicalStructureDifference::FrameSequence,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_counts_a_dropped_binding_at_its_frame() {
+    use purrdf_gts::v2::{
+        CanonicalForm, CanonicalStructureCheck, CanonicalStructureDifference, FrameType,
+    };
+
+    let source = include_bytes!("fixtures/v2/P3/bindings-forward-reference.bin");
+    let original = second(source);
+    let mut bytes = Vec::new();
+    write_header(&mut bytes, None, Some(CanonicalForm::V1), None).unwrap();
+    let header = Header::decode(Item::first(&bytes).unwrap().unwrap()).unwrap();
+    let mut predecessor = header.identifier().unwrap();
+    let mut binding_offset = 0;
+    for kind in [FrameType::Terms, FrameType::Bindings] {
+        let frame = original
+            .frame_wire
+            .iter()
+            .find(|frame| frame.frame_type == Some(kind as u64))
+            .unwrap();
+        let at = bytes.len();
+        bytes.extend_from_slice(&source[frame.offset..frame.offset + frame.length]);
+        predecessor = relink_frame(&mut bytes[at..], &predecessor);
+        if kind == FrameType::Bindings {
+            binding_offset = at;
+        }
+    }
+    let graph = second(&bytes);
+    assert!(graph.reference_findings[0].forward_reference);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: 2,
+            offset: binding_offset,
+            difference: CanonicalStructureDifference::Bindings,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_counts_an_unreferenced_packed_chunk_before_a_bad_commit() {
+    use purrdf_gts::v2::{CanonicalForm, CanonicalStructureCheck, CanonicalStructureDifference};
+
+    let source = include_bytes!("fixtures/v2/P4/pack-compressed.one-frame.bin");
+    let mut bytes = Vec::new();
+    write_header(&mut bytes, None, Some(CanonicalForm::V1), None).unwrap();
+    let pack_offset = bytes.len();
+    let header = Header::decode(Item::first(&bytes).unwrap().unwrap()).unwrap();
+    let predecessor = header.identifier().unwrap();
+    let original_header = Item::first(source).unwrap().unwrap().bytes().len();
+    bytes.extend_from_slice(&source[original_header..]);
+    let pack = Item::first(&bytes[pack_offset..]).unwrap().unwrap();
+    let commit_offset = pack_offset + pack.bytes().len();
+    let pack_id = relink_frame(&mut bytes[pack_offset..commit_offset], &predecessor);
+    relink_frame(&mut bytes[commit_offset..], &pack_id);
+
+    let graph = second(&bytes);
+    assert_eq!(graph.invalid_commits[0].0, commit_offset);
+    let [unit] = graph.unreferenced_units.as_slice() else {
+        panic!("the folded pack has one unreferenced member");
+    };
+    assert_eq!((unit.offset, unit.member), (pack_offset, Some(0)));
+    let limited = second_at_capacity(
+        &bytes,
+        ReadCapacity {
+            items: 2,
+            ..ReadCapacity::default()
+        },
+    );
+    assert_eq!(limited.item_refusal.unwrap().offset, commit_offset);
+    assert_eq!(limited.unreferenced_units, [*unit]);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            position: 1,
+            offset: pack_offset,
+            difference: CanonicalStructureDifference::BlobRegion,
+        }
+    );
+}
+
+#[test]
+fn canonical_labelling_accepts_automorphisms_and_locates_label_and_digest_differences() {
+    use purrdf_gts::v2::{CanonicalLabellingCheck, CanonicalLabellingDifference, FrameType};
+
+    let check = |graph: &RdfGraph<'_>| {
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap();
+        assert_eq!(report.segments.len(), 1);
+        report.segments[0].canonical.labelling
+    };
+    let automorphic = second(include_bytes!(
+        "fixtures/v2/P7/canonical__labels-automorphic.bin"
+    ));
+    assert_eq!(check(&automorphic), CanonicalLabellingCheck::Verified);
+
+    let labels = include_bytes!(
+        "fixtures/v2/P7/canonical__check__first-difference__labelling.label-of-no-position.bin"
+    );
+    let digest = include_bytes!(
+        "fixtures/v2/P7/canonical__check__first-difference__content_digest.digest-of-zeros.bin"
+    );
+    for (fixture, frame_type, reason) in [
+        (
+            labels.as_slice(),
+            FrameType::Terms,
+            CanonicalLabellingDifference::BlankLabels,
+        ),
+        (
+            digest.as_slice(),
+            FrameType::Index,
+            CanonicalLabellingDifference::ContentDigest,
+        ),
+    ] {
+        let graph = second(fixture);
+        let frame = graph
+            .frame_wire
+            .iter()
+            .find(|frame| frame.frame_type == Some(frame_type as u64))
+            .unwrap();
+        assert_eq!(
+            check(&graph),
+            CanonicalLabellingCheck::Failed {
+                offset: frame.offset,
+                position: frame.position,
+                difference: reason,
+            }
+        );
+    }
+}
+
+#[test]
+fn canonical_labelling_observes_claim_and_capacity_before_comparing() {
+    use purrdf_gts::v2::{
+        CanonicalLabellingCheck::Unchecked, CanonicalLabellingUnchecked, CanonicalStorageCheck,
+        CanonicalStructureCheck,
+    };
+
+    let not_claimed = include_bytes!("fixtures/v2/P7/canonical__check__not-claimed.bin");
+    let index = include_bytes!("fixtures/v2/P7/canonical__check__index-above-capacity.bin");
+    let refused = include_bytes!("fixtures/v2/P7/canonical__check__refused.bin");
+    let mut small = ReadCapacity::default();
+    small.payload.decoded_bytes_per_frame = 203;
+    for (graph, expected, structure, storage) in [
+        (
+            second(not_claimed),
+            CanonicalLabellingUnchecked::NotClaimed,
+            CanonicalStructureCheck::NotClaimed,
+            CanonicalStorageCheck::NotClaimed,
+        ),
+        (
+            second_at_capacity(index, small),
+            CanonicalLabellingUnchecked::ExceedsCapacity,
+            CanonicalStructureCheck::ExceedsCapacity,
+            CanonicalStorageCheck::ExceedsCapacity,
+        ),
+        (
+            second(refused),
+            CanonicalLabellingUnchecked::LabellingRefused,
+            CanonicalStructureCheck::Failed {
+                offset: Item::first(refused).unwrap().unwrap().bytes().len(),
+                position: 1,
+                difference: purrdf_gts::v2::CanonicalStructureDifference::Terms,
+            },
+            CanonicalStorageCheck::EncoderNotHeld,
+        ),
+    ] {
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap();
+        let canonical = report.segments[0].canonical;
+        assert_eq!(canonical.labelling, Unchecked(expected));
+        assert_eq!(canonical.structure, structure);
+        assert_eq!(canonical.storage, storage);
+    }
+}
+
+#[test]
+fn canonical_labelling_skips_an_index_after_the_fold_stops() {
+    use purrdf_gts::v2::{CanonicalForm, CanonicalLabellingCheck};
+
+    let fixture = include_bytes!("fixtures/v2/P5/index-after-stop.exact.bin");
+    let opener = Item::first(fixture).unwrap().unwrap();
+    let mut rest = &fixture[opener.bytes().len()..];
+    let mut bytes = Vec::new();
+    write_header(&mut bytes, None, Some(CanonicalForm::V1), None).unwrap();
+    bytes[3] = 2; // Registry 2 admits the fixture's unknown critical frame.
+    let mut predecessor = Header::decode(Item::first(&bytes).unwrap().unwrap())
+        .unwrap()
+        .identifier()
+        .unwrap();
+    while let Some(item) = Item::first(rest).unwrap() {
+        let at = bytes.len();
+        bytes.extend_from_slice(item.bytes());
+        predecessor = relink_frame(&mut bytes[at..], &predecessor);
+        rest = &rest[item.bytes().len()..];
+    }
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_frame = 14;
+    let graph = second_at_capacity(&bytes, capacity);
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("the reader retains the stopped index's independent check");
+    };
+    assert!(graph.stopped_frames.contains(&index.offset));
+    assert!(matches!(
+        index.prefix,
+        Err(ReadFailure::PayloadRefusal(PayloadRefusal::DecodedSize(_)))
+    ));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.labelling,
+        CanonicalLabellingCheck::Verified
+    );
+}
+
+#[test]
+fn compaction_matches_the_frozen_canonical_head_and_index() {
+    assert_compaction_head(include_bytes!("fixtures/v2/P7/canonical__construction.bin"));
+}
+
+#[test]
+fn compaction_externalizes_values_at_the_frozen_storage_thresholds() {
+    for fixture in [
+        include_bytes!("fixtures/v2/P7/canonical__constants__threshold.octets-524287.output.bin")
+            .as_slice(),
+        include_bytes!("fixtures/v2/P7/canonical__constants__threshold.octets-524288.output.bin")
+            .as_slice(),
+        include_bytes!(
+            "fixtures/v2/P7/canonical__constants__threshold.language-1048575.output.bin"
+        )
+        .as_slice(),
+        include_bytes!(
+            "fixtures/v2/P7/canonical__constants__threshold.language-1048576.output.bin"
+        )
+        .as_slice(),
+    ] {
+        assert_compaction_head(fixture);
+    }
+}
+
+fn assert_compaction_head(fixture: &[u8]) {
+    use purrdf_gts::v2::{CompactionOutcome, FrameType, compact};
+
+    let source = second(fixture);
+    let report = compact(
+        &source,
+        None,
+        Limit::new(0),
+        &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        Vec::new(),
+    )
+    .unwrap();
+    let CompactionOutcome::Written(bytes) = report.outcome else {
+        panic!("the frozen fold admits compaction");
+    };
+    let graph = second(&bytes);
+    let opener = |bytes: &[u8]| {
+        Header::decode(Item::first(bytes).unwrap().unwrap())
+            .unwrap()
+            .identifier()
+    };
+    assert_eq!(opener(&bytes), opener(fixture));
+    let ids = |bytes: &[u8], graph: &RdfGraph<'_>| {
+        graph
+            .frame_wire
+            .iter()
+            .filter(|wire| wire.frame_type != Some(FrameType::Parity as u64))
+            .map(|wire| {
+                let item = Item::first(&bytes[wire.offset..]).unwrap().unwrap();
+                let frame = item.frame().unwrap().unwrap();
+                (
+                    wire.frame_type,
+                    frame.field(FrameField::Identifier).to_vec(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&bytes, &graph), ids(fixture, &source));
+    assert!(graph.frame_failures.is_empty());
+    assert_eq!(graph.parity_findings, []);
+    assert_eq!(graph.index_storage_findings, []);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    let claims = report.segments[0].closing_index.unwrap();
+    assert!(claims.statistics_match && claims.content_digest_matches);
+}
+
+#[test]
+fn compaction_checks_formed_capacity_before_held_rows_and_keeps_stopped_sinks_empty() {
+    use purrdf_gts::v2::{CompactionOutcome, CompactionStop, compact};
+
+    let formed = include_bytes!("fixtures/v2/P7/canonical__compaction__formed-refused.bin");
+    let missing = include_bytes!("fixtures/v2/P7/canonical__compaction__missing-unit.bin");
+    let mut sink = Vec::new();
+    let mut capacity = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let source = second_at_capacity(
+        formed,
+        ReadCapacity {
+            formed_bytes: 8,
+            ..ReadCapacity::default()
+        },
+    );
+    assert!(matches!(
+        compact(&source, None, Limit::new(0), &mut capacity, &mut sink)
+            .unwrap()
+            .outcome,
+        CompactionOutcome::Stopped(CompactionStop::TotalFormed)
+    ));
+    assert_eq!(sink, [] as [u8; 0]);
+    assert!(matches!(
+        compact(
+            &second(missing),
+            None,
+            Limit::new(0),
+            &mut capacity,
+            &mut sink
+        )
+        .unwrap()
+        .outcome,
+        CompactionOutcome::Stopped(CompactionStop::MissingChunk)
+    ));
+    assert_eq!(sink, [] as [u8; 0]);
+    assert!(matches!(
+        compact(
+            &second(formed),
+            None,
+            Limit::new(0),
+            &mut capacity,
+            &mut sink
+        )
+        .unwrap()
+        .outcome,
+        CompactionOutcome::Written(_)
+    ));
+}
+
+#[test]
+fn indexed_writer_places_full_parity_before_rows_and_short_parity_after_index() {
+    use purrdf_gts::v2::FrameType::{Commit, Index, Parity, Quads, Terms};
+
+    let mut fold = RdfFold::default();
+    let subject = fold
+        .intern_term(Term::Iri("https://example.org/s".into()))
+        .unwrap();
+    let predicate = fold
+        .intern_term(Term::Iri("https://example.org/p".into()))
+        .unwrap();
+    let object = fold
+        .intern_term(Term::Language {
+            lexical: "x".repeat(4 * 1024 * 1024).into(),
+            language: "en".into(),
+            direction: None,
+        })
+        .unwrap();
+    fold.add_line(Line::Quad([subject, predicate, object], None))
+        .unwrap();
+    let bytes = write_indexed_rdf_segment(
+        &fold,
+        Limit::new(0),
+        &mut LabellingCapacity::new(1, u64::MAX),
+        Vec::new(),
+    )
+    .unwrap();
+    let graph = second(&bytes);
+    let types: Vec<_> = graph
+        .frame_wire
+        .iter()
+        .map(|frame| frame.frame_type)
+        .collect();
+    assert_eq!(
+        types,
+        [Terms, Parity, Quads, Commit, Index, Parity].map(|kind| Some(kind as u64))
+    );
+    assert_eq!(graph.parity_findings, []);
+    assert_eq!(graph.index_storage_findings, []);
+}
+
+#[test]
+fn closing_indexes_compare_digest_and_statistics_independently() {
+    let cases: &[(&[u8], bool, bool)] = &[
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.content_digest.bin"),
+            true,
+            false,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.statistics-lines.bin"),
+            false,
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-each-claim.statistics-records.bin"),
+            false,
+            true,
+        ),
+    ];
+    for &(bytes, statistics_match, content_digest_matches) in cases {
+        let graph = second(bytes);
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap();
+        let comparison = report.segments[0].closing_index.unwrap();
+        assert_eq!(
+            (
+                comparison.statistics_match,
+                comparison.content_digest_matches
+            ),
+            (statistics_match, content_digest_matches),
+        );
+        assert_eq!(comparison.offset, graph.index_checks[0].offset);
+    }
+}
+
+#[test]
+fn closing_index_checks_the_absence_of_a_digest_for_held_content() {
+    for (bytes, matches) in [
+        (
+            include_bytes!("fixtures/v2/P5/index-digest-absent.absent.bin").as_slice(),
+            true,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-digest-absent.present.bin").as_slice(),
+            false,
+        ),
+    ] {
+        let graph = second(bytes);
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap();
+        let segment = &report.segments[0];
+        assert_eq!(*segment.content_digest.as_ref().unwrap(), None);
+        let check = segment.closing_index.unwrap();
+        // The held quad still counts as a written row of predicate ID zero.
+        assert!(!check.statistics_match);
+        assert_eq!(check.content_digest_matches, matches);
+    }
+}
+
+#[test]
+fn broken_ordinary_parity_does_not_block_closing_index_comparisons() {
+    let fixture = include_bytes!("fixtures/v2/P5/parity-wrong-transparent.bin");
+    let graph = second(fixture);
+    let parity = graph.frame_wire.last().unwrap();
+    let end = parity.offset + parity.length;
+    let item = Item::first(&fixture[parity.offset..end]).unwrap().unwrap();
+    let envelope = item.frame().unwrap().unwrap();
+    let identifier = end - envelope.field(FrameField::Signatures).len() - 32;
+    let mut bytes = fixture[..end].to_vec();
+    bytes[identifier] ^= 1;
+    let predecessor = bytes[identifier..identifier + 32].try_into().unwrap();
+
+    let index_offset = graph.index_checks[0].offset;
+    let index = Item::first(&fixture[index_offset..]).unwrap().unwrap();
+    let mut closing = index.bytes().to_vec();
+    relink_frame(&mut closing, &predecessor);
+    bytes.extend_from_slice(&closing);
+
+    let graph = second(&bytes);
+    let before_index = &graph.frame_wire[graph.frame_wire.len() - 2];
+    assert_eq!(before_index.offset, parity.offset);
+    assert_eq!(before_index.link, LinkState::Broken);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap();
+    let check = report.segments[0].closing_index.unwrap();
+    assert_eq!(check.offset, end);
+    assert!(check.statistics_match);
+    assert!(check.content_digest_matches);
+}
+
+#[test]
+fn index_fold_claims_stay_uncompared_without_an_eligible_own_fold() {
+    let mut narrow = ReadCapacity::default();
+    narrow.payload.decoded_bytes_per_frame = 150;
+    let cases = [
+        (
+            include_bytes!("fixtures/v2/P5/index-nonterminal-claims.bin").as_slice(),
+            ReadCapacity::default(),
+            false,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-last-unfolded.bin").as_slice(),
+            narrow,
+            false,
+        ),
+        (
+            include_bytes!("fixtures/v2/P5/index-labelling-refused.bin").as_slice(),
+            ReadCapacity::default(),
+            true,
+        ),
+    ];
+    for (bytes, read_capacity, refused) in cases {
+        let graph = second_at_capacity(bytes, read_capacity);
+        assert!(graph.index_checks.iter().all(|index| index.prefix.is_ok()));
+        assert!(!graph.index_checks.is_empty());
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap();
+        assert_eq!(report.segments[0].closing_index, None);
+        assert_eq!(report.segments[0].content_digest.is_err(), refused);
+    }
 }
 
 #[test]
@@ -2649,6 +3965,63 @@ fn one_annotation_frame_rejects_repeated_written_definitions() {
 }
 
 #[test]
+fn canonical_term_order_matches_the_frozen_dictionary_cases() {
+    use purrdf_gts::v2::FrameType;
+
+    macro_rules! case {
+        ($name:literal, $violation:literal) => {
+            (
+                $name,
+                include_bytes!(concat!("fixtures/v2/P3/", $name, ".bin")).as_slice(),
+                $violation,
+            )
+        };
+    }
+
+    for (name, bytes, expected) in [
+        case!("terms-canonical-order-ties.ascending", false),
+        case!("terms-canonical-order-ties.swap-2", true),
+        case!("terms-canonical-triple-depth.ascending", false),
+        case!("terms-canonical-triple-depth.swapped", true),
+        case!("terms-canonical-across-frames.arrival-between", false),
+        case!("terms-canonical-across-frames.descending-junction", true),
+        case!("terms-canonical-follows-opaque", false),
+        case!(
+            "terms-canonical-skipped-term.skipped-at-the-end-of-the-earlier-frame",
+            false
+        ),
+        case!(
+            "terms-canonical-skipped-term.skipped-at-the-end-descending-junction",
+            true
+        ),
+        case!("terms-canonical-literal-value-ref-order.swapped", true),
+        case!("terms-canonical-value-order.swap-0", true),
+        case!("terms-duplicate-canonical-kinds.arrival", false),
+        case!("terms-duplicate-canonical-kinds.canonical", true),
+    ] {
+        let graph = second(bytes);
+        if expected {
+            let frame = graph
+                .frame_wire
+                .iter()
+                .rfind(|frame| frame.frame_type == Some(FrameType::Terms as u64))
+                .unwrap();
+            assert_eq!(graph.term_order_violations, [frame.offset], "{name}");
+            assert_eq!(frame.payload, PayloadOutcome::Verified, "{name}");
+        } else {
+            assert_eq!(graph.term_order_violations, [], "{name}");
+        }
+    }
+
+    let (_, arrival, _) = case!("terms-duplicate-canonical-kinds.arrival", false);
+    let (_, canonical, _) = case!("terms-duplicate-canonical-kinds.canonical", true);
+    let arrival = second(arrival);
+    let canonical = second(canonical);
+    assert!(canonical.rdf.terms().eq(arrival.rdf.terms()));
+    assert!(canonical.rdf.lines().eq(arrival.rdf.lines()));
+}
+
+#[test]
 fn a_broken_order_claim_is_reported_and_the_rows_still_fold() {
     let graph = second(include_bytes!(
         "fixtures/v2/P3/rows-order-canonical-across-frames.bin"
@@ -2743,11 +4116,125 @@ fn the_item_limit_applies_before_framing_an_opener() {
     );
     assert_eq!(stopped.end, FileEnd::NotRead);
     assert!(stopped.blobs.is_empty());
+    assert_eq!(stopped.labelling_size(), None);
+    assert!(
+        stopped
+            .label_content(Limit::new(0), &mut LabellingCapacity::new(0, 0))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(second(&bytes).blobs[0].bytes.as_ref(), b"checked prefix");
 }
 
 #[test]
+fn the_item_limit_retains_canonical_claims_without_forming_a_fold() {
+    use purrdf_gts::v2::{
+        CanonicalLabellingCheck, CanonicalLabellingUnchecked, CanonicalStorageCheck,
+        CanonicalStructureCheck,
+    };
+
+    let bytes = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let preceding = SegmentWriter::new(Vec::new()).unwrap().into_inner();
+    let mut unreadable = include_bytes!("fixtures/v2/P1/header-minimal.bin").to_vec();
+    unreadable[0] = 0x88;
+    unreadable.push(0xf6);
+    let joined = [&unreadable, preceding.as_slice(), bytes.as_slice()].concat();
+    let limits = ReadCapacity {
+        items: 3,
+        ..ReadCapacity::default()
+    };
+    let stopped = second_at_capacity(&joined, limits);
+    assert_eq!(stopped.end, FileEnd::NotRead);
+    assert_eq!(stopped.labelling_size(), None);
+    let mut budget = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let report = stopped.label_read(Limit::new(0), &mut budget).unwrap();
+    assert_eq!(budget.total(), 0);
+    assert!(report.file.unwrap().is_none());
+    let [unreadable, unclaimed, claimed] = report.segments.as_slice() else {
+        panic!("all three openers were observed before the item limit");
+    };
+    for (ordinal, segment) in [unreadable, unclaimed, claimed].into_iter().enumerate() {
+        assert_eq!(segment.segment, ordinal as u64);
+        assert!(matches!(segment.content_digest, Ok(None)));
+        assert_eq!(segment.closing_index, None);
+        assert_eq!(segment.canonical.first_difference, None);
+    }
+    assert!(!unreadable.canonical.claimed);
+    assert_eq!(unreadable.canonical, unclaimed.canonical);
+    assert_eq!(
+        unclaimed.canonical.structure,
+        CanonicalStructureCheck::NotClaimed
+    );
+    assert!(claimed.canonical.claimed);
+    assert_eq!(
+        claimed.canonical.structure,
+        CanonicalStructureCheck::ExceedsCapacity
+    );
+    assert_eq!(
+        claimed.canonical.labelling,
+        CanonicalLabellingCheck::Unchecked(CanonicalLabellingUnchecked::ExceedsCapacity)
+    );
+    assert_eq!(
+        claimed.canonical.storage,
+        CanonicalStorageCheck::ExceedsCapacity
+    );
+
+    let complete = second(&joined)
+        .label_read(Limit::new(0), &mut budget)
+        .unwrap();
+    assert!(complete.file.unwrap().is_some());
+    assert_eq!(complete.segments[0].canonical, unreadable.canonical);
+    assert_eq!(
+        complete.segments[2].canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+}
+
+#[test]
+fn whole_read_returns_the_requested_canonical_report() {
+    use purrdf_gts::v2::{CanonicalLabellingCheck, CanonicalStructureCheck, ReadLabellingLimits};
+
+    let bytes = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let mut limits = ReadLimits::default();
+    limits.labelling = Some(ReadLabellingLimits::default());
+    let ReadGraph::Second(graph) = read_with_limits(bytes, limits).unwrap() else {
+        panic!("the fixture opens a generation 2 file");
+    };
+    let report = graph.read_labelling().unwrap();
+    let [segment] = report.segments.as_slice() else {
+        panic!("the fixture holds one complete segment");
+    };
+    assert_eq!(
+        segment.canonical.structure,
+        CanonicalStructureCheck::Verified
+    );
+    assert_eq!(
+        segment.canonical.labelling,
+        CanonicalLabellingCheck::Verified
+    );
+    let file = report.file.as_ref().unwrap().as_ref().unwrap();
+    assert!(file.content_digest.is_some());
+    assert_eq!(
+        *segment.content_digest.as_ref().unwrap(),
+        file.content_digest
+    );
+
+    limits.second_generation.items = 1;
+    let ReadGraph::Second(graph) = read_with_limits(bytes, limits).unwrap() else {
+        panic!("the claimed segment's opener fits the item limit");
+    };
+    let report = graph.read_labelling().unwrap();
+    assert!(matches!(report.file, Ok(None)));
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::ExceedsCapacity
+    );
+}
+
+#[test]
 fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
+    use purrdf_gts::v2::UnreferencedUnit;
+
     let compressed = second(include_bytes!(
         "fixtures/v2/P4/pack-compressed.one-frame.bin"
     ));
@@ -2757,6 +4244,7 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
         "fixtures/v2/P4/rebuild-unit-after-recipe.units-first.bin"
     ));
     assert_eq!(earlier.blobs.len(), 1);
+    assert_eq!(earlier.unreferenced_units, [] as [UnreferencedUnit; 0]);
     for (bytes, member) in [
         (
             include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.pack-recipe-first.bin")
@@ -2771,6 +4259,7 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
     ] {
         let packed = second(bytes);
         assert_eq!(packed.blobs.len(), 1);
+        assert_eq!(packed.unreferenced_units, [] as [UnreferencedUnit; 0]);
         let [result] = packed.rebuilds.as_slice() else {
             panic!("expected one rebuild from the pack");
         };
@@ -2784,6 +4273,7 @@ fn recipes_use_prior_frames_and_every_unit_in_their_own_pack() {
     let later = include_bytes!("fixtures/v2/P4/rebuild-unit-after-recipe.recipe-first.bin");
     let graph = second(later);
     assert!(graph.blobs.is_empty());
+    assert_eq!(graph.unreferenced_units, [] as [UnreferencedUnit; 0]);
     let [error] = graph.frame_failures.as_slice() else {
         panic!("expected one unavailable unit finding");
     };
@@ -2882,6 +4372,7 @@ fn blob_declarations_union_by_digest_and_keep_the_smallest_length() {
     };
     assert_eq!(entry.name, name);
     assert!(entry.present);
+    assert_eq!(graph.labelling_size(), Some(4));
     assert_eq!(entry.media_types, ["a/a", "z/b", "a/long"]);
     assert_eq!(
         graph.blob_length_conflicts,

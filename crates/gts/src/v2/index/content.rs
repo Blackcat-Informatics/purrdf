@@ -3,6 +3,9 @@
 
 use core::num::NonZeroU64;
 use std::collections::TryReserveError;
+use std::io::{self, Write};
+
+use purrdf_lex::cbor::head;
 
 use super::{ContentError, Digest, Fields, FrameType, LAST_FRAME_TYPE, WireError, push};
 use crate::v2::Row;
@@ -26,11 +29,22 @@ struct DirectoryRange {
 struct GraphDirectory {
     ranges: FastMap<GraphName, Vec<DirectoryRange>>,
     last: [Option<RunStart>; 4],
+    predicates: FastMap<u64, u128>,
 }
 
 impl GraphDirectory {
-    fn record(&mut self, rows: &[Row], frame: u64) -> Result<(), TryReserveError> {
-        for (position, row) in rows.iter().copied().enumerate() {
+    fn record(
+        &mut self,
+        rows: impl IntoIterator<Item = Row>,
+        frame: u64,
+    ) -> Result<(), TryReserveError> {
+        for (position, row) in rows.into_iter().enumerate() {
+            if let Row::Quad([_, predicate, _], _) = row {
+                if !self.predicates.contains_key(&predicate) {
+                    self.predicates.try_reserve(1)?;
+                }
+                *self.predicates.entry(predicate).or_default() += 1;
+            }
             let (slot, kind, graph) = match row {
                 Row::Quad(_, graph) => (0, FrameType::Quads, graph),
                 Row::ReifierBinding(_, graph) => (1, FrameType::ReifierBindings, graph),
@@ -66,6 +80,7 @@ impl GraphDirectory {
     }
 }
 
+#[derive(Debug)]
 pub(in crate::v2) struct IndexContent {
     directory: Option<GraphDirectory>,
     pack_members: Option<FastSet<PackLocation>>,
@@ -81,6 +96,10 @@ impl Default for IndexContent {
 }
 
 impl IndexContent {
+    pub(super) fn predicates(&self) -> Option<&FastMap<u64, u128>> {
+        Some(&self.directory.as_ref()?.predicates)
+    }
+
     pub(in crate::v2) fn opaque_frame(&mut self, kind: Option<FrameType>) {
         match kind {
             Some(
@@ -96,7 +115,7 @@ impl IndexContent {
 
     pub(in crate::v2) fn record_rows(
         &mut self,
-        rows: &[Row],
+        rows: impl IntoIterator<Item = Row>,
         frame: u64,
     ) -> Result<(), TryReserveError> {
         if let Some(directory) = &mut self.directory {
@@ -116,6 +135,88 @@ impl IndexContent {
             members.insert((digest, frame, member as u64));
         }
         Ok(())
+    }
+
+    pub(in crate::v2) fn write_directory(&self, output: &mut impl Write) -> io::Result<()> {
+        let directory = self.written_directory()?;
+        let mut graphs = Vec::new();
+        graphs
+            .try_reserve_exact(directory.ranges.len())
+            .map_err(io::Error::other)?;
+        graphs.extend(directory.ranges.iter());
+        graphs.sort_unstable_by_key(|(graph, _)| **graph);
+        head::write_head(output, head::ARRAY, graphs.len() as u64)?;
+        for (&graph, runs) in graphs {
+            head::write_head(output, head::ARRAY, 2)?;
+            super::super::fields::write_option(output, graph, |output, id| {
+                head::write_head(output, head::UNSIGNED, id)
+            })?;
+            head::write_head(output, head::ARRAY, runs.len() as u64)?;
+            for run in runs {
+                head::write_head(output, head::ARRAY, 4)?;
+                let count = u64::try_from(run.count).map_err(io::Error::other)?;
+                for value in [run.kind, run.frame, run.row, count] {
+                    head::write_head(output, head::UNSIGNED, value)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(in crate::v2) fn write_statistics(
+        &self,
+        output: &mut impl Write,
+        counts: [u64; 3],
+    ) -> io::Result<()> {
+        let directory = self.written_directory()?;
+        let mut predicates = Vec::new();
+        predicates
+            .try_reserve_exact(directory.predicates.len())
+            .map_err(io::Error::other)?;
+        predicates.extend(directory.predicates.iter());
+        predicates.sort_unstable_by_key(|(predicate, _)| **predicate);
+        head::write_head(output, head::ARRAY, 4)?;
+        for count in counts {
+            head::write_head(output, head::UNSIGNED, count)?;
+        }
+        head::write_head(output, head::ARRAY, predicates.len() as u64)?;
+        for (&predicate, &count) in predicates {
+            head::write_head(output, head::ARRAY, 2)?;
+            head::write_head(output, head::UNSIGNED, predicate)?;
+            head::write_head(
+                output,
+                head::UNSIGNED,
+                u64::try_from(count).map_err(io::Error::other)?,
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(in crate::v2) fn write_pack_members(&self, output: &mut impl Write) -> io::Result<()> {
+        let members = self
+            .pack_members
+            .as_ref()
+            .ok_or_else(|| io::Error::other("GTS pack observations are incomplete"))?;
+        let mut sorted: Vec<&PackLocation> = Vec::new();
+        sorted
+            .try_reserve_exact(members.len())
+            .map_err(io::Error::other)?;
+        sorted.extend(members);
+        sorted.sort_unstable();
+        head::write_head(output, head::ARRAY, sorted.len() as u64)?;
+        for (digest, frame, member) in sorted {
+            head::write_head(output, head::ARRAY, 3)?;
+            head::write_bytes(output, digest)?;
+            head::write_head(output, head::UNSIGNED, *frame)?;
+            head::write_head(output, head::UNSIGNED, *member)?;
+        }
+        Ok(())
+    }
+
+    fn written_directory(&self) -> io::Result<&GraphDirectory> {
+        self.directory
+            .as_ref()
+            .ok_or_else(|| io::Error::other("GTS row observations are incomplete"))
     }
 }
 

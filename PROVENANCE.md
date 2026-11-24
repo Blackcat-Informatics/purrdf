@@ -123,24 +123,34 @@ Copied from `gmeow-gts`:
 - GTS specification and implementer docs under `docs`
 - SVG brand assets under `docs`
 
-The GTS generation 2 wire grammar, segment openers, resync candidate tests, frame links and payload checks follow [P1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P1.md)
-and [P2](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P2.md)
-at `c646f9d98be7ff31ceb0cb96695ee5ccc75db04a`. The whole-blob writer,
+The GTS generation 2 wire grammar, segment openers, resync candidate tests, frame links and payload checks follow [P1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/7233d0da06d31cf26e03db1af355b4067fd8dcb6/docs/v2/P1.md)
+and the [P2 registry](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P2.md).
+The whole-blob writer,
 range commitments and signature envelope grammar follow [P4](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P4.md),
 [P5](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P5.md)
 and [P6](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P6.md)
-at the same revision. Signature verification and deterministic commit signing
+at `c646f9d98be7ff31ceb0cb96695ee5ccc75db04a`. Signature verification and deterministic commit signing
 use the P6 key identifier, signed subject, failure order, coverage and caller
 trust rules. Term
 reservations, dictionary payloads, row
 columns and RDF resolution follow [P3](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P3.md).
+GTS file-fold labelling uses the P3 record bodies and source identifiers,
+then runs the shared canonical labeller with the
+[L1 context](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/L1.md).
+The frozen P3 digest cases cover raw language spelling, suppression, ground
+slots, blob records, typed values, and shared nested terms.
 Chunked writing uses the fixed gear table and cut rule of P4, and recipe
 and value reconstruction use its unit scope.
 The graph reader takes the file capacity limits from [P7](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P7.md)
 and delegates generation 1 inputs as specified in [P9](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P9.md).
+Compaction follows P7 sections 4.2 through 4.5 for the canonical item
+sequence and refusal order, using P3 section 11 for terms and rows and P4
+section 7 for value and blob packs. Stored payloads use the native zstd
+encoder with the level, window and size rule of P7 section 4.2.
 The binary fixtures in `crates/gts/tests/fixtures/v2`
 preserve their upstream paths and bytes from `vectors/v2`. Their SHA-256
-values match the upstream manifest. The header identity expectation
+values match the upstream manifests. The `P1/frame-test-array-long-form.bin`
+fixture comes from the revision cited for P1. The header identity expectation
 follows P1 section 10.2.
 The full-span parity writer uses the field, matrix and shard geometry of P5
 sections 6.1 through 6.5. Its byte identity expectation is the BLAKE3 digest

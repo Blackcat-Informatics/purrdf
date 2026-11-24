@@ -6,14 +6,20 @@ use std::borrow::Cow;
 use super::values::Candidate;
 use super::{FoldError, Line, LiteralDirection, RdfFold, Term, TermId, ValueName, ValueStore};
 use crate::v2::{
-    DecodedRows, DecodedTerms, LiteralForm, Row, TermDefinition, TermReservation, TermText,
-    TypedValue,
+    DecodedRows, DecodedTerms, LiteralForm, Row, TermDefinition, TermOrder, TermReservation,
+    TermText, TypedValue,
 };
 use crate::{FastMap, FastSet};
+
+mod order;
 
 /// Findings from the first failed condition of each definition in a terms frame.
 #[derive(Debug, Default)]
 #[non_exhaustive]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent findings can coexist across definitions in one frame"
+)]
 pub struct DefinitionFindings {
     /// One or more reconstructed terms contain invalid UTF-8.
     pub ill_formed_term: bool,
@@ -23,6 +29,9 @@ pub struct DefinitionFindings {
     pub position_constraint: bool,
     /// New missing pairs, in order of first use.
     pub missing_values: Vec<ValueName>,
+    /// The written terms violate the frame's canonical order declaration.
+    pub declared_order_violated: bool,
+    pub(in crate::v2) capacity_refused_value: bool,
 }
 
 /// A row's resolution under P3 §4.2.
@@ -59,6 +68,14 @@ pub(in crate::v2) struct RowScope {
 }
 
 impl RowScope {
+    pub(in crate::v2) const fn defines(self, id: u64) -> bool {
+        (id as u128) < self.next
+    }
+
+    pub(in crate::v2) const fn admits(self, id: u64) -> bool {
+        !self.in_doubt && (id as u128) >= self.broken_prefix
+    }
+
     pub(in crate::v2) const fn waits_for_commit(self) -> bool {
         self.broken_prefix != 0 && !self.in_doubt
     }
@@ -104,6 +121,7 @@ pub struct SegmentDictionary {
     references: FastMap<(ValueName, ReferenceForm), u64>,
     reference_languages: FastMap<String, usize>,
     aliases: FastMap<u64, u64>,
+    order: order::History,
     in_doubt: bool,
     broken_prefix: u128,
 }
@@ -121,6 +139,7 @@ impl SegmentDictionary {
             references: FastMap::default(),
             reference_languages: FastMap::default(),
             aliases: FastMap::default(),
+            order: order::History::default(),
             in_doubt: false,
             broken_prefix: 0,
         }
@@ -148,6 +167,10 @@ impl SegmentDictionary {
     #[must_use]
     pub fn readable_term(&self, id: u64) -> Option<TermId> {
         self.readable.get(&id).copied()
+    }
+
+    pub(in crate::v2) fn forget_term_order(&mut self) {
+        self.order.last = None;
     }
 
     /// Add a reservation and resolve definitions when the frame is folded.
@@ -195,9 +218,22 @@ impl SegmentDictionary {
         }
         let mut findings = DefinitionFindings::default();
         if let Some(decoded) = decoded {
-            let result = self.resolve_terms(fold, decoded, values, &mut findings);
+            let canonical = reservation.content.as_ref().is_some_and(|content| {
+                content
+                    .as_ref()
+                    .is_ok_and(|header| header.order == TermOrder::Canonical)
+            });
+            let result =
+                self.check_order(fold, &decoded, canonical)
+                    .and_then(|(violated, last)| {
+                        findings.declared_order_violated = violated;
+                        self.resolve_terms(fold, decoded, values, &mut findings, canonical)?;
+                        self.order.last = last;
+                        Ok(())
+                    });
             if let Err(error) = result {
                 self.runs.truncate(runs_before);
+                self.order.rollback(start);
                 self.readable.retain(|id, _| u128::from(*id) < start);
                 self.definitions.retain(|_, id| u128::from(*id) < start);
                 self.references.retain(|_, id| u128::from(*id) < start);
@@ -210,6 +246,8 @@ impl SegmentDictionary {
                 }
                 return Err(error);
             }
+        } else {
+            self.forget_term_order();
         }
         self.next = end;
         Ok(findings)
@@ -221,11 +259,13 @@ impl SegmentDictionary {
         decoded: DecodedTerms<'_>,
         values: &ValueStore,
         findings: &mut DefinitionFindings,
+        canonical: bool,
     ) -> Result<(), FoldError> {
         let context = Definitions {
             languages: &decoded.languages,
             values,
         };
+        let mut literals = FastMap::default();
         for (index, definition) in decoded.terms.into_iter().enumerate() {
             let id =
                 u64::try_from(self.next + index as u128).expect("definition fits its admitted run");
@@ -240,6 +280,12 @@ impl SegmentDictionary {
             let term = self.resolve_definition(fold, id, definition, &context, findings)?;
             if let Some(term) = term {
                 self.readable.insert(id, term);
+                if canonical && !findings.declared_order_violated && matches!(kind, 2 | 5 | 6 | 7) {
+                    literals.try_reserve(1)?;
+                    if let Some(before) = literals.insert(term, kind) {
+                        findings.declared_order_violated = before != kind;
+                    }
+                }
             }
             let first = if let Some(reference) = reference {
                 self.references.try_reserve(1)?;
@@ -332,11 +378,23 @@ impl SegmentDictionary {
             }
             TermDefinition::LiteralRef(reference, form) => {
                 let name = reference.into();
-                let candidate = context.values.get(name);
+                let (candidate, state_refused) = context.values.get(name);
                 let text = match candidate {
                     Candidate::Verified(bytes) => match core::str::from_utf8(bytes) {
                         Ok(text) => Some(text),
                         Err(_) => {
+                            if state_refused {
+                                // This lexical text comes from outside the
+                                // run. Judge the scoped datatype separately.
+                                findings.capacity_refused_value |= self
+                                    .literal_form(
+                                        id,
+                                        form,
+                                        context.languages,
+                                        &mut DefinitionFindings::default(),
+                                    )?
+                                    .is_some();
+                            }
                             findings.ill_formed_term = true;
                             return Ok(None);
                         }
@@ -346,6 +404,7 @@ impl SegmentDictionary {
                 let Some(form) = self.literal_form(id, form, context.languages, findings)? else {
                     return Ok(None);
                 };
+                findings.capacity_refused_value |= state_refused;
                 let Some(text) = text else {
                     note_missing(fold, name, candidate, findings)?;
                     return Ok(None);
@@ -355,7 +414,8 @@ impl SegmentDictionary {
             TermDefinition::Value(value) => return self.intern_value(fold, value),
             TermDefinition::ValueRef(reference) => {
                 let name = reference.into();
-                let candidate = context.values.get(name);
+                let (candidate, state_refused) = context.values.get(name);
+                findings.capacity_refused_value |= state_refused;
                 let Candidate::Verified(bytes) = candidate else {
                     note_missing(fold, name, candidate, findings)?;
                     return Ok(None);
@@ -451,14 +511,14 @@ impl SegmentDictionary {
         if references
             .iter()
             .flatten()
-            .any(|(id, _)| u128::from(*id) >= scope.next)
+            .any(|(id, _)| !scope.defines(*id))
         {
             return RowDisposition::ForwardReference;
         }
-        if scope.in_doubt
-            || references.iter().flatten().any(|(id, _)| {
-                u128::from(*id) < scope.broken_prefix || self.readable_term(*id).is_none()
-            })
+        if references
+            .iter()
+            .flatten()
+            .any(|(id, _)| !scope.admits(*id) || self.readable_term(*id).is_none())
         {
             return RowDisposition::Held;
         }

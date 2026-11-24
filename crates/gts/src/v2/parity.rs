@@ -21,7 +21,7 @@ mod resume;
 mod solve;
 mod stream;
 
-pub(super) use encode::{Recorder, RecordingWriter};
+pub(super) use encode::{EncodedParity, Recorder, RecordingWriter};
 pub use repair::ParityRepairFailure;
 pub use solve::{ParityPatch, ParitySolution, ParitySolveError};
 pub(super) use stream::ParityStream;
@@ -29,7 +29,7 @@ pub use stream::{ParityFinding, ParityFindingKind};
 
 type Digest = [u8; DIGEST_LENGTH];
 pub(super) const GEOMETRY_ONE: u64 = 1;
-const SPAN_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const SPAN_BYTES: usize = 4 * 1024 * 1024;
 const MAX_SHARD_BYTES: usize = 4096;
 const DATA_COLUMNS: usize = 64;
 const PARITY_ROWS: usize = 4;

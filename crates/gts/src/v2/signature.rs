@@ -252,32 +252,25 @@ pub struct SegmentAuthentication {
 }
 
 #[derive(Default)]
-pub(super) struct AuthenticationProgress {
-    pub(super) run_start: u64,
-    counted: u64,
+struct CoverageCount {
     linked: u64,
     authenticated: u64,
     run_linked: u64,
     run_authenticated: u64,
 }
 
-impl AuthenticationProgress {
-    pub(super) const fn begin_run(&mut self, first: u64) {
-        self.run_start = first;
+impl CoverageCount {
+    const fn begin_run(&mut self) {
         self.run_linked = 0;
         self.run_authenticated = 0;
     }
 
-    pub(super) const fn count_frame(&mut self, link_holds: bool) {
-        // Every counted frame already fits the range's ordinary count.
-        self.counted += 1;
-        if link_holds {
-            self.linked += 1;
-            self.run_linked += 1;
-        }
+    const fn count_linked(&mut self) {
+        self.linked += 1;
+        self.run_linked += 1;
     }
 
-    pub(super) const fn authenticate(&mut self, commit: bool) {
+    const fn authenticate(&mut self, commit: bool) {
         if commit {
             // A valid commit covers every linked frame in the prefix.
             self.authenticated = self.linked;
@@ -286,18 +279,63 @@ impl AuthenticationProgress {
         }
         self.run_authenticated = self.run_linked;
     }
+}
+
+#[derive(Default)]
+pub(super) struct AuthenticationProgress {
+    pub(super) run_start: u64,
+    counted: u64,
+    ordinary: CoverageCount,
+    suppression: CoverageCount,
+}
+
+impl AuthenticationProgress {
+    pub(super) const fn begin_run(&mut self, first: u64) {
+        self.run_start = first;
+        self.ordinary.begin_run();
+        self.suppression.begin_run();
+    }
+
+    pub(super) const fn count_frame(&mut self, link_holds: bool) {
+        // Every counted frame already fits the range's ordinary count.
+        self.counted += 1;
+        if link_holds {
+            self.ordinary.count_linked();
+        }
+    }
+
+    pub(super) const fn count_folded_suppression(&mut self, authenticates: bool) {
+        self.suppression.count_linked();
+        if authenticates {
+            self.suppression.authenticate(false);
+        }
+    }
+
+    pub(super) const fn authenticate(&mut self, commit: bool) {
+        self.ordinary.authenticate(commit);
+        self.suppression.authenticate(commit);
+    }
+
+    pub(super) const fn folded_suppressions(&self) -> u64 {
+        self.suppression.linked
+    }
+
+    pub(super) const fn unauthenticated_suppressions(&self) -> u64 {
+        self.suppression.linked - self.suppression.authenticated
+    }
 
     pub(super) const fn summary(&self, segment: u64) -> SegmentAuthentication {
-        let authenticity = if self.authenticated == 0 {
+        let authenticated_frames = self.ordinary.authenticated;
+        let authenticity = if authenticated_frames == 0 {
             Authenticity::Unauthenticated
-        } else if self.authenticated == self.counted {
+        } else if authenticated_frames == self.counted {
             Authenticity::Authenticated
         } else {
             Authenticity::PartlyAuthenticated
         };
         SegmentAuthentication {
             segment,
-            authenticated_frames: self.authenticated,
+            authenticated_frames,
             authenticity,
         }
     }
