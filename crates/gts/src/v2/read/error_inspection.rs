@@ -130,12 +130,13 @@ impl StructuredError for PayloadRefusal {
 
 impl StructuredError for DefinitionFindings {
     purrdf_hash::error_visit! {
-        @record self { ill_formed_term, forward_reference, position_constraint, missing_values, capacity_refused_value } =>
+        @record self { ill_formed_term, forward_reference, position_constraint, missing_values, capacity_refused_value, declared_order_violated } =>
         "gts-v2-definition-findings" {
             "ill_formed_term" => Boolean(self.ill_formed_term),
             "forward_reference" => Boolean(self.forward_reference),
             "capacity_refused_value" => Boolean(self.capacity_refused_value),
             "position_constraint" => Boolean(self.position_constraint),
+            "declared_order_violated" => Boolean(self.declared_order_violated),
             "missing_values" => List(self.missing_values.iter().map(|value| ErrorValue::Record(value))),
         }
     }

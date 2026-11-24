@@ -16,7 +16,7 @@ use super::{
 };
 
 const STORED_CHECK_LENGTH: usize = 16;
-const ZSTD: u64 = 1;
+pub(super) const ZSTD: u64 = 1;
 
 /// Three byte limits used by the P1 payload check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -398,17 +398,22 @@ fn check_stored(
     expected: &[u8; STORED_CHECK_LENGTH],
     payload: &[u8],
 ) -> StoredState {
+    if &stored_digest(codec, payload) == expected {
+        StoredState::Matches
+    } else {
+        StoredState::Mismatch
+    }
+}
+
+pub(super) fn stored_digest(codec: NonZeroU64, payload: &[u8]) -> [u8; STORED_CHECK_LENGTH] {
     let mut hasher = Hasher::new_derive_key("gts2 stored");
     hasher.update(&[0x81]);
     head::with_encoded_head(head::UNSIGNED, codec.get(), |head| {
         hasher.update(head);
     });
     hasher.update(payload);
-    if &hasher.finalize().as_bytes()[..STORED_CHECK_LENGTH] == expected {
-        StoredState::Matches
-    } else {
-        StoredState::Mismatch
-    }
+    let digest = hasher.finalize();
+    core::array::from_fn(|index| digest.as_bytes()[index])
 }
 
 fn check_plain<'a>(
@@ -435,7 +440,7 @@ pub(super) fn payload_digest(bytes: &[u8]) -> [u8; DIGEST_LENGTH] {
     derive_key("gts2 payload", bytes)
 }
 
-fn matches_zstd_header(length: u64, payload: &[u8]) -> bool {
+pub(super) fn matches_zstd_header(length: u64, payload: &[u8]) -> bool {
     let Some(body) = payload.strip_prefix(&[0x28, 0xb5, 0x2f, 0xfd]) else {
         return false;
     };

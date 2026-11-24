@@ -48,6 +48,7 @@ use blob::{BlobClaim, RebuildBudget};
 pub use blob::{BlobEntry, ExternalBlob, RebuildResult, RebuildState};
 pub use frame_wire::{FrameWireResult, PayloadOutcome, PayloadUnchecked};
 use labelling_size::LabellingSize;
+pub(super) use own_segment::OwnSegment;
 use own_segment::OwnSegments;
 pub use references::Visibility;
 use references::VisibilityProgress;
@@ -181,6 +182,8 @@ pub struct RdfGraph<'a> {
     pub blob_length_conflicts: Vec<usize>,
     /// Recipe and value rebuild outcomes in declaration order.
     pub rebuilds: Vec<RebuildResult>,
+    /// File offsets of terms frames whose canonical order declaration fails.
+    pub term_order_violations: Vec<usize>,
     /// File offsets of row frames whose declared order differs from their rows.
     pub row_order_violations: Vec<usize>,
     /// File offsets whose stored check differs from the compressed bytes.
@@ -191,6 +194,11 @@ pub struct RdfGraph<'a> {
     pub opaque_items: Vec<ReadError>,
     /// Opener offsets and declared versions of segments with newer registries.
     pub unsupported_registries: Vec<(usize, NonZeroU64)>,
+    /// Declared profiles that the reader does not check, in segment order.
+    pub unchecked_profiles: Vec<ProfileNotChecked>,
+    pub(super) canonical_claim: bool,
+    pub(super) canonical_labels: Vec<(super::TermId, usize)>,
+    pub(super) pack_regions: Vec<(usize, super::canonical::PackRegion)>,
     /// Segments whose opener prevents link and content checks.
     pub skipped_segments: Vec<SkippedSegment>,
     /// Lineage findings at segment openers in file order.
@@ -353,9 +361,7 @@ impl RdfGraph<'_> {
 }
 
 impl<'a> RdfGraph<'a> {
-    pub(in crate::v2) fn own_segments(
-        &self,
-    ) -> impl ExactSizeIterator<Item = &own_segment::OwnSegment<'a>> {
+    pub(in crate::v2) fn own_segments(&self) -> impl ExactSizeIterator<Item = &OwnSegment<'a>> {
         self.own_segments.iter()
     }
 }
@@ -439,6 +445,18 @@ pub struct FrameSignatures {
     pub checks: Vec<SignatureCheck>,
 }
 
+/// A readable segment declares a profile outside the reader's implemented set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct ProfileNotChecked {
+    /// File-relative segment ordinal.
+    pub segment: u64,
+    /// File-relative byte offset of the opener.
+    pub offset: usize,
+    /// Declared profile code, including codes outside the profile registry.
+    pub profile: NonZeroU64,
+}
+
 /// Commit coverage of one readable segment.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -471,6 +489,7 @@ pub struct GraphIndexCheck {
     /// Prefix comparisons or the failure that prevented them.
     pub prefix: Result<IndexPrefixCheck, ReadFailure>,
     fold_claims: Option<super::index::IndexFoldClaims>,
+    pub(super) declared_digest: Option<[u8; DIGEST_LENGTH]>,
 }
 
 /// A verified resync opener reached by scanning after framing failed.
@@ -1020,6 +1039,7 @@ fn framing_damage(error: &ReadError, end: usize) -> Option<FramingDamage> {
 
 struct Segment<'a> {
     registry: NonZeroU64,
+    canonical_claim: bool,
     verifier: SegmentVerifier,
     dictionary: SegmentDictionary,
     ordinal: Option<u64>,
@@ -1820,6 +1840,9 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         };
         let mut segment = segment_from_header(header, identifier, extent, file_ordinal)
             .map_err(|failure| ReadError { offset, failure })?;
+        if self.stop_after_segment {
+            self.graph.canonical_claim = segment.canonical_claim;
+        }
         segment.labelling.blob_start = self.blob_claims.len();
         segment.state_run = if header.resync().is_some() || header.lineage().is_none() {
             self.remember_state_start(file_ordinal, offset, items_at_opener)?;
@@ -1832,6 +1855,22 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         } else {
             None
         };
+        if !self.stop_after_segment
+            && let Some(profile) = header.profile()
+        {
+            super::fields::push(
+                &mut self.graph.unchecked_profiles,
+                ProfileNotChecked {
+                    segment: file_ordinal,
+                    offset,
+                    profile,
+                },
+            )
+            .map_err(|error| ReadError {
+                offset,
+                failure: error.into(),
+            })?;
+        }
         self.values
             .set_state_run(segment.state_run.map(|first| first.segment));
         Ok(Some(segment))
@@ -2159,9 +2198,17 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
         self.visibility.settle_segment(segment);
         let size = segment.labelling.size(self.blob_claims.len());
         self.labelling_size += size;
-        self.graph
-            .own_segments
-            .finish(segment.file_ordinal, size, self.graph.frame_wire.len());
+        let end = if self.graph.framing_tail.is_some() {
+            self.bytes.len()
+        } else {
+            offset
+        };
+        self.graph.own_segments.finish(
+            segment.file_ordinal,
+            size,
+            self.graph.frame_wire.len(),
+            end,
+        );
         let read_error = |error: std::collections::TryReserveError| ReadError {
             offset,
             failure: error.into(),
@@ -2771,6 +2818,8 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                     .dictionary
                     .observe_terms(&mut self.graph.rdf, reservation, None, &self.values)
                     .map_err(ReadFailure::Fold)?;
+            } else if kind == Some(FrameType::Terms) {
+                segment.dictionary.forget_term_order();
             }
             let primary = checked
                 .frame
@@ -2892,6 +2941,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
                         offset,
                         prefix,
                         fold_claims: checked.index_fold,
+                        declared_digest: checked.index_declared_digest,
                     },
                 )?;
             }
@@ -2924,6 +2974,7 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             Err(error) => return Err(ReadFailure::Content(error)),
         };
         let reservation = checked.terms.as_ref().ok_or(ReadFailure::MissingContent)?;
+        let record_labels = terms.is_some() && self.stop_after_segment && segment.canonical_claim;
         if let Some(decoded) = &terms {
             segment.labelling.terms(reservation, decoded)?;
         }
@@ -2931,8 +2982,26 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             .dictionary
             .observe_terms(&mut self.graph.rdf, reservation, terms, &self.values)
             .map_err(ReadFailure::Fold)?;
+        if record_labels {
+            let mut start = reservation.start;
+            for (kind, count) in reservation.runs() {
+                let end = start + u128::from(count.get());
+                if kind == 3 {
+                    for id in start..end {
+                        let id = u64::try_from(id).expect("the checked reservation fits term IDs");
+                        if let Some(term) = segment.dictionary.readable_term(id) {
+                            super::fields::push(&mut self.graph.canonical_labels, (term, offset))?;
+                        }
+                    }
+                }
+                start = end;
+            }
+        }
         if findings.capacity_refused_value {
             segment.state_run = None;
+        }
+        if findings.declared_order_violated {
+            super::fields::push(&mut self.graph.term_order_violations, offset)?;
         }
         if let Some(failure) = failure {
             self.graph.left_out += 1;
@@ -2992,7 +3061,9 @@ impl<'a, 'keys> GraphReader<'a, 'keys> {
             Err(failure) => return Err(failure),
         };
         segment.labelling.rows_or_entries(decoded.rows.len());
-        segment.index_content.record_rows(&decoded.rows, position)?;
+        segment
+            .index_content
+            .record_rows(decoded.rows.iter().copied(), position)?;
         if decoded.declared_order_violated {
             super::fields::push(&mut self.graph.row_order_violations, offset)?;
         }
@@ -3190,6 +3261,9 @@ fn segment_from_header(
     let registry = header.registry_version();
     Ok(Segment {
         registry,
+        canonical_claim: header
+            .canonical()
+            .is_some_and(|form| form.get() == u64::from(super::CanonicalForm::V1 as u8)),
         ordinal: header.lineage().map(|lineage| lineage.ordinal.get()),
         verifier: SegmentVerifier::new(identifier, registry),
         dictionary: SegmentDictionary::new(file_ordinal),

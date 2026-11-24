@@ -13,8 +13,8 @@ use super::{
     REGISTRY_VERSION, RESYNC_KIND, WireError,
 };
 
-const LOCATOR_KIND: u64 = 3;
-const OFFSETS_KIND: u64 = 4;
+pub(super) const LOCATOR_KIND: u64 = 3;
+pub(super) const OFFSETS_KIND: u64 = 4;
 
 /// The generation identified by the first complete item under P1 §2.3.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

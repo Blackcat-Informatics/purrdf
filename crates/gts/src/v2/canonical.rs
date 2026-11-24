@@ -11,12 +11,28 @@ use std::collections::TryReserveError;
 use std::io::{self, Write};
 
 use purrdf_core::canonical_labelling::{
-    Direction, FoldLabelling, FoldLine, FoldRecord, FoldTerm, Kind, Labelled, LabellingCapacity,
-    Limit, LineSet, LoweringRefusal, Placement, Refusal, StatisticsRecord, ViewError, label_fold,
+    Direction, FoldLabelling, FoldLine, FoldRecord, FoldTerm, Kind, LabellingCapacity, Limit,
+    LineSet, LoweringRefusal, Placement, Refusal, StatisticsRecord, ViewError, label_fold,
 };
 use purrdf_iri::vocab::rdf;
 use purrdf_lex::cbor::head::{self, write_bytes, write_text};
 
+use crate::FastMap;
+
+mod check_labels;
+mod check_structure;
+mod report;
+pub use check_labels::{
+    CanonicalLabellingCheck, CanonicalLabellingDifference, CanonicalLabellingUnchecked,
+};
+pub(super) use check_structure::PackRegion;
+pub use check_structure::{CanonicalStructureCheck, CanonicalStructureDifference};
+pub use report::{
+    CanonicalDifference, CanonicalDifferenceReason, CanonicalStorageCheck, SegmentCanonicalCheck,
+};
+
+use super::fields::Fields;
+use super::read::OwnSegment;
 use super::references::{LeafNode, write_blob_name, write_referent};
 use super::{
     Binding, BlobEntry, Line, LiteralDirection, LiteralValue, RdfFold, RdfGraph, ReadError,
@@ -80,6 +96,8 @@ pub struct SegmentContentLabelling {
     pub content_digest: Result<Option<[u8; 32]>, ContentLabellingRefusal>,
     /// Digest and statistics comparison for the eligible closing index.
     pub closing_index: Option<ClosingIndexLabelling>,
+    /// The canonical form check on this own fold.
+    pub canonical: SegmentCanonicalCheck,
 }
 
 /// The closing index's comparisons against its segment's own fold.
@@ -112,6 +130,10 @@ pub enum ReadLabellingError {
     Segment(ReadError),
     /// The labeller could not read or store the folded input.
     Labeller(ViewError<io::Error>),
+    /// Comparing canonical labels could not complete.
+    CanonicalLabels(io::Error),
+    /// Comparing the canonical structure could not complete.
+    CanonicalStructure(io::Error),
     /// The report could not reserve storage for the segment results.
     Resource(TryReserveError),
     /// The input had no fold to label.
@@ -123,6 +145,8 @@ impl fmt::Display for ReadLabellingError {
         match self {
             Self::Segment(error) => error.fmt(f),
             Self::Labeller(error) => error.fmt(f),
+            Self::CanonicalLabels(error) => error.fmt(f),
+            Self::CanonicalStructure(error) => error.fmt(f),
             Self::Resource(error) => {
                 write!(f, "could not reserve segment labelling results ({error})")
             }
@@ -136,6 +160,8 @@ impl std::error::Error for ReadLabellingError {
         match self {
             Self::Segment(error) => Some(error),
             Self::Labeller(error) => Some(error),
+            Self::CanonicalLabels(error) => Some(error),
+            Self::CanonicalStructure(error) => Some(error),
             Self::Resource(error) => Some(error),
             Self::MissingFold => None,
         }
@@ -146,6 +172,8 @@ impl purrdf_hash::error::StructuredError for ReadLabellingError {
     purrdf_hash::error_visit! {
         Segment(cause) => "gts-v2-read-labelling-segment" { "cause" => Cause(cause) },
         Labeller(cause) => "gts-v2-read-labelling-engine" { "cause" => Cause(cause) },
+        CanonicalLabels(cause) => "gts-v2-canonical-labels-check" { "cause" => Cause(cause) },
+        CanonicalStructure(cause) => "gts-v2-canonical-structure-check" { "cause" => Cause(cause) },
         Resource(cause) => "gts-v2-read-labelling-resource" { "cause" => Cause(cause) },
         MissingFold => "gts-v2-read-labelling-missing-fold" {},
     }
@@ -170,7 +198,7 @@ impl ContentLabelling {
         &self.statistics
     }
 
-    fn index_counts(&self) -> [u64; 3] {
+    pub(super) fn index_counts(&self) -> [u64; 3] {
         let rdf_lines = self
             .canonical_lines
             .iter()
@@ -184,9 +212,31 @@ impl ContentLabelling {
         let records = self.canonical_lines.len() - rdf_lines - (nodes - blank_nodes);
         [rdf_lines as u64, records as u64, blank_nodes as u64]
     }
+
+    pub(super) fn blank_positions(&self) -> io::Result<FastMap<(u64, &[u8]), u64>> {
+        let mut result = FastMap::default();
+        for (node, placement) in self.placements.iter().enumerate() {
+            let source = self.lines.source(node);
+            // Blank sources are CBOR pairs. Term-node sources start with an array of one.
+            if source.first() == Some(&0x82) {
+                let mut fields = Fields::new(source);
+                let (ordinal, label) = (|| {
+                    fields.record(2)?;
+                    let ordinal = fields.uint()?;
+                    let label = fields.bytes()?;
+                    fields.finish()?;
+                    Ok::<_, super::WireError>((ordinal, label))
+                })()
+                .map_err(io::Error::other)?;
+                result.try_reserve(1).map_err(io::Error::other)?;
+                result.insert((ordinal, label), placement.position);
+            }
+        }
+        Ok(result)
+    }
 }
 
-impl RdfGraph<'_> {
+impl<'a> RdfGraph<'a> {
     /// Label the segments' own folds in file order, then label the file fold.
     ///
     /// Each own fold resolves terms and references within its original
@@ -204,14 +254,11 @@ impl RdfGraph<'_> {
         if self.labelling_size().is_none() {
             return Ok(None);
         }
-        let own = self.own_segments();
         let mut segments = Vec::new();
         segments
-            .try_reserve_exact(own.len())
+            .try_reserve_exact(self.own_segments().len())
             .map_err(ReadLabellingError::Resource)?;
-        for segment in own {
-            let fold = segment.fold(self).map_err(ReadLabellingError::Segment)?;
-            let labelled = read_labelling(fold.label_scoped(limit, capacity, Some(0)))?;
+        self.for_labelled_segments(limit, capacity, |segment, fold, labelled| {
             let closing_index = labelled.as_ref().ok().and_then(|result| {
                 let (offset, check) = segment.closing_index(self)?;
                 let (statistics_match, content_digest_matches) =
@@ -224,12 +271,51 @@ impl RdfGraph<'_> {
             });
             segments.push(SegmentContentLabelling {
                 segment: segment.ordinal,
+                canonical: SegmentCanonicalCheck::from_levels(
+                    fold,
+                    check_structure::check_structure(
+                        fold,
+                        labelled.as_ref().ok(),
+                        segment.input(self).ok_or(ReadLabellingError::MissingFold)?,
+                    )
+                    .map_err(ReadLabellingError::CanonicalStructure)?,
+                    check_labels::check(fold, labelled.as_ref().ok())
+                        .map_err(ReadLabellingError::CanonicalLabels)?,
+                ),
                 content_digest: labelled.map(|result| result.content_digest),
                 closing_index,
             });
-        }
+            Ok(())
+        })?;
         let file = read_labelling(self.label_content(limit, capacity))?;
         Ok(Some(ReadContentLabelling { segments, file }))
+    }
+
+    pub(super) fn label_for_compaction(
+        &self,
+        limit: Limit,
+        capacity: &mut LabellingCapacity,
+    ) -> Result<Result<ContentLabelling, ContentLabellingRefusal>, ReadLabellingError> {
+        self.for_labelled_segments(limit, capacity, |_, _, _| Ok(()))?;
+        read_labelling(self.label_content(limit, capacity))
+    }
+
+    fn for_labelled_segments(
+        &self,
+        limit: Limit,
+        capacity: &mut LabellingCapacity,
+        mut visit: impl FnMut(
+            &OwnSegment<'a>,
+            &Self,
+            Result<ContentLabelling, ContentLabellingRefusal>,
+        ) -> Result<(), ReadLabellingError>,
+    ) -> Result<(), ReadLabellingError> {
+        for segment in self.own_segments() {
+            let fold = segment.fold(self).map_err(ReadLabellingError::Segment)?;
+            let labelled = read_labelling(fold.label_scoped(limit, capacity, Some(0)))?;
+            visit(segment, &fold, labelled)?;
+        }
+        Ok(())
     }
 
     /// Label the file fold, including the content hidden by suppression.
@@ -281,33 +367,84 @@ impl RdfGraph<'_> {
             annotation_width: self.rdf.annotation_width_exceeded(),
             limit,
         };
-        let (lines, labelled) = label_fold(
-            self.rdf.lines().map(fold_line),
-            records,
-            |index| fold_term(&self.rdf, index, ordinal),
-            limits,
-            capacity,
-        )?;
+        let mut result = label_rdf(&self.rdf, records, limits, capacity, |_, segment, label| {
+            (ordinal.unwrap_or(segment), label)
+        })?;
         let held = self.rdf.has_held_rows()
             || self
                 .reference_findings
                 .iter()
                 .any(|finding| finding.opaque_term);
-        let Labelled {
-            lines: canonical_lines,
-            placements,
-            record: statistics,
-            digest,
-            ..
-        } = labelled;
-        Ok(Some(ContentLabelling {
-            lines,
-            canonical_lines,
-            placements,
-            statistics,
-            content_digest: (!held).then_some(digest),
-        }))
+        if held {
+            result.content_digest = None;
+        }
+        Ok(Some(result))
     }
+}
+
+pub(super) fn label_written_rdf(
+    fold: &RdfFold,
+    limit: Limit,
+    capacity: &mut LabellingCapacity,
+) -> Result<ContentLabelling, ViewError<io::Error>> {
+    let mut labels = Vec::new();
+    let mut size = fold.lines().count() as u128 + fold.values().len() as u128;
+    for (index, term) in fold.terms().enumerate() {
+        match term {
+            Term::Blank { .. } => {
+                labels
+                    .try_reserve(1)
+                    .map_err(io::Error::other)
+                    .map_err(ViewError::Read)?;
+                labels.push((index, (index as u64).to_be_bytes()));
+            }
+            Term::Triple([_, _, object]) if matches!(fold.term(*object), Some(Term::Triple(_))) => {
+                size += 1;
+            }
+            _ => {}
+        }
+    }
+    label_rdf(
+        fold,
+        fold.values()
+            .iter()
+            .map(|(id, value)| Record::Value(*id, value)),
+        FoldLabelling {
+            size,
+            annotation_width: fold.annotation_width_exceeded(),
+            limit,
+        },
+        capacity,
+        |index, _, _| {
+            let position = labels
+                .binary_search_by_key(&index, |(id, _)| *id)
+                .expect("every written blank term was assigned a label");
+            (0, &labels[position].1)
+        },
+    )
+}
+
+fn label_rdf<'a>(
+    fold: &'a RdfFold,
+    records: impl Iterator<Item = Record<'a>> + Clone,
+    limits: FoldLabelling,
+    capacity: &mut LabellingCapacity,
+    blank: impl Fn(usize, u64, &'a [u8]) -> (u64, &'a [u8]),
+) -> Result<ContentLabelling, ViewError<io::Error>> {
+    let (lines, labelled) = label_fold(
+        fold.lines().map(fold_line),
+        records,
+        |index| fold_term(fold, index, &blank),
+        limits,
+        capacity,
+    )?;
+    Ok(ContentLabelling {
+        lines,
+        canonical_lines: labelled.lines,
+        placements: labelled.placements,
+        statistics: labelled.record,
+        content_digest: Some(labelled.digest),
+    })
 }
 
 fn read_labelling(
@@ -341,13 +478,17 @@ fn fold_line(line: Line) -> FoldLine {
     }
 }
 
-fn fold_term(fold: &RdfFold, index: usize, ordinal: Option<u64>) -> Option<FoldTerm<'_>> {
+fn fold_term<'a>(
+    fold: &'a RdfFold,
+    index: usize,
+    blank: impl Fn(usize, u64, &'a [u8]) -> (u64, &'a [u8]),
+) -> Option<FoldTerm<'a>> {
     Some(match fold.term(TermId::from_index(index))? {
         Term::Iri(iri) => FoldTerm::Iri(iri),
-        Term::Blank { segment, label } => FoldTerm::Blank {
-            ordinal: ordinal.unwrap_or(*segment),
-            label,
-        },
+        Term::Blank { segment, label } => {
+            let (ordinal, label) = blank(index, *segment, label);
+            FoldTerm::Blank { ordinal, label }
+        }
         Term::Typed { lexical, datatype } => {
             let Term::Iri(datatype) = fold.term(*datatype)? else {
                 return None;

@@ -156,6 +156,17 @@ impl RdfFold {
         )
     }
 
+    pub(in crate::v2) fn contains_line(&self, line: Line) -> bool {
+        if let Line::EmptyGraph(graph) = line
+            && self.carried_graphs.contains(&graph)
+        {
+            return false;
+        }
+        self.line_indices
+            .get(&line.key())
+            .is_some_and(|&index| self.lines[index] == line)
+    }
+
     pub(in crate::v2) fn retain_visible_lines(&mut self, mut visible: impl FnMut(Line) -> bool) {
         self.lines.retain(|&line| {
             !matches!(line, Line::EmptyGraph(graph) if self.carried_graphs.contains(&graph))

@@ -13,10 +13,10 @@ use purrdf_gts::v2::{
     ContentError, ContentLabellingRefusal, DetectionCapacity, FileEnd, FrameField, FramingDamage,
     Header, IndexStorageItem, IndexStorageProblem, Item, ItemKind, Line, Lineage, LineageFinding,
     LinkState, MalformedReason, ParityFindingKind, ParityRepairFailure, PayloadDamage,
-    PayloadOutcome, PayloadRefusal, PayloadUnchecked, RdfGraph, ReadCapacity, ReadFailure,
+    PayloadOutcome, PayloadRefusal, PayloadUnchecked, RdfFold, RdfGraph, ReadCapacity, ReadFailure,
     ReadGraph, ReadLimits, RebuildState, ResyncPast, ResyncReach, SegmentWriteError, SegmentWriter,
     SignatureStatus, SignatureUnverified, Term, UnknownFrameType, ValueName, read,
-    read_with_limits, write_header,
+    read_with_limits, write_header, write_indexed_rdf_segment,
 };
 use purrdf_lex::cbor::{DecodeErrorKind, StructuralError, head};
 
@@ -71,6 +71,28 @@ fn long_form_envelope_stays_opaque_and_preserves_the_opener_link() {
     let graph = second(&extended);
     assert!(graph.frame_failures.is_empty());
     assert_eq!(graph.blobs.len(), 1);
+}
+
+#[test]
+fn unchecked_profiles_are_reported_once_per_readable_segment() {
+    let dist = include_bytes!("fixtures/v2/P7/profile__not-checked.profile-dist.bin");
+    let unknown = include_bytes!("fixtures/v2/P7/profile__not-checked.profile-99.bin");
+    let plain = SegmentWriter::new(Vec::new()).unwrap().into_inner();
+    let bytes = [dist.as_slice(), &plain, unknown.as_slice()].concat();
+    let graph = second(&bytes);
+    let [first, last] = graph.unchecked_profiles.as_slice() else {
+        panic!("the dist and unknown profiles are unchecked");
+    };
+    assert_eq!(
+        (first.segment, first.offset, first.profile.get()),
+        (0, 0, 1)
+    );
+    assert_eq!(
+        (last.segment, last.offset, last.profile.get()),
+        (2, dist.len() + plain.len(), 99),
+    );
+    assert_eq!(graph.unsupported_registries, [] as [(usize, NonZeroU64); 0]);
+    assert!(graph.into_complete_rdf().unwrap().lines().count() > 0);
 }
 
 #[test]
@@ -310,6 +332,8 @@ fn own_fold_only_resolves_values_from_its_segment() {
 
 #[test]
 fn own_folds_charge_the_shared_weight_before_the_file() {
+    use purrdf_gts::v2::{CompactionOutcome, CompactionStop, compact};
+
     let graph = second(include_bytes!(
         "fixtures/v2/P3/labelling-weight-segments.bin"
     ));
@@ -347,7 +371,631 @@ fn own_folds_charge_the_shared_weight_before_the_file() {
                 LoweringRefusal::Weight { weight: 120, total, .. }
             )) if total == admitted));
         }
+        let mut fresh = LabellingCapacity::new(u64::MAX, limit);
+        let mut sink = Vec::new();
+        let compacted = compact(&graph, None, Limit::new(0), &mut fresh, &mut sink).unwrap();
+        if limit == 240 {
+            assert!(matches!(compacted.outcome, CompactionOutcome::Written(_)));
+        } else {
+            assert!(matches!(
+                compacted.outcome,
+                CompactionOutcome::Stopped(CompactionStop::Labelling(
+                    ContentLabellingRefusal::Lowering(LoweringRefusal::Weight { total, .. })
+                )) if total == admitted
+            ));
+            assert_eq!(sink, [] as [u8; 0]);
+        }
+        assert_eq!(fresh.total(), admitted);
     }
+}
+
+#[test]
+fn indexed_writer_closes_the_written_fold_and_checks_labelling_before_output() {
+    let mut fold = RdfFold::default();
+    let subject = fold
+        .intern_term(Term::Blank {
+            segment: 8,
+            label: b"source".as_slice().into(),
+        })
+        .unwrap();
+    let predicate = fold
+        .intern_term(Term::Iri("https://example.org/p".into()))
+        .unwrap();
+    let object = fold
+        .intern_term(Term::Iri("https://example.org/o".into()))
+        .unwrap();
+    let graph_name = fold
+        .intern_term(Term::Iri("https://example.org/g".into()))
+        .unwrap();
+    let row = [subject, predicate, object];
+    fold.add_line(Line::Quad(row, Some(graph_name))).unwrap();
+    fold.add_line(Line::Quad(row, None)).unwrap();
+
+    let mut output = Vec::new();
+    assert!(matches!(
+        write_indexed_rdf_segment(
+            &fold,
+            Limit::new(0),
+            &mut LabellingCapacity::new(1, u64::MAX),
+            &mut output
+        ),
+        Err(SegmentWriteError::Labelling(ViewError::Lowering(
+            LoweringRefusal::Size { .. }
+        )))
+    ));
+    assert_eq!(output, [] as [u8; 0]);
+
+    let bytes = write_indexed_rdf_segment(
+        &fold,
+        Limit::new(0),
+        &mut LabellingCapacity::new(2, u64::MAX),
+        output,
+    )
+    .unwrap();
+    let graph = second(&bytes);
+    assert_eq!(graph.rdf.lines().count(), 2);
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("one closing index was written");
+    };
+    let prefix = index.prefix.as_ref().unwrap();
+    assert!(prefix.head_matches && prefix.root_matches && prefix.type_runs_match);
+    assert_eq!(prefix.graph_directory_matches, Some(true));
+    assert_eq!(prefix.pack_members_match, Some(true));
+    let parity = graph.frame_wire.last().unwrap();
+    assert_eq!(
+        parity.frame_type,
+        Some(purrdf_gts::v2::FrameType::Parity as u64)
+    );
+    assert!(parity.offset > index.offset);
+    assert_eq!(graph.parity_findings, []);
+    assert_eq!(graph.index_storage_findings, []);
+    let locator_offset = bytes.len() - 11;
+    let locator = &bytes[locator_offset..];
+    assert_eq!(&locator[..3], &[0x82, 0x03, 0x1b]);
+    assert_eq!(
+        u64::from_be_bytes(locator[3..].try_into().unwrap()),
+        (locator_offset - index.offset) as u64,
+    );
+    let report = graph
+        .label_read(Limit::new(0), &mut LabellingCapacity::new(2, u64::MAX))
+        .unwrap()
+        .unwrap();
+    let claims = report.segments[0].closing_index.unwrap();
+    assert!(claims.statistics_match && claims.content_digest_matches);
+}
+
+#[test]
+fn canonical_structure_locates_differences_at_the_upstream_positions() {
+    use purrdf_gts::v2::CanonicalStructureDifference::{
+        Bindings, BlobRegion, Commit, FrameSequence, Header, Index, Rows, Suppression, Terms,
+        ValueRegion,
+    };
+    use purrdf_gts::v2::{CanonicalDifferenceReason, CanonicalStructureCheck};
+
+    macro_rules! fixture {
+        ($name:literal) => {
+            include_bytes!(concat!("fixtures/v2/P7/", $name, ".bin")).as_slice()
+        };
+    }
+    let check = |bytes: &[u8]| {
+        let graph = second(bytes);
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap()
+            .unwrap();
+        report.segments[0].canonical
+    };
+    for (bytes, rule, at) in [
+        (
+            fixture!("canonical__check__first-difference__header.registry-version-two"),
+            Header,
+            0,
+        ),
+        (
+            fixture!("canonical__check__first-difference__frame_sequence.locator-removed"),
+            FrameSequence,
+            11,
+        ),
+        (
+            fixture!("canonical__check__first-difference__terms.terms-out-of-order"),
+            Terms,
+            2,
+        ),
+        (
+            fixture!("canonical__check__first-difference__rows.rows-out-of-order"),
+            Rows,
+            3,
+        ),
+        (
+            fixture!("canonical__check__first-difference__value_region.values-swapped"),
+            ValueRegion,
+            1,
+        ),
+        (
+            fixture!("canonical__check__first-difference__blob_region.members-reversed"),
+            BlobRegion,
+            1,
+        ),
+        (
+            fixture!("canonical__check__first-difference__bindings.entries-swapped"),
+            Bindings,
+            5,
+        ),
+        (
+            fixture!("canonical__check__first-difference__suppression.entries-swapped"),
+            Suppression,
+            6,
+        ),
+        (
+            fixture!("canonical__check__first-difference__commit.count-one-too-high"),
+            Commit,
+            7,
+        ),
+        (
+            fixture!("canonical__check__first-difference__index.frame-count-one-too-high"),
+            Index,
+            8,
+        ),
+        (
+            fixture!("canonical__check__two-differences.one-position"),
+            Index,
+            8,
+        ),
+        (
+            fixture!("canonical__check__parity-state.frame-removed"),
+            FrameSequence,
+            7,
+        ),
+    ] {
+        let actual = check(bytes);
+        assert!(
+            matches!(actual.structure, CanonicalStructureCheck::Failed { position, difference, .. }
+            if position == at && difference == rule),
+            "{rule:?} at {at}: {actual:?}"
+        );
+        let first = actual.first_difference.unwrap();
+        assert_eq!(
+            (first.position, first.reason),
+            (at, CanonicalDifferenceReason::Structure(rule))
+        );
+    }
+    for bytes in [
+        fixture!("canonical__check__parity-state.table-altered"),
+        fixture!("canonical__check__signature-added"),
+        fixture!("canonical__check__first-difference__labelling.label-of-no-position"),
+        fixture!("canonical__check__first-difference__content_digest.digest-of-zeros"),
+        fixture!("canonical__labels-automorphic"),
+    ] {
+        assert_eq!(check(bytes).structure, CanonicalStructureCheck::Verified);
+    }
+}
+
+#[test]
+fn canonical_structure_reports_short_parity_after_an_intermediate_index() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let source = second(fixture);
+    let index = source
+        .frame_wire
+        .iter()
+        .find(|frame| frame.frame_type == Some(FrameType::Index as u64))
+        .unwrap();
+    let parity = source
+        .frame_wire
+        .iter()
+        .find(|frame| frame.frame_type == Some(FrameType::Parity as u64))
+        .unwrap();
+    let item = Item::first(&fixture[index.offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let identifier = frame.field(FrameField::Identifier)[2..].try_into().unwrap();
+    let mut bytes = fixture.to_vec();
+    bytes.extend_from_slice(item.bytes());
+    relink_frame(&mut bytes[fixture.len()..], identifier);
+    let graph = second(&bytes);
+    assert_eq!(graph.index_checks.len(), 2);
+    assert!(!graph.index_checks[1].prefix.as_ref().unwrap().head_matches);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            offset: parity.offset,
+            position: parity.position,
+            difference: CanonicalStructureDifference::FrameSequence,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_reports_a_healed_ordinary_identifier() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference, FrameType};
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let source = second(fixture);
+    let terms = source
+        .frame_wire
+        .iter()
+        .find(|frame| frame.frame_type == Some(FrameType::Terms as u64))
+        .unwrap();
+    let item = Item::first(&fixture[terms.offset..]).unwrap().unwrap();
+    let frame = item.frame().unwrap().unwrap();
+    let field = frame.field(FrameField::Identifier);
+    let last_byte = field.as_ptr().addr() - fixture.as_ptr().addr() + field.len() - 1;
+    let mut damaged = fixture.to_vec();
+    damaged[last_byte] ^= 1;
+    let graph = second(&damaged);
+    assert!(graph.frame_wire.iter().any(|frame| {
+        frame.offset == terms.offset
+            && frame.link == LinkState::Healed
+            && frame.payload == PayloadOutcome::Verified
+    }));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.structure,
+        CanonicalStructureCheck::Failed {
+            offset: terms.offset,
+            position: terms.position,
+            difference: CanonicalStructureDifference::Terms,
+        }
+    );
+}
+
+#[test]
+fn canonical_structure_uses_the_actual_segment_boundaries_and_reports_a_torn_suffix() {
+    use purrdf_gts::v2::{CanonicalStructureCheck, CanonicalStructureDifference};
+
+    let fixture = include_bytes!("fixtures/v2/P7/canonical__construction.bin");
+    let mut bytes = [fixture.as_slice(), fixture.as_slice()].concat();
+    let end = bytes.len();
+    bytes.push(0x82);
+    let graph = second(&bytes);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap()
+        .unwrap();
+    let [first, second] = report.segments.as_slice() else {
+        panic!("the complete openers delimit two segments");
+    };
+    assert_eq!(first.canonical.structure, CanonicalStructureCheck::Verified);
+    assert!(
+        matches!(second.canonical.structure, CanonicalStructureCheck::Failed {
+        offset, difference: CanonicalStructureDifference::FrameSequence, ..
+    } if offset == end)
+    );
+}
+
+#[test]
+fn canonical_labelling_accepts_automorphisms_and_locates_label_and_digest_differences() {
+    use purrdf_gts::v2::{CanonicalLabellingCheck, CanonicalLabellingDifference, FrameType};
+
+    let check = |graph: &RdfGraph<'_>| {
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(report.segments.len(), 1);
+        report.segments[0].canonical.labelling
+    };
+    let automorphic = second(include_bytes!(
+        "fixtures/v2/P7/canonical__labels-automorphic.bin"
+    ));
+    assert_eq!(check(&automorphic), CanonicalLabellingCheck::Verified);
+
+    let labels = include_bytes!(
+        "fixtures/v2/P7/canonical__check__first-difference__labelling.label-of-no-position.bin"
+    );
+    let digest = include_bytes!(
+        "fixtures/v2/P7/canonical__check__first-difference__content_digest.digest-of-zeros.bin"
+    );
+    for (fixture, frame_type, reason) in [
+        (
+            labels.as_slice(),
+            FrameType::Terms,
+            CanonicalLabellingDifference::BlankLabels,
+        ),
+        (
+            digest.as_slice(),
+            FrameType::Index,
+            CanonicalLabellingDifference::ContentDigest,
+        ),
+    ] {
+        let graph = second(fixture);
+        let frame = graph
+            .frame_wire
+            .iter()
+            .find(|frame| frame.frame_type == Some(frame_type as u64))
+            .unwrap();
+        assert_eq!(
+            check(&graph),
+            CanonicalLabellingCheck::Failed {
+                offset: frame.offset,
+                position: frame.position,
+                difference: reason,
+            }
+        );
+    }
+}
+
+#[test]
+fn canonical_labelling_observes_claim_and_capacity_before_comparing() {
+    use purrdf_gts::v2::{
+        CanonicalLabellingCheck::Unchecked, CanonicalLabellingUnchecked, CanonicalStorageCheck,
+        CanonicalStructureCheck,
+    };
+
+    let not_claimed = include_bytes!("fixtures/v2/P7/canonical__check__not-claimed.bin");
+    let index = include_bytes!("fixtures/v2/P7/canonical__check__index-above-capacity.bin");
+    let refused = include_bytes!("fixtures/v2/P7/canonical__check__refused.bin");
+    let mut small = ReadCapacity::default();
+    small.payload.decoded_bytes_per_frame = 203;
+    for (graph, expected, structure, storage) in [
+        (
+            second(not_claimed),
+            CanonicalLabellingUnchecked::NotClaimed,
+            CanonicalStructureCheck::NotClaimed,
+            CanonicalStorageCheck::NotClaimed,
+        ),
+        (
+            second_at_capacity(index, small),
+            CanonicalLabellingUnchecked::ExceedsCapacity,
+            CanonicalStructureCheck::ExceedsCapacity,
+            CanonicalStorageCheck::ExceedsCapacity,
+        ),
+        (
+            second(refused),
+            CanonicalLabellingUnchecked::LabellingRefused,
+            CanonicalStructureCheck::Failed {
+                offset: Item::first(refused).unwrap().unwrap().bytes().len(),
+                position: 1,
+                difference: purrdf_gts::v2::CanonicalStructureDifference::Terms,
+            },
+            CanonicalStorageCheck::EncoderNotHeld,
+        ),
+    ] {
+        let report = graph
+            .label_read(
+                Limit::new(0),
+                &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+            )
+            .unwrap()
+            .unwrap();
+        let canonical = report.segments[0].canonical;
+        assert_eq!(canonical.labelling, Unchecked(expected));
+        assert_eq!(canonical.structure, structure);
+        assert_eq!(canonical.storage, storage);
+    }
+}
+
+#[test]
+fn canonical_labelling_skips_an_index_after_the_fold_stops() {
+    use purrdf_gts::v2::{CanonicalForm, CanonicalLabellingCheck};
+
+    let fixture = include_bytes!("fixtures/v2/P5/index-after-stop.exact.bin");
+    let opener = Item::first(fixture).unwrap().unwrap();
+    let mut rest = &fixture[opener.bytes().len()..];
+    let mut bytes = Vec::new();
+    write_header(&mut bytes, None, Some(CanonicalForm::V1), None).unwrap();
+    bytes[3] = 2; // Registry 2 admits the fixture's unknown critical frame.
+    let mut predecessor = Header::decode(Item::first(&bytes).unwrap().unwrap())
+        .unwrap()
+        .identifier()
+        .unwrap();
+    while let Some(item) = Item::first(rest).unwrap() {
+        let at = bytes.len();
+        bytes.extend_from_slice(item.bytes());
+        predecessor = relink_frame(&mut bytes[at..], &predecessor);
+        rest = &rest[item.bytes().len()..];
+    }
+    let mut capacity = ReadCapacity::default();
+    capacity.payload.decoded_bytes_per_frame = 14;
+    let graph = second_at_capacity(&bytes, capacity);
+    let [index] = graph.index_checks.as_slice() else {
+        panic!("the reader retains the stopped index's independent check");
+    };
+    assert!(graph.stopped_frames.contains(&index.offset));
+    assert!(matches!(
+        index.prefix,
+        Err(ReadFailure::PayloadRefusal(PayloadRefusal::DecodedSize(_)))
+    ));
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        report.segments[0].canonical.labelling,
+        CanonicalLabellingCheck::Verified
+    );
+}
+
+#[test]
+fn compaction_matches_the_frozen_canonical_head_and_index() {
+    assert_compaction_head(include_bytes!("fixtures/v2/P7/canonical__construction.bin"));
+}
+
+#[test]
+fn compaction_externalizes_values_at_the_frozen_storage_thresholds() {
+    for fixture in [
+        include_bytes!("fixtures/v2/P7/canonical__constants__threshold.octets-524287.output.bin")
+            .as_slice(),
+        include_bytes!("fixtures/v2/P7/canonical__constants__threshold.octets-524288.output.bin")
+            .as_slice(),
+        include_bytes!(
+            "fixtures/v2/P7/canonical__constants__threshold.language-1048575.output.bin"
+        )
+        .as_slice(),
+        include_bytes!(
+            "fixtures/v2/P7/canonical__constants__threshold.language-1048576.output.bin"
+        )
+        .as_slice(),
+    ] {
+        assert_compaction_head(fixture);
+    }
+}
+
+fn assert_compaction_head(fixture: &[u8]) {
+    use purrdf_gts::v2::{CompactionOutcome, FrameType, compact};
+
+    let source = second(fixture);
+    let report = compact(
+        &source,
+        None,
+        Limit::new(0),
+        &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        Vec::new(),
+    )
+    .unwrap();
+    let CompactionOutcome::Written(bytes) = report.outcome else {
+        panic!("the frozen fold admits compaction");
+    };
+    let graph = second(&bytes);
+    let opener = |bytes: &[u8]| {
+        Header::decode(Item::first(bytes).unwrap().unwrap())
+            .unwrap()
+            .identifier()
+    };
+    assert_eq!(opener(&bytes), opener(fixture));
+    let ids = |bytes: &[u8], graph: &RdfGraph<'_>| {
+        graph
+            .frame_wire
+            .iter()
+            .filter(|wire| wire.frame_type != Some(FrameType::Parity as u64))
+            .map(|wire| {
+                let item = Item::first(&bytes[wire.offset..]).unwrap().unwrap();
+                let frame = item.frame().unwrap().unwrap();
+                (
+                    wire.frame_type,
+                    frame.field(FrameField::Identifier).to_vec(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&bytes, &graph), ids(fixture, &source));
+    assert!(graph.frame_failures.is_empty());
+    assert_eq!(graph.parity_findings, []);
+    assert_eq!(graph.index_storage_findings, []);
+    let report = graph
+        .label_read(
+            Limit::new(0),
+            &mut LabellingCapacity::new(u64::MAX, u64::MAX),
+        )
+        .unwrap()
+        .unwrap();
+    let claims = report.segments[0].closing_index.unwrap();
+    assert!(claims.statistics_match && claims.content_digest_matches);
+}
+
+#[test]
+fn compaction_checks_formed_capacity_before_held_rows_and_keeps_stopped_sinks_empty() {
+    use purrdf_gts::v2::{CompactionOutcome, CompactionStop, compact};
+
+    let formed = include_bytes!("fixtures/v2/P7/canonical__compaction__formed-refused.bin");
+    let missing = include_bytes!("fixtures/v2/P7/canonical__compaction__missing-unit.bin");
+    let mut sink = Vec::new();
+    let mut capacity = LabellingCapacity::new(u64::MAX, u64::MAX);
+    let source = second_at_capacity(
+        formed,
+        ReadCapacity {
+            formed_bytes: 8,
+            ..ReadCapacity::default()
+        },
+    );
+    assert!(matches!(
+        compact(&source, None, Limit::new(0), &mut capacity, &mut sink)
+            .unwrap()
+            .outcome,
+        CompactionOutcome::Stopped(CompactionStop::TotalFormed)
+    ));
+    assert_eq!(sink, [] as [u8; 0]);
+    assert!(matches!(
+        compact(
+            &second(missing),
+            None,
+            Limit::new(0),
+            &mut capacity,
+            &mut sink
+        )
+        .unwrap()
+        .outcome,
+        CompactionOutcome::Stopped(CompactionStop::MissingChunk)
+    ));
+    assert_eq!(sink, [] as [u8; 0]);
+    assert!(matches!(
+        compact(
+            &second(formed),
+            None,
+            Limit::new(0),
+            &mut capacity,
+            &mut sink
+        )
+        .unwrap()
+        .outcome,
+        CompactionOutcome::Written(_)
+    ));
+}
+
+#[test]
+fn indexed_writer_places_full_parity_before_rows_and_short_parity_after_index() {
+    use purrdf_gts::v2::FrameType::{Commit, Index, Parity, Quads, Terms};
+
+    let mut fold = RdfFold::default();
+    let subject = fold
+        .intern_term(Term::Iri("https://example.org/s".into()))
+        .unwrap();
+    let predicate = fold
+        .intern_term(Term::Iri("https://example.org/p".into()))
+        .unwrap();
+    let object = fold
+        .intern_term(Term::Language {
+            lexical: "x".repeat(4 * 1024 * 1024).into(),
+            language: "en".into(),
+            direction: None,
+        })
+        .unwrap();
+    fold.add_line(Line::Quad([subject, predicate, object], None))
+        .unwrap();
+    let bytes = write_indexed_rdf_segment(
+        &fold,
+        Limit::new(0),
+        &mut LabellingCapacity::new(1, u64::MAX),
+        Vec::new(),
+    )
+    .unwrap();
+    let graph = second(&bytes);
+    let types: Vec<_> = graph
+        .frame_wire
+        .iter()
+        .map(|frame| frame.frame_type)
+        .collect();
+    assert_eq!(
+        types,
+        [Terms, Parity, Quads, Commit, Index, Parity].map(|kind| Some(kind as u64))
+    );
+    assert_eq!(graph.parity_findings, []);
+    assert_eq!(graph.index_storage_findings, []);
 }
 
 #[test]
@@ -3099,6 +3747,63 @@ fn one_annotation_frame_rejects_repeated_written_definitions() {
             .lines()
             .any(|line| matches!(line, Line::Annotation(..)))
     );
+}
+
+#[test]
+fn canonical_term_order_matches_the_frozen_dictionary_cases() {
+    use purrdf_gts::v2::FrameType;
+
+    macro_rules! case {
+        ($name:literal, $violation:literal) => {
+            (
+                $name,
+                include_bytes!(concat!("fixtures/v2/P3/", $name, ".bin")).as_slice(),
+                $violation,
+            )
+        };
+    }
+
+    for (name, bytes, expected) in [
+        case!("terms-canonical-order-ties.ascending", false),
+        case!("terms-canonical-order-ties.swap-2", true),
+        case!("terms-canonical-triple-depth.ascending", false),
+        case!("terms-canonical-triple-depth.swapped", true),
+        case!("terms-canonical-across-frames.arrival-between", false),
+        case!("terms-canonical-across-frames.descending-junction", true),
+        case!("terms-canonical-follows-opaque", false),
+        case!(
+            "terms-canonical-skipped-term.skipped-at-the-end-of-the-earlier-frame",
+            false
+        ),
+        case!(
+            "terms-canonical-skipped-term.skipped-at-the-end-descending-junction",
+            true
+        ),
+        case!("terms-canonical-literal-value-ref-order.swapped", true),
+        case!("terms-canonical-value-order.swap-0", true),
+        case!("terms-duplicate-canonical-kinds.arrival", false),
+        case!("terms-duplicate-canonical-kinds.canonical", true),
+    ] {
+        let graph = second(bytes);
+        if expected {
+            let frame = graph
+                .frame_wire
+                .iter()
+                .rfind(|frame| frame.frame_type == Some(FrameType::Terms as u64))
+                .unwrap();
+            assert_eq!(graph.term_order_violations, [frame.offset], "{name}");
+            assert_eq!(frame.payload, PayloadOutcome::Verified, "{name}");
+        } else {
+            assert_eq!(graph.term_order_violations, [], "{name}");
+        }
+    }
+
+    let (_, arrival, _) = case!("terms-duplicate-canonical-kinds.arrival", false);
+    let (_, canonical, _) = case!("terms-duplicate-canonical-kinds.canonical", true);
+    let arrival = second(arrival);
+    let canonical = second(canonical);
+    assert!(canonical.rdf.terms().eq(arrival.rdf.terms()));
+    assert!(canonical.rdf.lines().eq(arrival.rdf.lines()));
 }
 
 #[test]

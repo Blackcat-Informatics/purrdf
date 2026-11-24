@@ -81,16 +81,20 @@ pub struct RebuildResult {
     pub name: ValueName,
     /// Result of checking and rebuilding the declaration.
     pub state: RebuildState,
+    pub(in crate::v2) is_value: bool,
+    pub(in crate::v2) has_all_units: bool,
 }
 
 impl purrdf_hash::error::StructuredError for RebuildResult {
     purrdf_hash::error_visit! {
-        @record self { offset, member, name, state } => "gts-v2-rebuild-result" {
+        @record self { offset, member, name, state, is_value, has_all_units } => "gts-v2-rebuild-result" {
             "offset" => Unsigned(self.offset as u128),
             "member" => Value(self.member.map_or(purrdf_hash::error::ErrorValue::Absent,
                 |member| purrdf_hash::error::ErrorValue::Unsigned(member as u128))),
             "name" => Record(&self.name),
             "state" => Record(&self.state),
+            "is_value" => Boolean(self.is_value),
+            "has_all_units" => Boolean(self.has_all_units),
         }
     }
 }
@@ -427,18 +431,12 @@ impl<'a> GraphReader<'a, '_> {
     }
 
     fn rebuild<'p>(
-        &self,
         entries: &[Entry],
-        segment: &Segment<'a>,
-        pack_unit: impl Fn(&Digest) -> Option<&'p [u8]>,
+        unit: impl Fn(&Digest) -> Option<&'p [u8]>,
     ) -> Result<Vec<u8>, ReadFailure> {
         let mut output = Vec::new();
         for &(entry, _) in entries {
-            let bytes = match segment.units.get(&entry.digest) {
-                Some(Unit::Blob(index)) => self.graph.blobs[*index].bytes.as_ref(),
-                Some(Unit::Chunk(bytes)) => bytes.as_ref(),
-                None => pack_unit(&entry.digest).ok_or(ReadFailure::MissingUnit(entry))?,
-            };
+            let bytes = unit(&entry.digest).ok_or(ReadFailure::MissingUnit(entry))?;
             if bytes.len() as u64 != entry.length {
                 return Err(ReadFailure::UnitLength(entry));
             }
@@ -467,11 +465,30 @@ impl<'a> GraphReader<'a, '_> {
             self.claim_blob(name, true, media_type, offset)?;
         }
         let refused = self.rebuilt.charge(name.length).err();
-        let result = match refused {
-            Some(_) => Err(ReadFailure::RebuildCapacity(name)),
-            None => self
-                .rebuild(entries, segment, pack_unit)
-                .and_then(|bytes| self.store_rebuild(name, kind, bytes)),
+        let (result, has_all_units) = if refused.is_some() {
+            (Err(ReadFailure::RebuildCapacity(name)), false)
+        } else {
+            let unit = |digest: &Digest| match segment.units.get(digest) {
+                Some(Unit::Blob(index)) => Some(self.graph.blobs[*index].bytes.as_ref()),
+                Some(Unit::Chunk(bytes)) => Some(bytes.as_ref()),
+                None => pack_unit(digest),
+            };
+            let rebuilt = Self::rebuild(entries, unit);
+            let has_all_units = match &rebuilt {
+                Ok(_) => true,
+                Err(ReadFailure::UnitLength(_)) if !is_value => {
+                    // A length failure stops the rebuild. Compaction still
+                    // needs to know whether all its units were available.
+                    entries
+                        .iter()
+                        .all(|(entry, _)| unit(&entry.digest).is_some())
+                }
+                Err(_) => false,
+            };
+            (
+                rebuilt.and_then(|bytes| self.store_rebuild(name, kind, bytes)),
+                has_all_units,
+            )
         };
         let state = match result {
             Ok(()) => RebuildState::Verified,
@@ -513,6 +530,8 @@ impl<'a> GraphReader<'a, '_> {
                 member,
                 name,
                 state,
+                is_value,
+                has_all_units,
             },
         )?;
         Ok(())
@@ -563,6 +582,28 @@ impl<'a> GraphReader<'a, '_> {
             return Err(WireError::new(MalformedReason::InconsistentCounts, length_offset).into());
         }
         let mut members = pack.members()?;
+        if self.stop_after_segment
+            && segment.canonical_claim
+            && let Some(region) = members.iter().find_map(|member| {
+                use crate::v2::canonical::PackRegion;
+                match member {
+                    Member::Unit(
+                        UnitDeclaration {
+                            kind: UnitKind::Blob(_),
+                            ..
+                        },
+                        _,
+                    ) => Some(PackRegion::Blob),
+                    Member::Recipe(recipe, _) => Some(match recipe.kind {
+                        RecipeKind::Blob(_) => PackRegion::Blob,
+                        RecipeKind::Value => PackRegion::Value,
+                    }),
+                    _ => None,
+                }
+            })
+        {
+            push(&mut self.graph.pack_regions, (offset, region))?;
+        }
         let mut units = FastMap::default();
         for (member_index, member) in members.iter_mut().enumerate() {
             if let Member::Unit(unit, bytes) = member {

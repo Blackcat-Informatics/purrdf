@@ -21,7 +21,7 @@ pub enum TermText<'a> {
 }
 
 impl TermText<'_> {
-    fn bytes(&self) -> &[u8] {
+    pub(in crate::v2) fn bytes(&self) -> &[u8] {
         match self {
             Self::Text(value) => value.as_bytes(),
             Self::Invalid(bytes) => bytes,

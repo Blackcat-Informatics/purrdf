@@ -29,6 +29,18 @@ reading. `v2::SegmentWriter` writes generation 2 segments to a caller-owned
 sink. The `reader` and `writer` modules below provide the generation 1
 interfaces.
 
+The generation 2 reader reports false canonical term and row order
+declarations at their frame offsets and retains the decoded content.
+
+`v2::write_indexed_rdf_segment` writes a committed RDF segment in arrival
+order with a closing index, parity, item offsets, and a locator. It labels
+the fold under a caller-supplied capacity before writing the opener.
+
+Use `v2::compact` to write canonical form 1 from a whole-file fold. It
+preserves hidden content and blob declarations, reports typed refusals
+before writing, and returns the source read's coverage alongside the outcome.
+It uses PurRDF's native zstd encoder for stored payloads.
+
 Call `v2::RdfGraph::label_content` on the original read result to obtain the
 canonical lines, placements, statistics, and content digest of the file fold.
 Labelling takes a caller-supplied work limit and size and weight capacities.
@@ -36,6 +48,11 @@ Held rows, bindings, and suppression entries leave the digest absent.
 Call `v2::RdfGraph::label_read` for each segment's own digest and its closing
 index comparisons as well as the file result. Labelling charges the same
 weight budget for the segments in file order, then for the file fold.
+For a claimed canonical form, the segment report compares ordinary
+frames and item placement against the canonical construction. It checks
+the stored labels as a renaming of its own fold, compares the eligible
+index digest, and reports the first difference. The storage level reports
+whether capacity or the unavailable reference encoder prevents comparison.
 
 The crate owns the wire-format machinery:
 

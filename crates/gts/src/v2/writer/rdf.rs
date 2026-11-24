@@ -7,7 +7,10 @@ use purrdf_lex::cbor::head::{self, write_bytes, write_text};
 
 use super::{Buffer, FrameType, SegmentWriteError, SegmentWriter};
 use crate::FastMap;
-use crate::v2::{Line, LiteralDirection, LiteralValue, RdfFold, Term, TermId, TermOrder};
+use crate::v2::{
+    Line, LiteralDirection, LiteralValue, RdfFold, Row, RowOrder, Term, TermId, TermOrder,
+    ValueName,
+};
 
 const FRAME_ROWS: usize = 4096;
 
@@ -76,9 +79,23 @@ impl<W: Write> SegmentWriter<W> {
             .map_err(io::Error::other)?;
         values.extend(fold.values().iter().map(|(id, value)| (id.index(), value)));
         let mut terms = fold.terms().enumerate().map(|(index, term)| {
-            values
-                .get(&index)
-                .map_or(Definition::Term(term), |value| Definition::Value(value))
+            if let Some(value) = values.get(&index) {
+                return Definition::Value(value);
+            }
+            let id = |term| wire_id(base, term);
+            match term {
+                Term::Iri(text) => Definition::Iri(text),
+                Term::Typed { lexical, datatype } => {
+                    Definition::Literal(lexical, Form::Typed(id(*datatype)))
+                }
+                Term::Language {
+                    lexical,
+                    language,
+                    direction,
+                } => Definition::Literal(lexical, Form::language(language, *direction)),
+                Term::Blank { .. } => Definition::Blank(BlankLabel::arrival(base + index as u64)),
+                Term::Triple(terms) => Definition::Triple(terms.map(id)),
+            }
         });
         let mut batch = Vec::new();
         batch
@@ -90,17 +107,18 @@ impl<W: Write> SegmentWriter<W> {
             if batch.is_empty() {
                 return Ok(());
             }
-            self.write_term_batch(&batch, base, base + written)?;
+            self.write_term_batch(&batch, base + written, TermOrder::Arrival, 1)?;
             written += batch.len() as u64;
             batch.clear();
         }
     }
 
-    fn write_term_batch(
+    pub(super) fn write_term_batch(
         &mut self,
         terms: &[Definition<'_>],
-        base: u64,
         first: u64,
+        order: TermOrder,
+        restart: usize,
     ) -> Result<(), SegmentWriteError> {
         let blocks = || terms.chunk_by(|a, b| a.kind() == b.kind());
         let block_count = blocks().count() as u64;
@@ -108,11 +126,8 @@ impl<W: Write> SegmentWriter<W> {
         array(&mut payload, 2)?;
         array(&mut payload, block_count)?;
         let mut languages = Languages::default();
-        let mut id = u128::from(first);
         for run in blocks() {
-            let start = u64::try_from(id).expect("each run starts inside the admitted ID range");
-            write_block(&mut payload, run, base, start, &mut languages)?;
-            id += run.len() as u128;
+            write_block(&mut payload, run, restart, &mut languages)?;
         }
         list(&mut payload, &languages.ordered, |output, language| {
             write_text(output, language)
@@ -126,8 +141,8 @@ impl<W: Write> SegmentWriter<W> {
                 uint(output, run[0].kind())?;
                 uint(output, run.len() as u64)?;
             }
-            uint(output, TermOrder::Arrival as u64)?;
-            uint(output, 1)
+            uint(output, order as u64)?;
+            uint(output, restart as u64)
         })?;
         Ok(())
     }
@@ -139,7 +154,10 @@ impl<W: Write> SegmentWriter<W> {
             FrameType::Annotations,
             FrameType::EmptyGraphs,
         ] {
-            let mut rows = fold.lines().filter(|row| line_kind(*row) == kind);
+            let mut rows = fold
+                .lines()
+                .filter(|row| line_kind(*row) == kind)
+                .map(|line| wire_row(line, |id| wire_id(base, id)));
             let mut batch = Vec::new();
             loop {
                 for row in rows.by_ref().take(FRAME_ROWS) {
@@ -149,20 +167,19 @@ impl<W: Write> SegmentWriter<W> {
                 if batch.is_empty() {
                     break;
                 }
-                self.write_line_batch(kind, &batch, base)?;
+                self.write_row_batch(kind, &batch, RowOrder::Unordered)?;
                 batch.clear();
             }
         }
         Ok(())
     }
 
-    fn write_line_batch(
+    pub(super) fn write_row_batch(
         &mut self,
         kind: FrameType,
-        lines: &[Line],
-        base: u64,
+        rows: &[Row],
+        order: RowOrder,
     ) -> Result<(), SegmentWriteError> {
-        let id = |id| wire_id(base, id);
         let mut payload = Buffer::default();
         if kind != FrameType::EmptyGraphs {
             let columns = match kind {
@@ -172,11 +189,11 @@ impl<W: Write> SegmentWriter<W> {
                 _ => unreachable!("named row frame type"),
             };
             array(&mut payload, columns)?;
-            write_runs(&mut payload, lines, graph, |output, graph| match graph {
+            write_runs(&mut payload, rows, graph, |output, graph| match graph {
                 Some(graph) => {
                     array(output, 2)?;
                     uint(output, 2)?;
-                    uint(output, id(graph))
+                    uint(output, graph)
                 }
                 None => {
                     array(output, 1)?;
@@ -184,7 +201,7 @@ impl<W: Write> SegmentWriter<W> {
                 }
             })?;
             if kind == FrameType::Quads {
-                write_runs(&mut payload, lines, |line| row_values(line, base)[0], uint)?;
+                write_runs(&mut payload, rows, |row| row_values(row)[0], uint)?;
             }
         } else {
             array(&mut payload, 1)?;
@@ -196,10 +213,10 @@ impl<W: Write> SegmentWriter<W> {
             _ => 0..1,
         };
         for column in delta_columns {
-            array(&mut payload, lines.len() as u64)?;
+            array(&mut payload, rows.len() as u64)?;
             let mut previous = 0;
-            for &line in lines {
-                let value = row_values(line, base)[column];
+            for &row in rows {
+                let value = row_values(row)[column];
                 int(&mut payload, i128::from(value) - i128::from(previous))?;
                 previous = value;
             }
@@ -209,38 +226,104 @@ impl<W: Write> SegmentWriter<W> {
                 array(output, 1)?;
             } else {
                 array(output, 2)?;
-                uint(output, 2)?;
+                uint(
+                    output,
+                    match order {
+                        RowOrder::Canonical => 1,
+                        RowOrder::Unordered => 2,
+                    },
+                )?;
             }
-            uint(output, lines.len() as u64)
+            uint(output, rows.len() as u64)
         })?;
+        if let Some(index) = &mut self.index {
+            let position = self.range.count().get() - 2;
+            index
+                .content
+                .record_rows(rows.iter().copied(), position)
+                .map_err(io::Error::other)?;
+        }
         Ok(())
     }
 }
 
 #[derive(Clone, Copy)]
-enum Definition<'a> {
-    Term(&'a Term<'static>),
+pub(super) enum Definition<'a> {
+    Iri(&'a str),
+    Literal(&'a str, Form<'a>),
+    Blank(BlankLabel<'a>),
+    Triple([u64; 3]),
+    LiteralRef(ValueName, Form<'a>),
     Value(&'a LiteralValue),
+    ValueRef(ValueName),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Form<'a> {
+    Typed(u64),
+    Language(&'a str),
+    LeftToRight(&'a str),
+    RightToLeft(&'a str),
+}
+
+impl<'a> Form<'a> {
+    pub(super) const fn language(text: &'a str, direction: Option<LiteralDirection>) -> Self {
+        match direction {
+            None => Self::Language(text),
+            Some(LiteralDirection::LeftToRight) => Self::LeftToRight(text),
+            Some(LiteralDirection::RightToLeft) => Self::RightToLeft(text),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum BlankLabel<'a> {
+    Inline { bytes: [u8; 9], len: usize },
+    Stored(&'a [u8]),
+}
+
+impl BlankLabel<'_> {
+    fn arrival(id: u64) -> Self {
+        Self::from_bytes(&id.to_be_bytes())
+    }
+
+    pub(super) fn position(position: u64) -> Self {
+        head::with_encoded_head(head::UNSIGNED, position, Self::from_bytes)
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let mut storage = [0; 9];
+        storage[..bytes.len()].copy_from_slice(bytes);
+        Self::Inline {
+            bytes: storage,
+            len: bytes.len(),
+        }
+    }
+
+    pub(super) fn bytes(&self) -> &[u8] {
+        match self {
+            Self::Inline { bytes, len } => &bytes[..*len],
+            Self::Stored(bytes) => bytes,
+        }
+    }
 }
 
 impl<'a> Definition<'a> {
     const fn kind(&self) -> u64 {
         match self {
-            Self::Term(Term::Iri(_)) => 1,
-            Self::Term(Term::Typed { .. } | Term::Language { .. }) => 2,
-            Self::Term(Term::Blank { .. }) => 3,
-            Self::Term(Term::Triple(_)) => 4,
+            Self::Iri(_) => 1,
+            Self::Literal(..) => 2,
+            Self::Blank(_) => 3,
+            Self::Triple(_) => 4,
+            Self::LiteralRef(..) => 5,
             Self::Value(_) => 6,
+            Self::ValueRef(_) => 7,
         }
     }
 
     fn text(self) -> &'a [u8] {
         match self {
-            Self::Term(
-                Term::Iri(text)
-                | Term::Typed { lexical: text, .. }
-                | Term::Language { lexical: text, .. },
-            ) => text.as_bytes(),
+            Self::Iri(text) | Self::Literal(text, _) => text.as_bytes(),
             _ => unreachable!("only text blocks have front-coded columns"),
         }
     }
@@ -269,39 +352,44 @@ impl<'a> Languages<'a> {
 fn write_block<'a>(
     output: &mut Buffer,
     terms: &[Definition<'a>],
-    base: u64,
-    first: u64,
+    restart: usize,
     languages: &mut Languages<'a>,
 ) -> io::Result<()> {
-    match terms[0].kind() {
-        1 => {
+    match terms[0] {
+        Definition::Iri(_) => {
             array(output, 4)?;
             uint(output, 1)?;
-            write_text_columns(output, terms)?;
+            write_text_columns(output, terms, restart)?;
         }
-        2 => write_literal_block(output, terms, base, languages)?,
-        3 => {
+        Definition::Literal(..) => {
+            array(output, 7)?;
+            uint(output, 2)?;
+            write_text_columns(output, terms, restart)?;
+            write_literal_forms(output, terms, languages)?;
+        }
+        Definition::Blank(_) => {
             array(output, 2)?;
             uint(output, 3)?;
-            array(output, terms.len() as u64)?;
-            for index in 0..terms.len() {
-                let id = first + index as u64;
-                write_bytes(output, &id.to_be_bytes())?;
-            }
+            list(output, terms, |output, term| {
+                let Definition::Blank(label) = term else {
+                    unreachable!("one block holds one term kind");
+                };
+                write_bytes(output, label.bytes())
+            })?;
         }
-        4 => {
+        Definition::Triple(_) => {
             array(output, 4)?;
             uint(output, 4)?;
             for column in 0..3 {
                 list(output, terms, |output, term| {
-                    let Definition::Term(Term::Triple(ids)) = term else {
+                    let Definition::Triple(ids) = term else {
                         unreachable!("one block holds one term kind");
                     };
-                    uint(output, wire_id(base, ids[column]))
+                    uint(output, ids[column])
                 })?;
             }
         }
-        _ => {
+        Definition::Value(_) => {
             array(output, 2)?;
             uint(output, 6)?;
             list(output, terms, |output, term| {
@@ -311,63 +399,104 @@ fn write_block<'a>(
                 write_value(output, value)
             })?;
         }
+        Definition::ValueRef(_) => {
+            array(output, 3)?;
+            uint(output, 7)?;
+            write_value_columns(output, terms)?;
+        }
+        Definition::LiteralRef(..) => {
+            array(output, 6)?;
+            uint(output, 5)?;
+            write_value_columns(output, terms)?;
+            write_literal_forms(output, terms, languages)?;
+        }
     }
     Ok(())
 }
 
-fn write_text_columns(output: &mut Buffer, terms: &[Definition<'_>]) -> io::Result<()> {
-    list(output, terms, |output, _| uint(output, 0))?;
-    list(output, terms, |output, term| {
-        uint(output, term.text().len() as u64)
-    })?;
-    let length = terms.iter().try_fold(0_u64, |sum, term| {
-        sum.checked_add(term.text().len() as u64).ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "GTS v2 text column exceeds the wire length",
-            )
-        })
-    })?;
+fn write_text_columns(
+    output: &mut Buffer,
+    terms: &[Definition<'_>],
+    restart: usize,
+) -> io::Result<()> {
+    let mut prefixes = Vec::new();
+    if restart > 1 {
+        prefixes
+            .try_reserve_exact(terms.len())
+            .map_err(io::Error::other)?;
+        for group in terms.chunks(restart) {
+            prefixes.push(0);
+            prefixes.extend(
+                group
+                    .windows(2)
+                    .map(|pair| purrdf_deflate::common_prefix_len(pair[0].text(), pair[1].text())),
+            );
+        }
+    }
+    let prefix = |index| prefixes.get(index).copied().unwrap_or(0);
+    array(output, terms.len() as u64)?;
+    for index in 0..terms.len() {
+        uint(output, prefix(index) as u64)?;
+    }
+    array(output, terms.len() as u64)?;
+    let mut length = 0_u64;
+    for (index, term) in terms.iter().enumerate() {
+        let suffix = (term.text().len() - prefix(index)) as u64;
+        uint(output, suffix)?;
+        length = length
+            .checked_add(suffix)
+            .ok_or_else(|| io::Error::other("GTS text column exceeds the wire length"))?;
+    }
     head::write_head(output, head::BYTES, length)?;
-    for term in terms {
-        output.write_all(term.text())?;
+    for (index, term) in terms.iter().enumerate() {
+        output.write_all(&term.text()[prefix(index)..])?;
     }
     Ok(())
 }
 
-fn write_literal_block<'a>(
+fn write_value_columns(output: &mut Buffer, terms: &[Definition<'_>]) -> io::Result<()> {
+    let name = |term| match term {
+        Definition::LiteralRef(name, _) | Definition::ValueRef(name) => name,
+        _ => unreachable!("value reference columns contain value names"),
+    };
+    list(output, terms, |output, &term| {
+        write_bytes(output, &name(term).digest)
+    })?;
+    list(output, terms, |output, &term| {
+        uint(output, name(term).length)
+    })
+}
+
+fn write_literal_forms<'a>(
     output: &mut Buffer,
     terms: &[Definition<'a>],
-    base: u64,
     languages: &mut Languages<'a>,
 ) -> io::Result<()> {
-    array(output, 7)?;
-    uint(output, 2)?;
-    write_text_columns(output, terms)?;
     let mut datatypes = Vec::new();
     let mut indexes = Vec::new();
     array(output, terms.len() as u64)?;
     for term in terms {
-        let code = match term {
-            Definition::Term(Term::Typed { datatype, .. }) => {
+        let (Definition::Literal(_, form) | Definition::LiteralRef(_, form)) = *term else {
+            unreachable!("only lexical literals have form columns");
+        };
+        let code = match form {
+            Form::Typed(datatype) => {
                 datatypes.try_reserve(1).map_err(io::Error::other)?;
-                datatypes.push(wire_id(base, *datatype));
+                datatypes.push(datatype);
                 1
             }
-            Definition::Term(Term::Language {
-                language,
-                direction,
-                ..
-            }) => {
+            Form::Language(language)
+            | Form::LeftToRight(language)
+            | Form::RightToLeft(language) => {
                 indexes.try_reserve(1).map_err(io::Error::other)?;
                 indexes.push(languages.intern(language)?);
-                match direction {
-                    None => 2,
-                    Some(LiteralDirection::LeftToRight) => 3,
-                    Some(LiteralDirection::RightToLeft) => 4,
+                match form {
+                    Form::Language(_) => 2,
+                    Form::LeftToRight(_) => 3,
+                    Form::RightToLeft(_) => 4,
+                    Form::Typed(_) => unreachable!("the language is already selected"),
                 }
             }
-            _ => unreachable!("only inline literals have form columns"),
         };
         uint(output, code)?;
     }
@@ -375,7 +504,7 @@ fn write_literal_block<'a>(
     list(output, &indexes, |output, &index| uint(output, index))
 }
 
-fn write_value(output: &mut Buffer, value: &LiteralValue) -> io::Result<()> {
+pub(super) fn write_value(output: &mut impl Write, value: &LiteralValue) -> io::Result<()> {
     array(
         output,
         if matches!(value, LiteralValue::Time(..)) {
@@ -409,7 +538,7 @@ fn write_value(output: &mut Buffer, value: &LiteralValue) -> io::Result<()> {
     }
 }
 
-const fn line_kind(line: Line) -> FrameType {
+pub(super) const fn line_kind(line: Line) -> FrameType {
     match line {
         Line::Quad(..) => FrameType::Quads,
         Line::ReifierBinding(..) => FrameType::ReifierBindings,
@@ -418,32 +547,40 @@ const fn line_kind(line: Line) -> FrameType {
     }
 }
 
-const fn graph(line: Line) -> Option<TermId> {
-    match line {
-        Line::Quad(_, graph) | Line::ReifierBinding(_, graph) | Line::Annotation(_, _, graph) => {
-            graph
-        }
-        Line::EmptyGraph(id) => Some(id),
+const fn graph(row: Row) -> Option<u64> {
+    match row {
+        Row::Quad(_, graph) | Row::ReifierBinding(_, graph) | Row::Annotation(_, _, graph) => graph,
+        Row::EmptyGraph(id) => Some(id),
     }
 }
 
-fn row_values(line: Line, base: u64) -> [u64; 4] {
-    let id = |id| wire_id(base, id);
+pub(super) fn wire_row(line: Line, id: impl Fn(TermId) -> u64) -> Row {
     match line {
-        Line::Quad([s, p, o], _) => [id(p), id(o), id(s), 0],
-        Line::ReifierBinding([reifier, triple], _) => [id(reifier), id(triple), 0, 0],
-        Line::Annotation([s, p, o], count, _) => [id(s), id(p), id(o), count.get()],
-        Line::EmptyGraph(graph) => [id(graph), 0, 0, 0],
+        Line::Quad(terms, graph) => Row::Quad(terms.map(&id), graph.map(id)),
+        Line::ReifierBinding(terms, graph) => Row::ReifierBinding(terms.map(&id), graph.map(id)),
+        Line::Annotation(terms, count, graph) => {
+            Row::Annotation(terms.map(&id), count, graph.map(id))
+        }
+        Line::EmptyGraph(graph) => Row::EmptyGraph(id(graph)),
+    }
+}
+
+const fn row_values(row: Row) -> [u64; 4] {
+    match row {
+        Row::Quad([s, p, o], _) => [p, o, s, 0],
+        Row::ReifierBinding([reifier, triple], _) => [reifier, triple, 0, 0],
+        Row::Annotation([s, p, o], count, _) => [s, p, o, count.get()],
+        Row::EmptyGraph(graph) => [graph, 0, 0, 0],
     }
 }
 
 fn write_runs<T: Copy + Eq>(
     output: &mut Buffer,
-    lines: &[Line],
-    key: impl Fn(Line) -> T,
+    rows: &[Row],
+    key: impl Fn(Row) -> T,
     write: impl Fn(&mut Buffer, T) -> io::Result<()>,
 ) -> io::Result<()> {
-    let runs = || lines.chunk_by(|&a, &b| key(a) == key(b));
+    let runs = || rows.chunk_by(|&a, &b| key(a) == key(b));
     array(output, runs().count() as u64)?;
     for run in runs() {
         array(output, 2)?;

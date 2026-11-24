@@ -3,6 +3,9 @@
 
 use core::num::NonZeroU64;
 use std::collections::TryReserveError;
+use std::io::{self, Write};
+
+use purrdf_lex::cbor::head;
 
 use super::fields::{Fields, OptionShape, push};
 use super::terms::read_enum;
@@ -53,6 +56,10 @@ pub(super) struct IndexFoldClaims {
 }
 
 impl IndexFoldClaims {
+    pub(super) const fn content_digest(self) -> Option<Digest> {
+        self.content_digest
+    }
+
     pub(super) fn compare(self, counts: [u64; 3], digest: Option<Digest>) -> (bool, bool) {
         (
             self.statistics.counts == counts && self.statistics.predicates_match == Some(true),
@@ -65,6 +72,17 @@ impl IndexFoldClaims {
 pub(super) struct TypeRuns(Vec<(Option<u64>, u64)>);
 
 impl TypeRuns {
+    pub(super) fn write(&self, output: &mut impl Write) -> io::Result<()> {
+        head::write_head(output, head::ARRAY, self.0.len() as u64)?;
+        for &(code, count) in &self.0 {
+            let code = code.ok_or_else(|| io::Error::other("a written GTS frame has no type"))?;
+            head::write_head(output, head::ARRAY, 2)?;
+            head::write_head(output, head::UNSIGNED, code)?;
+            head::write_head(output, head::UNSIGNED, count)?;
+        }
+        Ok(())
+    }
+
     pub(super) fn reserve_next(&mut self, frame_type: Option<u64>) -> Result<(), TryReserveError> {
         if self.0.last().is_none_or(|(code, _)| *code != frame_type) {
             self.0.try_reserve(1)?;

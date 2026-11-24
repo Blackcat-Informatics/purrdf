@@ -143,6 +143,10 @@ Chunked writing uses the fixed gear table and cut rule of P4, and recipe
 and value reconstruction use its unit scope.
 The graph reader takes the file capacity limits from [P7](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P7.md)
 and delegates generation 1 inputs as specified in [P9](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P9.md).
+Compaction follows P7 sections 4.2 through 4.5 for the canonical item
+sequence and refusal order, using P3 section 11 for terms and rows and P4
+section 7 for value and blob packs. Stored payloads use the native zstd
+encoder with the level, window and size rule of P7 section 4.2.
 The binary fixtures in `crates/gts/tests/fixtures/v2`
 preserve their upstream paths and bytes from `vectors/v2`. Their SHA-256
 values match the upstream manifests. The `P1/frame-test-array-long-form.bin`

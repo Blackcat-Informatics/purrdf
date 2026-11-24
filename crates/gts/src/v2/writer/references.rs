@@ -10,11 +10,9 @@ use crate::v2::{
     Binding, FoldError, FrameType, RdfFold, ReferenceFold, ResolvedLeaf, Suppression, TermId,
 };
 
+use super::dictionary::ROW_COUNT;
 use super::rdf::{array, uint};
 use super::{Buffer, SegmentWriteError, SegmentWriter};
-
-// P7 §4.2 gives the entry count of a full reference frame.
-const FRAME_ENTRIES: usize = 1_048_576;
 
 impl<W: Write> SegmentWriter<W> {
     /// Append a resolved RDF fold and its bindings and suppression records.
@@ -32,22 +30,20 @@ impl<W: Write> SegmentWriter<W> {
         fold: &RdfFold,
         references: &ReferenceFold,
     ) -> Result<(), SegmentWriteError> {
-        let ids = TermIds {
-            base: self.term_base,
-            len: fold.terms().len(),
+        let base = self.term_base;
+        let ids = |term: TermId| {
+            if term.index() >= fold.terms().len() {
+                return Err(SegmentWriteError::ReferenceTerm(FoldError::TermHandle(
+                    term,
+                )));
+            }
+            u64::try_from(base + term.index() as u128)
+                .map_err(|_| SegmentWriteError::DictionaryFull)
         };
-        let bindings = sorted_records(&references.bindings, |output, binding| {
-            write_binding(output, binding, ids)
-        })?;
-        let suppressions = sorted_records(&references.suppressions, |output, claim| {
-            write_suppression(output, &claim.entry, ids)
-        })?;
+        let records = ReferenceRecords::new(references, ids)?;
 
         let previous = self.head;
-        let result = self
-            .add_rdf(fold)
-            .and_then(|()| self.write_reference_section(FrameType::Bindings, &bindings))
-            .and_then(|()| self.write_reference_section(FrameType::Suppress, &suppressions));
+        let result = self.add_rdf(fold).and_then(|()| records.write(self));
         if result.is_err() && self.head != previous {
             self.head = None;
         }
@@ -60,7 +56,7 @@ impl<W: Write> SegmentWriter<W> {
         entries: &[Vec<u8>],
     ) -> Result<(), SegmentWriteError> {
         let mut payload = Buffer::default();
-        for batch in entries.chunks(FRAME_ENTRIES) {
+        for batch in entries.chunks(ROW_COUNT) {
             payload.0.clear();
             array(&mut payload, batch.len() as u64)?;
             for entry in batch {
@@ -72,6 +68,38 @@ impl<W: Write> SegmentWriter<W> {
             })?;
         }
         Ok(())
+    }
+}
+
+#[derive(PartialEq, Eq)]
+pub(in crate::v2) struct ReferenceRecords {
+    bindings: Vec<Vec<u8>>,
+    suppressions: Vec<Vec<u8>>,
+}
+
+impl ReferenceRecords {
+    pub(in crate::v2) fn new(
+        references: &ReferenceFold,
+        ids: impl Fn(TermId) -> Result<u64, SegmentWriteError>,
+    ) -> Result<Self, SegmentWriteError> {
+        let bindings = sorted_records(&references.bindings, |output, binding| {
+            write_binding(output, binding, &ids)
+        })?;
+        let suppressions = sorted_records(&references.suppressions, |output, claim| {
+            write_suppression(output, &claim.entry, &ids)
+        })?;
+        Ok(Self {
+            bindings,
+            suppressions,
+        })
+    }
+
+    pub(super) fn write<W: Write>(
+        &self,
+        writer: &mut SegmentWriter<W>,
+    ) -> Result<(), SegmentWriteError> {
+        writer.write_reference_section(FrameType::Bindings, &self.bindings)?;
+        writer.write_reference_section(FrameType::Suppress, &self.suppressions)
     }
 }
 
@@ -93,31 +121,10 @@ fn sorted_records<T>(
     Ok(records)
 }
 
-#[derive(Clone, Copy)]
-struct TermIds {
-    base: u128,
-    len: usize,
-}
-
-impl TermIds {
-    fn write(self, output: &mut impl Write, term: TermId) -> Result<(), SegmentWriteError> {
-        if term.index() >= self.len {
-            return Err(SegmentWriteError::ReferenceTerm(FoldError::TermHandle(
-                term,
-            )));
-        }
-        let id = u64::try_from(self.base + term.index() as u128)
-            .map_err(|_| SegmentWriteError::DictionaryFull)?;
-        variant(output, 1)?;
-        uint(output, id)?;
-        Ok(())
-    }
-}
-
 fn write_binding(
     output: &mut Buffer,
     binding: &Binding<ResolvedLeaf>,
-    ids: TermIds,
+    ids: &impl Fn(TermId) -> Result<u64, SegmentWriteError>,
 ) -> Result<(), SegmentWriteError> {
     array(output, 2)?;
     write_leaf(output, &binding.term, ids)?;
@@ -128,7 +135,7 @@ fn write_binding(
 fn write_suppression(
     output: &mut Buffer,
     entry: &Suppression<ResolvedLeaf>,
-    ids: TermIds,
+    ids: &impl Fn(TermId) -> Result<u64, SegmentWriteError>,
 ) -> Result<(), SegmentWriteError> {
     variant(output, entry.kind() as u64)?;
     match entry {
@@ -151,7 +158,7 @@ fn write_row(
     output: &mut Buffer,
     leaves: &[ResolvedLeaf],
     graph: Option<&ResolvedLeaf>,
-    ids: TermIds,
+    ids: &impl Fn(TermId) -> Result<u64, SegmentWriteError>,
 ) -> Result<(), SegmentWriteError> {
     array(output, leaves.len() as u64 + 1)?;
     for leaf in leaves {
@@ -170,12 +177,15 @@ fn write_row(
 fn write_leaf(
     output: &mut Buffer,
     leaf: &ResolvedLeaf,
-    ids: TermIds,
+    ids: &impl Fn(TermId) -> Result<u64, SegmentWriteError>,
 ) -> Result<(), SegmentWriteError> {
     leaf.visit(
         |node| {
             match node {
-                LeafNode::Term(term) => ids.write(output, term)?,
+                LeafNode::Term(term) => {
+                    variant(output, 1)?;
+                    uint(output, ids(term)?)?;
+                }
                 LeafNode::Blank { frame, label } => {
                     variant(output, 2)?;
                     array(output, 2)?;
@@ -212,8 +222,8 @@ mod tests {
     };
 
     use super::{
-        Binding, Buffer, FrameType, RdfFold, SegmentWriter, Suppression, TermId, TermIds, array,
-        uint, write_binding,
+        Binding, Buffer, FrameType, RdfFold, SegmentWriter, Suppression, TermId, array, uint,
+        write_binding,
     };
 
     #[test]
@@ -234,7 +244,7 @@ mod tests {
                     term: ResolvedLeaf::Named(term),
                     referent: Referent::Blob(digest),
                 },
-                TermIds { base: 0, len: 2 },
+                &|term| Ok(term.index() as u64),
             )
             .unwrap();
         }

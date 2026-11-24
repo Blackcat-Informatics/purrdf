@@ -2,31 +2,42 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use core::fmt;
+use core::num::NonZeroU64;
 use std::io::{self, Write};
 
+use purrdf_core::canonical_labelling::ViewError;
 use purrdf_hash::blake3::Hasher;
 use purrdf_lex::allocation::try_boxed;
 use purrdf_lex::cbor::head;
+use purrdf_zstd::encoding::{CompressionLevel, CompressionParameters, compress_with_parameters};
 
 use super::fields::write_option;
 use super::header::HEADER_CONTEXT;
 use super::link::frame_hasher;
-use super::parity::{GEOMETRY_ONE, Recorder, RecordingWriter};
-use super::payload::payload_digest;
+use super::parity::{EncodedParity, GEOMETRY_ONE, Recorder, RecordingWriter};
+use super::payload::{ZSTD, matches_zstd_header, payload_digest, stored_digest};
 use super::rdf::unit_digest;
 use super::{
-    BLAKE3_256, DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, FoldError, FrameType, Range, RangeFull,
-    ValueName, write_header,
+    BLAKE3_256, CanonicalForm, DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, FoldError, FrameType,
+    Profile, Range, RangeFull, ReadLabellingError, ValueName, write_header,
 };
 
 mod blob;
+mod compact;
 mod cosign;
+mod dictionary;
+mod index;
+mod packs;
 mod rdf;
 mod references;
 mod signature;
 
+pub(super) use compact::write_structure;
+pub use compact::{Compaction, CompactionOutcome, CompactionStop, compact};
 pub use cosign::{CoSignError, append_cosigned_commit};
+pub use index::write_indexed_rdf_segment;
 pub use rdf::{rdf_segment_bytes, write_rdf_segment};
+pub(super) use references::ReferenceRecords;
 pub use signature::SignatureWriteError;
 
 type Digest = [u8; DIGEST_LENGTH];
@@ -51,6 +62,10 @@ pub enum SegmentWriteError {
     EmptyValue,
     /// The signature list could not be prepared.
     Signature(SignatureWriteError),
+    /// The segment's fold could not be labelled for its closing index.
+    Labelling(ViewError<io::Error>),
+    /// The source read could not complete the labelling procedure.
+    SourceLabelling(Box<ReadLabellingError>),
 }
 
 impl fmt::Display for SegmentWriteError {
@@ -66,6 +81,8 @@ impl fmt::Display for SegmentWriteError {
             Self::ReferenceTerm(error) => error.fmt(f),
             Self::EmptyValue => f.write_str("GTS v2 value declarations require a nonempty value"),
             Self::Signature(error) => error.fmt(f),
+            Self::Labelling(error) => error.fmt(f),
+            Self::SourceLabelling(error) => error.fmt(f),
         }
     }
 }
@@ -77,6 +94,8 @@ impl std::error::Error for SegmentWriteError {
             Self::RangeFull(error) => Some(error),
             Self::Signature(error) => Some(error),
             Self::ReferenceTerm(error) => Some(error),
+            Self::Labelling(error) => Some(error),
+            Self::SourceLabelling(error) => Some(error.as_ref()),
             Self::IncompleteFrame
             | Self::DictionaryFull
             | Self::IncompleteFold
@@ -95,6 +114,8 @@ impl purrdf_hash::error::StructuredError for SegmentWriteError {
         ReferenceTerm(cause) => "gts-v2-reference-write-term" { "cause" => Cause(cause) },
         EmptyValue => "gts-v2-empty-value-declaration" {},
         Signature(cause) => "gts-v2-signature-write" { "cause" => Cause(cause) },
+        Labelling(cause) => "gts-v2-index-labelling" { "cause" => Cause(cause) },
+        SourceLabelling(cause) => "gts-v2-source-labelling" { "cause" => Cause(cause.as_ref()) },
     }
 }
 
@@ -113,6 +134,9 @@ pub struct SegmentWriter<W> {
     range: Range,
     term_base: u128,
     parity: Option<Box<Recorder>>,
+    index: Option<Box<index::IndexObservations>>,
+    compression: Option<CompressionParameters>,
+    flush_frames: bool,
 }
 
 impl<W: Write> SegmentWriter<W> {
@@ -121,7 +145,7 @@ impl<W: Write> SegmentWriter<W> {
     /// # Errors
     /// Returns the sink error if the header cannot be written.
     pub fn new(sink: W) -> io::Result<Self> {
-        Self::open(sink, None)
+        Self::open(sink, None, None, None, None)
     }
 
     /// Write a header and emit parity for each completed four MiB span.
@@ -133,26 +157,45 @@ impl<W: Write> SegmentWriter<W> {
     /// Returns an error if allocation or the header write fails.
     pub fn new_with_parity(sink: W) -> io::Result<Self> {
         let parity = try_boxed(Recorder::new()?).map_err(io::Error::other)?;
-        Self::open(sink, Some(parity))
+        Self::open(sink, Some(parity), None, None, None)
     }
 
-    fn open(mut sink: W, mut parity: Option<Box<Recorder>>) -> io::Result<Self> {
+    fn open(
+        mut sink: W,
+        mut parity: Option<Box<Recorder>>,
+        mut index: Option<Box<index::IndexObservations>>,
+        profile: Option<Profile>,
+        canonical: Option<CanonicalForm>,
+    ) -> io::Result<Self> {
+        let compression = canonical
+            .map(|_| {
+                CompressionParameters::builder(CompressionLevel::Level(12))
+                    .window_log(26)
+                    .build()
+            })
+            .transpose()
+            .map_err(io::Error::other)?;
         let mut hasher = Hasher::new_derive_key(HEADER_CONTEXT);
+        let mut length = 0;
         write_header(
             &mut HashingWriter {
                 sink: &mut RecordingWriter {
                     sink: &mut sink,
                     recorder: parity.as_deref_mut(),
+                    length: index.as_ref().map(|_| &mut length),
                 },
                 hasher: &mut hasher,
             },
-            None,
-            None,
+            profile,
+            canonical,
             None,
         )?;
         let head = *hasher.finalize().as_bytes();
         if let Some(parity) = &mut parity {
             parity.set_opener(head);
+        }
+        if let Some(index) = &mut index {
+            index.record_length(length)?;
         }
         Ok(Self {
             sink,
@@ -161,7 +204,24 @@ impl<W: Write> SegmentWriter<W> {
             range: Range::new(&head),
             term_base: 0,
             parity,
+            index,
+            compression,
+            flush_frames: false,
         })
+    }
+
+    fn from_opener(sink: W, opener: Digest, index: Box<index::IndexObservations>) -> Self {
+        Self {
+            sink,
+            head: Some(opener),
+            opener,
+            range: Range::new(&opener),
+            term_base: 0,
+            parity: None,
+            index: Some(index),
+            compression: None,
+            flush_frames: true,
+        }
     }
 
     /// The head of the complete segment while the writer can still append.
@@ -243,8 +303,29 @@ impl<W: Write> SegmentWriter<W> {
         payload: &[u8],
         content: impl FnOnce(&mut HashingWriter<'_, RecordingWriter<'_, W>>) -> io::Result<()>,
     ) -> Result<Digest, SegmentWriteError> {
-        self.append_with(|sink, predecessor| {
-            write_frame(sink, predecessor, frame_type, payload, content)
+        let compressed = self
+            .compression
+            .filter(|_| payload.len() >= 64)
+            .map(|parameters| compress_with_parameters(payload, &parameters))
+            .filter(|stored| stored.len().saturating_add(16) < payload.len());
+        if let Some(stored) = &compressed
+            && !matches_zstd_header(payload.len() as u64, stored)
+        {
+            return Err(
+                io::Error::other("GTS compression produced an incompatible zstd header").into(),
+            );
+        }
+        self.append_with(frame_type, |sink, predecessor| {
+            let identifier = write_stored_frame_body(
+                sink,
+                predecessor,
+                frame_type,
+                payload,
+                compressed.as_deref(),
+                content,
+            )?;
+            head::write_head(sink, head::ARRAY, 0)?;
+            Ok(identifier)
         })
     }
 
@@ -257,32 +338,38 @@ impl<W: Write> SegmentWriter<W> {
 
     fn append_with(
         &mut self,
+        frame_type: FrameType,
         write: impl FnOnce(&mut RecordingWriter<'_, W>, &Digest) -> io::Result<Digest>,
     ) -> Result<Digest, SegmentWriteError> {
         let predecessor = self.append_head()?;
+        let code = Some(u64::from(frame_type as u8));
+        if let Some(index) = &mut self.index {
+            index.runs.reserve_next(code).map_err(io::Error::other)?;
+        }
         self.head = None;
+        let mut length = 0;
         let identifier = write(
             &mut RecordingWriter {
                 sink: &mut self.sink,
                 recorder: self.parity.as_deref_mut(),
+                length: self.index.as_ref().map(|_| &mut length),
             },
             &predecessor,
         )?;
+        if self.flush_frames {
+            self.sink.flush()?;
+        }
+        if let Some(index) = &mut self.index {
+            index.record_length(length)?;
+            index.runs.record(code);
+        }
         if let Some(parity) = &mut self.parity {
             for span in parity.drain() {
-                write_frame(
+                write_parity(
                     &mut self.sink,
+                    self.index.as_deref_mut(),
                     &identifier,
-                    FrameType::Parity,
-                    &span.payload,
-                    |output| {
-                        head::write_head(output, head::ARRAY, 5)?;
-                        head::write_head(output, head::UNSIGNED, GEOMETRY_ONE)?;
-                        head::write_head(output, head::UNSIGNED, span.first)?;
-                        head::write_head(output, head::UNSIGNED, span.end)?;
-                        head::write_bytes(output, &identifier)?;
-                        head::write_bytes(output, &span.table)
-                    },
+                    &span,
                 )?;
             }
         }
@@ -292,6 +379,37 @@ impl<W: Write> SegmentWriter<W> {
         self.head = Some(identifier);
         Ok(identifier)
     }
+}
+
+fn write_parity(
+    sink: &mut impl Write,
+    index: Option<&mut index::IndexObservations>,
+    anchor: &Digest,
+    span: &EncodedParity,
+) -> io::Result<()> {
+    let mut length = 0;
+    write_frame(
+        &mut RecordingWriter {
+            sink,
+            recorder: None,
+            length: index.as_ref().map(|_| &mut length),
+        },
+        anchor,
+        FrameType::Parity,
+        &span.payload,
+        |output| {
+            head::write_head(output, head::ARRAY, 5)?;
+            head::write_head(output, head::UNSIGNED, GEOMETRY_ONE)?;
+            head::write_head(output, head::UNSIGNED, span.first)?;
+            head::write_head(output, head::UNSIGNED, span.end)?;
+            head::write_bytes(output, anchor)?;
+            head::write_bytes(output, &span.table)
+        },
+    )?;
+    if let Some(index) = index {
+        index.record_length(length)?;
+    }
+    Ok(())
 }
 
 fn write_commit_content(output: &mut impl Write, count: u64, root: &Digest) -> io::Result<()> {
@@ -319,6 +437,17 @@ fn write_frame_body<W: Write>(
     payload: &[u8],
     content: impl FnOnce(&mut HashingWriter<'_, W>) -> io::Result<()>,
 ) -> io::Result<Digest> {
+    write_stored_frame_body(sink, predecessor, frame_type, payload, None, content)
+}
+
+fn write_stored_frame_body<W: Write>(
+    sink: &mut W,
+    predecessor: &Digest,
+    frame_type: FrameType,
+    payload: &[u8],
+    compressed: Option<&[u8]>,
+    content: impl FnOnce(&mut HashingWriter<'_, W>) -> io::Result<()>,
+) -> io::Result<Digest> {
     let mut hasher = frame_hasher(predecessor);
     head::write_head(sink, head::ARRAY, FRAME_FIELDS as u64)?;
     head::write_head(sink, head::UNSIGNED, FRAME_KIND)?;
@@ -337,9 +466,18 @@ fn write_frame_body<W: Write>(
         head::write_bytes(&mut identity, &payload_digest(payload))?;
     }
     let identifier = *hasher.finalize().as_bytes();
-    head::write_head(sink, head::ARRAY, 1)?;
-    head::write_head(sink, head::UNSIGNED, 1)?;
-    head::write_bytes(sink, payload)?;
+    if let Some(compressed) = compressed {
+        const CODEC: NonZeroU64 = NonZeroU64::new(ZSTD).expect("zstd has a registered code");
+        head::write_head(sink, head::ARRAY, 3)?;
+        head::write_head(sink, head::UNSIGNED, 2)?;
+        head::write_head(sink, head::UNSIGNED, CODEC.get())?;
+        head::write_bytes(sink, &stored_digest(CODEC, compressed))?;
+        head::write_bytes(sink, compressed)?;
+    } else {
+        head::write_head(sink, head::ARRAY, 1)?;
+        head::write_head(sink, head::UNSIGNED, 1)?;
+        head::write_bytes(sink, payload)?;
+    }
     head::write_bytes(sink, &identifier)?;
     Ok(identifier)
 }

@@ -103,6 +103,7 @@ fn copy_items<'a>(source: &VecDeque<Item<'a>>) -> Result<VecDeque<Item<'a>>, Try
 pub(in crate::v2) struct OwnSegment<'a> {
     pub(in crate::v2) ordinal: u64,
     opener: Range<usize>,
+    end: usize,
     reach: ResyncReach,
     point: ReadPoint,
     lookahead: Lookahead<'a>,
@@ -111,6 +112,14 @@ pub(in crate::v2) struct OwnSegment<'a> {
 }
 
 impl<'a> OwnSegment<'a> {
+    pub(in crate::v2) fn input(&self, original: &RdfGraph<'a>) -> Option<(usize, &'a [u8])> {
+        let bytes = original
+            .state_source
+            .input()?
+            .get(self.opener.start..self.end)?;
+        Some((self.opener.start, bytes))
+    }
+
     pub(in crate::v2) fn fold(&self, original: &RdfGraph<'a>) -> Result<RdfGraph<'a>, ReadError> {
         let offset = self.opener.start;
         let missing = || ReadError {
@@ -184,7 +193,7 @@ impl fmt::Debug for OwnSegments<'_> {
 }
 
 impl<'a> OwnSegments<'a> {
-    pub(super) fn finish(&mut self, ordinal: u64, size: u128, wire_end: usize) {
+    pub(super) fn finish(&mut self, ordinal: u64, size: u128, wire_end: usize, end: usize) {
         if let Some(segment) = self
             .0
             .last_mut()
@@ -192,6 +201,7 @@ impl<'a> OwnSegments<'a> {
         {
             segment.size = size;
             segment.wire.end = wire_end;
+            segment.end = end;
         }
     }
 
@@ -219,6 +229,7 @@ impl<'a> GraphReader<'a, '_> {
         let segment = OwnSegment {
             ordinal: segment.file_ordinal,
             opener: opener.clone(),
+            end: opener.end,
             reach,
             point: ReadPoint::capture(self, self.items),
             lookahead: Lookahead::capture(items, segment.file_ordinal, opener.start)?,
