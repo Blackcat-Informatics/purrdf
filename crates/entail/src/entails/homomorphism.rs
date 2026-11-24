@@ -63,8 +63,9 @@
 //! child is explored to exhaustion before its parent advances, and the budget is spent one
 //! unit per candidate in the order the candidates are reached.
 
-use purrdf_core::TermBox;
+use purrdf_core::{ShallowTermKey, TermBox};
 use std::borrow::Cow;
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::{ControlFlow, Range};
 use std::sync::Arc;
@@ -192,7 +193,7 @@ impl Closure {
         iri: &str,
     ) -> impl Iterator<Item = &Triple> {
         let span = self.predicate_span(iri);
-        self.endpoint_span(&self.store.subjects, 0, subject, &span)
+        self.endpoint_span(&self.store.subjects, 0, |term| term.cmp(subject), &span)
             .iter()
             .map(|&ordinal| self.at(ordinal))
     }
@@ -212,10 +213,14 @@ impl Closure {
         &self,
         posting: &'a [usize],
         position: usize,
-        term: &TermValue,
+        compare: impl Fn(&TermValue) -> Ordering,
         span: &Range<usize>,
     ) -> &'a [usize] {
-        let before = |ordinal, boundary| (&self.at(ordinal)[position], ordinal) < (term, boundary);
+        let before = |ordinal, boundary: usize| {
+            compare(&self.at(ordinal)[position])
+                .then_with(|| ordinal.cmp(&boundary))
+                .is_lt()
+        };
         let start = posting.partition_point(|&ordinal| before(ordinal, span.start));
         let rest = &posting[start..];
         let end = rest.partition_point(|&ordinal| before(ordinal, span.end));
@@ -308,15 +313,19 @@ impl<'a> Iterator for Candidates<'a> {
     }
 }
 
-/// The exact endpoint if all its variables are bound. Borrow single terms
-/// and resolve a compound pattern only when it can narrow the search.
-fn exact_endpoint<'a>(pat: &'a Pat, bound: &'a Binding) -> Option<Cow<'a, TermValue>> {
-    match pat {
-        Pat::Ground(term) => Some(Cow::Borrowed(term)),
-        Pat::Var(var) => bound.get(var).map(Cow::Borrowed),
-        Pat::Triple(_) => {
-            // Do not clone ground prefixes of a compound endpoint that remains open.
-            let ready = pat
+/// An exact endpoint key, borrowing both the query and any bound values.
+enum EndpointKey<'a> {
+    Value(&'a TermValue),
+    /// Every variable in this pattern has a binding.
+    Pattern(&'a Pat, &'a Binding),
+}
+
+impl<'a> EndpointKey<'a> {
+    fn resolve(pat: &'a Pat, bound: &'a Binding) -> Option<Self> {
+        match pat {
+            Pat::Ground(term) => Some(Self::Value(term)),
+            Pat::Var(var) => bound.get(var).map(Self::Value),
+            Pat::Triple(_) => pat
                 .visit(|part| {
                     if matches!(part, Pat::Var(var) if !bound.contains_key(var)) {
                         ControlFlow::Break(())
@@ -324,12 +333,41 @@ fn exact_endpoint<'a>(pat: &'a Pat, bound: &'a Binding) -> Option<Cow<'a, TermVa
                         ControlFlow::Continue(())
                     }
                 })
-                .is_continue();
-            if ready {
-                substitute(pat, bound).map(Cow::Owned)
+                .is_continue()
+                .then_some(Self::Pattern(pat, bound)),
+        }
+    }
+
+    /// Compare the stored value to this key, using the native term order.
+    /// A compound key walks borrowed positions instead of constructing a term.
+    fn compare(&self, value: &TermValue) -> Ordering {
+        let (pat, bound) = match *self {
+            Self::Value(term) => return value.cmp(term),
+            Self::Pattern(pat, bound) => (pat, bound),
+        };
+        match visit_nested((pat, value), |(part, stored)| {
+            let order = match part {
+                Pat::Ground(term) => stored.cmp(term),
+                Pat::Var(var) => stored.cmp(&bound[var]),
+                Pat::Triple(inner) => match stored {
+                    TermValue::Triple { s, p, o } => {
+                        return ControlFlow::Continue(Some([
+                            (&inner[0], &**s),
+                            (&inner[1], &**p),
+                            (&inner[2], &**o),
+                        ]));
+                    }
+                    _ => ShallowTermKey::from(stored).cmp(&ShallowTermKey::Triple {}),
+                },
+            };
+            if order.is_eq() {
+                ControlFlow::Continue(None)
             } else {
-                None
+                ControlFlow::Break(order)
             }
+        }) {
+            ControlFlow::Continue(()) => Ordering::Equal,
+            ControlFlow::Break(order) => order,
         }
     }
 }
@@ -352,8 +390,9 @@ fn candidates<'a>(pat: &PatTriple, closure: &'a Closure, bound: &Binding) -> Can
         if len <= 1 {
             break;
         }
-        if let Some(term) = exact_endpoint(&pat[position], bound) {
-            let selection = closure.endpoint_span(posting, position, term.as_ref(), &span);
+        if let Some(key) = EndpointKey::resolve(&pat[position], bound) {
+            let selection =
+                closure.endpoint_span(posting, position, |term| key.compare(term), &span);
             if selection.len() < len {
                 len = selection.len();
                 view = CandidateView::Posting(selection.iter());
@@ -885,14 +924,16 @@ mod tests {
     /// endpoint must still preserve the first witness and deduplicate rows.
     #[test]
     fn a_resolved_triple_endpoint_preserves_predicate_and_witness_order() {
-        let embedded = TermValue::Triple {
+        let embedded_at = |object| TermValue::Triple {
             s: TermBox::new(iri("nested-subject")),
             p: TermBox::new(iri("nested-predicate")),
-            o: TermBox::new(iri("nested-object")),
+            o: TermBox::new(iri(object)),
         };
+        let embedded = embedded_at("nested-object");
         let closure = Closure::of(vec![
             [iri("q-subject"), iri("q"), embedded.clone()],
             [iri("noise"), iri("a"), iri("other-object")],
+            [iri("noise"), iri("p"), embedded_at("another-object")],
             [iri("first"), iri("p"), embedded.clone()],
             [iri("first"), iri("p"), embedded.clone()],
             [iri("last"), iri("p"), embedded],
@@ -903,10 +944,11 @@ mod tests {
             Pat::Triple(Box::new([
                 ground("nested-subject"),
                 ground("nested-predicate"),
-                ground("nested-object"),
+                projected("inner"),
             ])),
         ];
         let mut bound = Binding::new();
+        bound.insert(VarKey::Projected("inner".to_owned()), iri("nested-object"));
         // The unrelated earlier predicate would exhaust this budget if visited.
         assert!(
             solve(
@@ -932,10 +974,10 @@ mod tests {
         );
     }
 
-    /// A compound endpoint with an unbound variable cannot be looked up by value.
-    /// Reaching it in a join must not clone its ground prefix on every branch.
+    /// Neither an open nor a resolved compound endpoint copies its ground
+    /// prefix when candidate selection reaches it on each join branch.
     #[test]
-    fn an_open_triple_endpoint_does_not_copy_its_ground_prefix() {
+    fn compound_endpoints_do_not_copy_their_ground_prefixes() {
         let closure = closure_of(&[
             ["s1", "p", "a1"],
             ["s1", "p", "a2"],
@@ -945,7 +987,7 @@ mod tests {
             ["s2", "q", "marker"],
         ]);
         let vars = [VarKey::Projected("s".to_owned())];
-        let query_bytes = |prefix_length| {
+        let query_bytes = |prefix_length, open| {
             let patterns = vec![
                 [projected("s"), ground("q"), ground("marker")],
                 [
@@ -954,7 +996,11 @@ mod tests {
                     Pat::Triple(Box::new([
                         ground(&"i".repeat(prefix_length)),
                         ground("p"),
-                        projected("open"),
+                        if open {
+                            projected("open")
+                        } else {
+                            ground("resolved")
+                        },
                     ])),
                 ],
             ];
@@ -964,7 +1010,9 @@ mod tests {
             assert!(rows.is_empty());
             measured.requested_bytes
         };
-        assert_eq!(query_bytes(64), query_bytes(64 * 1024));
+        for open in [true, false] {
+            assert_eq!(query_bytes(64, open), query_bytes(64 * 1024, open));
+        }
     }
 
     /// How many levels the depth tests below drive the search to.
