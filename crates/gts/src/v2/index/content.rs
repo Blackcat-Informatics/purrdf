@@ -26,11 +26,18 @@ struct DirectoryRange {
 struct GraphDirectory {
     ranges: FastMap<GraphName, Vec<DirectoryRange>>,
     last: [Option<RunStart>; 4],
+    predicates: FastMap<u64, u128>,
 }
 
 impl GraphDirectory {
     fn record(&mut self, rows: &[Row], frame: u64) -> Result<(), TryReserveError> {
         for (position, row) in rows.iter().copied().enumerate() {
+            if let Row::Quad([_, predicate, _], _) = row {
+                if !self.predicates.contains_key(&predicate) {
+                    self.predicates.try_reserve(1)?;
+                }
+                *self.predicates.entry(predicate).or_default() += 1;
+            }
             let (slot, kind, graph) = match row {
                 Row::Quad(_, graph) => (0, FrameType::Quads, graph),
                 Row::ReifierBinding(_, graph) => (1, FrameType::ReifierBindings, graph),
@@ -81,6 +88,10 @@ impl Default for IndexContent {
 }
 
 impl IndexContent {
+    pub(super) fn predicates(&self) -> Option<&FastMap<u64, u128>> {
+        Some(&self.directory.as_ref()?.predicates)
+    }
+
     pub(in crate::v2) fn opaque_frame(&mut self, kind: Option<FrameType>) {
         match kind {
             Some(

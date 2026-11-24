@@ -23,7 +23,7 @@ pub enum Line {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-enum LineKey {
+pub(in crate::v2) enum LineKey {
     Quad([TermId; 3], Option<TermId>),
     ReifierBinding([TermId; 2], Option<TermId>),
     Annotation([TermId; 3], Option<TermId>),
@@ -31,7 +31,7 @@ enum LineKey {
 }
 
 impl Line {
-    const fn key(self) -> LineKey {
+    pub(in crate::v2) const fn key(self) -> LineKey {
         match self {
             Self::Quad(terms, graph) => LineKey::Quad(terms, graph),
             Self::ReifierBinding(terms, graph) => LineKey::ReifierBinding(terms, graph),
@@ -137,6 +137,10 @@ impl RdfFold {
         self.terms.get(id)
     }
 
+    pub(in crate::v2) fn find_term(&self, term: &Term<'_>) -> Option<TermId> {
+        self.terms.find(term)
+    }
+
     /// The typed-value pairs in order of first definition.
     #[must_use]
     pub fn values(&self) -> &[(TermId, LiteralValue)] {
@@ -150,6 +154,21 @@ impl RdfFold {
         self.lines.iter().copied().filter(
             |line| !matches!(line, Line::EmptyGraph(graph) if self.carried_graphs.contains(graph)),
         )
+    }
+
+    pub(in crate::v2) fn retain_visible_lines(&mut self, mut visible: impl FnMut(Line) -> bool) {
+        self.lines.retain(|&line| {
+            !matches!(line, Line::EmptyGraph(graph) if self.carried_graphs.contains(&graph))
+                && visible(line)
+        });
+        self.line_indices.clear();
+        self.carried_graphs.clear();
+        for (position, line) in self.lines.iter().copied().enumerate() {
+            self.line_indices.insert(line.key(), position);
+            if let Some(graph) = line.carried_graph() {
+                self.carried_graphs.insert(graph);
+            }
+        }
     }
 
     /// Whether any row was held because its term was unreadable.

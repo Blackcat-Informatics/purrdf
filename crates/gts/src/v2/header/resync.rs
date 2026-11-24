@@ -117,6 +117,10 @@ impl<'a> ResyncScan<'a> {
         self.next
     }
 
+    pub(in crate::v2) fn restore_offset(&mut self, offset: usize) {
+        self.next = offset;
+    }
+
     /// Take the first candidate framing refusal caused by the depth ceiling.
     pub(in crate::v2) fn take_depth_refusal(&mut self) -> Option<(usize, usize, StructuralError)> {
         self.depth_refusal.take()

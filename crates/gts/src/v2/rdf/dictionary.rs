@@ -14,6 +14,10 @@ use crate::{FastMap, FastSet};
 /// Findings from the first failed condition of each definition in a terms frame.
 #[derive(Debug, Default)]
 #[non_exhaustive]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "Independent findings can coexist across definitions in one frame"
+)]
 pub struct DefinitionFindings {
     /// One or more reconstructed terms contain invalid UTF-8.
     pub ill_formed_term: bool,
@@ -23,6 +27,7 @@ pub struct DefinitionFindings {
     pub position_constraint: bool,
     /// New missing pairs, in order of first use.
     pub missing_values: Vec<ValueName>,
+    pub(in crate::v2) capacity_refused_value: bool,
 }
 
 /// A row's resolution under P3 §4.2.
@@ -59,6 +64,14 @@ pub(in crate::v2) struct RowScope {
 }
 
 impl RowScope {
+    pub(in crate::v2) const fn defines(self, id: u64) -> bool {
+        (id as u128) < self.next
+    }
+
+    pub(in crate::v2) const fn admits(self, id: u64) -> bool {
+        !self.in_doubt && (id as u128) >= self.broken_prefix
+    }
+
     pub(in crate::v2) const fn waits_for_commit(self) -> bool {
         self.broken_prefix != 0 && !self.in_doubt
     }
@@ -332,11 +345,23 @@ impl SegmentDictionary {
             }
             TermDefinition::LiteralRef(reference, form) => {
                 let name = reference.into();
-                let candidate = context.values.get(name);
+                let (candidate, state_refused) = context.values.get(name);
                 let text = match candidate {
                     Candidate::Verified(bytes) => match core::str::from_utf8(bytes) {
                         Ok(text) => Some(text),
                         Err(_) => {
+                            if state_refused {
+                                // This lexical text comes from outside the
+                                // run. Judge the scoped datatype separately.
+                                findings.capacity_refused_value |= self
+                                    .literal_form(
+                                        id,
+                                        form,
+                                        context.languages,
+                                        &mut DefinitionFindings::default(),
+                                    )?
+                                    .is_some();
+                            }
                             findings.ill_formed_term = true;
                             return Ok(None);
                         }
@@ -346,6 +371,7 @@ impl SegmentDictionary {
                 let Some(form) = self.literal_form(id, form, context.languages, findings)? else {
                     return Ok(None);
                 };
+                findings.capacity_refused_value |= state_refused;
                 let Some(text) = text else {
                     note_missing(fold, name, candidate, findings)?;
                     return Ok(None);
@@ -355,7 +381,8 @@ impl SegmentDictionary {
             TermDefinition::Value(value) => return self.intern_value(fold, value),
             TermDefinition::ValueRef(reference) => {
                 let name = reference.into();
-                let candidate = context.values.get(name);
+                let (candidate, state_refused) = context.values.get(name);
+                findings.capacity_refused_value |= state_refused;
                 let Candidate::Verified(bytes) = candidate else {
                     note_missing(fold, name, candidate, findings)?;
                     return Ok(None);
@@ -451,14 +478,14 @@ impl SegmentDictionary {
         if references
             .iter()
             .flatten()
-            .any(|(id, _)| u128::from(*id) >= scope.next)
+            .any(|(id, _)| !scope.defines(*id))
         {
             return RowDisposition::ForwardReference;
         }
-        if scope.in_doubt
-            || references.iter().flatten().any(|(id, _)| {
-                u128::from(*id) < scope.broken_prefix || self.readable_term(*id).is_none()
-            })
+        if references
+            .iter()
+            .flatten()
+            .any(|(id, _)| !scope.admits(*id) || self.readable_term(*id).is_none())
         {
             return RowDisposition::Held;
         }

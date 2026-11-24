@@ -36,6 +36,7 @@ mod certificate;
 mod document;
 #[cfg(test)]
 mod document_tests;
+mod fold_input;
 mod lines;
 mod nested;
 #[cfg(test)]
@@ -56,6 +57,7 @@ mod walk_tests;
 pub use certificate::{Certificate, Entry, EntryToken, RebuildError, rebuild};
 pub(crate) use document::write_line_with;
 pub use document::{DocumentError, write_document, write_line};
+pub use fold_input::{FoldLabelling, FoldLine, FoldRecord, FoldTerm, label_fold};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
 pub use view::{
     Comparison, Labelling, LabellingCapacity, LoweringRefusal, Record, Scope, ViewError,

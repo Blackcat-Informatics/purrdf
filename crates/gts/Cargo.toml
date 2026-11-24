@@ -21,6 +21,8 @@ all-features = true
 workspace = true
 
 [dependencies]
+# The shared L1 canonical labeller for the generation 2 file fold.
+purrdf-core = { workspace = true }
 # The zero-dependency, wasm-clean RDF 1.2 ingestion protocol: the
 # neutral `RdfEventSink` seam the GTS event bridge (`event_stream`) folds into.
 # This edge is acyclic — `purrdf-events` depends on nothing — so it never risks
@@ -29,11 +31,8 @@ purrdf-events = { workspace = true }
 # The workspace's ONE owner of BCP 47 language tags. A container's `"l"` field is
 # untrusted bytes that the fold view renders straight into an N-Quads token, so
 # the reader has to ask the same grammar, on the same profile, that every RDF
-# codec and the IR kernel already ask. The edge is safe where a `purrdf-core`
-# edge would not be: `purrdf-iri` takes no third-party runtime dependency (its
-# one dependency is the zero-dependency `purrdf-lex`; its `[lib]` note states the
-# contract) and is already wasm32-clean, so it drags nothing in and `make wasm`
-# stays green.
+# codec and the IR kernel already ask. The dependency is portable and uses
+# the same lexical layer as the transport reader.
 purrdf-iri = { workspace = true }
 # The one Crockford Base32 renderer and reader (`purrdf_lex::crockford`) behind
 # the ULID text form, the one CBOR codec (`purrdf_lex::cbor`) every GTS item is

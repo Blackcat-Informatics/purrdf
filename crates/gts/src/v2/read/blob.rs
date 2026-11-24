@@ -105,6 +105,7 @@ impl purrdf_hash::error::StructuredError for RebuildState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(super) struct RebuildBudget {
     remaining: Option<u64>,
     admitted: u64,
@@ -489,7 +490,12 @@ impl<'a> GraphReader<'a, '_> {
                 };
                 if is_value {
                     // The declaration remains a candidate for later terms.
-                    self.values.record(name, None).map_err(ReadFailure::Fold)?;
+                    if matches!(state, RebuildState::Refused { .. }) {
+                        self.values.record_refusal(name)
+                    } else {
+                        self.values.record(name, None)
+                    }
+                    .map_err(ReadFailure::Fold)?;
                 } else {
                     self.graph.note_content_omission(offset);
                 }

@@ -3,6 +3,7 @@
 
 //! GTS generation 2 framing, segment verification and RDF graph transport.
 
+mod canonical;
 mod fields;
 mod frame;
 mod header;
@@ -14,12 +15,23 @@ mod payload;
 mod range;
 mod rdf;
 mod read;
+mod references;
 mod rows;
+
+pub use references::{
+    Binding, FrameLocation, GroundLeaf, GroundNode, GroundTerm, MissingReferent, ReferenceFindings,
+    ReferenceFold, ReferenceLocation, Referent, ResolvedLeaf, ResolvedReferent, StateLocation,
+    Suppression, SuppressionClaim, SuppressionKind, SuppressionUnmatched, VisibleFold,
+};
 mod segment;
 mod signature;
 mod terms;
 mod writer;
 
+pub use canonical::{
+    ClosingIndexLabelling, ContentLabelling, ContentLabellingRefusal, ReadContentLabelling,
+    ReadLabellingError, SegmentContentLabelling,
+};
 pub use fields::WireError;
 pub use frame::{FrameCheck, FrameEnvelope, FrameField, FrameType, UnknownFrameType};
 pub use header::{
@@ -47,8 +59,9 @@ pub use read::{
     FramingDamage, GraphIndexCheck, ItemRefusal, LineageFinding, ParityRecovery, PayloadOutcome,
     PayloadUnchecked, RdfGraph, ReadCapacity, ReadError, ReadFailure, ReadGraph, ReadLimits,
     RebuildResult, RebuildState, RecoveryRefusal, ResyncOpener, ResyncPast, ResyncReach,
-    Resynchronization, SegmentDurability, SkippedSegment, UncommittedTail, VerifiedBlob, read,
-    read_with_limits, read_with_limits_and_signature_inputs, read_with_signature_inputs,
+    Resynchronization, SegmentDurability, SkippedSegment, StateFold, UncommittedTail, VerifiedBlob,
+    Visibility, read, read_with_limits, read_with_limits_and_signature_inputs,
+    read_with_signature_inputs,
 };
 pub use rows::{DecodedRows, Row, RowHeader, RowOrder};
 pub use segment::{SegmentCheckError, SegmentFrame, SegmentVerifier};

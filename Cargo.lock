@@ -664,6 +664,7 @@ dependencies = [
  "aes-gcm",
  "getrandom",
  "purrdf-alloc-probe",
+ "purrdf-core",
  "purrdf-deflate",
  "purrdf-ed25519",
  "purrdf-events",

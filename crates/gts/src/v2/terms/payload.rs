@@ -4,7 +4,10 @@
 use core::num::NonZeroU64;
 use std::borrow::Cow;
 
-use super::{ContentError, LAST_TERM_KIND, TermsHeader, read_enum};
+use super::{
+    ContentError, LAST_TERM_KIND, LITERAL_VALUE_KIND, LITERAL_VALUE_REF_KIND, TRIPLE_KIND,
+    TermsHeader, read_enum,
+};
 use crate::v2::fields::{Fields, push};
 use crate::v2::{DIGEST_LENGTH, MalformedReason, WireError};
 
@@ -435,11 +438,11 @@ impl<'a> Block<'a> {
     fn read(fields: &mut Fields<'a>, registry: NonZeroU64) -> Result<Self, ContentError> {
         let (offset, count, kind) = variant(fields, LAST_TERM_KIND, registry)?;
         let expected = match kind {
-            1 | 4 => 4,
+            1 | TRIPLE_KIND => 4,
             2 => 7,
-            3 | 6 => 2,
+            3 | LITERAL_VALUE_KIND => 2,
             5 => 6,
-            7 => 3,
+            LITERAL_VALUE_REF_KIND => 3,
             _ => unreachable!("term block kind was admitted"),
         };
         if count != expected {
@@ -449,16 +452,16 @@ impl<'a> Block<'a> {
             1 => BlockBody::Iri(Front::read(fields)?),
             2 => BlockBody::Literal(Front::read(fields)?, Forms::read(fields, registry)?),
             3 => BlockBody::Blank(List::blobs(fields)?),
-            4 => BlockBody::Triple([
+            TRIPLE_KIND => BlockBody::Triple([
                 List::uints(fields)?,
                 List::uints(fields)?,
                 List::uints(fields)?,
             ]),
             5 => BlockBody::LiteralRef(References::read(fields)?, Forms::read(fields, registry)?),
-            6 => BlockBody::Value(List::read(fields, |reader| {
+            LITERAL_VALUE_KIND => BlockBody::Value(List::read(fields, |reader| {
                 read_value(reader, registry).map(|_| ())
             })?),
-            7 => BlockBody::ValueRef(References::read(fields)?),
+            LITERAL_VALUE_REF_KIND => BlockBody::ValueRef(References::read(fields)?),
             _ => unreachable!("term block kind was admitted"),
         };
         Ok(Self { offset, kind, body })

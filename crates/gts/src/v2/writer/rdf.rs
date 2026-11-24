@@ -469,11 +469,11 @@ fn list<T>(
     Ok(())
 }
 
-fn array(output: &mut impl Write, length: u64) -> io::Result<()> {
+pub(super) fn array(output: &mut impl Write, length: u64) -> io::Result<()> {
     head::write_head(output, head::ARRAY, length)
 }
 
-fn uint(output: &mut impl Write, value: u64) -> io::Result<()> {
+pub(super) fn uint(output: &mut impl Write, value: u64) -> io::Result<()> {
     head::write_head(output, head::UNSIGNED, value)
 }
 

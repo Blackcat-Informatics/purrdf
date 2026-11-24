@@ -15,13 +15,14 @@ use super::parity::{GEOMETRY_ONE, Recorder, RecordingWriter};
 use super::payload::payload_digest;
 use super::rdf::unit_digest;
 use super::{
-    BLAKE3_256, DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, FrameType, Range, RangeFull, ValueName,
-    write_header,
+    BLAKE3_256, DIGEST_LENGTH, FRAME_FIELDS, FRAME_KIND, FoldError, FrameType, Range, RangeFull,
+    ValueName, write_header,
 };
 
 mod blob;
 mod cosign;
 mod rdf;
+mod references;
 mod signature;
 
 pub use cosign::{CoSignError, append_cosigned_commit};
@@ -44,6 +45,8 @@ pub enum SegmentWriteError {
     DictionaryFull,
     /// The supplied fold contains held rows or an overflowing multiplicity.
     IncompleteFold,
+    /// A reference record uses a term absent from the supplied fold.
+    ReferenceTerm(FoldError),
     /// A value declaration needs at least one nonempty unit.
     EmptyValue,
     /// The signature list could not be prepared.
@@ -60,6 +63,7 @@ impl fmt::Display for SegmentWriteError {
             Self::IncompleteFold => {
                 f.write_str("GTS v2 RDF fold contains held rows or an overflowing multiplicity")
             }
+            Self::ReferenceTerm(error) => error.fmt(f),
             Self::EmptyValue => f.write_str("GTS v2 value declarations require a nonempty value"),
             Self::Signature(error) => error.fmt(f),
         }
@@ -72,6 +76,7 @@ impl std::error::Error for SegmentWriteError {
             Self::Io(error) => Some(error),
             Self::RangeFull(error) => Some(error),
             Self::Signature(error) => Some(error),
+            Self::ReferenceTerm(error) => Some(error),
             Self::IncompleteFrame
             | Self::DictionaryFull
             | Self::IncompleteFold
@@ -87,6 +92,7 @@ impl purrdf_hash::error::StructuredError for SegmentWriteError {
         RangeFull(cause) => "gts-v2-segment-range-full" { "cause" => Cause(cause) },
         DictionaryFull => "gts-v2-dictionary-full" {},
         IncompleteFold => "gts-v2-incomplete-fold" {},
+        ReferenceTerm(cause) => "gts-v2-reference-write-term" { "cause" => Cause(cause) },
         EmptyValue => "gts-v2-empty-value-declaration" {},
         Signature(cause) => "gts-v2-signature-write" { "cause" => Cause(cause) },
     }

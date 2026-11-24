@@ -107,9 +107,10 @@ pub fn has_gts_v2_opener(bytes: &[u8]) -> bool {
 /// Load the complete native RDF dataset of a GTS file.
 ///
 /// A generation 2 opener selects the native v2 fold with default capacity and
-/// no supplied signature keys. Legacy and ambiguous openings use the bounded
-/// generation 1 reader. Use [`read_gts_v2_dataset`] to inspect recovery evidence
-/// or admit only the readable prefix of a generation 2 file.
+/// no supplied signature keys, then projects the visible RDF lines. Legacy
+/// and ambiguous openings use the bounded generation 1 reader. Use
+/// [`read_gts_v2_dataset`] to inspect the whole generation 2 fold and its
+/// recovery evidence, including the readable prefix of a damaged file.
 ///
 /// # Errors
 /// Returns a legacy diagnostic, a generation 2 failure or a native RDF
@@ -141,11 +142,11 @@ fn read_diagnostic(cause: impl NativeError + 'static) -> RdfDiagnostic {
     result.unwrap_or_else(RdfDiagnostic::from)
 }
 
-/// Read generation 2 and admit its resolved lines into a native RDF dataset.
+/// Read generation 2 and admit all its resolved lines into a native RDF dataset.
 ///
 /// The dataset uses native RDF validation and RDF set semantics. The graph
-/// carries the original GTS terms, annotation counts, values, declaration
-/// records and findings, including evidence associated with a partial read.
+/// carries the original GTS terms, annotation counts, values, declarations,
+/// bindings, suppression records, and findings from partial reads.
 /// # Errors
 /// Returns a typed generation, GTS read or native RDF admission failure.
 #[expect(

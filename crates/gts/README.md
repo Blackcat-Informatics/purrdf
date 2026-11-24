@@ -29,6 +29,11 @@ reading. `v2::SegmentWriter` writes generation 2 segments to a caller-owned
 sink. The `reader` and `writer` modules below provide the generation 1
 interfaces.
 
+Call `v2::RdfGraph::label_content` on the original read result to obtain the
+canonical lines, placements, statistics, and content digest of the file fold.
+Labelling takes a caller-supplied work limit and size and weight capacities.
+Held rows, bindings, and suppression entries leave the digest absent.
+
 The crate owns the wire-format machinery:
 
 - **`reader`** — chain-verified reading and deterministic folding of GTS bytes

@@ -103,8 +103,8 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-deflate`
 - `purrdf-zstd`
 - `purrdf-ed25519`
-- `purrdf-gts`
 - `purrdf-core`
+- `purrdf-gts`
 - `purrdf-geo-kernel`
 - `purrdf-columnar`
 - `purrdf-datalog`
