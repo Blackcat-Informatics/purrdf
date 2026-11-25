@@ -3469,8 +3469,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         }
                     }
 
-                    if let Some(perm) = group.permutations.next() {
-                        // Charge after obtaining each permutation, including pruned ones.
+                    if group.permutations.advance() {
+                        // Charge every attempt, including pruned ones. A refusal
+                        // can reorder the group inventory, so borrow only on success.
                         self.charge_search(SearchEvent::RdfcPermutation, || {
                             let frame_ordinal = self.blank_ordinal(frame_identifier);
                             let depth = parents.len();
@@ -3491,7 +3492,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         let mut path = String::new();
                         let mut recursion = Vec::new();
                         let mut pruned = false;
-                        for related in perm {
+                        for related in group.permutations.current() {
                             self.check_stop().map_err(CanonError::with_read_error)?;
                             if let Some(id) = self.canonical.issued_for(related) {
                                 path.push_str("_:");
@@ -3541,7 +3542,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     continue;
                 }
 
-                if let Some((hash, related)) = frame.related.next() {
+                if let Some((hash, mut related)) = frame.related.next() {
                     self.check_stop().map_err(CanonError::with_read_error)?;
                     frame.data.push_str(hash.as_str());
                     let fixed_label = |id| {
@@ -3549,7 +3550,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             .issued_for(id)
                             .or_else(|| frame.issuer.issued_for(id))
                     };
-                    let mut permutations = permutations(&related);
                     // Distinct fresh IDs always emit the same complete initial label path
                     // and leave the same next ordinal, regardless of their identities.
                     let mut fresh_distinct = true;
@@ -3560,20 +3560,20 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             break;
                         }
                     }
-                    if related.iter().all(|&id| fixed_label(id).is_some()) {
+                    let single = related.iter().all(|&id| fixed_label(id).is_some());
+                    if single {
                         // Every candidate has no recursion and the same final issuer.
                         // Choose its minimum fixed-label concatenation once, retaining
                         // the complete group inventory for refusal observations.
-                        permutations.items.sort_unstable_by(|&left, &right| {
+                        related.sort_unstable_by(|&left, &right| {
                             fixed_label_order(
                                 fixed_label(left).expect("the group has only fixed labels"),
                                 fixed_label(right).expect("the group has only fixed labels"),
                             )
                         });
-                        permutations.single = true;
                     }
                     frame.group = Some(NDegreeGroup {
-                        permutations,
+                        permutations: Permutations::new(related, single),
                         fresh_distinct,
                         chosen_path: None,
                         chosen_issuer: None,
@@ -4856,10 +4856,8 @@ fn fixed_label_order(left: &str, right: &str) -> Ordering {
 /// A **lazy** permutation generator, exhaustive by default (identity first, then
 /// lexicographic position order). The solver can seed the minimum fixed-label
 /// ordering and select that single candidate after proving it sufficient.
-/// Lazy generation matters for the poison case: a
-/// 9-element related group has 9! = 362 880 permutations, so collecting them all
-/// upfront would allocate a factorial-sized `Vec<Vec<_>>` per n-degree call. Yielding
-/// one small `Vec` at a time keeps the call-budget guard the only bound on cost.
+/// Retain the group and one position vector, borrowing the current order
+/// without copying the items on each attempt.
 struct Permutations<T> {
     items: Vec<T>,
     idx: Vec<usize>,
@@ -4870,6 +4868,37 @@ struct Permutations<T> {
 }
 
 impl<T: Copy + PartialEq> Permutations<T> {
+    fn new(items: Vec<T>, single: bool) -> Self {
+        Self {
+            idx: (0..items.len()).collect(),
+            items,
+            first: true,
+            // An empty group still has exactly one (empty) permutation.
+            done: false,
+            single,
+        }
+    }
+
+    /// Advance to the next candidate without borrowing its items.
+    fn advance(&mut self) -> bool {
+        if self.done {
+            return false;
+        }
+        if self.first {
+            self.first = false;
+            self.done = self.single;
+        } else if !next_permutation(&mut self.idx) {
+            self.done = true;
+            return false;
+        }
+        true
+    }
+
+    /// Read the order after a successful advance.
+    fn current(&self) -> impl Iterator<Item = T> + '_ {
+        self.idx.iter().map(|&index| self.items[index])
+    }
+
     /// The current occurrence prefix needed to preserve an issued dependency.
     fn required_prefix(&self, id: T) -> usize {
         self.idx
@@ -4882,36 +4911,6 @@ impl<T: Copy + PartialEq> Permutations<T> {
     /// candidate is then the first of the next prefix block, charged by the caller.
     fn skip_remaining_prefix(&mut self, prefix: usize) {
         self.idx[prefix..].sort_unstable_by(|left, right| right.cmp(left));
-    }
-}
-
-impl<T: Copy> Iterator for Permutations<T> {
-    type Item = Vec<T>;
-
-    fn next(&mut self) -> Option<Vec<T>> {
-        if self.done {
-            return None;
-        }
-        if self.first {
-            self.first = false;
-            self.done = self.single;
-        } else if !next_permutation(&mut self.idx) {
-            self.done = true;
-            return None;
-        }
-        Some(self.idx.iter().map(|&i| self.items[i]).collect())
-    }
-}
-
-/// Lazily generate every permutation of `items` (identity first; see [`Permutations`]).
-fn permutations<T: Copy>(items: &[T]) -> Permutations<T> {
-    Permutations {
-        items: items.to_vec(),
-        idx: (0..items.len()).collect(),
-        first: true,
-        // An empty slice still yields exactly one (empty) permutation.
-        done: false,
-        single: false,
     }
 }
 
@@ -6068,12 +6067,18 @@ mod tests {
 
     #[test]
     fn permutations_are_lexicographic_identity_first() {
-        let perms: Vec<Vec<u32>> = permutations(&[10u32, 20, 30]).collect();
+        let mut cursor = Permutations::new(vec![10u32, 20, 30], false);
+        let mut perms = Vec::new();
+        while cursor.advance() {
+            perms.push(cursor.current().collect::<Vec<_>>());
+        }
         assert_eq!(perms.len(), 6);
         assert_eq!(perms[0], vec![10, 20, 30], "identity first");
         assert_eq!(perms[5], vec![30, 20, 10], "reverse last");
-        // A single-element slice yields exactly one permutation.
-        assert_eq!(permutations(&[7u32]).count(), 1);
+        let mut singleton = Permutations::new(vec![7u32], false);
+        assert!(singleton.advance());
+        assert!(singleton.current().eq([7]));
+        assert!(!singleton.advance());
     }
 
     /// purrdf-EXT n-degree path: a symmetric blank pair reachable ONLY through
