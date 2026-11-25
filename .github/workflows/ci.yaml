@@ -866,6 +866,7 @@ jobs:
             target/x86_64-unknown-linux-gnu/release
             target/simd-asm
           key: ${{ steps.compiled-lookup.outputs.cache-primary-key }}
+          fail-on-cache-miss: true
       - name: Admit only an exact restored Cargo output key
         if: steps.compiled-cache.outputs.cache-matched-key != ''
         env:
