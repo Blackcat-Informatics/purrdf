@@ -673,7 +673,8 @@ Each operand has its own declaration.
 - `Calendar` reads one `xsd:date`, `xsd:gYearMonth`, or `xsd:gYear` literal.
 - `Timestamp` reads one `xsd:dateTime` or `xsd:dateTimeStamp` literal at an
   explicitly declared day, month, or year precision. It does not infer
-  precision from the lexical form.
+  precision from the lexical form. XSD end-of-day midnight belongs to the
+  next civil day before precision is applied.
 - `DateBounds` reads two `xsd:date` literals in start, end order. The end is
   exclusive. Supply your own dates for named periods such as seasons.
 

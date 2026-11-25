@@ -6,7 +6,7 @@
 use crate::error::EvaluatorInvariant;
 use purrdf_core::{DatasetView, evidence::EvidenceCombination};
 
-use super::compile::Op;
+use super::{Val, compile::Op};
 use crate::eval::EvalCtx;
 use crate::evidence_exec::RowEvidence;
 use crate::{AdmittedMap, AdmittedVec, EvalError, WorkspaceCapability};
@@ -49,7 +49,8 @@ impl Records {
             | Op::StrNone
             | Op::PushUnbound
             | Op::Exists(_)
-            | Op::Jmp(_) => 0,
+            | Op::Jmp(_)
+            | Op::Kleene { .. } => 0,
             Op::EbvOf
             | Op::Not
             | Op::NotExists
@@ -77,30 +78,60 @@ impl Records {
                     2
                 }
             }
-            Op::Kleene { n, .. } => n as usize,
             Op::Call { argc, .. } | Op::CallCustom { argc, .. } => argc as usize,
         };
         let start = depth.checked_sub(consumed).ok_or_else(|| {
             EvalError::Invariant(EvaluatorInvariant::VmEvidenceOperandsOutsideStack)
         })?;
-        let law = if matches!(op, Op::Kleene { or: true, .. }) {
+        let record = self.take_operands(
+            (start..depth).map(|position| (position, false)),
+            EvidenceCombination::Conjunction,
+        )?;
+        if matches!(op, Op::NotExists)
+            && let Some(original) = record.as_ref()
+        {
+            return ctx.negative_evidence(original).map(Some);
+        }
+        Ok(record)
+    }
+
+    pub(super) fn kleene<I: Copy>(
+        &mut self,
+        start: usize,
+        operands: &[Val<I>],
+        or: bool,
+        decisive: bool,
+    ) -> Result<Option<RowEvidence>, EvalError> {
+        let law = if or {
             EvidenceCombination::Alternatives
         } else {
             EvidenceCombination::Conjunction
         };
+        self.take_operands(
+            operands.iter().enumerate().map(|(index, operand)| {
+                // A known false conjunction or true disjunction does not
+                // depend on the result of an unsettled operand.
+                (start + index, decisive && matches!(operand, Val::Ebv(None)))
+            }),
+            law,
+        )
+    }
+
+    fn take_operands(
+        &mut self,
+        positions: impl Iterator<Item = (usize, bool)>,
+        law: EvidenceCombination,
+    ) -> Result<Option<RowEvidence>, EvalError> {
         let mut record: Option<RowEvidence> = None;
-        for position in start..depth {
-            if let Some(operand) = self.values.remove(&position) {
+        for (position, masked) in positions {
+            if let Some(operand) = self.values.remove(&position)
+                && !(masked && operand.is_undecided())
+            {
                 record = Some(match record {
                     None => operand,
                     Some(previous) => previous.combine(&operand, law)?,
                 });
             }
-        }
-        if matches!(op, Op::NotExists)
-            && let Some(original) = record.as_ref()
-        {
-            return ctx.negative_evidence(original).map(Some);
         }
         Ok(record)
     }

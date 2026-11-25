@@ -393,13 +393,7 @@ pub fn cast_calendar_admitted(
                     tz: value.tz,
                 })));
             }
-            let (year, month, day) = if value.hour == 24 {
-                let (year, month, day) =
-                    civil_from_days(days_from_civil(value.year, value.month, value.day) + 1);
-                (year, month, day)
-            } else {
-                (i128::from(value.year), value.month, value.day)
-            };
+            let (year, month, day) = value.civil_date();
             (year, month, day, value.tz)
         }
         XsdValue::Date(value) => {
@@ -511,7 +505,12 @@ pub fn duration_from_seconds_admitted(
 #[must_use]
 pub const fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
     // Widening casts: `From` is not callable in a `const fn`.
-    let y = y as i128;
+    days_from_civil_wide(y as i128, m, d)
+}
+
+// The normalized date-time value space can carry one day beyond the last
+// lexical `i64` year, so this same day-count law also accepts that year.
+const fn days_from_civil_wide(y: i128, m: u8, d: u8) -> i128 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
     let yoe = y - era * 400; // [0, 399]
@@ -4757,6 +4756,15 @@ impl core::fmt::Display for Gregorian {
 }
 
 impl DateTime {
+    /// The civil date in the value space, with lexical end-of-day normalized.
+    const fn civil_date(&self) -> (i128, u8, u8) {
+        if self.hour == 24 {
+            civil_from_days(days_from_civil(self.year, self.month, self.day) + 1)
+        } else {
+            (self.year as i128, self.month, self.day)
+        }
+    }
+
     /// Whether calendar fields, exact normalized seconds and declared timezone agree.
     /// This compares the retained representation without allocation. Equal instants
     /// with different timezone offsets can have different representations.

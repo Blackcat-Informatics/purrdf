@@ -4,13 +4,45 @@
 //! Caller-registered comparisons of instants at declared civil precision.
 
 use purrdf_core::TermValue;
+use purrdf_hash::error::ErrorValue;
 pub use purrdf_xsd::temporal::CivilPrecision;
 use purrdf_xsd::temporal::{InstantOrder, PrecisionInterval};
-use purrdf_xsd::{XsdDatatype, XsdValue};
+use purrdf_xsd::{ErrorCode, XsdDatatype, XsdValue};
 
 use crate::{
     EvalError, NativeDiagnostic, NativeDiagnosticKind, RetainedNativeFailure, WorkspaceCapability,
 };
+
+#[derive(Debug)]
+struct InvalidCalendarLiteral {
+    datatype: XsdDatatype,
+    code: Option<ErrorCode>,
+}
+
+impl core::fmt::Display for InvalidCalendarLiteral {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "invalid temporal order argument for <{}>",
+            self.datatype.iri()
+        )?;
+        if let Some(code) = self.code {
+            write!(f, " ({code})")?;
+        }
+        Ok(())
+    }
+}
+
+impl core::error::Error for InvalidCalendarLiteral {}
+
+impl purrdf_hash::error::StructuredError for InvalidCalendarLiteral {
+    purrdf_hash::error_visit! {
+        @record self { datatype, code } => "temporal-order-invalid-calendar" {
+            "datatype" => Iri(self.datatype.iri()),
+            "xpath_code" => Value(self.code.map_or(ErrorValue::Absent, |code| ErrorValue::Code(code.qname()))),
+        }
+    }
+}
 
 /// The declared interpretation and arity of one temporal operand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,9 +105,11 @@ impl TemporalOperand {
                     .storage_error(error, "temporal order input")
             })? {
                 purrdf_xsd::value::ParsedValue::Value(value) => Ok(value),
-                purrdf_xsd::value::ParsedValue::Invalid(_) => {
-                    Err(args("malformed temporal order argument"))
-                }
+                purrdf_xsd::value::ParsedValue::Invalid(code) => Err(RetainedNativeFailure::error(
+                    NativeDiagnosticKind::Function,
+                    InvalidCalendarLiteral { datatype, code },
+                    workspace,
+                )),
             }
         };
         let interval = match self {

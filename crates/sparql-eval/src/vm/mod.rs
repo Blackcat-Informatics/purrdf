@@ -1323,7 +1323,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         while let Some(op) = ops.get(*pc) {
             *pc += 1;
             let before = stack.len();
-            let record = if TRACKING {
+            let mut record = if TRACKING {
                 records
                     .as_mut()
                     .map(|records| records.begin(*op, before, ctx))
@@ -1370,8 +1370,8 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                 Op::Kleene { or, n } => {
                     let start = stack.len().checked_sub(n as usize).ok_or_else(underflow)?;
                     let mut value = Some(!or);
-                    for entry in stack.drain(start..) {
-                        let Val::Ebv(operand) = entry else {
+                    for entry in &stack[start..] {
+                        let Val::Ebv(operand) = *entry else {
                             return Err(mistyped(StackExpectation::Boolean));
                         };
                         value = if or {
@@ -1380,6 +1380,10 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                             helpers::kleene_and(value, operand)
                         };
                     }
+                    if let Some(records) = &mut records {
+                        record = records.kleene(start, &stack[start..], or, value == Some(or))?;
+                    }
+                    stack.truncate(start);
                     stack.push(Val::Term(
                         value.map(|b| helpers::intern_boolean(ctx, b)).transpose()?,
                     ));

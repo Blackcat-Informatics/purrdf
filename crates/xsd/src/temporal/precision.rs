@@ -3,7 +3,9 @@
 
 //! Instant order with explicitly declared civil precision.
 
-use super::{Date, DateTime, TZ_BOUND_SECS, days_from_civil, days_in_month, is_leap};
+use super::{
+    Date, DateTime, TZ_BOUND_SECS, days_from_civil, days_from_civil_wide, days_in_month, is_leap,
+};
 use crate::{XsdDatatype, XsdValue};
 
 const DAY: i128 = 86_400;
@@ -74,10 +76,12 @@ pub struct PrecisionInterval {
 
 impl PrecisionInterval {
     /// Interpret a timestamp with an explicitly declared coarse precision.
-    /// The timezone is retained and fields finer than the precision are ignored.
+    /// Normalize end-of-day midnight before discarding finer fields.
+    /// The timezone is retained.
     #[must_use]
     pub const fn from_datetime(value: &DateTime, precision: CivilPrecision) -> Self {
-        Self::civil(value.year, value.month, value.day, value.tz, precision)
+        let (year, month, day) = value.civil_date();
+        Self::civil(year, month, day, value.tz, precision)
     }
 
     /// Interpret an anchored XSD date, year-month, or year as a period.
@@ -88,19 +92,27 @@ impl PrecisionInterval {
     pub fn from_calendar(value: &XsdValue) -> Result<Self, PrecisionError> {
         match value {
             XsdValue::Date(date) => Ok(Self::civil(
-                date.year,
+                i128::from(date.year),
                 date.month,
                 date.day,
                 date.tz,
                 CivilPrecision::Day,
             )),
             XsdValue::Gregorian(value) => match (value.datatype, value.year, value.month) {
-                (XsdDatatype::GYear, Some(year), None) => {
-                    Ok(Self::civil(year, 1, 1, value.tz, CivilPrecision::Year))
-                }
-                (XsdDatatype::GYearMonth, Some(year), Some(month)) => {
-                    Ok(Self::civil(year, month, 1, value.tz, CivilPrecision::Month))
-                }
+                (XsdDatatype::GYear, Some(year), None) => Ok(Self::civil(
+                    i128::from(year),
+                    1,
+                    1,
+                    value.tz,
+                    CivilPrecision::Year,
+                )),
+                (XsdDatatype::GYearMonth, Some(year), Some(month)) => Ok(Self::civil(
+                    i128::from(year),
+                    month,
+                    1,
+                    value.tz,
+                    CivilPrecision::Month,
+                )),
                 _ => Err(PrecisionError::Unanchored),
             },
             _ => Err(PrecisionError::Unanchored),
@@ -134,18 +146,20 @@ impl PrecisionInterval {
     }
 
     const fn civil(
-        year: i64,
+        year: i128,
         month: u8,
         day: u8,
         offset: Option<i32>,
         precision: CivilPrecision,
     ) -> Self {
+        // The Gregorian leap rule repeats every 400 years.
+        let cycle_year = (year % 400) as i64;
         let (month, day, length) = match precision {
             CivilPrecision::Day => (month, day, 1),
-            CivilPrecision::Month => (month, 1, days_in_month(year, month) as i128),
-            CivilPrecision::Year => (1, 1, if is_leap(year) { 366 } else { 365 }),
+            CivilPrecision::Month => (month, 1, days_in_month(cycle_year, month) as i128),
+            CivilPrecision::Year => (1, 1, if is_leap(cycle_year) { 366 } else { 365 }),
         };
-        let first = DAY * days_from_civil(year, month, day);
+        let first = DAY * days_from_civil_wide(year, month, day);
         let last = first + DAY * length;
         match offset {
             Some(minutes) => {
@@ -234,6 +248,28 @@ mod tests {
         assert_eq!(
             PrecisionInterval::from_calendar(&recurring),
             Err(PrecisionError::Unanchored)
+        );
+    }
+
+    #[test]
+    fn end_of_day_is_the_next_civil_day_for_every_precision() {
+        let previous = parse_datetime("2024-12-31T24:00:00Z").unwrap();
+        let midnight = parse_datetime("2025-01-01T00:00:00Z").unwrap();
+        for precision in [
+            CivilPrecision::Day,
+            CivilPrecision::Month,
+            CivilPrecision::Year,
+        ] {
+            assert_eq!(
+                PrecisionInterval::from_datetime(&previous, precision),
+                PrecisionInterval::from_datetime(&midnight, precision)
+            );
+        }
+        let last = parse_datetime("9223372036854775807-12-31T24:00:00Z").unwrap();
+        let last_year = period(XsdDatatype::GYear, "9223372036854775807Z");
+        assert_eq!(
+            PrecisionInterval::from_datetime(&last, CivilPrecision::Year).after(last_year),
+            InstantOrder::Yes
         );
     }
 }

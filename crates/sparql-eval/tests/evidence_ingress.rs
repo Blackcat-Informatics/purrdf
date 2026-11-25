@@ -982,6 +982,25 @@ fn temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values() {
         })
         .unwrap();
 
+    // Use a bound variable so the VM runs the boolean operator at evaluation.
+    for (gate, op, count) in [("false", "&&", 0), ("true", "||", 3)] {
+        let gated = filtered.replace(
+            "FILTER(<https://example.org/before>(?left, ?right))",
+            &format!(
+                "VALUES ?gate {{ {gate} }} FILTER(?gate {op} <https://example.org/before>(?left, ?right))"
+            ),
+        );
+        engine
+            .query_interned_evidence_view(&dataset, request(&gated), &options, &source, |outcome| {
+                let InternedOutcome::Solutions(rows) = outcome else {
+                    panic!("SELECT solutions");
+                };
+                assert_eq!(rows.len(), count);
+                assert!(rows.rows().iter().all(|row| !row.evidence().is_undecided()));
+            })
+            .unwrap();
+    }
+
     let query = r#"
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         SELECT (<https://example.org/after-period>("2024-12-01T11:23:00Z"^^xsd:dateTime,
@@ -1011,6 +1030,25 @@ fn temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values() {
         ),
         Some(&purrdf_xsd::temporal::PrecisionError::NonPositivePeriod),
     );
+
+    let malformed = query.replace("2024-09-01Z", "2024-02-30Z");
+    let error = engine
+        .query_interned_evidence_view(&dataset, request(&malformed), &options, &source, |_| {
+            panic!("a malformed calendar literal is not an undecided comparison");
+        })
+        .unwrap_err();
+    let cause: &(dyn std::error::Error + 'static) =
+        error.native_cause().expect("original calendar parse error");
+    let retained = core::iter::successors(Some(cause), |&cause| cause.source())
+        .find_map(
+            <dyn std::error::Error>::downcast_ref::<purrdf_sparql_eval::RetainedNativeFailure>,
+        )
+        .expect("retained calendar parse error");
+    let fields = purrdf_testkit::error_capture::Capture::read(retained.cause());
+    assert!(matches!(
+        fields.field("xpath_code"),
+        purrdf_hash::error::ErrorValue::Code("err:FORG0001")
+    ));
 }
 
 fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence() {
