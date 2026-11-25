@@ -3337,6 +3337,8 @@ fn bind_row<D: DatasetView + Sync>(
             // variable repeated inside this pattern can still disagree. The general
             // loop below does the same writes in the same order through a work list.
             for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
+                #[cfg(test)]
+                crate::expr::exists_work::note_pattern_binding();
                 if let Pos::Slot(col) = pos {
                     let value = SolutionTerm::Existing(id);
                     match out[*col] {
@@ -3425,6 +3427,8 @@ fn bind_pos_admitted<D: DatasetView>(
     dataset: &D,
     workspace: &crate::WorkspaceCapability,
 ) -> Result<bool, EvalError> {
+    #[cfg(test)]
+    crate::expr::exists_work::note_pattern_binding();
     // Inline for a plain position and for a quoted triple of plain positions, so
     // binding a row allocates nothing beyond the row it writes.
     let mut allocation = None;

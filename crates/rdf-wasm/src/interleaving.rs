@@ -400,6 +400,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         reason: TEST_ONLY,
     },
     ThreadLocal {
+        file: "crates/sparql-eval/src/expr/exists_work.rs",
+        name: "BGP_PATTERN_BINDINGS",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
+    ThreadLocal {
         file: "crates/sparql-eval/src/expr.rs",
         name: "FORCE_EXISTS_STRATEGY",
         safety: Safety::NotCompiledIn,

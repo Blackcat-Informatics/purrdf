@@ -2645,6 +2645,9 @@ pub(crate) enum ForcedExistsStrategy {
 }
 
 #[cfg(test)]
+pub(crate) mod exists_work;
+
+#[cfg(test)]
 std::thread_local! {
     /// Test-only override for [`exists`]'s probe-vs-definition decision, so a
     /// differential test can force EITHER strategy on a shape regardless of what
@@ -3268,6 +3271,31 @@ impl<I: ViewTermId, D: DatasetView<Id = I> + Sync> ResidentAbort<D> for ExistsPe
     }
 }
 
+/// Only a witness over a pure positive relation can discard its internal
+/// order. Filters may not invoke stateful code or enter another evaluation.
+fn permits_bound_filter_witness<D: DatasetView + Sync>(
+    normalized: &GraphPattern,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<bool, EvalError> {
+    if ctx.governor_state().is_some()
+        || ctx.growth.is_bounded()
+        || ctx.bgp_cursor_sources.is_some()
+        || ctx.may_have_evidence()
+        || crate::engine::Sequencing::for_view::<D>() != crate::engine::Sequencing::Free
+        || !matches!(normalized, GraphPattern::Filter { .. })
+    {
+        return Ok(false);
+    }
+    let mut body = normalized;
+    while let GraphPattern::Filter { expr, inner } = body {
+        if !crate::parallel::is_operator_only_filter(expr) {
+            return Ok(false);
+        }
+        body = inner;
+    }
+    crate::bgp::PositivePlan::pure_eligible_admitted(body, &ctx.growth)
+}
+
 impl<I: ViewTermId> ExistsChild<I> {
     /// Decide the one graph child and install its lexical interval before the
     /// graph worklist enters that child. The resident adapter below consumes
@@ -3349,10 +3377,13 @@ impl<I: ViewTermId> ExistsChild<I> {
                     source,
                     &mut ledger_scope,
                 )?;
+                let filter_witness =
+                    first_witness && permits_bound_filter_witness(normalized, &ledger_scope)?;
                 let frames = crate::binop::SubstitutionFrames::enter(
                     prepared.body,
                     prepared.ledger_map,
                     prepared.placeholders,
+                    filter_witness,
                     &mut ledger_scope,
                 )?;
                 let owner = frames.owner();
@@ -3401,10 +3432,14 @@ impl<I: ViewTermId> ExistsChild<I> {
                     source,
                     &mut ledger_scope,
                 )?;
+                let filter_witness = !probe
+                    && first_witness
+                    && permits_bound_filter_witness(normalized, &ledger_scope)?;
                 let frames = crate::binop::SubstitutionFrames::enter(
                     prepared.body,
                     prepared.ledger_map,
                     prepared.placeholders,
+                    filter_witness,
                     &mut ledger_scope,
                 )?;
                 let owner = frames.owner();
@@ -11635,7 +11670,7 @@ mod tests {
 
     /// Run `query` against `ds` with the EXISTS memo on/off, returning sorted
     /// stringified rows for a multiset comparison.
-    fn run_rows(ds: &RdfDataset, query: &str, memo: bool) -> Vec<Vec<String>> {
+    pub(super) fn run_rows(ds: &RdfDataset, query: &str, memo: bool) -> Vec<Vec<String>> {
         use crate::eval::Outcome;
         use crate::eval::evaluate_query;
         use purrdf_sparql_algebra::SparqlParser;
@@ -16038,13 +16073,15 @@ pub(crate) struct AdmittedQuery {
 #[derive(Clone)]
 pub(crate) enum PreparedPattern {
     Pattern(crate::workspace::NativeSharedWorkspace<CorrelatedPattern>),
+    /// Copied, order-insensitive EXISTS body whose BGPs may use inserted rows.
+    BoundFilterWitness(crate::workspace::NativeSharedWorkspace<CorrelatedPattern>),
     Query(crate::workspace::NativeSharedWorkspace<AdmittedQuery>),
 }
 impl std::ops::Deref for PreparedPattern {
     type Target = GraphPattern;
     fn deref(&self) -> &GraphPattern {
         match self {
-            Self::Pattern(pattern) => pattern,
+            Self::Pattern(pattern) | Self::BoundFilterWitness(pattern) => pattern,
             Self::Query(query) => crate::eval::query_pattern(&query.query),
         }
     }
@@ -16062,9 +16099,16 @@ impl PreparedPattern {
         crate::workspace::NativeSharedWorkspace::new_admitted(pattern, workspace).map(Self::Pattern)
     }
 
+    pub(crate) fn with_filter_witness(self, enabled: bool) -> Self {
+        match self {
+            Self::Pattern(pattern) if enabled => Self::BoundFilterWitness(pattern),
+            other => other,
+        }
+    }
+
     pub(crate) fn into_cursor(self) -> PreparedPatternCursor {
         match self {
-            Self::Pattern(pattern) => {
+            Self::Pattern(pattern) | Self::BoundFilterWitness(pattern) => {
                 PreparedPatternCursor::Pattern(pattern.into_projected(|pattern| pattern.as_ref()))
             }
             Self::Query(query) => PreparedPatternCursor::Query(

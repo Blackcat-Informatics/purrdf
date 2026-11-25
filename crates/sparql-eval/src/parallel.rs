@@ -469,11 +469,23 @@ pub(crate) fn is_parallel_safe_with(
 /// meets; an expression of any depth is classified without a machine-stack frame per
 /// level.
 pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
+    expression_reaches_boundary(expr, false)
+}
+
+/// A witness filter may move predicate evaluation across rows only when it
+/// uses expression operators without calls or nested graph evaluation. A
+/// parallel-safe host call can still return a different first hard error.
+pub(crate) fn is_operator_only_filter(expr: &Expression) -> bool {
+    !expression_reaches_boundary(expr, true)
+}
+
+fn expression_reaches_boundary(expr: &Expression, include_calls: bool) -> bool {
     let mut pending =
         purrdf_lex::walk::WorkList::<ExpressionPart<'_>, 32>::with(ExpressionPart::Sub(expr));
     while let Some(part) = pending.pop() {
         match part {
             ExpressionPart::Sub(expr) => push_expression_parts(expr, &mut pending),
+            ExpressionPart::Call(_) if include_calls => return true,
             ExpressionPart::Call(_) => {}
             ExpressionPart::Exists(_) => return true,
         }
