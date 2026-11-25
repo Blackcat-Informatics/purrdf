@@ -273,9 +273,7 @@ fn read(triples: &[Triple], pending: &BTreeSet<usize>, closure: &Closure) -> Vec
         // The premise must DECLARE a range for the property. That is what establishes
         // `p ∈ IP`, and it is why an undeclared property is not given a range for free.
         let declarations: Vec<Triple> = closure
-            .with_predicate(RDFS_RANGE)
-            .iter()
-            .filter(|declared| &declared[0] == subject)
+            .with_subject_predicate(subject, RDFS_RANGE)
             .cloned()
             .collect();
         if !declarations.is_empty() {

@@ -20,13 +20,18 @@
 //! run is `1 + g` evaluations of one program and the cost is expected to grow with
 //! `g`. It is measured rather than asserted: this bench exists so a later change to
 //! the per-graph seeding has a number to move, not so a speedup can be claimed.
+//!
+//! The simple entailment lane measures endpoint selection against a growing
+//! predicate bucket, with a broad enumeration over the same closure as a control.
 
 use std::sync::Arc;
 
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder};
-use purrdf_entail::{Materialization, materialize};
+use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_entail::{
+    ImportMap, Materialization, QNode, QTriple, Regime, certain_answers, materialize,
+};
 
 use purrdf_iri::vocab::rdf::TYPE;
 use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASSOF;
@@ -99,5 +104,42 @@ fn bench_dataset(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_chase, bench_dataset);
+/// Vary the number of triples sharing a predicate. The ground subject
+/// has one answer, while the open subject ranges over the whole bucket.
+fn bench_certain_answers(c: &mut Bench) {
+    let mut group = c.benchmark_group("simple_certain_answers");
+    let predicate = format!("{EX}predicate");
+    let imports = ImportMap::default();
+    for n in [1_024, 8_192] {
+        let mut b = RdfDatasetBuilder::new();
+        let p = b.intern_iri(&predicate).expect("predicate");
+        for i in 0..n {
+            let s = b.intern_iri(&format!("{EX}s{i}")).expect("subject");
+            let o = b.intern_iri(&format!("{EX}o{i}")).expect("object");
+            b.push_quad(s, p, o, None).expect("triple");
+        }
+        let ds = b.freeze().expect("freeze");
+        for (name, subject) in [
+            (
+                "ground",
+                QNode::Term(TermValue::Iri(format!("{EX}s{}", n - 1))),
+            ),
+            ("open", QNode::Var("s".to_owned())),
+        ] {
+            let pattern = [QTriple {
+                s: subject,
+                p: QNode::Term(TermValue::iri(&predicate)),
+                o: QNode::Var("o".to_owned()),
+            }];
+            group.bench_with_input(BenchmarkId::new(name, n), &pattern, |bch, pattern| {
+                bch.iter(|| {
+                    certain_answers(&ds, pattern, Regime::Simple, &imports).expect("answers")
+                });
+            });
+        }
+    }
+    group.finish();
+}
+
+bench_group!(benches, bench_chase, bench_dataset, bench_certain_answers);
 bench_main!(benches);
