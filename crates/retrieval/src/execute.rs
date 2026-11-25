@@ -2581,7 +2581,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
                             ));
                         };
                         let MaterializedCells { variables, rows } =
-                            materialize_cells_admitted(&solutions, &scope_workspace)?;
+                            materialize_cells_admitted(&solutions, &scope_workspace, operation)?;
                         let constraints = crate::scope::retain_counts(scope, &scope_workspace)?;
                         let rows = crate::ScopedRows::new(rows, true, &scope_workspace)?;
                         rows.retain_search(solutions.search_evidence())?;
@@ -2754,7 +2754,7 @@ fn execute_bound<'d, D: DatasetView + Sync, C: CompiledRead>(
             operation,
             |outcome| match outcome {
                 InternedOutcome::Solutions(solutions) => {
-                    materialize_cells_admitted(&solutions, &scope_workspace).map(Some)
+                    materialize_cells_admitted(&solutions, &scope_workspace, operation).map(Some)
                 }
                 _ => Ok(None),
             },
@@ -2958,6 +2958,7 @@ struct MaterializedCells {
 fn materialize_cells_admitted<D: DatasetView + Sync>(
     solutions: &purrdf_sparql_eval::InternedSolutions<'_, '_, D>,
     workspace: &purrdf_sparql_eval::WorkspaceCapability,
+    operation: &purrdf_sparql_eval::ReadOperation<D::ReadError>,
 ) -> Result<MaterializedCells, purrdf_sparql_eval::EvalError> {
     let mut variables =
         purrdf_sparql_eval::AdmittedVec::with_capacity(solutions.variables().len(), workspace)?;
@@ -2968,7 +2969,7 @@ fn materialize_cells_admitted<D: DatasetView + Sync>(
     for row in solutions.rows() {
         let mut cells = purrdf_sparql_eval::AdmittedVec::with_capacity(variables.len(), workspace)?;
         for column in 0..variables.len() {
-            cells.push(solutions.try_cell_owned(row, column, workspace)?)?;
+            cells.push(solutions.try_cell_owned_in_read(row, column, workspace, operation)?)?;
         }
         rows.push(crate::ScopedRow {
             cells,
