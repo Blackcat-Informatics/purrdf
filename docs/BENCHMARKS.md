@@ -175,7 +175,9 @@ simply not narrated here:
   arithmetic; that comparison requires a separate baseline checkout. It covers
   its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
   crossover, and decimal products at eighteen and twenty fractional digits,
-  both with inline coefficients. Each routine
+  both with inline coefficients. The `rational_balanced` rows exercise
+  reduction through the public rational constructor with operands of
+  comparable widths. Each routine
   runs its body once under `--test`, so `perf stat -e instructions:u` of
   `--test --exact <id>`, less the same run selecting nothing, gives a
   setup-subtracted estimate that still includes differences in harness work.

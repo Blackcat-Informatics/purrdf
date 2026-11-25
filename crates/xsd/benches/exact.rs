@@ -308,6 +308,14 @@ fn bench_growth(c: &mut Bench) {
         group.bench_function(format!("div_rem/{digits}"), |bench| {
             bench.iter(|| black_box(black_box(&wide).div_rem(black_box(&a)).expect("nonzero")));
         });
+        group.bench_function(format!("rational_balanced/{digits}"), |bench| {
+            bench.iter(|| {
+                black_box(
+                    Rational::new(black_box(&a).clone(), black_box(&b).clone())
+                        .expect("nonzero denominator"),
+                )
+            });
+        });
         if digits >= 4_000 {
             // Same exact divisor/factor on both sides of a wide initial gap.
             // The operation, not fixture construction, is the registered row.
