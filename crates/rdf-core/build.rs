@@ -45,8 +45,9 @@ fn rustc(compiler: &str, args: &[&str]) -> Option<String> {
 }
 
 fn main() {
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=src/distance/build_identity.rs");
+    // Cargo tracks this script and its compiled identity module as Rust inputs.
+    // Listing them here as well would check their timestamps separately and
+    // invalidate restored artifacts on a fresh checkout of identical source.
     for variable in WATCHED {
         println!("cargo:rerun-if-env-changed={variable}");
     }
