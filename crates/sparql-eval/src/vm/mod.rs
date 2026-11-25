@@ -1230,7 +1230,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
             && self.evidence.is_none()
             && (self.program.has_exists()
                 || self.program.calls.iter().any(|function| {
-                    matches!(function, Function::Custom(iri) if ctx.user_functions.resolve(iri.as_str()).is_some())
+                    matches!(function, Function::Custom(iri) if ctx.user_functions.may_emit_evidence(iri.as_str()))
                 }))
         {
             self.evidence = Some(crate::workspace::SharedWorkspace::new_admitted(
@@ -1539,10 +1539,17 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                 }
                 Op::CallCustom { call, argc } => {
                     pop_values(stack, argc, ctx, args)?;
-                    let result = call_custom(program, call, args, ctx);
+                    let mut computed = None;
+                    let evidence = records.is_some().then_some(&mut computed);
+                    let result = call_custom(program, call, args, ctx, evidence);
                     args.clear();
                     match result? {
-                        VmStep::Value(value) => stack.push(Val::Term(value)),
+                        VmStep::Value(value) => {
+                            stack.push(Val::Term(value));
+                            if let (Some(records), Some(computed)) = (&mut records, computed) {
+                                records.attach(stack.len() - 1, computed, &ctx.growth)?;
+                            }
+                        }
                         suspension @ VmStep::Suspend(_) => {
                             if let Some(records) = &mut records {
                                 records.suspend(record);
@@ -1734,6 +1741,7 @@ fn call_custom<'d, D: DatasetView + Sync>(
     call: u32,
     vals: &mut Arguments,
     ctx: &mut EvalCtx<'d, D>,
+    evidence: Option<&mut Option<crate::RowEvidence>>,
 ) -> Result<VmStep<'d, D::Id>, EvalError> {
     let Function::Custom(iri) = &program.calls[call as usize] else {
         return Err(EvalError::Invariant(
@@ -1749,7 +1757,7 @@ fn call_custom<'d, D: DatasetView + Sync>(
             vals: vals.take(&ctx.growth),
         }));
     }
-    helpers::apply_custom_host(iri.as_str(), vals, ctx).map(VmStep::Value)
+    helpers::apply_custom_host(iri.as_str(), vals, ctx, evidence).map(VmStep::Value)
 }
 
 /// Resolve a suspension by running the pattern evaluation it waits on, now.

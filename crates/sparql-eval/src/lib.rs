@@ -399,3 +399,7 @@ pub(crate) type DetHashSet<K> = std::collections::HashSet<K, DetHasher>;
 
 /// Immutable admission-carrying native producer diagnostics.
 pub use error::{NativeDiagnostic, NativeDiagnosticKind, RetainedNativeFailure};
+mod temporal_order;
+pub use temporal_order::{
+    CivilPrecision, TemporalDirection, TemporalOperand, TemporalOrderPredicate,
+};

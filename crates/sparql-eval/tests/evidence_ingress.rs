@@ -885,6 +885,134 @@ fn empty_service_keeps_search_reason_without_inventing_an_answer_row() {
         }).unwrap();
 }
 
+fn temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values() {
+    use purrdf_sparql_eval::extension_env::ExtensionEnv;
+    use purrdf_sparql_eval::user_fn::UserFunctionRegistry;
+    use purrdf_sparql_eval::{
+        CivilPrecision, TemporalDirection, TemporalOperand, TemporalOrderPredicate,
+    };
+
+    let mut builder = RdfDatasetBuilder::new();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    let dataset = builder.freeze().unwrap();
+    let source = Claims {
+        negative,
+        record: EvidenceRecord::from_parts(
+            &InformationMap::default(),
+            SearchCompleteness::Complete,
+            &Frame::actual(),
+            &[],
+            &[],
+            &mut Memory::new(&mut Resident),
+        )
+        .unwrap(),
+        fail: false,
+        completeness: SearchCompleteness::Complete,
+        sum_nonnegative: false,
+        closure_declared: true,
+    };
+    let engine = NativeSparqlEngine::new();
+    let mut functions = UserFunctionRegistry::default();
+    functions.register_temporal_order(
+        "https://example.org/before",
+        TemporalOrderPredicate::new(
+            TemporalOperand::Calendar,
+            TemporalOperand::Calendar,
+            TemporalDirection::Before,
+        ),
+    );
+    functions.register_temporal_order(
+        "https://example.org/after-period",
+        TemporalOrderPredicate::new(
+            TemporalOperand::Timestamp(CivilPrecision::Day),
+            TemporalOperand::DateBounds,
+            TemporalDirection::After,
+        ),
+    );
+    let functions = engine
+        .bind_functions(functions, ExtensionEnv::empty())
+        .unwrap();
+    let options = QueryOptions::EMPTY.with_functions(&functions);
+    let query = r#"
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT ?kind ?decision WHERE {
+            VALUES (?kind ?left ?right) {
+                (1 "2023Z"^^xsd:gYear "2024-02-29Z"^^xsd:date)
+                (2 "2025Z"^^xsd:gYear "2024-02-29Z"^^xsd:date)
+                (3 "2024Z"^^xsd:gYear "2024-02-29Z"^^xsd:date)
+            }
+            BIND(<https://example.org/before>(?left, ?right) AS ?decision)
+        } ORDER BY ?kind"#;
+    let filtered = query.replace("?kind ?decision", "?kind").replace(
+        "BIND(<https://example.org/before>(?left, ?right) AS ?decision)",
+        "FILTER(<https://example.org/before>(?left, ?right))",
+    );
+    engine
+        .query_interned_evidence_view(&dataset, request(query), &options, &source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT solutions");
+            };
+            assert_eq!(rows.len(), 3);
+            for (row, expected) in rows.rows()[..2].iter().zip([true, false]) {
+                assert_eq!(
+                    rows.value_of(row[1].unwrap()),
+                    purrdf_core::TermValue::boolean(expected)
+                );
+                assert!(!row.evidence().is_undecided());
+            }
+            let uncertain = &rows.rows()[2];
+            assert_eq!(uncertain[1], None);
+            assert!(uncertain.evidence().is_undecided());
+            uncertain
+                .evidence()
+                .with_record(|record| {
+                    assert_eq!(record.completeness(), SearchCompleteness::Undetermined);
+                })
+                .unwrap();
+        })
+        .unwrap();
+    engine
+        .query_interned_evidence_view(&dataset, request(&filtered), &options, &source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT solutions");
+            };
+            assert_eq!(rows.len(), 2);
+            assert!(!rows.rows()[0].evidence().is_undecided());
+            assert!(rows.rows()[1].evidence().is_undecided());
+        })
+        .unwrap();
+
+    let query = r#"
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT (<https://example.org/after-period>("2024-12-01T11:23:00Z"^^xsd:dateTime,
+          "2024-09-01Z"^^xsd:date, "2024-12-01Z"^^xsd:date) AS ?decision) WHERE {}"#;
+    engine
+        .query_interned_evidence_view(&dataset, request(query), &options, &source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT solutions");
+            };
+            assert_eq!(
+                rows.value_of(rows.rows()[0][0].unwrap()),
+                purrdf_core::TermValue::boolean(true)
+            );
+        })
+        .unwrap();
+    let reversed = query.replace("\"2024-09-01Z\"^^xsd:date", "\"2024-12-02Z\"^^xsd:date");
+    let error = engine
+        .query_interned_evidence_view(&dataset, request(&reversed), &options, &source, |_| {
+            panic!("a reversed period is invalid, not an undecided comparison");
+        })
+        .unwrap_err();
+    let cause: &(dyn std::error::Error + 'static) =
+        error.native_cause().expect("original interval error");
+    assert_eq!(
+        core::iter::successors(Some(cause), |&cause| cause.source()).find_map(
+            <dyn std::error::Error>::downcast_ref::<purrdf_xsd::temporal::PrecisionError>
+        ),
+        Some(&purrdf_xsd::temporal::PrecisionError::NonPositivePeriod),
+    );
+}
+
 fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence() {
     use purrdf_sparql_eval::extension_env::ExtensionEnv;
     use purrdf_sparql_eval::user_fn::{
@@ -3778,6 +3906,7 @@ purrdf_testkit::harness_main!(
     actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims,
     service_rows_keep_signed_and_undecided_declarations_through_original_operators,
     empty_service_keeps_search_reason_without_inventing_an_answer_row,
+    temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values,
     sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence,
     distinct_coalesces_both_polarities_without_changing_binding_identity,
     source_refusal_never_publishes_partial_or_undetermined_rows,

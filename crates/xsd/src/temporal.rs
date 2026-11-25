@@ -45,6 +45,9 @@ use crate::value::{XsdError, XsdValue};
 const MAX_TZ_MIN: i32 = 14 * 60;
 /// ±14:00 expressed in seconds, for the no-timezone comparison bound.
 const TZ_BOUND_SECS: i128 = 14 * 3600;
+
+mod precision;
+pub use precision::{CivilPrecision, InstantOrder, PrecisionError, PrecisionInterval};
 const SECS_PER_DAY: i128 = 86_400;
 /// A leap year, used only by the test sweeps below to look up February's
 /// maximum length (29) via [`days_in_month`] when sizing a sweep — not a

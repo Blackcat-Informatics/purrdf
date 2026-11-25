@@ -6670,7 +6670,7 @@ pub(crate) fn apply_custom<D: DatasetView + Sync>(
             .transpose()?
             .flatten());
     }
-    apply_custom_host(iri, vals, ctx)
+    apply_custom_host(iri, vals, ctx, None)
 }
 
 /// A caller-registered function call that is not SPARQL-bodied, over its evaluated
@@ -6687,6 +6687,7 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
     iri: &str,
     vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
+    evidence: Option<&mut Option<crate::RowEvidence>>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     // A caller-injected native (host-Rust closure) function, resolved from the same
     // registry's second table. Checked after the SPARQL-bodied path (so a same-registry
@@ -6694,7 +6695,7 @@ pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
     // makes that unrepresentable) and before the XSD-cast fallback, so a function IRI
     // never collides with a datatype IRI.
     if let Some(native) = ctx.user_functions.resolve_native(iri) {
-        let result = crate::user_fn::eval_native_function(native, iri, vals, ctx)?;
+        let result = crate::user_fn::eval_native_function(native, iri, vals, ctx, evidence)?;
         return Ok(result
             .map(|value| ctx.intern_workspace_term(value))
             .transpose()?

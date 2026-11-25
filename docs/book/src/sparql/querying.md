@@ -658,6 +658,31 @@ a non-temporal first argument) is a SPARQL type error, which — inside `BIND`,
 `FILTER`, or an aggregate argument — poisons to unbound rather than aborting the
 query, per the engine's ordinary type-error discipline.
 
+## Comparing instants at declared precision
+
+Register a `TemporalOrderPredicate` with `UserFunctionRegistry::register_temporal_order`
+under an IRI you supply. The predicate asks whether the first represented
+instant is strictly before or strictly after the second. It returns true if
+every possible pair obeys the requested order, false if none do, and no boolean
+if the declared precision does not decide the order. In evidence-aware queries,
+an undecided comparison attaches undetermined evidence. A `BIND` leaves the
+value unbound, and a `FILTER` retains the row with that evidence.
+
+Each operand has its own declaration.
+
+- `Calendar` reads one `xsd:date`, `xsd:gYearMonth`, or `xsd:gYear` literal.
+- `Timestamp` reads one `xsd:dateTime` or `xsd:dateTimeStamp` literal at an
+  explicitly declared day, month, or year precision. It does not infer
+  precision from the lexical form.
+- `DateBounds` reads two `xsd:date` literals in start, end order. The end is
+  exclusive. Supply your own dates for named periods such as seasons.
+
+Periods use the proleptic Gregorian calendar and include their start but not
+their end. An unspecified timezone allows the offsets admitted by XSD. An
+explicit date pair must have timezones on both endpoints or neither, and it
+must have positive duration. This extension leaves ordinary SPARQL temporal
+comparisons unchanged.
+
 ## LATERAL (SEP-0006)
 
 The SPARQL 1.2 Query specification's own text carries no `LATERAL` production;
