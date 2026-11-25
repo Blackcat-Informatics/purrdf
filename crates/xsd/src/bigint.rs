@@ -166,16 +166,61 @@ fn mag_sub(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
 }
 
 /// The one borrow propagation used by subtraction and binary GCD.
+#[inline]
+fn sub_limb(a: u64, b: u64, borrow: &mut bool) -> u64 {
+    let (partial, borrowed_a) = a.overflowing_sub(b);
+    let (difference, borrowed_b) = partial.overflowing_sub(u64::from(*borrow));
+    *borrow = borrowed_a || borrowed_b;
+    difference
+}
+
 fn mag_sub_in_place(a: &mut Mag, b: &[u64]) {
     debug_assert!(mag_cmp(a, b) != Ordering::Less, "mag_sub would go negative");
     let mut borrow = false;
     for (i, limb) in a.iter_mut().enumerate() {
-        let (partial, borrowed_a) = limb.overflowing_sub(b.get(i).copied().unwrap_or(0));
-        let (difference, borrowed_b) = partial.overflowing_sub(u64::from(borrow));
-        *limb = difference;
-        borrow = borrowed_a || borrowed_b;
+        *limb = sub_limb(*limb, b.get(i).copied().unwrap_or(0), &mut borrow);
     }
     debug_assert!(!borrow, "mag_sub called with a < b");
+    mag_trim(a);
+}
+
+/// Subtract an ordered magnitude and strip the difference's trailing zero
+/// bits in the same pass. One pending limb supplies the cross-limb shift.
+fn mag_odd_difference(a: &mut Mag, b: &[u64]) {
+    let limbs = &mut a[..];
+    let mut borrow = false;
+    let mut input = 0;
+    let mut pending = loop {
+        let Some(&limb) = limbs.get(input) else {
+            debug_assert!(!borrow);
+            a.resize(0, 0);
+            return;
+        };
+        let difference = sub_limb(limb, b.get(input).copied().unwrap_or(0), &mut borrow);
+        input += 1;
+        if difference != 0 {
+            break difference;
+        }
+    };
+    let shift = pending.trailing_zeros();
+    let mut output = 0;
+    while input < limbs.len() {
+        let next = sub_limb(
+            limbs[input],
+            b.get(input).copied().unwrap_or(0),
+            &mut borrow,
+        );
+        // The next input limb has already been read before its predecessor
+        // is written, even when there were no whole zero limbs to omit.
+        let pair = (u128::from(next) << 64) | u128::from(pending);
+        limbs[output] = (pair >> shift) as u64;
+        output += 1;
+        input += 1;
+        pending = next;
+    }
+    debug_assert!(!borrow, "binary reduction orders the operands");
+    limbs[output] = pending >> shift;
+    a.resize(output + 1, 0);
     mag_trim(a);
 }
 
@@ -549,13 +594,13 @@ fn mag_gcd(a: &[u64], b: &[u64], storage: &impl Allocate) -> Result<Mag, LimbScr
     let common = mag_trailing_zeros(a).min(mag_trailing_zeros(b));
     let mut u = mag_shr(a, mag_trailing_zeros(a), storage)?;
     let mut v: Mag = storage.copy(b)?;
+    let zeros = mag_trailing_zeros(&v);
+    mag_shr_in_place(&mut v, zeros);
     loop {
-        let zeros = mag_trailing_zeros(&v);
-        mag_shr_in_place(&mut v, zeros);
         if mag_cmp(&u, &v) == Ordering::Greater {
             core::mem::swap(&mut u, &mut v);
         }
-        mag_sub_in_place(&mut v, &u);
+        mag_odd_difference(&mut v, &u);
         if v.is_empty() {
             break;
         }
@@ -2368,6 +2413,7 @@ mod tests {
             for limb in &mut words {
                 *limb = mix::splitmix64_next(&mut seed);
             }
+            words[0] |= 1;
             words[length - 1] |= 1;
             let factor = BigInt {
                 negative: false,
@@ -2380,6 +2426,10 @@ mod tests {
             assert_eq!(y.gcd(&x.neg()), expected);
             assert!(x.div_rem(&expected).unwrap().1.is_zero());
             assert!(y.div_rem(&expected).unwrap().1.is_zero());
+
+            // These odd operands first differ beyond two whole low limbs.
+            let across_limbs = factor.shl(128).add(&factor);
+            assert_eq!(across_limbs.gcd(&factor), factor);
         }
     }
 
