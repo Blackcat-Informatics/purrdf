@@ -952,8 +952,234 @@ jobs:
 
   # An explicit dispatch generates a projection independently of ordinary parity
   # checks. Its output is reviewed and committed separately; it never commits or pushes.
+  # Use isolated cache keys and the exact same checkout path for each pair.
+  simd-compiled-cache-recheck:
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name == 'trial/simd-compiled-cache'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
+      CARGO_BUILD_FINGERPRINT: content
+      CARGO_TARGET_DIR: ${{ github.workspace }}/sample/target
+      CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/sample/target
+      EXPECTED_COMMIT: 682decc88c3ed04571076a8adb718adf98f64fe3
+      EXPECTED_TREE: 438ef85b28880c5b637661756560fcf90237e9d2
+    steps:
+      - name: Checkout cold source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 682decc88c3ed04571076a8adb718adf98f64fe3
+          path: sample
+          persist-credentials: false
+      - name: Install the same nightly used for the cache comparison
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly-2026-11-25
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+      - name: Prepare and run the cold checked gate
+        working-directory: sample
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+        run: |
+          set -euo pipefail
+          export CARGO_INCREMENTAL=0
+          mkdir "$RUNNER_TEMP/freshness"
+          cat > "$RUNNER_TEMP/measure-freshness" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export CARGO_INCREMENTAL=0
+          phase=$1
+          out="$RUNNER_TEMP/freshness/$phase"
+          mkdir "$out"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain=v1)"
+          git rev-parse HEAD 'HEAD^{tree}' > "$out/checkout.txt"
+          sha256sum crates/rdf-core/build.rs crates/rdf-core/src/distance/build_identity.rs > "$out/core-inputs.txt"
+          {
+            printf '%s\n' "$PWD" "$ImageOS" "$ImageVersion" "$CARGO_BUILD_JOBS"
+            sed -n '0,/^model name/s/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo
+            rustc -vV
+            cargo -Vv
+            cc --version
+            ld --version
+          } > "$out/environment.txt"
+          df -h "$PWD" > "$out/disk-before.txt"
+          make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --report $out/report.json"
+          test -z "$(git status --porcelain=v1)"
+          shopt -s nullglob
+          for file in target/simd-asm/contexts/*/cargo.graph-*.stderr.log; do
+            context=${file%/*}
+            prefix="${context##*/}-${file##*/}"
+            cp "$file" "$out/$prefix"
+            cp "${file%.stderr.log}.stdout.jsonl" "$out/${prefix%.stderr.log}.stdout.jsonl"
+            awk '/^[[:space:]]*Running/ && /--crate-name/ {
+                count++; if (/--target x86_64-unknown-linux-gnu/) target++
+              }
+              END {printf "rustc commands: %d total, %d target, %d host\n", count, target, count-target}' "$file"
+          done
+          test -n "$(find "$out" -name '*.stderr.log' -print -quit)"
+          df -h "$PWD" > "$out/disk-after.txt"
+          SCRIPT
+          test ! -e "$CARGO_TARGET_DIR"
+          bash "$RUNNER_TEMP/measure-freshness" cold
+          shopt -s globstar nullglob
+          selected=0
+          for asm in "$CARGO_TARGET_DIR"/x86_64-unknown-linux-gnu/release/**/*.s; do
+            path_hash=$(printf '%s' "$asm" | sha256sum | cut -d ' ' -f 1)
+            for receipt in "$CARGO_TARGET_DIR"/simd-asm/contexts/*/evidence/"$path_hash.json"; do
+              root=${receipt%/evidence/*}
+              asm_hash=$(sha256sum "$asm" | cut -d ' ' -f 1)
+              if jq -e --arg digest "$asm_hash" --arg context "${root##*/}" \
+                '.assembly == $digest and .context == $context' "$receipt" > /dev/null; then
+                sha256sum "$asm" "$receipt" > "$RUNNER_TEMP/freshness/receipt.sha256"
+                selected=1
+                break 2
+              fi
+            done
+          done
+          test "$selected" = 1
+          du -sb target/release target/x86_64-unknown-linux-gnu/release target/simd-asm \
+            > "$RUNNER_TEMP/freshness/cache-input-bytes.txt"
+      - name: Save the checked cold output
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: simd-compiled-qualify-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Set the complete cold checkout aside
+        run: mv sample "$RUNNER_TEMP/freshness-cold-checkout"
+      - name: Checkout the same source into a physically new tree
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: 682decc88c3ed04571076a8adb718adf98f64fe3
+          path: sample
+          persist-credentials: false
+      - name: Require a cold output directory before restoring
+        working-directory: sample
+        run: test ! -e "$CARGO_TARGET_DIR"
+      - name: Restore only this run's exact cold output
+        id: restored
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: simd-compiled-qualify-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+      - name: Verify the receipt and run the warm checked gate
+        working-directory: sample
+        env:
+          RESTORED_EXACTLY: ${{ steps.restored.outputs.cache-hit }}
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+        run: |
+          set -euo pipefail
+          test "$RESTORED_EXACTLY" = true
+          sha256sum -c "$RUNNER_TEMP/freshness/receipt.sha256"
+          bash "$RUNNER_TEMP/measure-freshness" warm
+          evidence="$RUNNER_TEMP/freshness"
+          cmp "$evidence/cold/environment.txt" "$evidence/warm/environment.txt"
+          cmp "$evidence/cold/checkout.txt" "$evidence/warm/checkout.txt"
+          cmp "$evidence/cold/core-inputs.txt" "$evidence/warm/core-inputs.txt"
+          jq -e -s 'length == 2 and all(.[]; .status == "passed")
+            and .[0].identity == .[1].identity and .[0].cells == .[1].cells
+            and (.[1].cells["x86_64-v4"] | length) > 0' \
+            "$evidence/cold/report.json" "$evidence/warm/report.json"
+      - name: Check a prefix match without downloading its build outputs
+        id: prefix
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: simd-compiled-qualify-v1-${{ github.run_id }}-
+          lookup-only: true
+      - name: Probe an incompatible key without restoring artifacts
+        id: incompatible
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: simd-compiled-qualify-v1-${{ github.run_id }}-${{ github.run_attempt }}-different-context
+          lookup-only: true
+      - name: Require an incompatible miss and set the warm checkout aside
+        env:
+          PREFIX_HIT: ${{ steps.prefix.outputs.cache-hit }}
+          PREFIX_MATCHED: ${{ steps.prefix.outputs.cache-matched-key }}
+          EXPECTED_KEY: simd-compiled-qualify-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          MATCHED_KEY: ${{ steps.incompatible.outputs.cache-matched-key }}
+        run: |
+          test "$PREFIX_HIT" = false
+          test "$PREFIX_MATCHED" = "$EXPECTED_KEY"
+          test -z "$MATCHED_KEY"
+          mv sample "$RUNNER_TEMP/freshness-warm-checkout"
+      - name: Checkout the equal-length source edit into a physically new tree
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: 8eaadee25e3f63cae9512a3319ce21200f931720
+          path: sample
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Verify the only changed input and require cold paths before restore
+        working-directory: sample
+        run: |
+          test ! -e "$CARGO_TARGET_DIR"
+          test "$(git diff --name-only 682decc88c3ed04571076a8adb718adf98f64fe3 HEAD)" = crates/zstd/src/lib.rs
+          test "$(git cat-file -s 682decc88c3ed04571076a8adb718adf98f64fe3:crates/zstd/src/lib.rs)" = "$(wc -c < crates/zstd/src/lib.rs)"
+      - name: Restore the same exact archive for the edited source
+        id: restored-edited
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: simd-compiled-qualify-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          fail-on-cache-miss: true
+      - name: Require source-bound rechecking and actual checksum invalidation
+        working-directory: sample
+        env:
+          EXPECTED_COMMIT: 8eaadee25e3f63cae9512a3319ce21200f931720
+          EXPECTED_TREE: 6ae7626d09f56b22c08792308c025f516f5a161a
+          RESTORED_EXACTLY: ${{ steps.restored-edited.outputs.cache-hit }}
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+        run: |
+          test "$RESTORED_EXACTLY" = true
+          sha256sum -c "$RUNNER_TEMP/freshness/receipt.sha256"
+          bash "$RUNNER_TEMP/measure-freshness" edited
+          evidence="$RUNNER_TEMP/freshness"
+          cmp "$evidence/cold/environment.txt" "$evidence/edited/environment.txt"
+          jq -e -s 'length == 2 and all(.[]; .status == "passed")
+            and .[0].identity.source != .[1].identity.source
+            and .[0].identity.compiler == .[1].identity.compiler
+            and .[0].identity.manifest == .[1].identity.manifest
+            and .[0].cells == .[1].cells
+            and (.[1].cells["x86_64-v4"] | length) == 114' \
+            "$evidence/cold/report.json" "$evidence/edited/report.json"
+          awk '/Dirty purrdf-zstd/ && /checksum/ {source = 1}
+               /Fresh purrdf-hash/ {hash = 1}
+               /Fresh purrdf-lex/ {lex = 1}
+               END {exit !(source && hash && lex)}' "$evidence"/edited/*.stderr.log
+          awk '/^[[:space:]]*Running/ && /--crate-name/ {count++}
+               END {exit count != 0}' "$evidence"/warm/*.stderr.log
+      - name: Retain gate reports and actual Cargo graph logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: simd-compiled-qualification-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/freshness/
+          if-no-files-found: error
+
   simd-asm-projection:
-    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name != 'trial/simd-compiled-cache'
     runs-on: ubuntu-latest
     # Complete cold generation and checked replay of all seven configurations.
     timeout-minutes: 360
