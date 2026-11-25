@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   ready,
-  shaclProductValidateToSarifAsync,
+  shaclEvalNodeExprAsync,
   shaclValidateToSarifWithRecursion,
   shaclValidateChangesToSarifWithRecursion,
   shaclValidateToSarifAsync,
@@ -113,8 +113,8 @@ test("SHACL fixed-point host refusals preserve native cause and unsigned limits"
     /recursionMaxPairs/,
   );
   await assert.rejects(
-    shaclProductValidateToSarifAsync(new Uint8Array(), "", controls("gfp")),
-    /recursion options apply only to SHACL text validation/,
+    shaclEvalNodeExprAsync("", "", undefined, "http://example.org/a", ...Array(7).fill(undefined), controls("gfp")),
+    /recursion options apply only to SHACL text and prepared-product validation/,
   );
   assert.equal(conforms(scope(await shaclValidateChangesToSarifAsync(...change, controls("gfp"))).sarif), true);
 });

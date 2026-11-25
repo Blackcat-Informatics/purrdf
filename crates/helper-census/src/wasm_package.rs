@@ -95,6 +95,10 @@ const CASES: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "shacl-product-recursion.test.mjs",
+        &["prepared SHACL fixed-point requests cross sync and async Wasm routes"],
+    ),
+    (
         "rule-coordinates.test.mjs",
         &[
             "rule coordinates cross synchronous async and low-level positional routes",
