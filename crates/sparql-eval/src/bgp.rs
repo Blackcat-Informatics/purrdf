@@ -43,7 +43,7 @@ use purrdf_xsd::ieee::{Binary64, Binary64Scope};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::governor::ledger::PlanEstimate;
+use crate::governor::ledger::{BoundSlot, CertifiedBounds, PlanEstimate};
 use crate::plan::PlanShape;
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
@@ -3810,6 +3810,7 @@ pub(crate) struct PlanSurvey {
     /// retain exactness separately from the heuristic join/output estimates.
     pub(crate) statistics: AdmittedRecords<String>,
     pub(crate) record_statistics: bool,
+    pub(crate) certificates: Option<CertifiedBounds>,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
     pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
@@ -3839,6 +3840,7 @@ impl PlanSurvey {
             orders: AdmittedRecords::new(workspace),
             statistics: AdmittedRecords::new(workspace),
             record_statistics: false,
+            certificates: None,
             estimates,
             shape: shape.clone(),
             workspace: workspace.clone(),
@@ -3865,6 +3867,73 @@ impl PlanSurvey {
         self.shape
             .node_of(node)
             .and_then(|id| self.estimates[id.index()].as_ref())
+    }
+
+    pub(crate) fn certify_admitted(&mut self) -> Result<(), EvalError> {
+        let mut bounds = AdmittedVec::with_capacity(self.shape.len(), &self.workspace)?;
+        for _ in 0..self.shape.len() {
+            bounds.push_reserved(BoundSlot {
+                input: Some(1),
+                output: None,
+                suppressed: false,
+            });
+        }
+        self.certificates = Some(CertifiedBounds(bounds));
+        Ok(())
+    }
+
+    fn input_bound(&self, pattern: &GraphPattern) -> Option<u64> {
+        let node = self.shape.node_of(pattern)?;
+        self.certificates.as_ref()?.0[node.index()].input
+    }
+
+    fn output_bound(&self, pattern: &GraphPattern) -> Option<u64> {
+        self.certificates
+            .as_ref()?
+            .output(self.shape.node_of(pattern)?.index())
+    }
+
+    fn record_input_bound(&mut self, pattern: &GraphPattern, bound: Option<u64>) {
+        if let Some(bounds) = &mut self.certificates {
+            let node = self.shape.node_of(pattern).expect("surveyed node");
+            bounds.0.as_mut_slice()[node.index()].input = bound;
+        }
+    }
+
+    fn record_output_bound(&mut self, pattern: &GraphPattern, bound: Option<u64>) {
+        if let Some(bounds) = &mut self.certificates {
+            let node = self.shape.node_of(pattern).expect("surveyed node");
+            let slot = &mut bounds.0.as_mut_slice()[node.index()];
+            if !slot.suppressed {
+                slot.output = bound;
+            }
+        }
+    }
+
+    fn certifies(&self, pattern: &GraphPattern) -> bool {
+        self.certificates.as_ref().is_some_and(|bounds| {
+            let node = self.shape.node_of(pattern).expect("surveyed node");
+            !bounds.0[node.index()].suppressed
+        })
+    }
+
+    /// A survey under a symbolic scope or seed can use a different physical
+    /// schedule from the one an invocation builds. Keep its cost estimates,
+    /// but do not certify those intermediate input bags.
+    fn withhold_subtree_bounds(&mut self, root: &GraphPattern) {
+        let Some(bounds) = &mut self.certificates else {
+            return;
+        };
+        let node = self.shape.node_of(root).expect("surveyed subtree");
+        if bounds.0[node.index()].suppressed {
+            // The first mark covered the complete contiguous subtree.
+            return;
+        }
+        let range = node.index()..self.shape.subtree_end(node).index();
+        for slot in &mut bounds.0.as_mut_slice()[range] {
+            slot.output = None;
+            slot.suppressed = true;
+        }
     }
 
     /// The largest predicted intermediate bag anywhere in the plan, in cells, together
@@ -4000,10 +4069,14 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             } => {
                 if !PositivePlan::pure_eligible_admitted(right, &workspace)? {
                     drop(seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)));
+                    if optional {
+                        survey.withhold_subtree_bounds(right);
+                    }
                     steps.push(Step::Visit(right, graph))?;
                     continue;
                 }
                 let driving_rows = predicted_rows(left, survey).unwrap_or(1);
+                let driving_bound = survey.output_bound(left);
                 let mut seed =
                     match seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)) {
                         Some(seed) => seed,
@@ -4027,6 +4100,8 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     None,
                     account,
                 )? {
+                    survey
+                        .record_input_bound(right, if optional { Some(1) } else { driving_bound });
                     positive.survey_seeded_admitted(
                         dataset,
                         active_dataset,
@@ -4039,6 +4114,11 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         .estimate_of(right)
                         .expect("the seeded root was surveyed")
                         .clone();
+                    let mut upper_bound = survey.output_bound(right);
+                    // Real seeds may bind more columns than their forecast.
+                    // The right's logical output still bounds the enclosing
+                    // join, but no surveyed intermediate bag is authoritative.
+                    survey.withhold_subtree_bounds(right);
                     let schema = seed
                         .schema
                         .union_admitted(positive.root_schema(), &workspace)?;
@@ -4046,9 +4126,14 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     if optional {
                         estimate.rows = driving_rows.saturating_mul(estimate.rows.max(1));
                         estimate.peak_rows = estimate.peak_rows.max(estimate.rows);
+                        upper_bound = CertifiedBounds::product(
+                            driving_bound,
+                            upper_bound.map(|bound| bound.max(1)),
+                        );
                     }
                     let rows = estimate.rows;
                     survey.record(node, estimate);
+                    survey.record_output_bound(node, upper_bound);
                     if !optional {
                         seed.bound = seed.bound.union_admitted(
                             &crate::property_fn_plan::collect_certainly_bound_admitted(
@@ -4067,6 +4152,9 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         &workspace,
                     )?;
                 } else {
+                    if optional {
+                        survey.withhold_subtree_bounds(right);
+                    }
                     steps.push(Step::Visit(right, graph))?;
                 }
                 continue;
@@ -4132,11 +4220,13 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         left,
                     })?;
                 } else {
+                    survey.withhold_subtree_bounds(right);
                     steps.push(Step::Visit(right, active_graph))?;
                 }
                 steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Apply { left, right, .. } => {
+                survey.withhold_subtree_bounds(right);
                 steps.push(Step::Visit(right, active_graph))?;
                 steps.push(Step::Visit(left, active_graph))?;
             }
@@ -4174,10 +4264,18 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph)))?,
                         // An empty scope: the block yields no row and its inner pattern
                         // is never evaluated, so the block's estimate is zero.
-                        None => survey.record(pattern, EMPTY_SCOPE),
+                        None => {
+                            survey.record(pattern, EMPTY_SCOPE);
+                            survey.record_output_bound(pattern, Some(0));
+                        }
                     }
                 }
-                NamedNodePattern::Variable(_) => steps.push(Step::Visit(inner, GraphMatch::Any))?,
+                NamedNodePattern::Variable(_) => {
+                    // One Any forecast is not a physical schedule for each
+                    // named graph. Per-graph selectivity can flip join order.
+                    survey.withhold_subtree_bounds(inner);
+                    steps.push(Step::Visit(inner, GraphMatch::Any))?;
+                }
             },
             // A call with nothing written before it: its driving bag is the identity table,
             // which is one row, so its whole prediction is the relation's declared bound.
@@ -4195,6 +4293,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         variables.len() as u64,
                     ),
                 );
+                survey.record_output_bound(pattern, u64::try_from(bindings.len()).ok());
             }
             GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
         }
@@ -4244,6 +4343,7 @@ fn survey_bgp<D: DatasetView>(
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     if patterns.is_empty() {
+        survey.record_output_bound(node, Some(1));
         return Ok(());
     }
     survey_bgp_seeded(
@@ -4399,19 +4499,33 @@ fn record_bgp_statistics<D: DatasetView>(
     if !survey.record_statistics {
         return Ok(());
     }
-    let Some(statistics) = dataset.statistics() else {
+    let statistics = dataset.statistics();
+    let certify = survey.certifies(node);
+    if statistics.is_none() && !certify {
         return Ok(());
-    };
+    }
     let GraphPattern::Bgp { patterns } = node else {
         unreachable!("statistics evidence receives a BGP node");
     };
     let workspace = account.capability();
     let schema = collect_slots_admitted(patterns, None, &workspace)?;
-    let Some(compiled) = compile_bgp_admitted(dataset, patterns, &schema, account)? else {
-        return Ok(());
-    };
     let node_id = survey.shape.node_of(node).expect("surveyed BGP").index();
     let scope = active_dataset.scope_for(active_graph);
+    let compiled = compile_bgp_admitted(dataset, patterns, &schema, account)?;
+    if certify {
+        let upper_bound = match &compiled {
+            None => Some(0),
+            Some(compiled) => dataset
+                .checked_read(|view| {
+                    certified_bgp_bound(view, compiled, &scope, survey.input_bound(node))
+                })
+                .map_err(|error| account.source_error(error))?,
+        };
+        survey.record_output_bound(node, upper_bound);
+    }
+    let (Some(compiled), Some(statistics)) = (compiled, statistics) else {
+        return Ok(());
+    };
     for (pattern_index, pattern) in compiled.iter().enumerate() {
         let domains = if base_cardinality(dataset, pattern, &scope) == 0 {
             [None; 3]
@@ -4452,6 +4566,59 @@ fn record_bgp_statistics<D: DatasetView>(
         }
     }
     Ok(())
+}
+
+/// For each input row, a BGP can emit at most one row per matching
+/// candidate combination. Constants constrain that combination, while slots
+/// (including repeated or initially bound ones) can only reject candidates.
+/// Summing constituent graph counts also bounds a deduplicated FROM merge.
+/// Ask the statistics provider only. Do not fall back to draining candidate
+/// streams on views without statistics.
+fn certified_bgp_bound<D: DatasetView>(
+    dataset: &D,
+    compiled: &[CompiledPattern<D::Id>],
+    scope: &GraphScope<D::Id>,
+    seed: Option<u64>,
+) -> Option<u64> {
+    if compiled.is_empty() {
+        return seed;
+    }
+    if seed == Some(0) || matches!(scope, GraphScope::Merge(graphs) if graphs.is_empty()) {
+        return Some(0);
+    }
+    let statistics = dataset.statistics()?;
+    compiled.iter().fold(seed, |bound, pattern| {
+        if bound == Some(0) {
+            return bound;
+        }
+        let count = |graph| {
+            let mut probe = purrdf_core::ProbePattern {
+                s: constant_of(&pattern.s),
+                p: constant_of(&pattern.p),
+                o: constant_of(&pattern.o),
+                g: graph,
+            };
+            if let Some(count) = statistics.pattern(probe) {
+                return Some(count.value);
+            }
+            // A provider may not track the predicate/object pair. Loosening
+            // the restriction preserves the guarantee of any returned count.
+            if probe.o.take().is_some()
+                && let Some(count) = statistics.pattern(probe)
+            {
+                return Some(count.value);
+            }
+            probe.p.take()?;
+            statistics.pattern(probe).map(|count| count.value)
+        };
+        let candidates = match scope {
+            GraphScope::One(graph) => count(*graph),
+            GraphScope::Merge(graphs) => graphs.iter().try_fold(0_u64, |total, &graph| {
+                total.checked_add(count(GraphMatch::Named(graph))?)
+            }),
+        };
+        CertifiedBounds::product(bound, candidates)
+    })
 }
 
 /// Record a BGP's forecast under its selected positive driver's bindings.

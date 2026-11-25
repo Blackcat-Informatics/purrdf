@@ -31,6 +31,7 @@ use purrdf_sparql_eval::{
     NodeCharges, PartialAnswers, QueryExplanation, QueryGovernors, QueryOptions, STOP_POLL_FUEL,
     StopSignal, WallDeadline, resolve_precedence,
 };
+use purrdf_testkit::prop::prelude::*;
 
 /// The number of `ex:p` edges in the fixture dataset.
 const EDGES: usize = 8;
@@ -73,6 +74,156 @@ fn request(query: &str) -> SparqlRequest<'_> {
         base_iri: None,
         substitutions: &[],
     }
+}
+
+prop_test! {
+    #![prop_config(Config::with_cases(64))]
+    #[test]
+    fn certified_bgp_bound_covers_candidate_joins(
+        left in any::<u16>(), right in any::<u16>(), shape in 0_u8..6
+    ) {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let g = builder.intern_iri("http://example.org/g").unwrap();
+        let h = builder.intern_iri("http://example.org/h").unwrap();
+        let terms = [0, 1, 2, 3].map(|i| {
+            builder.intern_iri(&format!("http://example.org/n{i}")).unwrap()
+        });
+        for (predicate, mask) in [(p, left), (q, right)] {
+            for index in 0..16 {
+                if mask & (1 << index) == 0 {
+                    continue;
+                }
+                let (s, o) = (terms[index / 4], terms[index % 4]);
+                builder.push_quad(s, predicate, o, None).unwrap();
+                builder.push_quad(s, predicate, o, Some(g)).unwrap();
+                if index % 2 == 0 {
+                    builder.push_quad(s, predicate, o, Some(h)).unwrap();
+                }
+            }
+        }
+        let dataset = builder.freeze().unwrap();
+        let query = match shape {
+            0 => "SELECT * WHERE { ?a ex:p ?b . ?b ex:q ?c }",
+            1 => "SELECT * WHERE { ?a ex:p ?b . ?c ex:q ?d }",
+            2 => "SELECT * FROM ex:g FROM ex:h WHERE { ?a ex:p ?a . ?a ex:q ?c }",
+            3 => "SELECT * WHERE { GRAPH ex:g { ?a ex:p ex:n0 . ?a ex:q ?c } }",
+            4 => "SELECT * WHERE { ?a ex:p ?b . { ?x ex:q ?y } UNION { ?y ex:p ?x } }",
+            _ => "SELECT * WHERE { ?a ex:p ?b . { ?b ex:q ?y } UNION { ?y ex:p ?b } }",
+        };
+        let query = format!("PREFIX ex: <http://example.org/> {query}");
+        let explanation = NativeSparqlEngine::new()
+            .explain_query_with_bounds(&dataset, &query, None).unwrap();
+        let mut certified = 0;
+        for node in explanation.explanation().ledger() {
+            if node.estimate.is_some() {
+                certified += 1;
+                let bound = explanation.output_upper_bound(node.ordinal);
+                prop_assert!(bound.is_some_and(|bound| node.rows <= bound),
+                    "node {:?} produced {} rows with bound {:?}", node.label,
+                    node.rows, bound);
+            }
+        }
+        prop_assert!(certified > 0);
+    }
+}
+
+#[test]
+fn explanation_withholds_bounds_when_runtime_reorders_the_surveyed_scope() {
+    let mut builder = RdfDatasetBuilder::new();
+    let mut iri = |name: &str| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    };
+    let [s, x, p, q, t, g, h, seed, opt] =
+        ["s", "x", "p", "q", "t", "g", "h", "seed", "opt"].map(&mut iri);
+    let values: Vec<_> = (0..10).map(|i| iri(&format!("v{i}"))).collect();
+    builder.push_quad(s, seed, values[0], None).unwrap();
+    builder.push_quad(s, opt, x, None).unwrap();
+    for (index, value) in values.into_iter().enumerate() {
+        builder.push_quad(s, q, value, Some(h)).unwrap();
+        if index < 4 {
+            builder.push_quad(s, p, value, Some(g)).unwrap();
+            builder.push_quad(s, p, value, None).unwrap();
+        }
+        if index < 3 {
+            builder.push_quad(s, q, value, Some(g)).unwrap();
+        }
+        if index < 2 {
+            builder.push_quad(x, q, value, None).unwrap();
+            builder.push_quad(s, t, value, None).unwrap();
+        }
+    }
+    let dataset = builder.freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    for (body, expanded_rows) in [
+        (
+            "GRAPH ?g { ?s ex:p ?a . { ?s ex:q ?b } UNION { ?s ex:r ?b } }",
+            12,
+        ),
+        (
+            concat!(
+                "{ ?s ex:seed ?z OPTIONAL { ?s ex:opt ?x } } ",
+                "{ ?s ex:p ?a . { ?x ex:q ?b } UNION { ?x ex:r ?b } }",
+            ),
+            8,
+        ),
+        (
+            concat!(
+                "{ ?s ex:seed ?z OPTIONAL { ?s ex:opt ?x } } OPTIONAL ",
+                "{ ?s ex:p ?a . { ?x ex:q ?b } UNION { ?x ex:r ?b } }",
+            ),
+            8,
+        ),
+        (
+            concat!(
+                "VALUES ?pred { ex:p } LATERAL ",
+                "{ ?s ?pred ?a . { ?s ex:t ?b } UNION { ?s ex:r ?b } }",
+            ),
+            8,
+        ),
+    ] {
+        let query = format!("PREFIX ex: <http://example.org/> SELECT * WHERE {{ {body} }}");
+        let explanation = engine
+            .explain_query_with_bounds(&dataset, &query, None)
+            .unwrap_or_else(|error| panic!("{body}: {error}"));
+        let node = explanation
+            .explanation()
+            .ledger()
+            .iter()
+            .find(|node| node.label == "Bgp" && node.rows == expanded_rows)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a reordered BGP for {body}\n{}",
+                    explanation.render()
+                )
+            });
+        assert_eq!(explanation.output_upper_bound(node.ordinal), None, "{body}");
+        assert!(explanation.render().contains("output-upper-bound=unknown"));
+    }
+}
+
+#[test]
+fn an_independent_bgp_does_not_inherit_an_empty_driving_bound() {
+    let query = "PREFIX ex: <http://example.org/> SELECT * WHERE {
+        GRAPH ex:missing { ?a ex:p ?b } . ?s ex:p ?o
+    }";
+    let explained = NativeSparqlEngine::new()
+        .explain_query_with_bounds(&fixture(), query, None)
+        .unwrap();
+    let ledger = explained.explanation().ledger();
+    let graph = ledger.iter().find(|node| node.label == "Graph").unwrap();
+    assert_eq!(explained.output_upper_bound(graph.ordinal), Some(0));
+    let right = ledger
+        .iter()
+        .find(|node| node.label == "Bgp" && node.rows == EDGES as u64)
+        .expect("the independently evaluated right side emits its own rows");
+    assert_eq!(
+        explained.output_upper_bound(right.ordinal),
+        Some(right.rows)
+    );
 }
 
 fn one_remote_binding(_: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
@@ -1289,20 +1440,24 @@ fn wide_fixture(edges: usize) -> Arc<RdfDataset> {
 fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
     let engine = NativeSparqlEngine::new();
     for (query, matches) in STATEMENT_RANGE_QUERIES {
-        let measured = engine.explain_query(dataset, query, None).unwrap();
-        assert_eq!(candidate_quads(&measured), matches);
+        let certified = engine
+            .explain_query_with_bounds(dataset, query, None)
+            .unwrap();
+        let measured = certified.explanation();
+        assert_eq!(candidate_quads(measured), matches);
         assert_eq!(
             measured.statement_indexes(),
             purrdf_core::StatementIndexSupport::INDEXED
         );
         assert!(measured.render().contains("statement-indexes reifier-target=range reifier-components=range annotation-values=range"));
-        assert!(
-            measured
-                .ledger()
-                .iter()
-                .filter_map(|node| node.estimate.as_ref())
-                .any(|estimate| estimate.rows == matches)
-        );
+        assert!(measured.ledger().iter().any(|node| {
+            node.estimate
+                .as_ref()
+                .is_some_and(|estimate| estimate.rows == matches)
+                && certified
+                    .output_upper_bound(node.ordinal)
+                    .is_some_and(|bound| matches <= bound)
+        }));
         let bounded = engine
             .query_governed(
                 dataset,

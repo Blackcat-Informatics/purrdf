@@ -658,6 +658,10 @@ impl QueryExplanation {
     /// and no iteration over a hash map.
     #[must_use]
     pub fn render(&self) -> String {
+        self.render_with_bounds(None)
+    }
+
+    fn render_with_bounds(&self, bounds: Option<&CertifiedBounds>) -> String {
         use std::fmt::Write as _;
 
         let mut out = String::new();
@@ -690,6 +694,13 @@ impl QueryExplanation {
                     node.rows,
                     estimate.peak_cells(),
                 );
+            }
+            if let Some(bounds) = bounds {
+                if let Some(bound) = bounds.output(node.ordinal) {
+                    let _ = write!(out, " output-upper-bound={bound}");
+                } else if node.estimate.is_some() {
+                    out.push_str(" output-upper-bound=unknown");
+                }
             }
             out.push('\n');
             for point in ChargePoint::ALL {
@@ -780,6 +791,71 @@ impl QueryExplanation {
             );
         }
         out
+    }
+}
+
+/// Plan explanation with independently certified output bounds where available.
+///
+/// The ordinary explanation's ledger and planner estimates remain unchanged.
+/// These bounds are opt-in and are not used for intermediate-cell admission.
+#[derive(Debug)]
+pub struct CertifiedQueryExplanation {
+    explanation: QueryExplanation,
+    bounds: CertifiedBounds,
+}
+
+impl CertifiedQueryExplanation {
+    pub(crate) const fn new(explanation: QueryExplanation, bounds: CertifiedBounds) -> Self {
+        Self {
+            explanation,
+            bounds,
+        }
+    }
+
+    /// The ordinary measured explanation.
+    #[must_use]
+    pub const fn explanation(&self) -> &QueryExplanation {
+        &self.explanation
+    }
+
+    /// Certified maximum output rows for the surveyed input bag at this ordinal.
+    ///
+    /// This is not a total across repeated invocations. An unavailable certificate,
+    /// an overflow, or an out-of-range ordinal returns None.
+    #[must_use]
+    pub fn output_upper_bound(&self, ordinal: usize) -> Option<u64> {
+        self.bounds.output(ordinal)
+    }
+
+    /// Render the explanation with bounds alongside the predicted rows.
+    #[must_use]
+    pub fn render(&self) -> String {
+        self.explanation.render_with_bounds(Some(&self.bounds))
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BoundSlot {
+    pub(crate) input: Option<u64>,
+    pub(crate) output: Option<u64>,
+    pub(crate) suppressed: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct CertifiedBounds(pub(crate) AdmittedVec<BoundSlot>);
+
+impl CertifiedBounds {
+    pub(crate) fn output(&self, ordinal: usize) -> Option<u64> {
+        self.0.get(ordinal).and_then(|slot| slot.output)
+    }
+
+    /// A proved empty side is absorbing even if the other side is unknown.
+    pub(crate) const fn product(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+        match (left, right) {
+            (Some(0), _) | (_, Some(0)) => Some(0),
+            (Some(left), Some(right)) => left.checked_mul(right),
+            _ => None,
+        }
     }
 }
 

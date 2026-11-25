@@ -245,10 +245,11 @@ pub use governed::{
     PartialSparqlResult, RelationIdentity,
 };
 pub use governor::{
-    CHARGE_SCHEDULE, CancellationFlag, ChargePoint, GOVERNOR_CORPUS_DIGEST,
-    GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION, GovernorState,
-    HostStopWatch, ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate, ProfileIdentity,
-    QueryExplanation, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline, resolve_precedence,
+    CHARGE_SCHEDULE, CancellationFlag, CertifiedQueryExplanation, ChargePoint,
+    GOVERNOR_CORPUS_DIGEST, GOVERNOR_PROFILE_DIGEST, GOVERNOR_PROFILE_ID, GOVERNOR_PROFILE_VERSION,
+    GovernorState, HostStopWatch, ItemCharge, NodeCharges, NonMonotoneBarrier, PlanEstimate,
+    ProfileIdentity, QueryExplanation, QueryGovernors, STOP_POLL_FUEL, StopSignal, WallDeadline,
+    resolve_precedence,
 };
 // The interned query egress: a result visited inside its own evaluation, so a
 // caller that reads two columns of a wide row does not pay for the other twenty.

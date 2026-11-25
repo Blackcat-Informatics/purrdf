@@ -85,7 +85,9 @@ pub(crate) mod ledger;
 pub(crate) mod lift;
 pub(crate) mod soundness;
 
-pub use ledger::{NodeCharges, PlanEstimate, ProfileIdentity, QueryExplanation};
+pub use ledger::{
+    CertifiedQueryExplanation, NodeCharges, PlanEstimate, ProfileIdentity, QueryExplanation,
+};
 pub use lift::NonMonotoneBarrier;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
