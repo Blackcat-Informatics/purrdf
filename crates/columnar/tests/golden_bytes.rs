@@ -8,7 +8,7 @@
 //! the file bytes while preserving the RDF model and schema version.
 
 #[cfg(not(target_arch = "wasm32"))]
-use purrdf_columnar::read;
+use purrdf_columnar::{BloomOptions, WriteOptions, read, write_with_options};
 use purrdf_columnar::{Compression, Table, write};
 use purrdf_core::{
     BlankScope, ContentDigest, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral,
@@ -205,8 +205,31 @@ fn seeded_files_are_the_pinned_bytes() {
     assert_eq!(observed, pinned);
 }
 
+/// Pin the split-block Bloom filter's hash, seed, and on-disk layout.
+#[cfg(not(target_arch = "wasm32"))]
+fn bloom_enabled_terms_are_the_pinned_bytes() {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("https://example.org/subject").unwrap();
+    let predicate = builder.intern_iri("https://example.org/label").unwrap();
+    for label in ["falcon", "otter", "雪"] {
+        let object = builder.intern_literal(RdfLiteral::simple(label)).unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    let dataset = builder.freeze().expect("the fixture is valid RDF");
+    let options = WriteOptions {
+        bloom: Some(BloomOptions::default()),
+        ..WriteOptions::default()
+    };
+    let written = write_with_options(&*dataset, &ContentStore::new(), &options)
+        .expect("the Bloom-enabled fixture encodes");
+    let digest = ContentDigest::of(written.files.get(Table::Terms)).to_hex();
+    purrdf_testkit::assert_golden!("bloom-enabled-terms.parquet.sha256", &format!("{digest}\n"));
+}
+
 purrdf_testkit::harness_main!(
     seeded_files_are_the_pinned_bytes,
+    #[cfg(not(target_arch = "wasm32"))]
+    bloom_enabled_terms_are_the_pinned_bytes,
     arbitrary_backend_union_writes_the_same_archive_and_scoped_rdf,
     arbitrary_backend_union_keeps_live_failures_and_exact_view_limits,
 );
