@@ -977,6 +977,12 @@ fn temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values() {
                 panic!("SELECT solutions");
             };
             assert_eq!(rows.len(), 2);
+            for (row, kind) in rows.rows().iter().zip([1, 3]) {
+                assert_eq!(
+                    rows.value_of(row[0].unwrap()),
+                    purrdf_core::TermValue::integer(kind)
+                );
+            }
             assert!(!rows.rows()[0].evidence().is_undecided());
             assert!(rows.rows()[1].evidence().is_undecided());
         })
@@ -1005,6 +1011,40 @@ fn temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values() {
         PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
         SELECT (<https://example.org/after-period>("2024-12-01T11:23:00Z"^^xsd:dateTime,
           "2024-09-01Z"^^xsd:date, "2024-12-01Z"^^xsd:date) AS ?decision) WHERE {}"#;
+    let wide_seconds = format!("00.{}", "1".repeat(4096));
+    let wide = query.replace("00Z", &format!("{wide_seconds}Z"));
+    let evaluate_with_fuel = |text, limit| {
+        let governor = std::sync::Arc::new(purrdf_sparql_eval::GovernorState::new(
+            &purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_fuel(limit),
+        ));
+        engine
+            .query_governed_interned_in_operation(
+                &dataset,
+                request(text),
+                &options,
+                &governor,
+                |_| (),
+            )
+            .unwrap()
+    };
+    assert!(matches!(
+        evaluate_with_fuel(query, 100_000),
+        purrdf_sparql_eval::InternedGoverned::Complete { .. }
+    ));
+    let purrdf_sparql_eval::InternedGoverned::BudgetExhausted(exhausted) =
+        evaluate_with_fuel(&wide, 100_000)
+    else {
+        panic!("the exact seconds conversion must be charged before it runs");
+    };
+    let conversion = purrdf_xsd::exact::cost::parse(wide_seconds.len() as u64).work();
+    assert!(matches!(
+        exhausted.tripped,
+        purrdf_core::TrippedGovernor::Budget {
+            dimension: purrdf_core::ResourceDimension::Fuel,
+            consumed,
+            ..
+        } if consumed >= conversion
+    ));
     engine
         .query_interned_evidence_view(&dataset, request(query), &options, &source, |outcome| {
             let InternedOutcome::Solutions(rows) = outcome else {

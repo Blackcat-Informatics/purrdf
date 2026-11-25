@@ -175,6 +175,28 @@ impl TemporalOrderPredicate {
         self.left.arity() + self.right.arity()
     }
 
+    /// Calendar parsing constructs an exact seconds coefficient before the
+    /// declared civil precision discards it. Price that conversion separately
+    /// from the preceding lexical scan.
+    pub(crate) fn seconds_parse_work(values: &[&TermValue]) -> u64 {
+        use purrdf_xsd::datatype::{XSD_DATE_TIME, XSD_DATE_TIME_STAMP};
+        values
+            .iter()
+            .filter_map(|value| match value {
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    ..
+                } if matches!(datatype.as_str(), XSD_DATE_TIME | XSD_DATE_TIME_STAMP) => {
+                    purrdf_xsd::temporal::seconds_field_text(lexical_form)
+                }
+                _ => None,
+            })
+            .fold(0_u64, |work, seconds| {
+                work.saturating_add(purrdf_xsd::exact::cost::parse(seconds.len() as u64).work())
+            })
+    }
+
     /// The registry establishes the flattened arity before entering this body.
     pub(crate) fn evaluate(
         self,

@@ -2251,6 +2251,10 @@ pub(crate) fn eval_native_function<D: DatasetView + Sync>(
                     if context.charge_work(work).is_err() {
                         return Ok(None);
                     }
+                    let seconds_work = crate::TemporalOrderPredicate::seconds_parse_work(&values);
+                    if seconds_work != 0 && context.charge_work(seconds_work).is_err() {
+                        return Ok(None);
+                    }
                     let truth = match predicate.evaluate(&values, workspace)? {
                         InstantOrder::Yes => "true",
                         InstantOrder::No => "false",
