@@ -101,7 +101,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	$(MAKE) wasm
 	$(MAKE) wasm-imports
 
-workspace-gate: ## Before a push: every check the hosted `workspace` job runs (fmt, clippy, build, hygiene), without the test suite.
+workspace-gate: ## Run the compiler and hygiene checks behind the hosted `workspace` result, without the test suite.
 	cargo fmt --all --check
 	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
