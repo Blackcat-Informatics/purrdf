@@ -675,6 +675,22 @@ enum PreparedSource<'a> {
 }
 
 impl PreparedSource<'_> {
+    fn run_registry<T>(
+        self,
+        run: impl FnOnce(&PropertyFunctionRegistry<'static>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self {
+            Self::Temporary(input) => {
+                let PreparedRetrieval { data, registry } = input.prepare()?;
+                // The registry owns its producers. Planning and compilation do
+                // not need the temporary dataset once those producers are built.
+                drop(data);
+                run(&registry)
+            }
+            Self::Retained(prepared) => run(&prepared.registry),
+        }
+    }
+
     fn run<T>(
         self,
         run: impl FnOnce(&PreparedRetrieval) -> Result<T, String>,
@@ -1045,9 +1061,8 @@ fn build_profile(
 }
 
 /// Plan the call's request against the prepared producer registry.
-fn run_plan(prepared: &PreparedRetrieval, call: &Call) -> Result<Plan, String> {
-    crate::retrieval::plan(&call.request, &prepared.registry, &call.statistics)
-        .map_err(|e| e.to_string())
+fn run_plan(registry: &PropertyFunctionRegistry<'static>, call: &Call) -> Result<Plan, String> {
+    crate::retrieval::plan(&call.request, registry, &call.statistics).map_err(|e| e.to_string())
 }
 
 /// Plan, then admit and emit the per-stratum SPARQL units.
@@ -1060,13 +1075,13 @@ fn run_plan(prepared: &PreparedRetrieval, call: &Call) -> Result<Plan, String> {
 /// chosen a law passes `None` and is told nothing about resolution, rather than
 /// being handed evidence measured against a law it never named.
 fn run_compile(
-    prepared: &PreparedRetrieval,
+    registry: &PropertyFunctionRegistry<'static>,
     call: &Call,
     profile: Option<&FusionProfile>,
 ) -> Result<(Plan, CompiledRetrieval), String> {
-    let planned = run_plan(prepared, call)?;
+    let planned = run_plan(registry, call)?;
     let environment = AdmissionEnvironment {
-        registry: &prepared.registry,
+        registry,
         statistics: &call.statistics,
         fusion_profile: profile,
     };
@@ -3041,7 +3056,7 @@ fn plan_prepared<'py>(
     // Parsing, index construction and planning run detached (GIL released); the
     // result dict is built after the GIL is reacquired.
     let planned = py
-        .detach(move || source.run(|prepared| run_plan(prepared, &call)))
+        .detach(move || source.run_registry(|registry| run_plan(registry, &call)))
         .map_err(PyValueError::new_err)?;
     plan_dict(py, &planned)
 }
@@ -3308,7 +3323,7 @@ fn compile_prepared<'py>(
                     })
                 })
                 .transpose()?;
-            source.run(|prepared| run_compile(prepared, &call, profile.as_ref()))
+            source.run_registry(|registry| run_compile(registry, &call, profile.as_ref()))
         })
         .map_err(PyValueError::new_err)?;
 

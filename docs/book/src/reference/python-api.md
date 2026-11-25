@@ -803,13 +803,13 @@ independently prepared registries produce distinct IDs. The declared registry
 content fingerprint and fusion law ID remain comparable across instances.
 
 ```python
-from purrdf.retrieval import RetrievalSession
+from purrdf import retrieval
 
 notes = '''
 <https://example.org/a> <https://example.org/note> "the quick brown fox" .
 <https://example.org/b> <https://example.org/note> "a quick red fox" .
 '''
-session = RetrievalSession(
+session = retrieval.RetrievalSession(
     notes,
     text_producers={
         "https://example.org/pf/search": (
@@ -833,8 +833,9 @@ for query in ("quick fox", "red fox"):
 Weights are Python integers in raw fixed-point units. One whole unit is
 `10**scale_digits`. Scores and contributions carry integer `raw` values and
 `scale_digits` rather than floating-point approximations. `k`, `decay`,
-`scale_digits` and `top_k` are explicit. `reciprocal_rank` truncates the reciprocal before
-applying weight; `weighted_reciprocal_rank` rounds the weighted quotient once.
+`scale_digits` and `top_k` are explicit. `reciprocal_rank` truncates the
+reciprocal before applying weight. `weighted_reciprocal_rank` rounds the
+weighted quotient once.
 They are different content-addressed laws.
 
 `top_k` is also a planning input. Over disjoint candidate domains it can narrow
@@ -842,8 +843,8 @@ reads while preserving the answer. A compiled unit's `depth` is the reportable
 row bound; its SPARQL `LIMIT` includes one extra probe row. Do not report that
 probe as a value or read the bound from the text. `declared_rows=None` means
 no row count was declared, not zero. On `compile`, `weights`, `k`, `decay`
-and `scale_digits` are supplied together or omitted together. Without a law, no rank-resolution
-claim is invented.
+and `scale_digits` are supplied together or omitted together. Without a law,
+no rank-resolution claim is invented.
 
 `canonical_bytes` and `plan_id` identify a plan. `certify_plan` checks a received
 document's recorded depth derivations and consulted-statistics projections;
