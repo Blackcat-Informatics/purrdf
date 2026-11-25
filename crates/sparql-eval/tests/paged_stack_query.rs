@@ -739,6 +739,9 @@ fn operational(
 
 #[test]
 fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
     let a = Arc::new(ControlledProvider::new(
         vec![eager([edge("a", "p", iri("b"))], &[])],
         11,
@@ -788,6 +791,20 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
         ),
         (1, 1)
     );
+    let assert_origin_prefix = |stack: &Capture<'_>, count| {
+        assert_eq!(stack.code, "paged-stack-evidence");
+        let origins = stack.records("requested_origins");
+        assert_eq!(origins.len(), count);
+        assert_eq!(origins[0].code, "paged-stack-head-page");
+        for (origin, expected_layer) in origins[1..].iter().zip([1, 0]) {
+            assert_eq!(origin.code, "paged-stack-sealed-page");
+            assert!(
+                matches!(origin.field("layer"), ErrorValue::Unsigned(layer) if layer == expected_layer)
+            );
+            assert!(matches!(origin.field("page"), ErrorValue::Unsigned(0)));
+        }
+    };
+    assert_origin_prefix(&Capture::read(&*receipt), 3);
     let prepared = engine.prepare_query(query, None).unwrap();
     let reread = engine
         .query_prepared_fallible_view(&unbounded, &prepared, &[], &QueryOptions::EMPTY)
@@ -809,19 +826,38 @@ fn aggregate_admission_and_cache_receipts_are_exact_at_the_public_boundary() {
             .evidence,
         *receipt
     );
-    for limits in [
-        PagedQueryLimits::new(0, 0),
-        PagedQueryLimits::new(2, u64::MAX),
-        PagedQueryLimits::new(3, receipt.pages.consumed_bytes - 1),
+    for (limits, requested, admitted_bytes) in [
+        (PagedQueryLimits::new(0, 0), 1, 0),
+        (
+            PagedQueryLimits::new(2, u64::MAX),
+            3,
+            receipt.head_bytes + 17,
+        ),
+        (
+            PagedQueryLimits::new(3, receipt.pages.consumed_bytes - 1),
+            3,
+            receipt.head_bytes + 17,
+        ),
     ] {
         a.reads.store(0, Ordering::Relaxed);
         b.reads.store(0, Ordering::Relaxed);
         let view = snapshot.query_view(limits);
-        let (error, evidence) = operational(
-            engine
-                .query_fallible_view(&view, request(query), &QueryOptions::EMPTY)
-                .expect_err("one refused page prevents publication"),
+        let refusal = engine
+            .query_fallible_view(&view, request(query), &QueryOptions::EMPTY)
+            .expect_err("one refused page prevents publication");
+        let inspected = Capture::read(&refusal);
+        let stack = inspected.child("evidence");
+        assert_origin_prefix(&stack, requested);
+        let pages = stack.child("pages");
+        assert!(
+            matches!(pages.field("consumed_pages"), ErrorValue::Unsigned(value)
+            if value + 1 == requested as u128)
         );
+        assert!(
+            matches!(pages.field("consumed_bytes"), ErrorValue::ByteCount(value)
+            if value == u128::from(admitted_bytes))
+        );
+        let (error, evidence) = operational(refusal);
         assert!(matches!(
             error,
             PagedQueryError::PageBudgetExceeded { .. } | PagedQueryError::ByteBudgetExceeded { .. }
