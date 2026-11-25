@@ -1296,7 +1296,12 @@ fn publish_load_failure(
                 cause,
                 &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
             )
-            .map_err(RdfDiagnostic::from)?
+            .map_err(|error| {
+                execution_abort(
+                    &workspace.storage_error(error, "LOAD diagnostic attachment"),
+                    None,
+                )
+            })?
             .into());
     };
     let target = purrdf_core::SilencedTarget::Load {
