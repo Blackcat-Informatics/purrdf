@@ -1181,7 +1181,7 @@ fn load(
         let cause = MissingLoadResolver {
             source: crate::WorkspaceCapability::resident()
                 .authored_text(source)
-                .map_err(load_retention_failure)?,
+                .map_err(|error| execution_abort(&error, None))?,
         };
         let diagnostic = RdfDiagnostic::error("native-sparql-load-no-resolver", cause.to_string());
         return publish_load_failure(
@@ -1275,10 +1275,6 @@ impl core::fmt::Display for MissingLoadResolver {
 
 impl std::error::Error for MissingLoadResolver {}
 
-fn load_retention_failure(error: crate::EvalError) -> UpdateAbort {
-    UpdateAbort::Failed(crate::engine::EvaluationFailure::from(error).into_diagnostic())
-}
-
 /// Publish the original cause only once the failure or silenced record will be observed.
 fn publish_load_failure(
     silenced: Option<(&GovernorState, purrdf_core::SilencedKind)>,
@@ -1287,12 +1283,13 @@ fn publish_load_failure(
     cause: impl purrdf_hash::error::NativeError + 'static,
 ) -> Result<(), UpdateAbort> {
     let workspace = crate::WorkspaceCapability::resident();
+    // A retention refusal must not attempt to admit a second cause.
     let cause = crate::retained::PreparedDiagnosticCause::new(
         cause,
         crate::workspace::LexicalFrame::new(&workspace),
     )
     .and_then(crate::retained::PreparedDiagnosticCause::publish)
-    .map_err(load_retention_failure)?;
+    .map_err(|error| execution_abort(&error, None))?;
     let Some((state, kind)) = silenced else {
         return Err(diagnostic
             .with_native_cause(
@@ -1304,7 +1301,7 @@ fn publish_load_failure(
     };
     let target = purrdf_core::SilencedTarget::Load {
         iri: crate::workspace::string(source, "SILENT load source")
-            .map_err(load_retention_failure)?,
+            .map_err(|error| execution_abort(&error, None))?,
     };
     state
         .record_silenced_admitted(
@@ -1312,7 +1309,7 @@ fn publish_load_failure(
                 .with_native_cause(cause),
             &workspace,
         )
-        .map_err(load_retention_failure)
+        .map_err(|error| execution_abort(&error, None))
 }
 
 // ── CLEAR / DROP ─────────────────────────────────────────────────────────────
