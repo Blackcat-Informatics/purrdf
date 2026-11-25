@@ -3364,12 +3364,57 @@ class _RetrievalOrdering(TypedDict):
     leading: bool
     keys: dict[str, tuple[bytes, bytes]]
 
+class _RetrievalSession:
+    def __init__(
+        self,
+        data: str,
+        *,
+        text_producers: dict[str, _TextProducerSpec],
+        hnsw_producers: dict[str, _HnswProducerSpec] | None = None,
+        knn_producers: dict[str, _KnnProducerSpec] | None = None,
+        data_format: str = "turtle",
+        base: str | None = None,
+    ) -> None: ...
+    def plan(
+        self,
+        request: list[tuple[builtins.object, ...]],
+        *,
+        statistics: dict[str, builtins.object],
+        top_k: int,
+        caller_ordered: bool = False,
+    ) -> dict[str, builtins.object]: ...
+    def compile(
+        self,
+        request: list[tuple[builtins.object, ...]],
+        *,
+        statistics: dict[str, builtins.object],
+        top_k: int,
+        weights: dict[str, int] | None = None,
+        k: int | None = None,
+        decay: str | None = None,
+        scale_digits: int | None = None,
+        ordering: _RetrievalOrdering | None = None,
+    ) -> dict[str, builtins.object]: ...
+    def search(
+        self,
+        request: list[tuple[builtins.object, ...]],
+        *,
+        weights: dict[str, int],
+        statistics: dict[str, builtins.object],
+        k: int,
+        decay: str,
+        scale_digits: int,
+        top_k: int,
+        ordering: _RetrievalOrdering | None = None,
+    ) -> dict[str, builtins.object]: ...
+
 class retrieval:
     # Fusion precision is explicit on each law. Scores retain raw units and scale.
     # Spelled with an explicit `TypeAlias`, exactly as `purrdf.shapes` spells its
     # own re-exports and for the same reason: this is a type a caller ANNOTATES
     # with, and a plain `X = X` reads to a type checker as a variable.
     PlanDocumentError: TypeAlias = _PlanDocumentError
+    RetrievalSession: TypeAlias = _RetrievalSession
 
     # Every entry point that takes a smoothing constant `k` also takes the
     # `decay` rule it belongs to, as one of two spellings, with no default:

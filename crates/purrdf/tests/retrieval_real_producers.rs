@@ -1961,6 +1961,48 @@ fn search_equals_the_hand_composed_pipeline_over_the_real_producers() {
     );
 }
 
+fn shared_real_producers_keep_concurrent_request_state_separate() {
+    let registry = registry();
+    let data = dataset();
+    let profile = profile();
+    let search_request = |request: &RetrievalRequest| {
+        let statistics = NoStatistics;
+        let env = AdmissionEnvironment {
+            registry: &registry,
+            statistics: &statistics,
+            fusion_profile: None,
+        };
+        block_on(search(
+            request,
+            &registry,
+            &statistics,
+            &*data,
+            &env,
+            &profile,
+        ))
+        .unwrap()
+    };
+    let wide = request();
+    let mut narrow = request();
+    narrow.bound = purrdf_retrieval::ReadBound::Bounded(TopK::new(1));
+    let expected = [search_request(&wide), search_request(&narrow)];
+    assert_ne!(expected[0].rows.len(), expected[1].rows.len());
+
+    let start = std::sync::Barrier::new(2);
+    let actual = std::thread::scope(|scope| {
+        let wide = scope.spawn(|| {
+            start.wait();
+            search_request(&wide)
+        });
+        let narrow = scope.spawn(|| {
+            start.wait();
+            search_request(&narrow)
+        });
+        [wide.join().unwrap(), narrow.join().unwrap()]
+    });
+    assert_eq!(actual, expected);
+}
+
 // ---------------------------------------------------------------------------
 // 4. The evidence: what the two real indexes attested
 // ---------------------------------------------------------------------------
@@ -3786,6 +3828,7 @@ purrdf_testkit::harness_main!(
     each_real_producer_is_compiled_with_the_facet_it_declared,
     the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_stopped_it,
     search_equals_the_hand_composed_pipeline_over_the_real_producers,
+    shared_real_producers_keep_concurrent_request_state_separate,
     both_real_producers_attest_the_generation_of_the_index_that_answered,
     two_runs_over_the_same_index_state_carry_one_evidence_id,
     the_text_producer_names_each_document_once_over_a_corpus_that_tempts_a_repeat,
