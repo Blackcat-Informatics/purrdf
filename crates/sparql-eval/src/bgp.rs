@@ -43,7 +43,7 @@ use purrdf_xsd::ieee::{Binary64, Binary64Scope};
 use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::governor::ledger::PlanEstimate;
+use crate::governor::ledger::{BoundSlot, CertifiedBounds, PlanEstimate};
 use crate::plan::PlanShape;
 use crate::scratch::SolutionTerm;
 use crate::solution::{RetainedRow, RowsBuilder, Solution, SolutionSeq, VarSchema};
@@ -104,7 +104,6 @@ pub(crate) struct SeedEstimate {
     pub(crate) schema: VarSchema,
     pub(crate) bound: VarSchema,
     pub(crate) rows: u64,
-    pub(crate) upper_bound: Option<u64>,
 }
 
 impl SeedEstimate {
@@ -113,8 +112,6 @@ impl SeedEstimate {
         input: &SolutionSeq<I>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
-        let rows =
-            u64::try_from(input.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
         Ok(Self {
             schema: (*input.schema).clone(),
             bound: VarSchema::from_vars_admitted(
@@ -130,8 +127,7 @@ impl SeedEstimate {
                     .map(|(_, variable)| variable.clone()),
                 workspace,
             )?,
-            rows,
-            upper_bound: Some(rows),
+            rows: u64::try_from(input.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
         })
     }
 }
@@ -142,7 +138,6 @@ impl Default for SeedEstimate {
             schema: VarSchema::default(),
             bound: VarSchema::default(),
             rows: 1,
-            upper_bound: Some(1),
         }
     }
 }
@@ -3815,6 +3810,8 @@ pub(crate) struct PlanSurvey {
     /// retain exactness separately from the heuristic join/output estimates.
     pub(crate) statistics: AdmittedRecords<String>,
     pub(crate) record_statistics: bool,
+    pub(crate) certificates: Option<CertifiedBounds>,
+    certify_schedule: bool,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
     pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
@@ -3844,6 +3841,8 @@ impl PlanSurvey {
             orders: AdmittedRecords::new(workspace),
             statistics: AdmittedRecords::new(workspace),
             record_statistics: false,
+            certificates: None,
+            certify_schedule: true,
             estimates,
             shape: shape.clone(),
             workspace: workspace.clone(),
@@ -3870,6 +3869,59 @@ impl PlanSurvey {
         self.shape
             .node_of(node)
             .and_then(|id| self.estimates[id.index()].as_ref())
+    }
+
+    pub(crate) fn certify_admitted(&mut self) -> Result<(), EvalError> {
+        let mut bounds = AdmittedVec::with_capacity(self.shape.len(), &self.workspace)?;
+        for _ in 0..self.shape.len() {
+            bounds.push_reserved(BoundSlot {
+                input: Some(1),
+                output: None,
+            });
+        }
+        self.certificates = Some(CertifiedBounds(bounds));
+        Ok(())
+    }
+
+    fn input_bound(&self, pattern: &GraphPattern) -> Option<u64> {
+        let node = self.shape.node_of(pattern)?;
+        self.certificates.as_ref()?.0[node.index()].input
+    }
+
+    fn output_bound(&self, pattern: &GraphPattern) -> Option<u64> {
+        self.certificates
+            .as_ref()?
+            .output(self.shape.node_of(pattern)?.index())
+    }
+
+    fn record_input_bound(&mut self, pattern: &GraphPattern, bound: Option<u64>) {
+        if let Some(bounds) = &mut self.certificates {
+            let node = self.shape.node_of(pattern).expect("surveyed node");
+            bounds.0.as_mut_slice()[node.index()].input = bound;
+        }
+    }
+
+    fn record_output_bound(&mut self, pattern: &GraphPattern, bound: Option<u64>) {
+        if self.certify_schedule
+            && let Some(bounds) = &mut self.certificates
+        {
+            let node = self.shape.node_of(pattern).expect("surveyed node");
+            bounds.0.as_mut_slice()[node.index()].output = bound;
+        }
+    }
+
+    /// A survey under a symbolic scope or seed can use a different physical
+    /// schedule from the one an invocation builds. Keep its cost estimates,
+    /// but do not certify those intermediate input bags.
+    fn withhold_subtree_bounds(&mut self, root: &GraphPattern) {
+        let Some(bounds) = &mut self.certificates else {
+            return;
+        };
+        let node = self.shape.node_of(root).expect("surveyed subtree");
+        let range = node.index()..self.shape.subtree_end(node).index();
+        for slot in &mut bounds.0.as_mut_slice()[range] {
+            slot.output = None;
+        }
     }
 
     /// The largest predicted intermediate bag anywhere in the plan, in cells, together
@@ -3972,7 +4024,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
     /// One pending step of the walk.
     enum Step<'a, I> {
         /// Survey the subtree rooted at the node, evaluated against the graph.
-        Visit(&'a GraphPattern, GraphMatch<I>),
+        Visit(&'a GraphPattern, GraphMatch<I>, bool),
         /// Price the call `node` is, driven once per row of `left`'s bag: taken once
         /// `left`'s whole subtree has been surveyed, so its prediction is on record.
         Call {
@@ -3986,32 +4038,33 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             right: &'a GraphPattern,
             graph: GraphMatch<I>,
             optional: bool,
+            certify_schedule: bool,
         },
     }
 
     let mut steps = AdmittedVec::new(&workspace);
-    steps.push(Step::Visit(pattern, active_graph))?;
+    steps.push(Step::Visit(pattern, active_graph, true))?;
     // Retain only completed drivers needed by a parent join. This avoids
     // re-censusing every prefix of a deep ordinary join chain.
     let mut seeds = crate::workspace::AdmittedMap::<usize, SeedEstimate>::default();
     while let Some(step) = steps.pop() {
-        let (pattern, active_graph) = match step {
+        let (pattern, active_graph, certify_schedule) = match step {
             Step::BoundRight {
                 node,
                 left,
                 right,
                 graph,
                 optional,
+                certify_schedule,
             } => {
+                survey.certify_schedule = certify_schedule;
                 if !PositivePlan::pure_eligible_admitted(right, &workspace)? {
                     drop(seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)));
-                    steps.push(Step::Visit(right, graph))?;
+                    steps.push(Step::Visit(right, graph, certify_schedule && !optional))?;
                     continue;
                 }
                 let driving_rows = predicted_rows(left, survey).unwrap_or(1);
-                let driving_bound = survey
-                    .estimate_of(left)
-                    .and_then(|estimate| estimate.upper_bound);
+                let driving_bound = survey.output_bound(left);
                 let mut seed =
                     match seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)) {
                         Some(seed) => seed,
@@ -4023,11 +4076,10 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                                 left, &workspace,
                             )?,
                             rows: driving_rows,
-                            upper_bound: driving_bound,
                         },
                     };
                 seed.rows = if optional { 1 } else { driving_rows };
-                seed.upper_bound = if optional { Some(1) } else { driving_bound };
+                survey.record_input_bound(right, if optional { Some(1) } else { driving_bound });
                 if let Some(positive) = PositivePlan::build_seeded_admitted(
                     dataset,
                     active_dataset,
@@ -4049,6 +4101,13 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         .estimate_of(right)
                         .expect("the seeded root was surveyed")
                         .clone();
+                    let mut upper_bound = survey.output_bound(right);
+                    // Real seeds may bind more columns than their forecast.
+                    // The right's logical output still bounds the enclosing
+                    // join, but no surveyed intermediate bag is authoritative.
+                    if certify_schedule {
+                        survey.withhold_subtree_bounds(right);
+                    }
                     let schema = seed
                         .schema
                         .union_admitted(positive.root_schema(), &workspace)?;
@@ -4056,14 +4115,14 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     if optional {
                         estimate.rows = driving_rows.saturating_mul(estimate.rows.max(1));
                         estimate.peak_rows = estimate.peak_rows.max(estimate.rows);
-                        estimate.upper_bound = PlanEstimate::product(
+                        upper_bound = CertifiedBounds::product(
                             driving_bound,
-                            estimate.upper_bound.map(|bound| bound.max(1)),
+                            upper_bound.map(|bound| bound.max(1)),
                         );
                     }
                     let rows = estimate.rows;
-                    let upper_bound = estimate.upper_bound;
                     survey.record(node, estimate);
+                    survey.record_output_bound(node, upper_bound);
                     if !optional {
                         seed.bound = seed.bound.union_admitted(
                             &crate::property_fn_plan::collect_certainly_bound_admitted(
@@ -4078,12 +4137,11 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                             schema,
                             bound: seed.bound,
                             rows,
-                            upper_bound,
                         },
                         &workspace,
                     )?;
                 } else {
-                    steps.push(Step::Visit(right, graph))?;
+                    steps.push(Step::Visit(right, graph, certify_schedule && !optional))?;
                 }
                 continue;
             }
@@ -4100,8 +4158,11 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 )?;
                 continue;
             }
-            Step::Visit(pattern, active_graph) => (pattern, active_graph),
+            Step::Visit(pattern, active_graph, certify_schedule) => {
+                (pattern, active_graph, certify_schedule)
+            }
         };
+        survey.certify_schedule = certify_schedule;
         if survey
             .shape
             .node_of(pattern)
@@ -4136,9 +4197,9 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 if let GraphPattern::PropertyFunction(call) = &**right {
                     steps.push(Step::Call { node: right, call, left })?;
                 } else {
-                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false })?;
+                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false, certify_schedule })?;
                 }
-                steps.push(Step::Visit(left, active_graph))?;
+                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
             }
             GraphPattern::Lateral { left, right } => {
                 if let GraphPattern::PropertyFunction(call) = &**right {
@@ -4148,24 +4209,24 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         left,
                     })?;
                 } else {
-                    steps.push(Step::Visit(right, active_graph))?;
+                    steps.push(Step::Visit(right, active_graph, false))?;
                 }
-                steps.push(Step::Visit(left, active_graph))?;
+                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
             }
             GraphPattern::Apply { left, right, .. } => {
-                steps.push(Step::Visit(right, active_graph))?;
-                steps.push(Step::Visit(left, active_graph))?;
+                steps.push(Step::Visit(right, active_graph, false))?;
+                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
             }
             GraphPattern::Union { arms } => {
-                for arm in arms.iter().rev() { steps.push(Step::Visit(arm, active_graph))?; }
+                for arm in arms.iter().rev() { steps.push(Step::Visit(arm, active_graph, certify_schedule))?; }
             }
             GraphPattern::LeftJoin { left, right, .. } => {
-                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true })?;
-                steps.push(Step::Visit(left, active_graph))?;
+                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true, certify_schedule })?;
+                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
             }
             GraphPattern::Minus { left, right } => {
-                steps.push(Step::Visit(right, active_graph))?;
-                steps.push(Step::Visit(left, active_graph))?;
+                steps.push(Step::Visit(right, active_graph, certify_schedule))?;
+                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
             }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Extend { inner, .. }
@@ -4181,19 +4242,26 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             | GraphPattern::Slice { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Group { inner, .. } => {
-                steps.push(Step::Visit(inner, active_graph))?;
+                steps.push(Step::Visit(inner, active_graph, certify_schedule))?;
             }
             GraphPattern::Graph { name, inner } => match name {
                 NamedNodePattern::NamedNode(n) => {
                     let name = crate::convert::named_node_to_workspace_value(n, &workspace)?;
                     match addressed_graph(dataset, active_dataset, &name, &|error| account.source_error(error))? {
-                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph)))?,
+                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph), certify_schedule))?,
                         // An empty scope: the block yields no row and its inner pattern
                         // is never evaluated, so the block's estimate is zero.
-                        None => survey.record(pattern, EMPTY_SCOPE),
+                        None => {
+                            survey.record(pattern, EMPTY_SCOPE);
+                            survey.record_output_bound(pattern, Some(0));
+                        }
                     }
                 }
-                NamedNodePattern::Variable(_) => steps.push(Step::Visit(inner, GraphMatch::Any))?,
+                NamedNodePattern::Variable(_) => {
+                    // One Any forecast is not a physical schedule for each
+                    // named graph. Per-graph selectivity can flip join order.
+                    steps.push(Step::Visit(inner, GraphMatch::Any, false))?;
+                }
             },
             // A call with nothing written before it: its driving bag is the identity table,
             // which is one row, so its whole prediction is the relation's declared bound.
@@ -4209,9 +4277,9 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         bindings.len() as u64,
                         bindings.len() as u64,
                         variables.len() as u64,
-                    )
-                    .with_upper_bound(u64::try_from(bindings.len()).ok()),
+                    ),
                 );
+                survey.record_output_bound(pattern, u64::try_from(bindings.len()).ok());
             }
             GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
         }
@@ -4221,7 +4289,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
 
 /// The estimate of a `GRAPH <name> { ... }` block whose name addresses no graph: no
 /// row, and an inner pattern that is never evaluated.
-const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0).with_upper_bound(Some(0));
+const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0);
 
 /// The graph `GRAPH <name> { ... }` scopes its block to, as evaluation decides it
 /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
@@ -4261,9 +4329,7 @@ fn survey_bgp<D: DatasetView>(
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     if patterns.is_empty() {
-        if survey.record_statistics {
-            survey.record(node, PlanEstimate::new(1, 1, 0).with_upper_bound(Some(1)));
-        }
+        survey.record_output_bound(node, Some(1));
         return Ok(());
     }
     survey_bgp_seeded(
@@ -4413,11 +4479,15 @@ fn record_bgp_statistics<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     node: &GraphPattern,
-    seed_bound: Option<u64>,
     survey: &mut PlanSurvey,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     if !survey.record_statistics {
+        return Ok(());
+    }
+    let statistics = dataset.statistics();
+    let certify = survey.certificates.is_some() && survey.certify_schedule;
+    if statistics.is_none() && !certify {
         return Ok(());
     }
     let GraphPattern::Bgp { patterns } = node else {
@@ -4428,17 +4498,18 @@ fn record_bgp_statistics<D: DatasetView>(
     let node_id = survey.shape.node_of(node).expect("surveyed BGP").index();
     let scope = active_dataset.scope_for(active_graph);
     let compiled = compile_bgp_admitted(dataset, patterns, &schema, account)?;
-    let upper_bound = match &compiled {
-        None => Some(0),
-        Some(compiled) => dataset
-            .checked_read(|view| certified_bgp_bound(view, compiled, &scope, seed_bound))
-            .map_err(|error| account.source_error(error))?,
-    };
-    survey.estimates.as_mut_slice()[node_id]
-        .as_mut()
-        .expect("the forecast is recorded before its evidence")
-        .upper_bound = upper_bound;
-    let (Some(compiled), Some(statistics)) = (compiled, dataset.statistics()) else {
+    if certify {
+        let upper_bound = match &compiled {
+            None => Some(0),
+            Some(compiled) => dataset
+                .checked_read(|view| {
+                    certified_bgp_bound(view, compiled, &scope, survey.input_bound(node))
+                })
+                .map_err(|error| account.source_error(error))?,
+        };
+        survey.record_output_bound(node, upper_bound);
+    }
+    let (Some(compiled), Some(statistics)) = (compiled, statistics) else {
         return Ok(());
     };
     for (pattern_index, pattern) in compiled.iter().enumerate() {
@@ -4532,7 +4603,7 @@ fn certified_bgp_bound<D: DatasetView>(
                 total.checked_add(count(GraphMatch::Named(graph))?)
             }),
         };
-        PlanEstimate::product(bound, candidates)
+        CertifiedBounds::product(bound, candidates)
     })
 }
 
@@ -4559,15 +4630,7 @@ fn survey_bgp_seeded<D: DatasetView>(
         account,
     )?;
     record_bgp_forecast(node, patterns, estimate, &order, survey)?;
-    record_bgp_statistics(
-        dataset,
-        active_dataset,
-        active_graph,
-        node,
-        seed.upper_bound,
-        survey,
-        account,
-    )?;
+    record_bgp_statistics(dataset, active_dataset, active_graph, node, survey, account)?;
     Ok(())
 }
 
@@ -7818,7 +7881,6 @@ mod survey_tests {
             schema: crate::eval::syntactic_schema(left).as_ref().clone(),
             bound: VarSchema::from_vars(bound),
             rows: if optional { 1 } else { driving_rows },
-            upper_bound: None,
         };
         let Some(plan) =
             super::PositivePlan::build_seeded(dataset, active_dataset, graph, right, &seed)?

@@ -72,6 +72,19 @@ struct ExplanationExecution<'a> {
     prepared: &'a PreparedQuery,
     substitutions: Prebindings<'a>,
     state: &'a crate::workspace::SharedWorkspace<GovernorState>,
+    certify_bounds: bool,
+}
+
+type MeasuredPlan = (
+    QueryExplanation,
+    Option<crate::governor::ledger::CertifiedBounds>,
+);
+
+#[derive(Clone, Copy)]
+enum PlanSurveyMode {
+    Admission,
+    Explain,
+    ExplainWithBounds,
 }
 
 /// A reusable key buffer retains its original array's admission. Replacement
@@ -3387,6 +3400,36 @@ impl NativeSparqlEngine {
         self.explain_query_view(&**dataset, query_text, base_iri)
     }
 
+    /// Measure a resident query and separately certify its supported output bounds.
+    ///
+    /// This opt-in report does not change the existing planner estimates or the
+    /// intermediate-cell admission decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns the diagnostic from preparing, measuring, or certifying the plan.
+    pub fn explain_query_with_bounds(
+        &self,
+        dataset: &Arc<RdfDataset>,
+        query_text: &str,
+        base_iri: Option<&str>,
+    ) -> Result<crate::CertifiedQueryExplanation, RdfDiagnostic> {
+        self.explain_for_mode(
+            &**dataset,
+            query_text,
+            base_iri,
+            &QueryOptions::EMPTY,
+            None,
+            true,
+        )
+        .map(|(explanation, bounds)| {
+            crate::CertifiedQueryExplanation::new(
+                explanation,
+                bounds.expect("certified measurement allocates a bound table"),
+            )
+        })
+    }
+
     /// [`Self::explain_query`] over any [`DatasetView`] backend whose id type is the
     /// production [`TermId`](purrdf_core::TermId). The cost-based join order is computed against the given
     /// view's cardinalities exactly as the concrete path does.
@@ -3700,6 +3743,7 @@ impl NativeSparqlEngine {
                         prepared: &prepared,
                         substitutions: Prebindings::Owned(admitted.values),
                         state: &state,
+                        certify_bounds: false,
                     },
                     &options,
                     Sequencing::for_view::<D>(),
@@ -3707,7 +3751,7 @@ impl NativeSparqlEngine {
                     &mut capture,
                 )
             });
-        let measured = measured.and_then(|explanation| {
+        let measured = measured.and_then(|(explanation, _)| {
             // Every surviving metadata buffer already carries its original owner.
             // Publication adds only its concrete immutable shared control.
             let capability = workspace.capability();
@@ -3753,6 +3797,19 @@ impl NativeSparqlEngine {
         options: &QueryOptions<'d, 'd>,
         stop: Option<Arc<dyn crate::governor::StopSignal>>,
     ) -> Result<QueryExplanation, RdfDiagnostic> {
+        self.explain_for_mode(dataset, query_text, base_iri, options, stop, false)
+            .map(|(explanation, _)| explanation)
+    }
+
+    fn explain_for_mode<'d, D: DatasetView + Sync>(
+        &'d self,
+        dataset: &'d D,
+        query_text: &str,
+        base_iri: Option<&str>,
+        options: &QueryOptions<'d, 'd>,
+        stop: Option<Arc<dyn crate::governor::StopSignal>>,
+        certify_bounds: bool,
+    ) -> Result<MeasuredPlan, RdfDiagnostic> {
         let publication = crate::user_fn::RefusalPublication::default();
         checked_query_read_with_permit(dataset, &publication, || {
             let options = match publication.options(dataset, *options) {
@@ -3800,6 +3857,7 @@ impl NativeSparqlEngine {
                     prepared: &prepared,
                     substitutions: Prebindings::Owned(&[]),
                     state: &state,
+                    certify_bounds,
                 },
                 &options,
                 Sequencing::Free,
@@ -3820,17 +3878,23 @@ impl NativeSparqlEngine {
         sequencing: Sequencing,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
         capture: &mut QueryCoordinates,
-    ) -> Result<QueryExplanation, EvaluationFailure> {
+    ) -> Result<MeasuredPlan, EvaluationFailure> {
         let ExplanationExecution {
             prepared,
             substitutions,
             state,
+            certify_bounds,
         } = execution;
         let capability = workspace.capability();
         let relations = options.property_functions();
         let aggregates = options.aggregates();
+        let mode = if certify_bounds {
+            PlanSurveyMode::ExplainWithBounds
+        } else {
+            PlanSurveyMode::Explain
+        };
         let mut survey =
-            self.survey_plan_admitted(dataset, &prepared.query, relations, true, workspace)?;
+            self.survey_plan_admitted(dataset, &prepared.query, relations, mode, workspace)?;
         // Direct governed execution admits the un-substituted shape first. Keep
         // that same verdict, then number the actual rewritten measuring tree.
         let refused = record_plan_refusal(state, survey.peak_cells()).is_some();
@@ -3843,7 +3907,7 @@ impl NativeSparqlEngine {
                 (&substituted.query, None)
             });
         if substituted.is_some() {
-            survey = self.survey_plan_admitted(dataset, query, relations, true, workspace)?;
+            survey = self.survey_plan_admitted(dataset, query, relations, mode, workspace)?;
         }
         // All immutable metadata and the terminal ledger destination exist before
         // measuring. A sticky operational refusal requires no snapshot allocation.
@@ -3877,7 +3941,7 @@ impl NativeSparqlEngine {
                 .map_err(EvaluationFailure::Evaluation)?;
         }
         let shapes = ctx.shape_state.take_reports(&capability)?;
-        Ok(QueryExplanation::from_admitted(
+        let explanation = QueryExplanation::from_admitted(
             profile,
             survey.orders,
             publication.finish(),
@@ -3885,7 +3949,8 @@ impl NativeSparqlEngine {
             registered_aggregates,
             state.evidence(),
             (shapes, dataset.statement_indexes(), survey.statistics),
-        ))
+        );
+        Ok((explanation, survey.certificates))
     }
 
     fn survey_plan_admitted<D: DatasetView + Sync>(
@@ -3893,7 +3958,7 @@ impl NativeSparqlEngine {
         dataset: &D,
         query: &Query,
         relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
-        record_statistics: bool,
+        mode: PlanSurveyMode,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<crate::bgp::PlanSurvey, crate::EvalError> {
         let _ = self;
@@ -3906,7 +3971,10 @@ impl NativeSparqlEngine {
         )?;
         let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
         let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
-        survey.record_statistics = record_statistics;
+        survey.record_statistics = !matches!(mode, PlanSurveyMode::Admission);
+        if matches!(mode, PlanSurveyMode::ExplainWithBounds) {
+            survey.certify_admitted()?;
+        }
         crate::bgp::survey_pattern_plans_admitted(
             dataset,
             &active_dataset,
@@ -3978,8 +4046,13 @@ impl NativeSparqlEngine {
         if !state.is_engaged_in(dimension) {
             return None;
         }
-        let estimate = match self.survey_plan_admitted(dataset, query, relations, false, workspace)
-        {
+        let estimate = match self.survey_plan_admitted(
+            dataset,
+            query,
+            relations,
+            PlanSurveyMode::Admission,
+            workspace,
+        ) {
             Ok(survey) => survey.peak_cells(),
             Err(error) => return Some(Err(EvaluationFailure::Evaluation(error))),
         };
@@ -7890,7 +7963,7 @@ mod tests {
                 dataset.as_ref(),
                 &prepared.query,
                 &relations,
-                false,
+                PlanSurveyMode::Admission,
                 &workspace,
             )
             .unwrap();
@@ -7899,7 +7972,7 @@ mod tests {
                 dataset.as_ref(),
                 &prepared.query,
                 &relations,
-                true,
+                PlanSurveyMode::Explain,
                 &workspace,
             )
             .unwrap();

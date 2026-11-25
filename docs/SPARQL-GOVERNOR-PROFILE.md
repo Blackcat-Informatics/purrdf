@@ -265,13 +265,16 @@ Where the fuel went is readable per algebra node: `explain_query` runs under
 total per node and per charge point, beside the cost planner's estimate for each
 basic graph pattern.
 
-Where the explanation can certify an output bound, it prints
+Request `explain_query_with_bounds` to certify output bounds separately
+from the existing cost estimates. This opt-in explanation prints
 `output-upper-bound` beside the cost estimate. The bound is in solution
 rows for the surveyed input bag, not the sum across repeated invocations.
 Basic graph pattern bounds multiply conservative candidate populations
 from the view, including reifier and annotation rows. Positive joins and
-unions compose those bounds without using heuristic selectivity. Missing
-metadata or arithmetic overflow yields `unknown`, not a synthetic count.
+unions compose those bounds without using heuristic selectivity. If runtime
+graph selection or input bindings can change the schedule, the explanation
+does not certify an intermediate bag from the survey. Missing metadata,
+unverified schedules, and overflow yield `unknown`, not a synthetic count.
 The bound does not replace the intermediate-cell admission estimate.
 
 The explanation also reports `statement-indexes`: the exact view's available

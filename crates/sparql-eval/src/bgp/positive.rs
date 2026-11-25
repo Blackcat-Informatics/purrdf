@@ -6,9 +6,9 @@
 //! incoming bindings. This is a deterministic cost heuristic, not exhaustive search.
 
 use super::{
-    ActiveDataset, BgpOrder, Binary64Scope, DatasetView, EvalError, GraphMatch, GraphPattern,
-    PlanEstimate, PlanSurvey, SeedEstimate, VarSchema, forecast_bgp, record_bgp_forecast,
-    record_bgp_statistics, step_size, survey_bgp_seeded,
+    ActiveDataset, BgpOrder, Binary64Scope, CertifiedBounds, DatasetView, EvalError, GraphMatch,
+    GraphPattern, PlanEstimate, PlanSurvey, SeedEstimate, VarSchema, forecast_bgp,
+    record_bgp_forecast, record_bgp_statistics, step_size, survey_bgp_seeded,
 };
 use crate::WorkspaceCapability;
 use crate::workspace::{AdmittedMap, AdmittedVec, QueryWorkspace, SharedWorkspace};
@@ -470,7 +470,6 @@ impl PositivePlan {
                     schema: input.schema.union_admitted(&summary.schema, &workspace)?,
                     bound: input.bound.union_admitted(&summary.certain, &workspace)?,
                     rows: 1,
-                    upper_bound: Some(1),
                 };
                 pending.push(ChoiceStep::Visit(
                     driven,
@@ -597,7 +596,7 @@ impl PositivePlan {
         &self,
         node: &GraphPattern,
         input: &SeedEstimate,
-        driving: &PlanEstimate,
+        rows: u64,
         workspace: &WorkspaceCapability,
     ) -> Result<SeedEstimate, EvalError> {
         let summary = scope_summary(
@@ -611,8 +610,7 @@ impl PositivePlan {
         Ok(SeedEstimate {
             schema: input.schema.union_admitted(&summary.schema, workspace)?,
             bound: input.bound.union_admitted(&summary.certain, workspace)?,
-            rows: driving.rows,
-            upper_bound: driving.upper_bound,
+            rows,
         })
     }
 
@@ -722,7 +720,6 @@ impl PositivePlan {
                                 active_dataset,
                                 active_graph,
                                 node,
-                                Some(1),
                                 survey,
                                 account,
                             )?;
@@ -734,6 +731,7 @@ impl PositivePlan {
                         } else {
                             (&**right, &**left)
                         };
+                        survey.record_input_bound(first, survey.input_bound(node));
                         steps.push(Step::Second {
                             node,
                             first,
@@ -746,6 +744,7 @@ impl PositivePlan {
                     GraphPattern::Union { arms } => {
                         steps.push(Step::Union(node, seed.clone()))?;
                         for arm in arms.iter().rev() {
+                            survey.record_input_bound(arm, survey.input_bound(node));
                             steps.push(Step::Visit(arm, seed.clone(), has_input))?;
                         }
                     }
@@ -758,9 +757,10 @@ impl PositivePlan {
                     seed,
                     independent,
                 } => {
-                    let driving = survey
+                    let rows = survey
                         .estimate_of(first)
-                        .expect("first driver was surveyed");
+                        .expect("first driver was surveyed")
+                        .rows;
                     steps.push(Step::Join {
                         node,
                         first,
@@ -774,10 +774,11 @@ impl PositivePlan {
                             false,
                         ))?;
                     } else {
+                        survey.record_input_bound(second, survey.output_bound(first));
                         steps.push(Step::Visit(
                             second,
                             SharedWorkspace::new_admitted(
-                                self.extend_seed(first, &seed, driving, &workspace)?,
+                                self.extend_seed(first, &seed, rows, &workspace)?,
                                 &workspace,
                             )?,
                             true,
@@ -790,6 +791,12 @@ impl PositivePlan {
                     second,
                     independent,
                 } => {
+                    let right_bound = survey.output_bound(second);
+                    let upper_bound = if independent {
+                        CertifiedBounds::product(survey.output_bound(first), right_bound)
+                    } else {
+                        right_bound
+                    };
                     let second = survey
                         .estimate_of(second)
                         .expect("second child was surveyed");
@@ -806,14 +813,11 @@ impl PositivePlan {
                             )
                             .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
                         )
-                        .with_upper_bound(PlanEstimate::product(
-                            first.upper_bound,
-                            second.upper_bound,
-                        ))
                     } else {
                         second.clone()
                     };
                     survey.record(node, estimate);
+                    survey.record_output_bound(node, upper_bound);
                 }
                 Step::Union(node, seed) => {
                     let GraphPattern::Union { arms } = node else {
@@ -826,17 +830,15 @@ impl PositivePlan {
                         let estimate = survey.estimate_of(arm).expect("every arm was surveyed");
                         rows = rows.saturating_add(estimate.rows);
                         columns = columns.max(estimate.columns);
-                        upper_bound =
-                            upper_bound.and_then(|bound| bound.checked_add(estimate.upper_bound?));
+                        upper_bound = upper_bound
+                            .and_then(|bound| bound.checked_add(survey.output_bound(arm)?));
                     }
                     columns = columns.max(union_width(
                         &*crate::eval::syntactic_schema_admitted(node, &workspace)?,
                         &seed.schema,
                     )?);
-                    survey.record(
-                        node,
-                        PlanEstimate::new(rows, rows, columns).with_upper_bound(upper_bound),
-                    );
+                    survey.record(node, PlanEstimate::new(rows, rows, columns));
+                    survey.record_output_bound(node, upper_bound);
                 }
             }
         }

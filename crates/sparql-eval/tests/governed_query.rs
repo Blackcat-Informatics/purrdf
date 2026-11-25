@@ -114,17 +114,94 @@ prop_test! {
         };
         let query = format!("PREFIX ex: <http://example.org/> {query}");
         let explanation = NativeSparqlEngine::new()
-            .explain_query(&dataset, &query, None).unwrap();
+            .explain_query_with_bounds(&dataset, &query, None).unwrap();
         let mut certified = 0;
-        for node in explanation.ledger() {
-            if let Some(estimate) = &node.estimate {
+        for node in explanation.explanation().ledger() {
+            if node.estimate.is_some() {
                 certified += 1;
-                prop_assert!(estimate.upper_bound.is_some_and(|bound| node.rows <= bound),
+                let bound = explanation.output_upper_bound(node.ordinal);
+                prop_assert!(bound.is_some_and(|bound| node.rows <= bound),
                     "node {:?} produced {} rows with bound {:?}", node.label,
-                    node.rows, estimate.upper_bound);
+                    node.rows, bound);
             }
         }
         prop_assert!(certified > 0);
+    }
+}
+
+#[test]
+fn explanation_withholds_bounds_when_runtime_reorders_the_surveyed_scope() {
+    let mut builder = RdfDatasetBuilder::new();
+    let mut iri = |name: &str| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    };
+    let [s, x, p, q, t, g, h, seed, opt] =
+        ["s", "x", "p", "q", "t", "g", "h", "seed", "opt"].map(&mut iri);
+    let values: Vec<_> = (0..10).map(|i| iri(&format!("v{i}"))).collect();
+    builder.push_quad(s, seed, values[0], None).unwrap();
+    builder.push_quad(s, opt, x, None).unwrap();
+    for (index, value) in values.into_iter().enumerate() {
+        builder.push_quad(s, q, value, Some(h)).unwrap();
+        if index < 4 {
+            builder.push_quad(s, p, value, Some(g)).unwrap();
+            builder.push_quad(s, p, value, None).unwrap();
+        }
+        if index < 3 {
+            builder.push_quad(s, q, value, Some(g)).unwrap();
+        }
+        if index < 2 {
+            builder.push_quad(x, q, value, None).unwrap();
+            builder.push_quad(s, t, value, None).unwrap();
+        }
+    }
+    let dataset = builder.freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    for (body, expanded_rows) in [
+        (
+            "GRAPH ?g { ?s ex:p ?a . { ?s ex:q ?b } UNION { ?s ex:r ?b } }",
+            12,
+        ),
+        (
+            concat!(
+                "{ ?s ex:seed ?z OPTIONAL { ?s ex:opt ?x } } ",
+                "{ ?s ex:p ?a . { ?x ex:q ?b } UNION { ?x ex:r ?b } }",
+            ),
+            8,
+        ),
+        (
+            concat!(
+                "{ ?s ex:seed ?z OPTIONAL { ?s ex:opt ?x } } OPTIONAL ",
+                "{ ?s ex:p ?a . { ?x ex:q ?b } UNION { ?x ex:r ?b } }",
+            ),
+            8,
+        ),
+        (
+            concat!(
+                "VALUES ?pred { ex:p } LATERAL ",
+                "{ ?s ?pred ?a . { ?s ex:t ?b } UNION { ?s ex:r ?b } }",
+            ),
+            8,
+        ),
+    ] {
+        let query = format!("PREFIX ex: <http://example.org/> SELECT * WHERE {{ {body} }}");
+        let explanation = engine
+            .explain_query_with_bounds(&dataset, &query, None)
+            .unwrap_or_else(|error| panic!("{body}: {error}"));
+        let node = explanation
+            .explanation()
+            .ledger()
+            .iter()
+            .find(|node| node.label == "Bgp" && node.rows == expanded_rows)
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected a reordered BGP for {body}\n{}",
+                    explanation.render()
+                )
+            });
+        assert_eq!(explanation.output_upper_bound(node.ordinal), None, "{body}");
+        assert!(explanation.render().contains("output-upper-bound=unknown"));
     }
 }
 
@@ -1342,23 +1419,24 @@ fn wide_fixture(edges: usize) -> Arc<RdfDataset> {
 fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
     let engine = NativeSparqlEngine::new();
     for (query, matches) in STATEMENT_RANGE_QUERIES {
-        let measured = engine.explain_query(dataset, query, None).unwrap();
-        assert_eq!(candidate_quads(&measured), matches);
+        let certified = engine
+            .explain_query_with_bounds(dataset, query, None)
+            .unwrap();
+        let measured = certified.explanation();
+        assert_eq!(candidate_quads(measured), matches);
         assert_eq!(
             measured.statement_indexes(),
             purrdf_core::StatementIndexSupport::INDEXED
         );
         assert!(measured.render().contains("statement-indexes reifier-target=range reifier-components=range annotation-values=range"));
-        assert!(
-            measured
-                .ledger()
-                .iter()
-                .filter_map(|node| node.estimate.as_ref())
-                .any(|estimate| {
-                    estimate.rows == matches
-                        && estimate.upper_bound.is_some_and(|bound| matches <= bound)
-                })
-        );
+        assert!(measured.ledger().iter().any(|node| {
+            node.estimate
+                .as_ref()
+                .is_some_and(|estimate| estimate.rows == matches)
+                && certified
+                    .output_upper_bound(node.ordinal)
+                    .is_some_and(|bound| matches <= bound)
+        }));
         let bounded = engine
             .query_governed(
                 dataset,
@@ -2231,11 +2309,6 @@ fn explain_reports_a_deterministic_per_node_ledger() {
             estimate.peak_cells(),
             estimate.peak_rows.saturating_mul(estimate.columns)
         );
-        let bound = estimate
-            .upper_bound
-            .expect("native BGP statistics certify a bound");
-        assert!(node.rows <= bound, "{node:?} exceeded {bound}");
-        assert!(rendered.contains(&format!("output-upper-bound={bound}")));
         assert!(
             rendered.contains(&format!(
                 "estimated-rows={} actual-rows={}",
