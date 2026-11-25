@@ -363,10 +363,11 @@ jobs:
       # The lib shard seeds the cache with the shared test-profile units. Cargo
       # reuses matching units across fresh checkouts and rebuilds changed inputs.
       # Each shard can compile independently when the cache is cold.
+      # Use a new key because existing archives may lack current Cargo build directories.
       - name: Share compiled test libraries
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: workspace-test-checksums-v1
+          shared-key: workspace-test-checksums-v2
           cache-workspace-crates: true
           save-if: ${{ matrix.shard == 'lib' }}
 
@@ -1370,9 +1371,9 @@ jobs:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Restore shared test libraries
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: workspace-test-checksums-v1
+          shared-key: workspace-test-checksums-v2
           cache-workspace-crates: true
           save-if: false
 
@@ -1487,9 +1488,9 @@ jobs:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Restore shared test libraries
-        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          shared-key: workspace-test-checksums-v1
+          shared-key: workspace-test-checksums-v2
           cache-workspace-crates: true
           save-if: false
 
