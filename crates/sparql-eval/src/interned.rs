@@ -380,23 +380,51 @@ impl<'a, 'd, D: DatasetView + Sync> InternedSolutions<'a, 'd, D> {
     /// borrowed result and its evaluation context have been dropped.
     ///
     /// # Errors
-    /// Preserves the original dataset read or workspace admission failure.
+    /// Returns a source-read diagnostic or the original workspace admission failure.
     pub fn try_cell_owned(
         &self,
         row: &Solution<D::Id>,
         column: usize,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<crate::WorkspaceTerm>, crate::EvalError> {
+        self.try_cell_owned_with_source(row, column, workspace, crate::EvalError::source_read)
+    }
+
+    /// Copy one bound cell within its original fallible read operation.
+    ///
+    /// Use the operation supplied by [`crate::with_fallible_read`] for this
+    /// dataset. The cell owner keeps its payload admitted through `workspace`,
+    /// and any point-read fault is retained by that operation.
+    ///
+    /// # Errors
+    /// A source failure stops the operation, whose enclosing boundary returns
+    /// the original cause. Workspace admission failures are returned directly.
+    pub fn try_cell_owned_in_read(
+        &self,
+        row: &Solution<D::Id>,
+        column: usize,
+        workspace: &crate::WorkspaceCapability,
+        operation: &crate::ReadOperation<D::ReadError>,
+    ) -> Result<Option<crate::WorkspaceTerm>, crate::EvalError> {
+        self.try_cell_owned_with_source(row, column, workspace, |error| {
+            operation.source_error(error)
+        })
+    }
+
+    fn try_cell_owned_with_source(
+        &self,
+        row: &Solution<D::Id>,
+        column: usize,
+        workspace: &crate::WorkspaceCapability,
+        source_error: impl Fn(D::ReadError) -> crate::EvalError,
+    ) -> Result<Option<crate::WorkspaceTerm>, crate::EvalError> {
         row.get(column)
             .copied()
             .flatten()
             .map(|term| {
-                self.ctx.scratch.try_owned_value_of(
-                    self.ctx.dataset,
-                    term,
-                    workspace,
-                    crate::EvalError::source_read,
-                )
+                self.ctx
+                    .scratch
+                    .try_owned_value_of(self.ctx.dataset, term, workspace, source_error)
             })
             .transpose()
     }
