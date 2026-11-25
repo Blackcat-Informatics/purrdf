@@ -445,3 +445,87 @@ fn scalar_code_spans_refuse_resources_at_original_positions() {
         Err(SyntaxError::Limit { resource: "work", position, .. }) if position.byte == 0
     ));
 }
+
+#[test]
+fn repeated_misses_keep_each_consumers_opener_and_coordinate_rules() {
+    use purrdf_markdown::syntax::InlineKind;
+    use std::borrow::Cow;
+
+    // Leave widths one and two for the actual code spans. The preceding
+    // distinct runs force repeated failed searches in one logical view.
+    let mut prefix = String::from("α prose ");
+    for width in 3..=34 {
+        prefix.extend(std::iter::repeat_n('`', width));
+        prefix.push_str(" x ");
+    }
+
+    // Standard consumes the first escaped punctuation byte before matching
+    // the remaining single-backtick opener. A backslash before a close is literal.
+    let standard_source = format!("{prefix}{}", r"\``tail\` after");
+    let standard = syntax(&standard_source, limits()).unwrap();
+    let standard_spans: Vec<_> = standard
+        .inlines()
+        .iter()
+        .filter(|inline| matches!(inline.kind, InlineKind::Code))
+        .collect();
+    assert_eq!(standard_spans.len(), 1);
+    assert_eq!(standard.spelling(standard_spans[0].source), r"`tail\`");
+    assert_eq!(standard_spans[0].source.start as usize, prefix.len() + 2);
+
+    // Authoring treats the first escaped opener as literal and does not
+    // match across physically distinct lines.
+    let physical_source = format!("{prefix}{}\r\n``open\nclose``\n", r"\`literal `pair\`");
+    let physical = authoring(&physical_source, limits()).unwrap();
+    assert_eq!(physical.code_spans().len(), 1);
+    let span = physical.code_spans()[0].source;
+    assert_eq!(physical.spelling(span), r"`pair\`");
+    assert_eq!(span.start as usize, prefix.len() + r"\`literal ".len());
+    assert_eq!(physical.position(span.start as usize).unwrap().line, 1);
+
+    // The scalar uses the original bytes across line endings, and the
+    // unequal interior run does not terminate a two-backtick span.
+    let scalar = format!("{prefix}``x`y\r\nz\\`` tail");
+    let bounded = CodeSpanLimits {
+        work: 12_000,
+        ..scalar_limits()
+    };
+    assert_eq!(
+        replace_code_spans(&scalar, bounded).unwrap(),
+        format!("{prefix}  tail")
+    );
+    let constrained = CodeSpanLimits {
+        auxiliary_bytes: 0,
+        ..scalar_limits()
+    };
+    assert!(
+        matches!(replace_code_spans(&prefix, constrained).unwrap(), Cow::Borrowed(text) if text == prefix)
+    );
+}
+
+#[test]
+fn indexed_code_spans_release_scratch_before_refusing_required_output() {
+    let mut prefix = String::new();
+    for width in 3..=34 {
+        prefix.extend(std::iter::repeat_n('`', width));
+        prefix.push('x');
+    }
+    let source = format!("{prefix}`z`x``tail``y");
+    // After copying the prefix, appending the replacement grows that buffer
+    // from one to two prefix lengths. Both buffers live during the copy.
+    let output_peak = 3 * prefix.len();
+    let mut policy = CodeSpanLimits {
+        auxiliary_bytes: output_peak,
+        work: 8_000,
+        ..scalar_limits()
+    };
+    assert_eq!(
+        replace_code_spans(&source, policy).unwrap(),
+        format!("{prefix} x y")
+    );
+    policy.auxiliary_bytes -= 1;
+    assert!(matches!(
+        replace_code_spans(&source, policy),
+        Err(SyntaxError::Limit { resource: "auxiliary bytes", actual, limit, position })
+            if actual == output_peak as u64 && limit + 1 == actual && position.byte == prefix.len()
+    ));
+}

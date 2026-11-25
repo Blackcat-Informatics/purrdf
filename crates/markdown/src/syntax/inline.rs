@@ -655,6 +655,7 @@ pub(super) fn occurrences(
     let b = text.as_bytes();
     let mut at = 0;
     let mut brackets = Vec::new();
+    let mut spans = super::code_span::CodeSpans::new(text);
     let mut prose = 0;
     while at < text.len() {
         budget.tick(input.map[at], 1)?;
@@ -665,8 +666,7 @@ pub(super) fn occurrences(
         let mut opaque = None;
         let mut recorded = false;
         if doc.policy == super::Policy::Standard && b[at] == b'`' {
-            let (opening_end, closing_end) =
-                super::code_span::read(text, at, |at| input.map[at], budget)?;
+            let (opening_end, closing_end) = spans.read(at, |at| input.map[at], budget)?;
             if let Some(end) = closing_end {
                 opaque = Some((end, InlineKind::Code));
             } else {
@@ -830,6 +830,7 @@ pub(super) fn occurrences(
         }
         at += text[at..].chars().next().expect("inline scalar").len_utf8();
     }
+    spans.release(budget);
     if doc.policy == super::Policy::Standard && prose < text.len() {
         self::prose(doc, input, prose, text.len(), budget)?;
     }

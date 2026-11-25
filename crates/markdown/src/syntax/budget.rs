@@ -1,6 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-use super::{Policy, SourcePosition, SyntaxError, SyntaxLimits};
+use super::{Policy, SourcePosition, SyntaxError, SyntaxLimits, code_span::RunIndex};
 use purrdf_lex::allocation::{Admission, Memory, StorageError};
 pub(super) struct Budget<'a> {
     policy: Policy,
@@ -8,6 +8,8 @@ pub(super) struct Budget<'a> {
     pub limits: SyntaxLimits,
     pub live: usize,
     pub work: u64,
+    // This optional scratch can be dropped before admitting required storage.
+    code_span_index: Option<(RunIndex, usize)>,
     at: usize,
     failure: Option<SyntaxError>,
 }
@@ -19,6 +21,7 @@ impl<'a> Budget<'a> {
             limits,
             live: 0,
             work: 0,
+            code_span_index: None,
             at: 0,
             failure: None,
         }
@@ -83,6 +86,29 @@ impl<'a> Budget<'a> {
     pub(super) fn release<T>(&mut self, values: Vec<T>) -> Result<(), SyntaxError> {
         self.memory(|m| m.release_vec(values))
     }
+
+    pub(super) fn retain_code_span_index(&mut self, index: RunIndex, non_index_live: usize) {
+        let index_bytes = self.live - non_index_live;
+        self.live = non_index_live;
+        self.code_span_index = Some((index, index_bytes));
+    }
+
+    pub(super) fn indexed_code_span_close(
+        &mut self,
+        at: usize,
+        width: usize,
+        position: &impl Fn(usize) -> usize,
+    ) -> Option<Result<Option<usize>, SyntaxError>> {
+        // Lookup only charges work. It does not resize the admission account.
+        let mut scratch = self.code_span_index.take()?;
+        let result = scratch.0.close(at, width, position, self);
+        self.code_span_index = Some(scratch);
+        Some(result)
+    }
+
+    pub(super) fn release_code_span_index(&mut self) {
+        self.code_span_index = None;
+    }
 }
 impl Admission for Budget<'_> {
     fn progress_enabled(&self) -> bool {
@@ -108,6 +134,13 @@ impl Admission for Budget<'_> {
                 limit: self.limits.auxiliary_bytes as u64,
             });
             return Err(StorageError::AdmissionFailed);
+        }
+        if self
+            .code_span_index
+            .as_ref()
+            .is_some_and(|(_, index_bytes)| *index_bytes > self.limits.auxiliary_bytes - bytes)
+        {
+            self.release_code_span_index();
         }
         self.live = bytes;
         Ok(())
