@@ -249,7 +249,7 @@ fn comments(
             at = end;
         }
     }
-    spans.release(budget)?;
+    spans.release(budget);
     // INVARIANT: every physical input appends its original end sentinel,
     // including an empty visible view after comment removal.
     sentinel(
@@ -298,7 +298,7 @@ fn prose(
             at = end;
         }
     }
-    spans.release(budget)?;
+    spans.release(budget);
     // INVARIANT: every physical input appends its original end sentinel,
     // including an empty visible view after comment removal.
     sentinel(

@@ -347,9 +347,11 @@ The index scans the suffix once and links maximal runs by width. For each
 width, a cursor moves past runs that start before the current search. One
 view's openers only move forward, so each run is skipped at most once. The index uses linear construction and traversal work
 and storage proportional to the number of reserved runs plus the widest
-reserved run. It is discarded before moving to a different view. Views
-that cannot afford the index may still revisit suffixes, so work can
-refuse even when the source and output storage fit.
+reserved run. It is discarded before moving to a different view or when
+required storage would otherwise exceed the auxiliary ceiling. After
+discarding it mid-view, the matcher resumes direct searching and does not
+build another index for that view. Views without an index may still revisit
+suffixes, so work can refuse even when the source and output storage fit.
 
 Byte probes, candidate comparisons and index probes are charged before
 inspection. Scratch, output capacity and copies use the same native

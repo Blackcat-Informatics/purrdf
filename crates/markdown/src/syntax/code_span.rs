@@ -82,7 +82,7 @@ struct Run {
     next: usize,
 }
 
-struct RunIndex {
+pub(super) struct RunIndex {
     runs: Vec<Run>,
     heads: Vec<usize>,
 }
@@ -121,7 +121,7 @@ impl RunIndex {
         Ok(Self { runs, heads })
     }
 
-    fn close(
+    pub(super) fn close(
         &mut self,
         at: usize,
         width: usize,
@@ -142,11 +142,6 @@ impl RunIndex {
         }
         Ok(None)
     }
-
-    fn release(self, budget: &mut Budget<'_>) -> Result<(), SyntaxError> {
-        budget.release(self.runs)?;
-        budget.release(self.heads)
-    }
 }
 
 /// One matcher's openers are visited in source order in one logical input.
@@ -154,7 +149,7 @@ pub(super) struct CodeSpans<'a> {
     text: &'a str,
     failed_work: u64,
     suffix: Suffix,
-    index: Option<RunIndex>,
+    index_started: bool,
 }
 
 impl<'a> CodeSpans<'a> {
@@ -163,7 +158,7 @@ impl<'a> CodeSpans<'a> {
             text,
             failed_work: 0,
             suffix: Suffix::default(),
-            index: None,
+            index_started: false,
         }
     }
 
@@ -176,22 +171,22 @@ impl<'a> CodeSpans<'a> {
     ) -> Result<Option<usize>, SyntaxError> {
         // Successful spans never justify an extra suffix pass. Only repeated
         // misses can spend this much closing work before requesting an index.
-        if self.index.is_none()
+        if !self.index_started
             && at < self.text.len()
             && self.failed_work >= (self.text.len() as u64).saturating_mul(2)
             && self.suffix.fits(budget)
         {
-            self.index = Some(RunIndex::build(
-                self.text,
-                at,
-                &self.suffix,
-                position,
-                budget,
-            )?);
+            let before = budget.live;
+            let index = RunIndex::build(self.text, at, &self.suffix, position, budget)?;
+            budget.retain_code_span_index(index, before);
+            self.index_started = true;
         }
-        if let Some(index) = &mut self.index {
-            return index.close(at, width, position, budget);
+        if self.index_started
+            && let Some(result) = budget.indexed_code_span_close(at, width, position)
+        {
+            return result;
         }
+        // After eviction, direct searches resume without rebuilding the index.
         let before = budget.work;
         let mut suffix = Suffix::default();
         while let Some((start, end)) = next_run(self.text, &mut at, position, budget)? {
@@ -234,11 +229,10 @@ impl<'a> CodeSpans<'a> {
         Ok((opening_end, closing_end))
     }
 
-    pub(super) fn release(self, budget: &mut Budget<'_>) -> Result<(), SyntaxError> {
-        if let Some(index) = self.index {
-            index.release(budget)?;
+    pub(super) fn release(self, budget: &mut Budget<'_>) {
+        if self.index_started {
+            budget.release_code_span_index();
         }
-        Ok(())
     }
 }
 
@@ -294,7 +288,7 @@ pub fn replace_code_spans(
             at = opening_end;
         }
     }
-    spans.release(&mut budget)?;
+    spans.release(&mut budget);
     if let Some(mut output) = output {
         budget.tick(from, 0)?;
         budget.memory(|m| m.push_str(&mut output, &source[from..]))?;

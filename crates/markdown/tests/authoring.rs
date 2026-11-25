@@ -501,3 +501,31 @@ fn repeated_misses_keep_each_consumers_opener_and_coordinate_rules() {
         matches!(replace_code_spans(&prefix, constrained).unwrap(), Cow::Borrowed(text) if text == prefix)
     );
 }
+
+#[test]
+fn indexed_code_spans_release_scratch_before_refusing_required_output() {
+    let mut prefix = String::new();
+    for width in 3..=34 {
+        prefix.extend(std::iter::repeat_n('`', width));
+        prefix.push('x');
+    }
+    let source = format!("{prefix}`z`x``tail``y");
+    // After copying the prefix, appending the replacement grows that buffer
+    // from one to two prefix lengths. Both buffers live during the copy.
+    let output_peak = 3 * prefix.len();
+    let mut policy = CodeSpanLimits {
+        auxiliary_bytes: output_peak,
+        work: 8_000,
+        ..scalar_limits()
+    };
+    assert_eq!(
+        replace_code_spans(&source, policy).unwrap(),
+        format!("{prefix} x y")
+    );
+    policy.auxiliary_bytes -= 1;
+    assert!(matches!(
+        replace_code_spans(&source, policy),
+        Err(SyntaxError::Limit { resource: "auxiliary bytes", actual, limit, position })
+            if actual == output_peak as u64 && limit + 1 == actual && position.byte == prefix.len()
+    ));
+}

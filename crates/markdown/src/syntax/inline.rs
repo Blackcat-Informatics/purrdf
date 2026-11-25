@@ -830,7 +830,7 @@ pub(super) fn occurrences(
         }
         at += text[at..].chars().next().expect("inline scalar").len_utf8();
     }
-    spans.release(budget)?;
+    spans.release(budget);
     if doc.policy == super::Policy::Standard && prose < text.len() {
         self::prose(doc, input, prose, text.len(), budget)?;
     }
