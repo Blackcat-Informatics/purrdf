@@ -189,12 +189,13 @@ fn into_text<'a>(
     }
 }
 fn code_end(
+    spans: &mut super::code_span::CodeSpans<'_>,
     input: &Input,
     at: usize,
     budget: &mut Budget<'_>,
 ) -> Result<(usize, Option<usize>), SyntaxError> {
     if input.text.as_bytes()[at] == b'`' {
-        super::code_span::read(&input.text, at, |at| input.map[at], budget)
+        spans.read(at, |at| input.map[at], budget)
     } else {
         // INVARIANT: the physical-line loop supplies a nonempty UTF-8 suffix;
         // every prior advance ends at a scalar or ASCII delimiter boundary.
@@ -215,6 +216,7 @@ fn comments(
     budget: &mut Budget<'_>,
 ) -> Result<Input, SyntaxError> {
     let mut out = empty();
+    let mut spans = super::code_span::CodeSpans::new(&input.text);
     let mut at = 0;
     while at < input.text.len() {
         budget.tick(input.map[at], 1)?;
@@ -236,7 +238,7 @@ fn comments(
             *open = Some(input.map[at]);
             at += 4;
         } else {
-            let (opening_end, closing_end) = code_end(input, at, budget)?;
+            let (opening_end, closing_end) = code_end(&mut spans, input, at, budget)?;
             let end = closing_end.unwrap_or(opening_end);
             append(
                 &mut out,
@@ -247,6 +249,7 @@ fn comments(
             at = end;
         }
     }
+    spans.release(budget);
     // INVARIANT: every physical input appends its original end sentinel,
     // including an empty visible view after comment removal.
     sentinel(
@@ -262,11 +265,12 @@ fn prose(
     budget: &mut Budget<'_>,
 ) -> Result<Option<Input>, SyntaxError> {
     let mut out = empty();
+    let mut spans = super::code_span::CodeSpans::new(&input.text);
     let mut at = 0;
     let mut replaced = false;
     while at < input.text.len() {
         budget.tick(input.map[at], 1)?;
-        let (opening_end, closing_end) = code_end(input, at, budget)?;
+        let (opening_end, closing_end) = code_end(&mut spans, input, at, budget)?;
         if let Some(end) = closing_end {
             budget.push(
                 &mut doc.inlines,
@@ -294,6 +298,7 @@ fn prose(
             at = end;
         }
     }
+    spans.release(budget);
     // INVARIANT: every physical input appends its original end sentinel,
     // including an empty visible view after comment removal.
     sentinel(
