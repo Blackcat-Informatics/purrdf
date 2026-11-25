@@ -107,12 +107,19 @@ impl Records {
         } else {
             EvidenceCombination::Conjunction
         };
+        // A bound Boolean may still be provisional, as with an incomplete
+        // EXISTS search. Only a settled decisive operand proves that the
+        // conjunction or disjunction cannot depend on the others.
+        let settled = decisive
+            && operands.iter().enumerate().any(|(index, operand)| {
+                matches!(operand, Val::Ebv(Some(value)) if *value == or)
+                    && self
+                        .values
+                        .get(&(start + index))
+                        .is_none_or(|record| !record.is_undecided())
+            });
         self.take_operands(
-            operands.iter().enumerate().map(|(index, operand)| {
-                // A known false conjunction or true disjunction does not
-                // depend on the result of an unsettled operand.
-                (start + index, decisive && matches!(operand, Val::Ebv(None)))
-            }),
+            (start..start + operands.len()).map(|position| (position, settled)),
             law,
         )
     }
@@ -123,17 +130,21 @@ impl Records {
         law: EvidenceCombination,
     ) -> Result<Option<RowEvidence>, EvalError> {
         let mut record: Option<RowEvidence> = None;
+        let mut undecided = false;
         for (position, masked) in positions {
             if let Some(operand) = self.values.remove(&position)
                 && !(masked && operand.is_undecided())
             {
+                undecided |= operand.is_undecided();
                 record = Some(match record {
                     None => operand,
                     Some(previous) => previous.combine(&operand, law)?,
                 });
             }
         }
-        Ok(record)
+        // These are operands of an expression, not alternative proven rows.
+        // A retained provisional operand can still change the result.
+        Ok(record.map(|record| record.with_undecided(undecided)))
     }
 
     pub(super) fn finish(

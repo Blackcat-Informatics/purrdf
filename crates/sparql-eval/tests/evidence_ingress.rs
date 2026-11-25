@@ -1730,6 +1730,49 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
             )
             .unwrap();
     }
+    for (gate, operator, count, undecided) in [
+        ("?off", "&&", 0, 0),
+        ("?on", "&&", 1, 1),
+        ("?on", "||", 1, 0),
+        (
+            "EXISTS { VALUES ?closed { false } FILTER(?closed) }",
+            "||",
+            1,
+            1,
+        ),
+    ] {
+        let query = format!(
+            "SELECT ?on WHERE {{ VALUES (?on ?off) {{ (true false) }}
+             FILTER({gate} {operator} EXISTS {{ ?doc <https://example.org/search> \"absent\" }}) }}",
+        );
+        engine
+            .query_interned_evidence_view(
+                &dataset,
+                request(&query),
+                &QueryOptions::default().with_env(&env),
+                &source,
+                |outcome| {
+                    let InternedOutcome::Solutions(rows) = outcome else {
+                        panic!("native SELECT");
+                    };
+                    assert_eq!(rows.len(), count, "{gate} {operator}");
+                    assert_eq!(
+                        rows.undecided_rows().count(),
+                        undecided,
+                        "{gate} {operator}"
+                    );
+                    if undecided != 0 {
+                        rows.rows()[0]
+                            .evidence()
+                            .with_record(|record| {
+                                assert_eq!(record.reasons(), &[source.reason]);
+                            })
+                            .unwrap();
+                    }
+                },
+            )
+            .unwrap();
+    }
 }
 
 fn declared_filter_gap_retains_original_row_and_reason_without_promoting_completeness() {
