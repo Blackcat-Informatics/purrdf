@@ -319,6 +319,9 @@ fn cancelled_paged() -> PagedDataset {
 
 #[test]
 fn query_time_failure_cannot_masquerade_as_an_empty_result() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::{Capture, Event};
+
     let paged = cancelled_paged();
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     let error = NativeSparqlEngine::new()
@@ -328,6 +331,30 @@ fn query_time_failure_cannot_masquerade_as_an_empty_result() {
             &QueryOptions::EMPTY,
         )
         .expect_err("cancelled materialization cannot return empty solutions");
+    let inspected = Capture::read(&error);
+    assert_eq!(inspected.child("cause").code, "paged-query-stopped");
+    let receipt = inspected.child("evidence");
+    assert_eq!(receipt.code, "paged-query-evidence");
+    assert!(matches!(
+        receipt.field("consumed_pages"),
+        ErrorValue::Unsigned(0)
+    ));
+    assert!(matches!(
+        receipt.field("consumed_bytes"),
+        ErrorValue::ByteCount(0)
+    ));
+    assert!(receipt.events.windows(3).any(|events| matches!(
+        events,
+        [
+            Event::BeginList(Some("requested_pages"), 1),
+            Event::Value(None, ErrorValue::Unsigned(0)),
+            Event::EndList
+        ]
+    )));
+    assert!(matches!(
+        receipt.field("generation"),
+        ErrorValue::Unsigned(generation) if generation == u128::from(error.evidence().generation.0)
+    ));
     match error {
         FallibleSparqlError::Operational { error, evidence } => {
             assert_eq!(

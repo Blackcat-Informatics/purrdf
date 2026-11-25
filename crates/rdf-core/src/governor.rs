@@ -600,7 +600,7 @@ impl SilencedKind {
 /// The answer such an operation returns is the one the specification defines, and it is
 /// indistinguishable from an endpoint that answered with nothing to add. This record is
 /// where the difference is kept.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone)]
 #[non_exhaustive]
 pub struct SilencedInvocation {
     /// The endpoint or source.
@@ -609,13 +609,25 @@ pub struct SilencedInvocation {
     pub kind: SilencedKind,
     /// The failure's own message, as the error would have rendered without `SILENT`.
     pub message: String,
+    cause: Option<SilencedCause>,
 }
+
+#[derive(Clone)]
+struct SilencedCause(crate::diagnostic::DiagnosticCause);
+
+// The opaque owner is attached as a whole and does not participate in receipt
+// invariants. The cause accessor promises no unwind safety for the erased error.
+impl std::panic::UnwindSafe for SilencedCause {}
+impl std::panic::RefUnwindSafe for SilencedCause {}
 
 impl purrdf_hash::error::StructuredError for SilencedInvocation {
     purrdf_hash::error_visit! {
-        @record self { target, kind, message } => "governor-silenced-invocation" {
+        @record self { target, kind, message, cause } => "governor-silenced-invocation" {
             "target" => Record(&self.target), "kind" => Code(self.kind.label()),
             "message" => Message(&self.message),
+            "cause" => Value(self.native_cause().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |cause| purrdf_hash::error::ErrorValue::Cause(cause))),
         }
     }
 }
@@ -635,7 +647,66 @@ impl SilencedInvocation {
             target,
             kind,
             message,
+            cause: None,
         }
+    }
+
+    /// Retain the original native failure with its independent admission.
+    /// The supplemental cause does not affect comparison, ordering, or hashing.
+    #[must_use]
+    pub fn with_native_cause(mut self, cause: crate::diagnostic::DiagnosticCause) -> Self {
+        self.cause = Some(SilencedCause(cause));
+        self
+    }
+
+    /// Borrow the original failure, when the producer retained one.
+    #[must_use]
+    pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
+        self.cause.as_ref().map(|SilencedCause(cause)| &***cause)
+    }
+
+    fn key(&self) -> (&SilencedTarget, SilencedKind, &str) {
+        (&self.target, self.kind, &self.message)
+    }
+}
+
+impl PartialEq for SilencedInvocation {
+    fn eq(&self, other: &Self) -> bool {
+        self.key() == other.key()
+    }
+}
+impl Eq for SilencedInvocation {}
+
+impl PartialOrd for SilencedInvocation {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for SilencedInvocation {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.key().cmp(&other.key())
+    }
+}
+
+impl core::hash::Hash for SilencedInvocation {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.target.hash(state);
+        self.kind.hash(state);
+        self.message.hash(state);
+    }
+}
+
+#[expect(
+    clippy::missing_fields_in_debug,
+    reason = "preserve the receipt presentation without rendering its native cause"
+)]
+impl core::fmt::Debug for SilencedInvocation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SilencedInvocation")
+            .field("target", &self.target)
+            .field("kind", &self.kind)
+            .field("message", &self.message)
+            .finish()
     }
 }
 
@@ -890,11 +961,12 @@ impl SilencedEvidenceBuilder {
                 },
                 SilencedTarget::Load { iri } => SilencedTarget::Load { iri: copy(iri)? },
             };
-            records.push(SilencedInvocation::new(
+            records.push(SilencedInvocation {
                 target,
-                record.kind,
-                copy(&record.message)?,
-            ));
+                kind: record.kind,
+                message: copy(&record.message)?,
+                cause: record.cause.clone(),
+            });
         }
         let ordinal = records.partition_point(|record| record <= &invocation);
         records.insert(ordinal, invocation);

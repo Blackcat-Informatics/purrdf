@@ -386,6 +386,19 @@ impl core::fmt::Display for LoadError {
 
 purrdf_hash::error_sources!(LoadError, Storage);
 
+impl purrdf_hash::error::StructuredError for LoadError {
+    purrdf_hash::error_visit! {
+        Transport(message) => "sparql-load-transport" { "message" => Message(message) },
+        Decode(message) => "sparql-load-decode" { "message" => Message(message) },
+        Denied(error) => "sparql-load-denied" { "cause" => Cause(error) },
+        HostDenied(message) => "sparql-load-host-denied" { "message" => Message(message) },
+        Fault(message) => "sparql-load-fault" { "message" => Message(message) },
+        Governed(governor) => "sparql-load-governed" { "governor" => Record(governor) },
+        Storage(error) => "sparql-load-storage" { "cause" => Cause(error) },
+        OpaqueRedirect(iri) => "sparql-load-opaque-redirect" { "iri" => Iri(iri) },
+    }
+}
+
 /// One governed request handed to a SPARQL `LOAD` host resolver.
 #[derive(Clone, Copy)]
 pub struct GraphResolveRequest<'a> {
@@ -1162,13 +1175,22 @@ fn load(
 ) -> Result<(), UpdateAbort> {
     let governors = cfg.governors;
     let Some(resolver) = resolver else {
-        let message = format!("LOAD <{source}> needs a GraphResolver host seam, none was provided");
-        return silence_or_fail(
-            silent,
+        if silent && governors.is_none() {
+            return Ok(());
+        }
+        let cause = MissingLoadResolver {
+            source: crate::WorkspaceCapability::resident()
+                .authored_text(source)
+                .map_err(|error| execution_abort(&error, None))?,
+        };
+        let diagnostic = RdfDiagnostic::error("native-sparql-load-no-resolver", cause.to_string());
+        return publish_load_failure(
+            governors
+                .filter(|_| silent)
+                .map(|state| (state.as_ref(), purrdf_core::SilencedKind::Unconfigured)),
             source,
-            purrdf_core::SilencedKind::Unconfigured,
-            RdfDiagnostic::error("native-sparql-load-no-resolver", message),
-            governors,
+            diagnostic,
+            cause,
         );
     };
     check_stop(governors)?;
@@ -1185,27 +1207,28 @@ fn load(
             ds
         }
         Err(error) => {
-            let diagnostic =
-                RdfDiagnostic::error(error.code(), format!("LOAD <{source}>: {error}"));
-            let Some(kind) = error.silenced_kind() else {
-                // Failures `SILENT` never absorbs. The request's own stop signal or ceiling,
-                // reported by the resolver, is the trip, whatever `SILENT` says; an
-                // ungoverned request has no governor to have tripped, so a resolver that
-                // claims one is reporting a failure. A storage refusal is a failure too.
-                return Err(match (post_return_trip, governors, error) {
-                    (Some(tripped), _, _) => tripped,
-                    (None, Some(state), LoadError::Governed(governor)) => {
-                        UpdateAbort::Tripped(state.record_trip(governor))
-                    }
-                    _ => UpdateAbort::Failed(diagnostic),
-                });
-            };
-            // Under `SILENT` the failure is erased, so a stop that fired during the same
-            // wait becomes the surviving fact; without it the failure is reported.
-            if silent && let Some(tripped) = post_return_trip {
+            let kind = error.silenced_kind();
+            // A stop wins over failures that cannot be silenced, or would be
+            // absorbed. An ordinary reported resolver failure otherwise wins.
+            if (kind.is_none() || silent)
+                && let Some(tripped) = post_return_trip
+            {
                 return Err(tripped);
             }
-            return silence_or_fail(silent, source, kind, diagnostic, governors);
+            if let (Some(state), LoadError::Governed(governor)) = (governors, &error) {
+                return Err(UpdateAbort::Tripped(state.record_trip(*governor)));
+            }
+            if silent && kind.is_some() && governors.is_none() {
+                return Ok(());
+            }
+            let diagnostic =
+                RdfDiagnostic::error(error.code(), format!("LOAD <{source}>: {error}"));
+            return publish_load_failure(
+                governors.filter(|_| silent).map(Arc::as_ref).zip(kind),
+                source,
+                diagnostic,
+                error,
+            );
         }
     };
 
@@ -1227,38 +1250,71 @@ fn load(
     Ok(())
 }
 
-/// A `LOAD` of `source` that failed with `diagnostic`: under `SILENT` a success with
-/// nothing loaded, recorded on the request's evidence as `kind`; otherwise the failure.
-fn silence_or_fail(
-    silent: bool,
-    source: &str,
-    kind: purrdf_core::SilencedKind,
-    diagnostic: RdfDiagnostic,
-    governors: Option<&Arc<GovernorState>>,
-) -> Result<(), UpdateAbort> {
-    if !silent {
-        return Err(UpdateAbort::Failed(diagnostic));
+#[derive(Debug)]
+struct MissingLoadResolver {
+    source: purrdf_lex::allocation::SharedText,
+}
+
+impl purrdf_hash::error::StructuredError for MissingLoadResolver {
+    purrdf_hash::error_visit! {
+        @record self { source } => "load-resolver-missing" {
+            "source" => Iri(self.source.as_str()),
+        }
     }
-    if let Some(state) = governors {
-        state
-            .record_silenced_admitted(
-                purrdf_core::SilencedInvocation::new(
-                    purrdf_core::SilencedTarget::Load {
-                        iri: source.to_owned(),
-                    },
-                    kind,
-                    diagnostic.message,
-                ),
-                &crate::WorkspaceCapability::resident(),
+}
+
+impl core::fmt::Display for MissingLoadResolver {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            f,
+            "LOAD <{}> needs a GraphResolver host seam, none was provided",
+            self.source
+        )
+    }
+}
+
+impl std::error::Error for MissingLoadResolver {}
+
+/// Publish the original cause only once the failure or silenced record will be observed.
+fn publish_load_failure(
+    silenced: Option<(&GovernorState, purrdf_core::SilencedKind)>,
+    source: &str,
+    diagnostic: RdfDiagnostic,
+    cause: impl purrdf_hash::error::NativeError + 'static,
+) -> Result<(), UpdateAbort> {
+    let workspace = crate::WorkspaceCapability::resident();
+    // A retention refusal must not attempt to admit a second cause.
+    let cause = crate::retained::PreparedDiagnosticCause::new(
+        cause,
+        crate::workspace::LexicalFrame::new(&workspace),
+    )
+    .and_then(crate::retained::PreparedDiagnosticCause::publish)
+    .map_err(|error| execution_abort(&error, None))?;
+    let Some((state, kind)) = silenced else {
+        return Err(diagnostic
+            .with_native_cause(
+                cause,
+                &mut purrdf_lex::allocation::Memory::new(&mut purrdf_lex::allocation::Resident),
             )
             .map_err(|error| {
-                UpdateAbort::Failed(RdfDiagnostic::error(
-                    crate::engine::eval_diagnostic_code(&error, "native-sparql-update-eval"),
-                    error.to_string(),
-                ))
-            })?;
-    }
-    Ok(())
+                execution_abort(
+                    &workspace.storage_error(error, "LOAD diagnostic attachment"),
+                    None,
+                )
+            })?
+            .into());
+    };
+    let target = purrdf_core::SilencedTarget::Load {
+        iri: crate::workspace::string(source, "SILENT load source")
+            .map_err(|error| execution_abort(&error, None))?,
+    };
+    state
+        .record_silenced_admitted(
+            purrdf_core::SilencedInvocation::new(target, kind, diagnostic.message)
+                .with_native_cause(cause),
+            &workspace,
+        )
+        .map_err(|error| execution_abort(&error, None))
 }
 
 // ── CLEAR / DROP ─────────────────────────────────────────────────────────────
@@ -2544,12 +2600,21 @@ mod tests {
 
     #[test]
     fn load_without_resolver_is_a_hard_error() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         let mut m = mut_with(&[]);
         let cache = BoundedOrderCache::default();
         let cfg = ungoverned(&cache);
-        let code =
-            failure_code(eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg, None).unwrap_err());
-        assert_eq!(code, "native-sparql-load-no-resolver");
+        let Err(UpdateAbort::Failed(diagnostic)) =
+            eval_update(&parse("LOAD ex:doc"), &mut m, None, &cfg, None)
+        else {
+            panic!("missing resolver must produce a diagnostic");
+        };
+        assert_eq!(diagnostic.code, "native-sparql-load-no-resolver");
+        let cause = Capture::read(diagnostic.native_cause().expect("missing resolver cause"));
+        assert_eq!(cause.code, "load-resolver-missing");
+        assert!(matches!(cause.field("source"), ErrorValue::Iri(iri) if iri == format!("{EX}doc")));
     }
 
     #[test]
@@ -2599,9 +2664,12 @@ mod tests {
         ]
     }
 
-    /// The outcome of a `LOAD`, the store's size after it, and each silenced record as
-    /// `(iri, kind label)`.
-    type LoadRun = (Result<(), UpdateAbort>, usize, Vec<(String, &'static str)>);
+    /// The outcome of a `LOAD`, the store's size after it, and its silenced evidence.
+    type LoadRun = (
+        Result<(), UpdateAbort>,
+        usize,
+        purrdf_core::SilencedEvidence,
+    );
 
     /// Apply `update` governed (metered) over `(a, p, b)`.
     fn load_governed(update: &str, resolver: Option<&dyn GraphResolver>) -> LoadRun {
@@ -2618,39 +2686,77 @@ mod tests {
             options: QueryOptions::EMPTY,
         };
         let outcome = eval_update(&parse(update), &mut m, resolver, &cfg, None);
-        let silenced = state
-            .evidence()
-            .silenced()
-            .iter()
-            .map(|record| (record.target.name().to_owned(), record.kind.label()))
-            .collect();
+        let silenced = state.evidence().silenced;
         (outcome, quad_set(&m).len(), silenced)
+    }
+
+    fn silenced_load<'a>(
+        records: &'a [purrdf_core::SilencedInvocation],
+        kind: &str,
+    ) -> &'a purrdf_core::SilencedInvocation {
+        let [record] = records else {
+            panic!("expected one silenced LOAD: {records:?}");
+        };
+        assert_eq!(record.target.label(), "load");
+        assert_eq!(record.target.name(), format!("{EX}doc"));
+        assert_eq!(record.kind.label(), kind);
+        record
     }
 
     #[test]
     fn load_silent_succeeds_for_every_failure_and_records_it() {
+        use purrdf_hash::error::ErrorValue;
+        use purrdf_testkit::error_capture::Capture;
+
         for (failure, kind) in load_failures() {
             let resolver = FailingResolver(failure);
             let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&resolver));
             assert!(outcome.is_ok(), "{kind}: SILENT succeeds");
             assert_eq!(quads, 1, "{kind}: nothing loaded");
-            assert_eq!(silenced, [(format!("{EX}doc"), kind)]);
+            let cause = silenced_load(&silenced, kind)
+                .native_cause()
+                .expect("original silenced refusal");
+            assert_eq!(
+                (cause as &dyn std::error::Error).downcast_ref::<LoadError>(),
+                Some(&failure())
+            );
             // Without SILENT: the failure, under its own code, and nothing recorded.
             let (outcome, _, silenced) = load_governed("LOAD ex:doc", Some(&resolver));
             match outcome {
                 Err(UpdateAbort::Failed(diagnostic)) => {
-                    assert_eq!(diagnostic.code, failure().code(), "{kind}");
+                    let expected = failure();
+                    assert_eq!(diagnostic.code, expected.code(), "{kind}");
                     assert!(diagnostic.message.starts_with(&format!("LOAD <{EX}doc>: ")));
+                    let cause = diagnostic
+                        .native_cause()
+                        .expect("original resolver refusal");
+                    assert_eq!(
+                        (cause as &dyn std::error::Error).downcast_ref::<LoadError>(),
+                        Some(&expected),
+                        "{kind}"
+                    );
+                    if matches!(expected, LoadError::Denied(_)) {
+                        let denial = Capture::read(cause).child("cause");
+                        assert_eq!(denial.code, "service-denial");
+                        assert!(matches!(
+                            denial.field("endpoint"),
+                            ErrorValue::Iri(endpoint) if endpoint == format!("{EX}doc")
+                        ));
+                    }
                 }
                 other => panic!("{kind}: expected the failure, got {other:?}"),
             }
-            assert_eq!(silenced, Vec::<(String, &str)>::new(), "{kind}");
+            assert!(silenced.is_empty(), "{kind}");
         }
         // No resolver at all: the same, recorded as unconfigured.
         let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", None);
         assert!(outcome.is_ok());
         assert_eq!(quads, 1);
-        assert_eq!(silenced, [(format!("{EX}doc"), "unconfigured")]);
+        let missing = Capture::read(silenced_load(&silenced, "unconfigured")).child("cause");
+        assert_eq!(missing.code, "load-resolver-missing");
+        assert!(
+            matches!(missing.field("source"), ErrorValue::Iri(iri) if iri == format!("{EX}doc"))
+        );
         let (outcome, _, _) = load_governed("LOAD ex:doc", None);
         assert!(
             matches!(&outcome, Err(UpdateAbort::Failed(d)) if d.code == "native-sparql-load-no-resolver"),
@@ -2662,7 +2768,7 @@ mod tests {
         let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&resolver));
         assert!(outcome.is_ok());
         assert_eq!(quads, 2, "the loaded quad beside the original");
-        assert_eq!(silenced, Vec::<(String, &str)>::new());
+        assert!(silenced.is_empty());
     }
 
     /// A storage refusal is operational: `LOAD SILENT` fails the request with the
@@ -2676,20 +2782,24 @@ mod tests {
         match outcome {
             Err(UpdateAbort::Failed(diagnostic)) => {
                 assert_eq!(diagnostic.code, "native-sparql-evaluation");
+                let load = diagnostic.native_cause().expect("original storage refusal");
+                assert_eq!(
+                    (load as &dyn std::error::Error).downcast_ref::<LoadError>(),
+                    Some(&LoadError::Storage(StorageError::AllocationFailed))
+                );
+                let cause = std::error::Error::source(load)
+                    .and_then(|cause| cause.downcast_ref::<StorageError>());
+                assert_eq!(cause, Some(&StorageError::AllocationFailed));
             }
             other => panic!("expected the storage failure, got {other:?}"),
         }
         assert_eq!(quads, 1, "nothing loaded");
-        assert_eq!(silenced, Vec::<(String, &str)>::new());
-        let cause = std::error::Error::source(&LoadError::Storage(StorageError::AllocationFailed))
-            .and_then(|cause| cause.downcast_ref::<StorageError>());
-        assert_eq!(cause, Some(&StorageError::AllocationFailed));
-
+        assert!(silenced.is_empty());
         let transport = FailingResolver(|| LoadError::Transport("unreachable".to_owned()));
         let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&transport));
         assert!(outcome.is_ok(), "SILENT absorbs a transport failure");
         assert_eq!(quads, 1);
-        assert_eq!(silenced, [(format!("{EX}doc"), "transport")]);
+        silenced_load(&silenced, "transport");
     }
 
     #[test]
@@ -2709,7 +2819,22 @@ mod tests {
                 "{update}: {outcome:?}"
             );
             assert_eq!(quads, 1, "{update}");
-            assert_eq!(silenced, Vec::<(String, &str)>::new(), "{update}");
+            assert!(silenced.is_empty(), "{update}");
+            let mut m = mut_with(&[("a", "p", "b")]);
+            let cache = BoundedOrderCache::default();
+            let cfg = ungoverned(&cache);
+            let Err(UpdateAbort::Failed(diagnostic)) =
+                eval_update(&parse(update), &mut m, Some(&resolver), &cfg, None)
+            else {
+                panic!("a resolver cannot trip an absent governor");
+            };
+            assert_eq!(diagnostic.code, "native-sparql-load-stopped");
+            let cause = diagnostic.native_cause().expect("resolver-reported stop");
+            assert_eq!(
+                (cause as &dyn std::error::Error).downcast_ref::<LoadError>(),
+                Some(&(resolver.0)())
+            );
+            assert_eq!(quad_set(&m).len(), 1);
         }
     }
 

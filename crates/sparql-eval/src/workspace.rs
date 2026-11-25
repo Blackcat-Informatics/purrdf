@@ -3907,6 +3907,78 @@ pub(crate) mod owned_row_regressions {
             &Closed,
             |_| 7,
         ));
+
+        let projected = "SELECT ?s ?o ?missing WHERE { ?s <http://example.org/p> ?o }";
+        for governed in [false, true] {
+            let read = crate::with_fallible_read(&view, |operation| {
+                let capability = operation.capability();
+                let mut execution = engine
+                    .prepare_execution_admitted(
+                        projected,
+                        None,
+                        &[],
+                        &crate::QueryOptions::EMPTY,
+                        &capability,
+                    )
+                    .expect("prepare a projected point read");
+                let visited = std::cell::Cell::new(false);
+                let visit = |outcome: crate::InternedOutcome<'_, '_, GroundFaultView<'_>>| {
+                    let crate::InternedOutcome::Solutions(solutions) = outcome else {
+                        panic!("expected a projected SELECT row");
+                    };
+                    let row = solutions.rows().first().expect("projected row");
+                    let valid = solutions
+                        .try_cell_owned_in_read(row, 0, &capability, &operation)
+                        .expect("adjacent subject remains readable")
+                        .expect("subject is bound");
+                    assert_eq!(
+                        &*valid,
+                        &purrdf_core::TermValue::iri("http://example.org/s")
+                    );
+                    assert!(
+                        solutions
+                            .try_cell_owned_in_read(row, 2, &capability, &operation)
+                            .expect("unbound result does not read the source")
+                            .is_none()
+                    );
+                    assert!(matches!(
+                        solutions.try_cell_owned_in_read(row, 1, &capability, &operation),
+                        Err(EvalError::WorkspaceStopped)
+                    ));
+                    visited.set(true);
+                };
+                if governed {
+                    drop(engine.execute_read_governed_admitted(
+                        &mut execution,
+                        &view,
+                        &crate::QueryOptions::EMPTY,
+                        &crate::QueryGovernors::UNBOUNDED,
+                        &operation,
+                        visit,
+                    ));
+                } else {
+                    drop(engine.execute_read_witnessed_admitted(
+                        &mut execution,
+                        &view,
+                        &crate::QueryOptions::EMPTY,
+                        Some(&Closed),
+                        &operation,
+                        visit,
+                    ));
+                }
+                assert!(
+                    visited.get(),
+                    "the original fault occurs during the cell read"
+                );
+                std::future::ready(())
+            });
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            let std::task::Poll::Ready(result) = Future::poll(std::pin::pin!(read), &mut context)
+            else {
+                panic!("the synchronous point-read provider has no pending work");
+            };
+            refused(result);
+        }
         assert_eq!(
             clones.load(Ordering::Relaxed),
             0,

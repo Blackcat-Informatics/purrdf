@@ -493,17 +493,71 @@ fn a_zero_norm_vector_is_refused_under_cosine_and_admitted_under_the_metrics_tha
 
 #[test]
 fn a_corrupted_artifact_is_a_data_error_rather_than_a_panic() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_sparql_eval::NativeDiagnosticKind;
+    use purrdf_testkit::error_capture::Capture;
+
     let mut built = fixture(&DistanceMetric::SquaredEuclidean, &points());
-    let at = built.artifact.len() / 2;
-    built.artifact[at] ^= 0xFF;
-    let error = built
-        .open(roomy())
-        .expect_err("a flipped byte must be caught by PURREMB's own sealing");
-    assert!(
-        matches!(error, EvalError::Data(_))
-            || matches!(&error, EvalError::NativeDiagnostic(diagnostic) if diagnostic.kind() == purrdf_sparql_eval::error::NativeDiagnosticKind::Data),
-        "got {error:?}"
+    let open = |fixture: &Fixture| {
+        EmbeddingSpace::from_artifact_with_native_errors(
+            &fixture.artifact,
+            fixture.target_set,
+            fixture.vector_space,
+            fixture.bindings.clone(),
+            roomy(),
+        )
+    };
+    let valid = open(&built).expect("the intact artifact opens");
+    assert_eq!(valid.row_count(), points().len());
+
+    let mut bad_magic = built.artifact.clone();
+    bad_magic[0] ^= 0x80;
+    let error = open(&Fixture {
+        artifact: bad_magic,
+        target_set: built.target_set,
+        vector_space: built.vector_space,
+        bindings: built.bindings.clone(),
+    })
+    .expect_err("invalid magic is a structural failure");
+    let EvalError::RetainedNativeFailure(failure) = &error else {
+        panic!("expected a retained native failure, got {error:?}");
+    };
+    assert_eq!(failure.kind(), NativeDiagnosticKind::Data);
+    assert_eq!(
+        Capture::read(failure.cause()).child("stage").code,
+        "knn-artifact-open"
     );
+    assert_eq!(
+        failure
+            .cause()
+            .source()
+            .and_then(|source| source.downcast_ref::<EmbeddingError>()),
+        Some(&EmbeddingError::BadMagic)
+    );
+
+    // The first directory entry stores its digest after its 32-byte framing prefix.
+    // Change the claimed hash without changing the structure or the section bytes.
+    let at = PURREMB_HEADER_LENGTH as usize + 32;
+    let mut actual = [0; 32];
+    actual.copy_from_slice(&built.artifact[at..at + 32]);
+    built.artifact[at] ^= 0x80;
+    let mut expected = actual;
+    expected[0] ^= 0x80;
+
+    let error = open(&built).expect_err("a changed stored digest fails verification");
+    let legacy = built.open(roomy()).expect_err("legacy data refusal");
+    assert!(matches!(legacy, EvalError::Data(_)));
+    assert_eq!(error.to_string(), legacy.to_string());
+    let EvalError::RetainedNativeFailure(failure) = &error else {
+        panic!("expected a retained native failure, got {error:?}");
+    };
+    assert_eq!(failure.kind(), NativeDiagnosticKind::Data);
+    let captured = Capture::read(failure.cause());
+    assert_eq!(captured.child("stage").code, "knn-artifact-verify");
+    let cause = captured.child("cause");
+    assert_eq!(cause.code, "purremb-digest-mismatch");
+    assert!(matches!(cause.field("expected"), ErrorValue::Bytes(v) if v == expected));
+    assert!(matches!(cause.field("actual"), ErrorValue::Bytes(v) if v == actual));
 }
 
 // ---------------------------------------------------------------------------

@@ -115,6 +115,7 @@
 //! so — it names the law and declares a perturbed order carrying the arithmetic's own
 //! evidence — so the difference reaches every plan and every fused answer that uses it.
 
+mod artifact_error;
 mod invocation;
 mod metric;
 
@@ -125,11 +126,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::distance::RowsRef;
 use purrdf_core::{
-    ContentDigest, DistanceMetric, EmbeddingView, FamilyContractDigest, Iri,
+    ContentDigest, DistanceMetric, EmbeddingError, EmbeddingView, FamilyContractDigest, Iri,
     ProjectionContentDigest, TargetId, TargetSetId, TermValue, VectorDtype, VectorSpaceId,
     verify_embedding,
 };
 
+use self::artifact_error::ArtifactStage;
 use crate::error::EvalError;
 use crate::property_fn::{
     AcceptedTerm, CandidateDomains, DepthPlacement, DuplicatePolicy, OrderFidelity, PfArgs,
@@ -347,6 +349,9 @@ impl EmbeddingSpace {
     /// environment is not the IEEE one the exact arithmetic defines its results under;
     /// the norms computed here would already differ.
     ///
+    /// Use [`Self::from_artifact_with_native_errors`] to inspect the original
+    /// artifact read failures without parsing these diagnostics.
+    ///
     /// # A row without a term is a refusal, not a skipped row
     ///
     /// Dropping an uncovered row would make the search quietly range over fewer
@@ -360,13 +365,56 @@ impl EmbeddingSpace {
         bindings: Vec<(TargetId, TermValue)>,
         guard: KnnGuard,
     ) -> Result<Self, EvalError> {
+        Self::open_artifact(
+            artifact,
+            target_set,
+            vector_space,
+            bindings,
+            guard,
+            ArtifactStage::legacy,
+        )
+    }
+
+    /// Build the same queryable space as [`Self::from_artifact`] with inspectable
+    /// PURREMB read failures.
+    ///
+    /// # Errors
+    /// Uses the same admission, verification and refusal order as
+    /// [`Self::from_artifact`]. Native artifact failures become a data-classified
+    /// [`EvalError::RetainedNativeFailure`] with an artifact stage and the original
+    /// [`EmbeddingError`] in its source chain. Other failures are unchanged.
+    pub fn from_artifact_with_native_errors(
+        artifact: &[u8],
+        target_set: TargetSetId,
+        vector_space: VectorSpaceId,
+        bindings: Vec<(TargetId, TermValue)>,
+        guard: KnnGuard,
+    ) -> Result<Self, EvalError> {
+        Self::open_artifact(
+            artifact,
+            target_set,
+            vector_space,
+            bindings,
+            guard,
+            ArtifactStage::retained,
+        )
+    }
+
+    fn open_artifact(
+        artifact: &[u8],
+        target_set: TargetSetId,
+        vector_space: VectorSpaceId,
+        bindings: Vec<(TargetId, TermValue)>,
+        guard: KnnGuard,
+        artifact_error: fn(ArtifactStage, EmbeddingError) -> EvalError,
+    ) -> Result<Self, EvalError> {
         // The float environment first: every number this constructor computes (the norms
         // a cosine space divides by) is already arithmetic under it.
         let exact = Exact::resolve().map_err(EvalError::FloatEnvironment)?;
         let mut view = EmbeddingView::from_bytes(artifact)
-            .map_err(|e| EvalError::data(format!("the PURREMB artifact is unreadable: {e}")))?;
+            .map_err(|error| artifact_error(ArtifactStage::Open, error))?;
         verify_embedding(&mut view)
-            .map_err(|e| EvalError::data(format!("the PURREMB artifact does not verify: {e}")))?;
+            .map_err(|error| artifact_error(ArtifactStage::Verify, error))?;
 
         let space = view.vector_space(vector_space).ok_or_else(|| {
             EvalError::config(format!(
@@ -379,9 +427,9 @@ impl EmbeddingSpace {
                 space.family_id()
             ))
         })?;
-        let metric = family.metric().map_err(|e| {
-            EvalError::data(format!("the family's declared metric is unusable: {e}"))
-        })?;
+        let metric = family
+            .metric()
+            .map_err(|error| artifact_error(ArtifactStage::Metric, error))?;
         let kernel = Kernel::of(&metric).ok_or_else(|| {
             EvalError::config(format!(
                 "vector space {vector_space} declares the caller-defined distance metric \
@@ -395,7 +443,7 @@ impl EmbeddingSpace {
         })?;
         let effective = view
             .effective_matrix(target_set, vector_space)
-            .map_err(|e| EvalError::data(format!("the effective matrix is unreadable: {e}")))?
+            .map_err(|error| artifact_error(ArtifactStage::EffectiveMatrix, error))?
             .ok_or_else(|| {
                 EvalError::config(format!(
                     "the artifact holds no matrix joining target set {target_set} to vector \
@@ -415,7 +463,7 @@ impl EmbeddingSpace {
 
         let dimension = space.dimension() as usize;
         let rows = TermRows::bind(&set, bindings)?;
-        let vectors = read_vectors(&effective, row_count, dimension, exact)?;
+        let vectors = read_vectors(&effective, row_count, dimension, exact, artifact_error)?;
         let norms = read_norms(exact, kernel, &vectors, dimension, row_count)?;
         check_index_guards(&view, target_set, vector_space, &effective)?;
 
@@ -916,36 +964,30 @@ fn read_vectors(
     row_count: usize,
     dimension: usize,
     exact: Resolved<Exact>,
+    artifact_error: fn(ArtifactStage, EmbeddingError) -> EvalError,
 ) -> Result<Vec<f64>, EvalError> {
     let dtype = effective
         .matrix()
         .dtype()
-        .map_err(|e| EvalError::data(format!("the matrix's scalar type is unreadable: {e}")))?;
+        .map_err(|error| artifact_error(ArtifactStage::ScalarType, error))?;
     let mut out: Vec<f64> = Vec::with_capacity(row_count.saturating_mul(dimension));
     for row in 0..row_count {
         let index = row as u64;
         let before = out.len();
+        let read_error = |error| artifact_error(ArtifactStage::Row(row), error);
         match dtype {
             VectorDtype::F32 => {
-                let values = effective.f32_row(index, exact).map_err(|e| {
-                    EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
-                })?;
+                let values = effective.f32_row(index, exact).map_err(read_error)?;
                 for value in values {
-                    let value = value.map_err(|e| {
-                        EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
-                    })?;
+                    let value = value.map_err(read_error)?;
                     // Exact: every binary32 is a binary64.
                     out.push(f64::from(value));
                 }
             }
             VectorDtype::F64 => {
-                let values = effective.f64_row(index, exact).map_err(|e| {
-                    EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
-                })?;
+                let values = effective.f64_row(index, exact).map_err(read_error)?;
                 for value in values {
-                    out.push(value.map_err(|e| {
-                        EvalError::data(format!("row {row} of the matrix is unreadable: {e}"))
-                    })?);
+                    out.push(value.map_err(read_error)?);
                 }
             }
         }

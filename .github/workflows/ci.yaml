@@ -32,7 +32,7 @@ permissions:
 jobs:
   # Manual assembly projection owns its complete seven-configuration build.
   # Ordinary PR/push gates run independently of that evidence-only dispatch.
-  workspace:
+  workspace-compiler:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -41,8 +41,6 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-          # Full history and every branch: the non-Rust ratchet compares against the
-          # merge-base with the pull request's base branch, which a depth-1 clone lacks.
           fetch-depth: 0
 
       - name: Install Rust
@@ -64,6 +62,25 @@ jobs:
 
       - name: Clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  # The helper census and metadata generators share built dependencies.
+  # Keep them on one runner and run them alongside the compiler checks.
+  workspace-hygiene:
+    if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          # The non-Rust ratchet uses the merge base with the integration branch.
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
       - name: Enforce no Cargo features
         run: cargo run -q --locked -p helper-census -- --no-features
@@ -302,6 +319,19 @@ jobs:
 
       - name: Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
+
+  # Keep the workspace result tied to both independent jobs.
+  workspace:
+    needs: [workspace-compiler, workspace-hygiene]
+    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require the compiler and hygiene checks to succeed
+        env:
+          COMPILER_RESULT: ${{ needs.workspace-compiler.result }}
+          HYGIENE_RESULT: ${{ needs.workspace-hygiene.result }}
+        run: test "$COMPILER_RESULT" = success && test "$HYGIENE_RESULT" = success
 
   # `make test-shard` partitions the lib, doc and integration targets from
   # `cargo test --workspace --locked`. Each shard selects the whole workspace
