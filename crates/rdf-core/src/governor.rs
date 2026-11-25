@@ -609,8 +609,16 @@ pub struct SilencedInvocation {
     pub kind: SilencedKind,
     /// The failure's own message, as the error would have rendered without `SILENT`.
     pub message: String,
-    cause: Option<crate::diagnostic::DiagnosticCause>,
+    cause: Option<SilencedCause>,
 }
+
+#[derive(Clone)]
+struct SilencedCause(crate::diagnostic::DiagnosticCause);
+
+// The opaque owner is attached as a whole and does not participate in receipt
+// invariants. The cause accessor promises no unwind safety for the erased error.
+impl std::panic::UnwindSafe for SilencedCause {}
+impl std::panic::RefUnwindSafe for SilencedCause {}
 
 impl purrdf_hash::error::StructuredError for SilencedInvocation {
     purrdf_hash::error_visit! {
@@ -647,14 +655,14 @@ impl SilencedInvocation {
     /// The supplemental cause does not affect comparison, ordering, or hashing.
     #[must_use]
     pub fn with_native_cause(mut self, cause: crate::diagnostic::DiagnosticCause) -> Self {
-        self.cause = Some(cause);
+        self.cause = Some(SilencedCause(cause));
         self
     }
 
     /// Borrow the original failure, when the producer retained one.
     #[must_use]
     pub fn native_cause(&self) -> Option<&(dyn purrdf_hash::error::NativeError + 'static)> {
-        self.cause.as_ref().map(|cause| &***cause)
+        self.cause.as_ref().map(|SilencedCause(cause)| &***cause)
     }
 
     fn key(&self) -> (&SilencedTarget, SilencedKind, &str) {

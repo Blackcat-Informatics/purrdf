@@ -570,6 +570,8 @@ fn load_silent_absorbs_an_opaque_redirect_beside_an_applied_load() {
     use purrdf_hash::error::ErrorValue;
     use purrdf_testkit::error_capture::Capture;
 
+    fn require_unwind_traits<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>(_: &T) {}
+
     let host = Host::new(vec![
         ("https://open.example/opaque", Route::Opaque),
         ("https://open.example/opaque-later", Route::Opaque),
@@ -606,6 +608,7 @@ fn load_silent_absorbs_an_opaque_redirect_beside_an_applied_load() {
         "https://open.example/opaque",
         "https://open.example/opaque-later",
     ]) {
+        require_unwind_traits(record);
         assert_eq!(
             record.target,
             SilencedTarget::Load {
