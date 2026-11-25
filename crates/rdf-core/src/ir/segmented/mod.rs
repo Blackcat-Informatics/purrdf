@@ -58,6 +58,23 @@ impl SegmentedSnapshot {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+    // Request checkpoints copy the fixed identity while holding their ledger
+    // lock, then release the lock before invoking a consumer. Copied scalar
+    // bytes preserve the exact identity without borrowing that temporary copy.
+    fn visit_fields(self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'_>) {
+        visitor.begin_list(Some("bytes"), self.0.len());
+        for byte in self.0 {
+            visitor.value(None, purrdf_hash::error::ErrorValue::Unsigned(byte.into()));
+        }
+        visitor.end_list();
+    }
+}
+
+impl purrdf_hash::error::StructuredError for SegmentedSnapshot {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        visitor.variant("segmented-snapshot");
+        self.visit_fields(visitor);
+    }
 }
 
 /// Host-owned authority for a persisted full-certification receipt. Authentication
@@ -327,6 +344,20 @@ pub struct SegmentedReceipt {
     block_count: u64,
     leaf_count: u64,
     byte_len: u64,
+}
+
+impl purrdf_hash::error::StructuredError for SegmentedReceipt {
+    purrdf_hash::error_visit! {
+        @record self { snapshot, root, block_bytes, block_count, leaf_count, byte_len }
+        => "segmented-receipt" {
+            "snapshot" => Record(&self.snapshot),
+            "root" => Bytes(&self.root),
+            "block_bytes" => ByteCount(u128::from(self.block_bytes)),
+            "block_count" => Unsigned(u128::from(self.block_count)),
+            "leaf_count" => Unsigned(u128::from(self.leaf_count)),
+            "byte_len" => ByteCount(u128::from(self.byte_len)),
+        }
+    }
 }
 
 impl SegmentedReceipt {
