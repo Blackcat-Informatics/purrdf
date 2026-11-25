@@ -788,46 +788,63 @@ a candidate in disjoint domains is an error, not a declaration silently widened
 after scores have been certified. Repeated candidates from a unique stream
 are also refused.
 
+Use `purrdf.retrieval.RetrievalSession` to reuse one parsed dataset and its
+producer indexes. The session owns the validated native inputs and does not
+retain the original Python containers. Keep arguments unchanged while they
+are being passed. You can reuse the session across threads with independent
+requests. Each call supplies its own statistics, limits, and any fusion law
+or ordering. Releasing the last reference to the session releases its
+ownership of the dataset and indexes.
+
+The module-level functions accept the same source and producer declarations
+but prepare a fresh registry for each call. Plan IDs include that registry
+instance, so equivalent requests on one session can share a plan ID while
+independently prepared registries produce distinct IDs. The declared registry
+content fingerprint and fusion law ID remain comparable across instances.
+
 ```python
-retrieval = purrdf.retrieval
+from purrdf import retrieval
+
 notes = '''
 <https://example.org/a> <https://example.org/note> "the quick brown fox" .
 <https://example.org/b> <https://example.org/note> "a quick red fox" .
 '''
-ranking = retrieval.search(
+session = retrieval.RetrievalSession(
     notes,
-    [("lexical", "quick fox", None, "https://example.org/note")],
     text_producers={
         "https://example.org/pf/search": (
             "https://example.org/stratum/lexical",
             "https://example.org/note", "any", {"lexicon": "empty"},
         )
     },
-    weights={"https://example.org/stratum/lexical": retrieval.SCALE},
-    statistics={"source": "host-statistics", "revision": "r1"},
-    k=60, decay="reciprocal_rank", top_k=10,
 )
-assert len(ranking["rows"]) == 2
-assert isinstance(ranking["rows"][0]["score"], str)
+for query in ("quick fox", "red fox"):
+    ranking = session.search(
+        [("lexical", query, None, "https://example.org/note")],
+        weights={"https://example.org/stratum/lexical": 10**12},
+        statistics={"source": "host-statistics", "revision": "r1"},
+        k=60, decay="reciprocal_rank", scale_digits=12, top_k=10,
+    )
+    assert ranking["rows"][0]["score"]["scale_digits"] == 12
 ```
 
 ### Law, depths and document checks
 
-Weights are Python integers in raw fixed-point units: `SCALE` is one whole
-unit and `SCALE_DIGITS` its exponent. Scores and contributions return exact
-decimal strings, never floating-point approximations. `k`, `decay` and
-`top_k` are explicit. `reciprocal_rank` truncates the reciprocal before
-applying weight; `weighted_reciprocal_rank` rounds the weighted quotient once.
-They are different content-addressed laws. Mixing a raw weight of `1` with
-weights expressed as multiples of `SCALE` changes the weighting by that factor.
+Weights are Python integers in raw fixed-point units. One whole unit is
+`10**scale_digits`. Scores and contributions carry integer `raw` values and
+`scale_digits` rather than floating-point approximations. `k`, `decay`,
+`scale_digits` and `top_k` are explicit. `reciprocal_rank` truncates the
+reciprocal before applying weight. `weighted_reciprocal_rank` rounds the
+weighted quotient once.
+They are different content-addressed laws.
 
 `top_k` is also a planning input. Over disjoint candidate domains it can narrow
 reads while preserving the answer. A compiled unit's `depth` is the reportable
 row bound; its SPARQL `LIMIT` includes one extra probe row. Do not report that
 probe as a value or read the bound from the text. `declared_rows=None` means
-no row count was declared, not zero. On `compile`, `weights`, `k` and `decay`
-are supplied together or omitted together; without a law, no rank-resolution
-claim is invented.
+no row count was declared, not zero. On `compile`, `weights`, `k`, `decay`
+and `scale_digits` are supplied together or omitted together. Without a law,
+no rank-resolution claim is invented.
 
 `canonical_bytes` and `plan_id` identify a plan. `certify_plan` checks a received
 document's recorded depth derivations and consulted-statistics projections;

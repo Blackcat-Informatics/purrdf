@@ -305,14 +305,15 @@
 //! silence as certification would put a claim in the mouth of every producer
 //! that never spoke.
 //!
-//! # Two identities, and only one of them survives the call
+//! # Registry instance and content identities
 //!
-//! Registration is **per call** here, exactly as it is on the query surface: the
-//! producers a call names are the producers it evaluates under, and the next
-//! call starts from nothing. A plan is pinned to the registry **instance** it was
-//! planned against — that is what stops a plan from being replayed against a
-//! registry whose IRIs declare the same shape but resolve to different code — so
-//! `"plan_id"` names one call's plan and is not comparable across calls.
+//! The convenience functions prepare a new registry per call. A
+//! [`RetrievalSession`] retains its registry and dataset across requests.
+//! A plan is pinned to the registry instance it was planned against, preventing
+//! replay against another registry with matching declarations but different
+//! producers. Equivalent requests on one session can have the same `"plan_id"`.
+//! Separate sessions and convenience calls still have distinct registry
+//! instances even when supplied the same source and producer declarations.
 //!
 //! What IS durable is the registry's declared **shape**, and the plan carries it
 //! separately as `"registry_content_fingerprint"`: a pure function of what the
@@ -642,21 +643,63 @@ impl Statistics for HostStatistics {
     }
 }
 
-/// Everything one call needs, converted out of Python before the GIL is released.
-#[derive(Clone, Debug)]
-struct Call {
+/// Preparation arguments copied out of Python before releasing the GIL.
+struct Preparation {
     /// The RDF document the whole ladder runs against.
     data: String,
     /// The media type `data` is written in.
     media_type: &'static str,
     /// The document base relative references resolve against.
     base: Option<String>,
-    /// The request terms, in the host's own order.
-    request: RetrievalRequest,
     /// The ranked producers to register, of every kind, in canonical IRI order.
     producers: Vec<Producer>,
+}
+
+/// The planner's per-request inputs, copied before releasing the GIL.
+struct Call {
+    /// The request terms, in the host's own order.
+    request: RetrievalRequest,
     /// The statistics planning consults.
     statistics: HostStatistics,
+}
+
+/// The immutable inputs retained by one session or one convenience call.
+struct PreparedRetrieval {
+    data: Arc<RdfDataset>,
+    registry: PropertyFunctionRegistry<'static>,
+}
+
+enum PreparedSource<'a> {
+    Temporary(Preparation),
+    Retained(&'a PreparedRetrieval),
+}
+
+impl PreparedSource<'_> {
+    fn run_registry<T>(
+        self,
+        run: impl FnOnce(&PropertyFunctionRegistry<'static>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self {
+            Self::Temporary(input) => {
+                let PreparedRetrieval { data, registry } = input.prepare()?;
+                // The registry owns its producers. Planning and compilation do
+                // not need the temporary dataset once those producers are built.
+                drop(data);
+                run(&registry)
+            }
+            Self::Retained(prepared) => run(&prepared.registry),
+        }
+    }
+
+    fn run<T>(
+        self,
+        run: impl FnOnce(&PreparedRetrieval) -> Result<T, String>,
+    ) -> Result<T, String> {
+        match self {
+            Self::Temporary(input) => run(&input.prepare()?),
+            Self::Retained(prepared) => run(prepared),
+        }
+    }
 }
 
 // ── pure-Rust cores (PyO3-free, exercised through the pytest suite) ──────────
@@ -758,10 +801,13 @@ fn candidate_domains(
     Ok(CandidateDomains::within(blocks))
 }
 
-/// Parse the document every stage runs against.
-fn build_dataset(call: &Call) -> Result<Arc<RdfDataset>, String> {
-    parse_dataset(call.data.as_bytes(), call.media_type, call.base.as_deref())
-        .map_err(|e| e.to_string())
+impl Preparation {
+    fn prepare(self) -> Result<PreparedRetrieval, String> {
+        let data = parse_dataset(self.data.as_bytes(), self.media_type, self.base.as_deref())
+            .map_err(|e| e.to_string())?;
+        let registry = build_registry(&data, &self.producers)?;
+        Ok(PreparedRetrieval { data, registry })
+    }
 }
 
 /// Register every declared producer as a ranked producer over `data`.
@@ -1014,15 +1060,9 @@ fn build_profile(
     FusionProfile::with_decay(declared, decay, precision).map_err(|e| e.to_string())
 }
 
-/// Plan the call's request against a registry built from its producers.
-fn run_plan(
-    call: &Call,
-) -> Result<(Arc<RdfDataset>, PropertyFunctionRegistry<'static>, Plan), String> {
-    let data = build_dataset(call)?;
-    let registry = build_registry(&data, &call.producers)?;
-    let planned = crate::retrieval::plan(&call.request, &registry, &call.statistics)
-        .map_err(|e| e.to_string())?;
-    Ok((data, registry, planned))
+/// Plan the call's request against the prepared producer registry.
+fn run_plan(registry: &PropertyFunctionRegistry<'static>, call: &Call) -> Result<Plan, String> {
+    crate::retrieval::plan(&call.request, registry, &call.statistics).map_err(|e| e.to_string())
 }
 
 /// Plan, then admit and emit the per-stratum SPARQL units.
@@ -1035,12 +1075,13 @@ fn run_plan(
 /// chosen a law passes `None` and is told nothing about resolution, rather than
 /// being handed evidence measured against a law it never named.
 fn run_compile(
+    registry: &PropertyFunctionRegistry<'static>,
     call: &Call,
     profile: Option<&FusionProfile>,
 ) -> Result<(Plan, CompiledRetrieval), String> {
-    let (_, registry, planned) = run_plan(call)?;
+    let planned = run_plan(registry, call)?;
     let environment = AdmissionEnvironment {
-        registry: &registry,
+        registry,
         statistics: &call.statistics,
         fusion_profile: profile,
     };
@@ -1050,14 +1091,14 @@ fn run_compile(
 
 /// Run the whole ladder and return the fused answer.
 fn run_search(
+    prepared: &PreparedRetrieval,
     call: &Call,
     profile: &FusionProfile,
     ordering: Option<Arc<OrderCatalog>>,
 ) -> Result<SearchResult, String> {
-    let data = build_dataset(call)?;
-    let registry = build_registry(&data, &call.producers)?;
+    let PreparedRetrieval { data, registry } = prepared;
     let environment = AdmissionEnvironment {
-        registry: &registry,
+        registry,
         statistics: &call.statistics,
         fusion_profile: None,
     };
@@ -1067,9 +1108,9 @@ fn run_search(
     let result = if let Some(catalog) = ordering {
         crate::retrieval::block_on(crate::retrieval::search_ordered(
             &call.request,
-            &registry,
+            registry,
             &call.statistics,
-            &*data,
+            data.as_ref(),
             &environment,
             profile,
             catalog,
@@ -1077,9 +1118,9 @@ fn run_search(
     } else {
         crate::retrieval::block_on(crate::retrieval::search(
             &call.request,
-            &registry,
+            registry,
             &call.statistics,
-            &*data,
+            data.as_ref(),
             &environment,
             profile,
         ))
@@ -2090,7 +2131,7 @@ fn collect_statistics(
     clippy::too_many_arguments,
     reason = "the three entry points' shared inputs are named, not bundled"
 )]
-fn collect_call(
+fn collect_temporary_call(
     data: &str,
     request: &Bound<'_, PyAny>,
     text_producers: &Bound<'_, PyDict>,
@@ -2100,16 +2141,45 @@ fn collect_call(
     top_k: usize,
     data_format: &str,
     base: Option<&str>,
+) -> PyResult<(PreparedSource<'static>, Call)> {
+    let call = collect_call(request, statistics, top_k)?;
+    let input = collect_preparation(
+        data,
+        text_producers,
+        hnsw_producers,
+        knn_producers,
+        data_format,
+        base,
+    )?;
+    Ok((PreparedSource::Temporary(input), call))
+}
+
+fn collect_call(
+    request: &Bound<'_, PyAny>,
+    statistics: &Bound<'_, PyDict>,
+    top_k: usize,
 ) -> PyResult<Call> {
     let request = collect_request(request, top_k)?;
     let statistics = collect_statistics(statistics, &request)?;
     Ok(Call {
+        request,
+        statistics,
+    })
+}
+
+fn collect_preparation(
+    data: &str,
+    text_producers: &Bound<'_, PyDict>,
+    hnsw_producers: Option<&Bound<'_, PyDict>>,
+    knn_producers: Option<&Bound<'_, PyDict>>,
+    data_format: &str,
+    base: Option<&str>,
+) -> PyResult<Preparation> {
+    Ok(Preparation {
         data: data.to_owned(),
         media_type: data_media_type(data_format).map_err(PyValueError::new_err)?,
         base: base.map(ToOwned::to_owned),
         producers: collect_producers(text_producers, hnsw_producers, knn_producers)?,
-        request,
-        statistics,
     })
 }
 
@@ -2960,7 +3030,7 @@ fn plan<'py>(
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let mut call = collect_call(
+    let (source, call) = collect_temporary_call(
         data,
         request,
         text_producers,
@@ -2971,13 +3041,22 @@ fn plan<'py>(
         data_format,
         base,
     )?;
+    plan_prepared(py, source, call, caller_ordered)
+}
+
+fn plan_prepared<'py>(
+    py: Python<'py>,
+    source: PreparedSource<'_>,
+    mut call: Call,
+    caller_ordered: bool,
+) -> PyResult<Bound<'py, PyDict>> {
     if caller_ordered {
         use_caller_order(&mut call);
     }
     // Parsing, index construction and planning run detached (GIL released); the
     // result dict is built after the GIL is reacquired.
     let planned = py
-        .detach(|| run_plan(&call).map(|(_, _, planned)| planned))
+        .detach(move || source.run_registry(|registry| run_plan(registry, &call)))
         .map_err(PyValueError::new_err)?;
     plan_dict(py, &planned)
 }
@@ -3175,7 +3254,7 @@ fn compile<'py>(
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let mut call = collect_call(
+    let (source, call) = collect_temporary_call(
         data,
         request,
         text_producers,
@@ -3186,6 +3265,23 @@ fn compile<'py>(
         data_format,
         base,
     )?;
+    compile_prepared(py, source, call, weights, k, decay, scale_digits, ordering)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "shared Python entry honors the complete or absent fusion law"
+)]
+fn compile_prepared<'py>(
+    py: Python<'py>,
+    source: PreparedSource<'_>,
+    mut call: Call,
+    weights: Option<&Bound<'py, PyDict>>,
+    k: Option<u32>,
+    decay: Option<&str>,
+    scale_digits: Option<u32>,
+    ordering: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyDict>> {
     let ordering = collect_ordering(ordering)?;
     if ordering.is_some() {
         use_caller_order(&mut call);
@@ -3217,7 +3313,7 @@ fn compile<'py>(
     }
     // Parsing, index construction, planning and admission run detached.
     let (planned, compiled) = py
-        .detach(|| {
+        .detach(move || {
             let profile = law
                 .as_ref()
                 .map(|(declared, decay, precision)| {
@@ -3227,7 +3323,7 @@ fn compile<'py>(
                     })
                 })
                 .transpose()?;
-            run_compile(&call, profile.as_ref())
+            source.run_registry(|registry| run_compile(registry, &call, profile.as_ref()))
         })
         .map_err(PyValueError::new_err)?;
 
@@ -3469,7 +3565,7 @@ fn search<'py>(
     data_format: &str,
     base: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let call = collect_call(
+    let (source, call) = collect_temporary_call(
         data,
         request,
         text_producers,
@@ -3480,6 +3576,23 @@ fn search<'py>(
         data_format,
         base,
     )?;
+    search_prepared(py, source, call, weights, k, decay, scale_digits, ordering)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "shared Python entry accepts every explicit fusion-law input"
+)]
+fn search_prepared<'py>(
+    py: Python<'py>,
+    source: PreparedSource<'_>,
+    call: Call,
+    weights: &Bound<'py, PyDict>,
+    k: u32,
+    decay: &str,
+    scale_digits: u32,
+    ordering: Option<&Bound<'py, PyDict>>,
+) -> PyResult<Bound<'py, PyDict>> {
     let declared = collect_weights(weights)?;
     let ordering = collect_ordering(ordering)?;
     // Read before the GIL is released, with every other Python-side argument:
@@ -3488,16 +3601,141 @@ fn search<'py>(
     // The whole ladder runs detached (GIL released): parse, index, plan, admit,
     // execute and fuse. The answer dict is built after the GIL is reacquired.
     let result = py
-        .detach(|| {
+        .detach(move || {
             let precision = Precision::new(scale_digits).map_err(|error| error.to_string())?;
             let mut profile = build_profile(&declared, decay, precision)?;
             if let Some(catalog) = &ordering {
                 profile = profile.with_ordering(catalog.policy().clone());
             }
-            run_search(&call, &profile, ordering.clone())
+            source.run(|prepared| run_search(prepared, &call, &profile, ordering))
         })
         .map_err(PyValueError::new_err)?;
     search_dict(py, &result)
+}
+
+/// An immutable dataset and producer registry for repeated retrieval requests.
+///
+/// Construction copies the source and producer arguments out of Python, then
+/// parses the dataset and builds the indexes without the GIL. No Python
+/// containers or callbacks are retained. Plans, fusion laws and cursor state
+/// belong to each request.
+#[pyclass(module = "purrdf.retrieval", frozen)]
+struct RetrievalSession {
+    prepared: PreparedRetrieval,
+}
+
+#[pymethods]
+impl RetrievalSession {
+    #[new]
+    #[pyo3(signature = (
+        data, *, text_producers, hnsw_producers=None, knn_producers=None,
+        data_format="turtle", base=None,
+    ))]
+    fn new(
+        py: Python<'_>,
+        data: &str,
+        text_producers: &Bound<'_, PyDict>,
+        hnsw_producers: Option<&Bound<'_, PyDict>>,
+        knn_producers: Option<&Bound<'_, PyDict>>,
+        data_format: &str,
+        base: Option<&str>,
+    ) -> PyResult<Self> {
+        let input = collect_preparation(
+            data,
+            text_producers,
+            hnsw_producers,
+            knn_producers,
+            data_format,
+            base,
+        )?;
+        let prepared = py
+            .detach(move || input.prepare())
+            .map_err(PyValueError::new_err)?;
+        Ok(Self { prepared })
+    }
+
+    /// Plan one request without executing it.
+    #[pyo3(signature = (request, *, statistics, top_k, caller_ordered=false))]
+    fn plan<'py>(
+        &self,
+        py: Python<'py>,
+        request: &Bound<'py, PyAny>,
+        statistics: &Bound<'py, PyDict>,
+        top_k: usize,
+        caller_ordered: bool,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        plan_prepared(
+            py,
+            PreparedSource::Retained(&self.prepared),
+            collect_call(request, statistics, top_k)?,
+            caller_ordered,
+        )
+    }
+
+    /// Plan and compile one request into its admitted per-stratum queries.
+    #[pyo3(signature = (
+        request, *, statistics, top_k, weights=None, k=None, decay=None,
+        scale_digits=None, ordering=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fusion law and caller ordering stay explicit request inputs"
+    )]
+    fn compile<'py>(
+        &self,
+        py: Python<'py>,
+        request: &Bound<'py, PyAny>,
+        statistics: &Bound<'py, PyDict>,
+        top_k: usize,
+        weights: Option<&Bound<'py, PyDict>>,
+        k: Option<u32>,
+        decay: Option<&str>,
+        scale_digits: Option<u32>,
+        ordering: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        compile_prepared(
+            py,
+            PreparedSource::Retained(&self.prepared),
+            collect_call(request, statistics, top_k)?,
+            weights,
+            k,
+            decay,
+            scale_digits,
+            ordering,
+        )
+    }
+
+    /// Plan, admit, execute and fuse one request under the named law.
+    #[pyo3(signature = (
+        request, *, weights, statistics, k, decay, scale_digits, top_k, ordering=None,
+    ))]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fusion law and caller ordering stay explicit request inputs"
+    )]
+    fn search<'py>(
+        &self,
+        py: Python<'py>,
+        request: &Bound<'py, PyAny>,
+        weights: &Bound<'py, PyDict>,
+        statistics: &Bound<'py, PyDict>,
+        k: u32,
+        decay: &str,
+        scale_digits: u32,
+        top_k: usize,
+        ordering: Option<&Bound<'py, PyDict>>,
+    ) -> PyResult<Bound<'py, PyDict>> {
+        search_prepared(
+            py,
+            PreparedSource::Retained(&self.prepared),
+            collect_call(request, statistics, top_k)?,
+            weights,
+            k,
+            decay,
+            scale_digits,
+            ordering,
+        )
+    }
 }
 
 /// The smallest stratum weight, in raw fixed-point units, that still separates
@@ -3815,6 +4053,7 @@ fn crossing_rank_at(
 /// submodule.
 pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("PlanDocumentError", m.py().get_type::<PlanDocumentError>())?;
+    m.add_class::<RetrievalSession>()?;
     m.add_function(wrap_pyfunction!(plan, m)?)?;
     m.add_function(wrap_pyfunction!(certify_plan, m)?)?;
     m.add_function(wrap_pyfunction!(explain_depth, m)?)?;
