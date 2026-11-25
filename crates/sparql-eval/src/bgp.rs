@@ -104,6 +104,7 @@ pub(crate) struct SeedEstimate {
     pub(crate) schema: VarSchema,
     pub(crate) bound: VarSchema,
     pub(crate) rows: u64,
+    pub(crate) upper_bound: Option<u64>,
 }
 
 impl SeedEstimate {
@@ -112,6 +113,8 @@ impl SeedEstimate {
         input: &SolutionSeq<I>,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Self, EvalError> {
+        let rows =
+            u64::try_from(input.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?;
         Ok(Self {
             schema: (*input.schema).clone(),
             bound: VarSchema::from_vars_admitted(
@@ -127,7 +130,8 @@ impl SeedEstimate {
                     .map(|(_, variable)| variable.clone()),
                 workspace,
             )?,
-            rows: u64::try_from(input.rows.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
+            rows,
+            upper_bound: Some(rows),
         })
     }
 }
@@ -138,6 +142,7 @@ impl Default for SeedEstimate {
             schema: VarSchema::default(),
             bound: VarSchema::default(),
             rows: 1,
+            upper_bound: Some(1),
         }
     }
 }
@@ -4004,6 +4009,9 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     continue;
                 }
                 let driving_rows = predicted_rows(left, survey).unwrap_or(1);
+                let driving_bound = survey
+                    .estimate_of(left)
+                    .and_then(|estimate| estimate.upper_bound);
                 let mut seed =
                     match seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)) {
                         Some(seed) => seed,
@@ -4015,9 +4023,11 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                                 left, &workspace,
                             )?,
                             rows: driving_rows,
+                            upper_bound: driving_bound,
                         },
                     };
                 seed.rows = if optional { 1 } else { driving_rows };
+                seed.upper_bound = if optional { Some(1) } else { driving_bound };
                 if let Some(positive) = PositivePlan::build_seeded_admitted(
                     dataset,
                     active_dataset,
@@ -4046,8 +4056,13 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     if optional {
                         estimate.rows = driving_rows.saturating_mul(estimate.rows.max(1));
                         estimate.peak_rows = estimate.peak_rows.max(estimate.rows);
+                        estimate.upper_bound = PlanEstimate::product(
+                            driving_bound,
+                            estimate.upper_bound.map(|bound| bound.max(1)),
+                        );
                     }
                     let rows = estimate.rows;
+                    let upper_bound = estimate.upper_bound;
                     survey.record(node, estimate);
                     if !optional {
                         seed.bound = seed.bound.union_admitted(
@@ -4063,6 +4078,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                             schema,
                             bound: seed.bound,
                             rows,
+                            upper_bound,
                         },
                         &workspace,
                     )?;
@@ -4193,7 +4209,8 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         bindings.len() as u64,
                         bindings.len() as u64,
                         variables.len() as u64,
-                    ),
+                    )
+                    .with_upper_bound(u64::try_from(bindings.len()).ok()),
                 );
             }
             GraphPattern::Path { .. } | GraphPattern::Service { .. } => {}
@@ -4204,7 +4221,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
 
 /// The estimate of a `GRAPH <name> { ... }` block whose name addresses no graph: no
 /// row, and an inner pattern that is never evaluated.
-const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0);
+const EMPTY_SCOPE: PlanEstimate = PlanEstimate::new(0, 0, 0).with_upper_bound(Some(0));
 
 /// The graph `GRAPH <name> { ... }` scopes its block to, as evaluation decides it
 /// (`modifier::eval_graph`): the name's term, when it names a graph of `dataset` that
@@ -4244,6 +4261,9 @@ fn survey_bgp<D: DatasetView>(
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     if patterns.is_empty() {
+        if survey.record_statistics {
+            survey.record(node, PlanEstimate::new(1, 1, 0).with_upper_bound(Some(1)));
+        }
         return Ok(());
     }
     survey_bgp_seeded(
@@ -4393,25 +4413,34 @@ fn record_bgp_statistics<D: DatasetView>(
     active_dataset: &ActiveDataset<D::Id>,
     active_graph: GraphMatch<D::Id>,
     node: &GraphPattern,
+    seed_bound: Option<u64>,
     survey: &mut PlanSurvey,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     if !survey.record_statistics {
         return Ok(());
     }
-    let Some(statistics) = dataset.statistics() else {
-        return Ok(());
-    };
     let GraphPattern::Bgp { patterns } = node else {
         unreachable!("statistics evidence receives a BGP node");
     };
     let workspace = account.capability();
     let schema = collect_slots_admitted(patterns, None, &workspace)?;
-    let Some(compiled) = compile_bgp_admitted(dataset, patterns, &schema, account)? else {
-        return Ok(());
-    };
     let node_id = survey.shape.node_of(node).expect("surveyed BGP").index();
     let scope = active_dataset.scope_for(active_graph);
+    let compiled = compile_bgp_admitted(dataset, patterns, &schema, account)?;
+    let upper_bound = match &compiled {
+        None => Some(0),
+        Some(compiled) => dataset
+            .checked_read(|view| certified_bgp_bound(view, compiled, &scope, seed_bound))
+            .map_err(|error| account.source_error(error))?,
+    };
+    survey.estimates.as_mut_slice()[node_id]
+        .as_mut()
+        .expect("the forecast is recorded before its evidence")
+        .upper_bound = upper_bound;
+    let (Some(compiled), Some(statistics)) = (compiled, dataset.statistics()) else {
+        return Ok(());
+    };
     for (pattern_index, pattern) in compiled.iter().enumerate() {
         let domains = if base_cardinality(dataset, pattern, &scope) == 0 {
             [None; 3]
@@ -4454,6 +4483,59 @@ fn record_bgp_statistics<D: DatasetView>(
     Ok(())
 }
 
+/// For each input row, a BGP can emit at most one row per matching
+/// candidate combination. Constants constrain that combination, while slots
+/// (including repeated or initially bound ones) can only reject candidates.
+/// Summing constituent graph counts also bounds a deduplicated FROM merge.
+/// Ask the statistics provider only. Do not fall back to draining candidate
+/// streams on views without statistics.
+fn certified_bgp_bound<D: DatasetView>(
+    dataset: &D,
+    compiled: &[CompiledPattern<D::Id>],
+    scope: &GraphScope<D::Id>,
+    seed: Option<u64>,
+) -> Option<u64> {
+    if compiled.is_empty() {
+        return seed;
+    }
+    if seed == Some(0) || matches!(scope, GraphScope::Merge(graphs) if graphs.is_empty()) {
+        return Some(0);
+    }
+    let statistics = dataset.statistics()?;
+    compiled.iter().fold(seed, |bound, pattern| {
+        if bound == Some(0) {
+            return bound;
+        }
+        let count = |graph| {
+            let mut probe = purrdf_core::ProbePattern {
+                s: constant_of(&pattern.s),
+                p: constant_of(&pattern.p),
+                o: constant_of(&pattern.o),
+                g: graph,
+            };
+            if let Some(count) = statistics.pattern(probe) {
+                return Some(count.value);
+            }
+            // A provider may not track the predicate/object pair. Loosening
+            // the restriction preserves the guarantee of any returned count.
+            if probe.o.take().is_some()
+                && let Some(count) = statistics.pattern(probe)
+            {
+                return Some(count.value);
+            }
+            probe.p.take()?;
+            statistics.pattern(probe).map(|count| count.value)
+        };
+        let candidates = match scope {
+            GraphScope::One(graph) => count(*graph),
+            GraphScope::Merge(graphs) => graphs.iter().try_fold(0_u64, |total, &graph| {
+                total.checked_add(count(GraphMatch::Named(graph))?)
+            }),
+        };
+        PlanEstimate::product(bound, candidates)
+    })
+}
+
 /// Record a BGP's forecast under its selected positive driver's bindings.
 fn survey_bgp_seeded<D: DatasetView>(
     dataset: &D,
@@ -4477,7 +4559,15 @@ fn survey_bgp_seeded<D: DatasetView>(
         account,
     )?;
     record_bgp_forecast(node, patterns, estimate, &order, survey)?;
-    record_bgp_statistics(dataset, active_dataset, active_graph, node, survey, account)?;
+    record_bgp_statistics(
+        dataset,
+        active_dataset,
+        active_graph,
+        node,
+        seed.upper_bound,
+        survey,
+        account,
+    )?;
     Ok(())
 }
 
@@ -7728,6 +7818,7 @@ mod survey_tests {
             schema: crate::eval::syntactic_schema(left).as_ref().clone(),
             bound: VarSchema::from_vars(bound),
             rows: if optional { 1 } else { driving_rows },
+            upper_bound: None,
         };
         let Some(plan) =
             super::PositivePlan::build_seeded(dataset, active_dataset, graph, right, &seed)?

@@ -31,6 +31,7 @@ use purrdf_sparql_eval::{
     NodeCharges, PartialAnswers, QueryExplanation, QueryGovernors, QueryOptions, STOP_POLL_FUEL,
     StopSignal, WallDeadline, resolve_precedence,
 };
+use purrdf_testkit::prop::prelude::*;
 
 /// The number of `ex:p` edges in the fixture dataset.
 const EDGES: usize = 8;
@@ -72,6 +73,58 @@ fn request(query: &str) -> SparqlRequest<'_> {
         query,
         base_iri: None,
         substitutions: &[],
+    }
+}
+
+prop_test! {
+    #![prop_config(Config::with_cases(64))]
+    #[test]
+    fn certified_bgp_bound_covers_candidate_joins(
+        left in any::<u16>(), right in any::<u16>(), shape in 0_u8..6
+    ) {
+        let mut builder = RdfDatasetBuilder::new();
+        let p = builder.intern_iri("http://example.org/p").unwrap();
+        let q = builder.intern_iri("http://example.org/q").unwrap();
+        let g = builder.intern_iri("http://example.org/g").unwrap();
+        let h = builder.intern_iri("http://example.org/h").unwrap();
+        let terms = [0, 1, 2, 3].map(|i| {
+            builder.intern_iri(&format!("http://example.org/n{i}")).unwrap()
+        });
+        for (predicate, mask) in [(p, left), (q, right)] {
+            for index in 0..16 {
+                if mask & (1 << index) == 0 {
+                    continue;
+                }
+                let (s, o) = (terms[index / 4], terms[index % 4]);
+                builder.push_quad(s, predicate, o, None).unwrap();
+                builder.push_quad(s, predicate, o, Some(g)).unwrap();
+                if index % 2 == 0 {
+                    builder.push_quad(s, predicate, o, Some(h)).unwrap();
+                }
+            }
+        }
+        let dataset = builder.freeze().unwrap();
+        let query = match shape {
+            0 => "SELECT * WHERE { ?a ex:p ?b . ?b ex:q ?c }",
+            1 => "SELECT * WHERE { ?a ex:p ?b . ?c ex:q ?d }",
+            2 => "SELECT * FROM ex:g FROM ex:h WHERE { ?a ex:p ?a . ?a ex:q ?c }",
+            3 => "SELECT * WHERE { GRAPH ex:g { ?a ex:p ex:n0 . ?a ex:q ?c } }",
+            4 => "SELECT * WHERE { ?a ex:p ?b . { ?x ex:q ?y } UNION { ?y ex:p ?x } }",
+            _ => "SELECT * WHERE { ?a ex:p ?b . { ?b ex:q ?y } UNION { ?y ex:p ?b } }",
+        };
+        let query = format!("PREFIX ex: <http://example.org/> {query}");
+        let explanation = NativeSparqlEngine::new()
+            .explain_query(&dataset, &query, None).unwrap();
+        let mut certified = 0;
+        for node in explanation.ledger() {
+            if let Some(estimate) = &node.estimate {
+                certified += 1;
+                prop_assert!(estimate.upper_bound.is_some_and(|bound| node.rows <= bound),
+                    "node {:?} produced {} rows with bound {:?}", node.label,
+                    node.rows, estimate.upper_bound);
+            }
+        }
+        prop_assert!(certified > 0);
     }
 }
 
@@ -1301,7 +1354,10 @@ fn assert_statement_query_ranges(dataset: &Arc<RdfDataset>) {
                 .ledger()
                 .iter()
                 .filter_map(|node| node.estimate.as_ref())
-                .any(|estimate| estimate.rows == matches)
+                .any(|estimate| {
+                    estimate.rows == matches
+                        && estimate.upper_bound.is_some_and(|bound| matches <= bound)
+                })
         );
         let bounded = engine
             .query_governed(
@@ -2175,6 +2231,11 @@ fn explain_reports_a_deterministic_per_node_ledger() {
             estimate.peak_cells(),
             estimate.peak_rows.saturating_mul(estimate.columns)
         );
+        let bound = estimate
+            .upper_bound
+            .expect("native BGP statistics certify a bound");
+        assert!(node.rows <= bound, "{node:?} exceeded {bound}");
+        assert!(rendered.contains(&format!("output-upper-bound={bound}")));
         assert!(
             rendered.contains(&format!(
                 "estimated-rows={} actual-rows={}",

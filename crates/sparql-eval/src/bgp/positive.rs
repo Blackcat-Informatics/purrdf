@@ -470,6 +470,7 @@ impl PositivePlan {
                     schema: input.schema.union_admitted(&summary.schema, &workspace)?,
                     bound: input.bound.union_admitted(&summary.certain, &workspace)?,
                     rows: 1,
+                    upper_bound: Some(1),
                 };
                 pending.push(ChoiceStep::Visit(
                     driven,
@@ -596,7 +597,7 @@ impl PositivePlan {
         &self,
         node: &GraphPattern,
         input: &SeedEstimate,
-        rows: u64,
+        driving: &PlanEstimate,
         workspace: &WorkspaceCapability,
     ) -> Result<SeedEstimate, EvalError> {
         let summary = scope_summary(
@@ -610,7 +611,8 @@ impl PositivePlan {
         Ok(SeedEstimate {
             schema: input.schema.union_admitted(&summary.schema, workspace)?,
             bound: input.bound.union_admitted(&summary.certain, workspace)?,
-            rows,
+            rows: driving.rows,
+            upper_bound: driving.upper_bound,
         })
     }
 
@@ -720,6 +722,7 @@ impl PositivePlan {
                                 active_dataset,
                                 active_graph,
                                 node,
+                                Some(1),
                                 survey,
                                 account,
                             )?;
@@ -755,10 +758,9 @@ impl PositivePlan {
                     seed,
                     independent,
                 } => {
-                    let rows = survey
+                    let driving = survey
                         .estimate_of(first)
-                        .expect("first driver was surveyed")
-                        .rows;
+                        .expect("first driver was surveyed");
                     steps.push(Step::Join {
                         node,
                         first,
@@ -775,7 +777,7 @@ impl PositivePlan {
                         steps.push(Step::Visit(
                             second,
                             SharedWorkspace::new_admitted(
-                                self.extend_seed(first, &seed, rows, &workspace)?,
+                                self.extend_seed(first, &seed, driving, &workspace)?,
                                 &workspace,
                             )?,
                             true,
@@ -804,6 +806,10 @@ impl PositivePlan {
                             )
                             .map_err(|_| EvalError::WorkspaceBoundOverflow)?,
                         )
+                        .with_upper_bound(PlanEstimate::product(
+                            first.upper_bound,
+                            second.upper_bound,
+                        ))
                     } else {
                         second.clone()
                     };
@@ -815,16 +821,22 @@ impl PositivePlan {
                     };
                     let mut rows = 0_u64;
                     let mut columns = 0_u64;
+                    let mut upper_bound = Some(0_u64);
                     for arm in arms {
                         let estimate = survey.estimate_of(arm).expect("every arm was surveyed");
                         rows = rows.saturating_add(estimate.rows);
                         columns = columns.max(estimate.columns);
+                        upper_bound =
+                            upper_bound.and_then(|bound| bound.checked_add(estimate.upper_bound?));
                     }
                     columns = columns.max(union_width(
                         &*crate::eval::syntactic_schema_admitted(node, &workspace)?,
                         &seed.schema,
                     )?);
-                    survey.record(node, PlanEstimate::new(rows, rows, columns));
+                    survey.record(
+                        node,
+                        PlanEstimate::new(rows, rows, columns).with_upper_bound(upper_bound),
+                    );
                 }
             }
         }

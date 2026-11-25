@@ -127,9 +127,7 @@ use crate::plan::{NodeId, PlanShape};
 use crate::property_fn::PfDescriptor;
 use crate::workspace::{AdmittedRecords, AdmittedVec, SharedWorkspace};
 
-/// The cost planner's prediction for one basic graph pattern, recorded before evaluation
-/// so the ledger can print it beside the row count that actually materialised.
-/// These estimates are predictions, not guaranteed output bounds.
+/// The planner's predictions and separately certified output bound for an algebra node.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct PlanEstimate {
@@ -144,6 +142,10 @@ pub struct PlanEstimate {
     /// [`ResourceDimension::IntermediateCells`](purrdf_core::ResourceDimension::IntermediateCells)
     /// ceiling.
     pub columns: u64,
+    /// Maximum possible output rows for the surveyed input bag. This is not
+    /// a total across repeated invocations by outer operators. None means
+    /// the certificate was unavailable or does not fit in a `u64`.
+    pub upper_bound: Option<u64>,
 }
 
 impl PlanEstimate {
@@ -154,6 +156,24 @@ impl PlanEstimate {
             rows,
             peak_rows,
             columns,
+            upper_bound: None,
+        }
+    }
+
+    /// Attach an independently certified output bound.
+    #[must_use]
+    pub(crate) const fn with_upper_bound(mut self, upper_bound: Option<u64>) -> Self {
+        self.upper_bound = upper_bound;
+        self
+    }
+
+    /// Multiply two bounds without misreporting a wrapped or saturated
+    /// value as a certificate. A provably empty side is absorbing.
+    pub(crate) const fn product(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+        match (left, right) {
+            (Some(0), _) | (_, Some(0)) => Some(0),
+            (Some(left), Some(right)) => left.checked_mul(right),
+            _ => None,
         }
     }
 
@@ -690,6 +710,11 @@ impl QueryExplanation {
                     node.rows,
                     estimate.peak_cells(),
                 );
+                if let Some(bound) = estimate.upper_bound {
+                    let _ = write!(out, " output-upper-bound={bound}");
+                } else {
+                    out.push_str(" output-upper-bound=unknown");
+                }
             }
             out.push('\n');
             for point in ChargePoint::ALL {
