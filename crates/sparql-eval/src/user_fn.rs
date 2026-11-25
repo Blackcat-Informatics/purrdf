@@ -578,6 +578,7 @@ enum NativeBody {
     Admitted(AdmittedNativeFnBody),
     Metered(MeteredNativeFnBody),
     Standard(crate::geo::functions::GeofFunction),
+    TemporalOrder(crate::TemporalOrderPredicate),
 }
 
 /// Everything a dataset-aware (expression-bodied) user function is given when it is
@@ -1131,6 +1132,25 @@ impl UserFunctionRegistry {
         self.register_native_body(iri.into(), arity, volatility, NativeBody::Metered(body));
     }
 
+    /// Register an order predicate under a caller-supplied IRI. An unsettled
+    /// comparison has no boolean value and retains undetermined evidence in
+    /// evidence-aware evaluation.
+    ///
+    /// # Panics
+    /// Panics on a cross-kind IRI collision, as [`Self::register_native`] does.
+    pub fn register_temporal_order(
+        &mut self,
+        iri: impl Into<String>,
+        predicate: crate::TemporalOrderPredicate,
+    ) {
+        self.register_native_body(
+            iri.into(),
+            Arity::Exact(predicate.arity()),
+            Volatility::Stable,
+            NativeBody::TemporalOrder(predicate),
+        );
+    }
+
     pub(crate) fn register_standard_geo(
         &mut self,
         iri: String,
@@ -1465,6 +1485,13 @@ impl BoundFunctionRegistry {
     #[must_use]
     pub fn resolve_native(&self, iri: &str) -> Option<&NativeFunction> {
         self.data().inner.resolve_native(iri)
+    }
+
+    pub(crate) fn may_emit_evidence(&self, iri: &str) -> bool {
+        self.resolve(iri).is_some()
+            || self
+                .resolve_native(iri)
+                .is_some_and(|function| matches!(function.body, NativeBody::TemporalOrder(_)))
     }
 
     /// Resolve a call-position IRI to its declared dataset-aware
@@ -2149,6 +2176,7 @@ pub(crate) fn eval_native_function<D: DatasetView + Sync>(
     iri: &str,
     args: &[Option<TermValue>],
     ctx: &EvalCtx<'_, D>,
+    evidence: Option<&mut Option<crate::RowEvidence>>,
 ) -> Result<Option<WorkspaceTerm>, EvalError> {
     let workspace = &ctx.growth;
     // Fail-fast: a wrong-count call never reaches the host closure with a short
@@ -2210,6 +2238,40 @@ pub(crate) fn eval_native_function<D: DatasetView + Sync>(
                 NativeBody::Metered(body) => body(&call),
                 NativeBody::Standard(function) => {
                     crate::geo::functions::evaluate_standard(*function, &call)
+                }
+                NativeBody::TemporalOrder(predicate) => {
+                    use purrdf_xsd::temporal::InstantOrder;
+                    let work = values.iter().fold(1_u64, |total, value| {
+                        let bytes = match value {
+                            TermValue::Literal { lexical_form, .. } => lexical_form.len() as u64,
+                            _ => 0,
+                        };
+                        total.saturating_add(bytes)
+                    });
+                    if context.charge_work(work).is_err() {
+                        return Ok(None);
+                    }
+                    let seconds_work = crate::TemporalOrderPredicate::seconds_parse_work(&values);
+                    if seconds_work != 0 && context.charge_work(seconds_work).is_err() {
+                        return Ok(None);
+                    }
+                    let truth = match predicate.evaluate(&values, workspace)? {
+                        InstantOrder::Yes => "true",
+                        InstantOrder::No => "false",
+                        InstantOrder::Undetermined => {
+                            if let Some(evidence) = evidence {
+                                *evidence = Some(
+                                    ctx.evidence_owner()?
+                                        .query_owner(workspace)?
+                                        .undecided_reasons(core::iter::empty())?,
+                                );
+                            }
+                            return Ok(None);
+                        }
+                    };
+                    workspace
+                        .literal(truth, purrdf_xsd::XsdDatatype::Boolean.iri())
+                        .map(Some)
                 }
             }))
         },

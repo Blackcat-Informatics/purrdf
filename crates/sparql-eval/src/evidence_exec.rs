@@ -1656,7 +1656,7 @@ impl RowEvidence {
             }
     }
 
-    fn with_undecided(mut self, undecided: bool) -> Self {
+    pub(crate) fn with_undecided(mut self, undecided: bool) -> Self {
         self.undecided = undecided;
         self
     }

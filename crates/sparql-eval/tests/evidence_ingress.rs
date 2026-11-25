@@ -885,6 +885,212 @@ fn empty_service_keeps_search_reason_without_inventing_an_answer_row() {
         }).unwrap();
 }
 
+fn temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values() {
+    use purrdf_sparql_eval::extension_env::ExtensionEnv;
+    use purrdf_sparql_eval::user_fn::UserFunctionRegistry;
+    use purrdf_sparql_eval::{
+        CivilPrecision, TemporalDirection, TemporalOperand, TemporalOrderPredicate,
+    };
+
+    let mut builder = RdfDatasetBuilder::new();
+    let negative = builder.intern_iri("https://example.org/negative").unwrap();
+    let dataset = builder.freeze().unwrap();
+    let source = Claims {
+        negative,
+        record: EvidenceRecord::from_parts(
+            &InformationMap::default(),
+            SearchCompleteness::Complete,
+            &Frame::actual(),
+            &[],
+            &[],
+            &mut Memory::new(&mut Resident),
+        )
+        .unwrap(),
+        fail: false,
+        completeness: SearchCompleteness::Complete,
+        sum_nonnegative: false,
+        closure_declared: true,
+    };
+    let engine = NativeSparqlEngine::new();
+    let mut functions = UserFunctionRegistry::default();
+    functions.register_temporal_order(
+        "https://example.org/before",
+        TemporalOrderPredicate::new(
+            TemporalOperand::Calendar,
+            TemporalOperand::Calendar,
+            TemporalDirection::Before,
+        ),
+    );
+    functions.register_temporal_order(
+        "https://example.org/after-period",
+        TemporalOrderPredicate::new(
+            TemporalOperand::Timestamp(CivilPrecision::Day),
+            TemporalOperand::DateBounds,
+            TemporalDirection::After,
+        ),
+    );
+    let functions = engine
+        .bind_functions(functions, ExtensionEnv::empty())
+        .unwrap();
+    let options = QueryOptions::EMPTY.with_functions(&functions);
+    let query = r#"
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT ?kind ?decision WHERE {
+            VALUES (?kind ?left ?right) {
+                (1 "2023Z"^^xsd:gYear "2024-02-29Z"^^xsd:date)
+                (2 "2025Z"^^xsd:gYear "2024-02-29Z"^^xsd:date)
+                (3 "2024Z"^^xsd:gYear "2024-02-29Z"^^xsd:date)
+            }
+            BIND(<https://example.org/before>(?left, ?right) AS ?decision)
+        } ORDER BY ?kind"#;
+    let filtered = query.replace("?kind ?decision", "?kind").replace(
+        "BIND(<https://example.org/before>(?left, ?right) AS ?decision)",
+        "FILTER(<https://example.org/before>(?left, ?right))",
+    );
+    engine
+        .query_interned_evidence_view(&dataset, request(query), &options, &source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT solutions");
+            };
+            assert_eq!(rows.len(), 3);
+            for (row, expected) in rows.rows()[..2].iter().zip([true, false]) {
+                assert_eq!(
+                    rows.value_of(row[1].unwrap()),
+                    purrdf_core::TermValue::boolean(expected)
+                );
+                assert!(!row.evidence().is_undecided());
+            }
+            let uncertain = &rows.rows()[2];
+            assert_eq!(uncertain[1], None);
+            assert!(uncertain.evidence().is_undecided());
+            uncertain
+                .evidence()
+                .with_record(|record| {
+                    assert_eq!(record.completeness(), SearchCompleteness::Undetermined);
+                })
+                .unwrap();
+        })
+        .unwrap();
+    engine
+        .query_interned_evidence_view(&dataset, request(&filtered), &options, &source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT solutions");
+            };
+            assert_eq!(rows.len(), 2);
+            for (row, kind) in rows.rows().iter().zip([1, 3]) {
+                assert_eq!(
+                    rows.value_of(row[0].unwrap()),
+                    purrdf_core::TermValue::integer(kind)
+                );
+            }
+            assert!(!rows.rows()[0].evidence().is_undecided());
+            assert!(rows.rows()[1].evidence().is_undecided());
+        })
+        .unwrap();
+
+    // Use a bound variable so the VM runs the boolean operator at evaluation.
+    for (gate, op, count) in [("false", "&&", 0), ("true", "||", 3)] {
+        let gated = filtered.replace(
+            "FILTER(<https://example.org/before>(?left, ?right))",
+            &format!(
+                "VALUES ?gate {{ {gate} }} FILTER(?gate {op} <https://example.org/before>(?left, ?right))"
+            ),
+        );
+        engine
+            .query_interned_evidence_view(&dataset, request(&gated), &options, &source, |outcome| {
+                let InternedOutcome::Solutions(rows) = outcome else {
+                    panic!("SELECT solutions");
+                };
+                assert_eq!(rows.len(), count);
+                assert!(rows.rows().iter().all(|row| !row.evidence().is_undecided()));
+            })
+            .unwrap();
+    }
+
+    let query = r#"
+        PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+        SELECT (<https://example.org/after-period>("2024-12-01T11:23:00Z"^^xsd:dateTime,
+          "2024-09-01Z"^^xsd:date, "2024-12-01Z"^^xsd:date) AS ?decision) WHERE {}"#;
+    let wide_seconds = format!("00.{}", "1".repeat(4096));
+    let wide = query.replace("00Z", &format!("{wide_seconds}Z"));
+    let evaluate_with_fuel = |text, limit| {
+        let governor = std::sync::Arc::new(purrdf_sparql_eval::GovernorState::new(
+            &purrdf_sparql_eval::QueryGovernors::UNBOUNDED.with_fuel(limit),
+        ));
+        engine
+            .query_governed_interned_in_operation(
+                &dataset,
+                request(text),
+                &options,
+                &governor,
+                |_| (),
+            )
+            .unwrap()
+    };
+    assert!(matches!(
+        evaluate_with_fuel(query, 100_000),
+        purrdf_sparql_eval::InternedGoverned::Complete { .. }
+    ));
+    let purrdf_sparql_eval::InternedGoverned::BudgetExhausted(exhausted) =
+        evaluate_with_fuel(&wide, 100_000)
+    else {
+        panic!("the exact seconds conversion must be charged before it runs");
+    };
+    let conversion = purrdf_xsd::exact::cost::parse(wide_seconds.len() as u64).work();
+    assert!(matches!(
+        exhausted.tripped,
+        purrdf_core::TrippedGovernor::Budget {
+            dimension: purrdf_core::ResourceDimension::Fuel,
+            consumed,
+            ..
+        } if consumed >= conversion
+    ));
+    engine
+        .query_interned_evidence_view(&dataset, request(query), &options, &source, |outcome| {
+            let InternedOutcome::Solutions(rows) = outcome else {
+                panic!("SELECT solutions");
+            };
+            assert_eq!(
+                rows.value_of(rows.rows()[0][0].unwrap()),
+                purrdf_core::TermValue::boolean(true)
+            );
+        })
+        .unwrap();
+    let reversed = query.replace("\"2024-09-01Z\"^^xsd:date", "\"2024-12-02Z\"^^xsd:date");
+    let error = engine
+        .query_interned_evidence_view(&dataset, request(&reversed), &options, &source, |_| {
+            panic!("a reversed period is invalid, not an undecided comparison");
+        })
+        .unwrap_err();
+    let cause: &(dyn std::error::Error + 'static) =
+        error.native_cause().expect("original interval error");
+    assert_eq!(
+        core::iter::successors(Some(cause), |&cause| cause.source()).find_map(
+            <dyn std::error::Error>::downcast_ref::<purrdf_xsd::temporal::PrecisionError>
+        ),
+        Some(&purrdf_xsd::temporal::PrecisionError::NonPositivePeriod),
+    );
+
+    let malformed = query.replace("2024-09-01Z", "2024-02-30Z");
+    let error = engine
+        .query_interned_evidence_view(&dataset, request(&malformed), &options, &source, |_| {
+            panic!("a malformed calendar literal is not an undecided comparison");
+        })
+        .unwrap_err();
+    let cause: &(dyn std::error::Error + 'static) =
+        error.native_cause().expect("original calendar parse error");
+    let retained = core::iter::successors(Some(cause), |&cause| cause.source())
+        .find_map(
+            <dyn std::error::Error>::downcast_ref::<purrdf_sparql_eval::RetainedNativeFailure>,
+        )
+        .expect("retained calendar parse error");
+    let fields = purrdf_testkit::error_capture::Capture::read(retained.cause());
+    assert!(matches!(
+        fields.field("xpath_code"),
+        purrdf_hash::error::ErrorValue::Code("err:FORG0001")
+    ));
+}
+
 fn sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence() {
     use purrdf_sparql_eval::extension_env::ExtensionEnv;
     use purrdf_sparql_eval::user_fn::{
@@ -1520,6 +1726,49 @@ fn registered_lossy_search_keeps_original_candidates_and_caller_reason() {
                             assert_eq!(record.information().fallback(), Information::Neither);
                         })
                         .unwrap();
+                },
+            )
+            .unwrap();
+    }
+    for (gate, operator, count, undecided) in [
+        ("?off", "&&", 0, 0),
+        ("?on", "&&", 1, 1),
+        ("?on", "||", 1, 0),
+        (
+            "EXISTS { VALUES ?closed { false } FILTER(?closed) }",
+            "||",
+            1,
+            1,
+        ),
+    ] {
+        let query = format!(
+            "SELECT ?on WHERE {{ VALUES (?on ?off) {{ (true false) }}
+             FILTER({gate} {operator} EXISTS {{ ?doc <https://example.org/search> \"absent\" }}) }}",
+        );
+        engine
+            .query_interned_evidence_view(
+                &dataset,
+                request(&query),
+                &QueryOptions::default().with_env(&env),
+                &source,
+                |outcome| {
+                    let InternedOutcome::Solutions(rows) = outcome else {
+                        panic!("native SELECT");
+                    };
+                    assert_eq!(rows.len(), count, "{gate} {operator}");
+                    assert_eq!(
+                        rows.undecided_rows().count(),
+                        undecided,
+                        "{gate} {operator}"
+                    );
+                    if undecided != 0 {
+                        rows.rows()[0]
+                            .evidence()
+                            .with_record(|record| {
+                                assert_eq!(record.reasons(), &[source.reason]);
+                            })
+                            .unwrap();
+                    }
                 },
             )
             .unwrap();
@@ -3778,6 +4027,7 @@ purrdf_testkit::harness_main!(
     actual_claim_ingress_inherits_sharper_standpoints_without_scoping_unspecified_claims,
     service_rows_keep_signed_and_undecided_declarations_through_original_operators,
     empty_service_keeps_search_reason_without_inventing_an_answer_row,
+    temporal_order_keeps_an_unsettled_comparison_out_of_boolean_values,
     sparql_function_suspensions_retain_original_select_ask_and_nested_body_evidence,
     distinct_coalesces_both_polarities_without_changing_binding_identity,
     source_refusal_never_publishes_partial_or_undetermined_rows,
