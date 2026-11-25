@@ -11,7 +11,7 @@ use std::borrow::Cow;
 pub struct CodeSpanLimits {
     /// Original decoded scalar bytes.
     pub source_bytes: usize,
-    /// Live native output capacity, excluding the caller's borrowed input.
+    /// Live native scratch and output capacity, excluding the caller's borrowed input.
     pub auxiliary_bytes: usize,
     /// Deterministic source, probe, comparison and copy work units.
     pub work: u64,
@@ -33,53 +33,213 @@ fn run_end(
     Ok(at)
 }
 
-fn close(
+fn next_run(
     text: &str,
-    mut at: usize,
-    count: usize,
+    at: &mut usize,
     position: &impl Fn(usize) -> usize,
     budget: &mut Budget<'_>,
-) -> Result<Option<usize>, SyntaxError> {
-    while at < text.len() {
-        budget.tick(position(at), 1)?;
-        if text.as_bytes()[at] != b'`' {
-            at += 1;
+) -> Result<Option<(usize, usize)>, SyntaxError> {
+    while *at < text.len() {
+        budget.tick(position(*at), 1)?;
+        if text.as_bytes()[*at] != b'`' {
+            *at += 1;
             continue;
         }
-        let end = run_end(text, at, position, budget)?;
-        budget.tick(position(at), 1)?;
-        if end - at == count {
-            return Ok(Some(end));
-        }
-        at = end;
+        let start = *at;
+        *at = run_end(text, start, position, budget)?;
+        return Ok(Some((start, *at)));
     }
     Ok(None)
 }
 
-// Callers select a backtick byte at a UTF-8 boundary. Returning the maximal
-// opening end lets unmatched and escaped runs advance without a second scan.
-pub(super) fn read(
-    text: &str,
-    at: usize,
-    position: impl Fn(usize) -> usize,
-    budget: &mut Budget<'_>,
-) -> Result<(usize, Option<usize>), SyntaxError> {
-    let opening_end = run_end(text, at, &position, budget)?;
-    let mut before = at;
-    let mut escaped = false;
-    while before > 0 {
-        budget.tick(position(before - 1), 1)?;
-        if text.as_bytes()[before - 1] != b'\\' {
-            break;
+#[derive(Default)]
+struct Suffix {
+    runs: usize,
+    widest: usize,
+}
+
+impl Suffix {
+    fn fits(&self, budget: &Budget<'_>) -> bool {
+        self.runs != 0
+            && self
+                .runs
+                .checked_mul(size_of::<Run>())
+                .zip(
+                    self.widest
+                        .checked_add(1)
+                        .and_then(|n| n.checked_mul(size_of::<usize>())),
+                )
+                .and_then(|(links, heads)| links.checked_add(heads))
+                .is_some_and(|bytes| bytes <= budget.limits.auxiliary_bytes - budget.live)
+    }
+}
+
+const NO_RUN: usize = usize::MAX;
+
+struct Run {
+    start: usize,
+    end: usize,
+    next: usize,
+}
+
+struct RunIndex {
+    runs: Vec<Run>,
+    heads: Vec<usize>,
+}
+
+impl RunIndex {
+    fn build(
+        text: &str,
+        mut at: usize,
+        bound: &Suffix,
+        position: &impl Fn(usize) -> usize,
+        budget: &mut Budget<'_>,
+    ) -> Result<Self, SyntaxError> {
+        let mut runs = Vec::new();
+        budget.memory(|memory| memory.reserve(&mut runs, bound.runs))?;
+        let mut heads = budget
+            .memory(|memory| memory.collect(std::iter::repeat_n(NO_RUN, bound.widest + 1)))?;
+        while let Some((start, end)) = next_run(text, &mut at, position, budget)? {
+            budget.tick(position(start), 0)?;
+            budget.push(
+                &mut runs,
+                Run {
+                    start,
+                    end,
+                    next: NO_RUN,
+                },
+            )?;
         }
-        escaped = !escaped;
-        before -= 1;
+        // A later opening end leaves only a subset of the last failed
+        // search's full runs. Its width directory and link bound still hold.
+        for (index, run) in runs.iter_mut().enumerate().rev() {
+            budget.tick(position(run.start), 1)?;
+            let head = &mut heads[run.end - run.start];
+            run.next = *head;
+            *head = index;
+        }
+        Ok(Self { runs, heads })
     }
-    if escaped {
-        return Ok((opening_end, None));
+
+    fn close(
+        &mut self,
+        at: usize,
+        width: usize,
+        position: &impl Fn(usize) -> usize,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<usize>, SyntaxError> {
+        budget.tick(position(at), 1)?;
+        let Some(head) = self.heads.get_mut(width) else {
+            return Ok(None);
+        };
+        while *head != NO_RUN {
+            budget.tick(position(at), 1)?;
+            let run = &self.runs[*head];
+            if run.start >= at {
+                return Ok(Some(run.end));
+            }
+            *head = run.next;
+        }
+        Ok(None)
     }
-    let closing_end = close(text, opening_end, opening_end - at, &position, budget)?;
-    Ok((opening_end, closing_end))
+
+    fn release(self, budget: &mut Budget<'_>) -> Result<(), SyntaxError> {
+        budget.release(self.runs)?;
+        budget.release(self.heads)
+    }
+}
+
+/// One matcher's openers are visited in source order in one logical input.
+pub(super) struct CodeSpans<'a> {
+    text: &'a str,
+    failed_work: u64,
+    suffix: Suffix,
+    index: Option<RunIndex>,
+}
+
+impl<'a> CodeSpans<'a> {
+    pub(super) fn new(text: &'a str) -> Self {
+        Self {
+            text,
+            failed_work: 0,
+            suffix: Suffix::default(),
+            index: None,
+        }
+    }
+
+    fn close(
+        &mut self,
+        mut at: usize,
+        width: usize,
+        position: &impl Fn(usize) -> usize,
+        budget: &mut Budget<'_>,
+    ) -> Result<Option<usize>, SyntaxError> {
+        // Successful spans never justify an extra suffix pass. Only repeated
+        // misses can spend this much closing work before requesting an index.
+        if self.index.is_none()
+            && at < self.text.len()
+            && self.failed_work >= (self.text.len() as u64).saturating_mul(2)
+            && self.suffix.fits(budget)
+        {
+            self.index = Some(RunIndex::build(
+                self.text,
+                at,
+                &self.suffix,
+                position,
+                budget,
+            )?);
+        }
+        if let Some(index) = &mut self.index {
+            return index.close(at, width, position, budget);
+        }
+        let before = budget.work;
+        let mut suffix = Suffix::default();
+        while let Some((start, end)) = next_run(self.text, &mut at, position, budget)? {
+            budget.tick(position(start), 1)?;
+            let candidate = end - start;
+            if candidate == width {
+                return Ok(Some(end));
+            }
+            suffix.runs += 1;
+            suffix.widest = suffix.widest.max(candidate);
+        }
+        self.failed_work = self.failed_work.saturating_add(budget.work - before);
+        self.suffix = suffix;
+        Ok(None)
+    }
+
+    // Callers select a backtick byte at a UTF-8 boundary. Returning the maximal
+    // opening end lets unmatched and escaped runs advance without a second scan.
+    pub(super) fn read(
+        &mut self,
+        at: usize,
+        position: impl Fn(usize) -> usize,
+        budget: &mut Budget<'_>,
+    ) -> Result<(usize, Option<usize>), SyntaxError> {
+        let opening_end = run_end(self.text, at, &position, budget)?;
+        let mut before = at;
+        let mut escaped = false;
+        while before > 0 {
+            budget.tick(position(before - 1), 1)?;
+            if self.text.as_bytes()[before - 1] != b'\\' {
+                break;
+            }
+            escaped = !escaped;
+            before -= 1;
+        }
+        if escaped {
+            return Ok((opening_end, None));
+        }
+        let closing_end = self.close(opening_end, opening_end - at, &position, budget)?;
+        Ok((opening_end, closing_end))
+    }
+
+    pub(super) fn release(self, budget: &mut Budget<'_>) -> Result<(), SyntaxError> {
+        if let Some(index) = self.index {
+            index.release(budget)?;
+        }
+        Ok(())
+    }
 }
 
 /// Replace every complete backtick span in a decoded scalar with one ASCII space.
@@ -91,7 +251,7 @@ pub(super) fn read(
 /// Unchanged input is borrowed without output allocation. Changed output is
 /// admitted before growth and copying. A refusal returns the original typed
 /// cause with positions in this decoded scalar and publishes no partial text.
-/// Repeated closing searches consume work; linear execution is not promised.
+/// Repeated failed searches can admit a width index when scratch storage fits.
 pub fn replace_code_spans(
     source: &str,
     limits: CodeSpanLimits,
@@ -111,6 +271,7 @@ pub fn replace_code_spans(
     budget.limit(0, "source bytes", source.len(), limits.source_bytes)?;
     budget.tick(0, source.len())?;
     let mut output = None;
+    let mut spans = CodeSpans::new(source);
     let mut at = 0;
     let mut from = 0;
     while at < source.len() {
@@ -119,7 +280,7 @@ pub fn replace_code_spans(
             at += 1;
             continue;
         }
-        let (opening_end, closing_end) = read(source, at, |at| at, &mut budget)?;
+        let (opening_end, closing_end) = spans.read(at, |at| at, &mut budget)?;
         if let Some(end) = closing_end {
             let text = output.get_or_insert_with(String::new);
             budget.tick(at, 0)?;
@@ -133,6 +294,7 @@ pub fn replace_code_spans(
             at = opening_end;
         }
     }
+    spans.release(&mut budget)?;
     if let Some(mut output) = output {
         budget.tick(from, 0)?;
         budget.memory(|m| m.push_str(&mut output, &source[from..]))?;

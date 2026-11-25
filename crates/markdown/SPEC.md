@@ -334,20 +334,33 @@ encoding marks, comment delimiters, HTML, entities, YAML-looking strings and
 fence-looking text. Backticks inside those spellings remain eligible. This
 operation performs no other document or language interpretation.
 
-The scalar, Standard and Authoring readers share one admitted matcher. Byte
-probes and candidate-width comparisons are charged before inspection, and
-output capacity and copies use the same native admission account. Storage
-includes simultaneous old and replacement buffers during growth. Closing
-searches can revisit suffixes, so finite work limits may refuse an input even
-when source and output storage would fit; no linear-work guarantee is made.
+The scalar, Standard and Authoring readers share one admitted matcher. A view
+starts with direct closing searches. After failed searches have used twice
+the view's byte length in work units, a later opener can index its remaining
+suffix. The last failed search supplies an upper bound on the number of
+suffix runs and their maximum width. The index is selected only when those
+link and directory buffers fit in the remaining auxiliary allowance. This
+keeps the direct path available without allocating when scratch is too tight.
+An actual allocation or work refusal still propagates.
 
-Standard opening-run scans and width comparisons that previously went
-uncharged now consume work. Authoring opener and backslash scans are charged
-before inspection rather than afterward, without rescanning unmatched runs.
-Consequently tight finite work ceilings can now refuse earlier, and refusal
-positions can identify a newly charged probe or comparison. These are resource
-accounting changes: grammar, output for admitted input, document physical-line
-policy and the structural dialect revision remain unchanged.
+The index scans the suffix once and links maximal runs by width. For each
+width, a cursor moves past runs that start before the current search. One
+view's openers only move forward, so each run is skipped at most once. The index uses linear construction and traversal work
+and storage proportional to the number of reserved runs plus the widest
+reserved run. It is discarded before moving to a different view. Views
+that cannot afford the index may still revisit suffixes, so work can
+refuse even when the source and output storage fit.
+
+Byte probes, candidate comparisons and index probes are charged before
+inspection. Scratch, output capacity and copies use the same native
+admission account, including simultaneous buffers during growth. Ordinary
+matched spans and isolated unmatched runs do not request scratch storage.
+
+Fewer suffix probes can admit inputs that previously exhausted their work
+ceiling. Index construction and lookup charge different operations, so a work
+refusal can occur at a different source position. Resource accounting does
+not change the grammar, output for admitted input, physical-line policy or
+structural dialect revision.
 
 ## 3. The split law
 
