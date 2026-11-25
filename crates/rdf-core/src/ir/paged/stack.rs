@@ -31,6 +31,15 @@ pub struct StackSource {
     pub page_count: u64,
 }
 
+impl purrdf_hash::error::StructuredError for StackSource {
+    purrdf_hash::error_visit! {
+        @record self { generation, page_count } => "paged-stack-source" {
+            "generation" => Unsigned(u128::from(self.generation.0)),
+            "page_count" => Unsigned(u128::from(self.page_count)),
+        }
+    }
+}
+
 /// The source-qualified address of a physical page request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StackPageOrigin {
@@ -43,6 +52,15 @@ pub enum StackPageOrigin {
     },
     /// The snapshot's frozen resident head, charged like one reference page.
     Head,
+}
+
+impl purrdf_hash::error::StructuredError for StackPageOrigin {
+    purrdf_hash::error_visit! {
+        Sealed { layer, page } => "paged-stack-sealed-page" {
+            "layer" => Unsigned(u128::from(*layer)), "page" => Unsigned(u128::from(page.0)),
+        },
+        Head => "paged-stack-head-page" {},
+    }
 }
 
 /// Exact immutable stack identity and aggregate operation evidence.
@@ -65,6 +83,68 @@ pub struct PagedStackEvidence {
     pub requested_origins: Vec<StackPageOrigin>,
     /// Reference byte charge of the head page (zero if no head page exists).
     pub head_bytes: u64,
+}
+
+impl purrdf_hash::error::StructuredError for PagedStackEvidence {
+    fn visit<'error>(&'error self, visitor: &mut dyn purrdf_hash::error::ErrorVisitor<'error>) {
+        use purrdf_hash::error::{ErrorValue, visit_list};
+        let Self {
+            sources,
+            head,
+            head_graphs,
+            graph_declarations,
+            removals,
+            pages,
+            requested_origins,
+            head_bytes,
+        } = self;
+        visitor.variant("paged-stack-evidence");
+        visit_list(
+            visitor,
+            Some("sources"),
+            sources.iter().map(|source| ErrorValue::Record(source)),
+        );
+        visit_list(
+            visitor,
+            Some("head"),
+            head.iter().map(|quad| ErrorValue::Record(quad)),
+        );
+        visit_list(
+            visitor,
+            Some("head_graphs"),
+            head_graphs.iter().map(|graph| ErrorValue::Term(graph)),
+        );
+        visitor.begin_list(Some("graph_declarations"), graph_declarations.len());
+        for graphs in graph_declarations.iter() {
+            visit_list(
+                visitor,
+                None,
+                graphs.iter().map(|graph| ErrorValue::Term(graph)),
+            );
+        }
+        visitor.end_list();
+        visitor.begin_list(Some("removals"), removals.len());
+        for rows in removals.iter() {
+            visit_list(
+                visitor,
+                None,
+                rows.iter().map(|quad| ErrorValue::Record(quad)),
+            );
+        }
+        visitor.end_list();
+        visitor.value(Some("pages"), ErrorValue::Record(pages));
+        visit_list(
+            visitor,
+            Some("requested_origins"),
+            requested_origins
+                .iter()
+                .map(|origin| ErrorValue::Record(origin)),
+        );
+        visitor.value(
+            Some("head_bytes"),
+            ErrorValue::ByteCount((*head_bytes).into()),
+        );
+    }
 }
 
 /// A construction or mutable membership failure; absence never substitutes for error.
