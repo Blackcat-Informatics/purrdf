@@ -2557,16 +2557,6 @@ reason = "Each test parses its N-Triples probe through its own crate's public en
 
 [[distinct]]
 members = [
-    "purrdf_entail::entails::homomorphism::index_key",
-    "purrdf_sparql_eval::test_crate::options_sources::render",
-]
-kind = "shim"
-criterion = "layering"
-anchor = "purrdf_entail::entails::homomorphism::index_key"
-reason = "The entailment checker's homomorphism index key is private to purrdf-entail, which sits above purrdf-sparql-eval; the evaluator's test renders terms for comparison with the same IRI-else-Debug spelling and cannot reach it."
-
-[[distinct]]
-members = [
     "purrdf_hash::crc32::Crc32::checksum",
     "purrdf_hash::md5::Md5::digest",
     "purrdf_hash::sha1::Sha1::digest",
