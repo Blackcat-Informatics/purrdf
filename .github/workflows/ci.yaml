@@ -884,6 +884,10 @@ jobs:
           awk '/^[[:space:]]*Running/ && /--crate-name/ {calls++}
                END {printf "Cargo compiler commands (host and target): %d\n", calls}' \
             target/simd-asm/contexts/*/cargo.graph-*.stderr.log
+          for graph in target/simd-asm/contexts/*/cargo.graph-*.stderr.log; do
+            printf 'Cargo freshness from %s\n' "$graph"
+            awk '/^[[:space:]]*(Fresh|Dirty|Compiling) / {print}' "$graph"
+          done
       - name: Upload checked evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
