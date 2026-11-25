@@ -3,11 +3,13 @@
 
 //! Frozen dataset geometry projection and exact spatial-relation queries.
 
+mod envelope;
 mod geographic;
 mod projection;
 pub use geographic::{GeographicGeoIndex, GeographicRelationReceipt};
 use projection::ProjectionWork;
 
+use crate::context::RetainedBuilder;
 use purrdf_core::FastMap;
 use purrdf_hash::Domain;
 use purrdf_hash::blake3::Hasher;
@@ -757,6 +759,7 @@ impl GeoIndex {
             progress: crate::context::WorkProgress::integer(observer),
             context: None,
             metadata: 0,
+            envelope_scan: envelope::Scan::default(),
         };
         self.relation_pairs_with(relation, subject, object, &mut worker)
     }
@@ -783,6 +786,7 @@ impl GeoIndex {
             progress: crate::context::WorkProgress::integer(Some(observer)),
             context: Some(context),
             metadata: 0,
+            envelope_scan: envelope::Scan::default(),
         };
         self.relation_pairs_with(relation, subject, object, &mut worker)
     }
@@ -835,12 +839,14 @@ impl GeoIndex {
         object: Option<&TermValue>,
         worker: &mut impl PairWorker,
     ) -> Result<crate::PreparedValues<RelationPair>, GeoError> {
-        use crate::context::RetainedBuilder;
         worker.bindings(subject, object)?;
         let lefts = self.candidate_positions(subject, worker)?;
         let rights = self.candidate_positions(object, worker)?;
         let mut pairs = RetainedBuilder::default();
         worker.reserve(&mut pairs, lefts.len().max(rights.len()))?;
+        if !lefts.is_empty() && rights.len() > 1 {
+            worker.prepare_unbound_rights();
+        }
         for left in lefts {
             for right in rights.clone() {
                 if worker.holds(left, right)? {
@@ -960,9 +966,10 @@ trait PairWorker {
     ) -> Result<(), GeoError>;
     fn reserve(
         &mut self,
-        pairs: &mut crate::context::RetainedBuilder<RelationPair>,
+        pairs: &mut RetainedBuilder<RelationPair>,
         required: usize,
     ) -> Result<(), GeoError>;
+    fn prepare_unbound_rights(&mut self) {}
     fn holds(&mut self, left: usize, right: usize) -> Result<bool, GeoError>;
     fn row(&mut self, subject: &TermValue, object: &TermValue, len: usize) -> Result<(), GeoError>;
     fn finish(&mut self, count: usize) -> Result<(), GeoError>;
@@ -989,6 +996,7 @@ struct PlanarPairs<'index, 'context, 'observer> {
     progress: crate::context::WorkProgress<'observer>,
     context: Option<&'context mut crate::MetricContext>,
     metadata: u64,
+    envelope_scan: envelope::Scan,
 }
 impl PlanarMetric for PlanarPairs<'_, '_, '_> {
     fn matrix(
@@ -996,12 +1004,14 @@ impl PlanarMetric for PlanarPairs<'_, '_, '_> {
         left: &crate::Geometry,
         right: &crate::Geometry,
     ) -> Result<crate::IntersectionMatrix, GeoError> {
-        match self.context.as_deref_mut() {
+        let matrix = match self.context.as_deref_mut() {
             Some(context) => {
                 crate::topology::relate_admitted(left, right, context, &mut self.progress)
             }
             None => Ok(relate(left, right)),
-        }
+        }?;
+        self.envelope_scan.observe(&matrix);
+        Ok(matrix)
     }
     fn dimension(&mut self, value: &crate::Geometry) -> Result<i32, GeoError> {
         self.progress.with_storage(0, |memory| {
@@ -1021,7 +1031,7 @@ impl PairWorker for PlanarPairs<'_, '_, '_> {
     }
     fn reserve(
         &mut self,
-        pairs: &mut crate::context::RetainedBuilder<RelationPair>,
+        pairs: &mut RetainedBuilder<RelationPair>,
         required: usize,
     ) -> Result<(), GeoError> {
         match self.context.as_deref_mut() {
@@ -1031,7 +1041,23 @@ impl PairWorker for PlanarPairs<'_, '_, '_> {
             None => pairs.reserve(required, &mut self.progress),
         }
     }
+    fn prepare_unbound_rights(&mut self) {
+        if self.context.is_some() && envelope::requires_contact(self.relation) {
+            self.envelope_scan = envelope::Scan::Observe;
+        }
+    }
     fn holds(&mut self, left: usize, right: usize) -> Result<bool, GeoError> {
+        if let Some(context) = self.context.as_deref_mut()
+            && self.envelope_scan.separated(
+                &self.index.data.entries,
+                left,
+                right,
+                context,
+                &mut self.progress,
+            )?
+        {
+            return Ok(false);
+        }
         let index = self.index;
         GeoIndex::holds_relation_with(
             self.relation,
