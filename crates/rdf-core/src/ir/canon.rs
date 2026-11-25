@@ -8987,7 +8987,7 @@ mod tests {
         });
         assert_eq!(view.shrink_fault.get(), ShrinkFault::Observed);
         assert_eq!(result, Err(CanonError::Read(cause)));
-        assert!(state.blanks.is_empty());
+        assert_eq!(state.blanks, [] as [TermId; 0]);
 
         view.shrink_fault.set(ShrinkFault::Disabled);
         let state = state.issue_labels().expect("the same source with scratch");
