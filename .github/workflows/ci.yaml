@@ -803,7 +803,7 @@ jobs:
             echo "CARGO_BUILD_FINGERPRINT=content"
           } >> "$GITHUB_ENV"
           {
-            printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:-unknown}"
+            printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:?}" "${ImageVersion:?}"
             cargo -Vv
             cc --version
             ld --version
@@ -818,7 +818,9 @@ jobs:
             target/release
             target/x86_64-unknown-linux-gnu/release
             target/simd-asm
-          key: simd-asm-units-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ steps.simd-cache-context.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          # Cargo checks source freshness and the gate checks each fresh unit's
+          # receipt. Graph and environment changes select a new cache.
+          key: simd-asm-units-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ steps.simd-cache-context.outputs.identity }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'Makefile', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', '.github/workflows/ci.yaml', 'scripts/check-simd-asm.py', 'scripts/simd_asm_runtime.py', 'scripts/simd-asm-manifest.toml') }}
       - name: Verify a restored assembly receipt before running Cargo
         if: steps.simd-unit-cache.outputs.cache-hit == 'true'
         run: |
