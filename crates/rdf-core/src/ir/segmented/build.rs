@@ -4,6 +4,7 @@
 //! Bounded resident fixture construction and complete untrusted-image validation.
 
 use super::super::statistics::{LocalStatistics, StatisticsMergeError, StatisticsSection};
+use core::ops::Range;
 use purrdf_lex::allocation::{CapacitySpace, Memory, Resident, StorageError};
 use std::sync::Arc;
 
@@ -543,17 +544,16 @@ fn encode_prepared_dataset(
     records.sort_by(|a, b| a.1.cmp(&b.1));
     let reverse = append_fixed(
         &mut blocks,
-        records.chunks((block_bytes - 9) / 8).map(|chunk| {
-            let mut bytes = Vec::with_capacity(chunk.len() * 8);
-            for (id, _) in chunk {
-                format::push_id(&mut bytes, *id);
-            }
-            bytes
-        }),
-        u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
+        records.len(),
         format::REVERSE,
         8,
         block_bytes,
+        |range, _, payload| {
+            for ((id, _), bytes) in records[range].iter().zip(payload.as_chunks_mut::<8>().0) {
+                *bytes = format::id_bytes(*id);
+            }
+            Ok(())
+        },
     )?;
     let mut summaries = Vec::new();
     let mut value_ranges = Vec::new();
@@ -602,44 +602,27 @@ fn encode_prepared_dataset(
     graphs.dedup();
     let graphs = append_fixed(
         &mut blocks,
-        graphs.chunks((block_bytes - 9) / 8).map(|chunk| {
-            let mut bytes = Vec::with_capacity(chunk.len() * 8);
-            for &id in chunk {
-                format::push_id(&mut bytes, id);
-            }
-            bytes
-        }),
-        u64::try_from(graphs.len()).map_err(|_| SegmentedError::AddressExhausted)?,
+        graphs.len(),
         format::GRAPHS,
         8,
         block_bytes,
+        |range, _, payload| {
+            for (&id, bytes) in graphs[range].iter().zip(payload.as_chunks_mut::<8>().0) {
+                *bytes = format::id_bytes(id);
+            }
+            Ok(())
+        },
     )?;
-    let summary_rows =
-        u64::try_from(summaries.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    let summaries = append_fixed(
+    let summaries = append_encoded_records(
         &mut blocks,
-        summaries
-            .chunks((block_bytes - 9) / format::SUMMARY_BYTES)
-            .map(|chunk| {
-                let mut bytes = Vec::with_capacity(chunk.len() * format::SUMMARY_BYTES);
-                for summary in chunk {
-                    bytes.extend_from_slice(summary);
-                }
-                bytes
-            }),
-        summary_rows,
+        &summaries,
         format::SUMMARIES,
         format::SUMMARY_BYTES,
         block_bytes,
     )?;
-    let value_range_rows =
-        u64::try_from(value_ranges.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    let value_ranges = append_fixed(
+    let value_ranges = append_encoded_records(
         &mut blocks,
-        value_ranges
-            .chunks((block_bytes - 9) / format::VALUE_RANGE_BYTES)
-            .map(<[Vec<u8>]>::concat),
-        value_range_rows,
+        &value_ranges,
         format::VALUE_RANGES,
         format::VALUE_RANGE_BYTES,
         block_bytes,
@@ -650,28 +633,29 @@ fn encode_prepared_dataset(
         &mut blocks,
         block_bytes,
     )?;
-    let effective_directory = append_source_directory(
-        source_statistics.effective_source_directory(),
-        format::SOURCE_DIRECTORY,
-        &mut blocks,
-        block_bytes,
-    )?;
     let directory = source_statistics.effective_source_directory();
+    let effective_directory = append_fixed(
+        &mut blocks,
+        directory.len(),
+        format::SOURCE_DIRECTORY,
+        super::super::source_directory::RECORD_BYTES,
+        block_bytes,
+        |range, _, payload| {
+            directory.encode_records(range.start, payload);
+            Ok(())
+        },
+    )?;
     let checkpoints = directory.node_checkpoints()?;
-    let checkpoint_count = checkpoints.len();
-    let width = super::super::source_directory::NODE_CHECKPOINT_BYTES;
-    let per = (block_bytes - 9) / width;
     let source_checkpoints = append_fixed(
         &mut blocks,
-        checkpoints.chunks(per).map(|chunk| {
-            let mut bytes = vec![0; chunk.len() * width];
-            super::super::source_directory::encode_node_checkpoints(chunk, &mut bytes);
-            bytes
-        }),
-        checkpoint_count as u64,
+        checkpoints.len(),
         format::SOURCE_CHECKPOINTS,
-        width,
+        super::super::source_directory::NODE_CHECKPOINT_BYTES,
         block_bytes,
+        |range, _, payload| {
+            super::super::source_directory::encode_node_checkpoints(&checkpoints[range], payload);
+            Ok(())
+        },
     )?;
     let overflow = Stream {
         first: blocks.len() as u64,
@@ -714,39 +698,6 @@ fn encode_prepared_dataset(
     SegmentedImage::certify(bytes)
 }
 
-fn append_source_directory(
-    directory: &super::super::source_directory::SourceDirectory,
-    kind: u8,
-    blocks: &mut Vec<Vec<u8>>,
-    block_bytes: usize,
-) -> Result<Stream, SegmentedError> {
-    let width = super::super::source_directory::RECORD_BYTES;
-    let per_block = (block_bytes - 9) / width;
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let mut stream = Stream {
-        first: blocks.len() as u64,
-        blocks: 0,
-        rows: directory.len() as u64,
-    };
-    for start in (0..directory.len()).step_by(per_block) {
-        let count = (directory.len() - start).min(per_block);
-        let mut encoded = memory.collect(std::iter::repeat_n(0_u8, count * width))?;
-        directory.encode_records(start, &mut encoded);
-        append_fixed(
-            blocks,
-            std::iter::once(encoded.as_slice()),
-            count as u64,
-            kind,
-            width,
-            block_bytes,
-        )?;
-        memory.release_vec(encoded)?;
-        stream.blocks += 1;
-    }
-    Ok(stream)
-}
-
 fn translated_statistics(
     source_statistics: &LocalStatistics,
     first: u64,
@@ -775,30 +726,17 @@ fn append_statistics(
     let statistics = translated_statistics(source_statistics, first, &mut memory)?;
     let mut streams = [Stream::default(); 4];
     for section in StatisticsSection::ALL {
-        let width = section.width();
-        let per_block = (block_bytes - 9) / width;
-        let rows = statistics.section_rows(section);
-        let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        for begin in (0..rows).step_by(per_block) {
-            let count = (rows - begin).min(per_block);
-            let mut encoded = memory.collect(std::iter::repeat_n(0_u8, count * width))?;
-            statistics.encode_records(section, begin, &mut encoded)?;
-            append_fixed(
-                blocks,
-                std::iter::once(encoded.as_slice()),
-                count as u64,
-                format::statistics_kind(section),
-                width,
-                block_bytes,
-            )?;
-            memory.release_vec(encoded)?;
-        }
-        streams[section.index()] = Stream {
-            first,
-            blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?
-                - first,
-            rows: rows as u64,
-        };
+        streams[section.index()] = append_fixed(
+            blocks,
+            statistics.section_rows(section),
+            format::statistics_kind(section),
+            section.width(),
+            block_bytes,
+            |range, _, payload| {
+                statistics.encode_records(section, range.start, payload)?;
+                Ok(())
+            },
+        )?;
     }
     Ok(streams)
 }
@@ -841,39 +779,66 @@ fn append_dictionary(
         spanned,
     ))
 }
-fn append_fixed<C: AsRef<[u8]>>(
+/// Partition a fixed-width stream and encode each payload into its owned block.
+fn append_fixed(
     blocks: &mut Vec<Vec<u8>>,
-    chunks: impl Iterator<Item = C>,
-    rows: u64,
+    rows: usize,
     kind: u8,
     width: usize,
     block_bytes: usize,
+    mut encode: impl FnMut(Range<usize>, u64, &mut [u8]) -> Result<(), SegmentedError>,
 ) -> Result<Stream, SegmentedError> {
+    const HEADER_BYTES: usize = 9;
     let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    for chunk in chunks {
-        let chunk = chunk.as_ref();
-        let mut block = Vec::with_capacity(block_bytes);
-        block.push(kind);
-        block.extend_from_slice(
-            &u32::try_from(chunk.len() / width)
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .to_le_bytes(),
-        );
-        block.extend_from_slice(
-            &u32::try_from(chunk.len())
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .to_le_bytes(),
-        );
-        block.extend_from_slice(chunk);
+    let per_block = (block_bytes - HEADER_BYTES) / width;
+    for start in (0..rows).step_by(per_block) {
+        let count = (rows - start).min(per_block);
+        let size = count * width;
+        let slot = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+        let encoded_count = u32::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?;
+        let encoded_size = u32::try_from(size).map_err(|_| SegmentedError::AddressExhausted)?;
+        let mut block = Vec::new();
+        Memory::new(&mut Resident).reserve(&mut block, block_bytes)?;
         block.resize(block_bytes, 0);
+        block[0] = kind;
+        crate::bytes::put_u32_le(&mut block, 1, encoded_count).expect("fixed block count field");
+        crate::bytes::put_u32_le(&mut block, 5, encoded_size).expect("fixed block size field");
+        encode(
+            start..start + count,
+            slot,
+            &mut block[HEADER_BYTES..HEADER_BYTES + size],
+        )?;
         blocks.push(block);
     }
     Ok(Stream {
         first,
         blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)? - first,
-        rows,
+        rows: u64::try_from(rows).map_err(|_| SegmentedError::AddressExhausted)?,
     })
 }
+
+fn append_encoded_records(
+    blocks: &mut Vec<Vec<u8>>,
+    records: &[Vec<u8>],
+    kind: u8,
+    width: usize,
+    block_bytes: usize,
+) -> Result<Stream, SegmentedError> {
+    append_fixed(
+        blocks,
+        records.len(),
+        kind,
+        width,
+        block_bytes,
+        |range, _, payload| {
+            for (record, bytes) in records[range].iter().zip(payload.chunks_exact_mut(width)) {
+                bytes.copy_from_slice(record);
+            }
+            Ok(())
+        },
+    )
+}
+
 fn append_quads<'a>(
     blocks: &mut Vec<Vec<u8>>,
     rows: &[QuadIds<GlobalTermId>],
@@ -883,29 +848,22 @@ fn append_quads<'a>(
     value_ranges: &mut Vec<Vec<u8>>,
     resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
 ) -> Result<Stream, SegmentedError> {
-    let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    for chunk in rows.chunks((block_bytes - 9) / 32) {
-        let mut bytes = Vec::with_capacity(chunk.len() * 32);
-        for &q in chunk {
-            format::encode_quad(q, &mut bytes);
-        }
-        let slot = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        let (first_range, range_count) = append_value_ranges(value_ranges, chunk, &resolve)?;
-        summaries.push(summary(chunk, slot, table, first_range, range_count)?);
-        append_fixed(
-            blocks,
-            std::iter::once(bytes),
-            u64::try_from(chunk.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-            format::QUADS,
-            32,
-            block_bytes,
-        )?;
-    }
-    Ok(Stream {
-        first,
-        blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)? - first,
-        rows: u64::try_from(rows.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-    })
+    append_fixed(
+        blocks,
+        rows.len(),
+        format::QUADS,
+        32,
+        block_bytes,
+        |range, slot, payload| {
+            let chunk = &rows[range];
+            for (&q, bytes) in chunk.iter().zip(payload.as_chunks_mut::<32>().0) {
+                format::encode_quad(q, bytes);
+            }
+            let (first_range, range_count) = append_value_ranges(value_ranges, chunk, &resolve)?;
+            summaries.push(summary(chunk, slot, table, first_range, range_count)?);
+            Ok(())
+        },
+    )
 }
 pub(super) fn summary(
     rows: &[QuadIds<GlobalTermId>],
