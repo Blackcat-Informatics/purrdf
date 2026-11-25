@@ -194,8 +194,8 @@ pub use dataset_view::{
     AccessCost, ContentIdentified, DatasetMut, DatasetView, DrainCheckpoint, DrainFailure,
     FallibleDatasetView, GraphMatch, GraphMatchValue, GraphSelector, NoopReservation,
     OwnedWorkspaceReservation, ProbePattern, ReadResidency, ResolvedQuad, StatementIndexSupport,
-    TermGuard, TermLookupError, ViewOperationStatus, ViewTermId, WorkspaceReservation,
-    checkpointed_drain,
+    SubjectOrderedScan, TermGuard, TermLookupError, ViewOperationStatus, ViewTermId,
+    WorkspaceReservation, checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{

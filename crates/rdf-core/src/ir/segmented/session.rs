@@ -8,12 +8,13 @@ use crate::hash::table::HashTable;
 use crate::hash::{
     hash_of, hash_table_allocation_bound, hash_table_retained_bound, reserve_table_with_memory,
 };
+use std::ops::RangeInclusive;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::dataset_view::{
     DatasetView, FallibleDatasetView, GraphMatch, TermGuard, ViewOperationStatus,
 };
-use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, TermRef, TermValue};
+use crate::{GlobalTermId, QuadIds, RdfStoreCapabilities, StatisticsStream, TermRef, TermValue};
 use purrdf_hash::blake3::Hasher;
 use purrdf_lex::allocation::StorageError;
 use purrdf_lex::allocation::shared::{Shared, SharedCloneError};
@@ -1755,14 +1756,18 @@ impl SegmentedSession {
         self.lookup_key(&key)
     }
 
+    fn summaries_per_block(&self) -> u64 {
+        (u64::from(self.header.block_bytes) - 9)
+            / u64::try_from(format::SUMMARY_BYTES).expect("fixed summary width fits u64")
+    }
+
     fn summary(&self, ordinal: u64) -> Result<[u8; format::SUMMARY_BYTES], SegmentedError> {
         if ordinal >= self.header.summaries.rows {
             return self.fail(SegmentedError::Corrupt(
                 "summary outside certified ordinal range",
             ));
         }
-        let per_block = (u64::from(self.header.block_bytes) - 9)
-            / u64::try_from(format::SUMMARY_BYTES).expect("fixed summary width fits u64");
+        let per_block = self.summaries_per_block();
         let slot = self.header.summaries.first + ordinal / per_block;
         let index =
             usize::try_from(ordinal % per_block).map_err(|_| SegmentedError::AddressExhausted)?;
@@ -1785,13 +1790,52 @@ impl SegmentedSession {
         let Some(subject) = subject else {
             return Ok(start..end);
         };
-        let offset = format::partition_point(end - start, |mid| {
-            let summary = self.summary(start + mid)?;
+        if subject.index() <= self.header.first_term_index {
+            return Ok(start..end);
+        }
+        self.subject_suffix(start..end, subject)
+    }
+
+    fn subject_suffix(
+        &self,
+        range: core::ops::Range<u64>,
+        subject: GlobalTermId,
+    ) -> Result<core::ops::Range<u64>, SegmentedError> {
+        let offset = format::partition_point(range.end - range.start, |mid| {
+            let summary = self.summary(range.start + mid)?;
             let max =
                 crate::bytes::read_u64_le(&summary, 32).expect("fixed summary subject maximum");
             Ok::<_, SegmentedError>(max < subject.index() + 1)
         })?;
-        Ok(start + offset..end)
+        Ok(range.start + offset..range.end)
+    }
+
+    fn ordered_stream_may_match(
+        &self,
+        table: usize,
+        pattern: Pattern,
+        range: &core::ops::Range<u64>,
+    ) -> Result<bool, SegmentedError> {
+        if range.is_empty() {
+            return Ok(false);
+        }
+        let (None, Some(predicate), _, graph) = pattern else {
+            return Ok(true);
+        };
+        let per_block = self.summaries_per_block();
+        if range.start / per_block == (range.end - 1) / per_block {
+            return Ok(true);
+        }
+        let stream = [
+            StatisticsStream::Asserted,
+            StatisticsStream::Reifiers,
+            StatisticsStream::Annotations,
+        ][table];
+        // Only exact scoped absence discharges a whole stream. A positive
+        // predicate count does not imply a match for the requested object.
+        Ok(self
+            .source_summary(predicate, graph, stream)?
+            .is_none_or(|summary| summary.statement_count() != 0))
     }
     pub(super) const fn has_stream_rows(&self, table: usize) -> bool {
         self.header.streams[table].rows != 0
@@ -1811,12 +1855,56 @@ impl SegmentedSession {
         pattern: Pattern,
         values: Option<R>,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
+        self.scan_subjects(table, pattern, None, values)
+    }
+
+    /// Scan one statement stream in ascending subject order within this image.
+    ///
+    /// The bounds are inclusive and refer to this session's own dictionary.
+    /// Predicate, object and graph restrictions do not change the scan order.
+    /// Only blocks whose certified subject bounds intersect the range can
+    /// produce rows. The cursor does not hold a payload pin between yields,
+    /// so another cursor or lookup may use the same cache slot.
+    ///
+    /// Check the session's read status after advancing, as for other
+    /// [`DatasetView`] scans. The first provider failure remains sticky.
+    pub fn quads_in_subject_range(
+        &self,
+        stream: StatisticsStream,
+        subjects: RangeInclusive<GlobalTermId>,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+    ) -> impl crate::SubjectOrderedScan<GlobalTermId> + '_ {
+        let table = match stream {
+            StatisticsStream::Asserted => 0,
+            StatisticsStream::Reifiers => 1,
+            StatisticsStream::Annotations => 2,
+        };
+        self.scan_subjects(
+            table,
+            (None, predicate, object, graph),
+            Some(subjects),
+            None::<crate::AnnotationValueRange<'_>>,
+        )
+    }
+
+    fn scan_subjects<'a, R: crate::AnnotationRangeSource + 'a>(
+        &'a self,
+        table: usize,
+        pattern: Pattern,
+        subjects: Option<RangeInclusive<GlobalTermId>>,
+        values: Option<R>,
+    ) -> QuadIter<'a, R> {
         QuadIter {
             session: self,
             table,
             summaries: None,
             rows: None,
             row: 0..0,
+            page: None,
+            page_max: 0,
+            subjects,
             pattern,
             values,
         }
@@ -2024,12 +2112,67 @@ struct QuadIter<'a, R: crate::AnnotationRangeSource> {
     // without a self-reference or repeated header/cache work between yields.
     rows: Option<Arc<CachedBlock>>,
     row: core::ops::Range<usize>,
+    // Range cursors retain offsets into the same authenticated block, not a
+    // pin. A cache miss on resume revalidates that block through the session.
+    page: Option<u64>,
+    page_max: u64,
+    subjects: Option<RangeInclusive<GlobalTermId>>,
     pattern: Pattern,
     values: Option<R>,
 }
+
+impl<R: crate::AnnotationRangeSource + Send> crate::SubjectOrderedScan<GlobalTermId>
+    for QuadIter<'_, R>
+{
+    fn advance_to(&mut self, minimum: GlobalTermId) {
+        let Some(bounds) = &mut self.subjects else {
+            unreachable!("only bounded subject scans expose forward seeking");
+        };
+        if minimum <= *bounds.start() {
+            return;
+        }
+        let upper = *bounds.end();
+        *bounds = minimum..=upper;
+        if self.page_max > minimum.index() && minimum <= upper {
+            // Keep the bookmark and let the ordinary row filter finish the
+            // current page without a new directory search.
+            return;
+        }
+        self.rows = None;
+        self.row = 0..0;
+        if minimum > upper {
+            self.summaries = Some(0..0);
+        } else if let Some(range) = self.summaries.as_ref().filter(|range| !range.is_empty()) {
+            let suffix = (|| {
+                // A move to the very next page should not pay for bisection
+                // through the rest of the directory.
+                let first = self.session.summary(range.start)?;
+                let max =
+                    crate::bytes::read_u64_le(&first, 32).expect("fixed summary subject maximum");
+                if max > minimum.index() {
+                    Ok(range.clone())
+                } else {
+                    self.session
+                        .subject_suffix(range.start + 1..range.end, minimum)
+                }
+            })();
+            match suffix {
+                Ok(range) => self.summaries = Some(range),
+                Err(error) => {
+                    self.summaries = Some(0..0);
+                    let _ = self.session.fail::<()>(error);
+                }
+            }
+        }
+    }
+}
+
 impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
     type Item = QuadIds<GlobalTermId>;
     fn next(&mut self) -> Option<Self::Item> {
+        if self.subjects.as_ref().is_some_and(RangeInclusive::is_empty) {
+            return None;
+        }
         loop {
             if self.values.as_ref().is_some_and(|source| {
                 source
@@ -2038,6 +2181,9 @@ impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
                     .is_some_and(crate::AnnotationRangeWorkspace::stopped)
             }) {
                 return None;
+            }
+            if self.rows.is_none() && !self.row.is_empty() {
+                self.rows = Some(self.session.block(self.page?).ok()?);
             }
             if let Some(block) = &self.rows {
                 while self.row.start < self.row.end {
@@ -2050,12 +2196,26 @@ impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
                             return None;
                         }
                     };
+                    if let Some(subjects) = &self.subjects {
+                        if quad.s > *subjects.end() {
+                            self.rows = None;
+                            self.row = 0..0;
+                            self.summaries = Some(0..0);
+                            return None;
+                        }
+                        if quad.s < *subjects.start() {
+                            continue;
+                        }
+                    }
                     let (s, p, o, g) = self.pattern;
                     if s.is_none_or(|id| id == quad.s)
                         && p.is_none_or(|id| id == quad.p)
                         && o.is_none_or(|id| id == quad.o)
                         && g.matches(quad.g)
                     {
+                        if self.subjects.is_some() {
+                            self.rows = None;
+                        }
                         return Some(quad);
                     }
                 }
@@ -2067,7 +2227,27 @@ impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
                 return None;
             }
             if self.summaries.is_none() {
-                self.summaries = match self.session.summary_range(self.table, self.pattern.0) {
+                let lower = self
+                    .subjects
+                    .as_ref()
+                    .map(|range| *range.start())
+                    .or(self.pattern.0);
+                let summaries = self
+                    .session
+                    .summary_range(self.table, lower)
+                    .and_then(|range| {
+                        if self.subjects.is_some()
+                            && !self.session.ordered_stream_may_match(
+                                self.table,
+                                self.pattern,
+                                &range,
+                            )?
+                        {
+                            return Ok(range.end..range.end);
+                        }
+                        Ok(range)
+                    });
+                self.summaries = match summaries {
                     Ok(range) => Some(range),
                     Err(error) => {
                         let _ = self.session.fail::<()>(error);
@@ -2083,9 +2263,15 @@ impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
                     return None;
                 }
             };
-            if self.pattern.0.is_some_and(|subject| {
+            let upper = self
+                .subjects
+                .as_ref()
+                .map(|range| *range.end())
+                .or(self.pattern.0);
+            if upper.is_some_and(|subject| {
                 crate::bytes::read_u64_le(&summary, 24).is_some_and(|min| min > subject.index() + 1)
             }) {
+                self.summaries = Some(0..0);
                 return None;
             }
             if summary[8] != u8::try_from(self.table).expect("three RDF streams")
@@ -2121,6 +2307,11 @@ impl<R: crate::AnnotationRangeSource> Iterator for QuadIter<'_, R> {
             };
             let start = data.as_ptr().addr() - block.encoded.as_ptr().addr();
             self.row = start..start + data.len();
+            self.page = Some(page);
+            if self.subjects.is_some() {
+                self.page_max =
+                    crate::bytes::read_u64_le(&summary, 32).expect("fixed summary subject maximum");
+            }
             self.rows = Some(block);
         }
     }
@@ -2171,6 +2362,59 @@ impl DatasetView for SegmentedSession {
     type TermGuard<'a> = SegmentedTermGuard;
     type ProbePlan = ();
 
+    fn ordered_subject_quads(
+        &self,
+        stream: StatisticsStream,
+        first_subject: Option<GlobalTermId>,
+        last_subject: Option<GlobalTermId>,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+    ) -> Option<impl crate::SubjectOrderedScan<GlobalTermId> + '_> {
+        let lower = first_subject.unwrap_or_else(|| {
+            GlobalTermId::from_index(0).expect("zero fits the global subject domain")
+        });
+        let upper = last_subject.unwrap_or_else(|| {
+            GlobalTermId::from_index(u64::MAX - 1).expect("the last global index fits the domain")
+        });
+        let bounds = lower..=upper;
+        Some(self.quads_in_subject_range(stream, bounds, predicate, object, graph))
+    }
+
+    fn ordered_subject_upper_bound(
+        &self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+    ) -> Result<Option<GlobalTermId>, SegmentedError> {
+        self.ready()?;
+        let mut upper = None;
+        let pattern = (None, predicate, object, graph);
+        for table in 0..self.header.streams.len() {
+            let range = self.summary_range(table, None)?;
+            if !self.ordered_stream_may_match(table, pattern, &range)? {
+                continue;
+            }
+            for ordinal in range.rev() {
+                let summary = self.summary(ordinal)?;
+                if !summary_matches(&summary, pattern) {
+                    continue;
+                }
+                let Some(index) = crate::bytes::read_u64_le(&summary, 32)
+                    .and_then(|encoded| encoded.checked_sub(1))
+                else {
+                    return self.fail(SegmentedError::Corrupt("invalid summary subject maximum"));
+                };
+                let subject = GlobalTermId::from_index(index).map_err(StorageError::from)?;
+                // Each stream is in subject order. No earlier matching
+                // directory entry can raise this stream's bound.
+                upper = upper.max(Some(subject));
+                break;
+            }
+        }
+        Ok(upper)
+    }
+
     fn source_statement_count(&self) -> Result<Option<u128>, Self::ReadError> {
         self.ready()?;
         Ok(Some(
@@ -2188,7 +2432,7 @@ impl DatasetView for SegmentedSession {
         &self,
         predicate: Self::Id,
         graph: GraphMatch<Self::Id>,
-        stream: crate::StatisticsStream,
+        stream: StatisticsStream,
     ) -> Result<Option<crate::source::SourceSummary>, Self::ReadError> {
         Self::source_summary(self, predicate, graph, stream)
     }

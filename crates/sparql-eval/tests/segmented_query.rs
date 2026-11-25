@@ -27,6 +27,201 @@ use purrdf_sparql_eval::{
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
 #[test]
+fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
+    use purrdf_core::{QuadIds, SegmentedBuildLimits, SegmentedBuilder, StatisticsStream, TermBox};
+    use purrdf_sparql_eval::EvalOptions;
+
+    let mut builder =
+        SegmentedBuilder::new(SegmentedBuildLimits::new(512, 200_000, 512, 1024, 8).unwrap())
+            .unwrap();
+    let terms: Vec<_> = ["urn:left", "urn:right", "urn:x", "urn:y"]
+        .into_iter()
+        .map(TermValue::iri)
+        .chain((0..192).map(|n| TermValue::iri(format!("urn:subject:{n:04}"))))
+        .collect();
+    let mut ids = Vec::new();
+    builder.intern_batch(&terms, |_, id| ids.push(id)).unwrap();
+    let [p, q, x, y] = ids[..4] else {
+        unreachable!()
+    };
+    let mut push = |s, p, o| builder.push_quad(QuadIds { s, p, o, g: None }).unwrap();
+    for &subject in &ids[4..] {
+        push(subject, q, x);
+    }
+    let matched = ids[ids.len() - 90];
+    let tail = ids[ids.len() - 46];
+    for object in [x, y] {
+        push(matched, p, object);
+    }
+    push(tail, p, x);
+    push(tail, p, y);
+    let triple = TermValue::Triple {
+        s: TermBox::new(terms[2].clone()),
+        p: TermBox::new(terms[0].clone()),
+        o: TermBox::new(terms[3].clone()),
+    };
+    let mut triple_id = None;
+    builder
+        .intern_batch(&[triple], |_, id| triple_id = Some(id))
+        .unwrap();
+    builder
+        .push_reifier(matched, triple_id.unwrap(), None)
+        .unwrap();
+    builder
+        .push_annotation(QuadIds {
+            s: matched,
+            p: q,
+            o: y,
+            g: None,
+        })
+        .unwrap();
+    let image = builder.seal().unwrap();
+    let metadata = open(&image, CEILING);
+    let upper = metadata
+        .ordered_subject_upper_bound(Some(p), None, GraphMatch::Default)
+        .unwrap()
+        .expect("driver's certified subject bound");
+    assert!(tail <= upper && upper < *ids.last().unwrap());
+
+    let run = |query, force_structural_bgp_order| {
+        let source = open(&image, CEILING);
+        let engine = NativeSparqlEngine::new().with_eval_options(EvalOptions {
+            force_structural_bgp_order,
+            disable_shapes: true,
+            ..EvalOptions::default()
+        });
+        let result = engine
+            .query_fallible_view(
+                &source,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &QueryOptions::EMPTY,
+            )
+            .unwrap();
+        (
+            support::solutions(result.result),
+            source.evidence().io_bytes(),
+        )
+    };
+    let query = "SELECT ?s ?a ?b WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b } ORDER BY ?s ?a ?b";
+    let (actual, actual_io) = run(query, false);
+    let (expected, expected_io) = run(query, true);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.1.len(), 6);
+    assert!(
+        actual_io < expected_io,
+        "ordered query requested {actual_io} bytes, control {expected_io}"
+    );
+
+    let reifies = purrdf_iri::vocab::rdf::REIFIES;
+    let reifies_id = metadata
+        .term_id_by_value(&TermValue::iri(reifies))
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        metadata
+            .ordered_subject_upper_bound(Some(reifies_id), None, GraphMatch::Default)
+            .unwrap(),
+        Some(matched),
+    );
+    let query = format!(
+        "SELECT ?s ?triple ?b WHERE {{ ?s <{reifies}> ?triple . ?s <urn:right> ?b }} ORDER BY ?b",
+    );
+    let (actual, _) = run(&query, false);
+    let (expected, _) = run(&query, true);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.1.len(), 2);
+
+    use purrdf_sparql_eval::eval::CursorBufferReason;
+    for (query, structural, expected_rows, buffers) in [
+        (
+            "SELECT ?s WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b }",
+            false,
+            6,
+            false,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b }",
+            true,
+            6,
+            true,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <urn:left> ?o . ?s <urn:right> ?o }",
+            false,
+            3,
+            true,
+        ),
+    ] {
+        let engine = NativeSparqlEngine::new().with_eval_options(EvalOptions {
+            force_structural_bgp_order: structural,
+            disable_shapes: true,
+            ..EvalOptions::default()
+        });
+        let source = open(&image, CEILING);
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let mut cursor = engine
+            .open_select_cursor_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
+            .unwrap();
+        let mut count = 0;
+        while cursor.next_row().unwrap().is_some() {
+            count += 1;
+        }
+        assert_eq!(count, expected_rows);
+        assert_eq!(cursor.settle().unwrap().query.delivered, count);
+        assert_eq!(
+            cursor
+                .buffering_report()
+                .contains(CursorBufferReason::IntermediateRelation),
+            buffers,
+            "the merge should only be selected for the single shared key",
+        );
+    }
+
+    let provider = Arc::new(RefusingProvider {
+        bytes: image.provider(),
+        refuse: AtomicBool::new(false),
+        operation: "ordered bookmark reload",
+    });
+    let source = SegmentedSession::open(
+        provider.clone(),
+        image.receipt(),
+        SegmentedReadLimits::new(CEILING, 1, 65_536, 100_000_000, 8),
+    )
+    .unwrap();
+    let range = |lo, hi| {
+        source.quads_in_subject_range(
+            StatisticsStream::Asserted,
+            lo..=hi,
+            Some(q),
+            None,
+            GraphMatch::Default,
+        )
+    };
+    let mut left = range(ids[4], ids[8]);
+    let mut right = range(tail, ids[ids.len() - 1]);
+    assert_eq!(
+        source.checked_read(|_| left.next()).unwrap().unwrap().s,
+        ids[4]
+    );
+    assert_eq!(
+        source.checked_read(|_| right.next()).unwrap().unwrap().s,
+        tail
+    );
+    provider.refuse.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        source.checked_read(|_| left.next()),
+        Err(SegmentedError::Provider {
+            operation: "ordered bookmark reload",
+            host_code: Some(5),
+        })
+    ));
+}
+
+#[test]
 fn chronological_segmented_stack_matches_eager_raw_and_prepared_queries() {
     use purrdf_core::{
         RdfDatasetBuilder, SegmentedLayer, SegmentedLayerMetadata, SegmentedResidentHead,

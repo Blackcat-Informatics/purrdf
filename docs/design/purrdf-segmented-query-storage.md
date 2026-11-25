@@ -100,6 +100,33 @@ annotation probes use the existing subject-sorted stream. The statement-layer
 consumer can stop the traversal before another row is translated, so an
 ordinary positive LIMIT need not intern every reifier in the image.
 
+## Ordered subject joins
+
+A read session over one segment can scan every statement stream in the
+segment's numeric subject order. Inclusive subject bounds narrow the
+authenticated block directory before reading statement payloads. A range
+cursor keeps a bookmark and releases its payload pin before returning a row.
+Other cursors and term lookups can use the same cache slot between yields.
+The order guarantee is local to the segment's dictionary. It does not
+transfer to a stack that translates or assigns identifiers across segments.
+
+An unseeded two-pattern basic graph pattern with fixed predicates and
+one graph scope can merge using that guarantee when the subject variable
+occurs once in each pattern and is their only shared variable.
+The operator combines asserted, reifier and annotation streams in subject
+order. It bounds the probe between the first driving key and the last
+possible driver from the authenticated directory. Each stream can seek
+forward using that directory when the opposite key lies past its current
+page. This skips interior disjoint ranges without reopening the scan.
+Exact predicate and graph counts reject absent patterns before walking
+a multi-page stream directory.
+Repeated driving keys
+reuse a single probe row or reopen a longer probe run. Both preserve
+bag multiplicity without buffering the group. The ordinary result and the prepared row
+cursor use the same merge. Operations with governed settlement, evidence,
+an annotation value range, or an order-sensitive output window use the
+indexed evaluator.
+
 ## Statistical metadata
 
 Data profile 6 retains four authenticated statistical sections: predicate/scope

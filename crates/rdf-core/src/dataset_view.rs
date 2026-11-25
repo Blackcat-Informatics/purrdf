@@ -642,6 +642,18 @@ impl GraphSelector {
     }
 }
 
+/// A statement stream in nondecreasing subject identity order.
+pub trait SubjectOrderedScan<I: ViewTermId>: Iterator<Item = QuadIds<I>> + Send {
+    /// Discard unread rows with a subject below `minimum`. Never rewind or
+    /// expose a row beyond the original upper bound. Check the view's read
+    /// status after seeking, as after iteration.
+    fn advance_to(&mut self, minimum: I);
+}
+
+impl<I: ViewTermId> SubjectOrderedScan<I> for core::iter::Empty<QuadIds<I>> {
+    fn advance_to(&mut self, _minimum: I) {}
+}
+
 /// A statically dispatched read view over an RDF dataset (purrdf backend contract,
 /// C2/C3/C6). Resident term guards are borrowed and allocation-free. Operational
 /// sessions admit and pin storage and preserve typed read failures.
@@ -1196,6 +1208,44 @@ pub trait DatasetView {
     /// A view without this guarantee keeps the ordinary literal evaluator.
     fn certifies_probe_order(&self) -> bool {
         false
+    }
+
+    /// Scan one statement stream in nondecreasing subject identity order, if supported.
+    ///
+    /// The optional lower and upper bounds are inclusive and in this view's own
+    /// identity domain.
+    /// Predicate, object and graph restrictions preserve that order. An opted-in
+    /// view supports all three streams, even an empty one, and its cursors allow
+    /// independent advancement without retaining a storage pin between yields.
+    /// Lazy read failures follow the ordinary scan's checked-read contract.
+    ///
+    /// A view that cannot guarantee a common subject order returns `None`.
+    fn ordered_subject_quads(
+        &self,
+        _stream: crate::StatisticsStream,
+        _first_subject: Option<Self::Id>,
+        _last_subject: Option<Self::Id>,
+        _predicate: Option<Self::Id>,
+        _object: Option<Self::Id>,
+        _graph: GraphMatch<Self::Id>,
+    ) -> Option<impl SubjectOrderedScan<Self::Id> + '_> {
+        None::<core::iter::Empty<QuadIds<Self::Id>>>
+    }
+
+    /// An inclusive subject upper bound for matching rows across all three streams.
+    ///
+    /// The bound is in the same order as [`Self::ordered_subject_quads`]. It
+    /// may conservatively include nonmatching rows. None supplies no bound.
+    ///
+    /// # Errors
+    /// Returns any failure encountered reading the certified metadata.
+    fn ordered_subject_upper_bound(
+        &self,
+        _predicate: Option<Self::Id>,
+        _object: Option<Self::Id>,
+        _graph: GraphMatch<Self::Id>,
+    ) -> Result<Option<Self::Id>, Self::ReadError> {
+        Ok(None)
     }
 
     /// Compare physical candidates in the original plan's traversal order.
@@ -2431,6 +2481,34 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
     fn read_error(&self) -> Option<Self::ReadError> {
         (**self).read_error()
+    }
+
+    fn ordered_subject_quads(
+        &self,
+        stream: crate::StatisticsStream,
+        first_subject: Option<Self::Id>,
+        last_subject: Option<Self::Id>,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> Option<impl SubjectOrderedScan<Self::Id> + '_> {
+        (**self).ordered_subject_quads(
+            stream,
+            first_subject,
+            last_subject,
+            predicate,
+            object,
+            graph,
+        )
+    }
+
+    fn ordered_subject_upper_bound(
+        &self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Option<Self::Id>, Self::ReadError> {
+        (**self).ordered_subject_upper_bound(predicate, object, graph)
     }
 
     fn require_named_graphs(&self) -> Result<(), Self::ReadError> {

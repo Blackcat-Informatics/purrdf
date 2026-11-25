@@ -57,6 +57,7 @@ mod expansion;
 pub(crate) use expansion::VIRTUAL_SOURCES;
 pub(crate) mod forecast;
 mod positive;
+mod subject_merge;
 mod window;
 use expansion::{Expansion, ExpansionInput, ExpansionSource, ExpansionStep};
 pub(crate) use positive::PositivePlan;
@@ -483,6 +484,12 @@ fn eval_compiled_bgp<D: DatasetView + Sync>(
     window: Option<&crate::shapes::window::WindowSpec>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
+    if input.is_none()
+        && window.is_none()
+        && let Some(rows) = subject_merge::evaluate(program, ctx)?
+    {
+        return Ok(rows);
+    }
     match prepare_compiled_bgp(program, input, selected_order, window, false, ctx)? {
         BgpPreparation::Complete(rows) => Ok(rows),
         BgpPreparation::Final(_) => Err(EvalError::internal(
@@ -654,6 +661,19 @@ pub(crate) fn start_bgp_cursor<'a, D: DatasetView + Sync>(
         .flatten()
         .filter(|(address, _)| *address == patterns.as_ptr() as usize)
         .map(|(_, spec)| spec);
+    if input.is_none()
+        && window.is_none()
+        && let Some(cursor) = subject_merge::start(&program, ctx)?
+    {
+        program.projection = Some(BgpProjection::new_admitted(&program.working, &ctx.growth)?);
+        return Ok(BgpStart::Cursor(BgpCursor {
+            kind: BgpCursorKind::Subject {
+                program,
+                cursor: Some(cursor),
+                produced: 0,
+            },
+        }));
+    }
     let retain_final = window.is_none()
         && ctx.stop_signal().is_none()
         && ctx.cell_row_ceiling(program.working.len()).is_none()
@@ -673,24 +693,89 @@ pub(crate) fn start_bgp_cursor<'a, D: DatasetView + Sync>(
             program.projection = Some(BgpProjection::new_admitted(&program.working, &ctx.growth)?);
             let rows = std::mem::replace(&mut stage.rows, AdmittedVec::new(&ctx.growth));
             Ok(BgpStart::Cursor(BgpCursor {
-                program: crate::workspace::NativeSharedWorkspace::new_admitted(
-                    program,
-                    &ctx.growth,
-                )?,
-                stage,
-                remaining: rows.into_iter(),
-                current: None,
-                source: None,
-                expansion: None,
-                ledger: AdmittedVec::new(&ctx.growth),
-                produced: 0,
-                ended: false,
+                kind: BgpCursorKind::Indexed(IndexedBgpCursor {
+                    program: crate::workspace::NativeSharedWorkspace::new_admitted(
+                        program,
+                        &ctx.growth,
+                    )?,
+                    stage,
+                    remaining: rows.into_iter(),
+                    current: None,
+                    source: None,
+                    expansion: None,
+                    ledger: AdmittedVec::new(&ctx.growth),
+                    produced: 0,
+                    ended: false,
+                }),
             }))
         }
     }
 }
 
 pub(crate) struct BgpCursor<'a, I: ViewTermId, P> {
+    kind: BgpCursorKind<'a, I, P>,
+}
+
+#[allow(
+    clippy::large_enum_variant,
+    reason = "both cursor kinds go into the same admitted producer owner"
+)]
+enum BgpCursorKind<'a, I: ViewTermId, P> {
+    Indexed(IndexedBgpCursor<'a, I, P>),
+    Subject {
+        program: CompiledBgp<I>,
+        cursor: Option<subject_merge::Cursor<'a, I>>,
+        produced: usize,
+    },
+}
+
+impl<'a, I: ViewTermId, P: Copy + Send + Sync> BgpCursor<'a, I, P> {
+    pub(crate) fn stop<D: DatasetView<Id = I, ProbePlan = P> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<(), EvalError> {
+        match &mut self.kind {
+            BgpCursorKind::Indexed(cursor) => cursor.stop(ctx),
+            BgpCursorKind::Subject { cursor, .. } => {
+                *cursor = None;
+                Ok(())
+            }
+        }
+    }
+
+    pub(crate) fn next<'d: 'a, D: DatasetView<Id = I, ProbePlan = P> + Sync>(
+        &mut self,
+        ctx: &mut EvalCtx<'d, D>,
+        factory: BgpSourceFactory<D>,
+    ) -> Result<BgpCursorPoll<I>, EvalError> {
+        match &mut self.kind {
+            BgpCursorKind::Indexed(cursor) => cursor.next(ctx, factory),
+            BgpCursorKind::Subject {
+                program,
+                cursor,
+                produced,
+            } => {
+                if let Some(scan) = cursor
+                    && let Some(row) = scan.next(program, ctx)?
+                {
+                    *produced = produced
+                        .checked_add(1)
+                        .ok_or(EvalError::WorkspaceBoundOverflow)?;
+                    let mut rows = AdmittedVec::with_capacity(1, &ctx.growth)?;
+                    rows.push_reserved(row);
+                    return program.project(rows, &ctx.growth).map(BgpCursorPoll::Row);
+                }
+                *cursor = None;
+                Ok(BgpCursorPoll::Complete {
+                    header: program.empty(&ctx.growth)?,
+                    produced: *produced,
+                })
+            }
+        }
+    }
+}
+
+struct IndexedBgpCursor<'a, I: ViewTermId, P> {
     program: crate::workspace::NativeSharedWorkspace<CompiledBgp<I>>,
     stage: PreparedFinalBgp<I, P>,
     remaining: crate::AdmittedVecIntoIter<RetainedRow<I>>,
@@ -702,7 +787,7 @@ pub(crate) struct BgpCursor<'a, I: ViewTermId, P> {
     ended: bool,
 }
 
-impl<'a, I: ViewTermId, P: Copy + Send + Sync> BgpCursor<'a, I, P> {
+impl<'a, I: ViewTermId, P: Copy + Send + Sync> IndexedBgpCursor<'a, I, P> {
     pub(crate) fn stop<D: DatasetView<Id = I, ProbePlan = P> + Sync>(
         &mut self,
         ctx: &EvalCtx<'_, D>,
