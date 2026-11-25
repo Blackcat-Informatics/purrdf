@@ -14,8 +14,8 @@ static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::Count
 use purrdf_core::{
     BlankScope, DatasetView, GlobalTermId, GraphMatch, QuadIds, RdfTextDirection,
     SegmentedBuildLimits, SegmentedBuilder, SegmentedBytes, SegmentedError, SegmentedImage,
-    SegmentedReadLimits, SegmentedSession, TermBox, TermGuard, TermRef, TermValue, ViewTermId,
-    WorkspaceReservation,
+    SegmentedReadLimits, SegmentedSession, StatisticsStream, SubjectOrderedScan, TermBox,
+    TermGuard, TermRef, TermValue, ViewTermId, WorkspaceReservation,
 };
 
 fn build(values: &[TermValue], first: u64) -> (SegmentedImage, Vec<GlobalTermId>) {
@@ -1256,7 +1256,154 @@ fn composite_lexical_blank_references_keep_their_scoped_dictionary_closure() {
     }
 }
 
+fn subject_range_prunes_payload_and_releases_one_slot_between_cursors() {
+    let limits = SegmentedBuildLimits::new(512, 200_000, 512, 512, 8).unwrap();
+    let mut builder = SegmentedBuilder::new(limits).unwrap();
+    let values: Vec<_> = (0..384)
+        .map(|index| TermValue::iri(format!("urn:subjects:{index:04}")))
+        .collect();
+    let mut ids = Vec::new();
+    builder.intern_batch(&values, |_, id| ids.push(id)).unwrap();
+    let predicate = ids[0];
+    for &subject in &ids {
+        builder
+            .push_quad(QuadIds {
+                s: subject,
+                p: predicate,
+                o: predicate,
+                g: None,
+            })
+            .unwrap();
+    }
+    let image = builder.seal().unwrap();
+    let baseline = session(&image, 1);
+    let all = baseline
+        .checked_read(|view| view.quads().collect::<Vec<_>>())
+        .unwrap();
+    assert_eq!(all.len(), ids.len());
+
+    let ranged = session(&image, 1);
+    let bounds = ids[88]..=ids[94];
+    let rows = ranged
+        .checked_read(|view| {
+            view.quads_in_subject_range(
+                StatisticsStream::Asserted,
+                bounds.clone(),
+                Some(predicate),
+                None,
+                GraphMatch::Default,
+            )
+            .collect::<Vec<_>>()
+        })
+        .unwrap();
+    assert_eq!(rows, all[88..=94]);
+    assert!(ranged.evidence().io_bytes() < baseline.evidence().io_bytes());
+
+    let seek = |jump| {
+        let source = session(&image, 1);
+        let rows = source
+            .checked_read(|view| {
+                let mut scan = view.quads_in_subject_range(
+                    StatisticsStream::Asserted,
+                    ids[4]..=ids[176],
+                    Some(predicate),
+                    None,
+                    GraphMatch::Default,
+                );
+                let first = scan.next().unwrap();
+                // The first 512-byte data page holds fifteen fixed rows.
+                // Its certified maximum is still a candidate, not a skip.
+                let page_end = ids[14];
+                if jump {
+                    scan.advance_to(page_end);
+                }
+                let edge = scan.find(|quad| jump || quad.s == page_end).unwrap();
+                if jump {
+                    scan.advance_to(ids[169]);
+                    // A smaller request must not rewind the cursor.
+                    scan.advance_to(ids[7]);
+                }
+                (
+                    first,
+                    edge,
+                    scan.filter(|quad| jump || quad.s >= ids[169])
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .unwrap();
+        (rows, source.evidence().io_bytes())
+    };
+    let (jumped, jump_bytes) = seek(true);
+    let (linear, linear_bytes) = seek(false);
+    assert_eq!(jumped, (all[4], all[14], all[169..=176].to_vec()));
+    assert_eq!(jumped, linear);
+    assert!(jump_bytes < linear_bytes);
+
+    let absent = ids[1];
+    let indexed = session(&image, 1);
+    assert_eq!(
+        indexed
+            .checked_read(|view| {
+                view.quads_for_pattern(None, Some(absent), None, GraphMatch::Default)
+                    .next()
+            })
+            .unwrap(),
+        None,
+    );
+    let ordered = session(&image, 1);
+    assert_eq!(
+        ordered
+            .ordered_subject_upper_bound(Some(absent), None, GraphMatch::Default)
+            .unwrap(),
+        None,
+    );
+    assert_eq!(
+        ordered
+            .checked_read(|view| {
+                view.quads_in_subject_range(
+                    StatisticsStream::Asserted,
+                    predicate..=*ids.last().unwrap(),
+                    Some(absent),
+                    None,
+                    GraphMatch::Default,
+                )
+                .next()
+            })
+            .unwrap(),
+        None,
+    );
+    assert!(ordered.evidence().io_bytes() < indexed.evidence().io_bytes());
+
+    let interleaved = session(&image, 1);
+    interleaved
+        .checked_read(|view| {
+            let mut left = view.quads_in_subject_range(
+                StatisticsStream::Asserted,
+                bounds.clone(),
+                Some(predicate),
+                None,
+                GraphMatch::Default,
+            );
+            let mut right = view.quads_in_subject_range(
+                StatisticsStream::Asserted,
+                ids[3]..=ids[9],
+                Some(predicate),
+                None,
+                GraphMatch::Default,
+            );
+            for (left_row, right_row) in all[88..=94].iter().zip(&all[3..=9]) {
+                assert_eq!(left.next(), Some(*left_row));
+                assert_eq!(right.next(), Some(*right_row));
+            }
+            assert_eq!(left.next(), None);
+            right.advance_to(ids[10]);
+            assert_eq!(right.next(), None);
+        })
+        .unwrap();
+}
+
 purrdf_testkit::harness_main!(
+    subject_range_prunes_payload_and_releases_one_slot_between_cursors,
     compression_candidates_do_not_allocate_record_count_physical_blocks,
     compressed_archival_literals_preserve_rdf12_values_and_admitted_workspace,
     reverse_identifiers_resolve_the_single_stored_term_even_with_one_cache_slot,
