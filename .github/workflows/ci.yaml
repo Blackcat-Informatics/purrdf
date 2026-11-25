@@ -822,7 +822,63 @@ jobs:
           rustc -vV > target/asm-compiler.txt
           test "$(cat target/asm-compiler.txt)" = "$EXPECTED_COMPILER"
           echo "identity=$(sha256sum target/asm-compiler.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Identify the x86-64-v4 Cargo cache context
+        if: matrix.config == 'x86_64-v4'
+        id: compiled-context
+        shell: bash
+        run: |
+          {
+            echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target"
+            echo "CARGO_BUILD_BUILD_DIR=$GITHUB_WORKSPACE/target"
+            echo "CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true"
+            echo "CARGO_BUILD_FINGERPRINT=content"
+          } >> "$GITHUB_ENV"
+          {
+            printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:?}" "${ImageVersion:?}"
+            cat target/asm-compiler.txt
+            cargo -Vv
+            cc --version
+            ld --version
+            ar --version
+          } > target/asm-cache-context.txt
+          echo "identity=$(sha256sum target/asm-cache-context.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Look up the exact x86-64-v4 Cargo output key
+        if: matrix.config == 'x86_64-v4'
+        id: compiled-lookup
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            target/release
+            target/x86_64-unknown-linux-gnu/release
+            target/simd-asm
+          # Cargo verifies source content. The gate verifies receipts for fresh units.
+          # Only compatibility inputs, not the source commit, select this exact key.
+          key: simd-asm-compiled-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiled-context.outputs.identity }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'Makefile', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', '.github/workflows/ci.yaml', 'scripts/check-simd-asm.py', 'scripts/simd_asm_runtime.py', 'scripts/simd-asm-manifest.toml') }}
+          lookup-only: true
+      - name: Restore exact x86-64-v4 Cargo outputs
+        # The cache service can return a prefix match even without restore keys.
+        if: steps.compiled-lookup.outputs.cache-hit == 'true'
+        id: compiled-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            target/release
+            target/x86_64-unknown-linux-gnu/release
+            target/simd-asm
+          key: ${{ steps.compiled-lookup.outputs.cache-primary-key }}
+          fail-on-cache-miss: true
+      - name: Admit only an exact restored Cargo output key
+        if: steps.compiled-cache.outputs.cache-matched-key != ''
+        env:
+          EXPECTED_KEY: ${{ steps.compiled-lookup.outputs.cache-primary-key }}
+          RESTORED_KEY: ${{ steps.compiled-cache.outputs.cache-matched-key }}
+        run: |
+          if [ "$RESTORED_KEY" != "$EXPECTED_KEY" ]; then
+            echo "::error::The exact Cargo archive disappeared between lookup and restore"
+            exit 1
+          fi
       - name: Restore assembly build contexts and evidence
+        if: matrix.config != 'x86_64-v4'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: target/simd-asm
@@ -861,6 +917,23 @@ jobs:
           name: simd-asm-${{ matrix.config }}
           path: target/asm-reports/*.json
           if-no-files-found: error
+      - name: Retain the x86-64-v4 Cargo graph evidence
+        if: matrix.config == 'x86_64-v4'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: compiled-x86-64-v4-cargo-evidence
+          path: target/simd-asm/contexts/**/cargo.graph-*.stderr.log
+          if-no-files-found: error
+      - name: Seed compatible x86-64-v4 Cargo outputs from main
+        # Pull-request caches are not reusable by other pull requests.
+        if: matrix.config == 'x86_64-v4' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.compiled-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            target/release
+            target/x86_64-unknown-linux-gnu/release
+            target/simd-asm
+          key: ${{ steps.compiled-lookup.outputs.cache-primary-key }}
       - name: Upload failed measurement diagnostics
         if: failure() && steps.measure.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
