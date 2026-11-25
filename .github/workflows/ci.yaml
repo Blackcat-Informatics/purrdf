@@ -927,7 +927,7 @@ jobs:
   # An explicit dispatch generates a projection independently of ordinary parity
   # checks. Its output is reviewed and committed separately; it never commits or pushes.
   simd-asm-projection:
-    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name != 'trial/core-build-freshness'
     runs-on: ubuntu-latest
     # Complete cold generation and checked replay of all seven configurations.
     timeout-minutes: 360
@@ -1002,6 +1002,163 @@ jobs:
             target/simd-asm/contexts/**/cargo.graph-*.stdout.jsonl
             target/simd-asm/contexts/**/cargo.graph-*.stderr.log
             target/simd-asm/contexts/**/evidence/*.json
+          if-no-files-found: error
+
+  # Use isolated cache keys and the exact same checkout path for each pair.
+  core-build-freshness:
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name == 'trial/core-build-freshness'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: stock
+            commit: 46e0efb9e135507410bcd399a4b1d7f68ea4e7a5
+            tree: 2cd175dfbea37120c07e9307e280b5df2c2a8b48
+          - variant: patched
+            commit: 56718f9b7592e16a4b6bfc3cf8e1087480c0429c
+            tree: 96b0dd0f585e6804e3390efe11b22bd5e0eb1841
+    env:
+      CARGO_BUILD_JOBS: 4
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
+      CARGO_BUILD_FINGERPRINT: content
+      CARGO_TARGET_DIR: ${{ github.workspace }}/sample/target
+      CARGO_BUILD_BUILD_DIR: ${{ github.workspace }}/sample/target
+      EXPECTED_COMMIT: ${{ matrix.commit }}
+      EXPECTED_TREE: ${{ matrix.tree }}
+    steps:
+      - name: Checkout cold source
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ matrix.commit }}
+          path: sample
+          persist-credentials: false
+      - name: Install the same nightly used for the cache comparison
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: nightly-2026-11-25
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+      - name: Prepare and run the cold checked gate
+        working-directory: sample
+        env:
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+        run: |
+          set -euo pipefail
+          export CARGO_INCREMENTAL=0
+          mkdir "$RUNNER_TEMP/freshness"
+          cat > "$RUNNER_TEMP/measure-freshness" <<'SCRIPT'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          export CARGO_INCREMENTAL=0
+          phase=$1
+          out="$RUNNER_TEMP/freshness/$phase"
+          mkdir "$out"
+          test "$(git rev-parse HEAD)" = "$EXPECTED_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$EXPECTED_TREE"
+          test -z "$(git status --porcelain=v1)"
+          git rev-parse HEAD 'HEAD^{tree}' > "$out/checkout.txt"
+          sha256sum crates/rdf-core/build.rs crates/rdf-core/src/distance/build_identity.rs > "$out/core-inputs.txt"
+          stat -c '%y %n' crates/rdf-core/build.rs crates/rdf-core/src/distance/build_identity.rs > "$out/core-mtimes.txt"
+          {
+            printf '%s\n' "$PWD" "$ImageOS" "$ImageVersion" "$CARGO_BUILD_JOBS"
+            sed -n '0,/^model name/s/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo
+            rustc -vV
+            cargo -Vv
+            cc --version
+            ld --version
+          } > "$out/environment.txt"
+          df -h "$PWD" > "$out/disk-before.txt"
+          make simd-asm SIMD_ASM_ARGS="--config x86_64-v4 --jobs 1 --report $out/report.json"
+          test -z "$(git status --porcelain=v1)"
+          shopt -s nullglob
+          for file in target/simd-asm/contexts/*/cargo.graph-*.stderr.log; do
+            context=${file%/*}
+            prefix="${context##*/}-${file##*/}"
+            cp "$file" "$out/$prefix"
+            cp "${file%.stderr.log}.stdout.jsonl" "$out/${prefix%.stderr.log}.stdout.jsonl"
+            awk '/^[[:space:]]*Running/ && /--crate-name/ {
+                count++; if (/--target x86_64-unknown-linux-gnu/) target++
+              }
+              END {printf "rustc commands: %d total, %d target, %d host\n", count, target, count-target}' "$file"
+          done
+          test -n "$(find "$out" -name '*.stderr.log' -print -quit)"
+          df -h "$PWD" > "$out/disk-after.txt"
+          SCRIPT
+          test ! -e "$CARGO_TARGET_DIR"
+          bash "$RUNNER_TEMP/measure-freshness" cold
+          shopt -s globstar nullglob
+          selected=0
+          for asm in "$CARGO_TARGET_DIR"/x86_64-unknown-linux-gnu/release/**/*.s; do
+            path_hash=$(printf '%s' "$asm" | sha256sum | cut -d ' ' -f 1)
+            for receipt in "$CARGO_TARGET_DIR"/simd-asm/contexts/*/evidence/"$path_hash.json"; do
+              root=${receipt%/evidence/*}
+              asm_hash=$(sha256sum "$asm" | cut -d ' ' -f 1)
+              if jq -e --arg digest "$asm_hash" --arg context "${root##*/}" \
+                '.assembly == $digest and .context == $context' "$receipt" > /dev/null; then
+                sha256sum "$asm" "$receipt" > "$RUNNER_TEMP/freshness/receipt.sha256"
+                selected=1
+                break 2
+              fi
+            done
+          done
+          test "$selected" = 1
+          du -sb target/release target/x86_64-unknown-linux-gnu/release target/simd-asm \
+            > "$RUNNER_TEMP/freshness/cache-input-bytes.txt"
+      - name: Save this variant's cold output
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: core-freshness-v1-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
+      - name: Set the complete cold checkout aside
+        run: mv sample "$RUNNER_TEMP/freshness-cold-checkout"
+      - name: Checkout the same source into a physically new tree
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ matrix.commit }}
+          path: sample
+          persist-credentials: false
+      - name: Require a cold output directory before restoring
+        working-directory: sample
+        run: test ! -e "$CARGO_TARGET_DIR"
+      - name: Restore only this run's exact cold output
+        id: restored
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            sample/target/release
+            sample/target/x86_64-unknown-linux-gnu/release
+            sample/target/simd-asm
+          key: core-freshness-v1-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.variant }}
+          fail-on-cache-miss: true
+      - name: Verify the receipt and run the warm checked gate
+        working-directory: sample
+        env:
+          RESTORED_EXACTLY: ${{ steps.restored.outputs.cache-hit }}
+          RUSTUP_TOOLCHAIN: nightly-2026-11-25
+        run: |
+          set -euo pipefail
+          test "$RESTORED_EXACTLY" = true
+          sha256sum -c "$RUNNER_TEMP/freshness/receipt.sha256"
+          bash "$RUNNER_TEMP/measure-freshness" warm
+          evidence="$RUNNER_TEMP/freshness"
+          cmp "$evidence/cold/environment.txt" "$evidence/warm/environment.txt"
+          cmp "$evidence/cold/checkout.txt" "$evidence/warm/checkout.txt"
+          cmp "$evidence/cold/core-inputs.txt" "$evidence/warm/core-inputs.txt"
+          jq -e -s 'length == 2 and all(.[]; .status == "passed")
+            and .[0].identity == .[1].identity and .[0].cells == .[1].cells
+            and (.[1].cells["x86_64-v4"] | length) > 0' \
+            "$evidence/cold/report.json" "$evidence/warm/report.json"
+      - name: Retain gate reports and actual Cargo graph logs
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: core-freshness-${{ matrix.variant }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/freshness/
           if-no-files-found: error
 
   simd-asm:
