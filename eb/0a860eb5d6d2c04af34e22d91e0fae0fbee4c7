@@ -1,0 +1,23 @@
+ghprsq source head backlink metadata
+
+parent_hashes: eb0a860eb5d6d2c04af34e22d91e0fae0fbee4c7
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1544
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1544
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 8518a7f75b7a9204985d1957e47b908bb608acf0
+GhpRsq-Head-Ref: paudley/1193-research-conservative-candidate
+GhpRsq-Head-OID: eb0a860eb5d6d2c04af34e22d91e0fae0fbee4c7
+GhpRsq-Result-Tree: a8ecf2e8ddc8e2248b54da83d6fcf6d29d235a16
+GhpRsq-Result-Commit: f1c329f51b8e268c896d0d6d525aa8c05b8576d2
+GhpRsq-Parent-Hashes: eb0a860eb5d6d2c04af34e22d91e0fae0fbee4c7
+GhpRsq-Squash-Notes-SHA256: d3d839377916d22349636fc422794514f92dfb318bad4d5450d0dcc9ebf19270
+GhpRsq-Stage-Tree: 7c0ca5c7ff8a5c458f40033bd00281bd997b2de2
+GhpRsq-Stage-Commit: 98238562def178f440396395a892dfff53c57dda
+GhpRsq-Stage-Tag: refs/tags/ghprsq/artifacts/98238562def178f440396395a892dfff53c57dda
+GhpRsq-Stage-Ref: refs/ghprsq/pr/1544/stage
+GhpRsq-Stage-Files: 11
+GhpRsq-Stage-URL: https://github.com/Blackcat-Informatics/purrdf/tree/98238562def178f440396395a892dfff53c57dda
