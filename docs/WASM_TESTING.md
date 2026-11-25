@@ -187,6 +187,13 @@ cases. Native Rust owns fixed-point and change-scope semantics.
 | `SHACL fixed-point text requests cross sync and async Wasm routes` | Whole-graph and change validators carry both modes and unsigned limits, return the expected verdicts, and preserve the owned change scope. |
 | `SHACL fixed-point host refusals preserve native cause and unsigned limits` | Missing and zero limits retain their native causes. The request error carries the largest unsigned 64-bit value exactly across both routes. |
 
+The exact package case `prepared SHACL fixed-point requests cross sync and async Wasm routes`
+in `shacl-product-recursion.test.mjs` checks prepared packing, canonical receipt
+ownership, both fixed-point request fields, admit and rebuild options, expected
+identity refusal, and retained native recursion causes across the shipped exports.
+It retains a compatibility call with default options. Native Rust owns
+fixed-point evaluation, product integrity, and resource semantics.
+
 The optimized package's `rule-coordinates.test.mjs` selects these host-interface
 cases. Native rule suites own inference semantics; these selections verify only
 JavaScript transport, ownership and JSPI behavior against the actual release package.

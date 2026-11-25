@@ -1130,10 +1130,28 @@ pub struct ShaclProductRefusal {
     code: Option<String>,
     /// The prescriptive explanation, without the dimension label.
     message: String,
+    /// The original native recursion or canonicalization refusal.
+    native: Option<Box<JobError>>,
 }
 
 #[wasm_bindgen]
 impl ShaclProductRefusal {
+    /// The retained native cause, or `undefined`.
+    #[wasm_bindgen(getter, js_name = nativeCause)]
+    pub fn native_cause(&self) -> Result<Option<JsValue>, JsError> {
+        self.native
+            .as_deref()
+            .map_or(Ok(None), JobError::native_cause)
+    }
+
+    /// Deterministic typed fields of the native refusal, or `undefined`.
+    #[wasm_bindgen(getter, js_name = nativeCauseJson)]
+    pub fn native_cause_json(&self) -> Result<Option<String>, JsError> {
+        self.native
+            .as_deref()
+            .map_or(Ok(None), JobError::native_cause_json)
+    }
+
     /// The admission dimension that refused, or `undefined`.
     #[wasm_bindgen(getter)]
     #[must_use]
@@ -1172,10 +1190,29 @@ impl From<ShapesProductRefusal> for ShaclProductRefusal {
     /// Carry the boundary's refusal across unchanged: the label where there is one,
     /// the prose either way. Nothing is re-worded and nothing is dropped.
     fn from(refusal: ShapesProductRefusal) -> Self {
+        let dimension = refusal.dimension_label().map(ToOwned::to_owned);
+        let message = refusal.message().into_owned();
+        let canonical = purrdf_validate::canonical::native_canonical_cause(&refusal).cloned();
+        let native = match refusal {
+            ShapesProductRefusal::Shapes(error @ ShapesError::Recursion(_)) => {
+                Some(Box::new(JobError::diagnostic_message(
+                    purrdf_validate::native_error::diagnostic(SHACL_CODE, error, None),
+                )))
+            }
+            // Carry the canonical cause before the wrapper attaches its receipts.
+            // These properties are getter-only on this refusal class.
+            _ => canonical.map(|cause| {
+                Box::new(
+                    JobError::message(SHACL_CODE, message.clone())
+                        .with_canonicalization("[]".to_owned(), Some(cause)),
+                )
+            }),
+        };
         Self {
-            dimension: refusal.dimension_label().map(ToOwned::to_owned),
+            dimension,
             code: None,
-            message: refusal.message().into_owned(),
+            message,
+            native,
         }
     }
 }
@@ -1192,6 +1229,7 @@ extern "C" {
 ///
 /// Returns the plain Rust refusal so this is exercisable off wasm; the
 /// `#[wasm_bindgen]` wrapper converts it to [`ShaclProductRefusal`].
+#[cfg(test)]
 pub(crate) fn pack_product_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -1200,13 +1238,38 @@ pub(crate) fn pack_product_impl(
     shapes_graph: Option<&str>,
     control: &mut purrdf_core::CanonicalizationControl<'_>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
+    pack_product_request(
+        shapes_ttl,
+        shapes_base,
+        import_iris,
+        import_documents,
+        shapes_graph,
+        None,
+        control,
+    )
+}
+
+fn pack_product_request(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+    recursion: Option<RecursionOptions>,
+    control: &mut purrdf_core::CanonicalizationControl<'_>,
+) -> Result<Vec<u8>, ShapesProductRefusal> {
     let imports =
         shapes_import_pairs(import_iris, import_documents).map_err(ShapesProductRefusal::Shapes)?;
-    purrdf_validate::pack_shapes_product_with_shapes_graph(
+    let mut options = purrdf_validate::ValidationOptions::default();
+    if let Some(recursion) = recursion {
+        options = options.with_recursion(recursion);
+    }
+    purrdf_validate::pack_shapes_product_with_options(
         shapes_ttl,
         shapes_base,
         shapes_graph,
         &imports,
+        &options,
         control,
     )
 }
@@ -1247,16 +1310,74 @@ pub fn shacl_pack_product(
     canonical_search: &str,
     cancel: Option<crate::query::CancellationToken>,
 ) -> Result<crate::canonical::CanonicalResult, JsValue> {
-    let (value, receipts) = crate::canonical::run_with(
+    pack_product_entry(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        import_iris.as_deref().unwrap_or_default(),
+        import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
         canonical_search,
         cancel.as_ref(),
+        None,
+    )
+}
+
+/// Pack a prepared product with an explicit SHACL fixed-point request.
+#[wasm_bindgen(js_name = shaclPackProductWithRecursion)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
+pub fn shacl_pack_product_with_recursion(
+    shapes_ttl: &str,
+    shapes_base: Option<String>,
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
+    canonical_search: &str,
+    recursion: Option<JsValue>,
+    recursion_max_pairs: Option<JsValue>,
+    recursion_max_iterations: Option<JsValue>,
+    cancel: Option<crate::query::CancellationToken>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let recursion = host_recursion(
+        recursion.as_ref(),
+        recursion_max_pairs.as_ref(),
+        recursion_max_iterations.as_ref(),
+    )
+    .map_err(|error| crate::canonical::attach_evidence(error, "[]", None))?;
+    pack_product_entry(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        import_iris.as_deref().unwrap_or_default(),
+        import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
+        canonical_search,
+        cancel.as_ref(),
+        recursion,
+    )
+}
+
+#[allow(clippy::too_many_arguments)] // shared boundary for both packing exports
+fn pack_product_entry(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+    canonical_search: &str,
+    cancel: Option<&crate::query::CancellationToken>,
+    recursion: Option<RecursionOptions>,
+) -> Result<crate::canonical::CanonicalResult, JsValue> {
+    let (value, receipts) = crate::canonical::run_with(
+        canonical_search,
+        cancel,
         |control| {
-            pack_product_impl(
+            pack_product_request(
                 shapes_ttl,
-                shapes_base.as_deref(),
-                import_iris.as_deref().unwrap_or_default(),
-                import_documents.as_deref().unwrap_or_default(),
-                shapes_graph.as_deref(),
+                shapes_base,
+                import_iris,
+                import_documents,
+                shapes_graph,
+                recursion,
                 control,
             )
         },
@@ -1442,6 +1563,7 @@ fn product_profile(name: Option<&str>) -> Result<Option<Profile>, ShaclProductRe
         dimension: None,
         code: None,
         message,
+        native: None,
     })
 }
 
@@ -1476,24 +1598,20 @@ fn product_selected_impl(
     data_nt: &str,
     expected: Option<&[u8; 32]>,
     rebuild: bool,
-    profile: Profile,
+    profile: Option<Profile>,
+    recursion: Option<RecursionOptions>,
 ) -> Result<String, ShaclProductRefusal> {
-    let options = purrdf_validate::SarifOptions::default();
+    let mut options = purrdf_validate::SarifOptions::default();
+    if let Some(recursion) = recursion {
+        options.validation = options.validation.with_recursion(recursion);
+    }
     let validated = if rebuild {
         purrdf_validate::validate_with_rebuilt_shapes_product_with_xpath_regex(
-            product,
-            data_nt,
-            expected,
-            &options,
-            Some(profile),
+            product, data_nt, expected, &options, profile,
         )
     } else {
         purrdf_validate::validate_with_shapes_product_with_xpath_regex(
-            product,
-            data_nt,
-            expected,
-            &options,
-            Some(profile),
+            product, data_nt, expected, &options, profile,
         )
     };
     validated.map_err(|error| match error {
@@ -1505,6 +1623,7 @@ fn product_selected_impl(
             dimension: None,
             code: selected_refusal_code(&error).map(ToOwned::to_owned),
             message: error.to_string(),
+            native: None,
         },
     })
 }
@@ -1515,7 +1634,39 @@ fn expected_identity(expect_identity: &str) -> Result<[u8; 32], ShaclProductRefu
         dimension: None,
         code: None,
         message,
+        native: None,
     })
+}
+
+/// Resolve the host selectors before either admitting or rebuilding the product.
+fn product_validation_request(
+    product: &[u8],
+    data_nt: &str,
+    identity: Option<&str>,
+    rebuild: bool,
+    xpath_regex: Option<&str>,
+    recursion: Option<RecursionOptions>,
+) -> Result<String, ShaclProductRefusal> {
+    let profile = product_profile(xpath_regex)?;
+    if profile.is_none() && recursion.is_none() {
+        return match (rebuild, identity) {
+            (false, None) => product_validate_impl(product, data_nt).map_err(Into::into),
+            (true, None) => product_validate_rebuild_impl(product, data_nt).map_err(Into::into),
+            (false, Some(digest)) => product_validate_expecting_impl(product, data_nt, digest),
+            (true, Some(digest)) => {
+                product_validate_rebuild_expecting_impl(product, data_nt, digest)
+            }
+        };
+    }
+    let expected = identity.map(expected_identity).transpose()?;
+    product_selected_impl(
+        product,
+        data_nt,
+        expected.as_ref(),
+        rebuild,
+        profile,
+        recursion,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1610,7 +1761,7 @@ macro_rules! shacl_decode_coordinates {
     };
 }
 
-/// Decode a text-validation recursion request and keep the native refusal.
+/// Decode a SHACL recursion request and keep the native refusal.
 pub(crate) fn decode_recursion(
     mode: Option<&str>,
     max_pairs: Option<u64>,
@@ -1732,6 +1883,35 @@ pub fn shacl_validate_changes_to_sarif_with_recursion(
     ))
 }
 
+/// Validate with an admitted or rebuilt prepared product and a fixed-point request.
+#[wasm_bindgen(js_name = shaclProductValidateToSarifWithRecursion)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
+pub fn shacl_product_validate_to_sarif_with_recursion(
+    product: &[u8],
+    data_nt: &str,
+    rebuild: bool,
+    expect_identity: Option<String>,
+    xpath_regex: Option<String>,
+    recursion: Option<JsValue>,
+    recursion_max_pairs: Option<JsValue>,
+    recursion_max_iterations: Option<JsValue>,
+) -> Result<String, JsValue> {
+    let recursion = host_recursion(
+        recursion.as_ref(),
+        recursion_max_pairs.as_ref(),
+        recursion_max_iterations.as_ref(),
+    )?;
+    shacl_sync_entry!(product_validation_request(
+        product,
+        data_nt,
+        expect_identity.as_deref(),
+        rebuild,
+        xpath_regex.as_deref(),
+        recursion,
+    ))
+}
+
 macro_rules! shacl_entries {
     ($(
         $(#[$meta:meta])*
@@ -1795,7 +1975,7 @@ macro_rules! shacl_entries {
                 }
             }
 
-            /// Admit explicit recursion settings for text validation.
+            /// Admit explicit recursion settings for text and prepared-product validation.
             pub(crate) fn select_recursion(
                 &mut self,
                 options: Option<RecursionOptions>,
@@ -1806,7 +1986,7 @@ macro_rules! shacl_entries {
                         Ok(())
                     },)?)*
                     _ => options.map_or(Ok(()), |_| {
-                        Err("recursion options apply only to SHACL text validation")
+                        Err("recursion options apply only to SHACL text and prepared-product validation")
                     }),
                 }
             }
@@ -2292,12 +2472,9 @@ shacl_entries! {
     shaclProductValidateToSarif: fn shacl_product_validate_to_sarif(
         product: Vec<u8>,
         data_nt: String,
-    ) selecting xpath_regex -> Result<String, ShaclProductRefusal> => ProductValidateToSarif, productValidateToSarif / product_validate_to_sarif
+    ) selecting xpath_regex recursion(recursion) -> Result<String, ShaclProductRefusal> => ProductValidateToSarif, productValidateToSarif / product_validate_to_sarif
     {
-        match product_profile(xpath_regex.as_deref())? {
-            None => product_validate_impl(&product, &data_nt).map_err(ShaclProductRefusal::from),
-            Some(profile) => product_selected_impl(&product, &data_nt, None, false, profile),
-        }
+        product_validation_request(&product, &data_nt, None, false, xpath_regex.as_deref(), recursion)
     }
 
     /// `shaclProductValidateToSarifRebuild(product, dataNt, xpathRegex?)` → a SARIF 2.1.0 JSON
@@ -2322,13 +2499,9 @@ shacl_entries! {
     shaclProductValidateToSarifRebuild: fn shacl_product_validate_to_sarif_rebuild(
         product: Vec<u8>,
         data_nt: String,
-    ) selecting xpath_regex -> Result<String, ShaclProductRefusal> => ProductValidateToSarifRebuild, productValidateToSarifRebuild / product_validate_to_sarif_rebuild
+    ) selecting xpath_regex recursion(recursion) -> Result<String, ShaclProductRefusal> => ProductValidateToSarifRebuild, productValidateToSarifRebuild / product_validate_to_sarif_rebuild
     {
-        match product_profile(xpath_regex.as_deref())? {
-            None => product_validate_rebuild_impl(&product, &data_nt)
-                .map_err(ShaclProductRefusal::from),
-            Some(profile) => product_selected_impl(&product, &data_nt, None, true, profile),
-        }
+        product_validation_request(&product, &data_nt, None, true, xpath_regex.as_deref(), recursion)
     }
 
     /// `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity, xpathRegex?)` → a SARIF
@@ -2355,13 +2528,9 @@ shacl_entries! {
         product: Vec<u8>,
         data_nt: String,
         expect_identity: String,
-    ) selecting xpath_regex -> Result<String, ShaclProductRefusal> => ProductValidateToSarifExpecting, productValidateToSarifExpecting / product_validate_to_sarif_expecting
+    ) selecting xpath_regex recursion(recursion) -> Result<String, ShaclProductRefusal> => ProductValidateToSarifExpecting, productValidateToSarifExpecting / product_validate_to_sarif_expecting
     {
-        let Some(profile) = product_profile(xpath_regex.as_deref())? else {
-            return product_validate_expecting_impl(&product, &data_nt, &expect_identity);
-        };
-        let expected = expected_identity(&expect_identity)?;
-        product_selected_impl(&product, &data_nt, Some(&expected), false, profile)
+        product_validation_request(&product, &data_nt, Some(&expect_identity), false, xpath_regex.as_deref(), recursion)
     }
 
     /// `shaclProductValidateToSarifRebuildExpecting(product, dataNt, expectIdentity,
@@ -2392,13 +2561,9 @@ shacl_entries! {
         product: Vec<u8>,
         data_nt: String,
         expect_identity: String,
-    ) selecting xpath_regex -> Result<String, ShaclProductRefusal> => ProductValidateToSarifRebuildExpecting, productValidateToSarifRebuildExpecting / product_validate_to_sarif_rebuild_expecting
+    ) selecting xpath_regex recursion(recursion) -> Result<String, ShaclProductRefusal> => ProductValidateToSarifRebuildExpecting, productValidateToSarifRebuildExpecting / product_validate_to_sarif_rebuild_expecting
     {
-        let Some(profile) = product_profile(xpath_regex.as_deref())? else {
-            return product_validate_rebuild_expecting_impl(&product, &data_nt, &expect_identity);
-        };
-        let expected = expected_identity(&expect_identity)?;
-        product_selected_impl(&product, &data_nt, Some(&expected), true, profile)
+        product_validation_request(&product, &data_nt, Some(&expect_identity), true, xpath_regex.as_deref(), recursion)
     }
 }
 

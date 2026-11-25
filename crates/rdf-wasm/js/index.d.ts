@@ -3372,6 +3372,9 @@ export function shaclValidateChangesToSarifWithRecursion(
  * in this package the instance owns wasm memory — call `free()` when done.
  */
 export class ShaclProductRefusal {
+  /** Free this owned native cause after inspecting its typed fields. */
+  readonly nativeCause?: YamlSourceCause | CanonicalCause;
+  readonly nativeCauseJson?: string;
   readonly dimension: string | undefined;
   readonly code: string | undefined;
   readonly message: string;
@@ -3407,6 +3410,20 @@ export function shaclPackProduct(
   importDocuments: readonly string[] | undefined,
   shapesGraph: string | undefined,
   canonicalSearch: string,
+  cancel?: CancellationToken,
+): CanonicalResult<Uint8Array>;
+
+/** Pack a shapes graph with an explicit fixed point and both work limits. */
+export function shaclPackProductWithRecursion(
+  shapesTtl: string,
+  shapesBase: string | undefined,
+  importIris: readonly string[] | undefined,
+  importDocuments: readonly string[] | undefined,
+  shapesGraph: string | undefined,
+  canonicalSearch: string,
+  recursion: ShaclRecursionMode,
+  recursionMaxPairs: bigint | number,
+  recursionMaxIterations: bigint | number,
   cancel?: CancellationToken,
 ): CanonicalResult<Uint8Array>;
 
@@ -3531,6 +3548,22 @@ export function shaclProductValidateToSarifExpecting(
 ): string;
 
 /**
+ * Validate a prepared product with an explicit fixed point. Set `rebuild` to
+ * re-derive the preparation rather than admit it. An expected identity is
+ * checked before preparation, with or without an explicit XPath law.
+ */
+export function shaclProductValidateToSarifWithRecursion(
+  product: Uint8Array,
+  dataNt: string,
+  rebuild: boolean,
+  expectIdentity: string | undefined,
+  xpathRegex: XPathRegexLaw | undefined,
+  recursion: ShaclRecursionMode,
+  recursionMaxPairs: bigint | number,
+  recursionMaxIterations: bigint | number,
+): string;
+
+/**
  * The host options a SHACL asynchronous twin accepts, and nothing else. A synchronous
  * SHACL entry takes no ceiling, so neither does its twin: a deadline is a `signal`
  * (`AbortSignal.timeout(ms)`). Document and limit arguments stay positional; XPath law and execution inputs
@@ -3563,14 +3596,20 @@ export interface AsyncShaclValidationOptions extends AsyncShaclOptions {
 }
 
 /**
- * Options for the two text validators. Supply the mode and both limits together.
+ * Fixed-point selection. Supply the mode and both limits together.
  * Limits accept unsigned bigints or nonnegative safe integers.
  */
-export interface AsyncShaclTextValidationOptions extends AsyncShaclValidationOptions {
+export interface ShaclRecursionOptions {
   readonly recursion?: ShaclRecursionMode | null;
   readonly recursionMaxPairs?: bigint | number | null;
   readonly recursionMaxIterations?: bigint | number | null;
 }
+
+/** Options for the two text validators. */
+export interface AsyncShaclTextValidationOptions extends AsyncShaclValidationOptions, ShaclRecursionOptions {}
+
+/** Options for prepared-product validation, including admission and rebuild. */
+export interface AsyncShaclProductValidationOptions extends AsyncShaclValidationOptions, ShaclRecursionOptions {}
 
 /**
  * The asynchronous twin of `shaclValidateToSarif`, over exactly its arguments: resolves
@@ -3688,14 +3727,14 @@ export function shaclEvalNodeExprAsync(
 export function shaclProductValidateToSarifAsync(
   product: Uint8Array,
   dataNt: string,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclProductValidationOptions | null,
 ): Promise<string>;
 
 /** The asynchronous twin of `shaclProductValidateToSarifRebuild`. */
 export function shaclProductValidateToSarifRebuildAsync(
   product: Uint8Array,
   dataNt: string,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclProductValidationOptions | null,
 ): Promise<string>;
 
 /** The asynchronous twin of `shaclProductValidateToSarifExpecting`. */
@@ -3703,7 +3742,7 @@ export function shaclProductValidateToSarifExpectingAsync(
   product: Uint8Array,
   dataNt: string,
   expectIdentity: string,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclProductValidationOptions | null,
 ): Promise<string>;
 
 /** The asynchronous twin of `shaclProductValidateToSarifRebuildExpecting`. */
@@ -3711,7 +3750,7 @@ export function shaclProductValidateToSarifRebuildExpectingAsync(
   product: Uint8Array,
   dataNt: string,
   expectIdentity: string,
-  options?: AsyncShaclValidationOptions | null,
+  options?: AsyncShaclProductValidationOptions | null,
 ): Promise<string>;
 
 export function version(): string;
