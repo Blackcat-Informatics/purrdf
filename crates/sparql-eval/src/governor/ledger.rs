@@ -838,6 +838,7 @@ impl CertifiedQueryExplanation {
 pub(crate) struct BoundSlot {
     pub(crate) input: Option<u64>,
     pub(crate) output: Option<u64>,
+    pub(crate) suppressed: bool,
 }
 
 #[derive(Debug)]

@@ -3811,7 +3811,6 @@ pub(crate) struct PlanSurvey {
     pub(crate) statistics: AdmittedRecords<String>,
     pub(crate) record_statistics: bool,
     pub(crate) certificates: Option<CertifiedBounds>,
-    certify_schedule: bool,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
     pub(crate) estimates: AdmittedVec<Option<PlanEstimate>>,
@@ -3842,7 +3841,6 @@ impl PlanSurvey {
             statistics: AdmittedRecords::new(workspace),
             record_statistics: false,
             certificates: None,
-            certify_schedule: true,
             estimates,
             shape: shape.clone(),
             workspace: workspace.clone(),
@@ -3877,6 +3875,7 @@ impl PlanSurvey {
             bounds.push_reserved(BoundSlot {
                 input: Some(1),
                 output: None,
+                suppressed: false,
             });
         }
         self.certificates = Some(CertifiedBounds(bounds));
@@ -3902,12 +3901,20 @@ impl PlanSurvey {
     }
 
     fn record_output_bound(&mut self, pattern: &GraphPattern, bound: Option<u64>) {
-        if self.certify_schedule
-            && let Some(bounds) = &mut self.certificates
-        {
+        if let Some(bounds) = &mut self.certificates {
             let node = self.shape.node_of(pattern).expect("surveyed node");
-            bounds.0.as_mut_slice()[node.index()].output = bound;
+            let slot = &mut bounds.0.as_mut_slice()[node.index()];
+            if !slot.suppressed {
+                slot.output = bound;
+            }
         }
+    }
+
+    fn certifies(&self, pattern: &GraphPattern) -> bool {
+        self.certificates.as_ref().is_some_and(|bounds| {
+            let node = self.shape.node_of(pattern).expect("surveyed node");
+            !bounds.0[node.index()].suppressed
+        })
     }
 
     /// A survey under a symbolic scope or seed can use a different physical
@@ -3918,9 +3925,14 @@ impl PlanSurvey {
             return;
         };
         let node = self.shape.node_of(root).expect("surveyed subtree");
+        if bounds.0[node.index()].suppressed {
+            // The first mark covered the complete contiguous subtree.
+            return;
+        }
         let range = node.index()..self.shape.subtree_end(node).index();
         for slot in &mut bounds.0.as_mut_slice()[range] {
             slot.output = None;
+            slot.suppressed = true;
         }
     }
 
@@ -4024,7 +4036,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
     /// One pending step of the walk.
     enum Step<'a, I> {
         /// Survey the subtree rooted at the node, evaluated against the graph.
-        Visit(&'a GraphPattern, GraphMatch<I>, bool),
+        Visit(&'a GraphPattern, GraphMatch<I>),
         /// Price the call `node` is, driven once per row of `left`'s bag: taken once
         /// `left`'s whole subtree has been surveyed, so its prediction is on record.
         Call {
@@ -4038,29 +4050,29 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             right: &'a GraphPattern,
             graph: GraphMatch<I>,
             optional: bool,
-            certify_schedule: bool,
         },
     }
 
     let mut steps = AdmittedVec::new(&workspace);
-    steps.push(Step::Visit(pattern, active_graph, true))?;
+    steps.push(Step::Visit(pattern, active_graph))?;
     // Retain only completed drivers needed by a parent join. This avoids
     // re-censusing every prefix of a deep ordinary join chain.
     let mut seeds = crate::workspace::AdmittedMap::<usize, SeedEstimate>::default();
     while let Some(step) = steps.pop() {
-        let (pattern, active_graph, certify_schedule) = match step {
+        let (pattern, active_graph) = match step {
             Step::BoundRight {
                 node,
                 left,
                 right,
                 graph,
                 optional,
-                certify_schedule,
             } => {
-                survey.certify_schedule = certify_schedule;
                 if !PositivePlan::pure_eligible_admitted(right, &workspace)? {
                     drop(seeds.remove(&(std::ptr::from_ref::<GraphPattern>(left) as usize)));
-                    steps.push(Step::Visit(right, graph, certify_schedule && !optional))?;
+                    if optional {
+                        survey.withhold_subtree_bounds(right);
+                    }
+                    steps.push(Step::Visit(right, graph))?;
                     continue;
                 }
                 let driving_rows = predicted_rows(left, survey).unwrap_or(1);
@@ -4079,7 +4091,6 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         },
                     };
                 seed.rows = if optional { 1 } else { driving_rows };
-                survey.record_input_bound(right, if optional { Some(1) } else { driving_bound });
                 if let Some(positive) = PositivePlan::build_seeded_admitted(
                     dataset,
                     active_dataset,
@@ -4089,6 +4100,8 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     None,
                     account,
                 )? {
+                    survey
+                        .record_input_bound(right, if optional { Some(1) } else { driving_bound });
                     positive.survey_seeded_admitted(
                         dataset,
                         active_dataset,
@@ -4105,9 +4118,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     // Real seeds may bind more columns than their forecast.
                     // The right's logical output still bounds the enclosing
                     // join, but no surveyed intermediate bag is authoritative.
-                    if certify_schedule {
-                        survey.withhold_subtree_bounds(right);
-                    }
+                    survey.withhold_subtree_bounds(right);
                     let schema = seed
                         .schema
                         .union_admitted(positive.root_schema(), &workspace)?;
@@ -4141,7 +4152,10 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         &workspace,
                     )?;
                 } else {
-                    steps.push(Step::Visit(right, graph, certify_schedule && !optional))?;
+                    if optional {
+                        survey.withhold_subtree_bounds(right);
+                    }
+                    steps.push(Step::Visit(right, graph))?;
                 }
                 continue;
             }
@@ -4158,11 +4172,8 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 )?;
                 continue;
             }
-            Step::Visit(pattern, active_graph, certify_schedule) => {
-                (pattern, active_graph, certify_schedule)
-            }
+            Step::Visit(pattern, active_graph) => (pattern, active_graph),
         };
-        survey.certify_schedule = certify_schedule;
         if survey
             .shape
             .node_of(pattern)
@@ -4197,9 +4208,9 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 if let GraphPattern::PropertyFunction(call) = &**right {
                     steps.push(Step::Call { node: right, call, left })?;
                 } else {
-                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false, certify_schedule })?;
+                    steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: false })?;
                 }
-                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Lateral { left, right } => {
                 if let GraphPattern::PropertyFunction(call) = &**right {
@@ -4209,24 +4220,26 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                         left,
                     })?;
                 } else {
-                    steps.push(Step::Visit(right, active_graph, false))?;
+                    survey.withhold_subtree_bounds(right);
+                    steps.push(Step::Visit(right, active_graph))?;
                 }
-                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Apply { left, right, .. } => {
-                steps.push(Step::Visit(right, active_graph, false))?;
-                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
+                survey.withhold_subtree_bounds(right);
+                steps.push(Step::Visit(right, active_graph))?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Union { arms } => {
-                for arm in arms.iter().rev() { steps.push(Step::Visit(arm, active_graph, certify_schedule))?; }
+                for arm in arms.iter().rev() { steps.push(Step::Visit(arm, active_graph))?; }
             }
             GraphPattern::LeftJoin { left, right, .. } => {
-                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true, certify_schedule })?;
-                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
+                steps.push(Step::BoundRight { node: pattern, left, right, graph: active_graph, optional: true })?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Minus { left, right } => {
-                steps.push(Step::Visit(right, active_graph, certify_schedule))?;
-                steps.push(Step::Visit(left, active_graph, certify_schedule))?;
+                steps.push(Step::Visit(right, active_graph))?;
+                steps.push(Step::Visit(left, active_graph))?;
             }
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Extend { inner, .. }
@@ -4242,13 +4255,13 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             | GraphPattern::Slice { inner, .. }
             | GraphPattern::OrderBy { inner, .. }
             | GraphPattern::Group { inner, .. } => {
-                steps.push(Step::Visit(inner, active_graph, certify_schedule))?;
+                steps.push(Step::Visit(inner, active_graph))?;
             }
             GraphPattern::Graph { name, inner } => match name {
                 NamedNodePattern::NamedNode(n) => {
                     let name = crate::convert::named_node_to_workspace_value(n, &workspace)?;
                     match addressed_graph(dataset, active_dataset, &name, &|error| account.source_error(error))? {
-                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph), certify_schedule))?,
+                        Some(graph) => steps.push(Step::Visit(inner, GraphMatch::Named(graph)))?,
                         // An empty scope: the block yields no row and its inner pattern
                         // is never evaluated, so the block's estimate is zero.
                         None => {
@@ -4260,7 +4273,8 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 NamedNodePattern::Variable(_) => {
                     // One Any forecast is not a physical schedule for each
                     // named graph. Per-graph selectivity can flip join order.
-                    steps.push(Step::Visit(inner, GraphMatch::Any, false))?;
+                    survey.withhold_subtree_bounds(inner);
+                    steps.push(Step::Visit(inner, GraphMatch::Any))?;
                 }
             },
             // A call with nothing written before it: its driving bag is the identity table,
@@ -4486,7 +4500,7 @@ fn record_bgp_statistics<D: DatasetView>(
         return Ok(());
     }
     let statistics = dataset.statistics();
-    let certify = survey.certificates.is_some() && survey.certify_schedule;
+    let certify = survey.certifies(node);
     if statistics.is_none() && !certify {
         return Ok(());
     }

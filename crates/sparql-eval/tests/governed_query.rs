@@ -205,6 +205,27 @@ fn explanation_withholds_bounds_when_runtime_reorders_the_surveyed_scope() {
     }
 }
 
+#[test]
+fn an_independent_bgp_does_not_inherit_an_empty_driving_bound() {
+    let query = "PREFIX ex: <http://example.org/> SELECT * WHERE {
+        GRAPH ex:missing { ?a ex:p ?b } . ?s ex:p ?o
+    }";
+    let explained = NativeSparqlEngine::new()
+        .explain_query_with_bounds(&fixture(), query, None)
+        .unwrap();
+    let ledger = explained.explanation().ledger();
+    let graph = ledger.iter().find(|node| node.label == "Graph").unwrap();
+    assert_eq!(explained.output_upper_bound(graph.ordinal), Some(0));
+    let right = ledger
+        .iter()
+        .find(|node| node.label == "Bgp" && node.rows == EDGES as u64)
+        .expect("the independently evaluated right side emits its own rows");
+    assert_eq!(
+        explained.output_upper_bound(right.ordinal),
+        Some(right.rows)
+    );
+}
+
 fn one_remote_binding(_: HttpExchangeRequest<'_>) -> Result<HttpOutcome, HttpFailure> {
     Ok(HttpOutcome::Response(HttpResponse::new(
         HttpStatus::OK,
