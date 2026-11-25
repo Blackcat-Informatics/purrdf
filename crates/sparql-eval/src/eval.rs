@@ -2920,6 +2920,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   evaluating an earlier sibling sequentially) is inherited by the child
     ///   instead of rebuilt — a performance inheritance, not a correctness
     ///   requirement, since a cache miss just re-derives the same value.
+    ///   Workers inside a certified filtered witness omit the definition memo
+    ///   because the witness cannot consult it.
     /// - **Cloned base, fresh appends** (`scratch`): input rows carry
     ///   [`crate::scratch::SolutionTerm::Computed`] ids that index into THIS
     ///   context's scratch value table, so a child given a fresh, empty scratch
@@ -3052,15 +3054,20 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_prepared_cache: self
                 .exists_prepared_cache
                 .clone_entries_admitted(&self.growth, |key, value| Ok((*key, value.clone())))?,
-            exists_definition_memo: self.exists_definition_memo.clone_entries_admitted(
-                &self.growth,
-                |key, value| {
-                    Ok((
-                        (key.0, key.1, key.2, key.3.clone_admitted(&self.growth)?),
-                        *value,
-                    ))
-                },
-            )?,
+            // The marked witness contains only positive leaves and FILTER
+            // operators that cannot enter another evaluation. Its workers
+            // cannot consult the parent's growing definition memo.
+            exists_definition_memo: if self.active_bound_filter_witness() {
+                crate::AdmittedMap::default()
+            } else {
+                self.exists_definition_memo
+                    .clone_entries_admitted(&self.growth, |key, value| {
+                        Ok((
+                            (key.0, key.1, key.2, key.3.clone_admitted(&self.growth)?),
+                            *value,
+                        ))
+                    })?
+            },
             exists_evidence_memo: self.exists_evidence_memo.clone_entries_admitted(
                 &self.growth,
                 |key, value| {
@@ -3619,6 +3626,14 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
                         .as_ref()
                         .is_none_or(|plan| plan.shape().has_property_functions())))
             || !self.shapes.providers.is_empty()
+    }
+
+    /// The installed copy can discard internal order while finding a witness.
+    pub(crate) fn active_bound_filter_witness(&self) -> bool {
+        matches!(
+            &self.active_copied_pattern,
+            Some(crate::expr::PreparedPattern::BoundFilterWitness(_))
+        )
     }
 
     pub(crate) fn evidence_owner(&self) -> Result<crate::evidence_exec::EvidenceOwner, EvalError> {
@@ -7702,15 +7717,33 @@ fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
                             &runner.ctx.growth,
                         )?
                         .detach();
-                        crate::service_endpoints::binds_left_endpoints(left, right, runner.ctx).map(
-                            |reverse| {
-                                Some(OrdinaryAfter::BinaryFirst {
-                                    kind: OrdinaryBinary::Join,
-                                    first: usize::from(reverse),
-                                    lift,
-                                })
-                            },
-                        )
+                        // Values Insertion wraps a copied BGP in a join with one
+                        // fully bound row. Drive the same join from that row rather
+                        // than scanning the unrestricted BGP for each outer binding.
+                        // Only an admitted filtered EXISTS witness owns this
+                        // order-insensitive copy. LATERAL keeps its original order.
+                        let inserted_seed = runner.ctx.active_bound_filter_witness()
+                            && matches!(left.as_ref(), GraphPattern::Bgp { .. })
+                            && matches!(
+                                right.as_ref(),
+                                GraphPattern::Values { variables, bindings }
+                                    if !variables.is_empty()
+                                        && matches!(bindings.as_slice(), [row]
+                                            if row.len() == variables.len()
+                                                && row.iter().all(Option::is_some))
+                            );
+                        let reverse = if inserted_seed {
+                            Ok(true)
+                        } else {
+                            crate::service_endpoints::binds_left_endpoints(left, right, runner.ctx)
+                        };
+                        reverse.map(|reverse| {
+                            Some(OrdinaryAfter::BinaryFirst {
+                                kind: OrdinaryBinary::Join,
+                                first: usize::from(reverse),
+                                lift,
+                            })
+                        })
                     }
                     GraphPattern::Minus { .. } => crate::governor::lift::Lift::at_admitted(
                         current_pattern,
@@ -8677,13 +8710,28 @@ fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
                         _ => return Err(EvalError::internal("binary continuation lost its node")),
                     };
                     if matches!(kind, OrdinaryBinary::Join)
-                        && first == 0
+                        && (first == 0 || matches!(other, GraphPattern::Bgp { .. }))
                         && crate::bgp::PositivePlan::seed_eligible_admitted(
                             other,
                             &rows.schema,
                             &runner.ctx.growth,
                         )?
                     {
+                        if first == 1 {
+                            // A reversed SERVICE driver cannot have a BGP operand.
+                            // Retain the logical left-first column order of this join.
+                            let left = syntactic_schema_admitted(other, &runner.ctx.growth)?;
+                            let output = left.union_admitted(&rows.schema, &runner.ctx.growth)?;
+                            return crate::binop::finish_seeded_join(
+                                lift,
+                                rows,
+                                other,
+                                0,
+                                Some(&output),
+                                runner.ctx,
+                            )
+                            .map(Some);
+                        }
                         if runner.ctx.bgp_cursor_sources.is_some()
                             && runner.state.active.as_ref().is_some_and(|boundary| {
                                 boundary.awaiting_delivery() && boundary.physical.is_none()

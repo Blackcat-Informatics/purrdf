@@ -255,10 +255,12 @@ impl SubstitutionFrames {
         placeholders: Option<
             crate::workspace::SharedWorkspace<crate::deferred_exists::DeferredMap>,
         >,
+        filter_witness: bool,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Result<Self, EvalError> {
         // The copied owner and frame slot are admitted before scope installation.
-        let body = crate::expr::PreparedPattern::new(body, &ctx.growth)?;
+        let body = crate::expr::PreparedPattern::new(body, &ctx.growth)?
+            .with_filter_witness(filter_witness);
         let frames = crate::AdmittedVec::with_capacity(1, &ctx.growth)?;
         let mut stack = Self { frames };
         stack.push_prepared(body, ledger_map, placeholders, ctx)?;
@@ -329,7 +331,7 @@ impl<'ctx, 'd, D: DatasetView + Sync> SubstitutionRunner<'ctx, 'd, D> {
         >,
         ctx: &'ctx mut EvalCtx<'d, D>,
     ) -> Result<Self, EvalError> {
-        let stack = SubstitutionFrames::enter(body, ledger_map, placeholders, ctx)?;
+        let stack = SubstitutionFrames::enter(body, ledger_map, placeholders, false, ctx)?;
         Ok(Self { ctx, stack })
     }
 
@@ -579,6 +581,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
             prepared.body,
             prepared.ledger_map,
             prepared.placeholders,
+            false,
             ctx,
         )?;
         return Ok(LateralPending {
@@ -617,6 +620,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
                 prepared.body,
                 prepared.ledger_map,
                 prepared.placeholders,
+                false,
                 &mut guard,
             )?;
             return Ok(LateralPending {
@@ -633,6 +637,7 @@ fn enter_lateral_child<D: DatasetView + Sync>(
             prepared.body,
             prepared.ledger_map,
             prepared.placeholders,
+            false,
             ctx,
         )?;
         return Ok(LateralPending {
@@ -892,6 +897,7 @@ impl<I: ViewTermId> ApplicationRow<I> {
             prepared.body,
             prepared.ledger_map,
             prepared.placeholders,
+            false,
             ctx,
         )?;
         ctx.current_row = 0;
