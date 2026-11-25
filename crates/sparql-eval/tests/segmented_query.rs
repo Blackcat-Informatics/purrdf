@@ -245,7 +245,18 @@ fn chronological_segmented_stack_matches_eager_raw_and_prepared_queries() {
 #[test]
 fn chronological_segmented_provider_failure_preserves_original_final_evidence() {
     use purrdf_core::{SegmentedLayer, SegmentedLayerMetadata, SegmentedStack};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
     let (image, _) = fixture();
+    let (earlier, _) = fixture_with_layout(1024, 8);
+    let earlier_layer = Arc::new(
+        SegmentedLayer::new(
+            Arc::new(earlier.provider()),
+            earlier.receipt().clone(),
+            SegmentedLayerMetadata::default(),
+        )
+        .unwrap(),
+    );
     let provider = Arc::new(RefusingProvider {
         bytes: image.provider(),
         refuse: AtomicBool::new(false),
@@ -261,7 +272,9 @@ fn chronological_segmented_provider_failure_preserves_original_final_evidence() 
     );
     let read_limits = SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8);
     let mut stack = SegmentedStack::default();
-    stack.publish(vec![layer], read_limits).unwrap();
+    stack
+        .publish(vec![earlier_layer, layer], read_limits)
+        .unwrap();
     let snapshot = stack.snapshot().unwrap();
     let view = snapshot.query(read_limits).unwrap();
     provider.refuse.store(true, Ordering::Relaxed);
@@ -276,6 +289,39 @@ fn chronological_segmented_provider_failure_preserves_original_final_evidence() 
             &QueryOptions::EMPTY,
         )
         .unwrap_err();
+    let inspected = Capture::read(&error);
+    let cause = inspected.child("cause");
+    assert_eq!(cause.code, "segmented-provider");
+    assert!(matches!(cause.field("host_code"), ErrorValue::Signed(5)));
+    let receipt = inspected.child("evidence");
+    let layers = receipt.child("snapshot").records("layers");
+    assert_eq!(layers.len(), 2);
+    assert_inspected_snapshot(
+        &layers[0].child("receipt").child("snapshot"),
+        earlier.receipt().snapshot(),
+    );
+    assert_inspected_snapshot(
+        &layers[1].child("receipt").child("snapshot"),
+        image.receipt().snapshot(),
+    );
+    let requests = receipt.records("requests");
+    let failed = requests.last().expect("failed provider read was retained");
+    assert_inspected_snapshot(&failed.child("snapshot"), image.receipt().snapshot());
+    assert!(matches!(
+        failed.field("completed"),
+        ErrorValue::Boolean(false)
+    ));
+    error.evidence().with_requests(|original| {
+        assert!(
+            original
+                .iter()
+                .any(|request| request.snapshot() == earlier.receipt().snapshot())
+        );
+        assert_eq!(requests.len(), original.len());
+        for (inspected, original) in requests.iter().zip(original) {
+            assert_inspected_request(inspected, original);
+        }
+    });
     let FallibleSparqlError::Operational { error, evidence } = error else {
         panic!("source error must remain operational");
     };
@@ -292,7 +338,41 @@ fn chronological_segmented_provider_failure_preserves_original_final_evidence() 
     drop(view);
     drop(snapshot);
     drop(stack);
-    assert_eq!(evidence.identity().layers().len(), 1);
+    assert_eq!(evidence.identity().layers().len(), 2);
+}
+
+fn assert_inspected_request(
+    inspected: &purrdf_testkit::error_capture::Capture<'_>,
+    expected: &purrdf_core::SegmentedRequest,
+) {
+    use purrdf_hash::error::ErrorValue;
+    assert_eq!(inspected.code, "segmented-request");
+    assert_inspected_snapshot(&inspected.child("snapshot"), expected.snapshot());
+    assert!(
+        matches!(inspected.field("position"), ErrorValue::Unsigned(value) if value == u128::from(expected.position()))
+    );
+    assert!(
+        matches!(inspected.field("bytes"), ErrorValue::ByteCount(value) if value == u128::from(expected.bytes()))
+    );
+    assert!(
+        matches!(inspected.field("completed"), ErrorValue::Boolean(value) if value == expected.completed())
+    );
+}
+
+fn assert_inspected_snapshot(
+    inspected: &purrdf_testkit::error_capture::Capture<'_>,
+    expected: SegmentedSnapshot,
+) {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Event;
+    assert_eq!(inspected.code, "segmented-snapshot");
+    assert!(matches!(
+        inspected.events.first(),
+        Some(Event::BeginList(Some("bytes"), 32))
+    ));
+    assert!(inspected.events[1..33].iter().zip(expected.as_bytes()).all(
+        |(event, byte)| matches!(event, Event::Value(None, ErrorValue::Unsigned(value)) if *value == u128::from(*byte))
+    ));
 }
 
 #[test]
@@ -442,6 +522,8 @@ impl SegmentedProvider for RefusingProvider {
 /// Dense storage blocks must price only the selected subject range and retain provider refusals.
 #[test]
 fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
     let (image, resident) = fixture_with_layout(8192, 128);
     let source = open(&image, CEILING);
     let target = source
@@ -488,6 +570,12 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
         SegmentedReadLimits::new(CEILING, 2, 2048, 20_000_000, 8),
     )
     .unwrap();
+    let before = source.evidence();
+    let original = Capture::read(&before);
+    assert!(
+        matches!(original.field("request_digest"), ErrorValue::Bytes(bytes) if bytes == before.request_digest())
+    );
+    let before_count = original.records("requests").len();
     provider.refuse.store(true, Ordering::Relaxed);
     assert_eq!(
         source.cardinality_estimate(Some(target), Some(p), None, GraphMatch::Default),
@@ -497,13 +585,33 @@ fn dense_pages_price_only_the_exact_subject_range_and_preserve_source_refusal() 
         source.read_error(),
         Some(SegmentedError::Provider { .. })
     ));
+    let refused = engine
+        .query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
+        .unwrap_err();
+    let report = Capture::read(&refused);
+    assert_eq!(report.child("cause").code, "segmented-provider");
+    let receipt = report.child("evidence");
+    let requests = receipt.records("requests");
+    assert!(requests.len() > before_count);
     assert!(matches!(
-        engine.query_prepared_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY),
-        Err(FallibleSparqlError::Operational {
-            error: SegmentedError::Provider { .. },
-            ..
-        })
+        requests.last().unwrap().field("completed"),
+        ErrorValue::Boolean(false)
     ));
+    let held = Capture::read(&before);
+    let held_requests = held.records("requests");
+    let original_requests = original.records("requests");
+    assert_eq!(held_requests.len(), before_count);
+    before.with_requests(|requests| {
+        for ((held, original), request) in
+            held_requests.iter().zip(&original_requests).zip(requests)
+        {
+            assert_inspected_request(held, request);
+            assert_inspected_request(original, request);
+        }
+    });
+    assert!(
+        matches!(held.field("request_digest"), ErrorValue::Bytes(bytes) if bytes == before.request_digest())
+    );
 }
 
 /// A long host-owned cause stays exact while error publication fits the charged reporting ledger.
