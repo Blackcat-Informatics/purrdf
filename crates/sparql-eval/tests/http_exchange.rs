@@ -567,8 +567,12 @@ fn service_silent_absorbs_exchange_refusals_and_records_them() {
 /// evidence; the neighbouring `LOAD` in the same request is applied.
 #[test]
 fn load_silent_absorbs_an_opaque_redirect_beside_an_applied_load() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_testkit::error_capture::Capture;
+
     let host = Host::new(vec![
         ("https://open.example/opaque", Route::Opaque),
+        ("https://open.example/opaque-later", Route::Opaque),
         (
             "https://open.example/doc",
             Route::Document {
@@ -585,6 +589,7 @@ fn load_silent_absorbs_an_opaque_redirect_beside_an_applied_load() {
             &mut dataset,
             SparqlRequest {
                 query: "LOAD SILENT <https://open.example/opaque> ; \
+                        LOAD SILENT <https://open.example/opaque-later> ; \
                         LOAD <https://open.example/doc>",
                 base_iri: None,
                 substitutions: &[],
@@ -594,15 +599,24 @@ fn load_silent_absorbs_an_opaque_redirect_beside_an_applied_load() {
         )
         .expect("the update runs");
     assert!(outcome.is_applied(), "{outcome:?}");
-    let silenced: Vec<_> = outcome.evidence().silenced.iter().cloned().collect();
-    assert_eq!(silenced.len(), 1, "{silenced:?}");
-    assert_eq!(
-        silenced[0].target,
-        SilencedTarget::Load {
-            iri: "https://open.example/opaque".to_owned()
-        }
-    );
-    assert_eq!(silenced[0].kind, SilencedKind::Transport);
+    let silenced = outcome.evidence().silenced.to_vec();
+    drop(outcome);
+    assert_eq!(silenced.len(), 2, "{silenced:?}");
+    for (record, expected) in silenced.iter().zip([
+        "https://open.example/opaque",
+        "https://open.example/opaque-later",
+    ]) {
+        assert_eq!(
+            record.target,
+            SilencedTarget::Load {
+                iri: expected.to_owned()
+            }
+        );
+        assert_eq!(record.kind, SilencedKind::Transport);
+        let cause = Capture::read(record).child("cause");
+        assert_eq!(cause.code, "sparql-load-opaque-redirect");
+        assert!(matches!(cause.field("iri"), ErrorValue::Iri(iri) if iri == expected));
+    }
     assert_eq!(dataset.quad_count(), 1);
 }
 
