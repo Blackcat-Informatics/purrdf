@@ -18,8 +18,7 @@ use crate::{DatasetView, ViewTermId};
 /// `pool`, and `pool` itself (the sorted, distinct blanks of every component,
 /// back to back). A blank node's incident components are a slice of `mentions`,
 /// sorted by `(blank, component index)`, so everything refers to a component by
-/// its index. The three admitted arrays never shrink after allocation;
-/// `mentions` is plain search scratch, like the incidence it replaced.
+/// its index. All four arrays use the source's search workspace.
 pub(super) struct Footprints<Id> {
     components: Vec<Component<Id>>,
     ends: Vec<usize>,
@@ -54,9 +53,10 @@ impl<Id: ViewTermId> Footprints<Id> {
         memory.extend(&mut self.pool, blanks.iter().copied())?;
         memory.push(&mut self.ends, self.pool.len())?;
         memory.push(&mut self.components, component)?;
-        self.mentions
-            .extend(blanks.iter().map(|&blank| (blank, index)));
-        Ok(())
+        memory.extend(
+            &mut self.mentions,
+            blanks.iter().map(|&blank| (blank, index)),
+        )
     }
 
     pub(super) fn finish(&mut self) {
@@ -64,14 +64,17 @@ impl<Id: ViewTermId> Footprints<Id> {
     }
 
     /// Every blank mentioned, ascending and distinct.
-    pub(super) fn blanks(&self) -> Vec<Id> {
+    pub(super) fn blanks<S: Admission + ?Sized>(
+        &self,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<Vec<Id>, StorageError> {
         let mut blanks: Vec<Id> = Vec::new();
         for &(blank, _) in &self.mentions {
             if blanks.last() != Some(&blank) {
-                blanks.push(blank);
+                memory.push(&mut blanks, blank)?;
             }
         }
-        blanks
+        Ok(blanks)
     }
 
     /// The components mentioning `blank`, in collection order, as
@@ -121,6 +124,7 @@ impl<Id: ViewTermId> Footprints<Id> {
     ) -> Result<(), StorageError> {
         memory.release_vec(self.components)?;
         memory.release_vec(self.ends)?;
+        memory.release_vec(self.mentions)?;
         memory.release_vec(self.pool)
     }
 }

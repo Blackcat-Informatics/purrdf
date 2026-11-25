@@ -3133,10 +3133,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
     }
 
-    fn collect_incidence<S: Admission + ?Sized>(
+    fn collect_incidence<R, F>(
         &mut self,
-        memory: &mut Memory<'_, S>,
-    ) -> Result<memo::Footprints<D::Id>, CanonError<D::ReadError>> {
+        memory: &mut Memory<'_, rendering::ScratchGrant<R, F>>,
+    ) -> Result<memo::Footprints<D::Id>, CanonError<D::ReadError>>
+    where
+        R: crate::WorkspaceReservation<Error = D::ReadError>,
+        F: FnOnce() -> Result<R, D::ReadError>,
+    {
         let mut footprints = memo::Footprints::new();
         // One buffer for the distinct blanks of each component in turn.
         let mut mentioned: Vec<D::Id> = Vec::new();
@@ -3148,8 +3152,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             &mut |comp| {
                 mentioned.clear();
                 comp.try_for_each_blank(self.ds, self.stop, &mut |b| {
-                    mentioned.push(b);
-                    Ok(())
+                    // Restore this account's cause before the nested term
+                    // walk cleans up and interprets its own storage marker.
+                    memory
+                        .push(&mut mentioned, b)
+                        .map_err(|cause| memory.admission_mut().restore(CanonError::Storage(cause)))
                 })?;
                 mentioned.sort_unstable();
                 mentioned.dedup();
@@ -3158,9 +3165,19 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     .map_err(CanonError::Storage)
             },
         )?;
+        memory.release_vec(mentioned).map_err(CanonError::Storage)?;
         footprints.finish();
-        self.blanks = footprints.blanks();
+        self.blanks = footprints.blanks(memory).map_err(CanonError::Storage)?;
         Ok(footprints)
+    }
+
+    fn release_incidence<S: Admission + ?Sized>(
+        &mut self,
+        footprints: memo::Footprints<D::Id>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        memory.release_vec(std::mem::take(&mut self.blanks))?;
+        footprints.release(memory)
     }
 
     fn check_stop(&self) -> Result<(), CanonError> {
@@ -3283,7 +3300,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             let footprints = self.collect_incidence(memory)?;
             self.run.phase(CanonPhase::Search);
             self.run_inner(&footprints, memory)?;
-            footprints.release(memory).map_err(CanonError::Storage)?;
+            self.release_incidence(footprints, memory)
+                .map_err(CanonError::Storage)?;
             Ok(self)
         })
     }
@@ -4110,7 +4128,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// Release the search's own tables, which output never reads. They are not
     /// part of any admitted account, so no charge or poll moves with them.
     fn drop_search_state(&mut self) {
-        drop(std::mem::take(&mut self.blanks));
         drop(std::mem::take(&mut self.first_degree));
         drop(std::mem::take(&mut self.canonical.order));
     }
@@ -7594,6 +7611,32 @@ mod tests {
         observe_only: bool,
         reads: std::cell::Cell<usize>,
         reservations: std::cell::Cell<usize>,
+        shrink_fault: std::cell::Cell<ShrinkFault>,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ShrinkFault {
+        Disabled,
+        Armed,
+        Observed,
+    }
+
+    struct FlatProbeReservation<'a> {
+        live: u64,
+        shrink_fault: &'a std::cell::Cell<ShrinkFault>,
+    }
+
+    impl crate::WorkspaceReservation for FlatProbeReservation<'_> {
+        type Error = FlatProbeFault;
+
+        fn resize(&mut self, bytes: u64) -> Result<(), Self::Error> {
+            if bytes < self.live && self.shrink_fault.get() != ShrinkFault::Disabled {
+                self.shrink_fault.set(ShrinkFault::Observed);
+                return Err(FlatProbeFault("nested scratch cleanup refused"));
+            }
+            self.live = bytes;
+            Ok(())
+        }
     }
 
     impl FlatProbeView {
@@ -7608,6 +7651,7 @@ mod tests {
                 observe_only: false,
                 reads: std::cell::Cell::new(0),
                 reservations: std::cell::Cell::new(0),
+                shrink_fault: std::cell::Cell::new(ShrinkFault::Disabled),
             }
         }
 
@@ -7622,6 +7666,7 @@ mod tests {
                 observe_only: false,
                 reads: std::cell::Cell::new(0),
                 reservations: std::cell::Cell::new(0),
+                shrink_fault: std::cell::Cell::new(ShrinkFault::Disabled),
             }
         }
 
@@ -7687,7 +7732,10 @@ mod tests {
         ) -> Result<impl crate::WorkspaceReservation<Error = Self::ReadError> + '_, Self::ReadError>
         {
             self.reservations.set(self.reservations.get() + 1);
-            Ok(crate::NoopReservation::<FlatProbeFault>::default())
+            Ok(FlatProbeReservation {
+                live: 0,
+                shrink_fault: &self.shrink_fault,
+            })
         }
 
         /// A point lookup; does not trip [`mark_read`](Self::mark_read).
@@ -8404,7 +8452,7 @@ mod tests {
             CanonHash::Sha256,
             &run,
         );
-        let mut storage = purrdf_lex::allocation::Resident;
+        let mut storage = rendering::ScratchGrant::new(crate::NoopReservation::default());
         let mut memory = Memory::new(&mut storage);
         assert!(matches!(
             memory.try_scope(|memory| state.collect_incidence(memory)),
@@ -8442,7 +8490,7 @@ mod tests {
                 CanonHash::Sha256,
                 &run,
             );
-            let mut storage = purrdf_lex::allocation::Resident;
+            let mut storage = rendering::ScratchGrant::new(crate::NoopReservation::default());
             let mut memory = Memory::new(&mut storage);
             let footprints = state.collect_incidence(&mut memory).unwrap();
             for &blank in &state.blanks {
@@ -8454,7 +8502,7 @@ mod tests {
             let (_, issuer) = state
                 .hash_n_degree(blanks[0], issuer, &footprints, &mut memory)
                 .unwrap();
-            footprints.release(&mut memory).unwrap();
+            state.release_incidence(footprints, &mut memory).unwrap();
             assert_eq!(issuer.order(), blanks);
             // One entry per blank, plus one permutation at each endpoint
             // and two at each internal node: COUNT + 2 * (COUNT - 1).
@@ -8476,7 +8524,7 @@ mod tests {
             CanonHash::Sha256,
             &run,
         );
-        let mut storage = purrdf_lex::allocation::Resident;
+        let mut storage = rendering::ScratchGrant::new(crate::NoopReservation::default());
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &blank in &state.blanks {
@@ -8495,7 +8543,7 @@ mod tests {
             state.run.work().total() > 1,
             "the search reached permutation work"
         );
-        footprints.release(&mut memory).unwrap();
+        state.release_incidence(footprints, &mut memory).unwrap();
     }
 
     struct MemoFixture {
@@ -8619,7 +8667,7 @@ mod tests {
                     CanonHash::Sha256,
                     &run,
                 );
-                let mut storage = purrdf_lex::allocation::Resident;
+                let mut storage = rendering::ScratchGrant::new(crate::NoopReservation::default());
                 let mut memory = Memory::new(&mut storage);
                 let footprints = state.collect_incidence(&mut memory).unwrap();
                 for &id in &state.blanks {
@@ -8641,7 +8689,7 @@ mod tests {
                             .to_owned()
                     })
                     .collect();
-                footprints.release(&mut memory).unwrap();
+                state.release_incidence(footprints, &mut memory).unwrap();
                 assert_eq!(memory.admitted_bytes(), 0);
 
                 let mapped = canonical_relabel_with_mapping(
@@ -8689,7 +8737,7 @@ mod tests {
             CanonHash::Sha256,
             &run,
         );
-        let mut storage = purrdf_lex::allocation::Resident;
+        let mut storage = rendering::ScratchGrant::new(crate::NoopReservation::default());
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &id in &state.blanks {
@@ -8813,7 +8861,7 @@ mod tests {
             expected_order,
             "the first equal candidate retains its complete issuance order"
         );
-        footprints.release(&mut memory).unwrap();
+        state.release_incidence(footprints, &mut memory).unwrap();
         assert_eq!(memory.admitted_bytes(), 0);
     }
 
@@ -8831,7 +8879,7 @@ mod tests {
             CanonHash::Sha256,
             &run,
         );
-        let mut storage = purrdf_lex::allocation::Resident;
+        let mut storage = rendering::ScratchGrant::new(crate::NoopReservation::default());
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &id in &state.blanks {
@@ -8880,7 +8928,7 @@ mod tests {
         assert_eq!(fixture.view.reads.get(), reads);
         assert_eq!(run.work(), work);
         memo.release(&mut memory).unwrap();
-        footprints.release(&mut memory).unwrap();
+        state.release_incidence(footprints, &mut memory).unwrap();
         assert_eq!(
             memory.admitted_bytes(),
             0,
@@ -8906,21 +8954,45 @@ mod tests {
         assert_eq!(run.work().total(), 0);
     }
 
-    /// The first positive scratch layout retains the provider's exact original
-    /// cause rather than translating a real resource refusal into a cache miss.
+    /// A nested term can refuse its own cleanup after the provider has refused
+    /// blank collection. The first cause must survive the nested admission.
     #[test]
-    fn positive_deferred_admission_retains_the_original_provider_cause() {
-        let cause = FlatProbeFault("first positive footprint admission refused");
+    fn incidence_refusal_survives_nested_scratch_cleanup_refusal() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = iri(&mut builder, "subject");
+        let p = iri(&mut builder, "predicate");
+        let object = builder
+            .intern_literal(RdfLiteral::typed("[_:inside]", purrdf_cdt::CDT_LIST))
+            .unwrap();
+        builder.push_quad(s, p, object, None).unwrap();
+        let view = FlatProbeView::observed(builder.freeze().unwrap());
+        let run = SearchRun::new(SearchPolicy::Unlimited, None);
+        let mut state = CanonState::new(
+            &view,
+            CanonScope::Dataset,
+            CanonPresentation::Overlay,
+            CanonHash::Sha256,
+            &run,
+        );
+        let cause = FlatProbeFault("incidence scratch refusal");
         let result = rendering::ScratchGrant::deferred(|| {
+            view.shrink_fault.set(ShrinkFault::Armed);
             Err::<crate::NoopReservation<FlatProbeFault>, _>(cause.clone())
         })
         .run(|memory| {
-            let mut bytes = Vec::new();
-            memory.push(&mut bytes, 0_u8).map_err(CanonError::Storage)?;
-            memory.release_vec(bytes).map_err(CanonError::Storage)?;
-            Ok(())
+            let footprints = state.collect_incidence(memory)?;
+            state
+                .release_incidence(footprints, memory)
+                .map_err(CanonError::Storage)
         });
+        assert_eq!(view.shrink_fault.get(), ShrinkFault::Observed);
         assert_eq!(result, Err(CanonError::Read(cause)));
+        assert_eq!(state.blanks, [] as [TermId; 0]);
+
+        view.shrink_fault.set(ShrinkFault::Disabled);
+        let state = state.issue_labels().expect("the same source with scratch");
+        assert_eq!(state.canonical.issued.len(), 1);
+        assert_eq!(state.run.work().total(), 0);
     }
 
     /// Label completion is not permission to return a truncated canonical document.
