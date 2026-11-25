@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! PurRDF's fixed-product pure Rust Zstandard codec.
-//! Decoder errors let callers borrow the native fields without rendering messages.
+//! Decoder errors expose their original native fields through borrowed inspection.
 //!
 #![doc = include_str!("../README.md")]
 #![no_std]
