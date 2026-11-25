@@ -822,15 +822,9 @@ jobs:
           rustc -vV > target/asm-compiler.txt
           test "$(cat target/asm-compiler.txt)" = "$EXPECTED_COMPILER"
           echo "identity=$(sha256sum target/asm-compiler.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Install the C cross toolchain
-        if: startsWith(matrix.config, 'aarch64') || startsWith(matrix.config, 'wasm32')
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-      - name: Identify the Arm cache roots and toolchains
-        if: matrix.config == 'aarch64'
-        id: simd-cache-context
+      - name: Identify the x86-64-v4 Cargo cache context
+        if: matrix.config == 'x86_64-v4'
+        id: compiled-context
         shell: bash
         run: |
           {
@@ -841,66 +835,39 @@ jobs:
           } >> "$GITHUB_ENV"
           {
             printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:?}" "${ImageVersion:?}"
+            cat target/asm-compiler.txt
             cargo -Vv
             cc --version
             ld --version
-            clang --version
-            llvm-ar --version
-            aarch64-linux-gnu-gcc -v 2>&1
-            aarch64-linux-gnu-ld --version
-            aarch64-linux-gnu-gcc -print-sysroot
-            aarch64-linux-gnu-gcc -print-search-dirs
-            dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' \
-              gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-              libc6-dev-arm64-cross libc6-arm64-cross
-            dpkg-query -W -f='${db:Status-Abbrev}\t${Package}\t${Version}\t${Architecture}\n' \
-              '*aarch64-linux-gnu*' '*arm64-cross*' \
-              | awk '$1 == "ii"' | LC_ALL=C sort -u
+            ar --version
           } > target/asm-cache-context.txt
-          cat target/asm-cache-context.txt
           echo "identity=$(sha256sum target/asm-cache-context.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
-      - name: Restore matched Arm Cargo outputs and assembly receipts
-        if: matrix.config == 'aarch64'
-        id: simd-unit-cache
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+      - name: Restore compatible x86-64-v4 Cargo outputs
+        if: matrix.config == 'x86_64-v4'
+        id: compiled-cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             target/release
-            target/aarch64-unknown-linux-gnu/release
+            target/x86_64-unknown-linux-gnu/release
             target/simd-asm
-          # Cargo checks source freshness and the gate checks each fresh unit's
-          # receipt. Graph and environment changes select a new cache.
-          key: simd-asm-units-v3-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ steps.simd-cache-context.outputs.identity }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'Makefile', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', '.github/workflows/ci.yaml', 'scripts/check-simd-asm.py', 'scripts/simd_asm_runtime.py', 'scripts/simd-asm-manifest.toml') }}
-      - name: Verify a restored assembly receipt before running Cargo
-        if: steps.simd-unit-cache.outputs.cache-hit == 'true'
-        run: |
-          shopt -s globstar nullglob
-          matched=0
-          for asm in "$CARGO_TARGET_DIR"/aarch64-unknown-linux-gnu/release/**/*.s; do
-            path_hash=$(printf '%s' "$asm" | sha256sum | cut -d ' ' -f 1)
-            receipts=("$CARGO_TARGET_DIR"/simd-asm/contexts/*/evidence/"$path_hash.json")
-            if [ "${#receipts[@]}" -eq 0 ]; then
-              continue
-            fi
-            asm_hash=$(sha256sum "$asm" | cut -d ' ' -f 1)
-            for receipt in "${receipts[@]}"; do
-              root=${receipt%/evidence/*}
-              if jq -e --arg digest "$asm_hash" --arg context "${root##*/}" \
-                '.assembly == $digest and .context == $context' "$receipt" > /dev/null; then
-                matched=1
-                break 2
-              fi
-            done
-          done
-          test "$matched" = 1
+          # Cargo verifies source content. The gate verifies receipts for fresh units.
+          # Only compatibility inputs, not the source commit, select this exact key.
+          key: simd-asm-compiled-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiled-context.outputs.identity }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'Makefile', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', '.github/workflows/ci.yaml', 'scripts/check-simd-asm.py', 'scripts/simd_asm_runtime.py', 'scripts/simd-asm-manifest.toml') }}
       - name: Restore assembly build contexts and evidence
-        if: matrix.config != 'aarch64'
+        if: matrix.config != 'x86_64-v4'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: target/simd-asm
           key: simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
           restore-keys: |
             simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-
+      - name: Install the C cross toolchain
+        if: startsWith(matrix.config, 'aarch64') || startsWith(matrix.config, 'wasm32')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
       - name: Record measurement inputs
         run: |
           mkdir -p target/asm-diagnostics
@@ -921,23 +888,22 @@ jobs:
             export CARGO_BUILD_JOBS=2
           fi
           make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
-      - name: Record output sizes and compiler commands across the Cargo graphs
-        if: matrix.config == 'x86_64-v4'
-        run: |
-          du -sb target/release target/x86_64-unknown-linux-gnu/release target/simd-asm
-          awk '/^[[:space:]]*Running/ && /--crate-name/ {calls++}
-               END {printf "Cargo compiler commands (host and target): %d\n", calls}' \
-            target/simd-asm/contexts/*/cargo.graph-*.stderr.log
-          for graph in target/simd-asm/contexts/*/cargo.graph-*.stderr.log; do
-            printf 'Cargo freshness from %s\n' "$graph"
-            awk '/^[[:space:]]*(Fresh|Dirty|Compiling) / {print}' "$graph"
-          done
       - name: Upload checked evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: simd-asm-${{ matrix.config }}
           path: target/asm-reports/*.json
           if-no-files-found: error
+      - name: Seed compatible x86-64-v4 Cargo outputs from main
+        # Pull-request caches are not reusable by other pull requests.
+        if: matrix.config == 'x86_64-v4' && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.compiled-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            target/release
+            target/x86_64-unknown-linux-gnu/release
+            target/simd-asm
+          key: ${{ steps.compiled-cache.outputs.cache-primary-key }}
       - name: Upload failed measurement diagnostics
         if: failure() && steps.measure.outcome == 'failure'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
