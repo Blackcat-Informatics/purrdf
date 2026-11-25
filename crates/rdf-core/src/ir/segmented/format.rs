@@ -380,7 +380,11 @@ pub(super) fn push_text(out: &mut Vec<u8>, value: &str) -> Result<(), SegmentedE
 }
 
 pub(super) fn push_id(out: &mut Vec<u8>, id: GlobalTermId) {
-    out.extend_from_slice(&(id.index() + 1).to_le_bytes());
+    out.extend_from_slice(&id_bytes(id));
+}
+
+pub(super) fn id_bytes(id: GlobalTermId) -> [u8; 8] {
+    (id.index() + 1).to_le_bytes()
 }
 
 pub(super) fn encode_term(
@@ -902,11 +906,11 @@ impl DecodedRecords {
     }
 }
 
-pub(super) fn encode_quad(quad: QuadIds<GlobalTermId>, out: &mut Vec<u8>) {
-    for id in [quad.s, quad.p, quad.o] {
-        push_id(out, id);
-    }
-    out.extend_from_slice(&quad.g.map_or(0, |id| id.index() + 1).to_le_bytes());
+pub(super) fn encode_quad(quad: QuadIds<GlobalTermId>, out: &mut [u8; 32]) {
+    out[..8].copy_from_slice(&id_bytes(quad.s));
+    out[8..16].copy_from_slice(&id_bytes(quad.p));
+    out[16..24].copy_from_slice(&id_bytes(quad.o));
+    out[24..].copy_from_slice(&quad.g.map_or([0; 8], id_bytes));
 }
 pub(super) fn decode_quad(bytes: &[u8]) -> Result<QuadIds<GlobalTermId>, SegmentedError> {
     let mut input = Reader::at(bytes, 0);
