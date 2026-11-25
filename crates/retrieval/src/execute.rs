@@ -3968,6 +3968,201 @@ mod tests {
         );
     }
 
+    #[test]
+    fn materializers_retain_non_latching_projected_cell_faults() {
+        use purrdf_core::{
+            DatasetView, FallibleDatasetView, GraphMatch, QuadIds, QuadProbePlan, RdfDataset,
+            RdfDatasetBuilder, RdfStoreCapabilities, TermId, TermLookupError, TermRef,
+            ViewOperationStatus,
+        };
+        use purrdf_lex::allocation::{Admission, Memory, StorageError};
+        use purrdf_sparql_eval::{EvidenceScope, EvidenceSource, PropertyFunctionRegistry};
+
+        #[derive(Clone, Debug)]
+        struct PointFault(u64);
+
+        impl std::fmt::Display for PointFault {
+            fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                panic!("the point fault must not be rendered")
+            }
+        }
+
+        impl std::error::Error for PointFault {}
+
+        struct PointView<'a>(&'a RdfDataset, TermId);
+
+        impl DatasetView for PointView<'_> {
+            type Id = TermId;
+            type ReadError = PointFault;
+            type TermGuard<'a>
+                = TermRef<'a>
+            where
+                Self: 'a;
+            type ProbePlan = QuadProbePlan;
+
+            fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+                DatasetView::quads(self.0)
+            }
+
+            fn resolve(&self, id: TermId) -> Result<TermRef<'_>, PointFault> {
+                Ok(self.0.resolve(id))
+            }
+
+            fn term_id_by_value(&self, value: &TermValue) -> Result<Option<TermId>, PointFault> {
+                Ok(self.0.term_id_by_value(value))
+            }
+
+            fn capabilities(&self) -> RdfStoreCapabilities {
+                DatasetView::capabilities(self.0)
+            }
+
+            fn probe_plan(&self, s: bool, p: bool, o: bool, g: GraphMatch) -> QuadProbePlan {
+                DatasetView::probe_plan(self.0, s, p, o, g)
+            }
+
+            fn quads_for_pattern_with_plan(
+                &self,
+                plan: &QuadProbePlan,
+                s: Option<TermId>,
+                p: Option<TermId>,
+                o: Option<TermId>,
+                g: GraphMatch,
+            ) -> impl Iterator<Item = QuadIds> + '_ {
+                DatasetView::quads_for_pattern_with_plan(self.0, plan, s, p, o, g)
+            }
+
+            fn term_count(&self) -> u64 {
+                DatasetView::term_count(self.0)
+            }
+
+            fn term_value_with_memory<S: Admission + ?Sized, E>(
+                &self,
+                id: TermId,
+                memory: &mut Memory<'_, S>,
+                lookup_error: impl Fn(TermLookupError<PointFault>) -> E,
+                storage_error: impl Fn(StorageError, &mut Memory<'_, S>) -> E,
+            ) -> Result<TermValue, E> {
+                // The underlying query can resolve the term. The point fault
+                // belongs only to the admitted owned read of the projected cell.
+                if id == self.1 {
+                    return Err(lookup_error(TermLookupError::Read(PointFault(71))));
+                }
+                self.0.term_value_with_memory(
+                    id,
+                    memory,
+                    |error| match error {
+                        TermLookupError::ForeignId => lookup_error(TermLookupError::ForeignId),
+                        TermLookupError::Read(impossible) => match impossible {},
+                    },
+                    storage_error,
+                )
+            }
+        }
+
+        impl FallibleDatasetView for PointView<'_> {
+            type Error = PointFault;
+            type Evidence = ();
+
+            fn operation_status(&self) -> ViewOperationStatus<PointFault, ()> {
+                ViewOperationStatus::Ready { evidence: () }
+            }
+        }
+
+        struct Closed;
+
+        impl EvidenceSource<TermId> for Closed {
+            fn claim(
+                &self,
+                _: &QuadIds,
+            ) -> Result<Option<&purrdf_core::evidence::EvidenceRecord>, purrdf_sparql_eval::EvalError>
+            {
+                Ok(None)
+            }
+
+            fn scope(&self, _: GraphMatch) -> Result<EvidenceScope, purrdf_sparql_eval::EvalError> {
+                Ok(EvidenceScope {
+                    completeness: purrdf_core::evidence::SearchCompleteness::Complete,
+                    closure_declared: true,
+                    missing_reason: None,
+                })
+            }
+
+            fn reason(
+                &self,
+                _: purrdf_core::evidence::ReasonId,
+            ) -> Result<
+                Option<purrdf_core::evidence::ReasonDescription<'_>>,
+                purrdf_sparql_eval::EvalError,
+            > {
+                Ok(None)
+            }
+        }
+
+        let mut builder = RdfDatasetBuilder::new();
+        let subject = builder.intern_iri("https://example.org/subject").unwrap();
+        let predicate = builder.intern_iri("https://example.org/predicate").unwrap();
+        let object = builder.intern_iri("https://example.org/candidate").unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        let data = builder.freeze().unwrap();
+        let view = PointView(&data, object);
+        let registry = PropertyFunctionRegistry::new();
+        let unit = crate::StratumUnit::new(
+            Iri::parse("https://example.org/stratum").unwrap(),
+            "SELECT ?candidate WHERE { ?subject <https://example.org/predicate> ?candidate }"
+                .to_owned(),
+            crate::StreamContract::new(
+                purrdf_sparql_eval::RankLaw::Ordinal,
+                crate::DuplicatePolicy::Unique,
+                crate::RankFidelity::EXACT,
+                CandidateDomains::Unrestricted,
+                purrdf_sparql_eval::ExclusionBasis::Unavailable,
+            ),
+            1,
+            None,
+        )
+        .unwrap();
+        let compiled = crate::CompiledRetrieval::new(
+            vec![unit],
+            crate::PlanId::from_canonical(b"projected cell read"),
+            registry.instance_id(),
+            String::new(),
+            crate::TopK::new(1),
+            BTreeMap::new(),
+        );
+        let schedule = crate::ReadSchedule::Materialised;
+        let bindings = crate::ConstraintBindings::new(&[]);
+        for scoped in [false, true] {
+            let result =
+                crate::block_on(purrdf_sparql_eval::with_fallible_read(&view, |operation| {
+                    let materialized = if scoped {
+                        super::execute_scoped_in_read(
+                            &compiled, &registry, &view, schedule, &bindings, &Closed, &operation,
+                        )
+                        .map(|_| ())
+                    } else {
+                        super::execute_read_within(
+                            &compiled, &registry, &view, schedule, &operation,
+                        )
+                        .map(|_| ())
+                    };
+                    assert!(matches!(
+                        materialized,
+                        Err(ExecutionError::NativeFailure(
+                            purrdf_sparql_eval::EvalError::WorkspaceStopped
+                        ))
+                    ));
+                    std::future::ready(())
+                }));
+            assert!(matches!(
+                result,
+                Err(purrdf_sparql_eval::FallibleSparqlError::Operational {
+                    error: PointFault(71),
+                    evidence: (),
+                })
+            ));
+        }
+    }
+
     fn variables() -> Vec<String> {
         vec![CANDIDATE_NAME.to_owned()]
     }
