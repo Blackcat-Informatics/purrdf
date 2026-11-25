@@ -52,7 +52,7 @@ use purrdf_core::{
 };
 use purrdf_geo::relation::{GeoIndex, GeoIndexConfig, GraphSelector, register};
 use purrdf_geo::vocab::{GeoVocab, GeoVocabBuilder};
-use purrdf_geo::{GeoTerm, RelationFamily};
+use purrdf_geo::{GeoProfile, GeoTerm, RelationFamily};
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::{
     ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions,
@@ -310,6 +310,24 @@ fn run(
     options: ParserOptions,
     query: &str,
 ) -> Result<Answer, String> {
+    run_with_profile(dataset, registry, options, query, None)
+}
+
+fn run_with_profile(
+    dataset: &RdfDataset,
+    registry: &PropertyFunctionRegistry<'static>,
+    options: ParserOptions,
+    query: &str,
+    profile: Option<&GeoProfile>,
+) -> Result<Answer, String> {
+    let env = ExtensionEnv::new(
+        options,
+        registry.clone(),
+        purrdf_sparql_eval::AggregateRegistry::EMPTY,
+    )
+    .expect("the fixture declarations read cleanly");
+    let options = QueryOptions::new().with_env(&env);
+    let options = profile.map_or(options, |profile| options.with_geo(profile));
     let result = NativeSparqlEngine::new()
         .query_with_options_view(
             dataset,
@@ -318,14 +336,7 @@ fn run(
                 base_iri: None,
                 substitutions: &[],
             },
-            &QueryOptions::new().with_env(
-                &ExtensionEnv::new(
-                    options,
-                    registry.clone(),
-                    purrdf_sparql_eval::AggregateRegistry::EMPTY,
-                )
-                .expect("the fixture declarations read cleanly"),
-            ),
+            &options,
         )
         .map_err(|error| error.to_string())?;
     let SparqlResult::Solutions {
@@ -666,12 +677,17 @@ fn contains_is_the_converse_of_within_over_the_same_data() {
 fn an_asserted_within_triple_matches_alongside_the_computed_rows_and_is_not_duplicated() {
     let dataset = dataset_of(&asserted_triples());
     let registry = registry_over(&dataset);
-    let mut rows = answer(
+    let profile = GeoProfile::standard();
+    // An assertion remains visible even if the profiled geometry scan excludes
+    // its candidate pair. A positive witness still deduplicates as before.
+    let mut rows = run_with_profile(
         &dataset,
         &registry,
         parser_options(&registry, &[]),
         &within_query(),
+        Some(&profile),
     )
+    .expect("metered rewrite must accept the valid fixture")
     .pairs("f", "g");
     rows.sort();
 

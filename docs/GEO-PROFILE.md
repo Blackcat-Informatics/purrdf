@@ -484,6 +484,17 @@ Cancellation or a work, storage or output refusal returns no partial index.
 The context retains the complete admitted preparation allowance on success;
 its work and peak counters are evidence of admission, not allocator measurements.
 
+Metered planar relation queries can reject a strictly separated candidate
+before building its exact topology matrix. The scan applies to contact
+relations with an unbound right argument. It starts after the exact walk
+observes a no-contact pair and verifies that the index uses one coordinate
+reference system. Touching or equal floor bounds do not prove separation.
+Unsupported bounds, multiple literals and mixed reference systems use the
+exact walk. The scan keeps one left envelope inline and charges candidate
+work, so an ambiguous envelope may add work without eliminating a matrix.
+A work limit applies to the work actually performed. A completed query
+still gives the full sorted, deduplicated answer, including asserted pairs.
+
 The WKT writer's context-taking variants use the same carrier rendering body
 and preserve ordinary output bytes. They reserve output and arithmetic scratch
 before writing; the successful returned string remains admitted in the context
