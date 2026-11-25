@@ -9010,7 +9010,8 @@ ex:PatternShape a sh:NodeShape ;
                 requests::product_validate_to_sarif(
                     product,
                     data.to_owned(),
-                    law.map(str::to_owned)
+                    law.map(str::to_owned),
+                    None,
                 )
                 .expect("sync entry"),
                 "{law:?}"

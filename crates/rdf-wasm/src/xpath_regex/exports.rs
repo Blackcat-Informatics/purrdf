@@ -509,15 +509,27 @@ fn product_validations(
         .expect("an identity digest");
     let data = data.to_owned();
     [
-        requests::product_validate_to_sarif(product.clone(), data.clone(), owned(law)),
-        requests::product_validate_to_sarif_rebuild(product.clone(), data.clone(), owned(law)),
+        requests::product_validate_to_sarif(product.clone(), data.clone(), owned(law), None),
+        requests::product_validate_to_sarif_rebuild(
+            product.clone(),
+            data.clone(),
+            owned(law),
+            None,
+        ),
         requests::product_validate_to_sarif_expecting(
             product.clone(),
             data.clone(),
             identity.clone(),
             owned(law),
+            None,
         ),
-        requests::product_validate_to_sarif_rebuild_expecting(product, data, identity, owned(law)),
+        requests::product_validate_to_sarif_rebuild_expecting(
+            product,
+            data,
+            identity,
+            owned(law),
+            None,
+        ),
     ]
 }
 
