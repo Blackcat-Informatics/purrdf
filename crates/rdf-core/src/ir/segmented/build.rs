@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::{GlobalTermId, QuadIds, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 
-use super::format::{self, DecodedRecords, Header, Reader, Stream};
+use super::format::{self, Header, Reader, Stream};
 use super::{
     SegmentedBytes, SegmentedError, SegmentedReadLimits, SegmentedReceipt, SegmentedSession,
 };
@@ -511,6 +511,152 @@ fn encode_dataset(
     })
 }
 
+/// Sizing claims logical pages. Emission admits sections before writing.
+struct ImagePages<'a> {
+    data: Option<&'a mut [u8]>,
+    block_bytes: usize,
+    next: usize,
+    sections: Option<[Stream; 15]>,
+    claimed: usize,
+    auxiliary: Option<(Stream, Stream)>,
+}
+impl ImagePages<'_> {
+    fn block(&mut self, slot: usize) -> Result<&mut [u8], SegmentedError> {
+        let offset = slot
+            .checked_mul(self.block_bytes)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let data = self
+            .data
+            .as_deref_mut()
+            .ok_or(SegmentedError::Corrupt("missing output image"))?;
+        data.get_mut(offset..)
+            .and_then(|tail| tail.get_mut(..self.block_bytes))
+            .ok_or(SegmentedError::Corrupt("image emission exceeds layout"))
+    }
+
+    fn claim(&mut self, rows: usize, count: usize) -> Result<Stream, SegmentedError> {
+        let stream = Stream {
+            first: u64::try_from(self.next).map_err(|_| SegmentedError::AddressExhausted)?,
+            blocks: u64::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?,
+            rows: u64::try_from(rows).map_err(|_| SegmentedError::AddressExhausted)?,
+        };
+        if let Some(sections) = &self.sections {
+            let expected = sections
+                .get(self.claimed)
+                .ok_or(SegmentedError::Corrupt("extra image section"))?;
+            if (stream.first, stream.blocks, stream.rows)
+                != (expected.first, expected.blocks, expected.rows)
+            {
+                return Err(SegmentedError::Corrupt(
+                    "image section differs from its layout",
+                ));
+            }
+        }
+        self.claimed += 1;
+        self.next = self
+            .next
+            .checked_add(count)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        Ok(stream)
+    }
+
+    fn section_page(&mut self, stream: Stream, page: u64) -> Result<&mut [u8], SegmentedError> {
+        if page >= stream.blocks {
+            return Err(SegmentedError::Corrupt("page exceeds image section"));
+        }
+        let slot = stream
+            .first
+            .checked_add(page)
+            .and_then(|slot| usize::try_from(slot).ok())
+            .ok_or(SegmentedError::AddressExhausted)?;
+        self.block(slot)
+    }
+
+    fn put_record(
+        &mut self,
+        stream: Stream,
+        ordinal: u64,
+        kind: u8,
+        record: &[u8],
+    ) -> Result<(), SegmentedError> {
+        let width = record.len();
+        let per_block = u64::try_from((self.block_bytes - 9) / width)
+            .map_err(|_| SegmentedError::AddressExhausted)?;
+        if ordinal >= stream.rows {
+            return Err(SegmentedError::Corrupt("auxiliary stream exceeds plan"));
+        }
+        let page = ordinal / per_block;
+        let block = self.section_page(stream, page)?;
+        let in_page =
+            usize::try_from(ordinal % per_block).map_err(|_| SegmentedError::AddressExhausted)?;
+        if in_page == 0 {
+            let count = usize::try_from((stream.rows - ordinal).min(per_block))
+                .map_err(|_| SegmentedError::AddressExhausted)?;
+            fixed_header(block, kind, count, width)?;
+        }
+        let at = 9 + in_page * width;
+        block[at..at + width].copy_from_slice(record);
+        Ok(())
+    }
+
+    fn overflow(
+        &mut self,
+        span: format::OverflowSpan,
+        parts: [&[u8]; 5],
+    ) -> Result<(), SegmentedError> {
+        let stream = self
+            .sections
+            .as_ref()
+            .and_then(|sections| sections.last())
+            .copied()
+            .ok_or(SegmentedError::Corrupt("missing planned overflow section"))?;
+        let end = span
+            .first
+            .checked_add(span.blocks(self.block_bytes)?)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        if end > stream.blocks {
+            return Err(SegmentedError::Corrupt(
+                "overflow span exceeds image section",
+            ));
+        }
+        let mut remaining =
+            usize::try_from(span.bytes).map_err(|_| SegmentedError::AddressExhausted)?;
+        let mut parts = parts.into_iter().filter(|part| !part.is_empty());
+        let mut part = parts.next().unwrap_or_default();
+        for ordinal in span.first..end {
+            let width = remaining.min(self.block_bytes - format::OVERFLOW_HEADER_BYTES);
+            let block = self.section_page(stream, ordinal)?;
+            block[0] = format::OVERFLOW;
+            crate::bytes::put_u32_le(
+                block,
+                1,
+                u32::try_from(width).map_err(|_| SegmentedError::AddressExhausted)?,
+            )
+            .expect("overflow page size field");
+            let start = format::OVERFLOW_HEADER_BYTES;
+            let mut page = &mut block[start..start + width];
+            while !page.is_empty() {
+                if part.is_empty() {
+                    part = parts
+                        .next()
+                        .ok_or(SegmentedError::Corrupt("short overflow encoding"))?;
+                }
+                let copied = page.len().min(part.len());
+                page[..copied].copy_from_slice(&part[..copied]);
+                page = &mut page[copied..];
+                part = &part[copied..];
+            }
+            remaining -= width;
+        }
+        if remaining != 0 || !part.is_empty() || parts.next().is_some() {
+            return Err(SegmentedError::Corrupt(
+                "overflow encoding differs from its layout",
+            ));
+        }
+        Ok(())
+    }
+}
+
 fn encode_prepared_dataset(
     dataset: &RdfDataset,
     source_statistics: &LocalStatistics,
@@ -518,86 +664,224 @@ fn encode_prepared_dataset(
 ) -> Result<Vec<u8>, SegmentedError> {
     let block_bytes =
         usize::try_from(limits.block_bytes).map_err(|_| SegmentedError::AddressExhausted)?;
-    let records_per_block =
-        usize::try_from(limits.records_per_block).map_err(|_| SegmentedError::AddressExhausted)?;
-    let mut blocks = vec![vec![0_u8; block_bytes]];
-    let term_count =
-        u32::try_from(dataset.term_count()).map_err(|_| SegmentedError::AddressExhausted)?;
-    let term_ids = (0..term_count)
-        .map(|index| TermId::from_index(index).expect("stored term index is representable"));
-    let key_bytes = term_ids.clone().try_fold(0_usize, |size, local| {
-        size.checked_add(format::encoded_term_size(&dataset.resolve(local))?)
-            .ok_or(SegmentedError::AddressExhausted)
-    })?;
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
-    let mut keys = Vec::new();
-    memory.reserve(&mut keys, key_bytes)?;
+    let mut sizing = ImagePages {
+        data: None,
+        block_bytes,
+        next: 1,
+        sections: None,
+        claimed: 0,
+        auxiliary: None,
+    };
+    let mut term_data = prepare_dictionary(dataset, limits)?;
+    let statistics =
+        translated_statistics(source_statistics, limits.first_term_index, &mut memory)?;
+    let planned = emit_image(
+        dataset,
+        source_statistics,
+        limits,
+        &mut sizing,
+        &mut term_data,
+        &statistics,
+    )?;
+    let count = planned
+        .overflow
+        .first
+        .checked_add(planned.overflow.blocks)
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let leaves = count
+        .checked_next_power_of_two()
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let data_size = usize::try_from(count)
+        .ok()
+        .and_then(|count| count.checked_mul(block_bytes))
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let tree_size = leaves
+        .checked_mul(64)
+        .and_then(|size| usize::try_from(size).ok())
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let capacity = data_size
+        .checked_add(tree_size)
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let mut bytes = Vec::new();
+    memory.reserve(&mut bytes, capacity)?;
+    bytes.resize(capacity, 0);
+    let (data, tree) = bytes.split_at_mut(data_size);
+    let sections = [
+        planned.dictionary,
+        planned.reverse,
+        planned.streams[0],
+        planned.streams[1],
+        planned.streams[2],
+        planned.graphs,
+        planned.summaries,
+        planned.value_ranges,
+        planned.statistics[0],
+        planned.statistics[1],
+        planned.statistics[2],
+        planned.statistics[3],
+        planned.effective_directory,
+        planned.source_checkpoints,
+        planned.overflow,
+    ];
+    let mut output = ImagePages {
+        data: Some(data),
+        block_bytes,
+        next: 1,
+        sections: Some(sections),
+        claimed: 0,
+        auxiliary: Some((planned.summaries, planned.value_ranges)),
+    };
+    let actual = emit_image(
+        dataset,
+        source_statistics,
+        limits,
+        &mut output,
+        &mut term_data,
+        &statistics,
+    )?;
+    if output.claimed != sections.len()
+        || output.next != usize::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?
+    {
+        return Err(SegmentedError::Corrupt(
+            "image emission did not consume its layout",
+        ));
+    }
+    drop(term_data);
+    drop(statistics);
+    let header = actual.encode();
+    if header != planned.encode() {
+        return Err(SegmentedError::Corrupt(
+            "image emission disagrees with its layout",
+        ));
+    }
+    data[..header.len()].copy_from_slice(&header);
+    fill_tree(data, block_bytes, count, leaves, tree)?;
+    Ok(bytes)
+}
+
+enum DictionaryPage {
+    Inline { used: usize, compressed: bool },
+    Overflow(format::OverflowSpan),
+}
+
+struct PreparedDictionary {
+    pages: Vec<DictionaryPage>,
+    records: Vec<(TermId, u32)>,
+    max_footprint: u64,
+}
+
+fn term_encoding(
+    dataset: &RdfDataset,
+    local: TermId,
+    first: u64,
+) -> Result<format::TermEncoding<'_>, SegmentedError> {
+    format::TermEncoding::new(dataset.resolve(local).map_ids(|id| map_id(id, first)))
+}
+
+fn prepare_dictionary(
+    dataset: &RdfDataset,
+    limits: SegmentedBuildLimits,
+) -> Result<PreparedDictionary, SegmentedError> {
+    let count =
+        u32::try_from(dataset.term_count()).map_err(|_| SegmentedError::AddressExhausted)?;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
     let mut records = Vec::new();
-    memory.reserve(&mut records, dataset.term_count())?;
     let mut footprints = Vec::new();
+    memory.reserve(&mut records, dataset.term_count())?;
     memory.reserve(&mut footprints, dataset.term_count())?;
-    for local in term_ids {
-        let start = keys.len();
-        format::encode_term(
-            dataset
-                .resolve(local)
-                .map_ids(|id| map_id(id, limits.first_term_index)),
-            &mut keys,
-        )?;
-        let range = start..keys.len();
-        footprints.push(expanded_footprint(
-            format::decode_term(&keys[range.clone()])?.map_ids(GlobalTermId::index),
+    let mut max_footprint = 0;
+    for raw in 0..count {
+        let local = TermId::from_index(raw).map_err(StorageError::from)?;
+        let term = dataset
+            .resolve(local)
+            .map_ids(|id| map_id(id, limits.first_term_index));
+        let footprint = expanded_footprint(
+            term.map_ids(GlobalTermId::index),
             limits.first_term_index,
             &footprints,
-        )?);
-        records.push((map_id(local, limits.first_term_index), range));
+        )?;
+        max_footprint = max_footprint.max(footprint);
+        footprints.push(footprint);
+        let width = u32::try_from(format::encoded_term_size(&term)?)
+            .map_err(|_| SegmentedError::AddressExhausted)?;
+        records.push((local, width));
     }
-    debug_assert_eq!(keys.len(), key_bytes);
-    let mut overflow_blocks = Vec::new();
+    Ok(PreparedDictionary {
+        pages: Vec::new(),
+        records,
+        max_footprint,
+    })
+}
+
+fn emit_image(
+    dataset: &RdfDataset,
+    source_statistics: &LocalStatistics,
+    limits: SegmentedBuildLimits,
+    blocks: &mut ImagePages<'_>,
+    term_data: &mut PreparedDictionary,
+    prepared_statistics: &LocalStatistics<GlobalTermId>,
+) -> Result<Header, SegmentedError> {
+    let block_bytes = blocks.block_bytes;
+    let records_per_block =
+        usize::try_from(limits.records_per_block).map_err(|_| SegmentedError::AddressExhausted)?;
+    let mut overflow_blocks = 0;
     let (dictionary, overflow_rows) = append_dictionary(
-        &mut blocks,
-        &records,
-        &keys,
+        blocks,
+        term_data,
+        dataset,
+        limits.first_term_index,
         records_per_block,
         block_bytes,
         &mut overflow_blocks,
     )?;
-    records.sort_by(|a, b| keys[a.1.clone()].cmp(&keys[b.1.clone()]));
+    if blocks.data.is_some() {
+        purrdf_lex::walk::try_sort_unstable_by(&mut term_data.records, |left, right| {
+            let left = term_encoding(dataset, left.0, limits.first_term_index)?;
+            let right = term_encoding(dataset, right.0, limits.first_term_index)?;
+            let order =
+                format::compare_key_parts(left.parts().into_iter(), right.parts().into_iter()).1;
+            Ok::<_, SegmentedError>(order)
+        })?;
+    }
     let reverse = append_fixed(
-        &mut blocks,
-        records.len(),
+        blocks,
+        term_data.records.len(),
         format::REVERSE,
         8,
         block_bytes,
         |range, _, payload| {
-            for ((id, _), bytes) in records[range].iter().zip(payload.as_chunks_mut::<8>().0) {
-                *bytes = format::id_bytes(*id);
+            for ((id, _), bytes) in term_data.records[range]
+                .iter()
+                .zip(payload.as_chunks_mut::<8>().0)
+            {
+                *bytes = format::id_bytes(map_id(*id, limits.first_term_index));
             }
             Ok(())
         },
     )?;
-    memory.release_vec(records)?;
-    memory.release_vec(keys)?;
-    let mut summaries = Vec::new();
-    let mut value_ranges = Vec::new();
+    if blocks.data.is_some() {
+        term_data.pages = Vec::new();
+        term_data.records = Vec::new();
+    }
+    let mut summaries = 0;
+    let mut value_ranges = 0;
     let mut streams = [Stream::default(); 3];
-    for (table, rows) in [
-        dataset.quads().collect::<Vec<_>>(),
-        dataset.reifier_quads().collect(),
-        dataset.annotation_quads().collect(),
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let mut rows: Vec<_> = rows
-            .into_iter()
-            .map(|q| map_quad(q, limits.first_term_index))
-            .collect();
-        rows.sort_by_key(|q| (q.s, q.p, q.o, q.g));
-        rows.dedup();
-        streams[table] = append_quads(
-            &mut blocks,
+    let mut rows = Vec::new();
+    let mut resident = Resident;
+    let mut scratch = Memory::new(&mut resident);
+    for (table, stream) in streams.iter_mut().enumerate() {
+        match table {
+            0 => prepare_ordered_quads(&mut rows, dataset.quads(), limits, &mut scratch)?,
+            1 => prepare_ordered_quads(&mut rows, dataset.reifier_quads(), limits, &mut scratch)?,
+            _ => {
+                prepare_ordered_quads(&mut rows, dataset.annotation_quads(), limits, &mut scratch)?;
+            }
+        }
+        *stream = append_quads(
+            blocks,
             &rows,
             table as u8,
             block_bytes,
@@ -618,48 +902,31 @@ fn encode_prepared_dataset(
             },
         )?;
     }
-    let mut graphs: Vec<_> = dataset
-        .named_graphs()
-        .map(|id| map_id(id, limits.first_term_index))
-        .collect();
-    graphs.sort_unstable();
-    graphs.dedup();
+    drop(rows);
+    // The frozen dictionary already owns the sorted, distinct graph IDs.
+    let mut graph_ids = dataset.named_graphs();
     let graphs = append_fixed(
-        &mut blocks,
-        graphs.len(),
+        blocks,
+        dataset.named_graphs().count(),
         format::GRAPHS,
         8,
         block_bytes,
-        |range, _, payload| {
-            for (&id, bytes) in graphs[range].iter().zip(payload.as_chunks_mut::<8>().0) {
-                *bytes = format::id_bytes(id);
+        |_, _, payload| {
+            for bytes in payload.as_chunks_mut::<8>().0 {
+                let local = graph_ids.next().ok_or(SegmentedError::Corrupt(
+                    "named graph count changed during emission",
+                ))?;
+                *bytes = format::id_bytes(map_id(local, limits.first_term_index));
             }
             Ok(())
         },
     )?;
-    let summaries = append_encoded_records(
-        &mut blocks,
-        &summaries,
-        format::SUMMARIES,
-        format::SUMMARY_BYTES,
-        block_bytes,
-    )?;
-    let value_ranges = append_encoded_records(
-        &mut blocks,
-        &value_ranges,
-        format::VALUE_RANGES,
-        format::VALUE_RANGE_BYTES,
-        block_bytes,
-    )?;
-    let statistics = append_statistics(
-        source_statistics,
-        limits.first_term_index,
-        &mut blocks,
-        block_bytes,
-    )?;
+    let summaries = fixed_layout(blocks, summaries, format::SUMMARY_BYTES)?;
+    let value_ranges = fixed_layout(blocks, value_ranges, format::VALUE_RANGE_BYTES)?;
+    let statistics = append_statistics(prepared_statistics, blocks, block_bytes)?;
     let directory = source_statistics.effective_source_directory();
     let effective_directory = append_fixed(
-        &mut blocks,
+        blocks,
         directory.len(),
         format::SOURCE_DIRECTORY,
         super::super::source_directory::RECORD_BYTES,
@@ -671,7 +938,7 @@ fn encode_prepared_dataset(
     )?;
     let checkpoints = directory.node_checkpoints()?;
     let source_checkpoints = append_fixed(
-        &mut blocks,
+        blocks,
         checkpoints.len(),
         format::SOURCE_CHECKPOINTS,
         super::super::source_directory::NODE_CHECKPOINT_BYTES,
@@ -681,22 +948,20 @@ fn encode_prepared_dataset(
             Ok(())
         },
     )?;
-    let overflow = Stream {
-        first: blocks.len() as u64,
-        blocks: overflow_blocks.len() as u64,
-        rows: overflow_rows,
-    };
-    blocks.extend(overflow_blocks);
+    let overflow = blocks.claim(
+        usize::try_from(overflow_rows).map_err(|_| SegmentedError::AddressExhausted)?,
+        usize::try_from(overflow_blocks).map_err(|_| SegmentedError::AddressExhausted)?,
+    )?;
     let caps = dataset.capabilities();
     let flags = u8::from(caps.quoted_triples)
         | (u8::from(caps.reifiers) << 1)
         | (u8::from(caps.annotations) << 2);
-    let header = Header {
+    Ok(Header {
         version: format::VERSION,
         block_bytes: limits.block_bytes,
         records_per_block: limits.records_per_block,
         first_term_index: limits.first_term_index,
-        max_owned_term_bytes: footprints.iter().copied().max().unwrap_or(0),
+        max_owned_term_bytes: term_data.max_footprint,
         terms: u64::try_from(dataset.term_count()).map_err(|_| SegmentedError::AddressExhausted)?,
         dictionary,
         reverse,
@@ -710,29 +975,23 @@ fn encode_prepared_dataset(
         overflow,
         flags,
         source_union: source_statistics.source_union(),
-    };
-    let encoded = header.encode();
-    blocks[0][..encoded.len()].copy_from_slice(&encoded);
-    let count = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    let leaves = count
-        .checked_next_power_of_two()
-        .ok_or(SegmentedError::AddressExhausted)?;
-    let tree_bytes = leaves
-        .checked_mul(64)
-        .and_then(|size| usize::try_from(size).ok())
-        .ok_or(SegmentedError::AddressExhausted)?;
-    let capacity = blocks
-        .len()
-        .checked_mul(block_bytes)
-        .and_then(|size| size.checked_add(tree_bytes))
-        .ok_or(SegmentedError::AddressExhausted)?;
-    let mut bytes = Vec::new();
-    memory.reserve(&mut bytes, capacity)?;
-    for block in blocks {
-        bytes.extend_from_slice(&block);
+    })
+}
+
+fn prepare_ordered_quads(
+    rows: &mut Vec<QuadIds<GlobalTermId>>,
+    source: impl Iterator<Item = QuadIds>,
+    limits: SegmentedBuildLimits,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<(), SegmentedError> {
+    rows.clear();
+    memory.reserve(rows, source.size_hint().0)?;
+    for quad in source {
+        memory.push(rows, map_quad(quad, limits.first_term_index))?;
     }
-    bytes.extend_from_slice(&make_tree(&bytes, block_bytes, count, leaves)?);
-    Ok(bytes)
+    rows.sort_unstable_by_key(|quad| (quad.s, quad.p, quad.o, quad.g));
+    rows.dedup();
+    Ok(())
 }
 
 fn translated_statistics(
@@ -753,14 +1012,10 @@ fn translated_statistics(
 }
 
 fn append_statistics(
-    source_statistics: &LocalStatistics,
-    first: u64,
-    blocks: &mut Vec<Vec<u8>>,
+    statistics: &LocalStatistics<GlobalTermId>,
+    blocks: &mut ImagePages<'_>,
     block_bytes: usize,
 ) -> Result<[Stream; 4], SegmentedError> {
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let statistics = translated_statistics(source_statistics, first, &mut memory)?;
     let mut streams = [Stream::default(); 4];
     for section in StatisticsSection::ALL {
         streams[section.index()] = append_fixed(
@@ -779,137 +1034,223 @@ fn append_statistics(
 }
 
 fn append_dictionary(
-    blocks: &mut Vec<Vec<u8>>,
-    records: &[(GlobalTermId, Range<usize>)],
-    keys: &[u8],
+    blocks: &mut ImagePages<'_>,
+    dictionary: &mut PreparedDictionary,
+    dataset: &RdfDataset,
+    first: u64,
     chunk: usize,
     block_bytes: usize,
-    overflow: &mut Vec<Vec<u8>>,
+    overflow: &mut u64,
 ) -> Result<(Stream, u64), SegmentedError> {
-    let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    let mut remaining = records;
-    let mut spanned = 0;
-    while !remaining.is_empty() {
-        let offered = &remaining[..remaining.len().min(chunk)];
-        let inline = offered
-            .iter()
-            .position(|(_, key)| key.len().saturating_add(format::RECORD_HEADER + 16) > block_bytes)
-            .unwrap_or(offered.len());
-        let (block, used) = if inline == 0 {
-            spanned += 1;
-            (
-                format::spanned_record(
-                    offered[0].0,
-                    &keys[offered[0].1.clone()],
-                    overflow,
-                    block_bytes,
-                )?,
-                1,
-            )
-        } else {
-            let records = offered[..inline]
+    let mut spanned = 0_u64;
+    let inline_limit = block_bytes - (format::RECORD_HEADER + 16);
+    let inline_record = |&(id, _): &(TermId, u32)| {
+        let key = term_encoding(dataset, id, first)?;
+        Ok((map_id(id, first), format::WireKey::Term(key)))
+    };
+    if blocks.sections.is_none() {
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut remaining = dictionary.records.as_slice();
+        while !remaining.is_empty() {
+            let offered = &remaining[..remaining.len().min(chunk)];
+            let inline = offered
                 .iter()
-                .map(|(id, range)| (*id, &keys[range.clone()]));
-            format::record_block(&records, block_bytes)?
-        };
-        blocks.push(block);
-        remaining = &remaining[used..];
+                .position(|(_, width)| *width as usize > inline_limit)
+                .unwrap_or(offered.len());
+            let (page, used) = if inline == 0 {
+                let span = format::OverflowSpan {
+                    first: *overflow,
+                    bytes: offered[0].1,
+                };
+                *overflow = overflow
+                    .checked_add(span.blocks(block_bytes)?)
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                spanned += 1;
+                (DictionaryPage::Overflow(span), 1)
+            } else {
+                let records = offered[..inline].iter().map(inline_record);
+                let layout = format::plan_record_block(&records, block_bytes)?;
+                (
+                    DictionaryPage::Inline {
+                        used: layout.used,
+                        compressed: layout.compressed,
+                    },
+                    layout.used,
+                )
+            };
+            memory.push(&mut dictionary.pages, page)?;
+            remaining = &remaining[used..];
+        }
     }
-    Ok((
-        Stream {
-            first,
-            blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?
-                - first,
-            rows: u64::try_from(records.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-        },
-        spanned,
-    ))
+    let stream = blocks.claim(dictionary.records.len(), dictionary.pages.len())?;
+    if blocks.data.is_some() {
+        let mut remaining = dictionary.records.as_slice();
+        for (page, plan) in dictionary.pages.iter().enumerate() {
+            let page = u64::try_from(page).map_err(|_| SegmentedError::AddressExhausted)?;
+            let used = match *plan {
+                DictionaryPage::Overflow(span) => {
+                    let &(id, width) = remaining
+                        .first()
+                        .ok_or(SegmentedError::Corrupt("missing planned overflow record"))?;
+                    if *overflow != span.first
+                        || span.bytes != width
+                        || width as usize <= inline_limit
+                    {
+                        return Err(SegmentedError::Corrupt(
+                            "overflow span differs from its layout",
+                        ));
+                    }
+                    let key = term_encoding(dataset, id, first)?;
+                    blocks.overflow(span, key.parts())?;
+                    format::write_spanned_record(
+                        map_id(id, first),
+                        span,
+                        blocks.section_page(stream, page)?,
+                    );
+                    *overflow = overflow
+                        .checked_add(span.blocks(block_bytes)?)
+                        .ok_or(SegmentedError::AddressExhausted)?;
+                    spanned += 1;
+                    1
+                }
+                DictionaryPage::Inline { used, compressed } => {
+                    let selected = remaining
+                        .get(..used)
+                        .ok_or(SegmentedError::Corrupt("missing planned dictionary prefix"))?;
+                    if selected.iter().any(|(_, key)| *key as usize > inline_limit) {
+                        return Err(SegmentedError::Corrupt("inline page names a spanned term"));
+                    }
+                    let records = selected.iter().map(inline_record);
+                    format::replay_record_block(
+                        records,
+                        compressed,
+                        blocks.section_page(stream, page)?,
+                    )?;
+                    used
+                }
+            };
+            remaining = &remaining[used..];
+        }
+        if !remaining.is_empty() {
+            return Err(SegmentedError::Corrupt(
+                "dictionary emission did not consume all records",
+            ));
+        }
+    }
+    Ok((stream, spanned))
 }
-/// Partition a fixed-width stream and encode each payload into its owned block.
+
+fn fixed_layout(
+    blocks: &mut ImagePages<'_>,
+    rows: usize,
+    width: usize,
+) -> Result<Stream, SegmentedError> {
+    blocks.claim(rows, rows.div_ceil((blocks.block_bytes - 9) / width))
+}
+
+fn fixed_header(
+    block: &mut [u8],
+    kind: u8,
+    count: usize,
+    width: usize,
+) -> Result<(), SegmentedError> {
+    let encoded_count = u32::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?;
+    let encoded_size =
+        u32::try_from(count * width).map_err(|_| SegmentedError::AddressExhausted)?;
+    block[0] = kind;
+    crate::bytes::put_u32_le(block, 1, encoded_count).expect("fixed block count field");
+    crate::bytes::put_u32_le(block, 5, encoded_size).expect("fixed block size field");
+    Ok(())
+}
+
 fn append_fixed(
-    blocks: &mut Vec<Vec<u8>>,
+    blocks: &mut ImagePages<'_>,
     rows: usize,
     kind: u8,
     width: usize,
     block_bytes: usize,
     mut encode: impl FnMut(Range<usize>, u64, &mut [u8]) -> Result<(), SegmentedError>,
 ) -> Result<Stream, SegmentedError> {
-    const HEADER_BYTES: usize = 9;
-    let first = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    let per_block = (block_bytes - HEADER_BYTES) / width;
-    for start in (0..rows).step_by(per_block) {
-        let count = (rows - start).min(per_block);
-        let size = count * width;
-        let slot = u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-        let encoded_count = u32::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?;
-        let encoded_size = u32::try_from(size).map_err(|_| SegmentedError::AddressExhausted)?;
-        let mut block = Vec::new();
-        Memory::new(&mut Resident).reserve(&mut block, block_bytes)?;
-        block.resize(block_bytes, 0);
-        block[0] = kind;
-        crate::bytes::put_u32_le(&mut block, 1, encoded_count).expect("fixed block count field");
-        crate::bytes::put_u32_le(&mut block, 5, encoded_size).expect("fixed block size field");
-        encode(
-            start..start + count,
-            slot,
-            &mut block[HEADER_BYTES..HEADER_BYTES + size],
-        )?;
-        blocks.push(block);
+    let stream = fixed_layout(blocks, rows, width)?;
+    if blocks.data.is_some() {
+        let per_block = (block_bytes - 9) / width;
+        for (page, start) in (0..rows).step_by(per_block).enumerate() {
+            let count = (rows - start).min(per_block);
+            let page = u64::try_from(page).map_err(|_| SegmentedError::AddressExhausted)?;
+            let slot = stream
+                .first
+                .checked_add(page)
+                .ok_or(SegmentedError::AddressExhausted)?;
+            let block = blocks.section_page(stream, page)?;
+            fixed_header(block, kind, count, width)?;
+            encode(start..start + count, slot, &mut block[9..9 + count * width])?;
+        }
     }
-    Ok(Stream {
-        first,
-        blocks: u64::try_from(blocks.len()).map_err(|_| SegmentedError::AddressExhausted)? - first,
-        rows: u64::try_from(rows).map_err(|_| SegmentedError::AddressExhausted)?,
-    })
-}
-
-fn append_encoded_records(
-    blocks: &mut Vec<Vec<u8>>,
-    records: &[Vec<u8>],
-    kind: u8,
-    width: usize,
-    block_bytes: usize,
-) -> Result<Stream, SegmentedError> {
-    append_fixed(
-        blocks,
-        records.len(),
-        kind,
-        width,
-        block_bytes,
-        |range, _, payload| {
-            for (record, bytes) in records[range].iter().zip(payload.chunks_exact_mut(width)) {
-                bytes.copy_from_slice(record);
-            }
-            Ok(())
-        },
-    )
+    Ok(stream)
 }
 
 fn append_quads<'a>(
-    blocks: &mut Vec<Vec<u8>>,
+    blocks: &mut ImagePages<'_>,
     rows: &[QuadIds<GlobalTermId>],
     table: u8,
     block_bytes: usize,
-    summaries: &mut Vec<Vec<u8>>,
-    value_ranges: &mut Vec<Vec<u8>>,
+    summaries: &mut usize,
+    value_ranges: &mut usize,
     resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
 ) -> Result<Stream, SegmentedError> {
-    append_fixed(
+    let stream = append_fixed(
         blocks,
         rows.len(),
         format::QUADS,
         32,
         block_bytes,
-        |range, slot, payload| {
-            let chunk = &rows[range];
-            for (&q, bytes) in chunk.iter().zip(payload.as_chunks_mut::<32>().0) {
+        |range, _, payload| {
+            for (&q, bytes) in rows[range].iter().zip(payload.as_chunks_mut::<32>().0) {
                 format::encode_quad(q, bytes);
             }
-            let (first_range, range_count) = append_value_ranges(value_ranges, chunk, &resolve)?;
-            summaries.push(summary(chunk, slot, table, first_range, range_count)?);
             Ok(())
         },
-    )
+    )?;
+    for (page, chunk) in rows.chunks((block_bytes - 9) / 32).enumerate() {
+        let intervals =
+            crate::annotation_range::seal_intervals_with(chunk.iter().copied(), &resolve)?;
+        let first = u64::try_from(*value_ranges).map_err(|_| SegmentedError::AddressExhausted)?;
+        let count = u64::try_from(intervals.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+        if let Some((summary_stream, ranges_stream)) = blocks.auxiliary {
+            let slot = stream
+                .first
+                .checked_add(u64::try_from(page).map_err(|_| SegmentedError::AddressExhausted)?)
+                .ok_or(SegmentedError::AddressExhausted)?;
+            let row = summary(chunk, slot, table, first, count)?;
+            blocks.put_record(
+                summary_stream,
+                u64::try_from(*summaries).map_err(|_| SegmentedError::AddressExhausted)?,
+                format::SUMMARIES,
+                &row,
+            )?;
+            for (offset, interval) in intervals.iter().enumerate() {
+                let ordinal = first
+                    .checked_add(
+                        u64::try_from(offset).map_err(|_| SegmentedError::AddressExhausted)?,
+                    )
+                    .ok_or(SegmentedError::AddressExhausted)?;
+                blocks.put_record(
+                    ranges_stream,
+                    ordinal,
+                    format::VALUE_RANGES,
+                    &value_range_bytes(interval),
+                )?;
+            }
+        }
+        *summaries = summaries
+            .checked_add(1)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        *value_ranges = value_ranges
+            .checked_add(intervals.len())
+            .ok_or(SegmentedError::AddressExhausted)?;
+    }
+    Ok(stream)
 }
 pub(super) fn summary(
     rows: &[QuadIds<GlobalTermId>],
@@ -917,51 +1258,120 @@ pub(super) fn summary(
     table: u8,
     first_range: u64,
     range_count: u64,
-) -> Result<Vec<u8>, SegmentedError> {
-    let mut bytes = Vec::with_capacity(format::SUMMARY_BYTES);
-    bytes.extend_from_slice(&slot.to_le_bytes());
-    bytes.push(table);
-    bytes.extend_from_slice(&[0; 7]);
-    bytes.extend_from_slice(
-        &u64::try_from(rows.len())
-            .map_err(|_| SegmentedError::AddressExhausted)?
-            .to_le_bytes(),
-    );
-    for axis in 0..4 {
+) -> Result<[u8; format::SUMMARY_BYTES], SegmentedError> {
+    let mut bytes = [0; format::SUMMARY_BYTES];
+    crate::bytes::put_u64_le(&mut bytes, 0, slot).expect("fixed summary slot field");
+    bytes[8] = table;
+    let count = u64::try_from(rows.len()).map_err(|_| SegmentedError::AddressExhausted)?;
+    crate::bytes::put_u64_le(&mut bytes, 16, count).expect("fixed summary count field");
+    for (axis, bounds) in bytes[24..88].as_chunks_mut::<16>().0.iter_mut().enumerate() {
         let values = rows.iter().map(|q| match axis {
             0 => q.s.index() + 1,
             1 => q.p.index() + 1,
             2 => q.o.index() + 1,
             _ => q.g.map_or(0, |id| id.index() + 1),
         });
-        bytes.extend_from_slice(&values.clone().min().unwrap_or(0).to_le_bytes());
-        bytes.extend_from_slice(&values.max().unwrap_or(0).to_le_bytes());
+        crate::bytes::put_u64_le(bounds, 0, values.clone().min().unwrap_or(0))
+            .expect("fixed lower bound field");
+        crate::bytes::put_u64_le(bounds, 8, values.max().unwrap_or(0))
+            .expect("fixed upper bound field");
     }
-    bytes.extend_from_slice(&first_range.to_le_bytes());
-    bytes.extend_from_slice(&range_count.to_le_bytes());
+    crate::bytes::put_u64_le(&mut bytes, 88, first_range).expect("fixed first range field");
+    crate::bytes::put_u64_le(&mut bytes, 96, range_count).expect("fixed range count field");
     Ok(bytes)
 }
 
-fn append_value_ranges<'a>(
-    output: &mut Vec<Vec<u8>>,
-    rows: &[QuadIds<GlobalTermId>],
-    resolve: impl Fn(GlobalTermId) -> Result<TermRef<'a, GlobalTermId>, SegmentedError>,
-) -> Result<(u64, u64), SegmentedError> {
-    let start = u64::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    for interval in crate::annotation_range::seal_intervals_with(rows.iter().copied(), resolve)? {
-        let mut encoded = Vec::with_capacity(format::VALUE_RANGE_BYTES);
-        format::push_id(&mut encoded, interval.predicate);
-        for endpoint in [
-            interval.endpoints.map(|(low, _)| low),
-            interval.endpoints.map(|(_, high)| high),
-        ] {
-            encoded.extend_from_slice(&endpoint.map_or(0, |id| id.index() + 1).to_le_bytes());
-        }
-        output.push(encoded);
+fn value_range_bytes(
+    interval: &crate::annotation_range::ValueInterval<GlobalTermId>,
+) -> [u8; format::VALUE_RANGE_BYTES] {
+    let mut bytes = [0; format::VALUE_RANGE_BYTES];
+    bytes[..8].copy_from_slice(&format::id_bytes(interval.predicate));
+    for (index, endpoint) in [
+        interval.endpoints.map(|(low, _)| low),
+        interval.endpoints.map(|(_, high)| high),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let start = 8 + index * 8;
+        crate::bytes::put_u64_le(&mut bytes, start, endpoint.map_or(0, |id| id.index() + 1))
+            .expect("fixed interval endpoint field");
     }
-    let end = u64::try_from(output.len()).map_err(|_| SegmentedError::AddressExhausted)?;
-    Ok((start, end - start))
+    bytes
 }
+
+/// Compares generated fixed records with canonical blocks, keeping just a page view.
+struct FixedStreamProof<'a, const WIDTH: usize> {
+    bytes: &'a [u8],
+    header: &'a Header,
+    stream: Stream,
+    kind: u8,
+    errors: [&'static str; 3],
+    slot: u64,
+    seen: u64,
+    unread: &'a [u8],
+}
+
+impl<'a, const WIDTH: usize> FixedStreamProof<'a, WIDTH> {
+    const fn new(
+        bytes: &'a [u8],
+        header: &'a Header,
+        stream: Stream,
+        kind: u8,
+        errors: [&'static str; 3],
+    ) -> Self {
+        Self {
+            bytes,
+            header,
+            stream,
+            kind,
+            errors,
+            slot: stream.first,
+            seen: 0,
+            unread: &[],
+        }
+    }
+
+    fn check(&mut self, expected: [u8; WIDTH]) -> Result<(), SegmentedError> {
+        if self.seen == self.stream.rows {
+            return Err(SegmentedError::Corrupt(self.errors[2]));
+        }
+        if self.unread.is_empty() {
+            if self.slot == self.stream.first + self.stream.blocks {
+                return Err(SegmentedError::Corrupt(self.errors[2]));
+            }
+            let block = block(self.bytes, self.header, self.slot)?;
+            self.unread = fixed_records(block, self.kind, WIDTH)?;
+            let page_rows = u64::try_from((block.len() - 9) / WIDTH)
+                .map_err(|_| SegmentedError::AddressExhausted)?;
+            let expected_rows = (self.stream.rows - self.seen).min(page_rows);
+            if self.unread.len() / WIDTH
+                != usize::try_from(expected_rows).map_err(|_| SegmentedError::AddressExhausted)?
+            {
+                return Err(SegmentedError::Corrupt(self.errors[0]));
+            }
+            self.slot += 1;
+        }
+        let (record, rest) = self.unread.split_at(WIDTH);
+        if record != expected {
+            return Err(SegmentedError::Corrupt(self.errors[1]));
+        }
+        self.unread = rest;
+        self.seen += 1;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<(), SegmentedError> {
+        if self.seen != self.stream.rows
+            || !self.unread.is_empty()
+            || self.slot != self.stream.first + self.stream.blocks
+        {
+            return Err(SegmentedError::Corrupt(self.errors[2]));
+        }
+        Ok(())
+    }
+}
+
 fn make_tree(
     bytes: &[u8],
     block_bytes: usize,
@@ -980,6 +1390,17 @@ fn make_tree(
     let mut tree = Vec::new();
     Memory::new(&mut Resident).reserve(&mut tree, tree_bytes)?;
     tree.resize(tree_bytes, 0);
+    fill_tree(bytes, block_bytes, count, leaves, &mut tree)?;
+    Ok(tree)
+}
+
+fn fill_tree(
+    bytes: &[u8],
+    block_bytes: usize,
+    count: u64,
+    leaves: u64,
+    tree: &mut [u8],
+) -> Result<(), SegmentedError> {
     let leaf = usize::try_from(leaves).map_err(|_| SegmentedError::AddressExhausted)?;
     for index in 0..leaf {
         let digest = if u64::try_from(index).map_err(|_| SegmentedError::AddressExhausted)? < count
@@ -1005,7 +1426,7 @@ fn make_tree(
             .map_err(|_| SegmentedError::Corrupt("bad tree child"))?;
         tree[node * 32..node * 32 + 32].copy_from_slice(&format::node_digest(&left, &right));
     }
-    Ok(tree)
+    Ok(())
 }
 
 fn block<'a>(bytes: &'a [u8], header: &Header, slot: u64) -> Result<&'a [u8], SegmentedError> {
@@ -1025,71 +1446,304 @@ fn block<'a>(bytes: &'a [u8], header: &Header, slot: u64) -> Result<&'a [u8], Se
         )
         .ok_or(SegmentedError::Corrupt("missing data block"))
 }
-fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError> {
-    let mut resident = Resident;
-    let mut memory = Memory::new(&mut resident);
-    let mut arenas: Vec<Vec<u8>> = Vec::new();
-    let mut keys: Vec<(usize, Range<usize>)> = Vec::new();
+#[derive(Clone, Copy)]
+struct ResidentOverflow<'a> {
+    pages: &'a [u8],
+    block_bytes: usize,
+    key_bytes: usize,
+}
+
+impl<'a> ResidentOverflow<'a> {
+    fn new(
+        bytes: &'a [u8],
+        header: &Header,
+        span: format::OverflowSpan,
+    ) -> Result<Self, SegmentedError> {
+        let block_bytes = header.block_bytes as usize;
+        let first = header
+            .overflow
+            .first
+            .checked_add(span.first)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let end = first
+            .checked_add(span.blocks(block_bytes)?)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let offset = |slot| {
+            u64::checked_mul(slot, u64::from(header.block_bytes))
+                .and_then(|offset| usize::try_from(offset).ok())
+                .ok_or(SegmentedError::AddressExhausted)
+        };
+        let pages = bytes
+            .get(offset(first)?..offset(end)?)
+            .ok_or(SegmentedError::Corrupt("missing overflow blocks"))?;
+        let key_bytes =
+            usize::try_from(span.bytes).map_err(|_| SegmentedError::AddressExhausted)?;
+        let mut remaining = key_bytes;
+        for page in pages.chunks_exact(block_bytes) {
+            let width = remaining.min(block_bytes - format::OVERFLOW_HEADER_BYTES);
+            format::overflow_payload(page, width)?;
+            remaining -= width;
+        }
+        if remaining != 0 {
+            return Err(SegmentedError::Corrupt("false expanded dictionary size"));
+        }
+        Ok(Self {
+            pages,
+            block_bytes,
+            key_bytes,
+        })
+    }
+
+    fn parts(self) -> impl Iterator<Item = &'a [u8]> {
+        // Construction already validated all page widths, framing and padding.
+        self.pages
+            .chunks_exact(self.block_bytes)
+            .scan(self.key_bytes, move |remaining, page| {
+                let start = format::OVERFLOW_HEADER_BYTES;
+                let width = (*remaining).min(self.block_bytes - start);
+                *remaining -= width;
+                Some(&page[start..start + width])
+            })
+    }
+}
+
+fn append_resident_overflow(
+    bytes: &[u8],
+    header: &Header,
+    span: format::OverflowSpan,
+    key: &mut Vec<u8>,
+    memory: &mut Memory<'_, Resident>,
+) -> Result<(), SegmentedError> {
+    let overflow = ResidentOverflow::new(bytes, header, span)?;
+    key.clear();
+    memory.reserve(key, overflow.key_bytes)?;
+    for part in overflow.parts() {
+        key.extend_from_slice(part);
+    }
+    Ok(())
+}
+
+struct OriginalLiteral {
+    index: usize,
+    datatype: GlobalTermId,
+    language: Option<Range<usize>>,
+}
+
+struct DictionaryReplay<'m, 'r> {
+    first: u64,
+    builder: RdfDatasetBuilder,
+    local_ids: Vec<TermId>,
+    footprints: Vec<u64>,
+    original_literals: Vec<OriginalLiteral>,
+    original_languages: String,
+    datatype_scratch: String,
+    memory: &'m mut Memory<'r, Resident>,
+    quoted: bool,
+    max_footprint: u64,
+}
+
+impl DictionaryReplay<'_, '_> {
+    fn push(&mut self, id: GlobalTermId, key: &[u8]) -> Result<(), SegmentedError> {
+        let index = self.local_ids.len();
+        let ordinal = u64::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?;
+        if id.index().checked_sub(self.first) != Some(ordinal) {
+            return Err(SegmentedError::Corrupt(
+                "dictionary IDs are not stable dense ordinals",
+            ));
+        }
+        let term = format::decode_term(key)?;
+        let footprint = expanded_footprint(
+            term.map_ids(GlobalTermId::index),
+            self.first,
+            &self.footprints,
+        )?;
+        let reference = |id: GlobalTermId| -> Result<TermId, SegmentedError> {
+            id.index()
+                .checked_sub(self.first)
+                .and_then(|local| usize::try_from(local).ok())
+                .and_then(|local| self.local_ids.get(local))
+                .copied()
+                .ok_or(SegmentedError::Corrupt(
+                    "cyclic, forward or foreign RDF term reference",
+                ))
+        };
+        let local = match term {
+            TermRef::Iri(iri) => {
+                super::super::absolute::check_absolute(iri)
+                    .map_err(|_| SegmentedError::Corrupt("non-absolute dictionary IRI"))?;
+                self.builder.intern_iri(iri)
+            }
+            TermRef::Blank { label, scope } => self.builder.intern_blank(label, scope),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRef::Iri(iri) = self.builder.resolve(reference(datatype)?) else {
+                    return Err(SegmentedError::Corrupt("literal datatype is not an IRI"));
+                };
+                self.datatype_scratch.clear();
+                self.memory.push_str(&mut self.datatype_scratch, iri)?;
+                self.builder.intern_literal_parts(
+                    lexical,
+                    Some(&self.datatype_scratch),
+                    language,
+                    direction,
+                )
+            }
+            TermRef::Triple { s, p, o } => {
+                self.quoted = true;
+                self.builder
+                    .intern_triple(reference(s)?, reference(p)?, reference(o)?)
+            }
+        }?;
+        if local.index() != index {
+            return Err(SegmentedError::Corrupt(
+                "dictionary duplicates or non-normalized RDF values",
+            ));
+        }
+        // The builder preserves the wire fields except for literal datatype
+        // expansion and the language case fold. Keep just those differences,
+        // so reverse proof does not reread the compressed forward pages.
+        if let (
+            TermRef::Literal {
+                datatype, language, ..
+            },
+            TermRef::Literal {
+                datatype: expanded,
+                language: folded,
+                ..
+            },
+        ) = (
+            term,
+            self.builder
+                .resolve(local)
+                .map_ids(|id| map_id(id, self.first)),
+        ) && (datatype != expanded || language != folded)
+        {
+            let original_language = if let Some(tag) = language.filter(|_| language != folded) {
+                let start = self.original_languages.len();
+                self.memory.push_str(&mut self.original_languages, tag)?;
+                Some(start..self.original_languages.len())
+            } else {
+                None
+            };
+            self.memory.push(
+                &mut self.original_literals,
+                OriginalLiteral {
+                    index,
+                    datatype,
+                    language: original_language,
+                },
+            )?;
+        }
+        self.memory.push(&mut self.footprints, footprint)?;
+        self.memory.push(&mut self.local_ids, local)?;
+        self.max_footprint = self.max_footprint.max(footprint);
+        Ok(())
+    }
+
+    fn wire_encoding(
+        &self,
+        index: usize,
+        local: TermId,
+    ) -> Result<format::TermEncoding<'_>, SegmentedError> {
+        let mut term = self
+            .builder
+            .resolve(local)
+            .map_ids(|id| map_id(id, self.first));
+        if let Ok(entry) = self
+            .original_literals
+            .binary_search_by_key(&index, |entry| entry.index)
+        {
+            let original = &self.original_literals[entry];
+            let TermRef::Literal {
+                datatype, language, ..
+            } = &mut term
+            else {
+                return Err(SegmentedError::Corrupt(
+                    "stored wire override is not a literal",
+                ));
+            };
+            *datatype = original.datatype;
+            if let Some(range) = &original.language {
+                *language = Some(&self.original_languages[range.clone()]);
+            }
+        }
+        format::TermEncoding::new(term)
+    }
+}
+
+fn replay_dictionary(
+    bytes: &[u8],
+    header: &Header,
+    replay: &mut DictionaryReplay<'_, '_>,
+) -> Result<(), SegmentedError> {
+    let mut scratch = Vec::new();
+    let mut inflater = None;
     let (mut overflow_blocks, mut overflow_rows) = (0, 0);
     for slot in header.dictionary.first..header.dictionary.first + header.dictionary.blocks {
         let encoded = block(bytes, header, slot)?;
-        if encoded[0] == format::SPANNED_DICTIONARY {
-            let (_, span) = format::overflow_descriptor(encoded, header.overflow)?;
-            if span.first != overflow_blocks {
-                return Err(SegmentedError::Corrupt("noncontiguous overflow coverage"));
-            }
-            overflow_blocks += span.blocks(header.block_bytes as usize)?;
-            overflow_rows += 1;
-        }
-        let DecodedRecords { arena, entries } = DecodedRecords::decode(
-            encoded,
-            header.records_per_block,
-            header.dictionary_decode_bound(encoded[0]),
-            header.overflow,
-            |slot, page| {
-                page.copy_from_slice(block(bytes, header, slot)?);
-                Ok(())
-            },
-        )?;
-        let remaining = header
-            .terms
-            .checked_sub(u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?)
-            .ok_or(SegmentedError::Corrupt("dictionary cardinality is false"))?;
-        if u64::try_from(entries.len()).map_err(|_| SegmentedError::AddressExhausted)? > remaining {
+        if replay.local_ids.len() as u64 >= header.terms {
             return Err(SegmentedError::Corrupt(
                 "forward dictionary block packing is false",
             ));
         }
-        memory.reserve_for_push(&mut arenas)?;
-        let arena_index = arenas.len();
-        for (id, range) in entries {
-            if id.index()
-                != header.first_term_index
-                    + u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?
-            {
-                return Err(SegmentedError::Corrupt(
-                    "dictionary IDs are not stable dense ordinals",
-                ));
+        let decoded = header.dictionary_decode_bound(encoded[0]);
+        if encoded[0] == format::SPANNED_DICTIONARY {
+            let (id, span) = format::overflow_descriptor(encoded, header.overflow)?;
+            if span.first != overflow_blocks {
+                return Err(SegmentedError::Corrupt("noncontiguous overflow coverage"));
             }
-            memory.push(&mut keys, (arena_index, range))?;
+            if u64::from(span.bytes) > decoded {
+                return Err(SegmentedError::Corrupt("record decode bound exceeded"));
+            }
+            append_resident_overflow(bytes, header, span, &mut scratch, replay.memory)?;
+            overflow_blocks += span.blocks(header.block_bytes as usize)?;
+            overflow_rows += 1;
+            replay.push(id, &scratch)?;
+        } else {
+            let mut page = format::InlineFrames::open(
+                encoded,
+                header.records_per_block,
+                decoded,
+                &mut inflater,
+            )?;
+            while let Some(id) = page.read_next(&mut scratch, replay.memory)? {
+                if replay.local_ids.len() as u64 >= header.terms {
+                    return Err(SegmentedError::Corrupt(
+                        "forward dictionary block packing is false",
+                    ));
+                }
+                replay.push(id, &scratch)?;
+            }
+            page.finish()?;
         }
-        // The decoder already owns the reconstructed bytes, including spans.
-        // Keep that ownership and borrow checked ranges by dense term ordinal.
-        arenas.push(arena);
     }
     if overflow_blocks != header.overflow.blocks || overflow_rows != header.overflow.rows {
         return Err(SegmentedError::Corrupt("incomplete overflow coverage"));
     }
-    if u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)? != header.terms {
+    if replay.local_ids.len() as u64 != header.terms {
         return Err(SegmentedError::Corrupt("dictionary cardinality is false"));
     }
-    let key_at = |index: usize| {
-        let (arena, range) = keys.get(index)?;
-        arenas.get(*arena)?.get(range.clone())
-    };
-    let mut seen = vec![false; keys.len()];
-    let mut previous: Option<&[u8]> = None;
-    let mut reverse_count = 0_u64;
+    replay.memory.release_vec(scratch)?;
+    Ok(())
+}
+
+fn validate_reverse(
+    bytes: &[u8],
+    header: &Header,
+    replay: &DictionaryReplay<'_, '_>,
+) -> Result<(), SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut seen = super::super::pack::bits::BitVec::new();
+    if let Some(last) = replay.local_ids.len().checked_sub(1) {
+        seen.set_with_memory(last, false, &mut memory)?;
+    }
+    let mut previous: Option<format::TermEncoding<'_>> = None;
+    let mut count = 0_u64;
     for slot in header.reverse.first..header.reverse.first + header.reverse.blocks {
         let records = fixed_records(block(bytes, header, slot)?, format::REVERSE, 8)?;
         if records.is_empty() {
@@ -1099,95 +1753,79 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
         }
         for record in records.as_chunks::<8>().0 {
             let id = Reader::at(record, 0).id()?;
-            let local = id
+            let index = id
                 .index()
                 .checked_sub(header.first_term_index)
-                .and_then(|v| usize::try_from(v).ok())
+                .and_then(|local| usize::try_from(local).ok())
                 .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
-            let key =
-                key_at(local).ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
-            if seen.get(local).copied().unwrap_or(true) {
+            let local = *replay
+                .local_ids
+                .get(index)
+                .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
+            if seen.get(index) != Some(false) {
                 return Err(SegmentedError::Corrupt(
                     "forward/reverse correspondence is false",
                 ));
             }
-            if previous.is_some_and(|previous| previous >= key) {
-                return Err(SegmentedError::Corrupt(
-                    "reverse index is not globally strictly ordered",
-                ));
+            let current = replay.wire_encoding(index, local)?;
+            if let Some(previous) = previous.as_ref() {
+                let a = previous.parts();
+                let b = current.parts();
+                if !format::compare_key_parts(a.into_iter(), b.into_iter())
+                    .1
+                    .is_lt()
+                {
+                    return Err(SegmentedError::Corrupt(
+                        "reverse index is not globally strictly ordered",
+                    ));
+                }
             }
-            seen[local] = true;
-            previous = Some(key);
-            reverse_count += 1;
+            seen.set_with_memory(index, true, &mut memory)?;
+            previous = Some(current);
+            count += 1;
         }
     }
-    if reverse_count != header.terms || seen.iter().any(|seen| !seen) {
+    if count != header.terms {
         return Err(SegmentedError::Corrupt(
             "reverse index omits dictionary values",
         ));
     }
-    drop(seen);
-    let mut builder = RdfDatasetBuilder::new();
-    let mut footprints = Vec::with_capacity(keys.len());
-    let mut local_ids = Vec::with_capacity(keys.len());
-    let mut quoted = false;
-    for index in 0..keys.len() {
-        let term = format::decode_term(key_at(index).ok_or(SegmentedError::Corrupt(
-            "invalid decoded dictionary key range",
-        ))?)?;
-        footprints.push(expanded_footprint(
-            term.map_ids(GlobalTermId::index),
-            header.first_term_index,
-            &footprints,
-        )?);
-        let reference = |id: GlobalTermId| -> Result<TermId, SegmentedError> {
-            let local = id
-                .index()
-                .checked_sub(header.first_term_index)
-                .and_then(|v| usize::try_from(v).ok())
-                .ok_or(SegmentedError::Corrupt("foreign RDF reference"))?;
-            if local >= index {
-                return Err(SegmentedError::Corrupt("cyclic/forward RDF term reference"));
-            }
-            Ok(local_ids[local])
-        };
-        let id = match term {
-            TermRef::Iri(iri) => {
-                super::super::absolute::check_absolute(iri)
-                    .map_err(|_| SegmentedError::Corrupt("non-absolute dictionary IRI"))?;
-                builder.intern_iri(iri)
-            }
-            TermRef::Blank { label, scope } => builder.intern_blank(label, scope),
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype = reference(datatype)?;
-                // Reference closure and datatype role are checked before borrowing
-                // its value into the interner, without a fabricated fallback IRI.
-                let original = format::decode_term(
-                    key_at(datatype.index())
-                        .ok_or(SegmentedError::Corrupt("literal datatype is absent"))?,
-                )?;
-                let TermRef::Iri(iri) = original else {
-                    return Err(SegmentedError::Corrupt("literal datatype is not an IRI"));
-                };
-                builder.intern_literal_parts(lexical, Some(iri), language, direction)
-            }
-            TermRef::Triple { s, p, o } => {
-                quoted = true;
-                builder.intern_triple(reference(s)?, reference(p)?, reference(o)?)
-            }
-        }?;
-        if id.index() != index {
-            return Err(SegmentedError::Corrupt(
-                "dictionary duplicates or non-normalized RDF values",
-            ));
-        }
-        local_ids.push(id);
-    }
+    Ok(())
+}
+
+fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut replay = DictionaryReplay {
+        first: header.first_term_index,
+        builder: RdfDatasetBuilder::new(),
+        local_ids: Vec::new(),
+        footprints: Vec::new(),
+        original_literals: Vec::new(),
+        original_languages: String::new(),
+        datatype_scratch: String::new(),
+        memory: &mut memory,
+        quoted: false,
+        max_footprint: 0,
+    };
+    replay_dictionary(bytes, header, &mut replay)?;
+    validate_reverse(bytes, header, &replay)?;
+    let DictionaryReplay {
+        mut builder,
+        local_ids,
+        quoted,
+        max_footprint,
+        footprints,
+        datatype_scratch,
+        original_literals,
+        original_languages,
+        memory,
+        ..
+    } = replay;
+    memory.release_vec(footprints)?;
+    memory.release_string(datatype_scratch)?;
+    memory.release_vec(original_literals)?;
+    memory.release_string(original_languages)?;
     let native_id = |id: GlobalTermId| -> Result<TermId, SegmentedError> {
         id.index()
             .checked_sub(header.first_term_index)
@@ -1197,74 +1835,44 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                 "quad names unknown dictionary term",
             ))
     };
-    let mut expected_summaries = Vec::new();
-    let mut expected_value_ranges = Vec::new();
-    let mut referenced_graphs = std::collections::BTreeSet::new();
-    for (table, stream) in header.streams.iter().enumerate() {
-        let mut previous = None;
-        let mut count = 0_u64;
-        for slot in stream.first..stream.first + stream.blocks {
-            let data = fixed_records(block(bytes, header, slot)?, format::QUADS, 32)?;
-            let mut rows = Vec::with_capacity(data.len() / 32);
-            for encoded in data.as_chunks::<32>().0 {
-                let quad = format::decode_quad(encoded)?;
-                let order = (quad.s, quad.p, quad.o, quad.g);
-                if previous.is_some_and(|previous| previous >= order) {
-                    return Err(SegmentedError::Corrupt(
-                        "quad partitions overlap or are unordered",
-                    ));
-                }
-                previous = Some(order);
-                count += 1;
-                rows.push(quad);
-                let (s, p, o) = (native_id(quad.s)?, native_id(quad.p)?, native_id(quad.o)?);
-                let g = quad.g.map(native_id).transpose()?;
-                referenced_graphs.extend(quad.g);
-                match table {
-                    0 => builder.push_quad(s, p, o, g),
-                    1 => {
-                        let predicate = key_at(p.index())
-                            .ok_or(SegmentedError::Corrupt("reifier predicate is absent"))?;
-                        if !matches!(format::decode_term(predicate)?, TermRef::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES)
-                        {
-                            return Err(SegmentedError::Corrupt(
-                                "reifier stream predicate is not rdf:reifies",
-                            ));
-                        }
-                        builder.push_reifier_in_graph(s, o, g)
-                    }
-                    _ => builder.push_annotation_in_graph(s, p, o, g),
-                }?;
-            }
-            let (first_range, range_count) =
-                append_value_ranges(&mut expected_value_ranges, &rows, |id| {
-                    let ordinal = id
-                        .index()
-                        .checked_sub(header.first_term_index)
-                        .ok_or(SegmentedError::AddressExhausted)?;
-                    let index =
-                        usize::try_from(ordinal).map_err(|_| SegmentedError::AddressExhausted)?;
-                    let key = key_at(index).ok_or(SegmentedError::Corrupt(
-                        "value interval refers outside the dictionary",
-                    ))?;
-                    format::decode_term(key)
-                })?;
-            expected_summaries.push(summary(&rows, slot, table as u8, first_range, range_count)?);
-        }
-        if count != stream.rows {
-            return Err(SegmentedError::Corrupt("quad stream count is false"));
-        }
-    }
-    drop(keys);
-    drop(arenas);
+    let mut summaries = FixedStreamProof::new(
+        bytes,
+        header,
+        header.summaries,
+        format::SUMMARIES,
+        [
+            "pruning summary block packing is false",
+            "pruning summary hides or invents rows",
+            "pruning index omits quad partitions",
+        ],
+    );
+    let mut value_ranges = FixedStreamProof::new(
+        bytes,
+        header,
+        header.value_ranges,
+        format::VALUE_RANGES,
+        [
+            "annotation value interval packing is false",
+            "annotation value intervals hide or invent candidates",
+            "annotation value interval directory is incomplete",
+        ],
+    );
     let mut previous = None;
-    let mut graphs = std::collections::BTreeSet::new();
+    let mut named_graphs = super::super::pack::bits::BitVec::new();
+    let mut named_count = 0_u64;
+    // Allocate from proved dictionary cardinality, never from an unverified
+    // graph count. A default-only dataset does not need this scratch.
+    if header.graphs.rows != 0
+        && let Some(last) = local_ids.len().checked_sub(1)
+    {
+        named_graphs.set_with_memory(last, false, memory)?;
+    }
     for slot in header.graphs.first..header.graphs.first + header.graphs.blocks {
         let graph_records = fixed_records(block(bytes, header, slot)?, format::GRAPHS, 8)?;
         let remaining = header
             .graphs
             .rows
-            .checked_sub(u64::try_from(graphs.len()).map_err(|_| SegmentedError::AddressExhausted)?)
+            .checked_sub(named_count)
             .ok_or(SegmentedError::Corrupt("extra named graph declarations"))?;
         if u64::try_from(graph_records.len() / 8).map_err(|_| SegmentedError::AddressExhausted)?
             != remaining.min((u64::from(header.block_bytes) - 9) / 8)
@@ -1281,61 +1889,89 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                 ));
             }
             previous = Some(id);
-            graphs.insert(id);
-            builder.declare_named_graph(native_id(id)?)?;
+            let local = native_id(id)?;
+            named_graphs.set_with_memory(local.index(), true, memory)?;
+            builder.declare_named_graph(local)?;
+            named_count += 1;
         }
     }
-    if u64::try_from(graphs.len()).map_err(|_| SegmentedError::AddressExhausted)?
-        != header.graphs.rows
-        || !referenced_graphs.is_subset(&graphs)
-    {
+    if named_count != header.graphs.rows {
         return Err(SegmentedError::Corrupt(
             "named-graph declarations are incomplete",
         ));
     }
-    let mut summary_index = 0;
-    for slot in header.summaries.first..header.summaries.first + header.summaries.blocks {
-        let summary_records = fixed_records(
-            block(bytes, header, slot)?,
-            format::SUMMARIES,
-            format::SUMMARY_BYTES,
-        )?;
-        let remaining = expected_summaries
-            .len()
-            .checked_sub(summary_index)
-            .ok_or(SegmentedError::Corrupt("extra pruning summaries"))?;
-        if summary_records.len() / format::SUMMARY_BYTES
-            != remaining.min(
-                (usize::try_from(header.block_bytes)
-                    .map_err(|_| SegmentedError::AddressExhausted)?
-                    - 9)
-                    / format::SUMMARY_BYTES,
-            )
-        {
-            return Err(SegmentedError::Corrupt(
-                "pruning summary block packing is false",
-            ));
-        }
-        for encoded in summary_records.as_chunks::<{ format::SUMMARY_BYTES }>().0 {
-            if expected_summaries
-                .get(summary_index)
-                .is_none_or(|summary| summary.as_slice() != encoded)
-            {
-                return Err(SegmentedError::Corrupt(
-                    "pruning summary hides or invents rows",
-                ));
+    let mut rows = Vec::new();
+    for (table, stream) in header.streams.iter().enumerate() {
+        let mut previous = None;
+        let mut count = 0_u64;
+        for slot in stream.first..stream.first + stream.blocks {
+            let data = fixed_records(block(bytes, header, slot)?, format::QUADS, 32)?;
+            rows.clear();
+            memory.reserve(&mut rows, data.len() / 32)?;
+            for encoded in data.as_chunks::<32>().0 {
+                let quad = format::decode_quad(encoded)?;
+                let order = (quad.s, quad.p, quad.o, quad.g);
+                if previous.is_some_and(|previous| previous >= order) {
+                    return Err(SegmentedError::Corrupt(
+                        "quad partitions overlap or are unordered",
+                    ));
+                }
+                previous = Some(order);
+                count += 1;
+                rows.push(quad);
+                let (s, p, o) = (native_id(quad.s)?, native_id(quad.p)?, native_id(quad.o)?);
+                let g = quad.g.map(native_id).transpose()?;
+                if g.is_some_and(|id| named_graphs.get(id.index()) != Some(true)) {
+                    return Err(SegmentedError::Corrupt(
+                        "named-graph declarations are incomplete",
+                    ));
+                }
+                match table {
+                    0 => builder.push_quad(s, p, o, g),
+                    1 => {
+                        if !matches!(builder.resolve(p), TermRef::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES)
+                        {
+                            return Err(SegmentedError::Corrupt(
+                                "reifier stream predicate is not rdf:reifies",
+                            ));
+                        }
+                        builder.push_reifier_in_graph(s, o, g)
+                    }
+                    _ => builder.push_annotation_in_graph(s, p, o, g),
+                }?;
             }
-            summary_index += 1;
+            let first_range = value_ranges.seen;
+            for interval in
+                crate::annotation_range::seal_intervals_with(rows.iter().copied(), |id| {
+                    // The interner keeps lexical bytes, direction and language
+                    // presence. It only overrides an explicit datatype in the
+                    // language-tagged case, where intervals never use it.
+                    Ok::<_, SegmentedError>(
+                        builder
+                            .resolve(native_id(id)?)
+                            .map_ids(|id| map_id(id, header.first_term_index)),
+                    )
+                })?
+            {
+                value_ranges.check(value_range_bytes(&interval))?;
+            }
+            summaries.check(summary(
+                &rows,
+                slot,
+                table as u8,
+                first_range,
+                value_ranges.seen - first_range,
+            )?)?;
+        }
+        if count != stream.rows {
+            return Err(SegmentedError::Corrupt("quad stream count is false"));
         }
     }
-    if summary_index != expected_summaries.len()
-        || u64::try_from(summary_index).map_err(|_| SegmentedError::AddressExhausted)?
-            != header.summaries.rows
-    {
-        return Err(SegmentedError::Corrupt(
-            "pruning index omits quad partitions",
-        ));
-    }
+    memory.release_vec(rows)?;
+    drop(named_graphs);
+    memory.release_vec(local_ids)?;
+    summaries.finish()?;
+    value_ranges.finish()?;
     if header.flags
         != u8::from(quoted)
             | (u8::from(header.streams[1].rows != 0) << 1)
@@ -1345,43 +1981,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             "capability claims disagree with RDF streams",
         ));
     }
-    let mut range_index = 0;
-    for slot in header.value_ranges.first..header.value_ranges.first + header.value_ranges.blocks {
-        let records = fixed_records(
-            block(bytes, header, slot)?,
-            format::VALUE_RANGES,
-            format::VALUE_RANGE_BYTES,
-        )?;
-        let remaining = expected_value_ranges
-            .len()
-            .checked_sub(range_index)
-            .ok_or(SegmentedError::Corrupt("extra annotation value intervals"))?;
-        if records.len() / format::VALUE_RANGE_BYTES
-            != remaining.min((header.block_bytes as usize - 9) / format::VALUE_RANGE_BYTES)
-        {
-            return Err(SegmentedError::Corrupt(
-                "annotation value interval packing is false",
-            ));
-        }
-        for encoded in records.as_chunks::<{ format::VALUE_RANGE_BYTES }>().0 {
-            if expected_value_ranges
-                .get(range_index)
-                .is_none_or(|expected| expected.as_slice() != encoded)
-            {
-                return Err(SegmentedError::Corrupt(
-                    "annotation value intervals hide or invent candidates",
-                ));
-            }
-            range_index += 1;
-        }
-    }
-    if range_index != expected_value_ranges.len() || range_index as u64 != header.value_ranges.rows
-    {
-        return Err(SegmentedError::Corrupt(
-            "annotation value interval directory is incomplete",
-        ));
-    }
-    if header.max_owned_term_bytes != footprints.iter().copied().max().unwrap_or(0) {
+    if header.max_owned_term_bytes != max_footprint {
         return Err(SegmentedError::Corrupt(
             "expanded term footprint claim is false",
         ));
@@ -2138,20 +2738,41 @@ mod certification_tests {
             )
             .unwrap();
             let values = [
-                TermValue::iri(format!("urn:overflow:{}", "x".repeat(20_000))),
+                TermValue::iri(format!("urn:overflow:{}a", "x".repeat(20_000))),
+                TermValue::iri(format!("urn:overflow:{}b", "x".repeat(20_000))),
                 TermValue::simple_literal("literal".repeat(2000)),
             ];
             builder.intern_batch(&values, |_, _| {}).unwrap();
             let image = builder.seal().unwrap();
             let header = Header::decode(image.bytes()).unwrap();
             assert_eq!(header.block_bytes, block_bytes);
-            assert_eq!(header.overflow.rows, 2);
+            assert_eq!(header.overflow.rows, 3);
             let descriptor = (header.dictionary.first
                 ..header.dictionary.first + header.dictionary.blocks)
                 .find(|&slot| {
                     block(image.bytes(), &header, slot).unwrap()[0] == format::SPANNED_DICTIONARY
                 })
                 .unwrap();
+            // The two IRIs agree across several pages. Only the last byte
+            // distinguishes them in the authenticated reverse index.
+            let (_, span) = format::overflow_descriptor(
+                block(image.bytes(), &header, descriptor).unwrap(),
+                header.overflow,
+            )
+            .unwrap();
+            let width = block_bytes as usize;
+            let last = header.overflow.first + span.first + span.blocks(width).unwrap() - 1;
+            let start = format::OVERFLOW_HEADER_BYTES;
+            let tail = (span.bytes as usize - 1) % (width - start);
+            let mut bytes = image.bytes().to_vec();
+            let byte = &mut bytes[last as usize * width + start + tail];
+            assert_eq!(*byte, b'a');
+            *byte = b'c';
+            rehash(&mut bytes, image.receipt());
+            assert_eq!(
+                SegmentedImage::certify(bytes).unwrap_err(),
+                SegmentedError::Corrupt("reverse index is not globally strictly ordered")
+            );
             for (slot, offset) in [
                 (descriptor, 5),
                 (descriptor, format::RECORD_HEADER + 8),
@@ -2404,6 +3025,45 @@ mod certification_tests {
     }
 
     #[test]
+    fn reverse_proof_orders_original_language_spelling() {
+        let limits = SegmentedBuildLimits::new(16, 1_000, 0, 512, 1).unwrap();
+        let mut builder = SegmentedBuilder::new(limits).unwrap();
+        builder
+            .intern_batch(
+                &[
+                    TermValue::lang_literal("label", "en"),
+                    TermValue::lang_literal("label", "fr"),
+                ],
+                |_, _| {},
+            )
+            .unwrap();
+        let image = builder.seal().unwrap();
+        let header = Header::decode(image.bytes()).unwrap();
+        let width = header.block_bytes as usize;
+        let mut bytes = image.bytes().to_vec();
+        let dictionary_start = header.dictionary.first as usize * width;
+        let dictionary_end = dictionary_start + header.dictionary.blocks as usize * width;
+        let language = bytes[dictionary_start..dictionary_end]
+            .windows(7)
+            .position(|window| window == [2, 0, 0, 0, b'f', b'r', 0])
+            .unwrap()
+            + dictionary_start
+            + 4;
+        bytes[language..language + 2].copy_from_slice(b"FR");
+        rehash(&mut bytes, image.receipt());
+        assert_eq!(
+            SegmentedImage::certify(bytes.clone()).unwrap_err(),
+            SegmentedError::Corrupt("reverse index is not globally strictly ordered")
+        );
+        let reverse = header.reverse.first as usize * width + 9;
+        for offset in 0..8 {
+            bytes.swap(reverse + 8 + offset, reverse + 16 + offset);
+        }
+        rehash(&mut bytes, image.receipt());
+        SegmentedImage::certify(bytes).unwrap();
+    }
+
+    #[test]
     fn recomputed_hashes_cannot_certify_false_pruning_bounds() {
         let image = image();
         let header = Header::decode(image.bytes()).unwrap();
@@ -2414,10 +3074,21 @@ mod certification_tests {
         bytes[record + 24..record + 32].copy_from_slice(&999_u64.to_le_bytes());
         bytes[record + 32..record + 40].copy_from_slice(&999_u64.to_le_bytes());
         rehash(&mut bytes, &image.receipt);
-        assert!(matches!(
-            SegmentedImage::certify(bytes),
-            Err(SegmentedError::Corrupt(_))
-        ));
+        assert_eq!(
+            SegmentedImage::certify(bytes).unwrap_err(),
+            SegmentedError::Corrupt("pruning summary hides or invents rows")
+        );
+
+        let mut bytes = image.bytes().to_vec();
+        let record = usize::try_from(header.value_ranges.first).unwrap()
+            * usize::try_from(header.block_bytes).unwrap()
+            + 9;
+        bytes[record..record + 8].copy_from_slice(&999_u64.to_le_bytes());
+        rehash(&mut bytes, &image.receipt);
+        assert_eq!(
+            SegmentedImage::certify(bytes).unwrap_err(),
+            SegmentedError::Corrupt("annotation value intervals hide or invent candidates")
+        );
     }
 
     #[test]
@@ -2434,6 +3105,14 @@ mod certification_tests {
             SegmentedImage::certify(bytes),
             Err(SegmentedError::Corrupt(_))
         ));
+        let mut bytes = image.bytes().to_vec();
+        // The existing first subject is a valid local term but not a named graph.
+        bytes.copy_within(record..record + 8, record + 24);
+        rehash(&mut bytes, &image.receipt);
+        assert_eq!(
+            SegmentedImage::certify(bytes).unwrap_err(),
+            SegmentedError::Corrupt("named-graph declarations are incomplete")
+        );
     }
 
     #[test]
