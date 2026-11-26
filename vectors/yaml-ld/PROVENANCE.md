@@ -36,16 +36,16 @@ texts are [the policy](../../LICENSES/W3C-test-suites-policy.html),
 [the test-suite license](../../LICENSES/W3C-test-suite-license.html) and
 [the three-clause BSD alternative](../../LICENSES/W3C-test-suite-BSD.html).
 
-## Inventory and native selection
+## Manifest inventory
 
-| Manifest family | Entries | Normative entries selected here |
-| --- | ---: | ---: |
-| Expand | 80 | 0 |
-| ToRDF | 13 | 11 |
-| Compact | 2 | 0 |
-| Flatten | 1 | 0 |
-| Frame | 1 | 0 |
-| Total | 97 | 11 |
+| Manifest family | Entries |
+| --- | ---: |
+| Expand | 80 |
+| ToRDF | 13 |
+| Compact | 2 |
+| Flatten | 1 |
+| Frame | 1 |
+| Total | 97 |
 
 Five entries explicitly declare `extendedYAML: true` and `normative: false`:
 three Expand entries and the two ToRDF exclusions below. The native
@@ -69,9 +69,5 @@ construction with upstream N-Quads by RDF dataset isomorphism:
 The explicit ToRDF exclusions are `#cir-scalar-core-2-positive` and
 `#cir-scalar-other-2-positive`, both informative Extended YAML cases.
 
-Vendoring the whole inventory does not qualify its unselected families. The
-other 81 normative cases, including expansion and HTML processing, compaction,
-flattening and framing, remain unqualified here. The five informative cases
-remain outside this Basic selection. This family does not establish complete
-pinned Basic conformance, other required upstream-suite qualification or the
-remaining deterministic semantic-output acceptance.
+See [YAML-LD conformance](../../docs/CONFORMANCE.md) for native qualification
+coverage and known gaps. The five informative cases are outside Basic.
