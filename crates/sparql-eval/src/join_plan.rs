@@ -352,23 +352,6 @@ pub(crate) struct FactorizedCount<'a> {
 }
 
 impl<'a> FactorizedCount<'a> {
-    /// Only an unseeded root GROUP is eligible. These wrappers consume the
-    /// group without seeding it. An expression subtree is not a wrapper.
-    pub(crate) fn root_group(mut root: &'a GraphPattern) -> Option<&'a GraphPattern> {
-        while let GraphPattern::Project { inner, .. }
-        | GraphPattern::ProjectStar { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        | GraphPattern::Filter { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::OrderBy { inner, .. } = root
-        {
-            root = inner.as_ref();
-        }
-        matches!(root, GraphPattern::Group { .. }).then_some(root)
-    }
-
     /// External providers can attach evidence or replace a physical operator.
     pub(crate) fn allows(
         relations: &crate::property_fn::PropertyFunctionRegistry<'_>,

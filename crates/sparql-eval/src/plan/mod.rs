@@ -249,8 +249,6 @@ pub(crate) struct PlanShape {
     positive_regions: AdmittedVec<bool>,
     /// The numbered walk includes nested subqueries and expression EXISTS bodies.
     has_property_functions: bool,
-    /// The root GROUP below plain consumer wrappers, if present.
-    root_count_group: Option<NodeId>,
 }
 
 impl PlanShape {
@@ -261,8 +259,25 @@ impl PlanShape {
 
     /// Whether this is the one unseeded GROUP eligible for a factor forecast.
     pub(crate) fn is_root_count_group(&self, pattern: &GraphPattern) -> bool {
-        self.root_count_group
-            .is_some_and(|id| self.node_of(pattern) == Some(id))
+        if !matches!(pattern, GraphPattern::Group { .. }) {
+            return false;
+        }
+        let Some(mut node) = self.node_of(pattern) else {
+            return false;
+        };
+        while let Some(parent) = self.rows[node.index()].parent {
+            // Each of these consumers has one graph child and can also have
+            // expression children. Do not confuse an EXISTS body with input.
+            if !matches!(
+                self.kind(parent).label(),
+                "Project" | "Extend" | "Filter" | "Distinct" | "Reduced" | "Slice" | "OrderBy"
+            ) || self.site_of(node).is_some()
+            {
+                return false;
+            }
+            node = parent;
+        }
+        true
     }
 
     /// The number of nodes.
@@ -638,8 +653,6 @@ impl<'q> Tree<'q> {
         drop(ranked);
 
         let positive_regions = positive_region_table(&rows, workspace)?;
-        let root_count_group = crate::join_plan::FactorizedCount::root_group(root)
-            .and_then(|group| AddressIndex(&rows).get(std::ptr::from_ref(group) as usize));
         let endpoints = crate::service_endpoints::scan_admitted(
             root,
             &AddressIndex(&rows),
@@ -658,7 +671,6 @@ impl<'q> Tree<'q> {
             volatile_sites: Vec::new(),
             positive_regions,
             has_property_functions,
-            root_count_group,
         })
     }
 
