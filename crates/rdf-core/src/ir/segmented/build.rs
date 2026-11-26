@@ -1005,9 +1005,10 @@ fn block<'a>(bytes: &'a [u8], header: &Header, slot: u64) -> Result<&'a [u8], Se
         .ok_or(SegmentedError::Corrupt("missing data block"))
 }
 fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError> {
-    let mut keys = Vec::with_capacity(
-        usize::try_from(header.terms).map_err(|_| SegmentedError::AddressExhausted)?,
-    );
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut arenas: Vec<Vec<u8>> = Vec::new();
+    let mut keys: Vec<(usize, Range<usize>)> = Vec::new();
     let (mut overflow_blocks, mut overflow_rows) = (0, 0);
     for slot in header.dictionary.first..header.dictionary.first + header.dictionary.blocks {
         let encoded = block(bytes, header, slot)?;
@@ -1019,7 +1020,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             overflow_blocks += span.blocks(header.block_bytes as usize)?;
             overflow_rows += 1;
         }
-        let records = DecodedRecords::decode(
+        let DecodedRecords { arena, entries } = DecodedRecords::decode(
             encoded,
             header.records_per_block,
             header.dictionary_decode_bound(encoded[0]),
@@ -1033,14 +1034,14 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             .terms
             .checked_sub(u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?)
             .ok_or(SegmentedError::Corrupt("dictionary cardinality is false"))?;
-        if u64::try_from(records.entries.len()).map_err(|_| SegmentedError::AddressExhausted)?
-            > remaining
-        {
+        if u64::try_from(entries.len()).map_err(|_| SegmentedError::AddressExhausted)? > remaining {
             return Err(SegmentedError::Corrupt(
                 "forward dictionary block packing is false",
             ));
         }
-        for (index, (id, _)) in records.entries.iter().enumerate() {
+        memory.reserve_for_push(&mut arenas)?;
+        let arena_index = arenas.len();
+        for (id, range) in entries {
             if id.index()
                 != header.first_term_index
                     + u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)?
@@ -1049,8 +1050,11 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                     "dictionary IDs are not stable dense ordinals",
                 ));
             }
-            keys.push(records.key(index).to_vec());
+            memory.push(&mut keys, (arena_index, range))?;
         }
+        // The decoder already owns the reconstructed bytes, including spans.
+        // Keep that ownership and borrow checked ranges by dense term ordinal.
+        arenas.push(arena);
     }
     if overflow_blocks != header.overflow.blocks || overflow_rows != header.overflow.rows {
         return Err(SegmentedError::Corrupt("incomplete overflow coverage"));
@@ -1058,8 +1062,12 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
     if u64::try_from(keys.len()).map_err(|_| SegmentedError::AddressExhausted)? != header.terms {
         return Err(SegmentedError::Corrupt("dictionary cardinality is false"));
     }
+    let key_at = |index: usize| {
+        let (arena, range) = keys.get(index)?;
+        arenas.get(*arena)?.get(range.clone())
+    };
     let mut seen = vec![false; keys.len()];
-    let mut previous: Option<usize> = None;
+    let mut previous: Option<&[u8]> = None;
     let mut reverse_count = 0_u64;
     for slot in header.reverse.first..header.reverse.first + header.reverse.blocks {
         let records = fixed_records(block(bytes, header, slot)?, format::REVERSE, 8)?;
@@ -1075,21 +1083,20 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                 .checked_sub(header.first_term_index)
                 .and_then(|v| usize::try_from(v).ok())
                 .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
-            let key = keys
-                .get(local)
-                .ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
+            let key =
+                key_at(local).ok_or(SegmentedError::Corrupt("reverse index names foreign ID"))?;
             if seen.get(local).copied().unwrap_or(true) {
                 return Err(SegmentedError::Corrupt(
                     "forward/reverse correspondence is false",
                 ));
             }
-            if previous.is_some_and(|previous| keys[previous] >= *key) {
+            if previous.is_some_and(|previous| previous >= key) {
                 return Err(SegmentedError::Corrupt(
                     "reverse index is not globally strictly ordered",
                 ));
             }
             seen[local] = true;
-            previous = Some(local);
+            previous = Some(key);
             reverse_count += 1;
         }
     }
@@ -1098,12 +1105,15 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             "reverse index omits dictionary values",
         ));
     }
+    drop(seen);
     let mut builder = RdfDatasetBuilder::new();
     let mut footprints = Vec::with_capacity(keys.len());
     let mut local_ids = Vec::with_capacity(keys.len());
     let mut quoted = false;
-    for (index, key) in keys.iter().enumerate() {
-        let term = format::decode_term(key)?;
+    for index in 0..keys.len() {
+        let term = format::decode_term(key_at(index).ok_or(SegmentedError::Corrupt(
+            "invalid decoded dictionary key range",
+        ))?)?;
         footprints.push(expanded_footprint(
             term.map_ids(GlobalTermId::index),
             header.first_term_index,
@@ -1136,7 +1146,10 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                 let datatype = reference(datatype)?;
                 // Reference closure and datatype role are checked before borrowing
                 // its value into the interner, without a fabricated fallback IRI.
-                let original = format::decode_term(&keys[datatype.index()])?;
+                let original = format::decode_term(
+                    key_at(datatype.index())
+                        .ok_or(SegmentedError::Corrupt("literal datatype is absent"))?,
+                )?;
                 let TermRef::Iri(iri) = original else {
                     return Err(SegmentedError::Corrupt("literal datatype is not an IRI"));
                 };
@@ -1189,7 +1202,9 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                 match table {
                     0 => builder.push_quad(s, p, o, g),
                     1 => {
-                        if !matches!(format::decode_term(&keys[p.index()])?, TermRef::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES)
+                        let predicate = key_at(p.index())
+                            .ok_or(SegmentedError::Corrupt("reifier predicate is absent"))?;
+                        if !matches!(format::decode_term(predicate)?, TermRef::Iri(iri) if iri == purrdf_iri::vocab::rdf::REIFIES)
                         {
                             return Err(SegmentedError::Corrupt(
                                 "reifier stream predicate is not rdf:reifies",
@@ -1208,7 +1223,7 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
                         .ok_or(SegmentedError::AddressExhausted)?;
                     let index =
                         usize::try_from(ordinal).map_err(|_| SegmentedError::AddressExhausted)?;
-                    let key = keys.get(index).ok_or(SegmentedError::Corrupt(
+                    let key = key_at(index).ok_or(SegmentedError::Corrupt(
                         "value interval refers outside the dictionary",
                     ))?;
                     format::decode_term(key)
@@ -1219,6 +1234,8 @@ fn validate_content(bytes: &[u8], header: &Header) -> Result<(), SegmentedError>
             return Err(SegmentedError::Corrupt("quad stream count is false"));
         }
     }
+    drop(keys);
+    drop(arenas);
     let mut previous = None;
     let mut graphs = std::collections::BTreeSet::new();
     for slot in header.graphs.first..header.graphs.first + header.graphs.blocks {
