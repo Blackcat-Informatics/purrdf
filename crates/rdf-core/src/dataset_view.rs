@@ -1210,6 +1210,21 @@ pub trait DatasetView {
         false
     }
 
+    /// Whether planning may attempt a subject-ordered scan for this pattern.
+    ///
+    /// A view with pattern-dependent order declines here without opening a
+    /// scan, performing provider I/O, or admitting new storage. The default does not
+    /// rule out any pattern. It does not certify order: a planner still
+    /// needs the cursors returned by [`Self::ordered_subject_quads`].
+    fn may_scan_in_subject_order(
+        &self,
+        _predicate: Option<Self::Id>,
+        _object: Option<Self::Id>,
+        _graph: GraphMatch<Self::Id>,
+    ) -> bool {
+        true
+    }
+
     /// Scan one statement stream in nondecreasing subject identity order, if supported.
     ///
     /// The optional lower and upper bounds are inclusive and in this view's own
@@ -2191,6 +2206,43 @@ impl DatasetView for RdfDataset {
         Self: 'a;
     type ProbePlan = QuadProbePlan;
 
+    fn may_scan_in_subject_order(
+        &self,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: GraphMatch,
+    ) -> bool {
+        self.native_subject_order_available(predicate, object, graph)
+    }
+
+    fn ordered_subject_quads(
+        &self,
+        stream: crate::StatisticsStream,
+        first_subject: Option<TermId>,
+        last_subject: Option<TermId>,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: GraphMatch,
+    ) -> Option<impl SubjectOrderedScan<TermId> + '_> {
+        self.native_ordered_subject_quads(
+            stream,
+            first_subject,
+            last_subject,
+            predicate,
+            object,
+            graph,
+        )
+    }
+
+    fn ordered_subject_upper_bound(
+        &self,
+        predicate: Option<TermId>,
+        object: Option<TermId>,
+        graph: GraphMatch,
+    ) -> Result<Option<TermId>, Self::ReadError> {
+        Ok(self.native_subject_upper_bound(predicate, object, graph))
+    }
+
     #[inline]
     fn statement_layer_is_empty(&self) -> bool {
         self.reifiers_with_graph().next().is_none()
@@ -2481,6 +2533,15 @@ impl<T: DatasetView> DatasetView for Arc<T> {
     }
     fn read_error(&self) -> Option<Self::ReadError> {
         (**self).read_error()
+    }
+
+    fn may_scan_in_subject_order(
+        &self,
+        predicate: Option<Self::Id>,
+        object: Option<Self::Id>,
+        graph: GraphMatch<Self::Id>,
+    ) -> bool {
+        (**self).may_scan_in_subject_order(predicate, object, graph)
     }
 
     fn ordered_subject_quads(
