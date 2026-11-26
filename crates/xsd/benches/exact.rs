@@ -55,6 +55,10 @@ mod rational_reciprocal;
 #[path = "../tests/support/rational_float_rounding.rs"]
 mod rational_float_rounding;
 
+#[cfg(target_os = "linux")]
+#[path = "support/decimal_division.rs"]
+mod decimal_division;
+
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
 
@@ -525,6 +529,8 @@ fn operation_categories(operation: &str) -> [&'static str; 3] {
         "float" => rational_float_factory::CATEGORIES,
         "reciprocal" => rational_reciprocal::CATEGORIES,
         "rounding" => rational_float_rounding::CATEGORIES,
+        #[cfg(target_os = "linux")]
+        "division" => decimal_division::CATEGORIES,
         _ => panic!("unknown exact operation: {operation}"),
     }
 }
@@ -558,8 +564,44 @@ fn bench_exact_operations(c: &mut Bench) {
 }
 
 #[cfg(target_os = "linux")]
+fn decimal_division_sample(category: &str) {
+    use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
+    let empty = category == "empty";
+    let cases = decimal_division::fixture(
+        if empty { "terminating" } else { category },
+        u32::try_from(SMALL_OPS).unwrap(),
+    );
+    let mut output = Vec::with_capacity(cases.len());
+    for _ in 0..3 {
+        decimal_division::run(&cases, &mut output);
+        decimal_division::validate(&cases, &output);
+        output.clear();
+    }
+    let mut counter = CounterControl::required().expect("acknowledged instruction counter");
+    counter.command(CounterCommand::Enable).unwrap();
+    if !empty {
+        decimal_division::run(&cases, &mut output);
+    }
+    counter.command(CounterCommand::Disable).unwrap();
+    if !empty {
+        decimal_division::validate(&cases, &output);
+        for (index, answer) in output.iter().enumerate() {
+            let XsdValue::Decimal(answer) = answer else {
+                unreachable!()
+            };
+            println!("{index} {answer}");
+        }
+    }
+    println!("validated category={category} outputs={}", output.len());
+}
+
+#[cfg(target_os = "linux")]
 fn operation_sample(operation: &str, category: &str) {
     use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
+    if operation == "division" {
+        decimal_division_sample(category);
+        return;
+    }
     let empty = category == "empty";
     let empty_fixture = match operation {
         "float" => "integral",
@@ -655,6 +697,11 @@ fn main() -> std::process::ExitCode {
             Some("--rounding-instructions") => {
                 assert_eq!(args.len(), 2, "collection requires a new report directory");
                 collect_operation("rounding", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--decimal-division-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("division", std::path::Path::new(&args[1]));
                 return std::process::ExitCode::SUCCESS;
             }
             _ => {}
