@@ -513,35 +513,49 @@ fn encode_prepared_dataset(
     let records_per_block =
         usize::try_from(limits.records_per_block).map_err(|_| SegmentedError::AddressExhausted)?;
     let mut blocks = vec![vec![0_u8; block_bytes]];
-    let mut records = Vec::with_capacity(dataset.term_count());
-    let mut footprints = Vec::with_capacity(dataset.term_count());
-    for index in 0..dataset.term_count() {
-        let local =
-            TermId::from_index(u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?)
-                .expect("stored term index is representable");
-        let mut key = Vec::new();
+    let term_count =
+        u32::try_from(dataset.term_count()).map_err(|_| SegmentedError::AddressExhausted)?;
+    let term_ids = (0..term_count)
+        .map(|index| TermId::from_index(index).expect("stored term index is representable"));
+    let key_bytes = term_ids.clone().try_fold(0_usize, |size, local| {
+        size.checked_add(format::encoded_term_size(&dataset.resolve(local))?)
+            .ok_or(SegmentedError::AddressExhausted)
+    })?;
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut keys = Vec::new();
+    memory.reserve(&mut keys, key_bytes)?;
+    let mut records = Vec::new();
+    memory.reserve(&mut records, dataset.term_count())?;
+    let mut footprints = Vec::new();
+    memory.reserve(&mut footprints, dataset.term_count())?;
+    for local in term_ids {
+        let start = keys.len();
         format::encode_term(
             dataset
                 .resolve(local)
                 .map_ids(|id| map_id(id, limits.first_term_index)),
-            &mut key,
+            &mut keys,
         )?;
+        let range = start..keys.len();
         footprints.push(expanded_footprint(
-            format::decode_term(&key)?.map_ids(GlobalTermId::index),
+            format::decode_term(&keys[range.clone()])?.map_ids(GlobalTermId::index),
             limits.first_term_index,
             &footprints,
         )?);
-        records.push((map_id(local, limits.first_term_index), key));
+        records.push((map_id(local, limits.first_term_index), range));
     }
+    debug_assert_eq!(keys.len(), key_bytes);
     let mut overflow_blocks = Vec::new();
     let (dictionary, overflow_rows) = append_dictionary(
         &mut blocks,
         &records,
+        &keys,
         records_per_block,
         block_bytes,
         &mut overflow_blocks,
     )?;
-    records.sort_by(|a, b| a.1.cmp(&b.1));
+    records.sort_by(|a, b| keys[a.1.clone()].cmp(&keys[b.1.clone()]));
     let reverse = append_fixed(
         &mut blocks,
         records.len(),
@@ -555,6 +569,8 @@ fn encode_prepared_dataset(
             Ok(())
         },
     )?;
+    memory.release_vec(records)?;
+    memory.release_vec(keys)?;
     let mut summaries = Vec::new();
     let mut value_ranges = Vec::new();
     let mut streams = [Stream::default(); 3];
@@ -743,7 +759,8 @@ fn append_statistics(
 
 fn append_dictionary(
     blocks: &mut Vec<Vec<u8>>,
-    records: &[(GlobalTermId, Vec<u8>)],
+    records: &[(GlobalTermId, Range<usize>)],
+    keys: &[u8],
     chunk: usize,
     block_bytes: usize,
     overflow: &mut Vec<Vec<u8>>,
@@ -760,11 +777,19 @@ fn append_dictionary(
         let (block, used) = if inline == 0 {
             spanned += 1;
             (
-                format::spanned_record(offered[0].0, &offered[0].1, overflow, block_bytes)?,
+                format::spanned_record(
+                    offered[0].0,
+                    &keys[offered[0].1.clone()],
+                    overflow,
+                    block_bytes,
+                )?,
                 1,
             )
         } else {
-            format::record_block(&offered[..inline], block_bytes)?
+            let records = offered[..inline]
+                .iter()
+                .map(|(id, range)| (*id, &keys[range.clone()]));
+            format::record_block(&records, block_bytes)?
         };
         blocks.push(block);
         remaining = &remaining[used..];

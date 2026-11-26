@@ -280,7 +280,12 @@ impl PositivePlan {
             let summary = match node {
                 GraphPattern::Bgp { patterns } => {
                     let seed = SeedEstimate::default();
-                    let (schema, estimate, order) = forecast_bgp(
+                    let super::BgpForecast {
+                        schema,
+                        estimate,
+                        order,
+                        ..
+                    } = forecast_bgp(
                         dataset,
                         active_dataset,
                         active_graph,
