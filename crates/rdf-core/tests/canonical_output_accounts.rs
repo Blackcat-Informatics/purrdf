@@ -19,6 +19,8 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use purrdf_hash::hex::Digest32;
 
+use purrdf_core::ir::canon::CanonError;
+use purrdf_core::rdfc12::{self, CanonHash, RDFC_V2_CORPUS_POLICY};
 use purrdf_core::{
     BlankScope, CANON_CORPUS_POLICY, CanonPhase, CanonicalizationControl, ContentDigest,
     DatasetView, FallibleDatasetView, GraphMatch, OwnedWorkspaceReservation, QuadIds, RdfDataset,
@@ -619,6 +621,53 @@ fn provider_reservations_never_exceed_the_frozen_maxima() {
             .unwrap_or_else(|error| panic!("{at} refused at the frozen ceiling: {error}"));
         assert_eq!(digest, row.digest, "identity of {at} at the ceiling");
     }
+}
+
+/// Even when all first-degree hashes distinguish their blanks, their retained
+/// storage is admitted during search. A provider may refuse it before the
+/// engine issues any successful receipt or starts writing canonical output.
+#[test]
+fn first_degree_storage_is_admitted_before_canonical_output() {
+    let mut builder = RdfDatasetBuilder::new();
+    for index in 0..128 {
+        let subject = builder
+            .intern_blank(&format!("s{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        let predicate = builder
+            .intern_iri(&format!("https://example.org/p/{index}"))
+            .unwrap();
+        let object = builder
+            .intern_blank(&format!("o{index}"), BlankScope::DEFAULT)
+            .unwrap();
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    let dataset = builder.freeze().unwrap();
+    let limit = 24 * 1024;
+    let refused_view = Recording::new(&dataset, limit, u64::MAX);
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    assert!(matches!(
+        rdfc12::try_canonicalize_view(&refused_view, CanonHash::Sha256, &mut control),
+        Err(CanonError::Read(Refused(requested))) if requested > limit
+    ));
+    let [receipt] = control.receipts() else {
+        panic!("source refusal must leave one receipt");
+    };
+    assert_eq!(receipt.phase, CanonPhase::Search);
+    assert!(!receipt.completed);
+    assert_eq!(receipt.work.total(), 0);
+    assert_eq!(refused_view.owned.max(), 0);
+
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let expected =
+        rdfc12::try_canonicalize_view(dataset.as_ref(), CanonHash::Sha256, &mut control).unwrap();
+    let admitted_view = Recording::new(&dataset, u64::MAX, u64::MAX);
+    let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+    let admitted =
+        rdfc12::try_canonicalize_view(&admitted_view, CanonHash::Sha256, &mut control).unwrap();
+    assert_eq!(admitted.nquads(), expected.nquads());
+    assert_eq!(admitted.labels().count(), 256);
+    assert!(control.receipts()[0].completed);
+    assert_eq!(control.receipts()[0].work.total(), 0);
 }
 
 /// A stop that lands on any of the last polls of a run refuses with one
