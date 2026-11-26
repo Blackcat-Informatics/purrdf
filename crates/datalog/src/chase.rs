@@ -121,16 +121,19 @@
 
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le_into;
+use purrdf_lex::allocation::{Memory, Resident, StorageError, shared::Shared};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct, HeadForm};
-use crate::cursor::LendingIterator;
+use crate::cursor::RowPosition;
 use crate::id::TermId;
 use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
 use crate::seminaive::{BudgetReport, BudgetResource, EvalOptions, render_capacity_refusal};
 use crate::stop::{StopSignal, is_stopped};
-use crate::store::{Arity, Bound, RelationStore, ShapeFact, StoreShape, TermInterner};
+use crate::store::{
+    Arity, Bound, PartitionPosition, RelationStore, ShapeFact, StoreShape, TermInterner,
+};
 
 mod termination;
 pub use termination::{
@@ -221,7 +224,7 @@ impl fmt::Display for ChaseTermination {
 /// The repository renders a blank node as `_:<scope ordinal>.<label>`, and scope `0` is the
 /// default scope. A chase witness belongs to the dataset being closed, so it is minted
 /// there rather than into a scope of its own.
-const WITNESS_SCOPE: u32 = 0;
+const WITNESS_SCOPE: &str = "0";
 
 /// The first character of every witness label.
 ///
@@ -237,6 +240,8 @@ const WITNESS_LABEL_BYTES: usize = 16;
 /// Framed like every other field, so a witness digest can never coincide with some other
 /// BLAKE3 digest this crate computes over a different kind of value.
 const WITNESS_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog restricted chase witness v1");
+const WITNESS_ESCAPE_TAG: Domain =
+    Domain::new(b"purrdf-datalog restricted chase witness freshness v1");
 
 /// The address a Skolem witness is minted against: the SKOLEM FUNCTION APPLICATION that
 /// produced it.
@@ -250,7 +255,8 @@ const WITNESS_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog restricted chase
 /// The address is decomposable, which an opaque digest is not: [`SkolemRegistry::explain`]
 /// hands it back so a caller can say what an invented null stands for. A frontier value may
 /// itself be a previously invented witness, so an explanation is recursively decomposable
-/// through the same registry.
+/// through the same registry. A separately versioned salt keeps an authored blank with the
+/// original label from becoming that witness.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WitnessAddress {
     /// The producing clause's index in authored program order.
@@ -260,6 +266,8 @@ pub struct WitnessAddress {
     /// The bound frontier values, as lexical surfaces, in the clause's fixed frontier
     /// order (the frontier variables in lexical name order).
     frontier: Vec<String>,
+    /// Zero retains the original label. Later candidates avoid occupied terms.
+    salt: u64,
 }
 
 impl WitnessAddress {
@@ -277,30 +285,53 @@ impl WitnessAddress {
     pub fn frontier(&self) -> &[String] {
         &self.frontier
     }
+
+    /// Zero for the original label, or the deterministic collision escape.
+    pub fn salt(&self) -> u64 {
+        self.salt
+    }
 }
 
 /// The blank-node surface addressed by `address`.
 ///
 /// The label is a BLAKE3 digest over a length-framed encoding of the address: every field is
 /// preceded by its byte length, so no frontier value can forge a field boundary whatever
-/// bytes it holds, and the encoding is injective. The surface is therefore a deterministic,
-/// collision-resistant function of the address alone — identical on every target, and
-/// independent of the order witnesses were minted in.
-fn witness_surface(address: &WitnessAddress) -> String {
+/// bytes it holds, and the encoding is injective. The surface is a deterministic,
+/// collision-resistant function of the address alone, identical on every target. The
+/// original domain remains exact for unoccupied labels.
+fn witness_digest(address: &WitnessAddress) -> purrdf_hash::blake3::Hash {
     let mut hasher = purrdf_hash::blake3::RecordHasher::new();
-    frame_le_into(&mut hasher, WITNESS_DIGEST_TAG.as_bytes());
+    let domain = if address.salt == 0 {
+        WITNESS_DIGEST_TAG
+    } else {
+        WITNESS_ESCAPE_TAG
+    };
+    frame_le_into(&mut hasher, domain.as_bytes());
+    if address.salt != 0 {
+        hasher.update(&address.salt.to_le_bytes());
+    }
     hasher.update(&(address.clause as u64).to_le_bytes());
     hasher.update(&(address.ordinal as u64).to_le_bytes());
     hasher.update(&(address.frontier.len() as u64).to_le_bytes());
     for value in &address.frontier {
         frame_le_into(&mut hasher, value.as_bytes());
     }
-    let digest = hasher.finalize();
+    hasher.finalize()
+}
 
-    let mut surface = format!("_:{WITNESS_SCOPE}.");
+fn witness_surface(address: &WitnessAddress) -> Result<String, StorageError> {
+    let digest = witness_digest(address);
+    let mut surface = String::new();
+    Memory::new(&mut Resident).reserve_string(
+        &mut surface,
+        "_:.".len() + WITNESS_SCOPE.len() + 1 + 2 * WITNESS_LABEL_BYTES,
+    )?;
+    surface.push_str("_:");
+    surface.push_str(WITNESS_SCOPE);
+    surface.push('.');
     surface.push(WITNESS_LABEL_PREFIX);
     purrdf_hash::hex::encode_into(&digest.as_bytes()[..WITNESS_LABEL_BYTES], &mut surface);
-    surface
+    Ok(surface)
 }
 
 /// The witnesses one chase invented, keyed by blank-node surface.
@@ -313,8 +344,8 @@ fn witness_surface(address: &WitnessAddress) -> String {
 /// witness and the round's fact set deduplicates. Without idempotence each re-derivation
 /// would invent a fresh null and the fixpoint would never close.
 ///
-/// **Deterministic**: a `BTreeMap`, so every sweep is sorted, and the key is a content
-/// digest rather than a counter, so it does not depend on mint order either.
+/// **Deterministic**: a `BTreeMap`, so every sweep is sorted. The key is a content digest,
+/// with further deterministic candidates if a term already owns the original label.
 #[derive(Debug, Clone, Default)]
 pub struct SkolemRegistry {
     /// Witness surface → the address it was minted against.
@@ -323,10 +354,28 @@ pub struct SkolemRegistry {
 
 impl SkolemRegistry {
     /// Mint — or recover — the witness for `address`, returning its blank-node surface.
-    fn mint(&mut self, address: WitnessAddress) -> String {
-        let surface = witness_surface(&address);
-        self.witnesses.entry(surface.clone()).or_insert(address);
-        surface
+    fn mint(
+        &mut self,
+        mut address: WitnessAddress,
+        occupied: impl Fn(&str) -> bool,
+    ) -> Result<String, StorageError> {
+        loop {
+            let surface = witness_surface(&address)?;
+            match self.witnesses.get(&surface) {
+                Some(previous) if *previous == address => return Ok(surface),
+                None if !occupied(&surface) => {
+                    self.witnesses
+                        .insert(Memory::new(&mut Resident).string(&surface)?, address);
+                    return Ok(surface);
+                }
+                _ => {
+                    address.salt = address
+                        .salt
+                        .checked_add(1)
+                        .ok_or(StorageError::SizeOverflow)?;
+                }
+            }
+        }
     }
 
     /// The address behind an invented witness, or `None` if this registry never minted it.
@@ -375,7 +424,7 @@ pub enum ChaseError {
         clause: usize,
     },
     /// The original logical capacity or physical storage refusal.
-    Storage(purrdf_lex::allocation::StorageError),
+    Storage(StorageError),
     /// The complete existential rule bundle violates a declaration.
     NeverDerive(crate::admission::AdmissionRefusal),
     /// Native termination preparation, checking or account reclamation refused.
@@ -563,7 +612,7 @@ purrdf_lex::error_source!(ChaseError {
     Termination
 });
 
-purrdf_lex::variant_from!(ChaseError { Storage(purrdf_lex::allocation::StorageError), Termination(TerminationError) });
+purrdf_lex::variant_from!(ChaseError { Storage(StorageError), Termination(TerminationError) });
 
 // ── The chase ───────────────────────────────────────────────────────────────────
 
@@ -626,50 +675,80 @@ impl StepMeter {
 ///
 /// A repeated variable — within the atom or shared with `solution` — is enforced per row
 /// rather than through the index, so `p(?x, ?p, ?x, ?g)` behaves as the diagonal it is.
-fn extend_solution<const N: usize>(
-    atom: &ClauseAtom<N>,
-    store: &RelationStore<TermInterner, N>,
-    solution: &Binding,
-    out: &mut Vec<Binding>,
-    meter: &mut StepMeter,
-) where
+#[derive(Debug)]
+struct AtomScan<const N: usize>
+where
     Arity<N>: StoreShape<N>,
 {
-    let terms = atom.terms();
-    // The already-known surface of each position, or `None` when the scan binds it.
-    let known: [Option<String>; N] = std::array::from_fn(|index| match terms[index] {
-        ClauseTerm::Var(name) => solution.get(name).cloned(),
-        constant => constant.surface(),
-    });
+    partitions: PartitionPosition<TermId, N>,
+    bound: Bound,
+    active: Option<(crate::id::PartitionId, RowPosition)>,
+}
 
-    let mut ids: [Option<TermId>; N] = [None; N];
-    for (index, surface) in known.iter().enumerate() {
-        if let Some(surface) = surface {
-            // A pinned term the store has never interned matches nothing at all.
-            let Some(id) = store.term_id(surface) else {
-                return;
-            };
-            ids[index] = Some(id);
+impl<const N: usize> AtomScan<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn new(
+        atom: &ClauseAtom<N>,
+        store: &RelationStore<TermInterner, N>,
+        solution: &Binding,
+    ) -> Option<Self> {
+        let terms = atom.terms();
+        let known: [Option<String>; N] = std::array::from_fn(|index| match terms[index] {
+            ClauseTerm::Var(name) => solution.get(name).cloned(),
+            constant => constant.surface(),
+        });
+        let mut ids: [Option<TermId>; N] = [None; N];
+        for (index, surface) in known.iter().enumerate() {
+            if let Some(surface) = surface {
+                ids[index] = Some(store.term_id(surface)?);
+            }
+        }
+        let bound = match (ids[POSITION_SUBJECT], ids[POSITION_OBJECT]) {
+            (Some(subject), Some(object)) => Bound::Both(subject, object),
+            (Some(subject), None) => Bound::Subject(subject),
+            (None, Some(object)) => Bound::Object(object),
+            (None, None) => Bound::Any,
+        };
+        Some(Self {
+            partitions: PartitionPosition::new(store, ids),
+            bound,
+            active: None,
+        })
+    }
+
+    fn next(&mut self, store: &RelationStore<TermInterner, N>) -> Option<[TermId; N]> {
+        loop {
+            if let Some((id, rows)) = self.active.as_mut() {
+                let partition = store.partition_with_id(*id);
+                if let Some((subject, object, _)) = rows.next(partition.arrangement()) {
+                    return Some(partition.row(subject, object));
+                }
+            }
+            let partition = self.partitions.next(store, None)?;
+            self.active = Some((
+                partition.id(),
+                RowPosition::new(partition.arrangement(), self.bound),
+            ));
         }
     }
 
-    let bound = match (ids[POSITION_SUBJECT], ids[POSITION_OBJECT]) {
-        (Some(subject), Some(object)) => Bound::Both(subject, object),
-        (Some(subject), None) => Bound::Subject(subject),
-        (None, Some(object)) => Bound::Object(object),
-        (None, None) => Bound::Any,
-    };
-
-    let interner = store.interner();
-    for partition in store.partitions_for(ids) {
-        let mut cursor = partition.select(bound);
-        while let Some((subject, object, _row)) = LendingIterator::next(&mut cursor) {
-            if meter.spent() {
-                return;
-            }
-            let matched = partition
-                .row(subject, object)
-                .map(|id| interner.resolve(id));
+    fn advance(
+        &mut self,
+        atom: &ClauseAtom<N>,
+        store: &RelationStore<TermInterner, N>,
+        solution: &Binding,
+        out: &mut Vec<Binding>,
+        meter: &mut StepMeter,
+    ) -> bool {
+        let terms = atom.terms();
+        let interner = store.interner();
+        while !meter.spent() {
+            let Some(row) = self.next(store) else {
+                return true;
+            };
+            let matched = row.map(|id| interner.resolve(id));
             // Agreement first, allocation second: a row that fails the diagonal never
             // clones the binding.
             let mut fresh: [Option<(&str, &str)>; N] = [None; N];
@@ -705,40 +784,74 @@ fn extend_solution<const N: usize>(
             meter.charge();
             out.push(merged);
         }
+        false
     }
 }
 
-/// Join `atoms` as a conjunctive query over `store`, seeded with `seed`.
+/// Join the atoms of a clause over its original store.
 ///
 /// Used twice, and that reuse is the point: once for a clause BODY seeded with the empty
 /// binding, and once for the restricted-satisfaction probe over a head disjunct seeded with
 /// the frontier binding and the existentials left FREE. The blocking condition is literally
 /// "does this conjunctive query have a solution", so writing it as a second, subtly
 /// different traversal would be an opportunity for the two to disagree.
-fn join_atoms<'a, const N: usize>(
-    atoms: impl IntoIterator<Item = &'a ClauseAtom<N>>,
-    store: &RelationStore<TermInterner, N>,
-    seed: &Binding,
-    meter: &mut StepMeter,
-) -> Vec<Binding>
+#[derive(Debug)]
+struct JoinFrame<const N: usize>
 where
     Arity<N>: StoreShape<N>,
 {
-    let mut solutions = vec![seed.clone()];
-    for atom in atoms {
-        let mut next = Vec::new();
-        for solution in &solutions {
-            if meter.spent() {
-                break;
-            }
-            extend_solution(atom, store, solution, &mut next, meter);
-        }
-        solutions = next;
-        if solutions.is_empty() {
-            break;
+    atom: usize,
+    input: usize,
+    solutions: Vec<Binding>,
+    next: Vec<Binding>,
+    scan: Option<AtomScan<N>>,
+}
+
+impl<const N: usize> JoinFrame<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn new(seed: &Binding) -> Self {
+        Self {
+            atom: 0,
+            input: 0,
+            solutions: vec![seed.clone()],
+            next: Vec::new(),
+            scan: None,
         }
     }
-    solutions
+
+    fn advance(
+        &mut self,
+        atoms: &[ClauseAtom<N>],
+        store: &RelationStore<TermInterner, N>,
+        meter: &mut StepMeter,
+    ) -> bool {
+        while let Some(atom) = atoms.get(self.atom) {
+            if self.solutions.is_empty() {
+                return true;
+            }
+            while let Some(solution) = self.solutions.get(self.input) {
+                if meter.spent() {
+                    return false;
+                }
+                if self.scan.is_none() {
+                    self.scan = AtomScan::new(atom, store, solution);
+                }
+                if let Some(scan) = &mut self.scan
+                    && !scan.advance(atom, store, solution, &mut self.next, meter)
+                {
+                    return false;
+                }
+                self.scan = None;
+                self.input += 1;
+            }
+            self.solutions = core::mem::take(&mut self.next);
+            self.atom += 1;
+            self.input = 0;
+        }
+        true
+    }
 }
 
 /// The restriction of `solution` to `variables`.
@@ -896,6 +1009,8 @@ where
     store: RelationStore<TermInterner, N>,
     /// Every derived fact with its producing clause, in commit order.
     derivations: Vec<ChaseDerivation<N>>,
+    /// Optional firing evidence, indexed by committed derivation position.
+    proofs: Option<Vec<ChaseFiring<N>>>,
     /// The witnesses invented so far.
     witnesses: SkolemRegistry,
     /// The candidate-solution meter.
@@ -926,10 +1041,7 @@ where
     fn check_budget(&self) -> Result<(), ChaseError> {
         let report = self.report();
         if self.meter.spent() {
-            return Err(ChaseError::BudgetExhausted {
-                resource: BudgetResource::JoinSteps,
-                report,
-            });
+            return Err(self.join_refusal());
         }
         if u64::try_from(report.stored_facts()).unwrap_or(u64::MAX) > report.stored_fact_limit() {
             return Err(ChaseError::BudgetExhausted {
@@ -944,6 +1056,13 @@ where
             });
         }
         Ok(())
+    }
+
+    fn join_refusal(&self) -> ChaseError {
+        ChaseError::BudgetExhausted {
+            resource: BudgetResource::JoinSteps,
+            report: self.report(),
+        }
     }
 }
 
@@ -965,6 +1084,72 @@ where
     fact: ShapeFact<N>,
     /// The producing clause's index in authored program order.
     clause: usize,
+}
+
+/// Evidence for one committed head atom, in the authored clause's body order.
+#[derive(Debug)]
+pub struct ChaseFiring<const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    head: usize,
+    premises: Shared<Vec<ShapeFact<N>>>,
+}
+
+impl<const N: usize> ChaseFiring<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// Index of the concluded atom within the clause's sole head conjunction.
+    pub fn head(&self) -> usize {
+        self.head
+    }
+
+    /// Grounded antecedents in authored order, including repeats.
+    pub fn premises(&self) -> &[ShapeFact<N>] {
+        &self.premises
+    }
+}
+
+/// Independent checking of committed firing evidence failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ChaseProofError {
+    /// The chase did not record firing evidence.
+    NotRecorded,
+    /// The proof stream does not cover the complete committed prefix.
+    IncompletePrefix,
+    /// The firing at this commit position does not follow from the source
+    /// and preceding checked facts under the authored clause.
+    InvalidFiring(usize),
+    /// Independent verification could not allocate its working set.
+    Storage(StorageError),
+}
+
+purrdf_lex::variant_from!(ChaseProofError { Storage(StorageError) });
+
+impl fmt::Display for ChaseProofError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotRecorded => f.write_str("chase did not record firing evidence"),
+            Self::IncompletePrefix => {
+                f.write_str("recorded chase proof does not cover the committed prefix")
+            }
+            Self::InvalidFiring(index) => {
+                write!(f, "invalid recorded chase firing at commit {index}")
+            }
+            Self::Storage(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ChaseProofError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Storage(error) => Some(error),
+            _ => None,
+        }
+    }
 }
 
 impl<const N: usize> ChaseDerivation<N>
@@ -1173,13 +1358,11 @@ pub fn chase_with<const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let prepared = certify_with(
+    let prepared = certify_with(program, Resident, AnalysisLimits::default(), stop)?.prepare(
         program,
-        purrdf_lex::allocation::Resident,
         AnalysisLimits::default(),
         stop,
-    )?
-    .prepare(program, AnalysisLimits::default(), stop)?;
+    )?;
     let outcome = prepared.chase_with(edb, options, stop);
     prepared.close()?;
     outcome
@@ -1197,7 +1380,10 @@ where
     program: &'p [DlClause<N>],
     termination: ChaseTermination,
     firings: Vec<Firing>,
+    // These constants reserve names without changing the logical seed budget.
+    witness_literals: Vec<&'p str>,
     state: ChaseState<N>,
+    round: Option<Box<RoundFrame<N>>>,
 }
 
 impl<const N: usize> fmt::Debug for ChaseSession<'_, N>
@@ -1224,6 +1410,24 @@ where
     Paused(ChaseSession<'p, N>),
 }
 
+/// Progress under caller-replaceable logical ceilings.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ChaseAdvance<'p, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The complete result and original termination certificate.
+    Complete(ChaseOutcome<N>),
+    /// A stop or logical ceiling retained the original execution.
+    Paused {
+        /// The original refusal and its observed cumulative budget.
+        reason: ChaseError,
+        /// The only state which can continue that execution.
+        session: ChaseSession<'p, N>,
+    },
+}
+
 impl<'p, const N: usize> ChaseSession<'p, N>
 where
     Arity<N>: StoreShape<N>,
@@ -1233,21 +1437,28 @@ where
         edb: RelationStore<TermInterner, N>,
         options: &EvalOptions,
         termination: ChaseTermination,
+        record: bool,
     ) -> Result<Self, ChaseError> {
         let firings = plan_firings(program)?;
+        let witness_literals = authored_witness_literals(program)?;
         let state = ChaseState {
             store: edb,
             derivations: Vec::new(),
+            proofs: record.then(Vec::new),
             witnesses: SkolemRegistry::default(),
             meter: StepMeter::new(options.max_join_steps()),
             options: *options,
         };
-        state.check_budget()?;
+        if !record {
+            state.check_budget()?;
+        }
         Ok(Self {
             program,
             termination,
             firings,
+            witness_literals,
             state,
+            round: None,
         })
     }
 
@@ -1255,6 +1466,65 @@ where
     #[must_use]
     pub fn budget(&self) -> BudgetReport {
         self.state.report()
+    }
+
+    /// The committed prefix and its firing evidence, if recording was enabled.
+    /// Pending heads and speculative witnesses do not appear here.
+    pub fn recorded_prefix(&self) -> Option<(&[ChaseDerivation<N>], &[ChaseFiring<N>])> {
+        self.state
+            .proofs
+            .as_deref()
+            .map(|proofs| (self.state.derivations.as_slice(), proofs))
+    }
+
+    /// Whether this term of a committed conclusion is an invented witness.
+    pub fn is_invented_term(&self, surface: &str) -> bool {
+        self.state.witnesses.explain(surface).is_some()
+    }
+
+    /// Check the prefix against a fresh copy of the original seed without
+    /// executing a join or inspecting the suspended round.
+    ///
+    /// # Errors
+    /// Returns a missing recording, an invalid firing, or a hard native
+    /// storage failure. Callers that bind a source identity must verify it
+    /// before seeding this independent check.
+    pub fn verify_recorded_prefix(
+        &self,
+        mut seed: RelationStore<TermInterner, N>,
+    ) -> Result<(), ChaseProofError> {
+        let (derived, proofs) = self.recorded_prefix().ok_or(ChaseProofError::NotRecorded)?;
+        if derived.len() != proofs.len() {
+            return Err(ChaseProofError::IncompletePrefix);
+        }
+        // Resident term identities are dense and never recycled. New checked
+        // facts can add terms, but never turn one into an original seed term.
+        let source_terms =
+            u64::try_from(seed.interner().len()).map_err(|_| StorageError::SizeOverflow)?;
+        let witness_literals = authored_witness_literals(self.program)?;
+        for (position, (derivation, proof)) in derived.iter().zip(proofs).enumerate() {
+            let Some(clause) = self.program.get(derivation.clause) else {
+                return Err(ChaseProofError::InvalidFiring(position));
+            };
+            if !verify_firing(
+                clause,
+                derivation,
+                proof,
+                &seed,
+                &self.state.witnesses,
+                |surface| {
+                    seed.term_id(surface)
+                        .is_some_and(|id| id.index() < source_terms)
+                        || witness_literals.binary_search(&surface).is_ok()
+                },
+            )? || seed
+                .insert_row(Arity::<N>::fact_terms(&derivation.fact))?
+                .is_none()
+            {
+                return Err(ChaseProofError::InvalidFiring(position));
+            }
+        }
+        Ok(())
     }
 
     /// Continue with the original limits and a fresh caller signal if needed.
@@ -1270,6 +1540,22 @@ where
     ) -> Result<ChaseProgress<'p, N>, ChaseError> {
         advance_session(self, stop)
     }
+
+    /// Continue this execution under the supplied cumulative ceilings.
+    ///
+    /// A refusal preserves the original indexed scan and pending commits. The
+    /// ceilings govern all work since the initial seed, not just this call.
+    /// # Errors
+    /// An operational failure returns the original cause and no continuation.
+    pub fn advance_with(
+        mut self,
+        options: &EvalOptions,
+        stop: Option<&dyn StopSignal>,
+    ) -> Result<ChaseAdvance<'p, N>, ChaseError> {
+        self.state.options = *options;
+        self.state.meter.limit = options.max_join_steps();
+        drive_chase(self, stop, true)
+    }
 }
 
 fn advance_session<'p, const N: usize>(
@@ -1279,120 +1565,64 @@ fn advance_session<'p, const N: usize>(
 where
     Arity<N>: StoreShape<N>,
 {
-    let ChaseSession {
-        program,
-        termination,
-        firings,
-        mut state,
-    } = session;
+    match drive_chase(session, stop, false)? {
+        ChaseAdvance::Complete(outcome) => Ok(ChaseProgress::Complete(outcome)),
+        ChaseAdvance::Paused {
+            reason: ChaseError::Stopped { .. },
+            session,
+        } => Ok(ChaseProgress::Paused(session)),
+        ChaseAdvance::Paused { reason, .. } => Err(reason),
+    }
+}
+
+fn drive_chase<'p, const N: usize>(
+    mut session: ChaseSession<'p, N>,
+    stop: Option<&dyn StopSignal>,
+    retain_budget: bool,
+) -> Result<ChaseAdvance<'p, N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
     loop {
-        // The caller's stop signal, polled BEFORE the round it would prevent — the same
-        // place, and for the same reason, `crate::seminaive` polls it.
+        if let Err(reason) = session.state.check_budget() {
+            return if retain_budget {
+                Ok(ChaseAdvance::Paused { reason, session })
+            } else {
+                Err(reason)
+            };
+        }
         if is_stopped(stop) {
-            return Ok(ChaseProgress::Paused(ChaseSession {
-                program,
-                termination,
-                firings,
-                state,
-            }));
+            let reason = ChaseError::Stopped {
+                report: session.state.report(),
+            };
+            return Ok(ChaseAdvance::Paused { reason, session });
         }
-        // One round's candidate facts → the clause credited with them, in total lexical
-        // order and deduplicated: two clauses deriving the same fact, or one clause firing
-        // twice on one frontier, collapse here rather than racing to be committed first.
-        // The credit goes to the LOWEST authored clause index that produced the fact
-        // (`or_insert` over clauses visited in program order), so attribution is a function
-        // of the program and the data rather than of the traversal.
-        let mut pending: BTreeMap<ShapeFact<N>, usize> = BTreeMap::new();
-        let seed = Binding::new();
-
-        for firing in &firings {
-            let clause = &program[firing.clause];
-            let disjunct = firing.disjunct(clause);
-            let solutions = join_atoms(clause.body(), &state.store, &seed, &mut state.meter);
-            for solution in solutions {
-                if state.meter.spent() {
-                    break;
-                }
-                // The restricted-chase blocking condition: seed the head with the frontier
-                // binding, leave the existentials free, and skip the firing if the store
-                // already satisfies it. For a zero-existential head this reduces to "is the
-                // ground head already present", which is the ordinary Datalog dedup.
-                let head_binding = restrict(&solution, &firing.frontier);
-                if !join_atoms(
-                    disjunct.atoms(),
-                    &state.store,
-                    &head_binding,
-                    &mut state.meter,
-                )
-                .is_empty()
-                {
-                    continue;
-                }
-
-                let frontier: Vec<String> = firing
-                    .frontier
-                    .iter()
-                    .map(|name| {
-                        head_binding
-                            .get(name)
-                            .cloned()
-                            .expect("a frontier variable is bound by the body join")
-                    })
-                    .collect();
-                let mut extended = head_binding;
-                for (ordinal, existential) in clause.existentials().iter().enumerate() {
-                    let witness = state.witnesses.mint(WitnessAddress {
-                        clause: firing.clause,
-                        ordinal,
-                        frontier: frontier.clone(),
-                    });
-                    extended.insert(existential.clone(), witness);
-                }
-                // Every atom of the disjunct is credited to this ONE clause: a conjunctive
-                // or existential head asserts several facts from a single firing, and a
-                // consumer counts one credit per triple that entered the closure.
-                for atom in disjunct.atoms() {
-                    pending
-                        .entry(ground(atom, &extended))
-                        .or_insert(firing.clause);
-                }
+        let mut round = session
+            .round
+            .take()
+            .map_or_else(RoundFrame::new, |saved| *saved);
+        match round.advance(
+            session.program,
+            &session.firings,
+            &session.witness_literals,
+            &mut session.state,
+        ) {
+            Ok(RoundDone::Fixpoint) => break,
+            Ok(RoundDone::Committed) => {}
+            Err(reason @ ChaseError::BudgetExhausted { .. }) if retain_budget => {
+                // Only a mid-round refusal allocates an owned suspended frame.
+                session.round = Some(Memory::new(&mut Resident).boxed(round)?);
+                return Ok(ChaseAdvance::Paused { reason, session });
             }
-            if state.meter.spent() {
-                break;
-            }
+            Err(reason) => return Err(reason),
         }
-        state.check_budget()?;
-
-        // A fact an earlier round already committed keeps the attribution it entered the
-        // closure with: it is in the store, so it is filtered out here and never re-credited.
-        let fresh: Vec<ChaseDerivation<N>> = pending
-            .into_iter()
-            .filter(|(fact, _)| !state.store.contains_row(Arity::<N>::fact_terms(fact)))
-            .map(|(fact, clause)| ChaseDerivation { fact, clause })
-            .collect();
-        if fresh.is_empty() {
-            break; // the natural fixpoint: this round derived nothing new
-        }
-        for derivation in fresh {
-            state
-                .report()
-                .admit_fact()
-                .map_err(|report| ChaseError::BudgetExhausted {
-                    resource: BudgetResource::StoredFacts,
-                    report,
-                })?;
-            let fact = &derivation.fact;
-            state.store.insert_row(Arity::<N>::fact_terms(fact))?;
-            state.derivations.push(derivation);
-        }
-        state.check_budget()?;
     }
 
-    Ok(ChaseProgress::Complete(ChaseOutcome {
+    let state = session.state;
+    Ok(ChaseAdvance::Complete(ChaseOutcome {
         budget: state.report(),
         facts: state.store,
-        // `derived` is the same sequence with the attribution projected away, materialised
-        // once here so both accessors are a plain slice read.
+        // The two accessors retain their original committed ordering.
         derived: state
             .derivations
             .iter()
@@ -1400,8 +1630,395 @@ where
             .collect(),
         derivations: state.derivations,
         witnesses: state.witnesses,
-        termination,
+        termination: session.termination,
     }))
+}
+
+enum RoundDone {
+    Fixpoint,
+    Committed,
+}
+
+struct HeadProbe<const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    frontier: Binding,
+    join: JoinFrame<N>,
+    solution: Option<Binding>,
+}
+
+type PendingHead<const N: usize> = (usize, Option<ChaseFiring<N>>);
+type PendingHeads<const N: usize> = BTreeMap<ShapeFact<N>, PendingHead<N>>;
+type PendingIter<const N: usize> =
+    std::iter::Peekable<std::collections::btree_map::IntoIter<ShapeFact<N>, PendingHead<N>>>;
+
+enum RoundPhase<const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    Body(JoinFrame<N>),
+    Heads {
+        solutions: std::vec::IntoIter<Binding>,
+        probe: Option<HeadProbe<N>>,
+    },
+    Commit {
+        heads: PendingIter<N>,
+        changed: bool,
+    },
+}
+
+/// Owns one round's joins, lexical winner map, and commit coordinate.
+struct RoundFrame<const N: usize>
+where
+    Arity<N>: StoreShape<N>,
+{
+    firing: usize,
+    phase: RoundPhase<N>,
+    pending: PendingHeads<N>,
+}
+
+impl<const N: usize> RoundFrame<N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn new() -> Self {
+        Self {
+            firing: 0,
+            phase: RoundPhase::Body(JoinFrame::new(&Binding::new())),
+            pending: BTreeMap::new(),
+        }
+    }
+
+    fn advance(
+        &mut self,
+        program: &[DlClause<N>],
+        firings: &[Firing],
+        witness_literals: &[&str],
+        state: &mut ChaseState<N>,
+    ) -> Result<RoundDone, ChaseError> {
+        loop {
+            match &mut self.phase {
+                RoundPhase::Body(join) => {
+                    let Some(firing) = firings.get(self.firing) else {
+                        self.phase = RoundPhase::Commit {
+                            heads: core::mem::take(&mut self.pending).into_iter().peekable(),
+                            changed: false,
+                        };
+                        continue;
+                    };
+                    if !join.advance(
+                        program[firing.clause].body(),
+                        &state.store,
+                        &mut state.meter,
+                    ) {
+                        return Err(state.join_refusal());
+                    }
+                    self.phase = RoundPhase::Heads {
+                        solutions: core::mem::take(&mut join.solutions).into_iter(),
+                        probe: None,
+                    };
+                }
+                RoundPhase::Heads { solutions, probe } => {
+                    let firing = &firings[self.firing];
+                    let clause = &program[firing.clause];
+                    let disjunct = firing.disjunct(clause);
+                    if probe.is_none() {
+                        let Some(solution) = solutions.next() else {
+                            self.firing += 1;
+                            self.phase = RoundPhase::Body(JoinFrame::new(&Binding::new()));
+                            continue;
+                        };
+                        // Existentials stay free in the head satisfaction probe.
+                        let frontier = restrict(&solution, &firing.frontier);
+                        let join = JoinFrame::new(&frontier);
+                        *probe = Some(HeadProbe {
+                            frontier,
+                            join,
+                            solution: state.proofs.is_some().then_some(solution),
+                        });
+                    }
+                    let active = probe.as_mut().expect("the head probe was selected");
+                    if !active
+                        .join
+                        .advance(disjunct.atoms(), &state.store, &mut state.meter)
+                    {
+                        return Err(state.join_refusal());
+                    }
+                    let active = probe.take().expect("the completed head probe is retained");
+                    if active.join.solutions.is_empty() {
+                        stage_firing(
+                            firing,
+                            clause,
+                            active,
+                            &mut self.pending,
+                            state,
+                            witness_literals,
+                        )?;
+                    }
+                }
+                RoundPhase::Commit { heads, changed } => {
+                    while let Some((fact, _)) = heads.peek() {
+                        let row = Arity::<N>::fact_terms(fact);
+                        // Each staged key is unique, so a previous commit
+                        // cannot change membership for this key.
+                        if state.store.contains_row(row) {
+                            heads.next();
+                            continue;
+                        }
+                        state.report().admit_fact().map_err(|report| {
+                            ChaseError::BudgetExhausted {
+                                resource: BudgetResource::StoredFacts,
+                                report,
+                            }
+                        })?;
+                        let mut resident = Resident;
+                        let mut memory = Memory::new(&mut resident);
+                        if let Some(proofs) = &mut state.proofs {
+                            memory.reserve_for_push(proofs)?;
+                        }
+                        memory.reserve_for_push(&mut state.derivations)?;
+                        state.store.insert_row(row)?;
+                        let (fact, (clause, proof)) =
+                            heads.next().expect("the admitted derivation was peeked");
+                        state.derivations.push(ChaseDerivation { fact, clause });
+                        if let Some(proofs) = &mut state.proofs {
+                            proofs.push(proof.expect("recorded heads carry their firing evidence"));
+                        }
+                        *changed = true;
+                    }
+                    return Ok(if *changed {
+                        RoundDone::Committed
+                    } else {
+                        RoundDone::Fixpoint
+                    });
+                }
+            }
+        }
+    }
+}
+
+fn stage_firing<const N: usize>(
+    firing: &Firing,
+    clause: &DlClause<N>,
+    active: HeadProbe<N>,
+    pending: &mut PendingHeads<N>,
+    state: &mut ChaseState<N>,
+    witness_literals: &[&str],
+) -> Result<(), ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut extended = active.frontier;
+    let frontier: Vec<String> = firing
+        .frontier
+        .iter()
+        .map(|name| {
+            extended
+                .get(name)
+                .cloned()
+                .expect("a frontier variable is bound by the body join")
+        })
+        .collect();
+    for (ordinal, existential) in clause.existentials().iter().enumerate() {
+        let witness = state.witnesses.mint(
+            WitnessAddress {
+                clause: firing.clause,
+                ordinal,
+                frontier: frontier.clone(),
+                salt: 0,
+            },
+            |surface| {
+                state.store.term_id(surface).is_some()
+                    || witness_literals.binary_search(&surface).is_ok()
+            },
+        )?;
+        extended.insert(existential.clone(), witness);
+    }
+    // First authored producer wins; lexical fact order determines commit order.
+    let mut premises = None;
+    for (head, atom) in firing.disjunct(clause).atoms().iter().enumerate() {
+        if let std::collections::btree_map::Entry::Vacant(entry) =
+            pending.entry(ground(atom, &extended))
+        {
+            let proof = match &active.solution {
+                Some(solution) => {
+                    let premises = match &premises {
+                        Some(record) => record,
+                        None => premises.insert(record_premises(clause, solution)?),
+                    };
+                    Some(ChaseFiring {
+                        head,
+                        premises: premises
+                            .try_clone()
+                            .map_err(|_| ChaseError::Storage(StorageError::SizeOverflow))?,
+                    })
+                }
+                None => None,
+            };
+            entry.insert((firing.clause, proof));
+        }
+    }
+    Ok(())
+}
+
+fn record_premises<const N: usize>(
+    clause: &DlClause<N>,
+    solution: &Binding,
+) -> Result<Shared<Vec<ShapeFact<N>>>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut premises = Vec::new();
+    memory
+        .reserve(&mut premises, clause.body().len())
+        .map_err(ChaseError::Storage)?;
+    for atom in clause.body() {
+        let mut surfaces = std::array::from_fn(|_| String::new());
+        for (output, term) in surfaces.iter_mut().zip(atom.terms()) {
+            *output = match term {
+                ClauseTerm::Var(name) => memory.string(&solution[name]),
+                constant => constant
+                    .surface_in(&mut memory)
+                    .map(|surface| surface.expect("an authored constant has a surface")),
+            }
+            .map_err(ChaseError::Storage)?;
+        }
+        premises.push(Arity::<N>::fact(surfaces));
+    }
+    Shared::try_new(premises).map_err(|_| ChaseError::Storage(StorageError::AllocationFailed))
+}
+
+fn verify_firing<const N: usize>(
+    clause: &DlClause<N>,
+    derivation: &ChaseDerivation<N>,
+    proof: &ChaseFiring<N>,
+    seed: &RelationStore<TermInterner, N>,
+    witnesses: &SkolemRegistry,
+    source_contains: impl Fn(&str) -> bool,
+) -> Result<bool, StorageError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let [head] = clause.head_disjuncts() else {
+        return Ok(false);
+    };
+    let Some(head) = head.atoms().get(proof.head) else {
+        return Ok(false);
+    };
+    if clause.body().len() != proof.premises().len() {
+        return Ok(false);
+    }
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut binding: Vec<(&str, &str)> = Vec::new();
+    for (atom, fact) in clause.body().iter().zip(proof.premises()) {
+        let surfaces = Arity::<N>::fact_terms(fact);
+        if !seed.contains_row(surfaces) {
+            return Ok(false);
+        }
+        for (term, value) in atom.terms().into_iter().zip(surfaces) {
+            if let ClauseTerm::Var(name) = term {
+                match binding.iter().find(|(variable, _)| *variable == name) {
+                    Some((_, prior)) if *prior != value => return Ok(false),
+                    Some(_) => {}
+                    None => memory.push(&mut binding, (name, value))?,
+                }
+            } else if term.surface_in(&mut memory)?.as_deref() != Some(value) {
+                return Ok(false);
+            }
+        }
+    }
+    let bound = |name: &str| {
+        binding
+            .iter()
+            .find(|(key, _)| *key == name)
+            .map(|(_, value)| *value)
+    };
+    for (term, value) in head
+        .terms()
+        .into_iter()
+        .zip(Arity::<N>::fact_terms(&derivation.fact))
+    {
+        let matches = match term {
+            ClauseTerm::Var(name) => match clause.existentials().iter().position(|var| var == name)
+            {
+                None => bound(name) == Some(value),
+                Some(ordinal) => {
+                    let Some(address) = witnesses.explain(value) else {
+                        return Ok(false);
+                    };
+                    if source_contains(value) {
+                        return Ok(false);
+                    }
+                    let mut frontier = Vec::new();
+                    for variable in clause.head_atoms().flat_map(ClauseAtom::terms) {
+                        if let ClauseTerm::Var(variable) = variable
+                            && let Some(value) = bound(variable)
+                            && !clause.existentials().contains(variable)
+                        {
+                            memory.push(&mut frontier, (variable.as_str(), value))?;
+                        }
+                    }
+                    frontier.sort_unstable();
+                    frontier.dedup();
+                    address.clause == derivation.clause
+                        && address.ordinal == ordinal
+                        && address
+                            .frontier
+                            .iter()
+                            .map(String::as_str)
+                            .eq(frontier.iter().map(|(_, value)| *value))
+                        && matches_witness_surface(address, value)
+                }
+            },
+            constant => constant.surface_in(&mut memory)?.as_deref() == Some(value),
+        };
+        if !matches {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn authored_witness_literals<const N: usize>(
+    program: &[DlClause<N>],
+) -> Result<Vec<&str>, StorageError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut reserved = Vec::new();
+    for term in program
+        .iter()
+        .flat_map(|clause| clause.head_atoms().chain(clause.body()))
+        .flat_map(ClauseAtom::terms)
+    {
+        // Verbatim literals can spell a blank surface. IRI and default-graph
+        // constants cannot, and variables get their names from an admitted row.
+        if let ClauseTerm::Literal(surface) = term
+            && surface.starts_with("_:")
+        {
+            memory.push(&mut reserved, surface.as_str())?;
+        }
+    }
+    reserved.sort_unstable();
+    reserved.dedup();
+    Ok(reserved)
+}
+
+fn matches_witness_surface(address: &WitnessAddress, surface: &str) -> bool {
+    let Some(label) = surface
+        .strip_prefix("_:")
+        .and_then(|suffix| suffix.strip_prefix(WITNESS_SCOPE))
+        .and_then(|suffix| suffix.strip_prefix('.'))
+        .and_then(|label| label.strip_prefix(WITNESS_LABEL_PREFIX))
+    else {
+        return false;
+    };
+    let mut decoded = [0; WITNESS_LABEL_BYTES];
+    purrdf_hash::hex::decode_canonical_to_slice(label, &mut decoded) == Ok(decoded.len())
+        && decoded == witness_digest(address).as_bytes()[..WITNESS_LABEL_BYTES]
 }
 
 #[cfg(test)]
@@ -1630,6 +2247,167 @@ mod tests {
         assert_eq!(resumed.budget(), uninterrupted.budget());
     }
 
+    /// A mid-join and a mid-commit refusal keep the same work and attribution.
+    #[test]
+    fn cumulative_chase_limits_resume_without_replaying_a_round() {
+        let program = [restriction()];
+        let edb = || store_of(&[("a", TYPE, A), ("b", TYPE, A)]);
+        let unlimited = EvalOptions::default();
+        let expected = chase_with(&program, edb(), &unlimited, None).unwrap();
+        let prepared = certify(&program)
+            .unwrap()
+            .prepare(&program, AnalysisLimits::default(), None)
+            .unwrap();
+        let join_limit = unlimited.with_max_join_steps(1);
+        let session = prepared.start_recorded_session(edb(), &join_limit).unwrap();
+        prepared.close().unwrap();
+
+        let ChaseAdvance::Paused {
+            reason:
+                ChaseError::BudgetExhausted {
+                    resource: BudgetResource::JoinSteps,
+                    report: join_report,
+                },
+            session,
+        } = session.advance_with(&join_limit, None).unwrap()
+        else {
+            panic!("the unfinished body join is retained on fuel refusal");
+        };
+        assert_eq!(join_report.join_steps(), 2);
+        assert_eq!(join_report.stored_facts(), 2);
+
+        let fact_limit = unlimited.with_max_stored_facts(3);
+        let ChaseAdvance::Paused {
+            reason:
+                ChaseError::BudgetExhausted {
+                    resource: BudgetResource::StoredFacts,
+                    report: fact_report,
+                },
+            session,
+        } = session.advance_with(&fact_limit, None).unwrap()
+        else {
+            panic!("the uncommitted lexical suffix is retained on fact refusal");
+        };
+        assert_eq!(fact_report.stored_facts(), 3);
+        let (committed, proofs) = session.recorded_prefix().unwrap();
+        assert_eq!(committed.len(), 1);
+        assert_eq!(proofs[0].premises().len(), 1);
+        session.verify_recorded_prefix(edb()).unwrap();
+        assert_eq!(
+            session.verify_recorded_prefix(RelationStore::new()),
+            Err(ChaseProofError::InvalidFiring(0)),
+        );
+
+        let ChaseAdvance::Complete(actual) = session.advance_with(&unlimited, None).unwrap() else {
+            panic!("the original chase reaches its fixpoint after raising both limits");
+        };
+        assert_eq!(closure(&actual), closure(&expected));
+        assert_eq!(actual.derivations(), expected.derivations());
+        assert_eq!(actual.budget(), expected.budget());
+        assert!(
+            actual
+                .witnesses()
+                .witnesses()
+                .eq(expected.witnesses().witnesses())
+        );
+    }
+
+    /// An authored blank can spell the original digest without earning its
+    /// existential meaning. Do not join facts about it to invented facts.
+    #[test]
+    fn an_authored_blank_cannot_impersonate_a_recorded_witness() {
+        let program = vec![
+            restriction(),
+            DlClause::datalog(
+                concept("?x", CONCEPT_D),
+                vec![role("?x", R, "?y"), concept("?y", P)],
+            ),
+        ];
+        let occupied = witness_surface(&WitnessAddress {
+            clause: 0,
+            ordinal: 0,
+            frontier: vec![iri("a")],
+            salt: 0,
+        })
+        .unwrap();
+        for authored_in_program in [false, true] {
+            let mut program = program.clone();
+            if authored_in_program {
+                program.push(DlClause::datalog(
+                    ClauseAtom::positive(
+                        ClauseTerm::literal(occupied.clone()),
+                        TYPE,
+                        ClauseTerm::iri(P),
+                    ),
+                    Vec::new(),
+                ));
+            }
+            let seed = || {
+                let mut store = store_of(&[("a", TYPE, A)]);
+                if !authored_in_program {
+                    store
+                        .insert(&occupied, &iri(TYPE), &iri(P), RelationStore::DEFAULT_GRAPH)
+                        .unwrap();
+                }
+                store
+            };
+            let options = EvalOptions::default();
+            let prepared = certify(&program)
+                .unwrap()
+                .prepare(&program, AnalysisLimits::default(), None)
+                .unwrap();
+            let session = prepared.start_recorded_session(seed(), &options).unwrap();
+            prepared.close().unwrap();
+            let signal = AfterNPolls(std::sync::atomic::AtomicU64::new(1));
+            let ChaseAdvance::Paused { session, .. } =
+                session.advance_with(&options, Some(&signal)).unwrap()
+            else {
+                panic!("the witness should have committed in the first round");
+            };
+            session.verify_recorded_prefix(seed()).unwrap();
+            let witness = session.state.witnesses.witnesses().next().unwrap();
+            assert_ne!(witness, occupied);
+            assert_eq!(session.state.witnesses.explain(witness).unwrap().salt(), 1);
+            let mut forged_seed = seed();
+            forged_seed
+                .insert(witness, &iri(TYPE), &iri(P), RelationStore::DEFAULT_GRAPH)
+                .unwrap();
+            assert!(matches!(
+                session.verify_recorded_prefix(forged_seed),
+                Err(ChaseProofError::InvalidFiring(_))
+            ));
+            let ChaseAdvance::Complete(outcome) = session.advance_with(&options, None).unwrap()
+            else {
+                panic!("the witnessed restriction closes");
+            };
+            assert!(!outcome.facts().contains(
+                &iri("a"),
+                &iri(TYPE),
+                &iri(CONCEPT_D),
+                RelationStore::DEFAULT_GRAPH
+            ));
+        }
+    }
+
+    /// A store that cannot mint the next term must not publish a partial result.
+    #[test]
+    fn recorded_chase_does_not_pause_on_store_capacity_failure() {
+        let program = [restriction()];
+        let prepared = certify(&program)
+            .unwrap()
+            .prepare(&program, AnalysisLimits::default(), None)
+            .unwrap();
+        let mut store = store_of(&[("a", TYPE, A)]);
+        store.limit_terms_for_test(Some(u64::try_from(store.interner().len()).unwrap()));
+        let options = EvalOptions::default();
+        let session = prepared.start_recorded_session(store, &options).unwrap();
+        prepared.close().unwrap();
+        assert!(matches!(
+            session.advance_with(&options, None),
+            Err(ChaseError::Storage(StorageError::Capacity(_)))
+        ));
+    }
+
     // ── The caller's stored-fact and join-step limits ─────────────────────────
 
     /// The chase honours the caller's limits exactly as the semi-naive evaluator does: a
@@ -1685,6 +2463,7 @@ mod tests {
         let mut state = ChaseState {
             store: edb(),
             derivations: Vec::new(),
+            proofs: None,
             witnesses: SkolemRegistry::default(),
             meter: StepMeter::new(options.max_join_steps()),
             options,
@@ -2341,9 +3120,10 @@ mod tests {
             clause: 1,
             ordinal: 2,
             frontier: vec![iri("a"), iri("b")],
+            salt: 0,
         };
         assert_eq!(
-            witness_surface(&address),
+            witness_surface(&address).unwrap(),
             "_:0.wbbdbca6f8eab62b90b50735b5a380b76"
         );
     }
@@ -2356,9 +3136,10 @@ mod tests {
             clause: 0,
             ordinal: 0,
             frontier: vec![iri("a")],
+            salt: 0,
         };
         assert_eq!(witness_surface(&base), witness_surface(&base.clone()));
-        let surface = witness_surface(&base);
+        let surface = witness_surface(&base).unwrap();
         assert!(surface.starts_with("_:0.w"), "{surface}");
         assert_eq!(
             surface.len(),
@@ -2390,7 +3171,7 @@ mod tests {
             },
         ] {
             assert!(
-                others.insert(witness_surface(&changed)),
+                others.insert(witness_surface(&changed).unwrap()),
                 "every address component reaches the digest: {changed:?}"
             );
         }
@@ -2404,11 +3185,12 @@ mod tests {
             clause: 3,
             ordinal: 1,
             frontier: vec![iri("a"), iri("b")],
+            salt: 0,
         };
         let mut registry = SkolemRegistry::default();
         assert!(registry.is_empty());
-        let first = registry.mint(address.clone());
-        let second = registry.mint(address.clone());
+        let first = registry.mint(address.clone(), |_| false).unwrap();
+        let second = registry.mint(address.clone(), |_| false).unwrap();
         assert_eq!(first, second);
         assert_eq!(registry.len(), 1);
         assert_eq!(registry.explain(&first), Some(&address));

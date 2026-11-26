@@ -461,7 +461,29 @@ impl<'p, A: Admission, const N: usize> PreparedChase<'p, A, N> {
     where
         Arity<N>: StoreShape<N>,
     {
-        super::ChaseSession::start(self.program, edb, options, self.certificate.summary())
+        super::ChaseSession::start(
+            self.program,
+            edb,
+            options,
+            self.certificate.summary(),
+            false,
+        )
+    }
+
+    /// Bind a chase that retains firing evidence for each committed fact.
+    /// Initial logical ceilings are checked when the session advances.
+    ///
+    /// # Errors
+    /// Returns the original unsupported fragment refusal.
+    pub fn start_recorded_session(
+        &self,
+        edb: RelationStore<TermInterner, N>,
+        options: &EvalOptions,
+    ) -> Result<super::ChaseSession<'p, N>, ChaseError>
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        super::ChaseSession::start(self.program, edb, options, self.certificate.summary(), true)
     }
     /// Destroy evidence before releasing its original account.
     /// # Errors

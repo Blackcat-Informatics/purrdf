@@ -3143,12 +3143,12 @@ summary = "`purrdf_core::gallop::run_end` (inlined into `Batch::subject_run`) an
 
 [[site]]
 id = "datalog.chase"
-summary = "`chase::advance_session`, the shared restricted-chase fixpoint reached by ordinary and prepared admission"
+summary = "`chase::drive_chase`, the shared restricted-chase fixpoint reached by ordinary and resumable admission"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_datalog"
-  symbol = "purrdf_datalog::chase::advance_session"
+  symbol = "purrdf_datalog::chase::drive_chase"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
