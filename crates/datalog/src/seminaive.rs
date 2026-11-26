@@ -444,6 +444,8 @@ const STATED_TERM_GENERATING_ROUNDS: u8 = 1 << 2;
 const STATED_GENERATED_TERMS: u8 = 1 << 3;
 /// [`BudgetReport::flags`]: the surface-byte ceiling is the caller's.
 const STATED_TERM_ARENA_BYTES: u8 = 1 << 4;
+/// A guard-free chase refused an arena projection before inserting the row.
+const REFUSED_CHASE_TERM_ARENA: u8 = 1 << 6;
 /// The first unique stored-fact insertion was refused before mutation.
 const REFUSED_STORED_FACT: u8 = 1 << 7;
 
@@ -480,8 +482,10 @@ pub struct BudgetReport {
     flags: u8,
     /// Interned term surface bytes, against [`Self::term_arena_limit`].
     term_arena_bytes: usize,
-    /// Term-generating rounds run, against [`Self::term_generating_round_limit`].
-    term_generating_rounds: u64,
+    /// Guard-generating rounds, or a refused arena projection in the
+    /// guard-free chase. The flag disambiguates these mutually exclusive
+    /// measurements without enlarging the inline errors that embed a report.
+    guard_rounds_or_refused_arena: u64,
     /// Terms added to the store beyond the seeded ones, against
     /// [`Self::generated_term_budget`].
     generated_terms: u64,
@@ -493,11 +497,14 @@ pub struct BudgetReport {
 
 impl purrdf_hash::error::StructuredError for BudgetReport {
     purrdf_hash::error_visit! {
-        @record self { join_steps, stored_facts, flags, term_arena_bytes, term_generating_rounds, generated_terms, input_terms, limits } => "datalog-budget-report" {
+        @record self { join_steps, stored_facts, flags, term_arena_bytes, guard_rounds_or_refused_arena, generated_terms, input_terms, limits } => "datalog-budget-report" {
             "join_steps" => Unsigned(u128::from(self.join_steps)), "stored_facts" => Unsigned(self.stored_facts as u128),
             "stored_fact_refused" => Boolean(self.flags & REFUSED_STORED_FACT != 0),
-            "stated_limits" => Unsigned(u128::from(self.flags & !REFUSED_STORED_FACT)),
-            "term_arena_bytes" => ByteCount(self.term_arena_bytes as u128), "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds)),
+            "stated_limits" => Unsigned(u128::from(self.flags & !(REFUSED_STORED_FACT | REFUSED_CHASE_TERM_ARENA))),
+            "refused_term_arena_bytes" => Value(self.refused_term_arena_bytes().map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |bytes| purrdf_hash::error::ErrorValue::ByteCount(u128::from(bytes)))),
+            "term_arena_bytes" => ByteCount(self.term_arena_bytes as u128), "term_generating_rounds" => Unsigned(u128::from(self.term_generating_rounds())),
             "generated_terms" => Unsigned(u128::from(self.generated_terms)), "input_terms" => Unsigned(u128::from(self.input_terms)),
             "limits" => Record(&self.limits)
         }
@@ -551,7 +558,7 @@ impl BudgetReport {
             stored_facts,
             flags: Self::stated_limits(&EvalOptions::default()),
             term_arena_bytes,
-            term_generating_rounds: 0,
+            guard_rounds_or_refused_arena: 0,
             generated_terms: 0,
             input_terms: 0,
             limits: Limits::of(&EvalOptions::default(), 0),
@@ -643,6 +650,30 @@ impl BudgetReport {
         self.is_stated(STATED_TERM_ARENA_BYTES)
     }
 
+    /// The projected total for a refused insertion, or the retained count.
+    pub fn observed_term_arena_bytes(self) -> u64 {
+        self.refused_term_arena_bytes()
+            .unwrap_or(self.term_arena_bytes as u64)
+    }
+
+    fn refused_term_arena_bytes(self) -> Option<u64> {
+        (self.flags & REFUSED_CHASE_TERM_ARENA != 0).then_some(self.guard_rounds_or_refused_arena)
+    }
+
+    /// Admit a guard-free chase's complete projected total before insertion.
+    pub(crate) fn admit_chase_term_arena(self, projected: u64) -> Result<(), Self> {
+        debug_assert_eq!(self.term_generating_rounds(), 0);
+        if projected > self.limits.term_arena_bytes {
+            Err(Self {
+                flags: self.flags | REFUSED_CHASE_TERM_ARENA,
+                guard_rounds_or_refused_arena: projected,
+                ..self
+            })
+        } else {
+            Ok(())
+        }
+    }
+
     /// Interned term surface bytes held by the store when evaluation stopped.
     pub fn term_arena_bytes(self) -> usize {
         self.term_arena_bytes
@@ -651,7 +682,11 @@ impl BudgetReport {
     /// Completed term-generating rounds ([`EvalOptions`]). Always zero for a guard-free
     /// program, which has no guard to compute a term.
     pub fn term_generating_rounds(self) -> u64 {
-        self.term_generating_rounds
+        if self.refused_term_arena_bytes().is_some() {
+            0
+        } else {
+            self.guard_rounds_or_refused_arena
+        }
     }
 
     /// The term-generating round limit the run was governed by ([`EvalOptions`]).
@@ -735,8 +770,8 @@ impl BudgetResource {
         match self {
             Self::JoinSteps => report.join_steps,
             Self::StoredFacts => report.observed_stored_facts() as u64,
-            Self::TermArenaBytes => report.term_arena_bytes as u64,
-            Self::TermGeneratingRounds => report.term_generating_rounds,
+            Self::TermArenaBytes => report.observed_term_arena_bytes(),
+            Self::TermGeneratingRounds => report.term_generating_rounds(),
             Self::GeneratedTerms => report.generated_terms,
         }
     }
@@ -1355,7 +1390,7 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
                          committed a term the store did not hold, past the limit of {} ({}){rules}; \
                          if the rule set terminates, raise it with \
                          EvalOptions::with_max_term_generating_rounds",
-                        report.term_generating_rounds,
+                        report.term_generating_rounds(),
                         report.limits.term_generating_rounds,
                         term_generating_round_limit_origin(*report),
                     ),
@@ -4672,7 +4707,7 @@ where
             stored_facts: self.rel.retained_rows(),
             flags: self.stated,
             term_arena_bytes: self.rel.term_bytes(),
-            term_generating_rounds: self.term_generating_rounds,
+            guard_rounds_or_refused_arena: self.term_generating_rounds,
             generated_terms: self
                 .rel
                 .interner()

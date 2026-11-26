@@ -92,7 +92,7 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 use purrdf_datalog::cache::PlanCache;
-use purrdf_datalog::chase::{ChaseError, chase_with};
+use purrdf_datalog::chase::{ChaseError, ChaseOutcome, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::dictionary::{DictionaryTerm, TermDictionary};
 use purrdf_datalog::guard::NoGuards;
@@ -103,7 +103,7 @@ use purrdf_datalog::seminaive::{
     SessionContext, evaluate_guarded,
 };
 use purrdf_datalog::stop::StopSignal;
-use purrdf_datalog::store::{ReclaimingInterner, RelationStore, TermExpired};
+use purrdf_datalog::store::{ReclaimingInterner, RelationStore, ShapeFact, TermExpired};
 
 use crate::axioms::axioms_for;
 use crate::calculus::{ChaseRule, calculus_contract_hash, clash_rule, program_with_attribution};
@@ -118,6 +118,8 @@ use crate::{EntailError, Regime};
 use purrdf_hash::{Domain, blake3::Hasher, frame::frame_le_into, hex::Digest32};
 use purrdf_lex::allocation::Resident;
 use purrdf_lex::term_syntax::{write_iri, write_literal};
+
+pub(crate) mod rdfs;
 
 /// Every LITERAL constant the declared calculus names, as `(lexical form, datatype IRI)`.
 ///
@@ -354,25 +356,13 @@ pub(crate) fn close<D: DatasetView>(
             stop,
         };
         let default_run = close_graph(ds, run, None, &mut plans)?;
-        stats.absorb(default_run.budget);
-        stats.drop_generalized(default_run.generalized_rdf_drops);
-        stats.drop_surrogate(default_run.surrogate_drops);
-        stats.certify(default_run.termination);
-        if let Some(witness) = default_run.clash {
-            return Err(refuse(ds, regime, &stats, witness));
-        }
-
-        let mut b = RdfDatasetBuilder::new();
-        copy_into(&mut b, ds)?;
         // What the DEFAULT graph draws on its own. A named-graph run re-derives every one of
         // these — the default graph is in its seed — and restating them inside the named graph
         // would put a conclusion in a graph that did not produce it.
         let mut default_conclusions: BTreeSet<(String, String, String)> = BTreeSet::new();
-        for conclusion in &default_run.conclusions {
+        let mut b = emit_default_run(ds, regime, default_run, &mut stats, |conclusion| {
             default_conclusions.insert(conclusion.key());
-            stats.commit(conclusion.rule);
-            emit(&mut b, conclusion, None).map_err(EntailError::with_read_error)?;
-        }
+        })?;
         for graph in named.values() {
             // A dataset is closed graph by graph, so the loop over the named graphs is a
             // boundary of the CLOSURE just as a fixpoint round is — and it is the only one that
@@ -505,6 +495,62 @@ impl Conclusion {
     }
 }
 
+/// A recorded conclusion projected through the materializer's RDF boundary.
+enum ProjectedDerivation<'a> {
+    Internal,
+    Surrogate,
+    GeneralizedRdf,
+    Conclusion(ConclusionRef<'a>),
+}
+
+struct ConclusionRef<'a> {
+    rule: ChaseRule,
+    subject: &'a TermValue,
+    predicate: &'a TermValue,
+    object: &'a TermValue,
+}
+
+impl From<ConclusionRef<'_>> for Conclusion {
+    fn from(value: ConclusionRef<'_>) -> Self {
+        Self {
+            rule: value.rule,
+            subject: value.subject.clone(),
+            predicate: value.predicate.clone(),
+            object: value.object.clone(),
+        }
+    }
+}
+
+fn project_derivation<'a>(
+    fact: &ShapeFact<4>,
+    rule: ChaseRule,
+    terms: &'a Terms,
+    is_witness: impl Fn(&str) -> bool,
+) -> ProjectedDerivation<'a> {
+    // Internal bookkeeping is neither a conclusion nor a generalized RDF drop.
+    if is_internal(&fact.predicate) {
+        return ProjectedDerivation::Internal;
+    }
+    // Witnesses are never looked up in the RDF term dictionary.
+    if [&fact.subject, &fact.predicate, &fact.object, &fact.graph]
+        .into_iter()
+        .any(|surface| is_witness(surface))
+    {
+        return ProjectedDerivation::Surrogate;
+    }
+    let subject = terms.value(&fact.subject);
+    let predicate = terms.value(&fact.predicate);
+    if !admits_subject(subject) || !admits_predicate(predicate) {
+        return ProjectedDerivation::GeneralizedRdf;
+    }
+    ProjectedDerivation::Conclusion(ConclusionRef {
+        rule,
+        subject,
+        predicate,
+        object: terms.value(&fact.object),
+    })
+}
+
 /// What closing one graph produced and consumed.
 #[derive(Debug)]
 struct GraphRun {
@@ -535,6 +581,19 @@ struct GraphRun {
     termination: Option<TerminationCertificate>,
 }
 
+impl GraphRun {
+    fn record(&mut self, projection: ProjectedDerivation<'_>) {
+        match projection {
+            ProjectedDerivation::Internal => {}
+            ProjectedDerivation::Surrogate => self.surrogate_drops += 1,
+            ProjectedDerivation::GeneralizedRdf => self.generalized_rdf_drops += 1,
+            ProjectedDerivation::Conclusion(conclusion) => {
+                self.conclusions.push(conclusion.into());
+            }
+        }
+    }
+}
+
 /// Push `conclusion` into `b`, in `graph`.
 fn emit(
     b: &mut RdfDatasetBuilder,
@@ -546,6 +605,30 @@ fn emit(
     let o = intern_into(b, &conclusion.object)?;
     b.push_quad(s, p, o, graph)?;
     Ok(())
+}
+
+fn emit_default_run<D: DatasetView>(
+    ds: &D,
+    regime: Regime,
+    run: GraphRun,
+    stats: &mut RunStats,
+    mut on_conclusion: impl FnMut(&Conclusion),
+) -> Result<RdfDatasetBuilder, EntailError<D::ReadError>> {
+    stats.absorb(run.budget);
+    stats.drop_generalized(run.generalized_rdf_drops);
+    stats.drop_surrogate(run.surrogate_drops);
+    stats.certify(run.termination);
+    if let Some(witness) = run.clash {
+        return Err(refuse(ds, regime, stats, witness));
+    }
+    let mut builder = RdfDatasetBuilder::new();
+    copy_into(&mut builder, ds)?;
+    for conclusion in &run.conclusions {
+        on_conclusion(conclusion);
+        stats.commit(conclusion.rule);
+        emit(&mut builder, conclusion, None).map_err(EntailError::with_read_error)?;
+    }
+    Ok(builder)
 }
 
 /// Close ONE graph of `ds` under `regime`'s declared calculus.
@@ -615,6 +698,22 @@ fn close_graph<D: DatasetView>(
     )
     .map_err(evaluate_error)?;
 
+    Ok(project_seminaive_run(
+        &evaluation,
+        attribution,
+        &terms,
+        regime,
+        graph,
+    ))
+}
+
+fn project_seminaive_run(
+    evaluation: &purrdf_datalog::seminaive::Evaluation,
+    attribution: &[ChaseRule],
+    terms: &Terms,
+    regime: Regime,
+    graph: Option<&TermValue>,
+) -> GraphRun {
     // AN INCONSISTENCY IS DECIDED BEFORE AN ANSWER IS BUILT. Seventeen OWL 2 RL rules
     // conclude `false`, and a match on one of them says the knowledge base entails
     // everything — so there is no closure to hand back, only evidence. The first clash in
@@ -622,15 +721,15 @@ fn close_graph<D: DatasetView>(
     // function of the program and the data rather than of the round a rule happened to
     // fire in. The budget is still carried out, because the report the refusal owes its
     // caller is measured rather than stubbed.
-    if let Some(witness) = first_clash(&evaluation, attribution, &terms, regime, graph) {
-        return Ok(GraphRun {
+    if let Some(witness) = first_clash(evaluation, attribution, terms, regime, graph) {
+        return GraphRun {
             conclusions: Vec::new(),
             budget: evaluation.budget(),
             generalized_rdf_drops: 0,
             surrogate_drops: 0,
             clash: Some(witness),
             termination: None,
-        });
+        };
     }
 
     // The budget is the evaluator's own measurement, not a second tally kept alongside it.
@@ -648,34 +747,14 @@ fn close_graph<D: DatasetView>(
         .derivations()
         .expect("entailment requested derivation recording")
     {
-        let fact = derivation.fact();
-        // An INTERNAL conclusion is bookkeeping, not an answer. `prp-spo2` and `prp-key`
-        // accumulate their list traversals in relations whose predicate is an
-        // interner-local id ([`crate::lists`]), and those rows are premises for the rule's
-        // own final clause and nothing else. They are neither materialized — no internal
-        // id may reach the dataset builder, let alone a serializer — nor credited, because
-        // a per-rule count is "triples this rule was first to add" and a traversal row is
-        // not a triple. Dropping them is also NOT the generalized-RDF boundary: nothing
-        // was lost, so nothing is reported.
-        if is_internal(&fact.predicate) {
-            continue;
-        }
-        let subject = terms.value(&fact.subject);
-        let predicate = terms.value(&fact.predicate);
-        if !admits_subject(subject) || !admits_predicate(predicate) {
-            run.generalized_rdf_drops += 1;
-            continue;
-        }
-        // Recorded only once the conclusion is known to be representable, so the per-rule
-        // counts sum to exactly the inferred triples a caller can see.
-        run.conclusions.push(Conclusion {
-            rule: attribution[derivation.rule()],
-            subject: subject.clone(),
-            predicate: predicate.clone(),
-            object: terms.value(&fact.object).clone(),
-        });
+        run.record(project_derivation(
+            derivation.fact(),
+            attribution[derivation.rule()],
+            terms,
+            |_| false,
+        ));
     }
-    Ok(run)
+    run
 }
 
 /// Fill a fresh [`RelationStore`] with everything one graph's run reasons FROM, and the
@@ -710,7 +789,8 @@ pub(crate) fn seed<D: DatasetView>(
             let subject = terms.record(&TermValue::iri(subject));
             let predicate = terms.record(&TermValue::iri(predicate));
             let object = terms.record(&TermValue::iri(object));
-            let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+            edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH)
+                .map_err(EntailError::Storage)?;
         }
         let mut lists = ListIndex::default();
         let mut literals = LiteralIndex::default();
@@ -754,7 +834,8 @@ pub(crate) fn seed<D: DatasetView>(
                     surrogates.observe(surface, value);
                 }
             }
-            let _ = edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH);
+            edb.insert(&subject, &predicate, &object, RelationStore::DEFAULT_GRAPH)
+                .map_err(EntailError::Storage)?;
         }
         // The RDF collections the OWL 2 axioms point at, walked ONCE into the internal
         // relations the `LIST[…]` rules join against. A malformed or cyclic collection stops
@@ -768,7 +849,8 @@ pub(crate) fn seed<D: DatasetView>(
                 }))
             })? {
                 terms.record_internal(&fact);
-                let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+                edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph)
+                    .map_err(EntailError::Storage)?;
             }
         }
         // The XSD value spaces OWL 2 Profiles Table 8 quantifies over, decided ONCE over the
@@ -785,7 +867,8 @@ pub(crate) fn seed<D: DatasetView>(
             }
             for fact in literals.materialize() {
                 terms.record_internal(&fact);
-                let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+                edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph)
+                    .map_err(EntailError::Storage)?;
             }
         }
 
@@ -799,7 +882,8 @@ pub(crate) fn seed<D: DatasetView>(
             }
             for fact in surrogates.materialize() {
                 terms.record_internal(&fact);
-                let _ = edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph);
+                edb.insert(&fact.subject, fact.predicate, &fact.object, &fact.graph)
+                    .map_err(EntailError::Storage)?;
             }
         }
 
@@ -854,6 +938,10 @@ fn chase_graph(
         stop.map(|stop| &**stop as &dyn StopSignal),
     )
     .map_err(chase_error)?;
+    Ok(project_chase_run(&outcome, attribution, terms))
+}
+
+fn project_chase_run(outcome: &ChaseOutcome, attribution: &[ChaseRule], terms: &Terms) -> GraphRun {
     let witnesses: BTreeSet<&str> = outcome.witnesses().witnesses().collect();
     let mut run = GraphRun {
         conclusions: Vec::new(),
@@ -870,33 +958,14 @@ fn chase_graph(
         termination: TerminationCertificate::of_chase(outcome.termination()),
     };
     for derivation in outcome.derivations() {
-        let fact = derivation.fact();
-        // Bookkeeping, not an answer — the two surrogate relations and the observation
-        // relations they read; see the semi-naive path for the same exclusion.
-        if is_internal(&fact.predicate) {
-            continue;
-        }
-        if [&fact.subject, &fact.predicate, &fact.object, &fact.graph]
-            .into_iter()
-            .any(|surface| witnesses.contains(surface.as_str()))
-        {
-            run.surrogate_drops += 1;
-            continue;
-        }
-        let subject = terms.value(&fact.subject);
-        let predicate = terms.value(&fact.predicate);
-        if !admits_subject(subject) || !admits_predicate(predicate) {
-            run.generalized_rdf_drops += 1;
-            continue;
-        }
-        run.conclusions.push(Conclusion {
-            rule: attribution[derivation.clause()],
-            subject: subject.clone(),
-            predicate: predicate.clone(),
-            object: terms.value(&fact.object).clone(),
-        });
+        run.record(project_derivation(
+            derivation.fact(),
+            attribution[derivation.clause()],
+            terms,
+            |surface| witnesses.contains(surface),
+        ));
     }
-    Ok(run)
+    run
 }
 
 /// Whether `regime`'s lane walks the RDF collections its axioms point at.

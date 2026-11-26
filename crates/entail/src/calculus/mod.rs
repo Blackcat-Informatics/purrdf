@@ -957,9 +957,8 @@ mod tests {
     /// concludes are all edits that must leave these digests exactly where they are — only
     /// adding, removing or restating a RULE, changing a default limit, or deliberately
     /// bumping purrdf-datalog's calculus version may move one,
-    /// deliberately, with these tables updated in the same commit. The `wasm32` table is
-    /// the identity every target published while the limits were fixed at the `wasm32`
-    /// values; the native table moved when the native defaults were raised.
+    /// deliberately, with these tables updated in the same commit. The tables evaluate
+    /// the current calculus using the former browser and native finite limits.
     #[test]
     fn the_contract_hashes_are_pinned() {
         let wasm = EvalOptions::default()
@@ -1003,48 +1002,48 @@ mod tests {
     const PINNED_NATIVE: &[(Regime, &str)] = &[
         (
             Regime::Simple,
-            "bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a",
+            "388434d2dfa87aa58fc116f9de2e93993cb10bff9a7fff0d873ec920c07cd314",
         ),
         (
             Regime::Rdf,
-            "8a130678fd2ef3086aa4a6fd840bb7a567724540ca71dd33fe57f2f9dc3c4bf3",
+            "f85b093e2c2c4329ff23a3ce675927001f045da3ed61e649c88c2be7db8f621c",
         ),
         (
             Regime::Rdfs,
-            "43165d4570613a4e1db0550646cf7e9103a6fd5c79c10a37abbff4719602327d",
+            "99dae92eb42b0e455c292a40fc973e2aab4c70b025b74edc58bd84b64f3dbf93",
         ),
         (
             Regime::OwlRl,
-            "e0af06828995412165618c0938cdedb6d597525b65906bdef476710595047e7c",
+            "3a6d3e93baf96dd1e9b571128750863ad7c6138d98aa0467b31af720df2cdf79",
         ),
         (
             Regime::OwlDirect,
-            "bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a",
+            "388434d2dfa87aa58fc116f9de2e93993cb10bff9a7fff0d873ec920c07cd314",
         ),
         (
             Regime::Rif,
-            "bd38e3270ba0dbde2f1aa0ca8c8afb0ec3fcd146ec21bb90274e54007a83e83a",
+            "388434d2dfa87aa58fc116f9de2e93993cb10bff9a7fff0d873ec920c07cd314",
         ),
         (
             Regime::D,
-            "82674ca392c68d4ac789e7c7c9b517dbfcdfd02e344aafd961b2b1105bda5aea",
+            "b5c96ea934b04023658c01a00c75d0b47083b42860e7116b10b334b464bbd502",
         ),
     ];
 
     /// The empty program's identity — the lanes with no rule table of their own — under
-    /// the `wasm32` default limits.
+    /// the historical browser limits.
     const PINNED_EMPTY_HASH: &str =
-        "d65ad12e6865a9aa83a219984b3c7c34a15cb332b17f638cc04c6e76de489cb5";
+        "f54480f20d7c813a9931ca763c32863b9db721fa9698feb79ec7fb441a58ca35";
 
     /// The `RDF` lane's calculus identity, moved deliberately by stating `rdfD1` and
     /// `rdfD1a` — the two RDF patterns whose conclusions are existentially quantified.
     /// A consumer holding a closure minted under the one-rule calculus can tell, which is
     /// the whole point of the digest.
     const PINNED_RDF_HASH: &str =
-        "638d01641980195a1b2aa4e5df31f809b145a21ccabede7b2e3ea3280a77ece8";
+        "e58cccea38482ab83cb6b8929a6ff6e14d8f53c3db27d9e209161eb58c04cf68";
     /// The `RDFS` lane's, moved for the same reason with `rdfs14` and `rdfs14a` besides.
     const PINNED_RDFS_HASH: &str =
-        "4529c2c783b2384f0720b993697ec16f38caff4e8043a0b8fd36a293c6f4d672";
+        "e2cac94a4467865b0e2576615cf703e752f6a683a1b5ed1dfe193132f7bb694b";
     /// The `OWL-RL` lane's. This digest answers to the calculus's DECLARATION ORDER and
     /// not only to what the lane concludes, which is worth stating rather than leaving to
     /// be rediscovered: a rule whose conclusion is `false` is lowered into a clause whose
@@ -1062,9 +1061,9 @@ mod tests {
     /// renumbered the clash markers and moved the `RDF`, `RDFS` and `D` digests for a rule
     /// none of those lanes fires.
     const PINNED_OWL_RL_HASH: &str =
-        "c7c5b2b3b26d6261d52322c54176cd08c00230661d657e9a2f51f67517f773af";
+        "7f1917aeda767ec47b2a562ef7bbc0b865485144a34ba1fa817e3fdfbd217794";
     /// The `D` lane's, moved by the same renumbering — `dt-not-type` is a constraint too.
-    const PINNED_D_HASH: &str = "d91cd5de3d38ea2b90d2efe269afdffd62cd7c367f83d237ad43c4ab44147d2e";
+    const PINNED_D_HASH: &str = "fd60333f27dedf7938fc6d1d0e1a51c12e4986e72c6a83543f09ade73f8ba895";
 
     /// Two lanes with different rule sets have different calculus identities, and the
     /// three rule-free regimes share the empty program's identity.

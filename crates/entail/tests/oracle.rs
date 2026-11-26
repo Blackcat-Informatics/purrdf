@@ -66,11 +66,16 @@ use std::path::PathBuf;
 use std::str::FromStr as _;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue, try_canonicalize};
-use purrdf_datalog::seminaive::EvalOptions;
+use purrdf_core::{
+    ContentIdentified, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId, TermValue,
+    try_canonicalize,
+};
+use purrdf_datalog::chase::ChaseError;
+use purrdf_datalog::seminaive::{BudgetResource, EvalOptions};
 use purrdf_entail::{
-    Completeness, EntailError, InconsistencyWitness, Materialization, ReasoningReport, Regime,
-    RuleId, implemented, materialize, materialize_with, rules,
+    Completeness, EntailError, InconsistencyWitness, Materialization, RdfsPause, RdfsProgress,
+    RdfsSession, RdfsSessionError, ReasoningReport, Regime, RuleId, implemented, materialize,
+    materialize_with, rules,
 };
 
 // ── Vocabulary ──────────────────────────────────────────────────────────────────
@@ -8303,6 +8308,157 @@ fn a_deep_subclass_chain_needs_several_rounds() {
             );
         }
     }
+}
+
+/// A latching and answer-blind stop at the next boundary after one round.
+#[derive(Debug)]
+struct StopAfterOneRound(std::sync::atomic::AtomicBool);
+
+impl purrdf_datalog::StopSignal for StopAfterOneRound {
+    fn stopped(&self) -> bool {
+        self.0.swap(true, std::sync::atomic::Ordering::Relaxed)
+    }
+}
+
+fn assert_rdfs_prefix(pause: &RdfsPause, closure: &RdfDataset, report: &ReasoningReport) -> usize {
+    pause
+        .verify()
+        .expect("the original RDFS firings follow from the frozen seed");
+    pause
+        .conclusions()
+        .map(|conclusion| {
+            let s = closure.term_id_by_value(conclusion.subject).unwrap();
+            let p = closure.term_id_by_value(conclusion.predicate).unwrap();
+            let o = closure.term_id_by_value(conclusion.object).unwrap();
+            assert!(
+                closure
+                    .quads()
+                    .any(|quad| (quad.s, quad.p, quad.o, quad.g) == (s, p, o, None))
+            );
+            assert!(
+                report
+                    .rules_fired()
+                    .iter()
+                    .any(|(rule, total)| *rule == conclusion.rule && *total > 0)
+            );
+        })
+        .count()
+}
+
+/// A caller stop and a later fact refusal preserve exactly the original work
+/// and evidence, and the final policy determines the complete report contract.
+#[test]
+fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
+    let source = build(fixture("subclass_chain"));
+    let identity = source.content_identity().unwrap();
+    let initial_policy = EvalOptions::default().with_max_join_steps(50_000);
+    let final_policy = EvalOptions::default().with_max_join_steps(100_000);
+    let (oracle, oracle_report) =
+        materialize_with(&*source, Materialization::Rdfs, &final_policy, None).unwrap();
+    let signal = StopAfterOneRound(std::sync::atomic::AtomicBool::new(false));
+    let session = RdfsSession::start(Arc::clone(&source), identity, &initial_policy).unwrap();
+    let RdfsProgress::Paused(stopped) = session.advance(&initial_policy, Some(&signal)).unwrap()
+    else {
+        panic!("the second round must observe the stop");
+    };
+    assert!(matches!(stopped.reason(), ChaseError::Stopped { .. }));
+    assert_eq!(stopped.source_identity(), identity);
+    let first_count = assert_rdfs_prefix(&stopped, &oracle, &oracle_report);
+    assert!(first_count > 0);
+    let (a, predicate, c) = (
+        TermValue::iri(EX_A),
+        TermValue::iri(RDFS_SUBCLASSOF),
+        TermValue::iri(EX_C),
+    );
+    let transitive = stopped
+        .conclusions()
+        .find(|conclusion| {
+            (conclusion.subject, conclusion.predicate, conclusion.object) == (&a, &predicate, &c)
+        })
+        .expect("the first round proves the adjacent transitive subclass edge");
+    assert_eq!(transitive.rule.as_str(), "rdfs11");
+    assert_eq!(transitive.firing.head(), 0);
+    let premises = transitive.firing.premises();
+    assert_eq!(premises.len(), 2);
+    for (fact, (left, right)) in premises.iter().zip([(EX_A, EX_B), (EX_B, EX_C)]) {
+        assert_eq!(fact.subject, format!("<{left}>"));
+        assert_eq!(fact.predicate, format!("<{RDFS_SUBCLASSOF}>"));
+        assert_eq!(fact.object, format!("<{right}>"));
+        assert_eq!(fact.graph, "");
+    }
+
+    let snapshot = |conclusion: purrdf_entail::RdfsConclusion<'_>| {
+        (
+            conclusion.subject.clone(),
+            conclusion.predicate.clone(),
+            conclusion.object.clone(),
+            conclusion.rule,
+            conclusion.clause,
+            conclusion.firing.head(),
+            conclusion.firing.premises().to_vec(),
+        )
+    };
+    let first = stopped.conclusions().map(snapshot).collect::<Vec<_>>();
+    let facts = u64::try_from(stopped.budget().stored_facts()).unwrap() + 8;
+    let narrow = final_policy.with_max_stored_facts(facts);
+    let RdfsProgress::Paused(limited) = stopped.into_session().advance(&narrow, None).unwrap()
+    else {
+        panic!("the remaining rounds must reach the finite fact ceiling");
+    };
+    assert!(matches!(
+        limited.reason(),
+        ChaseError::BudgetExhausted {
+            resource: BudgetResource::StoredFacts,
+            ..
+        }
+    ));
+    assert_rdfs_prefix(&limited, &oracle, &oracle_report);
+    assert_eq!(
+        limited
+            .conclusions()
+            .take(first_count)
+            .map(snapshot)
+            .collect::<Vec<_>>(),
+        first
+    );
+
+    let RdfsProgress::Complete { closure, report } =
+        limited.into_session().advance(&final_policy, None).unwrap()
+    else {
+        panic!("the final policy admits the full native closure");
+    };
+    assert_eq!(
+        closure.content_identity().unwrap(),
+        oracle.content_identity().unwrap()
+    );
+    assert_eq!(report.rules_fired(), oracle_report.rules_fired());
+    assert_eq!(report.budget(), oracle_report.budget());
+    assert_eq!(report.contract_hash(), oracle_report.contract_hash());
+}
+
+/// Equal quad counts do not let a different frozen snapshot stand in for the
+/// original source, and an empty graph declaration is still a named graph.
+#[test]
+fn rdfs_continuation_refuses_a_different_snapshot_or_empty_named_graph() {
+    let options = EvalOptions::default();
+    let source = RdfDatasetBuilder::new().freeze().unwrap();
+    let mut builder = RdfDatasetBuilder::new();
+    let graph = builder.intern_iri("https://example.org/empty").unwrap();
+    builder.declare_named_graph(graph).unwrap();
+    let named = builder.freeze().unwrap();
+    assert_eq!(source.quad_count(), named.quad_count());
+    let expected = source.content_identity().unwrap();
+    let actual = named.content_identity().unwrap();
+    assert!(RdfsSession::start(source, expected, &options).is_ok());
+    assert!(matches!(
+        RdfsSession::start(Arc::clone(&named), expected, &options),
+        Err(RdfsSessionError::SnapshotMismatch { expected: wanted, actual: found })
+            if wanted == expected && found == actual
+    ));
+    assert!(matches!(
+        RdfsSession::start(named, actual, &options),
+        Err(RdfsSessionError::NamedGraphs)
+    ));
 }
 
 /// Two rules conclude the same triple; exactly one is credited, and the totals still add up.
