@@ -655,6 +655,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// The exact verdict which stopped the original answer producer, if any.
     pub(crate) evidence_stop: Option<purrdf_core::evidence::WitnessVerdict>,
     pub(crate) annotation_range: Option<crate::expr::AnnotationRanges>,
+    /// Paired admission and execution policy for a retained governed SELECT.
+    pub(crate) distinct_planning: crate::join_plan::DistinctPlanning,
     pub(crate) bgp_cursor_sources: Option<crate::bgp::BgpSourceFactory<D>>,
     cursor_delivery: CursorDelivery,
     cursor_buffering: Option<cursor_buffering::BufferingTrace>,
@@ -1498,6 +1500,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: None,
+            distinct_planning: crate::join_plan::DistinctPlanning::Ordinary,
             bgp_cursor_sources: None,
             cursor_delivery: CursorDelivery::Retained,
             cursor_buffering: None,
@@ -3016,6 +3019,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: self.annotation_range.clone(),
+            distinct_planning: crate::join_plan::DistinctPlanning::Ordinary,
             bgp_cursor_sources: self.bgp_cursor_sources,
             cursor_delivery: self.cursor_delivery,
             cursor_buffering: self.cursor_buffering.clone(),
@@ -3412,6 +3416,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: None,
+            distinct_planning: crate::join_plan::DistinctPlanning::Ordinary,
             bgp_cursor_sources: self.bgp_cursor_sources,
             cursor_delivery: self.cursor_delivery,
             cursor_buffering: self.cursor_buffering.clone(),
@@ -7424,7 +7429,7 @@ fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
                         .plan
                         .as_ref()
                         .is_some_and(|plan| plan.shape().is_root_count_group(current_pattern))
-                    && crate::join_plan::FactorizedCount::allows(
+                    && crate::join_plan::DisjointBgp::allows(
                         runner.ctx.property_functions,
                         runner.ctx.shapes,
                         runner.ctx.evidence_input.is_some(),
@@ -10335,7 +10340,7 @@ fn evaluate_factorized_count<D: DatasetView + Sync>(
     node: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<Evaluated<D::Id>>, EvalError> {
-    let Some(plan) = crate::join_plan::FactorizedCount::build(node, &ctx.growth)? else {
+    let Some(plan) = crate::join_plan::DisjointBgp::for_count(node, &ctx.growth)? else {
         return Ok(None);
     };
     let GraphPattern::Group {
@@ -10383,6 +10388,72 @@ fn evaluate_factorized_count<D: DatasetView + Sync>(
         schema,
         rows: rows.finish()?,
     })))
+}
+
+/// Feed just the selected factor through the original projection and deduplication.
+/// No factor output is published until every factor has proved its existence.
+fn evaluate_factorized_distinct<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    plan: &crate::join_plan::FactorizedDistinct<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    use crate::governor::lift::Lift;
+    use purrdf_sparql_algebra::ProjectionNames;
+
+    eval_evaluated_with(node, ctx, |ctx| {
+        let distinct = Lift::at_admitted(node, &ctx.growth)?.detach();
+        let projected = eval_evaluated_with(plan.project, ctx, |ctx| {
+            let project = Lift::at_admitted(plan.project, &ctx.growth)?.detach();
+            let factors = eval_evaluated_with(plan.factors.input, ctx, |ctx| {
+                let workspace = ctx.growth.clone();
+                let empty = || Evaluated::Complete(SolutionSeq::empty(VarSchema::empty_shared()));
+                let mut programs = crate::AdmittedVec::new(&workspace);
+                let mut impossible = false;
+                // Like an ordinary BGP, check fixed terms before reading any
+                // rows. Keep each admitted compilation for the actual scan.
+                plan.factors.visit(&workspace, |triples, members| {
+                    let program = crate::bgp::CompiledBgp::compile_factor(triples, ctx)?;
+                    if program.is_impossible() {
+                        impossible = true;
+                        return Ok(false);
+                    }
+                    programs.push((members[0].0, program))?;
+                    Ok(true)
+                })?;
+                if impossible {
+                    return Ok(empty());
+                }
+                let mut selected = None;
+                for (component, program) in &programs {
+                    let factor = program.eval_factor(ctx)?;
+                    if let Some(error) = ctx.dataset.read_error() {
+                        return Err(EvalError::source_read(error));
+                    }
+                    if let Err(tripped) = ctx.observe_cells(factor.rows.len(), factor.schema.len())
+                    {
+                        ctx.record_barrier(tripped);
+                    }
+                    if ctx.stop_check().is_some() || factor.rows.is_empty() {
+                        return Ok(empty());
+                    }
+                    if *component == plan.selected {
+                        selected = Some(factor);
+                    }
+                }
+                let rows = selected
+                    .ok_or_else(|| EvalError::internal("DISTINCT lost its selected factor"))?;
+                Ok(Evaluated::Complete(rows))
+            })?;
+            crate::modifier::finish_project(
+                plan.project,
+                ProjectionNames::Explicit(plan.variables),
+                project,
+                factors,
+                ctx,
+            )
+        })?;
+        crate::modifier::finish_dedup::<_, false>(node, distinct, projected, ctx)
+    })
 }
 
 /// Fold cardinalities, not the individual rows of the Cartesian product.
@@ -11273,7 +11344,23 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
         // pattern's variables; a caller-built one need not, so a shared blank's column
         // (see `crate::blank_scope`) is dropped from the answer here either way.
         Query::Select { pattern, .. } | Query::Ask { pattern, .. } => {
-            let evaluated = eval_answer_pattern(pattern, ctx)?;
+            let evaluated = if ctx.distinct_planning
+                == crate::join_plan::DistinctPlanning::Factorized
+                && kept.is_some()
+                && matches!(query, Query::Select { .. })
+                && ctx.evidence_verdict.is_none()
+                && crate::join_plan::DisjointBgp::allows(
+                    ctx.property_functions,
+                    ctx.shapes,
+                    ctx.evidence_input.is_some(),
+                )
+                && let Some(plan) =
+                    crate::join_plan::FactorizedDistinct::build(pattern, &ctx.growth)?
+            {
+                evaluate_factorized_distinct(pattern, &plan, ctx)?
+            } else {
+                eval_answer_pattern(pattern, ctx)?
+            };
             finish_solution_query(query, evaluated, None, ctx)
         }
         Query::Construct {

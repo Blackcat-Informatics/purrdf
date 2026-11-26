@@ -329,6 +329,27 @@ pub(crate) struct CompiledBgp<I: ViewTermId> {
 }
 
 impl<I: ViewTermId> CompiledBgp<I> {
+    /// Compile a root BGP component without a seed or window.
+    pub(crate) fn compile_factor<D: DatasetView<Id = I> + Sync>(
+        patterns: &[TriplePattern],
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Self, EvalError> {
+        compile_bgp(patterns, None, false, ctx)
+    }
+
+    /// Run the original indexed kernel for this unseeded component.
+    pub(crate) fn eval_factor<D: DatasetView<Id = I> + Sync>(
+        &self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<SolutionSeq<I>, EvalError> {
+        eval_compiled_bgp(self, None, None, None, ctx)
+    }
+
+    /// A missing ground term makes the whole BGP empty before any scan.
+    pub(crate) const fn is_impossible(&self) -> bool {
+        self.compiled.is_none()
+    }
+
     /// Keep every real output column even when compilation or a scan yields no row.
     fn empty(&self, workspace: &crate::WorkspaceCapability) -> Result<SolutionSeq<I>, EvalError> {
         self.projection.as_ref().map_or_else(
@@ -3896,6 +3917,7 @@ pub(crate) struct PlanSurvey {
     pub(crate) statistics: AdmittedRecords<String>,
     pub(crate) record_statistics: bool,
     pub(crate) factorized_count: bool,
+    pub(crate) factorized_distinct: bool,
     pub(crate) certificates: Option<CertifiedBounds>,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
@@ -3927,6 +3949,7 @@ impl PlanSurvey {
             statistics: AdmittedRecords::new(workspace),
             record_statistics: false,
             factorized_count: false,
+            factorized_distinct: false,
             certificates: None,
             estimates,
             shape: shape.clone(),
@@ -4120,6 +4143,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
 ) -> Result<(), EvalError> {
     let workspace = account.capability();
+    let root = pattern;
     /// One pending step of the walk.
     enum Step<'a, I> {
         /// Survey the subtree rooted at the node, evaluated against the graph.
@@ -4284,15 +4308,66 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             )?;
             continue;
         }
+        if survey.factorized_distinct
+            && std::ptr::eq(root, pattern)
+            && let Some(distinct) =
+                crate::join_plan::FactorizedDistinct::build(pattern, &workspace)?
+        {
+            let mut selected_rows = 0;
+            let mut peak = PlanEstimate::new(0, 0, 0);
+            let mut inputs = AdmittedVec::new(&workspace);
+            let mut impossible = false;
+            distinct.factors.visit(&workspace, |triples, members| {
+                let input =
+                    compile_forecast_bgp(dataset, triples, &SeedEstimate::default(), account)?;
+                if input.compiled.is_none() {
+                    impossible = true;
+                    return Ok(false);
+                }
+                inputs.push((members[0].0, input))?;
+                Ok(true)
+            })?;
+            // A custom view may read quads to estimate a cardinality. Resolve
+            // every fixed term before requesting statistics for any factor.
+            for (component, input) in &inputs {
+                if impossible {
+                    break;
+                }
+                let BgpForecast { estimate, .. } = forecast_compiled_bgp(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    input,
+                    &SeedEstimate::default(),
+                    None,
+                    account,
+                )?;
+                if *component == distinct.selected {
+                    selected_rows = estimate.rows;
+                }
+                if estimate.peak_cells() >= peak.peak_cells() {
+                    peak = estimate;
+                }
+            }
+            survey.record(
+                distinct.factors.input,
+                PlanEstimate::new(selected_rows, peak.peak_rows, peak.columns),
+            );
+            continue;
+        }
         if survey.factorized_count
             && survey.shape.is_root_count_group(pattern)
-            && let Some(count) = crate::join_plan::FactorizedCount::build(pattern, &workspace)?
+            && let Some(count) = crate::join_plan::DisjointBgp::for_count(pattern, &workspace)?
         {
             let mut rows = 1_u64;
             let mut peak = PlanEstimate::new(0, 0, 0);
             let mut order = AdmittedVec::new(&workspace);
             count.visit(&workspace, |triples, members| {
-                let (_, estimate, factor_order) = forecast_bgp(
+                let BgpForecast {
+                    estimate,
+                    order: factor_order,
+                    ..
+                } = forecast_bgp(
                     dataset,
                     active_dataset,
                     active_graph,
@@ -4491,19 +4566,26 @@ fn survey_bgp<D: DatasetView>(
     )
 }
 
-/// Price the same compiled BGP and initial bound mask that the indexed evaluator
-/// orders. Only certainly-bound input columns contribute selectivity.
-fn forecast_bgp<D: DatasetView>(
+struct BgpForecast {
+    schema: VarSchema,
+    estimate: PlanEstimate,
+    order: AdmittedVec<usize>,
+}
+
+struct BgpForecastInput<I: ViewTermId> {
+    working: VarSchema,
+    initial: AdmittedVec<bool>,
+    compiled: Option<AdmittedVec<CompiledPattern<I>>>,
+    patterns: usize,
+}
+
+fn compile_forecast_bgp<D: DatasetView>(
     dataset: &D,
-    active_dataset: &ActiveDataset<D::Id>,
-    active_graph: GraphMatch<D::Id>,
     patterns: &[TriplePattern],
     seed: &SeedEstimate,
-    cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
     account: &crate::workspace::QueryWorkspace<D::ReadError>,
-) -> Result<(VarSchema, PlanEstimate, AdmittedVec<usize>), EvalError> {
+) -> Result<BgpForecastInput<D::Id>, EvalError> {
     let workspace = account.capability();
-    let scope = active_dataset.scope_for(active_graph);
     let working = collect_slots_admitted(patterns, Some(&seed.schema), &workspace)?;
     let seeded = !seed.schema.is_empty() || !seed.bound.is_empty() || seed.rows != 1;
     let mut initial =
@@ -4514,13 +4596,57 @@ fn forecast_bgp<D: DatasetView>(
         }
     }
     let compiled = compile_bgp_admitted(dataset, patterns, &working, account)?;
-    let any_absent = compiled.is_none();
-    let compiled = compiled.as_deref().unwrap_or(&[]);
+    Ok(BgpForecastInput {
+        working,
+        initial,
+        compiled,
+        patterns: patterns.len(),
+    })
+}
+
+/// Price the same compiled BGP and initial bound mask that the indexed evaluator
+/// orders. Only certainly-bound input columns contribute selectivity.
+fn forecast_bgp<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    patterns: &[TriplePattern],
+    seed: &SeedEstimate,
+    cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<BgpForecast, EvalError> {
+    let input = compile_forecast_bgp(dataset, patterns, seed, account)?;
+    forecast_compiled_bgp(
+        dataset,
+        active_dataset,
+        active_graph,
+        &input,
+        seed,
+        cache,
+        account,
+    )
+}
+
+fn forecast_compiled_bgp<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    input: &BgpForecastInput<D::Id>,
+    seed: &SeedEstimate,
+    cache: Option<crate::plan_cache::OrderCacheRef<'_>>,
+    account: &crate::workspace::QueryWorkspace<D::ReadError>,
+) -> Result<BgpForecast, EvalError> {
+    let workspace = account.capability();
+    let scope = active_dataset.scope_for(active_graph);
+    let working = &input.working;
+    let initial = input.initial.as_slice();
+    let any_absent = input.compiled.is_none();
+    let compiled = input.compiled.as_deref().unwrap_or(&[]);
     let preparation = if any_absent {
         None
     } else {
         forecast::prepare(
-            dataset, compiled, &scope, &initial, seed.rows, cache, &workspace,
+            dataset, compiled, &scope, initial, seed.rows, cache, &workspace,
         )?
     };
     if preparation.is_some() {
@@ -4530,8 +4656,8 @@ fn forecast_bgp<D: DatasetView>(
     }
     let cached = preparation.as_ref().and_then(forecast::Preparation::get);
     let order = if any_absent {
-        let mut order = AdmittedVec::with_capacity(patterns.len(), &workspace)?;
-        for index in 0..patterns.len() {
+        let mut order = AdmittedVec::with_capacity(input.patterns, &workspace)?;
+        for index in 0..input.patterns {
             order.push_reserved(index);
         }
         order
@@ -4542,7 +4668,7 @@ fn forecast_bgp<D: DatasetView>(
             compiled,
             dataset,
             &scope,
-            &initial,
+            initial,
             preparation.as_ref().map(|preparation| &preparation.inputs),
             &workspace,
         )?
@@ -4557,7 +4683,7 @@ fn forecast_bgp<D: DatasetView>(
     )?;
     let (rows, peak_rows) = if any_absent {
         (0, 0)
-    } else if patterns.is_empty() {
+    } else if input.patterns == 0 {
         (seed.rows, seed.rows)
     } else if let Some((rows, peak)) = cached.as_ref().and_then(|cached| cached.forecast) {
         (rows, peak)
@@ -4567,7 +4693,7 @@ fn forecast_bgp<D: DatasetView>(
             dataset,
             &scope,
             &order,
-            (&initial, seed.rows),
+            (initial, seed.rows),
             preparation.as_ref().map(|preparation| &preparation.inputs),
             &workspace,
         )?
@@ -4589,7 +4715,11 @@ fn forecast_bgp<D: DatasetView>(
         peak_rows,
         u64::try_from(working.len()).map_err(|_| EvalError::WorkspaceBoundOverflow)?,
     );
-    Ok((schema, estimate, order))
+    Ok(BgpForecast {
+        schema,
+        estimate,
+        order,
+    })
 }
 
 /// Compile through the same term/error home for forecasting and its immutable
@@ -4768,7 +4898,9 @@ fn survey_bgp_seeded<D: DatasetView>(
     let GraphPattern::Bgp { patterns } = node else {
         unreachable!("BGP survey receives a BGP node");
     };
-    let (_, estimate, order) = forecast_bgp(
+    let BgpForecast {
+        estimate, order, ..
+    } = forecast_bgp(
         dataset,
         active_dataset,
         active_graph,
@@ -6307,7 +6439,9 @@ mod tests {
         let mut ready = HostCost::over(&graph, false);
         ready.supplied_statistics = true;
         ready.cacheable_statistics = true;
-        let (_, expected, _) = forecast_bgp(
+        let BgpForecast {
+            estimate: expected, ..
+        } = forecast_bgp(
             &ready,
             &ActiveDataset::store_default(),
             GraphMatch::Default,
@@ -6317,7 +6451,7 @@ mod tests {
             &crate::workspace::QueryWorkspace::resident(),
         )
         .unwrap();
-        let (_, estimate, _) = forecast_bgp(
+        let BgpForecast { estimate, .. } = forecast_bgp(
             &ready,
             &ActiveDataset::store_default(),
             GraphMatch::Default,

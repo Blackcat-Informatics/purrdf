@@ -91,6 +91,7 @@ enum PlanSurveyMode {
 struct PlanSurveyContext<'a, 'providers> {
     relations: &'a crate::property_fn::PropertyFunctionRegistry<'providers>,
     factorized_count: bool,
+    factorized_distinct: bool,
 }
 
 impl<'a, 'providers> PlanSurveyContext<'a, 'providers> {
@@ -105,11 +106,32 @@ impl<'a, 'providers> PlanSurveyContext<'a, 'providers> {
             // Admission of the original shape cannot assume a rewritten GROUP
             // still has a plain, disconnected BGP as its input.
             factorized_count: !prebindings
-                && crate::join_plan::FactorizedCount::allows(
+                && crate::join_plan::DisjointBgp::allows(
                     relations,
                     options.env.shapes(),
                     evidence_source,
                 ),
+            factorized_distinct: false,
+        }
+    }
+
+    /// A row cursor does not use the retained SELECT executor.
+    const fn retained(mut self) -> Self {
+        self.factorized_distinct = self.factorized_count;
+        self
+    }
+
+    fn distinct_planning<D: DatasetView>(
+        self,
+        query: &Query,
+    ) -> crate::join_plan::DistinctPlanning {
+        if self.factorized_distinct
+            && matches!(query, Query::Select { .. })
+            && Sequencing::for_view::<D>() == Sequencing::Free
+        {
+            crate::join_plan::DistinctPlanning::Factorized
+        } else {
+            crate::join_plan::DistinctPlanning::Ordinary
         }
     }
 }
@@ -2479,10 +2501,12 @@ impl NativeSparqlEngine {
             options.property_functions(),
             &workspace.capability(),
         )?;
+        let survey =
+            PlanSurveyContext::new(options, !substitutions.values.is_empty(), false).retained();
         if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
-            PlanSurveyContext::new(options, !substitutions.values.is_empty(), false),
+            survey,
             state,
             &mut identity_owner.value,
             workspace,
@@ -2493,6 +2517,7 @@ impl NativeSparqlEngine {
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+        ctx.distinct_planning = survey.distinct_planning::<D>(&prepared.query);
         ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         *capture = QueryCoordinates::started(
             &ctx.now,
@@ -4010,11 +4035,9 @@ impl NativeSparqlEngine {
         let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
         let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
         survey.record_statistics = !matches!(mode, PlanSurveyMode::Admission);
-        let PlanSurveyContext {
-            relations,
-            factorized_count,
-        } = context;
-        survey.factorized_count = factorized_count;
+        survey.factorized_count = context.factorized_count;
+        survey.factorized_distinct =
+            context.distinct_planning::<D>(query) == crate::join_plan::DistinctPlanning::Factorized;
         if matches!(mode, PlanSurveyMode::ExplainWithBounds) {
             survey.certify_admitted()?;
         }
@@ -4023,7 +4046,7 @@ impl NativeSparqlEngine {
             &active_dataset,
             GraphMatch::Default,
             query_pattern(query),
-            relations,
+            context.relations,
             &mut survey,
             workspace,
         )?;
@@ -4943,10 +4966,13 @@ impl NativeSparqlEngine {
             options.property_functions(),
             &workspace.capability(),
         )?;
+        let survey =
+            PlanSurveyContext::new(options, !execution.coordinate_bindings().is_empty(), false)
+                .retained();
         if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
-            PlanSurveyContext::new(options, !execution.coordinate_bindings().is_empty(), false),
+            survey,
             state,
             &mut identity_owner.value,
             workspace,
@@ -4966,6 +4992,7 @@ impl NativeSparqlEngine {
             });
         }
         let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
+        ctx.distinct_planning = survey.distinct_planning::<D>(&prepared.query);
         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
         let coordinates = coordinates::capture_query(
             &ctx,
@@ -5491,10 +5518,12 @@ impl NativeSparqlEngine {
                 options.property_functions(),
                 &workspace.capability(),
             )?;
+            let survey = PlanSurveyContext::new(&options, !request.substitutions.is_empty(), false)
+                .retained();
             if let Some(refused) = self.admit_refusal(
                 dataset,
                 &prepared.query,
-                PlanSurveyContext::new(&options, !request.substitutions.is_empty(), false),
+                survey,
                 state,
                 &mut identity_owner.value,
                 &workspace,
@@ -5503,6 +5532,7 @@ impl NativeSparqlEngine {
                     .map(|exhausted| InternedGoverned::BudgetExhausted(Box::new(exhausted)));
             }
             let mut ctx = self.governed_ctx(dataset, state.clone(), &options, &workspace)?;
+            ctx.distinct_planning = survey.distinct_planning::<D>(&prepared.query);
             let coordinates = coordinates::capture_query(
                 &ctx,
                 &prepared,

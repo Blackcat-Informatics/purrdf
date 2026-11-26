@@ -76,6 +76,94 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
+/// A retained DISTINCT can consume one factor without admitting product rows.
+#[test]
+fn disconnected_distinct_completes_within_one_factor_budget() {
+    let dataset = fixture();
+    let engine = NativeSparqlEngine::new();
+    let all = "?a ex:p ?x . ?b ex:p ?y";
+    let cases = [
+        ("b", all, 48, Some(EDGES)),
+        ("b", "?a ex:missing ?x . ?b ex:p ?y", 0, Some(0)),
+        ("a", "?a ex:p ?x . ?b ex:missing ?y", 0, Some(0)),
+        ("b", "?a ex:p ?x . ?b ex:p ?x", 48, Some(EDGES)),
+        ("a ?b", all, 48, None),
+        ("missing", all, 48, None),
+    ];
+    for (projection, patterns, ceiling, expected) in cases {
+        let query = format!(
+            "PREFIX ex: <http://example.org/> SELECT DISTINCT ?{projection} WHERE {{ {patterns} }}"
+        );
+        let governors = QueryGovernors::METERED.with_max_intermediate_cells(ceiling);
+        let prepared = engine.prepare_query(&query, None).unwrap();
+        let ordinary = engine
+            .query_governed(&dataset, request(&query), &QueryOptions::EMPTY, &governors)
+            .unwrap();
+        let prepared = engine
+            .query_prepared_governed_view(
+                dataset.as_ref(),
+                &prepared,
+                &[],
+                &QueryOptions::EMPTY,
+                &governors,
+            )
+            .unwrap();
+        for outcome in [ordinary, prepared] {
+            let Some(expected) = expected else {
+                let (trip, _, _) = exhausted(&outcome);
+                assert!(matches!(
+                    trip,
+                    TrippedGovernor::Refused {
+                        dimension: ResourceDimension::IntermediateCells,
+                        ..
+                    }
+                ));
+                continue;
+            };
+            let GovernedOutcome::Complete {
+                result:
+                    SparqlResult::Solutions {
+                        variables, rows, ..
+                    },
+                evidence,
+                ..
+            } = outcome
+            else {
+                panic!("DISTINCT must complete within the factor budget: {outcome:?}");
+            };
+            assert_eq!(variables, [projection]);
+            assert_eq!(rows.len(), expected);
+            for index in 0..expected {
+                let term = purrdf_core::TermValue::iri(format!("http://example.org/s{index}"));
+                assert!(rows.contains(&vec![Some(term)]), "{rows:?}");
+            }
+            assert!(evidence.consumed_in(ResourceDimension::IntermediateCells) <= ceiling);
+        }
+    }
+
+    // Three node entries and one eight-edge factor fit. Both factors do not.
+    let starved = engine
+        .query_governed(
+            &dataset,
+            request("SELECT DISTINCT ?a WHERE { ?a <http://example.org/p> ?x . ?b <http://example.org/p> ?y }"),
+            &QueryOptions::EMPTY,
+            &QueryGovernors::METERED.with_fuel(14),
+        )
+        .unwrap();
+    let (trip, partial, _) = exhausted(&starved);
+    assert!(matches!(
+        trip,
+        TrippedGovernor::Budget {
+            dimension: ResourceDimension::Fuel,
+            ..
+        }
+    ));
+    assert_eq!(
+        partial.result().map_or(0, |rows| row_count(rows.result())),
+        0
+    );
+}
+
 #[test]
 fn disconnected_count_completes_without_materializing_product_rows() {
     use purrdf_core::TermValue;

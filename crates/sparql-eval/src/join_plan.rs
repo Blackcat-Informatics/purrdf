@@ -344,14 +344,14 @@ fn connected_join(
 
 type VariableKey = purrdf_sparql_algebra::Variable;
 
-/// A global, non-distinct COUNT over a disjoint basic graph pattern.
-pub(crate) struct FactorizedCount<'a> {
+/// The admitted components of a disjoint basic graph pattern.
+pub(crate) struct DisjointBgp<'a> {
     pub(crate) input: &'a GraphPattern,
     triples: &'a [TriplePattern],
     members: AdmittedVec<(usize, usize)>,
 }
 
-impl<'a> FactorizedCount<'a> {
+impl<'a> DisjointBgp<'a> {
     /// External providers can attach evidence or replace a physical operator.
     pub(crate) fn allows(
         relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
@@ -361,7 +361,8 @@ impl<'a> FactorizedCount<'a> {
         !has_evidence_source && relations.is_empty() && shapes.providers.is_empty()
     }
 
-    pub(crate) fn build(
+    /// The input of a global, non-distinct COUNT.
+    pub(crate) fn for_count(
         node: &'a GraphPattern,
         workspace: &crate::WorkspaceCapability,
     ) -> Result<Option<Self>, crate::EvalError> {
@@ -383,7 +384,14 @@ impl<'a> FactorizedCount<'a> {
         {
             return Ok(None);
         }
-        let GraphPattern::Bgp { patterns } = inner.as_ref() else {
+        Self::build(inner.as_ref(), workspace)
+    }
+
+    fn build(
+        input: &'a GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<Self>, crate::EvalError> {
+        let GraphPattern::Bgp { patterns } = input else {
             return Ok(None);
         };
         if patterns.len() < 2 {
@@ -403,7 +411,7 @@ impl<'a> FactorizedCount<'a> {
         )?;
         members.sort_unstable();
         Ok(Some(Self {
-            input: inner.as_ref(),
+            input,
             triples: patterns,
             members,
         }))
@@ -423,7 +431,7 @@ impl<'a> FactorizedCount<'a> {
                 .map_err(|error| {
                     memory
                         .admission_mut()
-                        .storage_error(error, "count factor layout")
+                        .storage_error(error, "BGP factor layout")
                 })?;
             for &(_, index) in members {
                 let triple =
@@ -432,7 +440,7 @@ impl<'a> FactorizedCount<'a> {
                         .map_err(|error| {
                             memory
                                 .admission_mut()
-                                .storage_error(error, "count factor triple")
+                                .storage_error(error, "BGP factor triple")
                         })?;
                 triples.push(triple);
             }
@@ -441,6 +449,75 @@ impl<'a> FactorizedCount<'a> {
             }
         }
         Ok(())
+    }
+}
+
+/// The paired admission and execution policy for a retained DISTINCT.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DistinctPlanning {
+    Ordinary,
+    Factorized,
+}
+
+/// A retained DISTINCT whose explicit projection reads just one BGP factor.
+pub(crate) struct FactorizedDistinct<'a> {
+    pub(crate) project: &'a GraphPattern,
+    pub(crate) variables: &'a [VariableKey],
+    pub(crate) factors: DisjointBgp<'a>,
+    pub(crate) selected: usize,
+}
+
+impl<'a> FactorizedDistinct<'a> {
+    pub(crate) fn build(
+        node: &'a GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<Self>, crate::EvalError> {
+        let GraphPattern::Distinct { inner: project } = node else {
+            return Ok(None);
+        };
+        let GraphPattern::Project { inner, variables } = project.as_ref() else {
+            return Ok(None);
+        };
+        if variables.is_empty() {
+            return Ok(None);
+        }
+        let Some(factors) = DisjointBgp::build(inner.as_ref(), workspace)? else {
+            return Ok(None);
+        };
+        let mut missing = AdmittedMap::default();
+        for variable in variables {
+            if crate::blank_scope::is_joined_blank(variable) {
+                return Ok(None);
+            }
+            missing.insert_admitted(variable, (), workspace)?;
+        }
+        let mut selected = None;
+        for &(root, index) in &factors.members {
+            let mut spans_components = false;
+            crate::bgp::visit_triple_slots_admitted(&factors.triples[index], workspace, |slot| {
+                if let crate::bgp::SlotKey::Variable(variable) = slot
+                    && missing.remove(variable).is_some()
+                {
+                    spans_components |= *selected.get_or_insert(root) != root;
+                }
+                Ok(())
+            })?;
+            if spans_components {
+                return Ok(None);
+            }
+            if missing.is_empty() {
+                break;
+            }
+        }
+        if !missing.is_empty() {
+            return Ok(None);
+        }
+        Ok(selected.map(|selected| Self {
+            project: project.as_ref(),
+            variables,
+            factors,
+            selected,
+        }))
     }
 }
 
