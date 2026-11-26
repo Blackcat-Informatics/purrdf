@@ -744,6 +744,122 @@ fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
     );
 }
 
+fn reifier_scans_keep_scoped_bindings_and_suppress_cross_source_duplicates() {
+    use purrdf_core::{BlankScope, QuadValues, SegmentedResidentHead};
+
+    let binding = |scope, graph| QuadValues {
+        s: TermValue::Blank {
+            label: "reifier".into(),
+            scope: BlankScope(scope),
+        },
+        p: TermValue::iri(purrdf_iri::vocab::rdf::REIFIES),
+        o: TermValue::Triple {
+            s: TermValue::iri("urn:subject").into(),
+            p: TermValue::iri("urn:predicate").into(),
+            o: TermValue::simple_literal("value").into(),
+        },
+        g: graph,
+    };
+    let expected = [
+        binding(7, None),
+        binding(7, Some(TermValue::iri("urn:graph"))),
+        binding(8, None),
+    ];
+    let layer = statement_layer([&[], &expected, &[]], SegmentedLayerMetadata::default());
+    let head = statement_carrier([&[], &expected, &[]], &[]);
+    for (use_image, use_head) in [(true, false), (false, true), (true, true)] {
+        let mut stack = SegmentedStack::default();
+        if use_image {
+            stack.publish(vec![Arc::clone(&layer)], limits()).unwrap();
+        }
+        if use_head {
+            stack.set_head(Some(
+                SegmentedResidentHead::new(Arc::clone(&head), SegmentedLayerMetadata::default())
+                    .unwrap(),
+            ));
+        }
+        let snapshot = stack.snapshot().unwrap();
+        let query = snapshot.query(limits()).unwrap();
+        let value = |id| DatasetView::term_value(&query, id).unwrap();
+        let mut rows: Vec<_> = query
+            .reifier_quads()
+            .map(|row| QuadValues {
+                s: value(row.s),
+                p: value(row.p),
+                o: value(row.o),
+                g: row.g.map(value),
+            })
+            .collect();
+        query.check_ready().unwrap();
+        rows.sort_unstable_by(|a, b| (&a.s, &a.g).cmp(&(&b.s, &b.g)));
+        assert_eq!(rows, expected);
+    }
+}
+
+fn one_source_reifier_scan_preserves_the_original_read_refusal() {
+    use purrdf_core::QuadValues;
+
+    const REFUSAL: SegmentedError = SegmentedError::Provider {
+        operation: "read reifier source",
+        host_code: Some(17),
+    };
+
+    #[derive(Debug)]
+    struct RefusingReads {
+        bytes: SegmentedBytes,
+        enabled: Arc<AtomicBool>,
+    }
+
+    impl SegmentedProvider for RefusingReads {
+        fn snapshot(&self) -> SegmentedSnapshot {
+            self.bytes.snapshot()
+        }
+
+        fn byte_len(&self) -> u64 {
+            self.bytes.byte_len()
+        }
+
+        fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), SegmentedError> {
+            if self.enabled.load(Ordering::Relaxed) && position != 0 {
+                return Err(REFUSAL);
+            }
+            self.bytes.read_at(position, output)
+        }
+    }
+
+    let rows = [QuadValues {
+        s: TermValue::iri("urn:reifier"),
+        p: TermValue::iri(purrdf_iri::vocab::rdf::REIFIES),
+        o: TermValue::Triple {
+            s: TermValue::iri("urn:subject").into(),
+            p: TermValue::iri("urn:predicate").into(),
+            o: TermValue::simple_literal("value").into(),
+        },
+        g: None,
+    }];
+    let image = statement_image([&[], &rows, &[]]);
+    let enabled = Arc::new(AtomicBool::new(false));
+    let layer = SegmentedLayer::new(
+        Arc::new(RefusingReads {
+            bytes: image.provider(),
+            enabled: Arc::clone(&enabled),
+        }),
+        image.receipt().clone(),
+        SegmentedLayerMetadata::default(),
+    )
+    .unwrap();
+    let mut stack = SegmentedStack::default();
+    stack.publish(vec![Arc::new(layer)], limits()).unwrap();
+    let snapshot = stack.snapshot().unwrap();
+    let query = snapshot.query(limits()).unwrap();
+    enabled.store(true, Ordering::Relaxed);
+    assert!(query.reifier_quads().next().is_none());
+    assert_eq!(query.check_ready(), Err(REFUSAL));
+    enabled.store(false, Ordering::Relaxed);
+    assert!(query.reifier_quads().next().is_none());
+    assert_eq!(query.check_ready(), Err(REFUSAL));
+}
+
 fn layered_removal_translation_preserves_chronological_visibility() {
     use purrdf_core::QuadValues;
 
@@ -1448,6 +1564,8 @@ purrdf_testkit::harness_main!(
     persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last,
     chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs,
     layered_removal_translation_preserves_chronological_visibility,
+    reifier_scans_keep_scoped_bindings_and_suppress_cross_source_duplicates,
+    one_source_reifier_scan_preserves_the_original_read_refusal,
     effective_annotation_classification_uses_original_chronology_and_first_occurrence,
     removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view,
     fallible_evidence_pins_complete_publication_and_immutable_request_prefix,

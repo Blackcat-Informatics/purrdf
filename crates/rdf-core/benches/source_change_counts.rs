@@ -17,6 +17,8 @@
 //! * `capture`: the first source version of a one-image stack.
 //! * `removal_visibility`: an ordinary scan across three nonempty removal
 //!   carriers and a newer resident reinsertion.
+//! * `reifier_scan_head` and `reifier_scan_image`: one-source stack scans over
+//!   distinct reifier bindings built from a shared roster of terms.
 //! * `feed_layers`: the change feed after replacing that image with one whose
 //!   middle row changed.
 //! * `feed_head`: the same change in a resident head.
@@ -35,11 +37,12 @@
 //! * `version_fingerprint`: `SourceVersion::content_fingerprint` of the first
 //!   source version of a one-image stack.
 //!
-//! The fixture has `PURRDF_SOURCE_CHANGE_ROWS` rows (2048 by default), each a
-//! quad (a triple in `statistics`), a reifier and an annotation. Fixture construction, sealing of the
-//! compared images and the previous version are outside every window. The
-//! counting allocator also runs in the instruction samples; its work is the
-//! same for every build compared.
+//! `PURRDF_SOURCE_CHANGE_ROWS` sets the population (2048 by default). In the
+//! reifier scans it counts bindings. In the source-change fixture each entry
+//! contributes a quad (a triple in `statistics`), a reifier and an annotation.
+//! Fixture construction, sealing of the compared images and the previous
+//! version are outside every window. The counting allocator also runs in the
+//! instruction samples and does the same work for every build compared.
 
 use std::hint::black_box;
 use std::ops::ControlFlow;
@@ -48,9 +51,10 @@ use std::sync::Arc;
 use purrdf_alloc_probe::CountingAllocator;
 use purrdf_core::source::SourceVisit;
 use purrdf_core::{
-    ContentIdentified, DatasetMut, DatasetView, MutableDataset, QuadValues, RdfDataset, RdfLiteral,
-    SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer, SegmentedLayerMetadata,
-    SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId, TripleDatasetBuilder,
+    ContentIdentified, DatasetMut, DatasetView, MutableDataset, QuadValues, RdfDataset,
+    RdfDatasetBuilder, RdfLiteral, SegmentedBuildLimits, SegmentedBuilder, SegmentedLayer,
+    SegmentedLayerMetadata, SegmentedReadLimits, SegmentedResidentHead, SegmentedStack, TermId,
+    TripleDatasetBuilder,
 };
 
 #[path = "../tests/support/source_snapshot.rs"]
@@ -61,10 +65,12 @@ use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-const ROWS: [&str; 11] = [
+const ROWS: [&str; 13] = [
     "seal",
     "capture",
     "removal_visibility",
+    "reifier_scan_head",
+    "reifier_scan_image",
     "feed_layers",
     "feed_head",
     "feed_regroup",
@@ -166,9 +172,56 @@ fn head(dataset: Arc<RdfDataset>) -> SegmentedResidentHead {
     SegmentedResidentHead::new(dataset, SegmentedLayerMetadata::default()).unwrap()
 }
 
+fn prepare_reifier_scan(count: usize, image: bool) -> CountWork {
+    const WIDTH: usize = 64;
+    let mut source = RdfDatasetBuilder::new();
+    let s = source.intern_iri("urn:reifier-scan:subject").unwrap();
+    let p = source.intern_iri("urn:reifier-scan:predicate").unwrap();
+    let triples: [_; WIDTH] = std::array::from_fn(|index| {
+        let o = source
+            .intern_iri(&format!("urn:reifier-scan:object:{index}"))
+            .unwrap();
+        source.intern_triple(s, p, o).unwrap()
+    });
+    let reifiers: Vec<_> = (0..WIDTH.max(count.div_ceil(WIDTH)))
+        .map(|index| {
+            source
+                .intern_iri(&format!("urn:reifier-scan:resource:{index}"))
+                .unwrap()
+        })
+        .collect();
+    for index in 0..count {
+        let reifier = index % reifiers.len();
+        let triple = (index / reifiers.len() + reifier % WIDTH) % WIDTH;
+        source
+            .push_reifier(reifiers[reifier], triples[triple])
+            .unwrap();
+    }
+    let dataset = source.freeze().unwrap();
+    let mut stack = SegmentedStack::default();
+    if image {
+        stack.publish(vec![layer(&dataset)], limits()).unwrap();
+    } else {
+        stack.set_head(Some(head(dataset)));
+    }
+    let snapshot = stack.snapshot().unwrap();
+    Box::new(move || {
+        let query = snapshot.query(limits()).unwrap();
+        let emitted = black_box(query.reifier_quads().count());
+        query.check_ready().unwrap();
+        assert_eq!(emitted, count);
+        u64::try_from(emitted).unwrap()
+    })
+}
+
 /// Prepare one row outside the window; the returned closure is the measured
 /// work and returns its witness.
 fn prepare(row: &str, count: usize) -> CountWork {
+    match row {
+        "reifier_scan_head" => return prepare_reifier_scan(count, false),
+        "reifier_scan_image" => return prepare_reifier_scan(count, true),
+        _ => {}
+    }
     let original = source_snapshot::dataset(count, false, false);
     let changed = source_snapshot::dataset(count, true, false);
     match row {
