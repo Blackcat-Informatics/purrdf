@@ -19,7 +19,7 @@ use purrdf_core::{
     FallibleDatasetView, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection, TermValue, ViewLimits, ViewOperationStatus, verify_pack,
 };
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 /// The committed golden fixture's path (see [`golden_bytes_match_committed_fixture`]
 /// and [`regenerate_pack_small_golden`] below for how it was produced).
@@ -422,8 +422,7 @@ fn from_bytes_rejects_literal_datatype_not_referencing_an_iri() {
         (dict_offset..dict_offset + dict_len).contains(&datatype_byte_pos),
         "the tampered byte must fall inside the DICT section"
     );
-    let new_digest: [u8; 32] =
-        Sha256::digest(&corrupted[dict_offset..dict_offset + dict_len]).into();
+    let new_digest: [u8; 32] = Sha256::digest(&corrupted[dict_offset..dict_offset + dict_len]);
     corrupted[84..116].copy_from_slice(&new_digest);
 
     let err = PackView::from_bytes(&corrupted).expect_err(

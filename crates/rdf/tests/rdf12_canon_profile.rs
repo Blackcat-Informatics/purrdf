@@ -37,6 +37,7 @@ use purrdf_gts::files::media_type_for_path;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use purrdf_hash::sha2::Sha256;
 use purrdf_rdf::rdfc12::{
     CANON_CORPUS_DIGEST, CANON_PRESENTATION_FLAT_ASSERTION_ID,
     CANON_PRESENTATION_FLAT_ASSERTION_VERSION, CANON_PRESENTATION_OVERLAY_ID,
@@ -46,7 +47,6 @@ use purrdf_rdf::rdfc12::{
 use purrdf_rdf::{CanonError, RdfDatasetBuilder, TermPosition, ViewCanonError, parse_dataset};
 use purrdf_testkit::golden::regenerating;
 use purrdf_testkit::paths::workspace_root;
-use sha2::{Digest, Sha256};
 
 /// `rdf:reifies` — the real predicate a reifier binding denotes once lowered to the
 /// flat-assertion presentation. Named locally (not exported by `purrdf-rdf`, which

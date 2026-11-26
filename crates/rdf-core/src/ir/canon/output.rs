@@ -9,7 +9,7 @@
 //! and keeps nothing, so a run that only needs a digest never reserves or
 //! builds the document.
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use purrdf_lex::allocation::StorageError;
 
@@ -48,11 +48,11 @@ pub(super) trait Absorb {
 
 impl Absorb for Sha256 {
     fn absorb(&mut self, bytes: &[u8]) {
-        Digest::update(self, bytes);
+        self.update(bytes);
     }
 
     fn digest(self) -> [u8; 32] {
-        self.finalize().into()
+        self.finalize()
     }
 }
 

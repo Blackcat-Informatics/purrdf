@@ -5,6 +5,32 @@
 
 use crate::SecretArray;
 
+/// Finish the current block. Return whether the bit length needs a second
+/// block, in which case the current block contains only the marker and zeros
+/// following the input bytes.
+#[inline]
+pub(crate) fn pad_md(block: &mut [u8], filled: usize, length: &[u8]) -> bool {
+    debug_assert!(length.len() < block.len() && filled < block.len());
+    let length_start = block.len() - length.len();
+    block[filled] = 0x80;
+    if filled >= length_start {
+        block[filled + 1..].fill(0);
+        true
+    } else {
+        block[filled + 1..length_start].fill(0);
+        block[length_start..].copy_from_slice(length);
+        false
+    }
+}
+
+/// Write the length into a continuation block containing no input bytes.
+#[inline]
+pub(crate) fn pad_md_length_block(block: &mut [u8], length: &[u8]) {
+    let length_start = block.len() - length.len();
+    block[..length_start].fill(0);
+    block[length_start..].copy_from_slice(length);
+}
+
 /// Holds the bytes of a partial block between `update` calls.
 ///
 /// `N` is the capacity; the block length in use is passed per call and never
@@ -59,20 +85,19 @@ impl<const N: usize> BlockBuffer<N> {
         &self.bytes[..self.filled]
     }
 
-    /// The Merkle–Damgård finish shared by MD5 and SHA-1 (64-byte blocks):
-    /// append `0x80`, zeros up to 56 mod 64, then the 8-byte encoded message
-    /// bit length, handing the one or two final blocks to `blocks`.
-    pub(crate) fn finish_md(&mut self, length_field: [u8; 8], mut blocks: impl FnMut(&[u8])) {
-        debug_assert!(N >= 64 && self.filled < 64);
-        let filled = self.filled;
-        self.bytes[filled] = 0x80;
-        self.bytes[filled + 1..64].fill(0);
-        if filled >= 56 {
-            blocks(&self.bytes[..64]);
-            self.bytes[..56].fill(0);
+    /// Append the marker, zero padding and encoded message length for a
+    /// Merkle–Damgård hash whose block size equals this buffer's capacity.
+    #[inline]
+    pub(crate) fn finish_md<const L: usize>(
+        &mut self,
+        length_field: [u8; L],
+        mut blocks: impl FnMut(&[u8]),
+    ) {
+        if pad_md(&mut self.bytes[..], self.filled, &length_field) {
+            blocks(&self.bytes[..]);
+            pad_md_length_block(&mut self.bytes[..], &length_field);
         }
-        self.bytes[56..64].copy_from_slice(&length_field);
-        blocks(&self.bytes[..64]);
+        blocks(&self.bytes[..]);
         self.clear();
     }
 

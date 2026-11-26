@@ -89,7 +89,7 @@ external = []
 name = "purrdf-ed25519"
 deps = ["purrdf-hash"]
 # SHA-512 is Ed25519's hash (RFC 8032), from the single SHA-2 implementation.
-external = ["sha2"]
+external = []
 
 [[crate]]
 name = "purrdf-lex"
@@ -109,7 +109,7 @@ name = "purrdf-testkit"
 deps = ["purrdf-hash"]
 # The string generators walk regex-syntax's IR; SHA-256 seals frozen vectors;
 # wasm-bindgen reaches Node's argv, env, console and clock on wasm32.
-external = ["regex-syntax", "sha2", "wasm-bindgen"]
+external = ["regex-syntax", "wasm-bindgen"]
 
 [[crate]]
 name = "purrdf-xsd"

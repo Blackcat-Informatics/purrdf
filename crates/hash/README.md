@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-3, SHAKE, CRC-32 and a Fixed-Key Table Hasher
+# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-2, SHA-3, SHAKE, CRC-32 and a Fixed-Key Table Hasher
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-hash.svg)](https://crates.io/crates/purrdf-hash)
 [![docs.rs](https://docs.rs/purrdf-hash/badge.svg)](https://docs.rs/purrdf-hash)
@@ -17,7 +17,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-hash` is the PurRDF toolkit's digest leaf: the SPARQL `MD5()`,
-`SHA1()` and `SHA3-*()` built-ins, OpenPGP v4 key fingerprints and Datalog
+`SHA1()`, `SHA256()`, `SHA384()`, `SHA512()` and `SHA3-*()` built-ins, OpenPGP v4 key fingerprints and Datalog
 derivation identities all compute through it, and `fixed::FixedHasher` is
 the workspace's in-memory table hasher. It has **no runtime dependencies**.
 Its hashing paths allocate nothing, and it builds for `wasm32-unknown-unknown`.
@@ -27,6 +27,7 @@ Its hashing paths allocate nothing, and it builds for `wasm32-unknown-unknown`.
 | `blake3` | BLAKE3 hash, keyed hash, key derivation and XOF | BLAKE3 §2.1–2.6 | 32 bytes or caller-selected length |
 | `md5` | MD5 | RFC 1321 | 16 bytes |
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
+| `sha2` | SHA-224 / 256 / 384 / 512 | FIPS 180-4 | 28 / 32 / 48 / 64 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
 | `sha3` | `SHAKE128` / 256 | FIPS 202 | caller-selected byte length |
 | `crc32` | CRC-32/ISO-HDLC | reflected `0xEDB88320`, init and xorout `0xFFFFFFFF` | `u32` |
@@ -69,16 +70,19 @@ provides allocation-free ownership of a complete array, explicit cleanup at
 last use, and cleanup on drop, including cloned owners and unwinding. SHAKE
 absorbers, readers, buffered input and permutation scratch use this same home;
 Ed25519 re-exports it. Caller-owned copies, historical compiler copies,
-registers, spills and the external SHA-2 implementation remain outside this
+registers, spills and intermediate digest state remain outside this
 controlled-storage guarantee; it does not promise physical memory erasure.
 
-## SHA-2 is the `sha2` crate
+## SHA-2
 
-`purrdf-hash` implements no SHA-2. The workspace's one SHA-2 implementation is
-the external `sha2` crate, which the crates that need it depend on directly:
-the SHA-256 content identities and query provenance, and `purrdf-ed25519`'s
-SHA-512. The workspace keeps that one SHA-2 rather than a second, native one,
-so `purrdf-hash` keeps its zero runtime dependencies.
+The `sha2` module provides one-shot and streaming hashing for all four
+SHA-2 widths. The implementation selects hardware paths at runtime and uses
+the portable compressor on WebAssembly. The output does not depend on the
+selected path or the input chunking. Content identities, query provenance,
+RDF canonicalization, and Ed25519 use these same digests. RDFC batches
+eligible independent SHA-256 messages without changing digest order.
+See the [native SHA-2 benchmark](../../docs/benchmarks/native-sha2.md)
+for the measured instruction and heap work.
 
 ## Shared kernels
 

@@ -188,9 +188,8 @@ fn document<D: DatasetView>(
 fn stream_document<D: DatasetView>(
     labelling: &Labelling<D::Id>,
     run: &SearchRun<'_>,
-    hasher: &mut sha2::Sha256,
+    hasher: &mut purrdf_hash::sha2::Sha256,
 ) -> Result<(), CanonError<D::ReadError>> {
-    use sha2::Digest as _;
     // INVARIANT: as in `document`, a spelling failure is unreachable.
     let unreadable = |_| {
         CanonError::Refused(Box::new(Refusal::Input {
@@ -219,7 +218,7 @@ fn stream_document<D: DatasetView>(
 pub(crate) fn try_hash_document_view<D: DatasetView>(
     view: &D,
     control: &mut CanonicalizationControl<'_>,
-    hasher: &mut sha2::Sha256,
+    hasher: &mut purrdf_hash::sha2::Sha256,
 ) -> Result<(), CanonError<D::ReadError>> {
     control.run(
         SearchConfiguration::labelling(None, CanonOutput::Sha256Digest),

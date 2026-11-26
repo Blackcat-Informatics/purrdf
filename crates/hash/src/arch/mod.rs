@@ -76,6 +76,15 @@ pub(crate) type HexEncode = fn(&[u8], &mut [u8], bool);
 #[cfg(target_arch = "x86_64")]
 mod x86_64;
 
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod sha256_batch;
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod sha2_x86;
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+pub(crate) mod sha2_aarch64;
+
 #[cfg(target_arch = "aarch64")]
 mod aarch64;
 

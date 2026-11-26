@@ -53,7 +53,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::graph::tarjan_scc;
 use purrdf_hash::Domain;
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
 use crate::catalog::{SliceCatalog, SliceRecord};

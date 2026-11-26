@@ -3,7 +3,7 @@
 
 //! The SHA-256 digest the conformance and projection tests pin their inputs by.
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 /// The SHA-256 of `bytes` as lowercase hex. The digest renders itself — one
 /// idiom for "SHA-256 as lowercase hex" across the suite rather than a per-file

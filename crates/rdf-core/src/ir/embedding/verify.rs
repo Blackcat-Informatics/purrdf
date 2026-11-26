@@ -5,8 +5,6 @@
 
 use core::fmt;
 
-use sha2::{Digest as _, Sha256};
-
 use crate::{Canonicalized, ContentDigest, RdfDataset, TermValue};
 
 use crate::distance::{Arithmetic as _, Exact};
@@ -211,8 +209,8 @@ pub fn require_compatible_vector_spaces(
 
 fn verify_section_hashes_and_root(view: &EmbeddingView<'_>) -> Result<(), EmbeddingError> {
     for section in view.sections() {
-        let actual: [u8; 32] = Sha256::digest(section.bytes()).into();
-        DigestKind::Section.verify(&section.stored_sha256(), &actual)?;
+        let actual = ContentDigest::of(section.bytes());
+        DigestKind::Section.verify(&section.stored_sha256(), actual.as_bytes())?;
     }
 
     let mut header = [0u8; PURREMB_HEADER_LENGTH as usize];

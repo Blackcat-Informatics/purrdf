@@ -53,7 +53,7 @@
 //! given `Ok(None)` produces.
 
 use purrdf_hash::Domain;
-use sha2::Digest as _;
+use purrdf_hash::sha2::Sha256;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -1725,7 +1725,7 @@ pub(crate) fn content_fingerprint_with_memory(
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {
     let capability = memory.admission_mut().workspace().clone();
-    let mut bytes = sha2::Sha256::new();
+    let mut bytes = Sha256::new();
     append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
     append_framed_part(&mut bytes, "population", part.label().as_bytes());
     match part {
@@ -1773,11 +1773,11 @@ pub(crate) fn content_fingerprint_with_memory(
             }
         }
     }
-    Ok(ContentDigest::from_raw(bytes.finalize().into()))
+    Ok(ContentDigest::from_raw(bytes.finalize()))
 }
 
 fn append_arity(
-    out: &mut sha2::Sha256,
+    out: &mut Sha256,
     arity: Arity,
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<(), EvalError> {
@@ -1814,7 +1814,7 @@ fn iri_sorted<'a, V>(
 /// sites cannot produce overlapping label spellings, and every field is emitted
 /// unconditionally (absent ones as a zero presence byte) so an absent constraint and
 /// a present-but-empty one stay distinguishable.
-fn append_constraint(out: &mut sha2::Sha256, role: &str, constraint: &TypeConstraint) {
+fn append_constraint(out: &mut Sha256, role: &str, constraint: &TypeConstraint) {
     append_framed_part(out, "constraint-role", role.as_bytes());
     append_optional_part(
         out,
@@ -1831,7 +1831,7 @@ fn append_constraint(out: &mut sha2::Sha256, role: &str, constraint: &TypeConstr
 /// Append an optional field: always a one-byte presence flag under `label`, then the
 /// value under the same label when present. Emitting the flag unconditionally is what
 /// keeps the framing injective across a field that may or may not be there.
-fn append_optional_part(out: &mut sha2::Sha256, label: &str, value: Option<&[u8]>) {
+fn append_optional_part(out: &mut Sha256, label: &str, value: Option<&[u8]>) {
     append_framed_part(out, label, &[u8::from(value.is_some())]);
     if let Some(value) = value {
         append_framed_part(out, label, value);

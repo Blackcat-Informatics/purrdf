@@ -63,8 +63,6 @@ harness = false
 # function the deterministic stream is built on, and the FNV-1a hash that
 # seeds each benchmark's bootstrap from its id.
 purrdf-hash = { workspace = true }
-# SHA-256 for the frozen-vector tamper evidence.
-sha2 = { workspace = true }
 # The parser behind `regex`: string generators walk its high-level IR, so a
 # pattern means to `prop::string::regex` exactly what it means to `regex`.
 regex-syntax = { workspace = true }

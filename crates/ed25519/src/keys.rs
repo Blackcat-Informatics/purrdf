@@ -5,7 +5,7 @@
 
 use core::fmt;
 
-use sha2::{Digest as _, Sha512};
+use purrdf_hash::sha2::Sha512;
 
 use crate::ct;
 use crate::point::Point;
@@ -349,7 +349,7 @@ impl SigningKey {
     /// low half with bits 0–2 and 255 cleared and bit 254 set; the high half
     /// is the nonce prefix; A = s·B.
     pub fn from_bytes(seed: &[u8; SECRET_KEY_LENGTH]) -> Self {
-        let mut h: [u8; 64] = Sha512::digest(seed).into();
+        let mut h: [u8; 64] = Sha512::digest(seed);
         let mut clamped = [0u8; 32];
         clamped.copy_from_slice(&h[..32]);
         clamped[0] &= 0xf8;
@@ -398,9 +398,9 @@ impl SigningKey {
     /// constant-time code, and the nonce is overwritten before returning.
     pub fn sign(&self, message: &[u8]) -> Signature {
         let mut hasher = Sha512::new();
-        hasher.update(self.prefix);
+        hasher.update(&self.prefix);
         hasher.update(message);
-        let mut nonce_wide: [u8; 64] = hasher.finalize().into();
+        let mut nonce_wide: [u8; 64] = hasher.finalize();
         let mut nonce = Scalar::from_bytes_wide(&nonce_wide);
         ct::wipe(&mut nonce_wide);
         let r = Point::mul_base(&nonce).encode();
@@ -467,7 +467,7 @@ fn challenge(r: &[u8; 32], a: &[u8; 32], message: &[u8]) -> Scalar {
     hasher.update(r);
     hasher.update(a);
     hasher.update(message);
-    let wide: [u8; 64] = hasher.finalize().into();
+    let wide: [u8; 64] = hasher.finalize();
     Scalar::from_bytes_wide(&wide)
 }
 

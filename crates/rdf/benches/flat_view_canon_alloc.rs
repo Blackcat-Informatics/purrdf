@@ -26,6 +26,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY;
 use purrdf_core::{CANON_CORPUS_POLICY, CanonPhase, CanonicalizationControl};
+use purrdf_hash::sha2::Sha256;
 use purrdf_rdf::rdfc12::{
     CanonHash, try_canonical_sha256_view, try_canonicalize_flat_view, try_canonicalize_sha256_view,
     try_flat_blake3_measured_view, try_flat_blake3_view, try_flat_digest_view,
@@ -34,7 +35,6 @@ use purrdf_rdf::{
     ContentDigest, ContentStore, DatasetProvenance, PipelineBundle, RdfDataset, RdfLookaside,
     StopSignal, try_canonicalize_view,
 };
-use sha2::Digest as _;
 
 #[path = "support/canon_load.rs"]
 mod load;
@@ -335,10 +335,10 @@ fn probe(shape: &str, order: load::Order, scale: usize, lines: usize, with_pre_o
         &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
     )
     .expect("default document");
-    let mut hasher = sha2::Sha256::new();
+    let mut hasher = Sha256::new();
     hasher.update(built.nquads().as_bytes());
-    hasher.update([0x1d_u8; 3]);
-    let built_fold = ContentDigest::from_raw(hasher.finalize().into());
+    hasher.update(&[0x1d_u8; 3]);
+    let built_fold = ContentDigest::from_raw(hasher.finalize());
     let m = window.close();
     // Metadata is taken outside both windows.
     let built_document = Document::of(built.nquads());

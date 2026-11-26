@@ -58,8 +58,6 @@ purrdf-datalog = { workspace = true }
 purrdf-sparql-eval = { workspace = true }
 # The SPARQL-results provenance carrier `src/query.rs` fills.
 purrdf-sparql-results = { workspace = true }
-# SHA-256 of the query text: the `sha256:` query identity `src/query.rs` carries.
-sha2 = { workspace = true }
 # The workspace's one JSON value and writer: the hand-rolled SARIF model writes
 # itself as a `purrdf_lex::json::Value` and prints through `write_pretty`.
 purrdf-lex = { workspace = true }

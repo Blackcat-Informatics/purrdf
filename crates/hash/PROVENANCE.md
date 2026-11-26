@@ -25,11 +25,26 @@ was copied or ported.
 - **SHA-1** — FIPS 180-4, §4.1.1 (functions), §4.2.1 (constants), §5.1.1
   (padding), §5.3.1 (initial hash value), §6.1.2 and §6.1.3 (hash
   computation, circular message schedule).
+- **SHA-2** — [FIPS 180-4](https://doi.org/10.6028/NIST.FIPS.180-4),
+  §4.1.2–3 (functions), §4.2.2–3 (constants), §5.1 (padding),
+  §5.3.2–5 (initial hash values), and §6.2–5 (hash computation and
+  output truncation). The x86 kernels use the operand and lane semantics
+  in the [Intel Software Developer’s Manual](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)
+  for SHA256RNDS2, SHA256MSG1/2, VPRORD, VPRORQ, VPTERNLOGD/Q, and
+  VPGATHERDD. The SHA-512 instruction path uses the [Intel Intrinsics
+  Guide](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html)
+  for VSHA512RNDS2 and VSHA512MSG1/2. The AVX-512VL schedule applies each small sigma
+  to a pair of adjacent schedule words. Both words needed by its
+  high sigma precede that pair, so no intra-pair dependency remains.
+  The SHA-256 batch places one independent message in each vector
+  lane. The Arm kernels follow the [Arm Architecture Reference Manual](https://developer.arm.com/documentation/ddi0602/latest)
+  operands for the SHA-256 and SHA-512 hash and schedule updates.
+  No third-party implementation source was used to write these kernels.
 - **SHA-3** — FIPS 202, §3.1 (state array), §3.2.1–§3.2.5 (θ, ρ, π, χ, ι,
   including Algorithms 2, 3, 5 and 6 from which the rotation offsets, lane
-  permutation and round constants are computed), §3.3, §5.1 (pad10*1), §6.1
-  (the four hash functions), §6.2 (SHAKE128/256) and Appendix B (bit/byte conventions and the
-  hexadecimal form of the padding).
+  permutation and round constants are computed), §3.3, §5.1 (`pad10*1`),
+  §6.1 (the four hash functions), §6.2 (`SHAKE128` and `SHAKE256`), and
+  Appendix B (bit/byte conventions and the hexadecimal form of the padding).
   SHAKE absorption shares the existing block buffer, padding and permutation;
   its incremental byte output is written from the §4 sponge construction.
   No external SHAKE implementation source was consulted or copied.
@@ -69,7 +84,7 @@ was copied or ported.
   conformance vectors.
 - **Instruction semantics** — the Rust `core::arch` reference
   (doc.rust-lang.org) for the x86 SHA, `pclmulqdq` and `aesenc` intrinsics
-  and the AArch64 SHA1, CRC32, PMULL, `vaeseq_u8` and `vaesmcq_u8`
+  and the Arm SHA-1, CRC-32, PMULL, `vaeseq_u8` and `vaesmcq_u8`
   intrinsics.
 
 ## BLAKE3
@@ -136,7 +151,7 @@ creating this frozen projection. All 35 cases are retained without truncation.
 
 ## Frozen differential vectors (`crates/hash-conformance/tests/vectors/*_differential_vectors.txt`)
 
-Seven files, 14,097 records each, recording what third-party crates answered
+The following files each contain 14,097 records of answers from third-party crates
 over a deterministic input set while they were dependencies of this
 workspace, called as black boxes through their public APIs — **answers only,
 not code**:
@@ -155,11 +170,29 @@ file's header states its input recipe (the little-endian `u64` stream of
 file and this crate is a defect in this crate; the files are never edited to
 match it.
 
+`sha2_differential_vectors.txt` holds 258 input recipes and the public
+one-shot SHA-224, SHA-256, SHA-384, and SHA-512 answers from `sha2` 0.11.1.
+It covers every message length from zero through 256 bytes and a 1 MiB
+message. OpenSSL 4.1.0 independently confirms the four 1 MiB answers.
+The header pins the byte generator and the SHA-256 of the body. The
+conformance harness checks all one-shot answers. For inputs up to 256
+bytes it also checks every streaming split through offset 129 or the
+end of the message, whichever comes first.
+
+The [NIST CAVP byte-oriented archive](https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip)
+has SHA-256
+`929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8`.
+The native qualification replays 388 short messages, 384 long messages,
+and 400 Monte Carlo checkpoints across the four SHA-2 digests against
+the archive's unchanged responses. Local scalar models of the Arm SHA
+instructions validate their lane and round semantics. Model replay does
+not establish native dispatch or instruction execution.
+
 ## SHAKE known answers and boundaries
 
 `crates/hash-conformance/tests/vectors/shake_nist_vectors.txt` holds all 512
-output bytes of the NIST SHAKE128/256 example-value documents for 0-bit and
-1600-bit messages. `shake_boundary_vectors.txt` adds 16 independent OpenSSL
+output bytes of the NIST `SHAKE128` and `SHAKE256` example-value documents
+for 0-bit and 1600-bit messages. `shake_boundary_vectors.txt` adds 16 independent OpenSSL
 3.6.4 public-API answers at each mode's absorption-rate boundaries and for
 4097-byte output. Only answers were captured, not code or constants. The
 [fixture provenance](../hash-conformance/tests/vectors/shake-PROVENANCE.md)

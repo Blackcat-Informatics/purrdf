@@ -27,7 +27,6 @@ path = "src/lib.rs"
 [dependencies]
 purrdf-hash.workspace = true
 purrdf-core.workspace = true
-sha2.workspace = true
 purrdf-columnar = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-slice = { workspace = true }

@@ -61,7 +61,7 @@
 
 use std::fmt;
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use crate::ir::pack::bits::{PackBitsError, read_varint, write_varint};
 
@@ -251,7 +251,7 @@ impl Identity {
     pub fn new() -> Self {
         Self {
             components: Vec::new(),
-            digest: Sha256::digest(b"").into(),
+            digest: Sha256::digest(b""),
         }
     }
 
@@ -428,7 +428,7 @@ impl Identity {
     fn refresh(&mut self) {
         let mut digest = Sha256::new();
         self.visit_encoding(|part| digest.update(part));
-        self.digest = digest.finalize().into();
+        self.digest = digest.finalize();
     }
 }
 
@@ -474,7 +474,7 @@ mod tests {
         let bytes = identity.to_bytes();
         let frozen = b"\x04base\x1ahttps://example.org/shapes\x0bshapes-rdfc\x04\xde\xad\xbe\xef\x05empty\x00";
         assert_eq!(bytes, frozen);
-        assert_eq!(*identity.digest(), <[u8; 32]>::from(Sha256::digest(frozen)));
+        assert_eq!(*identity.digest(), Sha256::digest(frozen));
         let decoded = Identity::from_bytes(&bytes).expect("canonical identity decodes");
 
         assert_eq!(decoded, identity);
@@ -515,7 +515,7 @@ mod tests {
     fn empty_identity_round_trips() {
         let identity = Identity::new();
         assert_eq!(identity.to_bytes(), Vec::<u8>::new());
-        assert_eq!(identity.digest(), &<[u8; 32]>::from(Sha256::digest(b"")));
+        assert_eq!(identity.digest(), &Sha256::digest(b""));
         assert_eq!(Identity::from_bytes(&[]).expect("empty decodes"), identity);
     }
 

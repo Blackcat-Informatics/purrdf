@@ -27,7 +27,7 @@
 //!   run.
 //!
 //! Unset, nothing is required. Any other value fails the run, as does an
-//! entry naming a family outside [`FAMILIES`] or a path its family does not
+//! entry naming a family outside [`ALL_FAMILIES`] or a path its family does not
 //! have: a misspelt requirement must fail rather than require nothing.
 //!
 //! What "required" then asserts is the family's contract: that the path is
@@ -51,9 +51,38 @@ pub const REQUIRE_SIMD_PATHS: &str = "PURRDF_REQUIRE_SIMD_PATHS";
 /// | `hex` | base16 encoding (`purrdf_hash::hex`) |
 /// | `numeric` | directed binary64 endpoint products (`purrdf_xsd::math::FloatProductBackend`) |
 /// | `sha1` | the SHA-1 block function (`purrdf_hash::sha1`) |
-pub const FAMILIES: [&str; 8] = [
-    "blake3", "crc32", "csv", "deflate", "distance", "hex", "numeric", "sha1",
+/// | `sha256` | SHA-224 and SHA-256 compression (`purrdf_hash::sha2`) |
+/// | `sha256-batch` | batching independent SHA-256 messages (`purrdf_hash::sha2`) |
+/// | `sha512` | SHA-384 and SHA-512 compression (`purrdf_hash::sha2`) |
+pub const ALL_FAMILIES: [&str; 11] = [
+    "blake3",
+    "crc32",
+    "csv",
+    "deflate",
+    "distance",
+    "hex",
+    "numeric",
+    "sha1",
+    "sha256",
+    "sha256-batch",
+    "sha512",
 ];
+
+/// The original eight families. Use [`ALL_FAMILIES`] for the full inventory.
+pub const FAMILIES: [&str; 8] = {
+    let [
+        blake3,
+        crc32,
+        csv,
+        deflate,
+        distance,
+        hex,
+        numeric,
+        sha1,
+        ..,
+    ] = ALL_FAMILIES;
+    [blake3, crc32, csv, deflate, distance, hex, numeric, sha1]
+};
 
 /// A family of named execution paths of one function.
 ///
@@ -211,7 +240,7 @@ pub fn host_advertises(flags: &[&str]) -> bool {
 ///
 /// # Panics
 ///
-/// When `family` is not in [`FAMILIES`], or the variable is set and is not
+/// When `family` is not in [`ALL_FAMILIES`], or the variable is set and is not
 /// UTF-8, is neither `1` nor a list of `family:path` entries, or names an
 /// unknown family, or a path `family` does not have.
 #[must_use]
@@ -284,9 +313,9 @@ fn parse(
     expected_here: impl Fn(&'static str) -> bool,
 ) -> Result<Vec<&'static str>, String> {
     assert!(
-        FAMILIES.contains(&family),
+        ALL_FAMILIES.contains(&family),
         "`{family}` is not a family of {REQUIRE_SIMD_PATHS}; the families are: {}",
-        FAMILIES.join(", ")
+        ALL_FAMILIES.join(", ")
     );
     if value.trim() == "1" {
         return Ok(known
@@ -310,11 +339,11 @@ fn parse(
                  require nothing"
             ));
         };
-        if !FAMILIES.contains(&entry_family) {
+        if !ALL_FAMILIES.contains(&entry_family) {
             return Err(format!(
                 "{REQUIRE_SIMD_PATHS} entry `{entry}` names `{entry_family}`, which is not a \
                  family; the families are: {}",
-                FAMILIES.join(", ")
+                ALL_FAMILIES.join(", ")
             ));
         }
         if entry_family != family {
@@ -346,7 +375,7 @@ fn parse(
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, FAMILIES, host_advertises, parse};
+    use super::{ALL_FAMILIES, Backend, host_advertises, parse};
     use crate::backend::{Crc32Backend, HexBackend, Sha1Backend};
     use crate::blake3::Backend as Blake3Backend;
 
@@ -457,7 +486,7 @@ mod tests {
 
     #[test]
     fn the_families_are_sorted_and_unique() {
-        assert!(FAMILIES.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(ALL_FAMILIES.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

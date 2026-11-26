@@ -98,7 +98,7 @@ use purrdf_core::{
     GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, StopCause,
     TrippedGovernor,
 };
-use sha2::Digest;
+use purrdf_hash::sha2::Sha256;
 
 use crate::eval::DEFAULT_UDF_DEPTH;
 
@@ -2255,16 +2255,16 @@ fn write_schedule(
 /// Hash the one schedule spelling directly from its borrowed fields. No
 /// temporary preimage String or decimal conversion String is constructed.
 fn schedule_hash(id: &str, version: u32, schedule: &[(&str, u64)]) -> [u8; 32] {
-    struct HashText(sha2::Sha256);
+    struct HashText(Sha256);
     impl std::fmt::Write for HashText {
         fn write_str(&mut self, text: &str) -> std::fmt::Result {
             self.0.update(text.as_bytes());
             Ok(())
         }
     }
-    let mut text = HashText(sha2::Sha256::new());
+    let mut text = HashText(Sha256::new());
     write_schedule(&mut text, id, version, schedule).expect("the SHA text sink cannot fail");
-    text.0.finalize().into()
+    text.0.finalize()
 }
 
 /// The lowercase-hex SHA-256 of [`schedule_preimage`].
@@ -3181,7 +3181,7 @@ mod tests {
         let manifest = purrdf_testkit::paths::workspace_root!()
             .join("scripts/conformance-frozen/vectors-sparql-governors.sha256");
         let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
-        let hex = purrdf_hash::hex::encode(&sha2::Sha256::digest(&bytes));
+        let hex = purrdf_hash::hex::encode(&Sha256::digest(&bytes));
         assert_eq!(
             GOVERNOR_CORPUS_DIGEST, hex,
             "the frozen corpus at vectors/sparql-governors/ changed without \

@@ -352,7 +352,7 @@ use std::sync::{Arc, LazyLock, OnceLock};
 
 use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::{DatasetView, GraphMatch, TermValue};
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use crate::error::EvalError;
 use crate::property_fn::{PfArgs, PfArity, PfCursor, PfRow, PropertyFunction};
@@ -1183,7 +1183,7 @@ fn canonical_edges<D: DatasetView>(
 fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
     let mut state = Sha256::new();
     state.update(PATH_SNAPSHOT_DOMAIN_V1.as_bytes());
-    state.update((edges.len() as u64).to_le_bytes());
+    state.update(&(edges.len() as u64).to_le_bytes());
     let mut bytes = Vec::new();
     for (from, to, statement) in edges {
         bytes.clear();
@@ -1192,7 +1192,7 @@ fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
         statement.canonical_bytes(&mut bytes);
         state.update(&bytes);
     }
-    state.finalize().into()
+    state.finalize()
 }
 
 /// The dense index of `value` within an already-sorted, deduplicated table it is known to
@@ -1241,7 +1241,7 @@ fn seed_digest(graph: &PathGraph, node: u32) -> Sha256 {
 /// collision is not a hash-table slowdown, it is two different walks fused into one
 /// answer. All 32 bytes are rendered, as 64 lowercase hex characters.
 fn finish_digest(mut state: Sha256, hop_count: u64) -> String {
-    state.update(hop_count.to_le_bytes());
+    state.update(&hop_count.to_le_bytes());
     purrdf_hash::hex::encode(&state.finalize())
 }
 

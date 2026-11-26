@@ -127,7 +127,7 @@
 //! `n_terms` fields against the values recomputed from the decoded sections.
 //! A successfully-opened [`PackView`] therefore never panics on a later query.
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use crate::bytes::{read_u32_le, read_u64_le};
 use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
@@ -632,8 +632,7 @@ fn assemble(
         (SECTION_TRIPLES, triples_bytes),
         (SECTION_SIDE, side_bytes),
     ];
-    let digests: [[u8; 32]; SECTION_COUNT] =
-        std::array::from_fn(|i| Sha256::digest(sections[i].1).into());
+    let digests: [[u8; 32]; SECTION_COUNT] = std::array::from_fn(|i| Sha256::digest(sections[i].1));
 
     // First pass: compute every section's absolute, 8-byte-aligned offset.
     let mut offsets = [0u64; SECTION_COUNT];
@@ -784,7 +783,7 @@ impl<'a> PackView<'a> {
                 .ok_or(PackError::Malformed("container: section span overflows"))?;
             let slice = bytes.get(offset..end).ok_or(PackError::Truncated)?;
 
-            let actual_digest: [u8; 32] = Sha256::digest(slice).into();
+            let actual_digest: [u8; 32] = Sha256::digest(slice);
             if actual_digest != stored_digest {
                 return Err(PackError::SectionDigestMismatch { kind });
             }

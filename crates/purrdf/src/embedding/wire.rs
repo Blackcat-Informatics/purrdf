@@ -11,7 +11,6 @@ use purrdf_core::embedding::{
     SECTION_DERIVED, SECTION_EXTENSION_MIN, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD,
     SECTION_MATRIX_DATA, SECTION_SOURCE, SectionKey, derive_artifact_root, put_u32, put_u64,
 };
-use sha2::{Digest as _, Sha256};
 
 const ROOT_OFFSET: usize = 64;
 const ROOT_END: usize = 96;
@@ -314,7 +313,7 @@ pub(super) fn encode_artifact(
         .collect::<Result<Vec<_>, EmbeddingError>>()?;
     let mut layout = FileLayout::plan(source_exact_digest, descriptors)?;
     for section in &sections {
-        layout.set_section_digest(section.key, Sha256::digest(&section.bytes).into())?;
+        layout.set_section_digest(section.key, *ContentDigest::of(&section.bytes).as_bytes())?;
     }
 
     let root = layout.artifact_root()?;

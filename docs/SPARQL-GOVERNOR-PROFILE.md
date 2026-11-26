@@ -583,8 +583,9 @@ therefore recompute it from this document alone:
 # 2dd729d6a77c5e3aaa9dddb57a77dd77a7dee20a5696e9d1f5ae4a971d2a1c1d
 ```
 
-SHA-256 through the `sha2` crate, which is pure software with no entropy source, so
-the derivation is `wasm32-unknown-unknown`-clean and reproducible on every target.
+PurRDF derives this identity with `purrdf_hash::sha2::Sha256`. The digest
+needs no host entropy and is reproducible on every target, including
+`wasm32-unknown-unknown`.
 
 **What pinning the identity means.** The id and version say *which* schedule was
 agreed; the digest says *exactly what that schedule is*. Together they make a fuel

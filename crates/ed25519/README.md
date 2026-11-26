@@ -18,10 +18,9 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 `purrdf-ed25519` is the PurRDF toolkit's one Ed25519 (RFC 8032, pure Ed25519:
 no context, no pre-hash). The GTS COSE_Sign1 envelope, OpenPGP key import and
-the RDF packaging signatures all sign and verify through it. Its runtime
-dependencies are `purrdf-hash` (the base16 the `Debug` renderings print with)
-and `sha2` (SHA-512, which RFC 8032 fixes as Ed25519's hash), it is
-`#![forbid(unsafe_code)]`, and it builds for `wasm32-unknown-unknown`: it uses
+the RDF packaging signatures all sign and verify through it. Its only runtime
+dependency is `purrdf-hash` for base16 and the SHA-512 digest required by
+RFC 8032. It forbids unsafe code and builds for `wasm32-unknown-unknown`. It uses
 no threads, no clock, no filesystem and no entropy, since keys come from
 caller-supplied seeds.
 

@@ -87,7 +87,7 @@ use crate::agg_fn::AggregateRegistry;
 use crate::error::EvalError;
 use crate::property_fn::PropertyFunctionRegistry;
 use crate::registry_id::{RegistryId, digest_framed_part as append_framed_part};
-use sha2::Digest as _;
+use purrdf_hash::sha2::Sha256;
 
 /// The domain separator this environment's content digest opens with, so it can
 /// never collide with a digest of any other kind that happens to fold a
@@ -503,7 +503,7 @@ fn content_digest(
     aggregates: &AggregateRegistry,
     memory: &mut purrdf_lex::allocation::Memory<'_, crate::workspace::LexicalFrame>,
 ) -> Result<ContentDigest, EvalError> {
-    let mut bytes = sha2::Sha256::new();
+    let mut bytes = Sha256::new();
     append_framed_part(&mut bytes, "domain", CONTENT_DOMAIN.as_bytes());
     append_framed_part(&mut bytes, "version", &CONTENT_VERSION.to_be_bytes());
     for (label, list) in [
@@ -524,7 +524,7 @@ fn content_digest(
             .expect("32-byte digest fits 64 hex bytes");
         append_framed_part(&mut bytes, label, &hex);
     }
-    Ok(ContentDigest::from_raw(bytes.finalize().into()))
+    Ok(ContentDigest::from_raw(bytes.finalize()))
 }
 
 #[cfg(test)]

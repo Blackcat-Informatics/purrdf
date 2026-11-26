@@ -714,7 +714,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use purrdf_core::{RdfDatasetBuilder, datasets_isomorphic};
-    use sha2::{Digest, Sha256};
+    use purrdf_hash::sha2::Sha256;
 
     use super::*;
     use crate::{CsvwContext, CsvwMode, CsvwVocabulary};

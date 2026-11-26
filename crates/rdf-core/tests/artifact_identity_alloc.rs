@@ -5,7 +5,7 @@
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::artifact::Identity;
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -30,7 +30,7 @@ fn appending_a_component_does_not_allocate_for_existing_payloads() {
         assert_eq!(identity.component("retained"), Some(original.as_slice()));
         assert_eq!(identity.component("new"), Some(b"value".as_slice()));
         let bytes = identity.to_bytes();
-        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        let digest: [u8; 32] = Sha256::digest(&bytes);
         assert_eq!(*identity.digest(), digest);
         assert_eq!(Identity::from_bytes(&bytes).unwrap(), identity);
     }

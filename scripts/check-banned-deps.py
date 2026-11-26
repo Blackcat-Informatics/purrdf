@@ -110,9 +110,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-# Package name -> first-party replacement. Banned on ANY edge (runtime, build,
-# dev/test, transitive); a native replacement covers each kind. Cargo.lock is checked.
+# Package name to first-party replacement, banned on every manifest and lock edge.
 BANNED_ANY_EDGE: dict[str, str] = {
+    "sha2": "purrdf_hash::sha2 (native one-shot, streaming, and batch SHA-2)",
     "twox-hash": "purrdf_hash::xxh64 (seeded one-shot and streaming XXH64)",
     "visual-hashing": "purrdf_lex::visual_fingerprint (admitted native rendering over shared BLAKE3)",
     "structured-zstd": "purrdf_zstd (shared native frame codec and FastCOVER trainer)",

@@ -7,8 +7,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use purrdf_hash::sha2::Sha256;
 use rayon::prelude::*;
-use sha2::{Digest, Sha256};
 
 use purrdf_lex::json::{Object as JsonObject, Value as JsonValue};
 use purrdf_rdf::RdfDataset;

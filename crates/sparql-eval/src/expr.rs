@@ -54,7 +54,6 @@ use purrdf_xsd::{
 };
 #[cfg(test)]
 use purrdf_xsd::{parse_by_iri, value_cmp};
-use sha2::Digest; // the SHA-2 built-ins go through the RustCrypto `Digest` trait
 
 use crate::DetHashSet;
 use crate::error::EvalError;
@@ -6547,21 +6546,21 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         },
         Function::Sha256 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
-                let digest = sha2::Sha256::digest(s.as_bytes());
+                let digest = purrdf_hash::sha2::Sha256::digest(s.as_bytes());
                 Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha384 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
-                let digest = sha2::Sha384::digest(s.as_bytes());
+                let digest = purrdf_hash::sha2::Sha384::digest(s.as_bytes());
                 Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),
         },
         Function::Sha512 => match plain_string_arg_ref(vals, 0) {
             Some(s) => {
-                let digest = sha2::Sha512::digest(s.as_bytes());
+                let digest = purrdf_hash::sha2::Sha512::digest(s.as_bytes());
                 Ok(Some(digest_term(ctx, &digest)?))
             }
             None => Ok(None),

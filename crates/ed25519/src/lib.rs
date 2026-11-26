@@ -6,7 +6,7 @@
 //!
 //! This crate is the workspace's one Ed25519 implementation: key expansion,
 //! signing and verification are written once here, over the workspace's one
-//! SHA-512 ([`sha2::Sha512`]), and every signer and verifier (the GTS
+//! SHA-512 ([`purrdf_hash::sha2::Sha512`]), and every signer and verifier (the GTS
 //! COSE_Sign1 envelope, OpenPGP key import, the RDF packaging signatures)
 //! calls into it.
 //!

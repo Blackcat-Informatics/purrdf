@@ -114,7 +114,7 @@ fn edge_evidence_summary(edge: &DependencyEdge) -> String {
 /// Compute the bundle content-ID from the raw digests of all authored
 /// artifacts.  The digests are sorted for determinism, then hashed together.
 pub fn bundle_content_id(raw_digests: &[&str]) -> String {
-    use sha2::{Digest as _, Sha256};
+    use purrdf_hash::sha2::Sha256;
     let mut sorted: Vec<&str> = raw_digests.to_vec();
     sorted.sort_unstable();
     let mut h = Sha256::new();

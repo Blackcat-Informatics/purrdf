@@ -16,7 +16,7 @@ use purrdf_core::ir::pack::certify::{PackDigest, verify_pack};
 use purrdf_core::ir::pack::container::{PackBuilder, PackError, PackView};
 use purrdf_core::rdfc12::{CanonHash, RDFC_V2_CORPUS_POLICY, try_canonicalize_with};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 /// A rich fixture (default + named graphs, literals with facets, blanks,
 /// triple terms, reifiers, annotations) — deliberately varied so the
@@ -364,8 +364,7 @@ fn verify_pack_returns_err_when_reconstruction_fails_structural_validation() {
     corrupted[abs_start..abs_start + patched_bytes.len()].copy_from_slice(&patched_bytes);
 
     // -- Recompute and patch the SIDE section's own directory SHA-256 -------
-    let new_side_digest: [u8; 32] =
-        Sha256::digest(&corrupted[side_offset..side_offset + side_len]).into();
+    let new_side_digest: [u8; 32] = Sha256::digest(&corrupted[side_offset..side_offset + side_len]);
     let digest_start = side_entry_start + 4 + 8 + 8;
     corrupted[digest_start..digest_start + 32].copy_from_slice(&new_side_digest);
 
@@ -446,7 +445,7 @@ fn verify_pack_reads_a_version_one_pack_by_its_rdfc12_digest() {
         &mut purrdf_core::CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
     )
     .expect("source canonicalizes");
-    let legacy_digest: [u8; 32] = Sha256::digest(rdfc12.nquads().as_bytes()).into();
+    let legacy_digest: [u8; 32] = Sha256::digest(rdfc12.nquads().as_bytes());
 
     let mut v1 = current.clone();
     v1[VERSION_HEADER_OFFSET..VERSION_HEADER_OFFSET + 4].copy_from_slice(&1u32.to_le_bytes());

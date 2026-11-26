@@ -18,7 +18,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use purrdf_hash::hex::Digest32;
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use crate::FastMap;
 
@@ -50,7 +50,7 @@ impl ContentHasher {
     /// Finish the same content identity as [`ContentDigest::of`].
     #[must_use]
     pub fn finish(self) -> ContentDigest {
-        ContentDigest::from_raw(self.0.finalize().into())
+        ContentDigest::from_raw(self.0.finalize())
     }
 }
 
@@ -63,9 +63,7 @@ impl purrdf_hash::error::StructuredError for ContentDigest {
 impl ContentDigest {
     /// Compute the digest of `bytes` directly (SHA-256).
     pub fn of(bytes: &[u8]) -> Self {
-        let mut hasher = ContentHasher::default();
-        hasher.update(bytes);
-        hasher.finish()
+        Self::from_raw(Sha256::digest(bytes))
     }
 
     /// Wrap 32 raw digest bytes as a `ContentDigest` WITHOUT re-hashing.
@@ -296,8 +294,16 @@ mod tests {
     fn digest_of_is_stable_and_hex_round_trips() {
         let d = ContentDigest::of(b"hello world");
         let hex = d.to_hex();
-        assert_eq!(hex.len(), 64);
+        assert_eq!(
+            hex,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
         assert_eq!(ContentDigest::from_hex(&hex), Some(d));
+        let bytes = [0x61; 129];
+        let mut streamed = ContentHasher::default();
+        streamed.update(&bytes[..63]);
+        streamed.update(&bytes[63..]);
+        assert_eq!(ContentDigest::of(&bytes), streamed.finish());
     }
 
     #[test]

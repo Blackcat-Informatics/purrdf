@@ -25,7 +25,7 @@ rmeta and a ``.s`` per crate are all produced), LTO off and one codegen unit::
     wasm32-simd128       wasm32-unknown-unknown, -C target-feature=+simd128
 
 That emits a ``.s`` for EVERY crate in the graph, dependencies included, so a
-dependency's own kernels (sha2's) are measured in that dependency's symbols.
+dependency's own kernels are measured in that dependency's symbols.
 The asm is per crate and before LTO. LTO may inline, specialize or eliminate bodies;
 these counts prove this build's kernel lowering, not final-binary throughput.
 

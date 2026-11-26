@@ -59,10 +59,6 @@ purrdf-xsd = { workspace = true }
 # deterministic in-memory evaluator map: the workspace's zero-dependency hashing
 # leaf, pure integer arithmetic, wasm32-unknown-unknown-clean.
 purrdf-hash = { workspace = true }
-# The SHA256()/SHA384()/SHA512() built-ins. Pure software with
-# default-features = false in the workspace table, so no getrandom and the tree
-# stays wasm-clean.
-sha2 = { workspace = true }
 # SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
 # (its JSON reader is purrdf_lex::json).
 purrdf-sparql-results = { workspace = true }
