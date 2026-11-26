@@ -1821,56 +1821,183 @@ fn okf_frontmatter_reads_scalar_keys_as_text_and_keeps_them_unique() {
     }
 }
 
-/// Three unchanged upstream samples compared as expanded document structures.
+/// The pinned Expand family, including its explicit conformance gaps.
 #[test]
-fn pinned_w3c_structural_expansion_samples() {
+fn pinned_w3c_structural_expansion() {
+    use purrdf_lex::json::{self, Limits, Object, Value};
+
+    const EXTENDED: &[&str] = &[
+        "#cir-scalar-core-1-positive",
+        "#cir-scalar-i18n-1-positive",
+        "#cir-scalar-other-1-positive",
+    ];
+    const HTML: &[&str] = &[
+        "#html-and-yaml-streams",
+        "#mixed-script-types",
+        "#html-dedent-needed",
+        "#html-dedent-not-needed",
+    ];
+    const UNWRAPPED: &[&str] = &[
+        "#core-bool-true",
+        "#core-bool-false",
+        "#core-bool-true-title",
+        "#core-bool-false-upper",
+        "#core-null-null",
+        "#core-null-tilde",
+        "#core-null-upper",
+        "#core-int-decimal",
+        "#core-int-octal",
+        "#core-int-hex",
+        "#core-float-basic",
+        "#core-float-scientific",
+        "#core-date-ymd",
+        "#core-yaml11-yes",
+        "#core-yaml11-no",
+        "#core-yaml11-on",
+        "#core-yaml11-off",
+        "#core-yaml11-yes-title",
+        "#core-yaml11-yes-upper",
+    ];
+
     let root = purrdf_testkit::paths::workspace_root!().join("vectors/yaml-ld/tests");
-    let manifest = purrdf_lex::json::read_slice(
-        &std::fs::read(root.join("manifest.jsonld")).unwrap(),
-        purrdf_lex::json::Limits::DEFAULT,
+    let manifest = json::read_slice(
+        &read_yaml_ld_fixture(&root, "manifest.jsonld"),
+        Limits::DEFAULT,
     )
     .unwrap();
-    for id in [
-        "#cr-comments-1-positive",
-        "#aa-cycles-1-positive",
-        "#two-documents-from-stream",
-    ] {
-        let entry = manifest["sequence"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|entry| entry["@id"].as_str() == Some(id))
-            .expect("pinned structural sample");
+    let entries = manifest["sequence"].as_array().unwrap();
+    let base = manifest["baseIri"].as_str().unwrap();
+    assert_eq!(entries.len(), 97);
+    let registry = pinned_expand_registry(&root, base);
+    let (mut extended, mut html, mut unwrapped) = (Vec::new(), Vec::new(), Vec::new());
+    let (mut exact, mut refused) = (0, 0);
+    for entry in entries {
+        let types = entry["@type"].as_array().unwrap();
+        let has_type = |name| types.iter().any(|kind| kind.as_str() == Some(name));
+        if !has_type("jld:ExpandTest") {
+            continue;
+        }
+        let id = entry["@id"].as_str().unwrap();
+        let positive = has_type("jld:PositiveEvaluationTest");
+        assert_eq!(types.len(), 2, "{id}");
+        assert_ne!(positive, has_type("jld:NegativeEvaluationTest"), "{id}");
+        let options = entry.get("option").map(|value| value.as_object().unwrap());
+        if let Some(options) = options
+            && (options.contains_key("normative") || options.contains_key("extendedYAML"))
+        {
+            assert!(positive, "{id}");
+            assert_eq!(options.len(), 2, "{id}");
+            assert_eq!(options["extendedYAML"].as_bool(), Some(true), "{id}");
+            assert_eq!(options["normative"].as_bool(), Some(false), "{id}");
+            extended.push(id);
+            continue;
+        }
         let input = entry["input"].as_str().unwrap();
-        let expected = entry["expect"].as_str().unwrap();
-        let extract_all_scripts = entry.get("option").is_some_and(|options| {
-            assert_eq!(options.as_object().unwrap().len(), 1, "{id}");
-            options["extractAllScripts"]
-                .as_bool()
-                .expect("actual boolean selection")
+        let extract_all_scripts = options.is_some_and(|options| {
+            assert_eq!(options.len(), 1, "{id}");
+            options["extractAllScripts"].as_bool().unwrap()
         });
+        let source = read_yaml_ld_fixture(&root, input);
+        if std::path::Path::new(input)
+            .extension()
+            .is_some_and(|ext| ext == "html")
+        {
+            assert!(positive && extract_all_scripts, "{id}");
+            html.push(id);
+            continue;
+        }
         let options = YamlLdOptions {
             extract_all_scripts,
             ..YamlLdOptions::DEFAULT
         };
-        let base = format!("{}{input}", manifest["baseIri"].as_str().unwrap());
-        let context = CompiledJsonLdContext::compile(
-            &purrdf_lex::json::Value::Object(purrdf_lex::json::Object::new()),
-            Some(&base),
+        let context = CompiledJsonLdContext::compile_with_registry(
+            &Value::Object(Object::new()),
+            Some(&format!("{base}{input}")),
+            &registry,
         )
         .unwrap();
-        let actual = expand_yamlld_with_context(
-            &std::fs::read(root.join(input)).unwrap(),
+        let result = expand_yamlld_with_context(
+            &source,
             &context,
             &options,
             &JsonLdExpansionLimits::DEFAULT,
-        )
-        .unwrap_or_else(|error| panic!("{id}: {error}"));
-        let mut expected =
-            purrdf_lex::yaml::read(&std::fs::read_to_string(root.join(expected)).unwrap()).unwrap();
-        expected.sort_keys();
-        assert_eq!(actual, expected, "{id}: expanded document structure");
+        );
+        if !positive {
+            let expected = match entry["expectErrorCode"].as_str().unwrap() {
+                "loading document failed" => "loading-document-failed",
+                "invalid encoding" => "invalid-encoding",
+                "mapping-key-error" => "mapping-key-error",
+                other => panic!("{id}: unexpected upstream error code {other}"),
+            };
+            let failure = result.expect_err(id);
+            assert_eq!(failure.code, expected, "{id}");
+            assert!(failure.location.is_some(), "{id}: missing source location");
+            refused += 1;
+        } else if UNWRAPPED.contains(&id) {
+            let failure = result.expect_err(id);
+            assert_eq!(failure.code, "jsonld-context-invalid", "{id}");
+            assert!(
+                failure.message.contains("cases/yaml-schema/context.yamlld")
+                    && failure.message.contains("must contain @context"),
+                "{id}: {failure}"
+            );
+            unwrapped.push(id);
+        } else {
+            let oracle = read_yaml_ld_fixture(&root, entry["expect"].as_str().unwrap());
+            let mut expected =
+                purrdf_lex::yaml::read(std::str::from_utf8(&oracle).unwrap()).unwrap();
+            expected.sort_keys();
+            assert_eq!(
+                result.unwrap_or_else(|error| panic!("{id}: {error}")),
+                expected,
+                "{id}"
+            );
+            exact += 1;
+        }
     }
+    assert_eq!((exact, refused), (32, 22));
+    assert_eq!(
+        unwrapped, UNWRAPPED,
+        "pinned positives with unwrapped remote context"
+    );
+    assert_eq!(html, HTML, "pinned positives that require HTML loading");
+    assert_eq!(
+        extended, EXTENDED,
+        "only the informative Extended cases are excluded"
+    );
+}
+
+fn pinned_expand_registry(root: &std::path::Path, base: &str) -> JsonLdContextRegistry {
+    let yaml = JsonLdContextFormat::Yaml(YamlLdOptions::DEFAULT);
+    JsonLdContextRegistry::new_with_formats(
+        [
+            (
+                "cases/local-context/context.jsonld",
+                JsonLdContextFormat::Json,
+            ),
+            ("cases/local-context/context.yamlld", yaml),
+            ("cases/yaml-schema/context.yamlld", yaml),
+        ]
+        .map(|(path, kind)| {
+            (
+                format!("{base}{path}"),
+                read_yaml_ld_fixture(root, path),
+                kind,
+            )
+        }),
+    )
+    .unwrap()
+}
+
+fn read_yaml_ld_fixture(root: &std::path::Path, path: &str) -> Vec<u8> {
+    assert!(
+        (path == "manifest.jsonld" || path.starts_with("cases/"))
+            && std::path::Path::new(path)
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+        "invalid pinned fixture path {path}"
+    );
+    std::fs::read(root.join(path)).unwrap_or_else(|error| panic!("{path}: {error}"))
 }
 
 /// Every normative ToRDF entry in the publication-day W3C YAML-LD snapshot.
