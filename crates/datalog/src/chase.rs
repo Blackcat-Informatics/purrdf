@@ -895,21 +895,28 @@ fn restrict(solution: &Binding, variables: &[String]) -> Binding {
 /// frontier is bound by the body join, and every existential is bound to a freshly minted
 /// witness before this is reached, so an uncovered variable here is a contradiction in that
 /// check rather than a data state.
-fn ground<const N: usize>(atom: &ClauseAtom<N>, binding: &Binding) -> ShapeFact<N>
+fn ground<const N: usize>(
+    atom: &ClauseAtom<N>,
+    binding: &Binding,
+) -> Result<ShapeFact<N>, StorageError>
 where
     Arity<N>: StoreShape<N>,
 {
-    let terms = atom.terms();
-    let surfaces: [String; N] = std::array::from_fn(|index| match terms[index] {
-        ClauseTerm::Var(name) => binding
-            .get(name)
-            .cloned()
-            .expect("every head variable is a bound frontier variable or a minted witness"),
-        constant => constant
-            .surface()
-            .expect("a non-variable term always has a lexical surface"),
-    });
-    Arity::<N>::fact(surfaces)
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut surfaces = [const { String::new() }; N];
+    for (surface, term) in surfaces.iter_mut().zip(atom.terms()) {
+        *surface =
+            match term {
+                ClauseTerm::Var(name) => memory.string(binding.get(name).expect(
+                    "every head variable is a bound frontier variable or a minted witness",
+                ))?,
+                constant => constant
+                    .surface_in(&mut memory)?
+                    .expect("a non-variable term always has a lexical surface"),
+            };
+    }
+    Ok(Arity::<N>::fact(surfaces))
 }
 
 /// One clause the chase will actually fire, with its loop-invariant shapes hoisted out of
@@ -1884,7 +1891,7 @@ where
     let mut premises = None;
     for (head, atom) in firing.disjunct(clause).atoms().iter().enumerate() {
         if let std::collections::btree_map::Entry::Vacant(entry) =
-            pending.entry(ground(atom, &extended))
+            pending.entry(ground(atom, &extended)?)
         {
             let proof = match &active.solution {
                 Some(solution) => {

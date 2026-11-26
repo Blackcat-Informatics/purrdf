@@ -8387,6 +8387,18 @@ fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
         assert_eq!(fact.graph, "");
     }
 
+    let snapshot = |conclusion: purrdf_entail::RdfsConclusion<'_>| {
+        (
+            conclusion.subject.clone(),
+            conclusion.predicate.clone(),
+            conclusion.object.clone(),
+            conclusion.rule,
+            conclusion.clause,
+            conclusion.firing.head(),
+            conclusion.firing.premises().to_vec(),
+        )
+    };
+    let first = stopped.conclusions().map(snapshot).collect::<Vec<_>>();
     let facts = u64::try_from(stopped.budget().stored_facts()).unwrap() + 8;
     let narrow = final_policy.with_max_stored_facts(facts);
     let RdfsProgress::Paused(limited) = stopped.into_session().advance(&narrow, None).unwrap()
@@ -8400,7 +8412,15 @@ fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
             ..
         }
     ));
-    assert!(assert_rdfs_prefix(&limited, &oracle, &oracle_report) >= first_count);
+    assert_rdfs_prefix(&limited, &oracle, &oracle_report);
+    assert_eq!(
+        limited
+            .conclusions()
+            .take(first_count)
+            .map(snapshot)
+            .collect::<Vec<_>>(),
+        first
+    );
 
     let RdfsProgress::Complete { closure, report } =
         limited.into_session().advance(&final_policy, None).unwrap()
