@@ -4,6 +4,7 @@
 //! Immutable canonical output retained under its source's original admission.
 
 use purrdf_lex::allocation::{SharedOwned, StorageError};
+use std::ops::Range;
 
 use super::ownership::SourceGrant;
 use super::{CanonError, CanonPresentation};
@@ -12,8 +13,8 @@ use crate::{DatasetView, TermId, ViewTermId};
 #[derive(Debug, PartialEq, Eq)]
 struct Fields<Id> {
     nquads: String,
-    labels: Vec<(Id, String)>,
-    presentation: Option<CanonPresentation>,
+    labels: Box<[(Id, Range<usize>)]>,
+    label_text: Box<str>,
 }
 
 /// The result of canonicalizing a dataset or a view of one.
@@ -26,6 +27,7 @@ struct Fields<Id> {
 #[derive(Clone, Debug)]
 pub struct Canonicalized<Id = TermId> {
     payload: SharedOwned<Fields<Id>>,
+    presentation: Option<CanonPresentation>,
 }
 
 impl<Id: ViewTermId> Canonicalized<Id> {
@@ -70,7 +72,7 @@ impl<Id: ViewTermId> Canonicalized<Id> {
     /// families always report the presentation of the family that produced them.
     #[must_use]
     pub fn presentation(&self) -> Option<CanonPresentation> {
-        self.payload.presentation
+        self.presentation
     }
 
     /// Each blank id mapped to its canonical label WITHOUT the leading `_:`:
@@ -89,7 +91,7 @@ impl<Id: ViewTermId> Canonicalized<Id> {
         self.payload
             .labels
             .iter()
-            .map(|(id, label)| (*id, label.as_str()))
+            .map(|(id, label)| (*id, &self.payload.label_text[label.clone()]))
     }
 
     /// The canonical label for one view-local blank id, without `_:`.
@@ -99,7 +101,7 @@ impl<Id: ViewTermId> Canonicalized<Id> {
             .labels
             .binary_search_by_key(id, |(key, _)| *key)
             .ok()
-            .map(|index| self.payload.labels[index].1.as_str())
+            .map(|index| &self.payload.label_text[self.payload.labels[index].1.clone()])
     }
 
     /// Number of issued blank labels.
@@ -117,14 +119,17 @@ impl<Id: ViewTermId> AsRef<str> for Canonicalized<Id> {
 
 impl<Id: PartialEq> PartialEq for Canonicalized<Id> {
     fn eq(&self, other: &Self) -> bool {
-        *self.payload == *other.payload
+        self.presentation == other.presentation && *self.payload == *other.payload
     }
 }
 impl<Id: Eq> Eq for Canonicalized<Id> {}
 
 // Fields precede the grant on failed construction as well as in SharedOwned.
 pub(super) struct ResultBuilder<Id, E> {
-    fields: Fields<Id>,
+    nquads: String,
+    labels: Vec<(Id, Range<usize>)>,
+    label_text: String,
+    presentation: Option<CanonPresentation>,
     grant: SourceGrant<E>,
 }
 
@@ -149,50 +154,85 @@ impl<Id: ViewTermId, E: Send + Sync + 'static> ResultBuilder<Id, E> {
         presentation: Option<CanonPresentation>,
     ) -> Result<Self, CanonError<E>> {
         Ok(Self {
-            fields: Fields {
-                nquads: String::new(),
-                labels: Vec::new(),
-                presentation,
-            },
+            nquads: String::new(),
+            labels: Vec::new(),
+            label_text: String::new(),
+            presentation,
             grant: SourceGrant::new(view)?,
         })
     }
 
     pub(super) fn reserve_text(&mut self, bytes: usize) -> Result<(), CanonError<E>> {
         self.grant
-            .memory(|memory| memory.reserve_string(&mut self.fields.nquads, bytes))
+            .memory(|memory| memory.reserve_string(&mut self.nquads, bytes))
     }
 
     pub(super) fn append(&mut self, line: &str) -> Result<(), CanonError<E>> {
         self.grant
-            .memory(|memory| memory.push_str(&mut self.fields.nquads, line))
+            .memory(|memory| memory.push_str(&mut self.nquads, line))
     }
 
     pub(super) fn reserve_labels(&mut self, count: usize) -> Result<(), CanonError<E>> {
         self.grant
-            .memory(|memory| memory.reserve(&mut self.fields.labels, count))
+            .memory(|memory| memory.reserve(&mut self.labels, count))
     }
 
-    /// Take over an issued label without copying it. The issuer allocated the box
-    /// outside every account, so the owned account is charged exactly the bytes
-    /// an admitted copy of the label would have charged.
-    pub(super) fn label(&mut self, id: Id, label: Box<str>) -> Result<(), CanonError<E>> {
-        let label = label.into_string();
+    pub(super) fn reserve_label_text(&mut self, bytes: usize) -> Result<(), CanonError<E>> {
+        self.grant
+            .memory(|memory| memory.reserve_string(&mut self.label_text, bytes))
+    }
+
+    pub(super) fn decimal_label(&mut self, id: Id, position: u64) -> Result<(), CanonError<E>> {
         self.grant.memory(|memory| {
-            memory.add_bytes(label.len())?;
-            memory.push(&mut self.fields.labels, (id, label))
+            let start = self.label_text.len();
+            memory.append_text(&mut self.label_text, |out| {
+                // Decimal formatting itself cannot fail; the admitted sink retains failures.
+                let _ = write!(out, "{position}");
+            })?;
+            memory.push(&mut self.labels, (id, start..self.label_text.len()))
         })
+    }
+
+    /// Index an already issued label, then adopt its entire backing arena once.
+    pub(super) fn issued_label(
+        &mut self,
+        id: Id,
+        label: Range<usize>,
+    ) -> Result<(), CanonError<E>> {
+        self.grant
+            .memory(|memory| memory.push(&mut self.labels, (id, label)))
+    }
+
+    pub(super) fn adopt_label_text(&mut self, text: String) -> Result<(), CanonError<E>> {
+        self.grant
+            .memory(|memory| memory.add_bytes(text.capacity()))?;
+        self.label_text = text;
+        Ok(())
     }
 
     pub(super) fn finish(
         mut self,
         stop: Option<&dyn crate::StopSignal>,
     ) -> Result<Canonicalized<Id>, CanonError<E>> {
+        let labels = self
+            .grant
+            .memory(|memory| memory.boxed_slice(self.labels))?;
+        // Both paths reserve the exact label byte count, so freezing transfers
+        // the string's original allocation rather than shrinking it.
+        debug_assert_eq!(self.label_text.len(), self.label_text.capacity());
+        let fields = Fields {
+            nquads: self.nquads,
+            labels,
+            label_text: self.label_text.into_boxed_str(),
+        };
         let bytes = SharedOwned::<Fields<Id>>::allocation_layout::<SourceGrant<E>>().size();
         self.grant.memory(|memory| memory.add_bytes(bytes))?;
         super::check_stop(stop).map_err(CanonError::with_read_error)?;
-        SharedOwned::try_from_admitted(self.fields, self.grant)
-            .map(|payload| Canonicalized { payload })
+        SharedOwned::try_from_admitted(fields, self.grant)
+            .map(|payload| Canonicalized {
+                payload,
+                presentation: self.presentation,
+            })
             .map_err(|_| CanonError::Storage(StorageError::AllocationFailed))
     }
 }

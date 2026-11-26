@@ -175,9 +175,16 @@ fn document<D: DatasetView>(
     }
     let mut labels: Vec<(D::Id, u64)> = labelling.view_positions().collect();
     labels.sort_unstable_by_key(|&(id, _)| id);
+    let label_bytes = labels.iter().try_fold(0_usize, |total, &(_, position)| {
+        let digits = position.checked_ilog10().unwrap_or(0) + 1;
+        total
+            .checked_add(digits as usize)
+            .ok_or(CanonError::CounterCapacity)
+    })?;
     builder.reserve_labels(labels.len())?;
+    builder.reserve_label_text(label_bytes)?;
     for (id, position) in labels {
-        builder.label(id, position.to_string().into_boxed_str())?;
+        builder.decimal_label(id, position)?;
     }
     builder.finish(run.stop())
 }
@@ -514,7 +521,14 @@ pub fn canonical_relabel(
         SearchConfiguration::labelling(None, CanonOutput::RelabeledDataset),
         |run| {
             labelled(ds, Scope::Dataset, run, |labelling| {
-                rebuild_with_labels(ds, &labels_of(labelling), |_, _| {}, run)
+                let labels = labels_of(labelling);
+                rebuild_with_labels(
+                    ds,
+                    labels.len(),
+                    |id| labels.get(&id).map(Box::as_ref),
+                    |_, _| {},
+                    run,
+                )
             })
         },
     )
@@ -534,9 +548,11 @@ pub fn canonical_relabel_with_mapping(
         |run| {
             labelled(ds, Scope::Dataset, run, |labelling| {
                 let mut terms = vec![None; ds.term_count()].into_boxed_slice();
+                let labels = labels_of(labelling);
                 let dataset = rebuild_with_labels(
                     ds,
-                    &labels_of(labelling),
+                    labels.len(),
+                    |id| labels.get(&id).map(Box::as_ref),
                     |source, target| {
                         let source = match source {
                             RelabelSource::Term(id) => Some(id),
