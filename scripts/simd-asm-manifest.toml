@@ -450,19 +450,9 @@ summary = "Independent SHA-256 messages in the AVX-512 batch drain"
 
   [[site.measure]]
   label = "avx512 lanes"
-  configs = ["x86_64", "x86_64-v3"]
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
   crate = "purrdf_hash"
   symbol = "purrdf_hash::arch::sha256_batch::compress"
-  min_vector_ops = 536
-  require_mnemonics = ["vpgatherdd", "vprold", "vpternlogd"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  [[site.measure]]
-  label = "avx512 lanes"
-  configs = ["x86_64-v4"]
-  crate = "purrdf_hash"
-  symbol = "<purrdf_hash::sha2::batch::Sha256Batch>::finish_reset"
   min_vector_ops = 536
   require_mnemonics = ["vpgatherdd", "vprold", "vpternlogd"]
   max_fma = 0

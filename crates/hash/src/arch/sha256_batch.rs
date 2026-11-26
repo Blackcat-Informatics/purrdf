@@ -31,6 +31,9 @@ pub(crate) fn sha256_batch(batch: &Sha256Batch) -> Option<[[u8; 32]; LANES]> {
     Some(unsafe { compress(data, blocks, count) })
 }
 
+// Keep the compressor separate so the assembly audit measures the same kernel
+// even on targets where AVX-512 is already enabled for the caller.
+#[inline(never)]
 #[target_feature(enable = "avx512f,avx512bw")]
 unsafe fn compress(data: &[u8; BYTES], blocks: &[i32; LANES], count: usize) -> [[u8; 32]; LANES] {
     let word_stride = (STRIDE / 4) as i32;
