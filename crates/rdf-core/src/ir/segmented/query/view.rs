@@ -551,7 +551,10 @@ impl SegmentedStackQuery<'_> {
         pattern: ProbePattern<GlobalTermId>,
         sources: usize,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {
-        let mut seen = Seen::new(&self.operation);
+        // Each source stores each reifier binding once. Its unique RDF term
+        // identities remain distinct after translation into the query's IDs.
+        // Only overlapping sources can repeat a complete binding.
+        let mut seen = (sources > 1).then(|| Seen::new(&self.operation));
         let end = sources.saturating_sub(1);
         (0..sources)
             .rev()
@@ -566,11 +569,11 @@ impl SegmentedStackQuery<'_> {
                         return Ok(None);
                     }
                     self.operation.ready()?;
-                    Ok(seen
-                        .as_mut()
-                        .map_err(|error| error.clone())?
-                        .insert(row)?
-                        .then_some(row))
+                    let novel = match &mut seen {
+                        Some(seen) => seen.as_mut().map_err(|error| error.clone())?.insert(row)?,
+                        None => true,
+                    };
+                    Ok(novel.then_some(row))
                 };
                 select()
                     .or_else(|error| self.operation.fail(error))
