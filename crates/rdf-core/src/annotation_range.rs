@@ -152,7 +152,7 @@ impl AnnotationValueRange<'_> {
     }
 }
 
-fn compare<S: Admission + ?Sized>(
+pub(crate) fn compare<S: Admission + ?Sized>(
     left: &XsdValue,
     right: &XsdValue,
     memory: &mut Memory<'_, S>,
@@ -168,13 +168,15 @@ fn compare<S: Admission + ?Sized>(
         }
         Ok(())
     });
-    memory.release_bytes(peak)?;
-    answer.map_err(|error| match error {
+    let refund = memory.release_bytes(peak);
+    let order = answer.map_err(|error| match error {
         purrdf_xsd::bigint::LimbScratchError::Storage(error) => error,
         purrdf_xsd::bigint::LimbScratchError::SizeOverflow => StorageError::SizeOverflow,
         purrdf_xsd::bigint::LimbScratchError::AllocationFailed => StorageError::AllocationFailed,
         _ => StorageError::AdmissionFailed,
-    })
+    })?;
+    refund?;
+    Ok(order)
 }
 
 /// Endpoints name original dictionary values; None means an unorderable row is

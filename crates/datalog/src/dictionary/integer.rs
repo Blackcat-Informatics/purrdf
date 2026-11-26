@@ -3,9 +3,12 @@
 
 //! Caller-owned integer identities with explicit program symbols and no text projection.
 
-use super::{DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, try_map_row};
+use super::{
+    DictionaryError, DictionaryTerm, TermDictionary, TermIdentity, TypedLiteral, try_map_row,
+};
 use core::{cmp::Ordering, fmt};
-use purrdf_core::{FastMap, FastSet};
+use purrdf_core::literal_comparison::LiteralOperand;
+use purrdf_core::{FastMap, FastSet, RdfLiteral};
 use purrdf_lex::allocation::StorageError;
 
 /// A refusal at an explicitly requested native dictionary boundary.
@@ -68,6 +71,7 @@ impl std::error::Error for IntegerDictionaryError {}
 pub struct IntegerDictionary<'a, I: TermIdentity + Into<u64> = u32> {
     symbols: FastMap<&'a str, I>,
     identities: FastSet<I>,
+    literals: Option<&'a FastMap<I, RdfLiteral>>,
 }
 
 impl<'a, I: TermIdentity + Into<u64>> IntegerDictionary<'a, I> {
@@ -82,6 +86,7 @@ impl<'a, I: TermIdentity + Into<u64>> IntegerDictionary<'a, I> {
         let mut dictionary = Self {
             symbols: FastMap::default(),
             identities: FastSet::default(),
+            literals: None,
         };
         dictionary
             .symbols
@@ -102,6 +107,14 @@ impl<'a, I: TermIdentity + Into<u64>> IntegerDictionary<'a, I> {
             dictionary.identities.insert(id);
         }
         Ok(dictionary)
+    }
+
+    /// Supply the original RDF literal values for selected native identities.
+    /// This does not mint extra identities or copy or normalize the literals.
+    #[must_use]
+    pub fn with_rdf_literals(mut self, literals: &'a FastMap<I, RdfLiteral>) -> Self {
+        self.literals = Some(literals);
+        self
     }
 
     /// Resolve an explicit program symbol or retain an original cell identity.
@@ -131,6 +144,20 @@ impl<I: TermIdentity + Into<u64>> TermDictionary for IntegerDictionary<'_, I> {
 
     fn resolve_term(&self, id: I) -> Result<Self::Lexical<'_>, Self::Error> {
         Err(IntegerDictionaryError::LexicalUnavailable { id: id.into() })
+    }
+
+    fn literal_operand<'a>(
+        &'a self,
+        term: DictionaryTerm<'a, I>,
+    ) -> Result<TypedLiteral<'a>, Self::Error> {
+        let Some(literals) = self.literals else {
+            return Ok(TypedLiteral::Unavailable);
+        };
+        Ok(literals
+            .get(&self.identity(term)?)
+            .map_or(TypedLiteral::NotLiteral, |literal| {
+                TypedLiteral::Literal(LiteralOperand::from(literal))
+            }))
     }
 
     fn compare_terms(

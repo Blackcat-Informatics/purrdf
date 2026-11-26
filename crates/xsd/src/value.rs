@@ -606,33 +606,28 @@ pub fn try_parse_with_memory<S: purrdf_lex::allocation::Admission + ?Sized>(
                 }
                 Err(error) => return Ok(ParsedValue::Invalid(error.code())),
             }
-            let peak = temporal::temporal_parse_bytes(lexical, datatype).map_err(storage_error)?;
-            memory.add_bytes(peak)?;
-            let parsed = temporal::read_temporal(lexical, datatype)
-                .expect("the modeled temporal family has its native reader");
-            match parsed {
-                Ok(value) => {
-                    let Some(retained) = value.owned_heap_bytes() else {
-                        drop(value);
+            memory.scope(|memory| {
+                let peak =
+                    temporal::temporal_parse_bytes(lexical, datatype).map_err(storage_error)?;
+                memory.add_bytes(peak)?;
+                match temporal::read_temporal(lexical, datatype)
+                    .expect("the modeled temporal family has its native reader")
+                {
+                    Ok(value) => {
+                        let scratch = value
+                            .owned_heap_bytes()
+                            .and_then(|retained| peak.checked_sub(retained))
+                            .ok_or(StorageError::SizeOverflow)?;
+                        memory.release_bytes(scratch)?;
+                        Ok(ParsedValue::Value(value))
+                    }
+                    Err(temporal::TemporalReadError::Storage(error)) => Err(storage_error(error)),
+                    Err(error) => {
                         memory.release_bytes(peak)?;
-                        return Err(StorageError::SizeOverflow);
-                    };
-                    let Some(scratch) = peak.checked_sub(retained) else {
-                        drop(value);
-                        memory.release_bytes(peak)?;
-                        return Err(StorageError::SizeOverflow);
-                    };
-                    memory.release_bytes(scratch)?;
-                    Ok(ParsedValue::Value(value))
-                }
-                Err(error) => {
-                    memory.release_bytes(peak)?;
-                    match error {
-                        temporal::TemporalReadError::Storage(error) => Err(storage_error(error)),
-                        other => Ok(ParsedValue::Invalid(other.code())),
+                        Ok(ParsedValue::Invalid(error.code()))
                     }
                 }
-            }
+            })
         }
         D::Integer
         | D::Long
