@@ -368,7 +368,7 @@ where
                     }
                     if let Call::Undetermined { entered, .. } = &mut guard.call {
                         // A native comparison is a test and binds no outputs.
-                        // A subsequent false conjunct can rule out this branch.
+                        // A subsequent false conjunct can rule out the candidate.
                         if !*entered {
                             *entered = true;
                             self.next = Some(runtime.atoms.len() + guard.index + 1);
