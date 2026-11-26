@@ -8351,12 +8351,13 @@ fn assert_rdfs_prefix(pause: &RdfsPause, closure: &RdfDataset, report: &Reasonin
 fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
     let source = build(fixture("subclass_chain"));
     let identity = source.content_identity().unwrap();
+    let initial_policy = EvalOptions::default().with_max_join_steps(50_000);
     let final_policy = EvalOptions::default().with_max_join_steps(100_000);
     let (oracle, oracle_report) =
         materialize_with(&*source, Materialization::Rdfs, &final_policy, None).unwrap();
     let signal = StopAfterOneRound(std::sync::atomic::AtomicBool::new(false));
-    let session = RdfsSession::start(Arc::clone(&source), identity, &final_policy).unwrap();
-    let RdfsProgress::Paused(stopped) = session.advance(&final_policy, Some(&signal)).unwrap()
+    let session = RdfsSession::start(Arc::clone(&source), identity, &initial_policy).unwrap();
+    let RdfsProgress::Paused(stopped) = session.advance(&initial_policy, Some(&signal)).unwrap()
     else {
         panic!("the second round must observe the stop");
     };
@@ -8364,6 +8365,27 @@ fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
     assert_eq!(stopped.source_identity(), identity);
     let first_count = assert_rdfs_prefix(&stopped, &oracle, &oracle_report);
     assert!(first_count > 0);
+    let (a, predicate, c) = (
+        TermValue::iri(EX_A),
+        TermValue::iri(RDFS_SUBCLASSOF),
+        TermValue::iri(EX_C),
+    );
+    let transitive = stopped
+        .conclusions()
+        .find(|conclusion| {
+            (conclusion.subject, conclusion.predicate, conclusion.object) == (&a, &predicate, &c)
+        })
+        .expect("the first round proves the adjacent transitive subclass edge");
+    assert_eq!(transitive.rule.as_str(), "rdfs11");
+    assert_eq!(transitive.firing.head(), 0);
+    let premises = transitive.firing.premises();
+    assert_eq!(premises.len(), 2);
+    for (fact, (left, right)) in premises.iter().zip([(EX_A, EX_B), (EX_B, EX_C)]) {
+        assert_eq!(fact.subject, format!("<{left}>"));
+        assert_eq!(fact.predicate, format!("<{RDFS_SUBCLASSOF}>"));
+        assert_eq!(fact.object, format!("<{right}>"));
+        assert!(fact.graph.is_empty());
+    }
 
     let facts = u64::try_from(stopped.budget().stored_facts()).unwrap() + 8;
     let narrow = final_policy.with_max_stored_facts(facts);

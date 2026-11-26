@@ -71,13 +71,17 @@ impl fmt::Display for RdfsSessionError {
     }
 }
 
-impl std::error::Error for RdfsSessionError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Engine(error) => Some(error),
-            Self::Proof(error) => Some(error),
-            _ => None,
-        }
+purrdf_hash::error_sources!(RdfsSessionError, Engine, Proof);
+
+impl purrdf_hash::error::StructuredError for RdfsSessionError {
+    purrdf_hash::error_visit! {
+        NamedGraphs => "rdfs-session-named-graphs" {},
+        SnapshotMismatch { expected, actual } => "rdfs-session-snapshot-mismatch" {
+            "expected" => Bytes(expected.as_bytes()), "actual" => Bytes(actual.as_bytes())
+        },
+        Engine(cause) => "rdfs-session-engine" { "cause" => Cause(cause) },
+        Proof(cause) => "rdfs-session-proof" { "cause" => Cause(cause) },
+        UnsupportedProgress => "rdfs-session-unsupported-progress" {},
     }
 }
 

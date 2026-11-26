@@ -693,16 +693,22 @@ where
         atom: &ClauseAtom<N>,
         store: &RelationStore<TermInterner, N>,
         solution: &Binding,
-    ) -> Option<Self> {
-        let terms = atom.terms();
-        let known: [Option<String>; N] = std::array::from_fn(|index| match terms[index] {
-            ClauseTerm::Var(name) => solution.get(name).cloned(),
-            constant => constant.surface(),
-        });
+    ) -> Result<Option<Self>, StorageError> {
         let mut ids: [Option<TermId>; N] = [None; N];
-        for (index, surface) in known.iter().enumerate() {
+        for (index, term) in atom.terms().iter().enumerate() {
+            let rendered;
+            let surface = match term {
+                ClauseTerm::Var(name) => solution.get(name).map(String::as_str),
+                constant => {
+                    rendered = constant.surface_in(&mut Memory::new(&mut Resident))?;
+                    rendered.as_deref()
+                }
+            };
             if let Some(surface) = surface {
-                ids[index] = Some(store.term_id(surface)?);
+                let Some(id) = store.term_id(surface) else {
+                    return Ok(None);
+                };
+                ids[index] = Some(id);
             }
         }
         let bound = match (ids[POSITION_SUBJECT], ids[POSITION_OBJECT]) {
@@ -711,11 +717,11 @@ where
             (None, Some(object)) => Bound::Object(object),
             (None, None) => Bound::Any,
         };
-        Some(Self {
+        Ok(Some(Self {
             partitions: PartitionPosition::new(store, ids),
             bound,
             active: None,
-        })
+        }))
     }
 
     fn next(&mut self, store: &RelationStore<TermInterner, N>) -> Option<[TermId; N]> {
@@ -826,22 +832,22 @@ where
         atoms: &[ClauseAtom<N>],
         store: &RelationStore<TermInterner, N>,
         meter: &mut StepMeter,
-    ) -> bool {
+    ) -> Result<bool, StorageError> {
         while let Some(atom) = atoms.get(self.atom) {
             if self.solutions.is_empty() {
-                return true;
+                return Ok(true);
             }
             while let Some(solution) = self.solutions.get(self.input) {
                 if meter.spent() {
-                    return false;
+                    return Ok(false);
                 }
                 if self.scan.is_none() {
-                    self.scan = AtomScan::new(atom, store, solution);
+                    self.scan = AtomScan::new(atom, store, solution)?;
                 }
                 if let Some(scan) = &mut self.scan
                     && !scan.advance(atom, store, solution, &mut self.next, meter)
                 {
-                    return false;
+                    return Ok(false);
                 }
                 self.scan = None;
                 self.input += 1;
@@ -850,7 +856,7 @@ where
             self.atom += 1;
             self.input = 0;
         }
-        true
+        Ok(true)
     }
 }
 
@@ -1064,6 +1070,24 @@ where
             report: self.report(),
         }
     }
+
+    fn admit_row_terms(&self, row: [&str; N]) -> Result<(), ChaseError> {
+        let report = self.report();
+        let mut bytes = u64::try_from(report.term_arena_bytes()).unwrap_or(u64::MAX);
+        for (index, &surface) in row.iter().enumerate() {
+            if !row[..index].contains(&surface) && self.store.term_id(surface).is_none() {
+                let added = u64::try_from(surface.len()).map_err(|_| StorageError::SizeOverflow)?;
+                if added > report.term_arena_limit().saturating_sub(bytes) {
+                    return Err(ChaseError::BudgetExhausted {
+                        resource: BudgetResource::TermArenaBytes,
+                        report,
+                    });
+                }
+                bytes += added;
+            }
+        }
+        Ok(())
+    }
 }
 
 /// One fact the chase derived, and the clause that concluded it.
@@ -1144,6 +1168,17 @@ impl fmt::Display for ChaseProofError {
 }
 
 purrdf_hash::error_sources!(ChaseProofError, Storage);
+
+impl purrdf_hash::error::StructuredError for ChaseProofError {
+    purrdf_hash::error_visit! {
+        NotRecorded => "datalog-chase-proof-not-recorded" {},
+        IncompletePrefix => "datalog-chase-proof-incomplete-prefix" {},
+        InvalidFiring(index) => "datalog-chase-proof-invalid-firing" {
+            "index" => Unsigned(*index as u128)
+        },
+        Storage(cause) => "datalog-chase-proof-storage" { "cause" => Cause(cause) },
+    }
+}
 
 impl<const N: usize> ChaseDerivation<N>
 where
@@ -1704,7 +1739,7 @@ where
                         program[firing.clause].body(),
                         &state.store,
                         &mut state.meter,
-                    ) {
+                    )? {
                         return Err(state.join_refusal());
                     }
                     self.phase = RoundPhase::Heads {
@@ -1734,7 +1769,7 @@ where
                     let active = probe.as_mut().expect("the head probe was selected");
                     if !active
                         .join
-                        .advance(disjunct.atoms(), &state.store, &mut state.meter)
+                        .advance(disjunct.atoms(), &state.store, &mut state.meter)?
                     {
                         return Err(state.join_refusal());
                     }
@@ -1765,6 +1800,7 @@ where
                                 report,
                             }
                         })?;
+                        state.admit_row_terms(row)?;
                         let mut resident = Resident;
                         let mut memory = Memory::new(&mut resident);
                         if let Some(proofs) = &mut state.proofs {
@@ -2402,6 +2438,54 @@ mod tests {
     }
 
     // ── The caller's stored-fact and join-step limits ─────────────────────────
+
+    /// A staged row charges a novel term once, before changing its frozen prefix.
+    #[test]
+    fn recorded_chase_resumes_after_an_exact_term_arena_refusal() {
+        let novel = "http://example.org/novel";
+        let program = [DlClause::datalog(
+            ClauseAtom::positive(ClauseTerm::iri(novel), TYPE, ClauseTerm::iri(novel)),
+            vec![concept("?x", A)],
+        )];
+        let prepared = certify(&program)
+            .unwrap()
+            .prepare(&program, AnalysisLimits::default(), None)
+            .unwrap();
+        let seed = || store_of(&[("a", TYPE, A)]);
+        let bytes = seed().term_bytes();
+        let exact = EvalOptions::default()
+            .with_max_stored_facts(2)
+            .with_max_term_arena_bytes(u64::try_from(bytes + iri(novel).len()).unwrap());
+        let short = exact.with_max_term_arena_bytes(exact.max_term_arena_bytes() - 1);
+        let session = prepared.start_recorded_session(seed(), &short).unwrap();
+        prepared.close().unwrap();
+        let ChaseAdvance::Paused { reason, session } = session.advance_with(&short, None).unwrap()
+        else {
+            panic!("the next term would exceed the caller's arena limit");
+        };
+        let ChaseError::BudgetExhausted { resource, report } = reason else {
+            panic!("arena pressure must retain a typed budget reason");
+        };
+        assert_eq!(resource, BudgetResource::TermArenaBytes);
+        assert_eq!(report.term_arena_bytes(), bytes);
+        assert_eq!(report.stored_facts(), 1);
+        assert!(session.recorded_prefix().unwrap().0.is_empty());
+        session.verify_recorded_prefix(seed()).unwrap();
+
+        let ChaseAdvance::Complete(outcome) = session.advance_with(&exact, None).unwrap() else {
+            panic!("an exact fit must admit one copy of the repeated term");
+        };
+        assert_eq!(
+            outcome.budget().term_arena_bytes(),
+            bytes + iri(novel).len()
+        );
+        assert!(outcome.facts().contains(
+            &iri(novel),
+            &iri(TYPE),
+            &iri(novel),
+            RelationStore::DEFAULT_GRAPH,
+        ));
+    }
 
     /// The chase honours the caller's limits exactly as the semi-naive evaluator does: a
     /// stored-fact limit of exactly the universal model's size admits it — the same model
