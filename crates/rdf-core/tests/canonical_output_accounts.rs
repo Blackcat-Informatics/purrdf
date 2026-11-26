@@ -623,6 +623,46 @@ fn provider_reservations_never_exceed_the_frozen_maxima() {
     }
 }
 
+/// A single label must not add a storage header the former per-label table
+/// did not need. Exercise both presentations of the private label storage.
+#[test]
+fn one_label_fits_the_previous_per_label_reservation() {
+    let make = |with_blank| {
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = builder.intern_iri("https://example.org/p").unwrap();
+        let object = builder.intern_iri("https://example.org/o").unwrap();
+        let subject = if with_blank {
+            builder.intern_blank("x", BlankScope::DEFAULT).unwrap()
+        } else {
+            builder.intern_iri("https://example.org/s").unwrap()
+        };
+        builder.push_quad(subject, predicate, object, None).unwrap();
+        (builder.freeze().unwrap(), subject)
+    };
+    let (plain, _) = make(false);
+    let (blank, id) = make(true);
+    for (rdfc, expected) in [(false, "0"), (true, "c14n0")] {
+        let document = |view: &Recording| {
+            if rdfc {
+                let mut control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
+                rdfc12::try_canonicalize_view(view, CanonHash::Sha256, &mut control)
+            } else {
+                let mut control = CanonicalizationControl::new(CANON_CORPUS_POLICY, None);
+                try_canonicalize_view(view, &mut control)
+            }
+        };
+        let plain_view = Recording::new(&plain, u64::MAX, u64::MAX);
+        let plain_document = document(&plain_view).unwrap();
+        let labelled = document(&Recording::new(&blank, u64::MAX, u64::MAX)).unwrap();
+        let previous_limit = plain_view.owned.max() - plain_document.nquads().len() as u64
+            + (labelled.nquads().len() + size_of::<(TermId, String)>() + expected.len()) as u64;
+        let capped = Recording::new(&blank, u64::MAX, previous_limit);
+        let canonical = document(&capped).unwrap();
+        assert_eq!(canonical.label(&id), Some(expected));
+        assert_eq!(canonical, labelled);
+    }
+}
+
 /// Even when all first-degree hashes distinguish their blanks, their retained
 /// storage is admitted during search. A provider may refuse it before the
 /// engine issues any successful receipt or starts writing canonical output.
