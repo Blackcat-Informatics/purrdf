@@ -355,8 +355,9 @@ impl BigInt {
             let mut output = storage.destination(length, length)?;
             for (piece_index, words) in long.magnitude.chunks(short.limb_len()).enumerate() {
                 let left = Self::from_parts(false, storage.copy(words)?);
-                let right = short.abs_using(storage)?;
-                let piece = left.mul_fast_using(&right, storage)?;
+                // Only the magnitude is accumulated. The final product's sign
+                // comes from the original operands.
+                let piece = left.mul_fast_using(short, storage)?;
                 let offset = piece_index
                     .checked_mul(short.limb_len())
                     .ok_or(SizeOverflow)?;

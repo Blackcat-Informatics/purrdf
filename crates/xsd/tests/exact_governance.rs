@@ -1311,19 +1311,28 @@ fn big_decimal(decimal: Decimal) -> XsdValue {
 /// A product of one short and one very long integer is `long / short` balanced
 /// products and one pass of carries, not a copy of the running total per piece.
 fn a_lopsided_product_costs_what_it_is_charged() {
-    let short: Integer = "7".repeat(64 * 9).parse().expect("an integer");
-    let long: Integer = "3".repeat(20_000 * 9).parse().expect("an integer");
-    let cost = short.mul_cost(&long);
-    let (product, measurement) = measured(|| &short * &long);
-    assert_bounded("64 × 20000 limbs", cost, measurement);
-    // The product is right: (7…7)(3…3) ends in …1 and has the digits it should.
-    assert_eq!(product.decimal_digits(), 64 * 9 + 20_000 * 9);
-    assert!(product.canonical_lexical().ends_with('1'));
-    // The neighbour: a balanced product of the same total size is bounded too.
+    for (short_digits, long_digits, short_limbs, long_limbs) in
+        [(576, 180_000, 30, 9_343), (1_220, 19_745, 64, 1_025)]
+    {
+        let short: Integer = "7".repeat(short_digits).parse().expect("an integer");
+        let long: Integer = "3".repeat(long_digits).parse().expect("an integer");
+        assert_eq!(short.limb_len(), short_limbs);
+        assert_eq!(long.limb_len(), long_limbs);
+        let cost = short.mul_cost(&long);
+        let (product, measurement) = measured(|| &short * &long);
+        assert_bounded("lopsided integer product", cost, measurement);
+        // The product (7…7)(3…3) ends in …1 and has the expected width.
+        assert_eq!(
+            product.decimal_digits(),
+            u64::try_from(short_digits + long_digits).expect("test-sized digit count")
+        );
+        assert!(product.canonical_lexical().ends_with('1'));
+    }
+    // The balanced neighbour is bounded too.
     let half: Integer = "3".repeat(10_032 * 9).parse().expect("an integer");
     let cost = half.mul_cost(&half);
     let (_, measurement) = measured(|| &half * &half);
-    assert_bounded("10032 × 10032 limbs", cost, measurement);
+    assert_bounded("balanced integer product", cost, measurement);
 }
 
 /// The staged physical layout must include the live three-way evaluation and

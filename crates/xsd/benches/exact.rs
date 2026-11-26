@@ -26,9 +26,12 @@
 //!   establish their asymptotic growth or qualify their dispatch thresholds.
 //!   `gcd_wide_gap` uses a constructed exact multiple whose left operand has
 //!   about three times the decimal width of the right operand.
-//! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — the two product
-//!   algorithms on either side of `KARATSUBA_THRESHOLD`, the evidence for where
-//!   it sits.
+//! - `xsd_exact_karatsuba/{schoolbook,karatsuba}/<limbs>` — historical row
+//!   identifiers. The operands use nine decimal digits per nominal limb,
+//!   so the labels do not identify actual dispatch crossovers.
+//! - `xsd_exact_integer_products/{64x64,257x64,1025x64}` — one public exact
+//!   integer product with independently constructed operand widths in binary
+//!   limbs. The balanced pair controls the lopsided pairs.
 //! - `xsd_exact_fine_products/{scale18,scale20}` — exact products with scales
 //!   summing to eighteen or twenty. Both retain inline coefficients here.
 //!
@@ -365,6 +368,29 @@ fn bench_growth(c: &mut Bench) {
     group.finish();
 }
 
+fn dense_integer(state: &mut u64, limbs: usize) -> BigInt {
+    let mut value = BigInt::from_u64(splitmix64_next(state) | (1_u64 << 63));
+    for _ in 1..limbs {
+        value = value.shl(64).add(&BigInt::from_u64(splitmix64_next(state)));
+    }
+    assert_eq!(value.limb_len(), limbs);
+    value
+}
+
+fn bench_integer_product_shapes(c: &mut Bench) {
+    let mut group = c.benchmark_group("xsd_exact_integer_products");
+    group.throughput(Throughput::Elements(1));
+    for width in [64, 257, 1_025] {
+        let mut state = 0x42C9_853D;
+        let right = Integer::from_bigint(dense_integer(&mut state, 64).negated());
+        let left = Integer::from_bigint(dense_integer(&mut state, width));
+        group.bench_function(format!("{width}x64"), |bench| {
+            bench.iter(|| black_box(black_box(&left) * black_box(&right)));
+        });
+    }
+    group.finish();
+}
+
 fn bench_karatsuba(c: &mut Bench) {
     let mut state = 0x4B41_5241_u64;
     let mut group = c.benchmark_group("xsd_exact_karatsuba");
@@ -667,6 +693,7 @@ bench_group!(
     bench_small,
     bench_growth,
     bench_karatsuba,
+    bench_integer_product_shapes,
     bench_fine_products,
     bench_exact_operations
 );
