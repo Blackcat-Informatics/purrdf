@@ -249,12 +249,20 @@ pub(crate) struct PlanShape {
     positive_regions: AdmittedVec<bool>,
     /// The numbered walk includes nested subqueries and expression EXISTS bodies.
     has_property_functions: bool,
+    /// The root GROUP below plain consumer wrappers, if present.
+    root_count_group: Option<NodeId>,
 }
 
 impl PlanShape {
     /// Whether the actual prepared algebra can invoke a native relation.
     pub(crate) const fn has_property_functions(&self) -> bool {
         self.has_property_functions
+    }
+
+    /// Whether this is the one unseeded GROUP eligible for a factor forecast.
+    pub(crate) fn is_root_count_group(&self, pattern: &GraphPattern) -> bool {
+        self.root_count_group
+            .is_some_and(|id| self.node_of(pattern) == Some(id))
     }
 
     /// The number of nodes.
@@ -630,6 +638,8 @@ impl<'q> Tree<'q> {
         drop(ranked);
 
         let positive_regions = positive_region_table(&rows, workspace)?;
+        let root_count_group = crate::join_plan::FactorizedCount::root_group(root)
+            .and_then(|group| AddressIndex(&rows).get(std::ptr::from_ref(group) as usize));
         let endpoints = crate::service_endpoints::scan_admitted(
             root,
             &AddressIndex(&rows),
@@ -648,6 +658,7 @@ impl<'q> Tree<'q> {
             volatile_sites: Vec::new(),
             positive_regions,
             has_property_functions,
+            root_count_group,
         })
     }
 

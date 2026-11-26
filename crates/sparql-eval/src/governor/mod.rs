@@ -2104,6 +2104,8 @@ pub enum ChargePoint {
     /// under any built-in other than `COUNT(*)`, which takes no argument and so charges this
     /// point once per row unconditionally — is not a value this point ever counted: no
     /// expression evaluated to nothing, so no value existed to inspect.
+    /// A factorized `COUNT(*)` instead folds one cardinality per component.
+    /// It creates no product rows to visit or charge.
     AggregateAccumulation,
     /// One `EXISTS`/`NOT EXISTS` site answered via the memoized evaluate-once probe: an
     /// `exists_inner_cache` miss — the inner pattern (uncorrelated, or correlated but

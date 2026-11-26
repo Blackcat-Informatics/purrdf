@@ -868,7 +868,7 @@ impl NativeSparqlEngine {
         if let Some(refused) = self.admit_refusal(
             dataset,
             prepared.query(),
-            options.property_functions(),
+            super::PlanSurveyContext::new(options, !substitutions.is_empty(), source.is_some()),
             &state,
             &mut identity.value,
             workspace,
