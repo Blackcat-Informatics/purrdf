@@ -2398,7 +2398,8 @@ struct CanonState<'a, D: DatasetView> {
     /// Every blank, in ascending id order (the deterministic reference set).
     blanks: Vec<D::Id>,
     /// First-degree hash (§4.6) of each blank, computed once.
-    first_degree: BTreeMap<D::Id, HashHex>,
+    // Same ascending blank-ID order as `blanks`. Live only during search.
+    first_degree: Vec<HashHex>,
     /// The durable canonical issuer.
     canonical: IdIssuer<D::Id>,
     /// The hash algorithm for this run (RDFC-1.0 §3).
@@ -3139,7 +3140,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             scope,
             presentation,
             blanks: Vec::new(),
-            first_degree: BTreeMap::new(),
+            first_degree: Vec::new(),
             canonical: IdIssuer::new(CANON_PREFIX),
             hash,
             run,
@@ -3327,14 +3328,17 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     ) -> Result<(), CanonError<D::ReadError>> {
         // §4.4 step 3: first-degree hash of every blank, grouped by hash. One scratch
         // account and one line arena serve every blank in turn.
-        let mut by_hash: BTreeMap<HashHex, Vec<D::Id>> = BTreeMap::new();
-        let mut first_degree: BTreeMap<D::Id, HashHex> = BTreeMap::new();
+        let mut first_degree = Vec::new();
+        memory
+            .reserve(&mut first_degree, self.blanks.len())
+            .map_err(CanonError::Storage)?;
         let source = self.ds;
         rendering::ScratchGrant::deferred(|| source.reserve_workspace(0)).run(|scratch| {
             let mut lines = rendering::LineArena::default();
             let mut record = |b, h| {
-                first_degree.insert(b, h);
-                by_hash.entry(h).or_default().push(b);
+                // Both scalar and batch traversal emit one digest per blank, in order.
+                debug_assert_eq!(self.blanks.get(first_degree.len()), Some(&b));
+                first_degree.push(h);
             };
             if self.hash == CanonHash::Sha256
                 && self.stop.is_none()
@@ -3355,31 +3359,50 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             }
             lines.release(scratch).map_err(CanonError::Storage)
         })?;
-        self.first_degree = first_degree;
 
+        // Sort ordinals, not the large digest values. The blank ordinal breaks
+        // equal-hash ties in the same order as first-degree traversal.
+        let mut by_hash = Vec::new();
+        memory
+            .reserve(&mut by_hash, first_degree.len())
+            .map_err(CanonError::Storage)?;
+        by_hash.extend(0..first_degree.len());
+        by_hash.sort_unstable_by(|&a, &b| first_degree[a].cmp(&first_degree[b]).then(a.cmp(&b)));
+        self.first_degree = first_degree;
+        let result = self.issue_degree_groups(&by_hash, footprints, memory);
+        let groups_released = memory.release_vec(by_hash).map_err(CanonError::Storage);
+        let digests_released = memory
+            .release_vec(std::mem::take(&mut self.first_degree))
+            .map_err(CanonError::Storage);
+        result.and(groups_released).and(digests_released)
+    }
+
+    fn issue_degree_groups<S: Admission + ?Sized>(
+        &mut self,
+        by_hash: &[usize],
+        footprints: &memo::Footprints<D::Id>,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
+        let first_degree = &self.first_degree;
+        let groups = by_hash.chunk_by(|&a, &b| first_degree[a] == first_degree[b]);
         // §4.4 step 4: issue canonical ids to uniquely-hashed blanks, ascending hash.
         // Defer hash-colliding groups to the n-degree pass.
-        let mut ambiguous: Vec<HashHex> = Vec::new();
-        for (h, group) in &by_hash {
+        for group in groups.clone() {
             self.check_stop().map_err(CanonError::with_read_error)?;
-            if group.len() == 1 {
-                self.canonical.issue(group[0]);
-            } else {
-                ambiguous.push(*h);
+            if let [blank] = group {
+                self.canonical.issue(self.blanks[*blank]);
             }
         }
 
         // §4.4 step 5: resolve each ambiguous group via the n-degree search.
-        for h in ambiguous {
+        for group in groups.filter(|group| group.len() > 1) {
             self.check_stop().map_err(CanonError::with_read_error)?;
-            // `by_hash` is a local, not part of `self`, so the group can be walked
-            // by reference across the `&mut self` calls below (no `Vec` clone).
-            let group = by_hash.get(&h).expect("ambiguous hash present");
             // 5.2–5.3: for each not-yet-canonical blank, run hashNDegreeQuads against a
             // fresh temporary issuer seeded with that blank.
             let mut hash_paths: Vec<(HashHex, IdIssuer<D::Id>)> = Vec::new();
-            for &b in group {
+            for &blank in group {
                 self.check_stop().map_err(CanonError::with_read_error)?;
+                let b = self.blanks[blank];
                 if self.canonical.has(b) {
                     continue;
                 }
@@ -4012,7 +4035,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             input.push_str("_:");
             input.push_str(id);
         } else {
-            input.push_str(self.first_degree[&related].as_str());
+            input.push_str(self.first_degree[self.blank_ordinal(related)].as_str());
         }
         digest_hex(self.hash, input.as_bytes())
     }
@@ -4203,10 +4226,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         )
     }
 
-    /// Release the search's own tables, which output never reads. They are not
-    /// part of any admitted account, so no charge or poll moves with them.
+    /// Release the issuer's search order, which output never reads.
     fn drop_search_state(&mut self) {
-        drop(std::mem::take(&mut self.first_degree));
         drop(std::mem::take(&mut self.canonical.order));
     }
 
@@ -8624,7 +8645,7 @@ mod tests {
             let footprints = state.collect_incidence(&mut memory).unwrap();
             for &blank in &state.blanks {
                 let hash = first_degree_of(&state, blank, &footprints).unwrap();
-                state.first_degree.insert(blank, hash);
+                state.first_degree.push(hash);
             }
             let mut issuer = IdIssuer::new(TEMP_PREFIX);
             issuer.issue(blanks[0]);
@@ -8658,7 +8679,7 @@ mod tests {
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &blank in &state.blanks {
             let hash = first_degree_of(&state, blank, &footprints).unwrap();
-            state.first_degree.insert(blank, hash);
+            state.first_degree.push(hash);
         }
         signal.0.store(1000, std::sync::atomic::Ordering::Relaxed);
         let blank = state.blanks[0];
@@ -8800,9 +8821,8 @@ mod tests {
                 let mut memory = Memory::new(&mut storage);
                 let footprints = state.collect_incidence(&mut memory).unwrap();
                 for &id in &state.blanks {
-                    state
-                        .first_degree
-                        .insert(id, first_degree_of(&state, id, &footprints).unwrap());
+                    let hash = first_degree_of(&state, id, &footprints).unwrap();
+                    state.first_degree.push(hash);
                 }
                 let mut entry = IdIssuer::new(TEMP_PREFIX);
                 entry.issue(root);
@@ -8870,9 +8890,8 @@ mod tests {
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &id in &state.blanks {
-            state
-                .first_degree
-                .insert(id, first_degree_of(&state, id, &footprints).unwrap());
+            let hash = first_degree_of(&state, id, &footprints).unwrap();
+            state.first_degree.push(hash);
         }
         let entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
@@ -9012,9 +9031,8 @@ mod tests {
         let mut memory = Memory::new(&mut storage);
         let footprints = state.collect_incidence(&mut memory).unwrap();
         for &id in &state.blanks {
-            state
-                .first_degree
-                .insert(id, first_degree_of(&state, id, &footprints).unwrap());
+            let hash = first_degree_of(&state, id, &footprints).unwrap();
+            state.first_degree.push(hash);
         }
         let entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
