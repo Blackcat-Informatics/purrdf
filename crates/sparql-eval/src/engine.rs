@@ -52,6 +52,7 @@ use crate::governor::ledger::ChargeLedger;
 use crate::governor::soundness::SpineClass;
 use crate::governor::{GovernorState, NonMonotoneBarrier, QueryExplanation, QueryGovernors};
 use crate::interned::{InternedGoverned, InternedOutcome, InternedRequest, InternedSolutions};
+use crate::join_plan::DistinctPlanning;
 use crate::plan_cache::{BoundedCache, BoundedOrderCache};
 use crate::plan_memory::{PlanCharge, PlanMemoryObserver};
 use crate::substitute::Prebindings;
@@ -91,6 +92,7 @@ enum PlanSurveyMode {
 struct PlanSurveyContext<'a, 'providers> {
     relations: &'a crate::property_fn::PropertyFunctionRegistry<'providers>,
     factorized_count: bool,
+    factorized_distinct: bool,
 }
 
 impl<'a, 'providers> PlanSurveyContext<'a, 'providers> {
@@ -105,11 +107,29 @@ impl<'a, 'providers> PlanSurveyContext<'a, 'providers> {
             // Admission of the original shape cannot assume a rewritten GROUP
             // still has a plain, disconnected BGP as its input.
             factorized_count: !prebindings
-                && crate::join_plan::FactorizedCount::allows(
+                && crate::join_plan::DisjointBgp::allows(
                     relations,
                     options.env.shapes(),
                     evidence_source,
                 ),
+            factorized_distinct: false,
+        }
+    }
+
+    /// A row cursor does not use the retained SELECT executor.
+    const fn retained(mut self) -> Self {
+        self.factorized_distinct = self.factorized_count;
+        self
+    }
+
+    fn distinct_planning<D: DatasetView>(self, query: &Query) -> DistinctPlanning {
+        if self.factorized_distinct
+            && matches!(query, Query::Select { .. })
+            && Sequencing::for_view::<D>() == Sequencing::Free
+        {
+            DistinctPlanning::Factorized
+        } else {
+            DistinctPlanning::Ordinary
         }
     }
 }
@@ -2479,10 +2499,12 @@ impl NativeSparqlEngine {
             options.property_functions(),
             &workspace.capability(),
         )?;
+        let survey =
+            PlanSurveyContext::new(options, !substitutions.values.is_empty(), false).retained();
         if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
-            PlanSurveyContext::new(options, !substitutions.values.is_empty(), false),
+            survey,
             state,
             &mut identity_owner.value,
             workspace,
@@ -2510,6 +2532,7 @@ impl NativeSparqlEngine {
         let evaluated = evaluate_governed_with_substitutions(
             prepared,
             Prebindings::Owned(substitutions.values),
+            survey.distinct_planning::<D>(&prepared.query),
             &mut ctx,
         )?;
         materialize_governed(
@@ -3975,7 +3998,7 @@ impl NativeSparqlEngine {
         // before any fork prevents a worker-local report from being lost.
         ctx.shape_state.ensure_reports(&capability)?;
         if !refused {
-            evaluate_query_evaluated_over(query, plan, &mut ctx)
+            evaluate_query_evaluated_over(query, plan, DistinctPlanning::Ordinary, &mut ctx)
                 .map_err(EvaluationFailure::Evaluation)?;
         }
         let shapes = ctx.shape_state.take_reports(&capability)?;
@@ -4010,11 +4033,9 @@ impl NativeSparqlEngine {
         let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
         let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
         survey.record_statistics = !matches!(mode, PlanSurveyMode::Admission);
-        let PlanSurveyContext {
-            relations,
-            factorized_count,
-        } = context;
-        survey.factorized_count = factorized_count;
+        survey.factorized_count = context.factorized_count;
+        survey.factorized_distinct =
+            context.distinct_planning::<D>(query) == DistinctPlanning::Factorized;
         if matches!(mode, PlanSurveyMode::ExplainWithBounds) {
             survey.certify_admitted()?;
         }
@@ -4023,7 +4044,7 @@ impl NativeSparqlEngine {
             &active_dataset,
             GraphMatch::Default,
             query_pattern(query),
-            relations,
+            context.relations,
             &mut survey,
             workspace,
         )?;
@@ -4943,10 +4964,13 @@ impl NativeSparqlEngine {
             options.property_functions(),
             &workspace.capability(),
         )?;
+        let survey =
+            PlanSurveyContext::new(options, !execution.coordinate_bindings().is_empty(), false)
+                .retained();
         if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
-            PlanSurveyContext::new(options, !execution.coordinate_bindings().is_empty(), false),
+            survey,
             state,
             &mut identity_owner.value,
             workspace,
@@ -4981,10 +5005,13 @@ impl NativeSparqlEngine {
             ctx.scratch = execution.check_out_workspace();
         }
         let evaluated = match execution.substituted_admitted(&workspace.capability()) {
-            Ok(substituted) => {
-                evaluate_query_evaluated_over(substituted.query(), substituted.plan(), &mut ctx)
-                    .map_err(EvaluationFailure::Evaluation)
-            }
+            Ok(substituted) => evaluate_query_evaluated_over(
+                substituted.query(),
+                substituted.plan(),
+                survey.distinct_planning::<D>(&prepared.query),
+                &mut ctx,
+            )
+            .map_err(EvaluationFailure::Evaluation),
             Err(refused) => Err(refused),
         };
         let answer = evaluated.and_then(|evaluated| {
@@ -5491,10 +5518,12 @@ impl NativeSparqlEngine {
                 options.property_functions(),
                 &workspace.capability(),
             )?;
+            let survey = PlanSurveyContext::new(&options, !request.substitutions.is_empty(), false)
+                .retained();
             if let Some(refused) = self.admit_refusal(
                 dataset,
                 &prepared.query,
-                PlanSurveyContext::new(&options, !request.substitutions.is_empty(), false),
+                survey,
                 state,
                 &mut identity_owner.value,
                 &workspace,
@@ -5513,6 +5542,7 @@ impl NativeSparqlEngine {
             let evaluated = evaluate_governed_with_substitutions(
                 &prepared,
                 Prebindings::Borrowed(request.substitutions),
+                survey.distinct_planning::<D>(&prepared.query),
                 &mut ctx,
             )?;
             Ok(
@@ -6415,6 +6445,7 @@ fn evaluate_with_substitutions<D: DatasetView + Sync>(
 fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
     prepared: &PreparedQuery,
     substitutions: Prebindings<'_>,
+    distinct_planning: DistinctPlanning,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvaluationFailure> {
     let substituted = (!substitutions.is_empty())
@@ -6425,8 +6456,8 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
         .map_or((&prepared.query, Some(&prepared.plan)), |substituted| {
             (&substituted.query, None)
         });
-    let evaluated =
-        evaluate_query_evaluated_over(query, plan, ctx).map_err(EvaluationFailure::Evaluation)?;
+    let evaluated = evaluate_query_evaluated_over(query, plan, distinct_planning, ctx)
+        .map_err(EvaluationFailure::Evaluation)?;
     prepared
         .restore_evaluated_layout(evaluated, &ctx.growth)
         .map_err(EvaluationFailure::Evaluation)
