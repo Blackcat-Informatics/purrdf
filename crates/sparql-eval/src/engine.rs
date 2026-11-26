@@ -87,6 +87,33 @@ enum PlanSurveyMode {
     ExplainWithBounds,
 }
 
+#[derive(Clone, Copy)]
+struct PlanSurveyContext<'a, 'providers> {
+    relations: &'a crate::property_fn::PropertyFunctionRegistry<'providers>,
+    factorized_count: bool,
+}
+
+impl<'a, 'providers> PlanSurveyContext<'a, 'providers> {
+    fn new(
+        options: &QueryOptions<'a, 'providers>,
+        prebindings: bool,
+        evidence_source: bool,
+    ) -> Self {
+        let relations = options.property_functions();
+        Self {
+            relations,
+            // Admission of the original shape cannot assume a rewritten GROUP
+            // still has a plain, disconnected BGP as its input.
+            factorized_count: !prebindings
+                && crate::join_plan::FactorizedCount::allows(
+                    relations,
+                    options.env.shapes(),
+                    evidence_source,
+                ),
+        }
+    }
+}
+
 /// A reusable key buffer retains its original array's admission. Replacement
 /// uses the current invocation's capability while the old array remains alive.
 #[derive(Debug, Default)]
@@ -2455,7 +2482,7 @@ impl NativeSparqlEngine {
         if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
-            options.property_functions(),
+            PlanSurveyContext::new(options, !substitutions.values.is_empty(), false),
             state,
             &mut identity_owner.value,
             workspace,
@@ -3893,8 +3920,13 @@ impl NativeSparqlEngine {
         } else {
             PlanSurveyMode::Explain
         };
-        let mut survey =
-            self.survey_plan_admitted(dataset, &prepared.query, relations, mode, workspace)?;
+        let mut survey = self.survey_plan_admitted(
+            dataset,
+            &prepared.query,
+            PlanSurveyContext::new(options, !substitutions.is_empty(), false),
+            mode,
+            workspace,
+        )?;
         // Direct governed execution admits the un-substituted shape first. Keep
         // that same verdict, then number the actual rewritten measuring tree.
         let refused = record_plan_refusal(state, survey.peak_cells()).is_some();
@@ -3907,7 +3939,13 @@ impl NativeSparqlEngine {
                 (&substituted.query, None)
             });
         if substituted.is_some() {
-            survey = self.survey_plan_admitted(dataset, query, relations, mode, workspace)?;
+            survey = self.survey_plan_admitted(
+                dataset,
+                query,
+                PlanSurveyContext::new(options, false, false),
+                mode,
+                workspace,
+            )?;
         }
         // All immutable metadata and the terminal ledger destination exist before
         // measuring. A sticky operational refusal requires no snapshot allocation.
@@ -3957,7 +3995,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         query: &Query,
-        relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
+        context: PlanSurveyContext<'_, '_>,
         mode: PlanSurveyMode,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
     ) -> Result<crate::bgp::PlanSurvey, crate::EvalError> {
@@ -3972,6 +4010,11 @@ impl NativeSparqlEngine {
         let tree = crate::plan::Tree::build_admitted(query_pattern(query), &capability)?;
         let mut survey = crate::bgp::PlanSurvey::for_shape_admitted(tree.shape(), &capability)?;
         survey.record_statistics = !matches!(mode, PlanSurveyMode::Admission);
+        let PlanSurveyContext {
+            relations,
+            factorized_count,
+        } = context;
+        survey.factorized_count = factorized_count;
         if matches!(mode, PlanSurveyMode::ExplainWithBounds) {
             survey.certify_admitted()?;
         }
@@ -4037,7 +4080,7 @@ impl NativeSparqlEngine {
         &self,
         dataset: &D,
         query: &Query,
-        relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
+        context: PlanSurveyContext<'_, '_>,
         state: &GovernorState,
         identity: &mut RelationIdentity,
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
@@ -4049,7 +4092,7 @@ impl NativeSparqlEngine {
         let estimate = match self.survey_plan_admitted(
             dataset,
             query,
-            relations,
+            context,
             PlanSurveyMode::Admission,
             workspace,
         ) {
@@ -4903,7 +4946,7 @@ impl NativeSparqlEngine {
         if let Some(refused) = self.admit_refusal(
             dataset,
             &prepared.query,
-            options.property_functions(),
+            PlanSurveyContext::new(options, !execution.coordinate_bindings().is_empty(), false),
             state,
             &mut identity_owner.value,
             workspace,
@@ -5451,7 +5494,7 @@ impl NativeSparqlEngine {
             if let Some(refused) = self.admit_refusal(
                 dataset,
                 &prepared.query,
-                options.property_functions(),
+                PlanSurveyContext::new(&options, !request.substitutions.is_empty(), false),
                 state,
                 &mut identity_owner.value,
                 &workspace,
@@ -7957,12 +8000,11 @@ mod tests {
             .prepare_query("SELECT ?s WHERE { ?s <http://example.org/p> ?o }", None)
             .unwrap();
         let workspace = crate::workspace::QueryWorkspace::resident();
-        let relations = crate::property_fn::PropertyFunctionRegistry::new();
         let admission = engine
             .survey_plan_admitted(
                 dataset.as_ref(),
                 &prepared.query,
-                &relations,
+                PlanSurveyContext::new(&QueryOptions::EMPTY, false, false),
                 PlanSurveyMode::Admission,
                 &workspace,
             )
@@ -7971,7 +8013,7 @@ mod tests {
             .survey_plan_admitted(
                 dataset.as_ref(),
                 &prepared.query,
-                &relations,
+                PlanSurveyContext::new(&QueryOptions::EMPTY, false, false),
                 PlanSurveyMode::Explain,
                 &workspace,
             )

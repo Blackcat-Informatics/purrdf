@@ -76,6 +76,171 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
+#[test]
+fn disconnected_count_completes_without_materializing_product_rows() {
+    use purrdf_core::TermValue;
+    use purrdf_xsd::datatype::XSD_INTEGER;
+
+    let dataset = fixture();
+    let engine = NativeSparqlEngine::new();
+    // Each factor has EDGES rows with two bindings. A four-column product
+    // needs 4 * EDGES squared cells. This cap can hold both factors but
+    // cannot hold the product.
+    let ceiling = u64::try_from(6 * EDGES).unwrap();
+    let governors = QueryGovernors::METERED.with_max_intermediate_cells(ceiling);
+    let cases = [
+        ("?a ex:p ?x . ?b ex:p ?y", EDGES * EDGES),
+        ("?a ex:p ?x . ?b ex:missing ?y", 0),
+        ("?a ex:p ?x . ?b ex:p ?x", EDGES),
+    ];
+    for (patterns, count) in cases {
+        let query = format!(
+            "PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?total) WHERE {{ {patterns} }} LIMIT 1"
+        );
+        let prepared = engine.prepare_query(&query, None).unwrap();
+        let ordinary = engine
+            .query_governed(&dataset, request(&query), &QueryOptions::EMPTY, &governors)
+            .unwrap();
+        let prepared = engine
+            .query_prepared_governed_view(
+                &*dataset,
+                &prepared,
+                &[],
+                &QueryOptions::EMPTY,
+                &governors,
+            )
+            .unwrap();
+        for outcome in [ordinary, prepared] {
+            let GovernedOutcome::Complete {
+                result:
+                    SparqlResult::Solutions {
+                        variables, rows, ..
+                    },
+                evidence,
+                ..
+            } = &outcome
+            else {
+                panic!("count must complete within the factor budget: {outcome:?}");
+            };
+            assert_eq!(variables, &["total"]);
+            let value = TermValue::typed_literal(count.to_string(), XSD_INTEGER);
+            assert_eq!(rows, &[vec![Some(value)]]);
+            assert!(evidence.consumed_in(ResourceDimension::IntermediateCells) <= ceiling);
+        }
+    }
+}
+
+#[test]
+fn disconnected_count_has_no_machine_word_cardinality_ceiling() {
+    use purrdf_core::TermValue;
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use std::fmt::Write as _;
+
+    let dataset = fixture();
+    let engine = NativeSparqlEngine::new();
+    let governors = QueryGovernors::METERED.with_max_intermediate_cells(48);
+    let mut body = String::new();
+    for i in 0..43 {
+        write!(body, "?s{i} ex:p ?o{i} . ").unwrap();
+    }
+    for (tail, expected) in [
+        ("", "680564733841876926926749214863536422912"), // 8^43
+        ("?s43 ex:missing ?o43", "0"),
+    ] {
+        let query = format!(
+            "PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE {{ {body}{tail} }}"
+        );
+        let outcome = engine
+            .query_governed(&dataset, request(&query), &QueryOptions::EMPTY, &governors)
+            .unwrap();
+        let GovernedOutcome::Complete {
+            result: SparqlResult::Solutions { rows, .. },
+            ..
+        } = outcome
+        else {
+            panic!("a wide count does not require a wide result bag: {outcome:?}");
+        };
+        assert_eq!(
+            rows,
+            [vec![Some(TermValue::typed_literal(expected, XSD_INTEGER))]]
+        );
+    }
+}
+
+#[test]
+fn disconnected_count_withholds_the_answer_when_a_factor_is_interrupted() {
+    let dataset = large_fixture(256);
+    let engine = NativeSparqlEngine::new();
+    let query = "PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE {
+        ?a ex:p ?x . ?b ex:p ?y
+    }";
+    let evaluate = |governors: &QueryGovernors| {
+        engine
+            .query_governed(&dataset, request(query), &QueryOptions::EMPTY, governors)
+            .unwrap()
+    };
+    let GovernedOutcome::Complete { evidence, .. } = evaluate(&QueryGovernors::METERED) else {
+        panic!("a metered count must complete");
+    };
+    let fuel = evidence.consumed_in(ResourceDimension::Fuel);
+    let starved = evaluate(&QueryGovernors::UNBOUNDED.with_fuel(fuel / 4));
+    let (trip, partial, _) = exhausted(&starved);
+    assert!(matches!(
+        trip,
+        TrippedGovernor::Budget {
+            dimension: ResourceDimension::Fuel,
+            ..
+        }
+    ));
+    assert!(partial.barrier().is_some(), "{starved:?}");
+
+    let cancelled = evaluate(&QueryGovernors::UNBOUNDED.with_stop_signal(PollCountdown::new(16)));
+    let (trip, partial, _) = exhausted(&cancelled);
+    assert_eq!(
+        trip,
+        TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled,
+        }
+    );
+    assert!(partial.barrier().is_some(), "{cancelled:?}");
+}
+
+#[test]
+fn disconnected_count_does_not_admit_a_rewritten_prebound_group_as_factors() {
+    let dataset = fixture();
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(
+            "PREFIX ex: <http://example.org/> SELECT (COUNT(*) AS ?n) WHERE {
+                ?a ex:p ?x . ?b ex:p ?y
+            }",
+            None,
+        )
+        .unwrap();
+    let bindings = [(
+        "a".to_owned(),
+        purrdf_core::TermValue::iri("http://example.org/s0"),
+    )];
+    let outcome = engine
+        .query_prepared_governed_view(
+            &*dataset,
+            &prepared,
+            &bindings,
+            &QueryOptions::EMPTY,
+            &QueryGovernors::METERED.with_max_intermediate_cells(48),
+        )
+        .unwrap();
+    let (trip, _, _) = exhausted(&outcome);
+    assert!(matches!(
+        trip,
+        TrippedGovernor::Refused {
+            dimension: ResourceDimension::IntermediateCells,
+            limit: 48,
+            ..
+        }
+    ));
+}
+
 prop_test! {
     #![prop_config(Config::with_cases(64))]
     #[test]

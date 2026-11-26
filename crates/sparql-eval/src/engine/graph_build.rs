@@ -488,7 +488,7 @@ impl NativeSparqlEngine {
                     .survey_plan_admitted(
                         dataset,
                         &prepared.query,
-                        options.property_functions(),
+                        super::PlanSurveyContext::new(options, !substitutions.is_empty(), false),
                         super::PlanSurveyMode::Admission,
                         workspace,
                     )

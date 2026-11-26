@@ -7416,6 +7416,40 @@ fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
                     }
                     Ok(crate::shapes::ShapeStart::Declined) => {}
                 }
+                if matches!(current_pattern, GraphPattern::Group { .. })
+                    && !literal
+                    && !special_operand
+                    && runner
+                        .ctx
+                        .plan
+                        .as_ref()
+                        .is_some_and(|plan| plan.shape().is_root_count_group(current_pattern))
+                    && crate::join_plan::FactorizedCount::allows(
+                        runner.ctx.property_functions,
+                        runner.ctx.shapes,
+                        runner.ctx.evidence_input.is_some(),
+                    )
+                {
+                    match evaluate_factorized_count(current_pattern, runner.ctx) {
+                        Ok(None) => {}
+                        Ok(Some(evaluated)) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Ok(evaluated),
+                            );
+                        }
+                        Err(error) => {
+                            break finish_ordinary_active(
+                                &mut runner.state.active,
+                                runner.ctx,
+                                current_pattern,
+                                Err(error),
+                            );
+                        }
+                    }
+                }
                 if let GraphPattern::Join { .. } = current_pattern
                     && runner.ctx.positive_region(current_pattern).unwrap_or(false)
                 {
@@ -10294,6 +10328,113 @@ pub(crate) fn eval_literal_node<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     eval_ordinary_chain_with_delivery(pattern, None, true, ctx)
+}
+
+/// Evaluate the disjoint BGP factors of a global COUNT without forming its product.
+fn evaluate_factorized_count<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<Evaluated<D::Id>>, EvalError> {
+    let Some(plan) = crate::join_plan::FactorizedCount::build(node, &ctx.growth)? else {
+        return Ok(None);
+    };
+    let GraphPattern::Group {
+        variables,
+        aggregates,
+        ..
+    } = node
+    else {
+        unreachable!("a count plan comes from a GROUP");
+    };
+    let schema = crate::modifier::group_output_schema(variables, aggregates, ctx)?;
+    let mut lift = crate::governor::lift::Lift::at_admitted(node, &ctx.growth)?;
+    let mut counts = crate::AdmittedVec::new(&ctx.growth);
+    let child = eval_evaluated_with(plan.input, ctx, |ctx| {
+        let workspace = ctx.growth.clone();
+        plan.visit(&workspace, |patterns, _| {
+            let factor = crate::bgp::eval_bgp(patterns, ctx)?;
+            if let Some(error) = ctx.dataset.read_error() {
+                return Err(EvalError::source_read(error));
+            }
+            if let Err(tripped) = ctx.observe_cells(factor.rows.len(), factor.schema.len()) {
+                ctx.record_barrier(tripped);
+            }
+            if ctx.stop_check().is_none() {
+                counts.push(factor.rows.len() as u64)?;
+                Ok(true)
+            } else {
+                Ok(false)
+            }
+        })?;
+        // The BGP produces cardinalities for this consumer. There are no product
+        // rows to commit or report as materialized output at its boundary.
+        Ok(Evaluated::Complete(SolutionSeq::empty(
+            VarSchema::empty_shared(),
+        )))
+    })?;
+    if lift.absorb(0, child).is_none() {
+        return Ok(Some(lift.finish(SolutionSeq::empty(schema))));
+    }
+    let mut rows = crate::solution::RowsBuilder::new(&ctx.growth);
+    if let Some(result) = factorized_count_term(&counts, ctx)? {
+        rows.push_cells(1, core::iter::once(Some(result)))?;
+    }
+    Ok(Some(lift.finish(SolutionSeq {
+        schema,
+        rows: rows.finish()?,
+    })))
+}
+
+/// Fold cardinalities, not the individual rows of the Cartesian product.
+fn factorized_count_term<D: DatasetView + Sync>(
+    counts: &[u64],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    use crate::governor::ChargePoint;
+    use purrdf_xsd::exact::{DivisionPolicy, Integer};
+    use purrdf_xsd::numeric::{
+        CostOp, NumericBinaryOperator, numeric_binary_admitted, numeric_cost,
+    };
+    use purrdf_xsd::{XsdDatatype, XsdValue};
+
+    if let Err(tripped) = ctx.charge(ChargePoint::AggregateInvocation) {
+        ctx.record_barrier(tripped);
+        return Ok(None);
+    }
+    let integer = |n| XsdValue::Integer {
+        value: Integer::from_i128(n),
+        datatype: XsdDatatype::Integer,
+    };
+    let zero = counts.contains(&0);
+    let mut total =
+        crate::parsed_value::ParsedValue::from_admitted(integer(i128::from(!zero)), None, 0)?;
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
+    for &count in counts {
+        if let Err(tripped) = checkpoint.pass(ctx) {
+            ctx.record_barrier(tripped);
+            return Ok(None);
+        }
+        if zero {
+            continue;
+        }
+        let factor = integer(i128::from(count));
+        if !crate::expr::numeric_step_admitted(ctx, numeric_cost(&total, &factor, CostOp::Mul)) {
+            return Ok(None);
+        }
+        let mut frame = crate::native_numeric::NumericFrame::new(&ctx.growth);
+        let product = numeric_binary_admitted(
+            &total,
+            &factor,
+            NumericBinaryOperator::Multiply,
+            DivisionPolicy::Exact,
+            &mut |layout| frame.admit(layout),
+        );
+        total = frame
+            .finish_value(product)?
+            .map_err(|_| EvalError::internal("exact multiplication of count factors failed"))?;
+    }
+    crate::expr::governed_xsd_to_term(ctx, &total, purrdf_xsd::datatype::XSD_INTEGER)
 }
 
 /// Execute only operators with no ordinary graph continuation.

@@ -13,8 +13,8 @@ use purrdf_lex::allocation::Memory;
 #[cfg(test)]
 use purrdf_sparql_algebra::walk_pre_post;
 use purrdf_sparql_algebra::{
-    Child, Flow, GraphPattern, NodeRef, TriplePattern, Visit, fold_post_order_with_memory,
-    walk_pre_post_with_memory,
+    AggregateFunction, Child, Flow, GraphPattern, NodeRef, TriplePattern, Visit,
+    fold_post_order_with_memory, walk_pre_post_with_memory,
 };
 
 pub(crate) fn normalize_query(
@@ -344,22 +344,124 @@ fn connected_join(
 
 type VariableKey = purrdf_sparql_algebra::Variable;
 
-fn components(
-    mut triples: Vec<TriplePattern>,
-    memory: &mut Memory<'_, LexicalFrame>,
-) -> PrepResult<AdmittedVec<Vec<TriplePattern>>> {
-    let capability = memory.admission_mut().workspace().clone();
-    let mut roots = AdmittedVec::with_capacity(triples.len(), &capability)?;
+/// A global, non-distinct COUNT over a disjoint basic graph pattern.
+pub(crate) struct FactorizedCount<'a> {
+    pub(crate) input: &'a GraphPattern,
+    triples: &'a [TriplePattern],
+    members: AdmittedVec<(usize, usize)>,
+}
+
+impl<'a> FactorizedCount<'a> {
+    /// External providers can attach evidence or replace a physical operator.
+    pub(crate) fn allows(
+        relations: &crate::property_fn::PropertyFunctionRegistry<'_>,
+        shapes: &crate::shapes::ShapeRegistry,
+        has_evidence_source: bool,
+    ) -> bool {
+        !has_evidence_source && relations.is_empty() && shapes.providers.is_empty()
+    }
+
+    pub(crate) fn build(
+        node: &'a GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<Self>, crate::EvalError> {
+        let GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } = node
+        else {
+            return Ok(None);
+        };
+        let [(_, aggregate)] = aggregates.as_slice() else {
+            return Ok(None);
+        };
+        if !variables.is_empty()
+            || !matches!(aggregate.function(), AggregateFunction::Count)
+            || aggregate.distinct
+            || !aggregate.args().is_empty()
+        {
+            return Ok(None);
+        }
+        let GraphPattern::Bgp { patterns } = inner.as_ref() else {
+            return Ok(None);
+        };
+        if patterns.len() < 2 {
+            return Ok(None);
+        }
+        let roots = component_roots(patterns, workspace)?;
+        if roots.iter().all(|&representative| representative == 0) {
+            return Ok(None);
+        }
+        let mut members = AdmittedVec::from_iter_admitted(
+            roots
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(index, root)| (root, index)),
+            workspace,
+        )?;
+        members.sort_unstable();
+        Ok(Some(Self {
+            input: inner.as_ref(),
+            triples: patterns,
+            members,
+        }))
+    }
+
+    pub(crate) fn visit(
+        &self,
+        workspace: &crate::WorkspaceCapability,
+        mut run: impl FnMut(&[TriplePattern], &[(usize, usize)]) -> Result<bool, crate::EvalError>,
+    ) -> Result<(), crate::EvalError> {
+        for members in self.members.chunk_by(|left, right| left.0 == right.0) {
+            let mut storage = LexicalFrame::new(workspace);
+            let mut memory = Memory::new(&mut storage);
+            let mut triples = Vec::new();
+            memory
+                .reserve(&mut triples, members.len())
+                .map_err(|error| {
+                    memory
+                        .admission_mut()
+                        .storage_error(error, "count factor layout")
+                })?;
+            for &(_, index) in members {
+                let triple =
+                    self.triples[index]
+                        .clone_with_memory(&mut memory)
+                        .map_err(|error| {
+                            memory
+                                .admission_mut()
+                                .storage_error(error, "count factor triple")
+                        })?;
+                triples.push(triple);
+            }
+            if !run(&triples, members)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The earliest authored triple in each slot-connected component.
+/// Blank and nested triple slots participate in the same connectivity law
+/// as ordinary variables.
+pub(crate) fn component_roots(
+    triples: &[TriplePattern],
+    capability: &crate::WorkspaceCapability,
+) -> Result<AdmittedVec<usize>, crate::EvalError> {
+    let mut roots = AdmittedVec::with_capacity(triples.len(), capability)?;
     for index in 0..triples.len() {
         roots.push(index)?;
     }
     let mut first = AdmittedMap::default();
     for (index, triple) in triples.iter().enumerate() {
-        crate::bgp::visit_triple_slots_admitted(triple, &capability, |slot| {
+        crate::bgp::visit_triple_slots_admitted(triple, capability, |slot| {
             let variable = match slot {
                 crate::bgp::SlotKey::Variable(variable) => variable.clone(),
                 crate::bgp::SlotKey::Blank(label) => {
-                    crate::bgp::blank_var_admitted(label, &capability)?
+                    crate::bgp::blank_var_admitted(label, capability)?
                 }
             };
             if let Some(&other) = first.get(&variable) {
@@ -367,11 +469,24 @@ fn components(
                 let b = root(roots.as_mut_slice(), other);
                 roots.as_mut_slice()[a.max(b)] = a.min(b);
             } else {
-                first.insert_admitted(variable, index, &capability)?;
+                first.insert_admitted(variable, index, capability)?;
             }
             Ok(())
         })?;
     }
+    for index in 0..roots.len() {
+        let representative = root(roots.as_mut_slice(), index);
+        roots.as_mut_slice()[index] = representative;
+    }
+    Ok(roots)
+}
+
+fn components(
+    mut triples: Vec<TriplePattern>,
+    memory: &mut Memory<'_, LexicalFrame>,
+) -> PrepResult<AdmittedVec<Vec<TriplePattern>>> {
+    let capability = memory.admission_mut().workspace().clone();
+    let roots = component_roots(&triples, &capability)?;
     let mut groups = AdmittedMap::default();
     let mut out = AdmittedVec::new(&capability);
     #[expect(
@@ -379,7 +494,7 @@ fn components(
         reason = "The original vector stays allocated until Memory destroys it and refunds its grant; drain preserves authored transfer order."
     )]
     for (index, triple) in triples.drain(..).enumerate() {
-        let representative = root(roots.as_mut_slice(), index);
+        let representative = roots[index];
         let group = if let Some(&group) = groups.get(&representative) {
             group
         } else {

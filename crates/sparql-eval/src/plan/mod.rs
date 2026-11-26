@@ -257,6 +257,29 @@ impl PlanShape {
         self.has_property_functions
     }
 
+    /// Whether this is the one unseeded GROUP eligible for a factor forecast.
+    pub(crate) fn is_root_count_group(&self, pattern: &GraphPattern) -> bool {
+        if !matches!(pattern, GraphPattern::Group { .. }) {
+            return false;
+        }
+        let Some(mut node) = self.node_of(pattern) else {
+            return false;
+        };
+        while let Some(parent) = self.rows[node.index()].parent {
+            // Each of these consumers has one graph child and can also have
+            // expression children. Do not confuse an EXISTS body with input.
+            if !matches!(
+                self.kind(parent).label(),
+                "Project" | "Extend" | "Filter" | "Distinct" | "Reduced" | "Slice" | "OrderBy"
+            ) || self.site_of(node).is_some()
+            {
+                return false;
+            }
+            node = parent;
+        }
+        true
+    }
+
     /// The number of nodes.
     pub(crate) fn len(&self) -> usize {
         self.rows.len()

@@ -3895,6 +3895,7 @@ pub(crate) struct PlanSurvey {
     /// retain exactness separately from the heuristic join/output estimates.
     pub(crate) statistics: AdmittedRecords<String>,
     pub(crate) record_statistics: bool,
+    pub(crate) factorized_count: bool,
     pub(crate) certificates: Option<CertifiedBounds>,
     /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
     /// walks; `None` where it predicts nothing.
@@ -3925,6 +3926,7 @@ impl PlanSurvey {
             orders: AdmittedRecords::new(workspace),
             statistics: AdmittedRecords::new(workspace),
             record_statistics: false,
+            factorized_count: false,
             certificates: None,
             estimates,
             shape: shape.clone(),
@@ -4280,6 +4282,53 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 survey,
                 account,
             )?;
+            continue;
+        }
+        if survey.factorized_count
+            && survey.shape.is_root_count_group(pattern)
+            && let Some(count) = crate::join_plan::FactorizedCount::build(pattern, &workspace)?
+        {
+            let mut rows = 1_u64;
+            let mut peak = PlanEstimate::new(0, 0, 0);
+            let mut order = AdmittedVec::new(&workspace);
+            count.visit(&workspace, |triples, members| {
+                let (_, estimate, factor_order) = forecast_bgp(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    triples,
+                    &SeedEstimate::default(),
+                    None,
+                    account,
+                )?;
+                rows = rows.saturating_mul(estimate.rows);
+                if estimate.peak_cells() >= peak.peak_cells() {
+                    peak = estimate;
+                }
+                for &index in &factor_order {
+                    order.push(members[index].1)?;
+                }
+                Ok(true)
+            })?;
+            let GraphPattern::Bgp { patterns } = count.input else {
+                unreachable!("the factor plan retains its original BGP");
+            };
+            record_bgp_forecast(
+                count.input,
+                patterns,
+                PlanEstimate::new(rows, peak.peak_rows, peak.columns),
+                &order,
+                survey,
+            )?;
+            record_bgp_statistics(
+                dataset,
+                active_dataset,
+                active_graph,
+                count.input,
+                survey,
+                account,
+            )?;
+            survey.record_output_bound(pattern, Some(1));
             continue;
         }
         match pattern {

@@ -3835,6 +3835,53 @@ fn healthy_paged_evidence_source() -> purrdf_core::PagedDataset {
     .unwrap()
 }
 
+fn count_admission_preserves_the_evidence_cursor_execution_path() {
+    use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
+    use purrdf_core::{ResourceDimension, TrippedGovernor};
+    use purrdf_sparql_eval::QueryGovernors;
+    use purrdf_sparql_eval::eval::SelectCompletion;
+
+    let dataset = support::local_dataset([("a", "p", "b"), ("b", "p", "c")]);
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(
+            "SELECT (COUNT(*) AS ?n) WHERE { ?a ?p ?b . ?c ?q ?d }",
+            None,
+        )
+        .unwrap();
+    let claims = uniform_claims();
+    let mut cursor = engine
+        .open_select_cursor_governed_evidence_view(
+            &*dataset,
+            &prepared,
+            &[],
+            &QueryOptions::EMPTY,
+            &QueryGovernors::METERED.with_max_intermediate_cells(8),
+            &claims,
+            AnswerRequest {
+                tier: AnswerTier::Rows,
+                question: None,
+                standpoint: StandpointKey::Unscoped,
+                input_completeness: SearchCompleteness::Complete,
+                closure_declared: true,
+            },
+        )
+        .unwrap();
+    assert!(cursor.next_row().unwrap().is_none());
+    let settlement = cursor.settle().unwrap();
+    assert!(matches!(
+        settlement.completion,
+        SelectCompletion::Truncated {
+            tripped: TrippedGovernor::Refused {
+                dimension: ResourceDimension::IntermediateCells,
+                limit: 8,
+                ..
+            },
+            ..
+        }
+    ));
+}
+
 fn fallible_evidence_doors_keep_original_rows_and_all_query_form_status() {
     use purrdf_core::PagedQueryLimits;
     use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
@@ -4021,6 +4068,7 @@ fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
 }
 
 purrdf_testkit::harness_main!(
+    count_admission_preserves_the_evidence_cursor_execution_path,
     fallible_evidence_doors_keep_original_rows_and_all_query_form_status,
     fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers,
     verdict_stops_the_actual_answer_producer_after_filters_and_exact_polarities,
