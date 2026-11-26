@@ -28,38 +28,41 @@ static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::Count
 
 #[test]
 fn resident_subject_join_borrows_warm_runs_and_declines_an_unordered_probe() {
-    use purrdf_core::{RdfDatasetBuilder, StatisticsStream, SubjectOrderedScan};
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, StatisticsStream, SubjectOrderedScan};
     use purrdf_sparql_eval::eval::CursorBufferReason;
 
-    let mut builder = RdfDatasetBuilder::new();
-    let [s, t, p, q, mixed, x, y, g] = [
-        "urn:subject:s",
-        "urn:subject:t",
-        "urn:pred:left",
-        "urn:pred:right",
-        "urn:pred:mixed",
-        "urn:obj:x",
-        "urn:obj:y",
-        "urn:graph:other",
-    ]
-    .map(|iri| builder.intern_iri(iri).unwrap());
-    for subject in [s, t] {
-        builder.push_quad(subject, p, x, None).unwrap();
-        builder.push_quad(subject, q, x, None).unwrap();
-    }
-    builder.push_quad(s, q, y, Some(g)).unwrap();
-    builder.push_quad(t, mixed, y, None).unwrap();
-    let triple = builder.intern_triple(x, p, y).unwrap();
-    for subject in [s, t] {
-        builder
-            .push_reifier_in_graph(subject, triple, None)
-            .unwrap();
-        builder
-            .push_annotation_in_graph(subject, q, y, None)
-            .unwrap();
-    }
-    builder.push_annotation_in_graph(s, mixed, y, None).unwrap();
-    let dataset = builder.freeze().unwrap();
+    let build = || {
+        let mut builder = RdfDatasetBuilder::new();
+        let [s, t, p, q, mixed, x, y, g] = [
+            "urn:subject:s",
+            "urn:subject:t",
+            "urn:pred:left",
+            "urn:pred:right",
+            "urn:pred:mixed",
+            "urn:obj:x",
+            "urn:obj:y",
+            "urn:graph:other",
+        ]
+        .map(|iri| builder.intern_iri(iri).unwrap());
+        for subject in [s, t] {
+            builder.push_quad(subject, p, x, None).unwrap();
+            builder.push_quad(subject, q, x, None).unwrap();
+        }
+        builder.push_quad(s, q, y, Some(g)).unwrap();
+        builder.push_quad(t, mixed, y, None).unwrap();
+        let triple = builder.intern_triple(x, p, y).unwrap();
+        for subject in [s, t] {
+            builder
+                .push_reifier_in_graph(subject, triple, None)
+                .unwrap();
+            builder
+                .push_annotation_in_graph(subject, q, y, None)
+                .unwrap();
+        }
+        builder.push_annotation_in_graph(s, mixed, y, None).unwrap();
+        (builder.freeze().unwrap(), [s, t, p, q, mixed, x, y])
+    };
+    let (dataset, [s, t, p, q, mixed, x, y]) = build();
     let left = Some(p);
     let right = Some(q);
     let graph = GraphMatch::Default;
@@ -78,11 +81,11 @@ fn resident_subject_join_borrows_warm_runs_and_declines_an_unordered_probe() {
     );
     assert!(!dataset.may_scan_in_subject_order(right, Some(y), graph));
 
-    let run = |query| {
+    let run = |dataset: &RdfDataset, query: &str| {
         let engine = NativeSparqlEngine::new();
         let result = engine
             .query_with_options_view(
-                &dataset,
+                dataset,
                 SparqlRequest {
                     query,
                     base_iri: None,
@@ -96,9 +99,15 @@ fn resident_subject_join_borrows_warm_runs_and_declines_an_unordered_probe() {
     let exact = "SELECT ?s WHERE { ?s <urn:pred:left> <urn:obj:x> . ?s <urn:pred:right> <urn:obj:y> } ORDER BY ?s";
     let unordered = "SELECT ?s ?o WHERE { ?s <urn:pred:left> <urn:obj:x> . ?s <urn:pred:right> ?o } ORDER BY ?s ?o";
     let sample = "SELECT (SAMPLE(?s) AS ?chosen) WHERE { ?s <urn:pred:mixed> <urn:obj:y> . ?s <urn:pred:left> <urn:obj:x> }";
-    let first_sample = run(sample);
-    let cold = run(exact);
-    let unselected = run(unordered);
+    // No other query may warm the asserted graph index before the indexed
+    // baseline. In particular the mixed-stream SAMPLE still reads that index
+    // when it declines the subject-ordered evaluator.
+    let (cold_dataset, [_, _, cold_p, cold_q, _, cold_x, cold_y]) = build();
+    assert!(!cold_dataset.may_scan_in_subject_order(Some(cold_p), Some(cold_x), graph));
+    assert!(!cold_dataset.may_scan_in_subject_order(Some(cold_q), Some(cold_y), graph));
+    let cold = run(&cold_dataset, exact);
+    let first_sample = run(&dataset, sample);
+    let unselected = run(&dataset, unordered);
 
     // Warm through the normal graph-specific probe. The default graph gets
     // its annotation matches without walking the asserted named-graph row.
@@ -137,10 +146,10 @@ fn resident_subject_join_borrows_warm_runs_and_declines_an_unordered_probe() {
 
     assert_eq!(cold.1.len(), 2);
     assert_eq!(unselected.1.len(), 4);
-    assert_eq!(run(exact), cold);
-    assert_eq!(run(unordered), unselected);
+    assert_eq!(run(&dataset, exact), cold);
+    assert_eq!(run(&dataset, unordered), unselected);
     assert_eq!(
-        run(sample),
+        run(&dataset, sample),
         first_sample,
         "warmth must not change the aggregate"
     );
