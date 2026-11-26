@@ -1260,10 +1260,28 @@ impl Decimal {
         if a % rest != 0 {
             return Some(SmallQuotient::NonTerminating);
         }
+        self.finish_exact_small(rhs, a / rest, twos, fives)
+            .map(SmallQuotient::Exact)
+    }
+
+    // Repeating quotients return before creating the coefficient and
+    // normalization frame.
+    #[inline(never)]
+    fn finish_exact_small(
+        &self,
+        rhs: &Self,
+        quotient: u128,
+        twos: u32,
+        fives: u32,
+    ) -> Option<Self> {
         let k = twos.max(fives);
-        let coefficient = (a / rest)
-            .checked_mul(1_u128.checked_shl(k - twos)?)?
-            .checked_mul(5_u128.checked_pow(k - fives)?)?;
+        // Only one factor can be missing. If the exponents already match,
+        // no coefficient scaling is needed at all.
+        let coefficient = match twos.cmp(&fives) {
+            Ordering::Equal => quotient,
+            Ordering::Less => quotient.checked_mul(1_u128.checked_shl(fives - twos)?)?,
+            Ordering::Greater => quotient.checked_mul(5_u128.checked_pow(twos - fives)?)?,
+        };
         let exponent = i64::from(rhs.scale) - i64::from(self.scale) - i64::from(k);
         let (coefficient, scale) = if exponent >= 0 {
             let up = usize::try_from(exponent).ok()?;
@@ -1277,10 +1295,7 @@ impl Decimal {
         } else {
             i128::try_from(coefficient).ok()?
         };
-        Some(SmallQuotient::Exact(Self::new(
-            Integer::from_i128(signed),
-            scale,
-        )))
+        Some(Self::new(Integer::from_i128(signed), scale))
     }
 
     /// The quotient rounded to `scale` digits: with the operands

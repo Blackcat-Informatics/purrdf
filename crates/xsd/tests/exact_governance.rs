@@ -27,6 +27,26 @@ mod rational_reciprocal;
 #[path = "support/rational_float_rounding.rs"]
 mod rational_float_rounding;
 
+#[path = "../benches/support/decimal_division.rs"]
+mod decimal_division;
+
+/// Retain exact-first outputs while measuring the public numeric route.
+fn exact_first_decimal_division_matches_the_oracle_and_measures_heap() {
+    for category in decimal_division::CATEGORIES {
+        let fixture = decimal_division::fixture(category, 1024);
+        let mut outputs = Vec::with_capacity(fixture.len());
+        let ((), allocation) = measured(|| decimal_division::run(&fixture, &mut outputs));
+        decimal_division::validate(&fixture, &outputs);
+        if category != "wide" {
+            assert_eq!(allocation.allocations, 0);
+        }
+        println!(
+            "exact-first division {category} operations={} {allocation:?}",
+            outputs.len()
+        );
+    }
+}
+
 /// Count the public conversion while retaining only its complete scalar results.
 fn rational_float_rounding_preserves_bits_and_reports_allocations() {
     for category in rational_float_rounding::CATEGORIES {
@@ -1728,6 +1748,7 @@ fn canonical_decimal_reserves_one_exact_output_destination() {
 }
 
 purrdf_testkit::harness_main!(
+    exact_first_decimal_division_matches_the_oracle_and_measures_heap,
     rational_float_rounding_preserves_bits_and_reports_allocations,
     rational_reciprocal_preserves_values_and_reports_allocations,
     rational_float_factory_preserves_values_and_reports_allocations,
