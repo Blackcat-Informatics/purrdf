@@ -129,7 +129,9 @@ use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadDisjunct, HeadForm};
 use crate::cursor::RowPosition;
 use crate::id::TermId;
 use crate::plan::{POSITION_OBJECT, POSITION_SUBJECT};
-use crate::seminaive::{BudgetReport, BudgetResource, EvalOptions, render_capacity_refusal};
+use crate::seminaive::{
+    BudgetReport, BudgetResource, EvalOptions, render_budget_refusal, render_capacity_refusal,
+};
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{
     Arity, Bound, PartitionPosition, RelationStore, ShapeFact, StoreShape, TermInterner,
@@ -578,6 +580,18 @@ impl fmt::Display for ChaseError {
                 f,
                 "clause {clause} head variable {variable} is neither existentially quantified \
                  nor bound by the body, so it cannot be grounded"
+            ),
+            Self::BudgetExhausted {
+                resource: BudgetResource::TermArenaBytes,
+                report,
+            } => write!(
+                f,
+                "the chase did not complete: {}",
+                render_budget_refusal(
+                    BudgetResource::TermArenaBytes,
+                    *report,
+                    "raise it with EvalOptions::with_max_term_arena_bytes",
+                )
             ),
             Self::BudgetExhausted { resource, report } => {
                 let knob = match resource {
@@ -1073,20 +1087,22 @@ where
 
     fn admit_row_terms(&self, row: [&str; N]) -> Result<(), ChaseError> {
         let report = self.report();
-        let mut bytes = u64::try_from(report.term_arena_bytes()).unwrap_or(u64::MAX);
+        let mut projected =
+            u64::try_from(report.term_arena_bytes()).map_err(|_| StorageError::SizeOverflow)?;
         for (index, &surface) in row.iter().enumerate() {
             if !row[..index].contains(&surface) && self.store.term_id(surface).is_none() {
                 let added = u64::try_from(surface.len()).map_err(|_| StorageError::SizeOverflow)?;
-                if added > report.term_arena_limit().saturating_sub(bytes) {
-                    return Err(ChaseError::BudgetExhausted {
-                        resource: BudgetResource::TermArenaBytes,
-                        report,
-                    });
-                }
-                bytes += added;
+                projected = projected
+                    .checked_add(added)
+                    .ok_or(StorageError::SizeOverflow)?;
             }
         }
-        Ok(())
+        report
+            .admit_chase_term_arena(projected)
+            .map_err(|report| ChaseError::BudgetExhausted {
+                resource: BudgetResource::TermArenaBytes,
+                report,
+            })
     }
 }
 
@@ -2463,11 +2479,22 @@ mod tests {
         else {
             panic!("the next term would exceed the caller's arena limit");
         };
+        let rendered = reason.to_string();
         let ChaseError::BudgetExhausted { resource, report } = reason else {
             panic!("arena pressure must retain a typed budget reason");
         };
         assert_eq!(resource, BudgetResource::TermArenaBytes);
         assert_eq!(report.term_arena_bytes(), bytes);
+        assert_eq!(report.term_generating_rounds(), 0);
+        assert_eq!(resource.observed(report), exact.max_term_arena_bytes());
+        assert_eq!(
+            rendered,
+            format!(
+                "the chase did not complete: evaluation exceeded the term arena bytes limit: {} observed, {} permitted; raise it with EvalOptions::with_max_term_arena_bytes",
+                exact.max_term_arena_bytes(),
+                short.max_term_arena_bytes(),
+            ),
+        );
         assert_eq!(report.stored_facts(), 1);
         assert!(session.recorded_prefix().unwrap().0.is_empty());
         session.verify_recorded_prefix(seed()).unwrap();

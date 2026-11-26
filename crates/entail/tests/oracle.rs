@@ -8384,7 +8384,7 @@ fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
         assert_eq!(fact.subject, format!("<{left}>"));
         assert_eq!(fact.predicate, format!("<{RDFS_SUBCLASSOF}>"));
         assert_eq!(fact.object, format!("<{right}>"));
-        assert!(fact.graph.is_empty());
+        assert_eq!(fact.graph, "");
     }
 
     let facts = u64::try_from(stopped.budget().stored_facts()).unwrap() + 8;
