@@ -1735,18 +1735,7 @@ impl SegmentedSession {
         &self,
         term: TermRef<'_, GlobalTermId>,
     ) -> Result<Option<GlobalTermId>, SegmentedError> {
-        let size = match term {
-            TermRef::Iri(iri) => iri.len().checked_add(5),
-            TermRef::Blank { label, .. } => label.len().checked_add(9),
-            TermRef::Literal {
-                lexical, language, ..
-            } => lexical
-                .len()
-                .checked_add(language.map_or(0, str::len))
-                .and_then(|v| v.checked_add(if language.is_some() { 19 } else { 15 })),
-            TermRef::Triple { .. } => Some(25),
-        }
-        .ok_or(SegmentedError::AddressExhausted)?;
+        let size = format::encoded_term_size(&term)?;
         let _scratch = self.reserve_workspace(
             u64::try_from(size).map_err(|_| SegmentedError::AddressExhausted)?,
         )?;

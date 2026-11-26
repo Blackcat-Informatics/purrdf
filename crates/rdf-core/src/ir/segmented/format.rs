@@ -387,6 +387,21 @@ pub(super) fn id_bytes(id: GlobalTermId) -> [u8; 8] {
     (id.index() + 1).to_le_bytes()
 }
 
+pub(super) fn encoded_term_size<Id>(term: &TermRef<'_, Id>) -> Result<usize, SegmentedError> {
+    match term {
+        TermRef::Iri(iri) => iri.len().checked_add(5),
+        TermRef::Blank { label, .. } => label.len().checked_add(9),
+        TermRef::Literal {
+            lexical, language, ..
+        } => lexical
+            .len()
+            .checked_add(language.map_or(0, str::len))
+            .and_then(|v| v.checked_add(if language.is_some() { 19 } else { 15 })),
+        TermRef::Triple { .. } => Some(25),
+    }
+    .ok_or(SegmentedError::AddressExhausted)
+}
+
 pub(super) fn encode_term(
     term: TermRef<'_, GlobalTermId>,
     out: &mut Vec<u8>,
@@ -472,18 +487,19 @@ pub(super) fn decode_term(bytes: &[u8]) -> Result<TermRef<'_, GlobalTermId>, Seg
     Ok(term)
 }
 
-pub(super) fn record_block(
-    records: &[(GlobalTermId, Vec<u8>)],
+pub(super) fn record_block<'a>(
+    records: &(impl ExactSizeIterator<Item = (GlobalTermId, &'a [u8])> + Clone),
     block_bytes: usize,
 ) -> Result<(Vec<u8>, usize), SegmentedError> {
-    let raw = raw_record_block(records, block_bytes)?;
+    let raw = raw_record_block(records.clone(), block_bytes)?;
     let decoded_limit = block_bytes
         .checked_mul(records.len())
         .ok_or(SegmentedError::AddressExhausted)?;
     let mut count = records.len();
     while count > raw.1 {
-        let decoded = records[..count]
-            .iter()
+        let decoded = records
+            .clone()
+            .take(count)
             .try_fold(0_usize, |size, (_, key)| {
                 size.checked_add(key.len())
                     .ok_or(SegmentedError::AddressExhausted)
@@ -492,7 +508,7 @@ pub(super) fn record_block(
             count = raw.1 + (count - raw.1) / 2;
             continue;
         }
-        if records[..count].iter().any(|(_, key)| {
+        if records.clone().take(count).any(|(_, key)| {
             key.len()
                 .checked_add(RECORD_HEADER + 16)
                 .is_none_or(|size| size > block_bytes)
@@ -501,7 +517,7 @@ pub(super) fn record_block(
         }
         let mut previous = &[][..];
         let mut framed = RECORD_HEADER;
-        for (_, key) in &records[..count] {
+        for (_, key) in records.clone().take(count) {
             let prefix = purrdf_deflate::common_prefix_len(previous, key);
             framed = framed
                 .checked_add(16)
@@ -509,7 +525,7 @@ pub(super) fn record_block(
                 .ok_or(SegmentedError::AddressExhausted)?;
             previous = key;
         }
-        let (candidate, used) = raw_record_block(&records[..count], framed)?;
+        let (candidate, used) = raw_record_block(records.clone().take(count), framed)?;
         let payload = usize::try_from(
             read_u32_le(&candidate, 9)
                 .ok_or(SegmentedError::Corrupt("record encoder omitted its header"))?,
@@ -544,15 +560,14 @@ pub(super) fn record_block(
     Ok(raw)
 }
 
-fn raw_record_block(
-    records: &[(GlobalTermId, Vec<u8>)],
+fn raw_record_block<'a>(
+    records: impl Iterator<Item = (GlobalTermId, &'a [u8])> + Clone,
     block_bytes: usize,
 ) -> Result<(Vec<u8>, usize), SegmentedError> {
-    let first = records
-        .first()
-        .ok_or(SegmentedError::Corrupt("empty record block input"))?
-        .1
-        .as_slice();
+    let (_, first) = records
+        .clone()
+        .next()
+        .ok_or(SegmentedError::Corrupt("empty record block input"))?;
     // Routing reads the first decoded record; no second copy of its key is stored.
     let first_bytes = first
         .len()
@@ -592,7 +607,7 @@ fn raw_record_block(
                 .map_err(|_| SegmentedError::AddressExhausted)?
                 .to_le_bytes(),
         );
-        push_id(&mut out, *id);
+        push_id(&mut out, id);
         out.extend_from_slice(&key[prefix..]);
         previous = key;
         count += 1;
@@ -1002,7 +1017,9 @@ mod tests {
                 (GlobalTermId::from_index(100 + index).unwrap(), key)
             })
             .collect();
-        let (bytes, used) = record_block(&records, 4096).expect("compressible text fits");
+        let (bytes, used) =
+            record_block(&records.iter().map(|(id, key)| (*id, key.as_slice())), 4096)
+                .expect("compressible text fits");
         assert_eq!(
             used,
             records.len(),
@@ -1030,7 +1047,9 @@ mod tests {
         // 13 header + 16 framing + 200 first key = 229; no duplicate fence.
         // The next key shares 199 bytes, so adds exactly 17 bytes.
         for (width, expected) in [(229, 1), (245, 1), (246, 2), (461, 2), (462, 3), (512, 3)] {
-            let (bytes, used) = raw_record_block(&records, width).unwrap();
+            let (bytes, used) =
+                raw_record_block(records.iter().map(|(id, key)| (*id, key.as_slice())), width)
+                    .unwrap();
             assert_eq!(bytes.len(), width);
             assert_eq!(used, expected);
             assert_eq!(
@@ -1050,10 +1069,14 @@ mod tests {
             }
         }
         assert!(matches!(
-            raw_record_block(&records, 228),
+            raw_record_block(records.iter().map(|(id, key)| (*id, key.as_slice())), 228),
             Err(SegmentedError::ConstructionLimit)
         ));
-        let (bytes, used) = raw_record_block(&records[..1], 512).unwrap();
+        let (bytes, used) = raw_record_block(
+            records[..1].iter().map(|(id, key)| (*id, key.as_slice())),
+            512,
+        )
+        .unwrap();
         assert_eq!(used, 1);
         assert_eq!(
             DecodedRecords::decode(&bytes, 1, 200, Stream::default(), no_external_pages)
