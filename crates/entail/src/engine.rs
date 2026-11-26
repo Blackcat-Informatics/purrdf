@@ -90,12 +90,14 @@ use std::convert::Infallible;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
-use purrdf_datalog::dictionary::TermDictionary;
+use purrdf_datalog::dictionary::{DictionaryTerm, TermDictionary};
 use purrdf_datalog::guard::NoGuards;
+use purrdf_datalog::id::TermId as NativeTermId;
+use purrdf_datalog::maintenance::ChangeBatch;
 use purrdf_datalog::seminaive::{
     Derivation, DerivationMode, EvalError, EvalOptions, Executable, Maintained, ResumeProgress,
     SessionContext, evaluate_guarded,
@@ -107,7 +109,7 @@ use crate::axioms::axioms_for;
 use crate::calculus::{ChaseRule, calculus_contract_hash, clash_rule, program_with_attribution};
 use crate::datatypes::LiteralIndex;
 use crate::interner::intern_into;
-use crate::lists::{CLASH_RELATION, InternalFact, ListIndex, is_internal};
+use crate::lists::{CLASH_RELATION, InternalFact, LIST_VALUED, ListIndex, is_internal};
 use crate::report::{InconsistencyWitness, InconsistentRun, ReasoningReport, WitnessTriple};
 use crate::report::{RunStats, TerminationCertificate};
 use crate::surrogates::SurrogateIndex;
@@ -1066,6 +1068,7 @@ pub(crate) struct Closed {
 
 const REFUTATION_SOURCE: Domain = Domain::new(b"purrdf-entail-refutation-source-v1");
 const REFUTATION_SCENARIO: Domain = Domain::new(b"purrdf-entail-refutation-scenario-v1");
+const REFUTATION_SOURCE_TRIAL: Domain = Domain::new(b"purrdf-entail-refutation-source-trial-v1");
 const REFUTATION_GUARDS: Domain = Domain::new(b"purrdf-entail-refutation-no-guards-v1");
 const REFUTATION_EVIDENCE: Domain =
     Domain::new(b"purrdf-entail-refutation-native-canonical-proof-v1");
@@ -1085,6 +1088,30 @@ impl Refuter {
     pub(crate) const fn under(mut self, options: EvalOptions) -> Self {
         self.options = options;
         self
+    }
+
+    /// Admit premises whose seed is exactly their independent asserted rows.
+    pub(crate) fn admits_source_trials(&self, ds: &RdfDataset) -> bool {
+        self.regime == Regime::OwlRl
+            && axioms_for(self.regime).is_empty()
+            // A fresh solve and a signed revision charge different physical
+            // work. Keep explicit logical ceilings on their original path.
+            && self.options.max_join_steps() == u64::MAX
+            && self.options.max_stored_facts() == u64::MAX
+            && self.options.max_term_arena_bytes() == u64::MAX
+            && self.options.stated_max_term_generating_rounds().is_none()
+            && self.options.stated_max_generated_terms().is_none()
+            && ds.named_graphs().next().is_none()
+            && ds.quads().all(|quad| {
+                let TermRef::Iri(predicate) = ds.resolve(quad.p) else {
+                    return false;
+                };
+                // No datatype or surrogate inputs and no list heads. Each
+                // remaining source quad has one unique native asserted row.
+                !LIST_VALUED.contains(&predicate)
+                    && matches!(ds.resolve(quad.s), TermRef::Iri(_))
+                    && matches!(ds.resolve(quad.o), TermRef::Iri(_))
+            })
     }
 
     /// Seed and close one premise once, retaining original native owners.
@@ -1162,9 +1189,7 @@ impl Seeded<'_> {
         })
     }
 
-    fn evaluate_with(&mut self, added: &[[TermValue; 3]]) -> Result<(), EntailError> {
-        use purrdf_datalog::dictionary::DictionaryTerm;
-        use purrdf_datalog::maintenance::ChangeBatch;
+    pub(crate) fn evaluate_with(&mut self, added: &[[TermValue; 3]]) -> Result<(), EntailError> {
         let mut additions = Vec::new();
         additions.try_reserve_exact(added.len()).map_err(|_| {
             EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
@@ -1219,6 +1244,97 @@ impl Seeded<'_> {
         .map_err(|cause| {
             EntailError::from(purrdf_datalog::seminaive::MaintenanceError::Change(cause))
         })?;
+        self.apply_trial(batch)?;
+        self.additions = additions;
+        self.release_expired_terms()
+    }
+
+    /// Keep the selected row removed exactly when its absence still permits a clash.
+    /// The caller has established that each source contributes one native row.
+    pub(crate) fn try_source_removal(
+        &mut self,
+        source: [&TermValue; 3],
+    ) -> Result<Option<InconsistencyWitness>, EntailError> {
+        self.change_source_row(source, -1)?;
+        let witness = self.first_clash()?;
+        if witness.is_none() {
+            self.change_source_row(source, 1)?;
+        }
+        Ok(witness)
+    }
+
+    /// Restore the original premise before considering a different target.
+    pub(crate) fn restore_sources(
+        &mut self,
+        sources: &[[&TermValue; 3]],
+    ) -> Result<(), EntailError> {
+        if sources.is_empty() {
+            return Ok(());
+        }
+        let mut identity = self.source_trial_identity(1);
+        let mut changes = Vec::new();
+        changes.try_reserve_exact(sources.len()).map_err(|_| {
+            EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+        })?;
+        for &source in sources {
+            changes.push((self.admit_source_row(source, &mut identity)?, 1));
+        }
+        self.apply_source_changes(&identity, changes)
+    }
+
+    fn change_source_row(
+        &mut self,
+        source: [&TermValue; 3],
+        delta: i64,
+    ) -> Result<(), EntailError> {
+        let mut identity = self.source_trial_identity(delta);
+        let ids = self.admit_source_row(source, &mut identity)?;
+        self.apply_source_changes(&identity, [(ids, delta)])
+    }
+
+    fn source_trial_identity(&self, delta: i64) -> Hasher {
+        let mut identity = Hasher::new();
+        identity.update(REFUTATION_SOURCE_TRIAL.as_bytes());
+        frame_le_into(&mut identity, self.premise.as_bytes());
+        identity.update(&delta.to_le_bytes());
+        identity
+    }
+
+    fn admit_source_row(
+        &mut self,
+        source: [&TermValue; 3],
+        identity: &mut Hasher,
+    ) -> Result<[NativeTermId; 4], EntailError> {
+        let surfaces = source.map(surface_of);
+        let [s, p, o] = surfaces.each_ref().map(String::as_str);
+        let row = [s, p, o, RelationStore::DEFAULT_GRAPH];
+        for term in row {
+            frame_le_into(identity, term.as_bytes());
+        }
+        // A previously removed row can lose its term handles. Resolve against
+        // this model for each signed revision rather than retaining those IDs.
+        self.model
+            .admit_terms(row.map(DictionaryTerm::Surface))
+            .map_err(EntailError::from)
+    }
+
+    fn apply_source_changes(
+        &mut self,
+        identity: &Hasher,
+        changes: impl IntoIterator<Item = ([NativeTermId; 4], i64)>,
+    ) -> Result<(), EntailError> {
+        let batch = ChangeBatch::new(
+            Digest32::new(*identity.finalize().as_bytes()),
+            changes,
+            Resident,
+        )
+        .map_err(|cause| {
+            EntailError::from(purrdf_datalog::seminaive::MaintenanceError::Change(cause))
+        })?;
+        self.apply_trial(batch)
+    }
+
+    fn apply_trial(&mut self, batch: ChangeBatch<Digest32, Resident>) -> Result<(), EntailError> {
         self.model.apply(batch).map_err(EntailError::from)?;
         let options = self.options.with_max_join_steps(
             self.model
@@ -1233,7 +1349,10 @@ impl Seeded<'_> {
         {
             return Err(maintenance_evaluate_error(error));
         }
-        self.additions = additions;
+        Ok(())
+    }
+
+    fn release_expired_terms(&mut self) -> Result<(), EntailError> {
         let dictionary = self.model.facts().map_err(EntailError::from)?.interner();
         let mut expired = Vec::new();
         expired
@@ -1286,7 +1405,7 @@ impl Seeded<'_> {
         }))
     }
 
-    fn derived(&self) -> Result<Vec<[TermValue; 3]>, EntailError> {
+    pub(crate) fn derived(&self) -> Result<Vec<[TermValue; 3]>, EntailError> {
         // Order the requested native conclusions; no lexical witness table or
         // premise copies are needed to return RDF output.
         let model = self.model.facts().map_err(EntailError::from)?;

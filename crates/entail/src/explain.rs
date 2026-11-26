@@ -1120,7 +1120,40 @@ pub(crate) fn shrink_to_irreducible<F>(
 where
     F: FnMut(&RdfDataset) -> Result<bool, EntailError>,
 {
-    let axioms = Axioms::of(ds);
+    shrink_axioms(&Axioms::of(ds), budget, |axioms, kept, _| {
+        let subset = axioms.emit(kept)?;
+        holds(&subset)
+    })
+}
+
+/// Reuse the original axiom index across source-row trials for different
+/// targets. The caller has admitted a one-to-one projection of roots to rows.
+pub(crate) struct SourceShrinker(Axioms);
+
+impl SourceShrinker {
+    /// Retain the source index before shrinking the first target.
+    pub(crate) fn new(ds: &RdfDataset) -> Self {
+        Self(Axioms::of(ds))
+    }
+
+    /// Use the exact source order without freezing a dataset for each trial.
+    pub(crate) fn shrink<'a>(
+        &'a self,
+        budget: &mut u64,
+        mut remove: impl FnMut([&'a TermValue; 3]) -> Result<bool, EntailError>,
+    ) -> Result<Shrunk, EntailError> {
+        shrink_axioms(&self.0, budget, |axioms, _, candidate| {
+            let row: [_; 3] = axioms.triples[axioms.roots[candidate]].into();
+            remove(row.map(|id| axioms.interner.value(id)))
+        })
+    }
+}
+
+fn shrink_axioms<'a>(
+    axioms: &'a Axioms,
+    budget: &mut u64,
+    mut holds: impl FnMut(&'a Axioms, &BTreeSet<usize>, usize) -> Result<bool, EntailError>,
+) -> Result<Shrunk, EntailError> {
     let mut kept: BTreeSet<usize> = (0..axioms.roots.len()).collect();
     let mut decisions = 0_u64;
     let mut irreducible = true;
@@ -1132,10 +1165,9 @@ where
         if !kept.remove(&candidate) {
             continue;
         }
-        let subset = axioms.emit(&kept)?;
         *budget -= 1;
         decisions += 1;
-        if !holds(&subset)? {
+        if !holds(axioms, &kept, candidate)? {
             kept.insert(candidate);
         }
     }

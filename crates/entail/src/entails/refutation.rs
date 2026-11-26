@@ -102,23 +102,23 @@ use std::sync::Arc;
 use purrdf_core::{RdfDataset, TermValue};
 
 use crate::calculus::concludes_false;
-use crate::engine::Refuter;
+use crate::engine::{Clash, Refuter, Seeded};
 use crate::entails::graph::{Triple, default_graph_triples};
 use crate::entails::homomorphism::{Binding, Closure, substitute};
 use crate::entails::negation::{self, NegativeFact, Read};
 use crate::entails::warrant::{EntailmentMechanism, EntailmentWarrant, Replay};
 use crate::entails::{Attempt, Established, Question, Recognized, UndecidedReason};
-use crate::explain::shrink_to_irreducible;
+use crate::explain::{Shrunk, SourceShrinker, shrink_to_irreducible};
 use crate::report::InconsistencyWitness;
 use crate::{EntailError, Regime};
 
-/// The refutation budget, in CHASE RE-RUNS per [`entails`](super::entails) call.
+/// The refutation budget, in decisions per [`entails`](super::entails) call.
 ///
 /// A step count and never a clock reading, so the bound is reproducible on every target
 /// including `wasm32`. It is small — three orders of magnitude below
-/// [`MATCH_BUDGET`](super::MATCH_BUDGET) — because the unit is enormous by comparison: one
-/// step here is a complete evaluation of the seventy-eight-rule program over the premise,
-/// where one step there is a single candidate triple visited. Sized so that every conclusion
+/// [`MATCH_BUDGET`](super::MATCH_BUDGET) — because a decision can require a complete
+/// evaluation of the program, while one match step visits a single candidate triple.
+/// Sized so that every conclusion
 /// in the W3C entailment corpus, and any `owl:AllDifferent` over a couple of dozen members,
 /// finishes with room for a full shrink of each fact.
 pub const REFUTATION_BUDGET: u64 = 512;
@@ -147,7 +147,7 @@ pub struct Refutation {
     /// Whether the shrink tried every axiom, so no axiom of [`Self::premises`] can be
     /// dropped.
     irreducible: bool,
-    /// How many chase re-runs the shrink spent.
+    /// How many candidate source removals the shrink decided.
     decisions: u64,
     /// The closure of `premises ∪ ¬fact`: the seeded triples plus everything derived.
     closure: Closure,
@@ -452,43 +452,30 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         };
         clashes.push(clash);
     }
-    drop(seeded);
-
     // Whatever is left, split evenly: one fact's evidence must not be able to starve
     // another's, and an even split is a function of the question rather than of the order
     // the facts happen to be in.
     let share = budget / needed;
+    let mut reusable = (share != 0 && refuter.admits_source_trials(premise))
+        .then(|| (SourceShrinker::new(premise), seeded));
     let mut refutations = Vec::with_capacity(facts.len());
-    for (fact, established) in facts.into_iter().zip(clashes) {
+    let mut targets = facts.into_iter().zip(clashes).peekable();
+    while let Some((fact, established)) = targets.next() {
         let negation = fact.negation();
         let mut best = established;
         let mut allowance = share;
-        // The one search, shared with the tableau lane's `justify`: drop each axiom in
-        // source order and put back the ones the refutation turns out to need. The subset
-        // that survives is irreducible with respect to THIS decision procedure, and the
-        // decision procedure is "does the negation still clash?".
-        let mut holds = |subset: &RdfDataset| -> Result<bool, EntailError> {
-            // Removing part of a named OWL collection can make the subset malformed;
-            // retain that candidate. Other seed refusals do not decide entailment and
-            // must stop shrinking with their original evidence.
-            let mut seeded = match refuter.seed(subset) {
-                Ok(seeded) => seeded,
-                Err(EntailError::Collection(cause))
-                    if cause.phase == crate::CollectionPhase::OwlRl =>
-                {
-                    return Ok(false);
-                }
-                Err(error) => return Err(error),
-            };
-            match seeded.refute(&negation)? {
-                Some(clash) => {
-                    best = clash;
-                    Ok(true)
-                }
-                None => Ok(false),
-            }
+        let shrunk = if let Some((source, seeded)) = &mut reusable {
+            shrink_with_source_trials(
+                seeded,
+                source,
+                &negation,
+                &mut allowance,
+                &mut best,
+                targets.peek().is_some(),
+            )?
+        } else {
+            shrink_by_recomputation(&refuter, premise, &negation, &mut allowance, &mut best)?
         };
-        let shrunk = shrink_to_irreducible(premise, &mut allowance, &mut holds)?;
 
         // `best` is the clash of the LAST subset the search accepted, which is the subset it
         // returned: a rejected drop restores `kept`, so the final kept set is the last
@@ -524,6 +511,65 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         // nothing.
         declined: Vec::new(),
     })))
+}
+
+fn shrink_with_source_trials(
+    seeded: &mut Seeded<'_>,
+    source: &SourceShrinker,
+    negation: &[[TermValue; 3]],
+    allowance: &mut u64,
+    best: &mut Clash,
+    restore_premise: bool,
+) -> Result<Shrunk, EntailError> {
+    seeded.evaluate_with(negation)?;
+    let mut changed = false;
+    let mut removed = Vec::new();
+    let shrunk = source.shrink(allowance, |source| {
+        let Some(witness) = seeded.try_source_removal(source)? else {
+            return Ok(false);
+        };
+        if restore_premise {
+            removed.try_reserve(1).map_err(|_| {
+                EntailError::Storage(purrdf_lex::allocation::StorageError::AllocationFailed)
+            })?;
+            removed.push(source);
+        }
+        best.witness = witness;
+        changed = true;
+        Ok(true)
+    })?;
+    if changed {
+        // Rejected removals restore the last accepted source. Only the final
+        // closure is included in the warrant, so project it once.
+        best.derived = seeded.derived()?;
+    }
+    seeded.restore_sources(&removed)?;
+    Ok(shrunk)
+}
+
+fn shrink_by_recomputation(
+    refuter: &Refuter,
+    premise: &RdfDataset,
+    negation: &[[TermValue; 3]],
+    allowance: &mut u64,
+    best: &mut Clash,
+) -> Result<Shrunk, EntailError> {
+    shrink_to_irreducible(premise, allowance, &mut |subset: &RdfDataset| {
+        // Removing part of an OWL collection can make that subset malformed.
+        // Retain the candidate. Other seed refusals do not decide entailment.
+        let mut seeded = match refuter.seed(subset) {
+            Ok(seeded) => seeded,
+            Err(EntailError::Collection(cause)) if cause.phase == crate::CollectionPhase::OwlRl => {
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        };
+        let Some(clash) = seeded.refute(negation)? else {
+            return Ok(false);
+        };
+        *best = clash;
+        Ok(true)
+    })
 }
 
 /// Re-check a refutation warrant's own evidence and recompute what it discharged.
@@ -696,6 +742,65 @@ mod tests {
             .0
     }
 
+    fn check_recomputed_removals(premise: &RdfDataset, answer: &Refutation) {
+        let refuter = super::Refuter::new(Regime::OwlRl).unwrap();
+        let negation = answer.fact().negation();
+        let mut seed = refuter.seed(premise).unwrap();
+        let mut established = seed.refute(&negation).unwrap().unwrap();
+        let mut allowance = REFUTATION_BUDGET;
+        let reference = super::shrink_by_recomputation(
+            &refuter,
+            premise,
+            &negation,
+            &mut allowance,
+            &mut established,
+        )
+        .unwrap();
+        let mut triples = default_graph_triples(&reference.subset);
+        assert_eq!(triples, default_graph_triples(answer.premises()));
+        assert_eq!(reference.decisions, answer.decisions());
+        assert_eq!(reference.irreducible, answer.is_irreducible());
+        assert_eq!(&established.witness, answer.witness());
+        triples.extend(negation);
+        triples.extend(established.derived);
+        assert!(triples.iter().all(|triple| answer.closure.contains(triple)));
+        assert_eq!(Closure::of(triples).len(), answer.closure_size());
+    }
+
+    #[test]
+    fn source_removal_keeps_one_of_two_independent_supports() {
+        use purrdf_iri::vocab::rdfs::SUB_CLASS_OF;
+
+        let alternative = "http://example.org/AlternateBoy";
+        let premise = graph(&[
+            (BOY, RDF_TYPE, OWL_CLASS),
+            (GIRL, RDF_TYPE, OWL_CLASS),
+            (BOY, OWL_DISJOINTWITH, GIRL),
+            (STEWIE, RDF_TYPE, BOY),
+            (STEWIE, RDF_TYPE, alternative),
+            (alternative, SUB_CLASS_OF, BOY),
+        ]);
+        let conclusion = not_a_girl();
+        let EntailmentOutcome::Entailed(warrant) = decide(&premise, &conclusion) else {
+            panic!("the negated membership must refute");
+        };
+        assert!(verify(&warrant, &premise, &conclusion));
+        let EntailmentWarrant::Refutation(warrant) = warrant else {
+            panic!("the membership must use the refutation lane");
+        };
+        let [answer] = warrant.refutations() else {
+            panic!("one negative membership");
+        };
+        assert!(answer.is_irreducible());
+        check_recomputed_removals(&premise, answer);
+        let kept = default_graph_triples(answer.premises());
+        let has = |s, p, o| kept.contains(&[s, p, o].map(TermValue::iri));
+        let direct = has(STEWIE, RDF_TYPE, BOY);
+        let through_alternate =
+            has(STEWIE, RDF_TYPE, alternative) && has(alternative, SUB_CLASS_OF, BOY);
+        assert_ne!(direct, through_alternate);
+    }
+
     // ── The mechanism reaches what the rule table cannot ───────────────────────────────
 
     /// `Stewie : ¬Girl` follows from two disjoint classes, and NOTHING in the rule table
@@ -793,6 +898,32 @@ mod tests {
             assert!(refutation.is_irreducible(), "{:?}", refutation.premises());
         }
         assert!(verify(&warrant, &premise, &all_different(PETER, LOIS, JR)));
+
+        // The conclusion still has three negative targets, but this premise
+        // supplies each disjointness axiom separately and needs no list seed.
+        let premise = graph(&[
+            (HAS_FATHER, RDF_TYPE, OWL_OBJECTPROPERTY),
+            (HAS_MOTHER, RDF_TYPE, OWL_OBJECTPROPERTY),
+            (HAS_CHILD, RDF_TYPE, OWL_OBJECTPROPERTY),
+            (HAS_FATHER, OWL_PROPERTYDISJOINTWITH, HAS_MOTHER),
+            (HAS_FATHER, OWL_PROPERTYDISJOINTWITH, HAS_CHILD),
+            (HAS_MOTHER, OWL_PROPERTYDISJOINTWITH, HAS_CHILD),
+            (STEWIE, HAS_FATHER, PETER),
+            (STEWIE, HAS_MOTHER, LOIS),
+            (STEWIE, HAS_CHILD, JR),
+        ]);
+        let conclusion = all_different(PETER, LOIS, JR);
+        let EntailmentOutcome::Entailed(warrant) = decide(&premise, &conclusion) else {
+            panic!("each negative target has an independent clash");
+        };
+        assert!(verify(&warrant, &premise, &conclusion));
+        let EntailmentWarrant::Refutation(refuted) = warrant else {
+            panic!("no rule concludes owl:AllDifferent");
+        };
+        assert_eq!(refuted.refutations().len(), 3);
+        for answer in refuted.refutations() {
+            check_recomputed_removals(&premise, answer);
+        }
     }
 
     // ── ADVERSARIAL: the mechanism must be able to say NO ──────────────────────────────
