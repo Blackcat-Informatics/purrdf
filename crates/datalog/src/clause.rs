@@ -1049,6 +1049,22 @@ impl<const N: usize> DlClause<N> {
         Self::new(Vec::new(), Vec::new(), body)
     }
 
+    /// Lower a constraint to an ordinary rule whose result is a violation witness.
+    ///
+    /// The caller names the witness relation and selects its bindings. The body,
+    /// including ordered guards and negative conjunctions, is preserved exactly.
+    /// Returns `None` if this clause is not an inconsistency constraint.
+    ///
+    /// # Panics
+    /// Panics if `witness` is negated.
+    pub fn with_constraint_witness(mut self, witness: ClauseAtom<N>) -> Option<Self> {
+        if self.head_form() != HeadForm::Inconsistency {
+            return None;
+        }
+        self.head.push(HeadDisjunct::atom(witness));
+        Some(self)
+    }
+
     /// The body conjunction, in authored order.
     pub fn body(&self) -> &[ClauseAtom<N>] {
         &self.body

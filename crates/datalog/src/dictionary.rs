@@ -19,6 +19,17 @@ pub trait TermIdentity: Copy + Eq + Ord + Hash + fmt::Debug + Send + Sync + 'sta
 
 impl<T: Copy + Eq + Ord + Hash + fmt::Debug + Send + Sync + 'static> TermIdentity for T {}
 
+/// Typed RDF access for one bound term, independent of its rendered spelling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypedLiteral<'a> {
+    /// The dictionary cannot provide typed RDF data.
+    Unavailable,
+    /// The dictionary has no literal associated with this term.
+    NotLiteral,
+    /// The original literal components.
+    Literal(purrdf_core::literal_comparison::LiteralOperand<'a>),
+}
+
 /// One original identity or a genuinely fresh lexical term at row publication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DictionaryTerm<'a, I: TermIdentity> {
@@ -240,6 +251,17 @@ pub trait TermDictionary: Send + Sync {
     fn lookup_term(&self, surface: &str) -> Result<Option<Self::Id>, Self::Error>;
     /// Pin the canonical RDF surface at a semantic or publication boundary.
     fn resolve_term(&self, id: Self::Id) -> Result<Self::Lexical<'_>, Self::Error>;
+    /// Borrow a term's original RDF literal components, when this dictionary
+    /// supplies typed RDF data. Do not infer components from a rendered spelling.
+    ///
+    /// # Errors
+    /// Returns the original source failure.
+    fn literal_operand<'a>(
+        &'a self,
+        _term: DictionaryTerm<'a, Self::Id>,
+    ) -> Result<TypedLiteral<'a>, Self::Error> {
+        Ok(TypedLiteral::Unavailable)
+    }
     /// Compare terms in this dictionary's canonical publication order.
     ///
     /// This must be a total order consistent with term identity, stable for the

@@ -43,6 +43,21 @@ pub struct RdfLiteral {
     pub direction: Option<RdfTextDirection>,
 }
 
+impl purrdf_hash::error::StructuredError for RdfLiteral {
+    purrdf_hash::error_visit! {
+        @record self { lexical_form, datatype, language, direction } => "rdf-literal" {
+            "lexical" => Text(&self.lexical_form),
+            "datatype" => Value(self.datatype.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Iri)),
+            "language" => Value(self.language.as_deref().map_or(
+                purrdf_hash::error::ErrorValue::Absent, purrdf_hash::error::ErrorValue::Text)),
+            "direction" => Value(self.direction.map_or(
+                purrdf_hash::error::ErrorValue::Absent,
+                |direction| purrdf_hash::error::ErrorValue::Code(direction.as_str()))),
+        }
+    }
+}
+
 /// The stable diagnostic code for a literal whose datatype, language and
 /// direction do not agree. Language-tag *grammar* failures do not use it: they
 /// carry `purrdf_iri::langtag`'s own `langtag-*` code, because that module owns

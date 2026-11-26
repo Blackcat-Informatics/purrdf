@@ -7,9 +7,15 @@ use super::{
     EvalError, GuardCall, GuardEvaluator, GuardSite, INLINE_BINDING_SLOTS, RelationStore,
     RuleEntry, SlotSolution, SmallVec, StepGovernor, TermDictionary, TermId, TermIdentity,
 };
-use crate::dictionary::DictionaryTerm;
-use crate::guard::{CallbackDiagnostic, Guard, GuardRows};
+use crate::dictionary::{DictionaryTerm, TypedLiteral};
+use crate::guard::{CallbackDiagnostic, Comparison, Guard, GuardRows, UndeterminedComparison};
 use crate::store::{Arity, StoreShape};
+use purrdf_core::RdfLiteral;
+use purrdf_core::literal_comparison::{
+    LiteralComparisonRefusal, LiteralComparisonVerdict, LiteralOperand, LiteralOperandSide,
+    compare_literals,
+};
+use purrdf_lex::allocation::{Memory, Resident, StorageError};
 
 /// Stable invocation metadata; inputs need borrowing only for the original call.
 pub(super) struct Context<'a, D: TermDictionary, const N: usize>
@@ -45,6 +51,9 @@ where
             .interner()
             .check_read()
             .map_err(EvalError::Source)?;
+        if let Some(comparison) = self.guard.comparison() {
+            return self.compare(comparison, inputs);
+        }
         match self.guard.operation().filter(inputs) {
             Some(true) => Ok(vec![Vec::new()]),
             Some(false) => Ok(Vec::new()),
@@ -59,6 +68,85 @@ where
                 .map_err(|error| error.into_eval_error(|message| self.refuse(message))),
         }
     }
+
+    fn compare(
+        &self,
+        comparison: &Comparison,
+        inputs: &[DictionaryTerm<'_, D::Id>],
+    ) -> Result<GuardRows<D::Id>, EvalError<D::Error>> {
+        use LiteralComparisonVerdict::{Decided, Undetermined};
+        let &[left, right] = inputs else {
+            unreachable!("literal comparison declares exactly two input variables")
+        };
+        let dictionary = self.model.interner();
+        let operand = |term| match dictionary
+            .literal_operand(term)
+            .map_err(EvalError::Source)?
+        {
+            TypedLiteral::Literal(value) => Ok(Some(value)),
+            TypedLiteral::NotLiteral => Ok(None),
+            TypedLiteral::Unavailable => Err(EvalError::ComparisonDictionaryUnavailable {
+                rule: self.rule,
+                site: self.site,
+            }),
+        };
+        let left = operand(left)?;
+        let right = operand(right)?;
+        dictionary.check_read().map_err(EvalError::Source)?;
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        let verdict = match (left, right) {
+            (Some(left), Some(right)) => {
+                compare_literals(
+                    left,
+                    right,
+                    comparison.operation,
+                    &comparison.profile,
+                    &mut memory,
+                )?
+                .verdict
+            }
+            (None, _) => Undetermined(LiteralComparisonRefusal::Unsupported(
+                LiteralOperandSide::Left,
+            )),
+            (Some(_), None) => Undetermined(LiteralComparisonRefusal::Unsupported(
+                LiteralOperandSide::Right,
+            )),
+        };
+        let verdict = if comparison.negated {
+            verdict.negated()
+        } else {
+            verdict
+        };
+        match verdict {
+            Decided(true) => Ok(vec![Vec::new()]),
+            Decided(false) => Ok(Vec::new()),
+            Undetermined(reason) => Err(EvalError::ComparisonUndetermined {
+                rule: self.rule,
+                site: self.site,
+                evidence: memory.boxed(UndeterminedComparison {
+                    operands: [
+                        left.map(own_literal).transpose()?,
+                        right.map(own_literal).transpose()?,
+                    ],
+                    operation: comparison.operation,
+                    negated: comparison.negated,
+                    reason,
+                })?,
+            }),
+        }
+    }
+}
+
+fn own_literal(value: LiteralOperand<'_>) -> Result<RdfLiteral, StorageError> {
+    let mut resident = Resident;
+    let mut memory = Memory::new(&mut resident);
+    Ok(RdfLiteral {
+        lexical_form: memory.string(value.lexical_form)?,
+        datatype: value.datatype.map(|text| memory.string(text)).transpose()?,
+        language: value.language.map(|text| memory.string(text)).transpose()?,
+        direction: value.direction,
+    })
 }
 
 /// The original returned batch and its next unadmitted row; never an opaque replay.
@@ -270,6 +358,10 @@ where
         rel.interner().check_read().map_err(EvalError::Source)
     }
 }
+
+#[cfg(test)]
+#[path = "guards/typed_tests.rs"]
+mod typed_tests;
 
 #[cfg(test)]
 mod tests {

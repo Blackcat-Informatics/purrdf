@@ -1018,6 +1018,24 @@ pub enum EvalError<E = core::convert::Infallible> {
         /// The evaluator's message.
         message: crate::guard::CallbackDiagnostic,
     },
+    /// A native comparison produced no truth answer. A complete-only
+    /// evaluation cannot treat it as either a match or evidence of absence.
+    ComparisonUndetermined {
+        /// Rule index in authored order.
+        rule: usize,
+        /// The comparison's position in the rule body.
+        site: GuardSite,
+        /// Original operands and the typed refusal.
+        evidence: Box<crate::guard::UndeterminedComparison>,
+    },
+    /// A comparison requires typed RDF input but the dictionary supplies only
+    /// term identity or rendered spelling.
+    ComparisonDictionaryUnavailable {
+        /// Rule index in authored order.
+        rule: usize,
+        /// The comparison's position in the rule body.
+        site: GuardSite,
+    },
     /// A rule carries a guard that reads the evaluation model
     /// ([`crate::guard::GuardReads::Model`]), which the stratified fixpoint cannot
     /// place: what the guard reads, and with which polarity, is caller code rather than
@@ -1112,6 +1130,18 @@ impl<E> EvalError<E> {
                 guard,
                 message,
             },
+            Self::ComparisonUndetermined {
+                rule,
+                site,
+                evidence,
+            } => EvalError::ComparisonUndetermined {
+                rule,
+                site,
+                evidence,
+            },
+            Self::ComparisonDictionaryUnavailable { rule, site } => {
+                EvalError::ComparisonDictionaryUnavailable { rule, site }
+            }
             Self::ModelReadingGuard { rule } => EvalError::ModelReadingGuard { rule },
             Self::NonStratifiableRules {
                 rule,
@@ -1145,6 +1175,8 @@ impl<E: purrdf_hash::error::StructuredError> purrdf_hash::error::StructuredError
         TermLimitExceeded { resource, rules, report } => "datalog-eval-term-limit-exceeded" { "resource" => Record(resource), "rules" => List(rules.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))), "report" => Record(report) },
         Stopped { report } => "datalog-eval-stopped" { "report" => Record(report) },
         Guard { rule, site, guard, message } => "datalog-eval-guard" { "rule" => Unsigned(*rule as u128), "site" => Record(site), "guard" => Text(guard), "message" => Cause(message) },
+        ComparisonUndetermined { rule, site, evidence } => "datalog-eval-comparison-undetermined" { "rule" => Unsigned(*rule as u128), "site" => Record(site), "evidence" => Record(evidence.as_ref()) },
+        ComparisonDictionaryUnavailable { rule, site } => "datalog-eval-comparison-dictionary-unavailable" { "rule" => Unsigned(*rule as u128), "site" => Record(site) },
         ModelReadingGuard { rule } => "datalog-eval-model-reading-guard" { "rule" => Unsigned(*rule as u128) },
         NonStratifiableRules { rule, depends_on, cycle } => "datalog-eval-non-stratifiable-rules" { "rule" => Unsigned(*rule as u128), "depends_on" => Unsigned(*depends_on as u128), "cycle" => List(cycle.iter().map(|value| purrdf_hash::error::ErrorValue::Unsigned(*value as u128))) },
         MalformedSchedule { detail } => "datalog-eval-malformed-schedule" { "detail" => Cause(detail) },
@@ -1357,6 +1389,19 @@ impl<E: fmt::Display> fmt::Display for EvalError<E> {
             } => write!(
                 f,
                 "rule {rule}'s {site} ({guard}) could not be evaluated: {message}"
+            ),
+            Self::ComparisonUndetermined {
+                rule,
+                site,
+                evidence,
+            } => write!(
+                f,
+                "rule {rule}'s {site} has an undetermined literal comparison ({:?})",
+                evidence.reason
+            ),
+            Self::ComparisonDictionaryUnavailable { rule, site } => write!(
+                f,
+                "rule {rule}'s {site} requires original RDF literals from the term dictionary"
             ),
             Self::ModelReadingGuard { rule } => write!(
                 f,
@@ -4818,6 +4863,48 @@ where
     pub evidence: crate::evidence::DerivationEvidence<S>,
 }
 
+/// The complete model or a semantic refusal with its admitted search evidence.
+#[derive(Debug)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a terminal result returned once per run keeps the completed model unboxed"
+)]
+pub enum EvidencedOutcome<S: Admission, D: TermDictionary = TermInterner, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The completed fact store and its row evidence.
+    Complete(EvidencedEvaluation<S, D, N>),
+    /// Neither truth polarity was established for an invoked comparison.
+    Undetermined(UndeterminedEvaluation<S>),
+}
+
+/// Search evidence from a native comparison that prevented model completion.
+#[derive(Debug)]
+pub struct UndeterminedEvaluation<S: Admission> {
+    /// Rule index in authored order.
+    pub rule: usize,
+    /// The comparison's position in the rule body.
+    pub site: GuardSite,
+    /// Original operands and the typed reason, independent of RDF vocabulary.
+    pub comparison: Box<crate::guard::UndeterminedComparison>,
+    evidence: crate::evidence::DerivationEvidence<S>,
+    search: purrdf_core::evidence::EvidenceId,
+}
+
+impl<S: Admission> UndeterminedEvaluation<S> {
+    /// Borrow the search attestation. No fact or row represents this refusal.
+    ///
+    /// # Errors
+    /// Preserves any original evidence-workspace failure.
+    pub fn search_record(
+        &self,
+    ) -> Result<&purrdf_core::evidence::EvidenceRecord, purrdf_core::evidence::EvidenceWorkspaceError>
+    {
+        self.evidence.workspace().get(self.search)
+    }
+}
+
 /// Evaluate through the original semi-naive engine with admitted row evidence.
 ///
 /// Seed evidence must align with the actual input store. Default rows in a
@@ -4825,8 +4912,40 @@ where
 /// allocating a row-id array, record table or witness-capture buffer.
 ///
 /// # Errors
-/// Returns the original execution failure or native evidence refusal.
+/// Returns the original execution failure or native evidence refusal. For a
+/// comparison whose undecided search record is required, use
+/// [`evaluate_evidenced_outcome`].
 pub fn evaluate_evidenced<S: Admission, D: TermDictionary, const N: usize>(
+    exe: &Executable<N>,
+    edb: RelationStore<D, N>,
+    options: &EvalOptions,
+    guards: &dyn GuardEvaluator<D, N>,
+    stop: Option<&dyn StopSignal>,
+    rows: crate::evidence::DerivationEvidence<S>,
+    scope: NegationScope,
+) -> Result<EvidencedEvaluation<S, D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    match evaluate_evidenced_outcome(exe, edb, options, guards, stop, rows, scope)? {
+        EvidencedOutcome::Complete(evaluation) => Ok(evaluation),
+        EvidencedOutcome::Undetermined(undetermined) => Err(EvalError::ComparisonUndetermined {
+            rule: undetermined.rule,
+            site: undetermined.site,
+            evidence: undetermined.comparison,
+        }),
+    }
+}
+
+/// Evaluate with original row evidence and retain undecided search evidence
+/// when a native comparison prevents model completion.
+///
+/// A comparison refusal is not a false binding, supported fact or closed
+/// absence. It has its own outcome and does not publish a partial model.
+///
+/// # Errors
+/// Returns original operational and evidence-admission failures.
+pub fn evaluate_evidenced_outcome<S: Admission, D: TermDictionary, const N: usize>(
     exe: &Executable<N>,
     edb: RelationStore<D, N>,
     options: &EvalOptions,
@@ -4834,7 +4953,7 @@ pub fn evaluate_evidenced<S: Admission, D: TermDictionary, const N: usize>(
     stop: Option<&dyn StopSignal>,
     mut rows: crate::evidence::DerivationEvidence<S>,
     scope: NegationScope,
-) -> Result<EvidencedEvaluation<S, D, N>, EvalError<D::Error>>
+) -> Result<EvidencedOutcome<S, D, N>, EvalError<D::Error>>
 where
     Arity<N>: StoreShape<N>,
 {
@@ -4856,15 +4975,14 @@ where
             *options,
             options.round_execution(),
             JoinStrategy::Planned,
-        )?;
-        for (row, _) in evaluation.facts.rows_from(rows.row_count() as u64) {
-            rows.push_derived(row, purrdf_core::evidence::EvidenceId::DEFAULT)
-                .map_err(EvalError::Evidence)?;
+        );
+        if let Ok(evaluation) = &evaluation {
+            for (row, _) in evaluation.facts.rows_from(rows.row_count() as u64) {
+                rows.push_derived(row, purrdf_core::evidence::EvidenceId::DEFAULT)
+                    .map_err(EvalError::Evidence)?;
+            }
         }
-        return Ok(EvidencedEvaluation {
-            evaluation,
-            evidence: rows,
-        });
+        return evidenced_outcome(evaluation, rows, scope);
     }
     let mut capture = evidence::Capture::new(rows, scope);
     let evaluation = evaluate_with_evidence(
@@ -4878,11 +4996,54 @@ where
             strategy: JoinStrategy::Planned,
         },
         &mut Some(&mut capture),
-    )?;
-    Ok(EvidencedEvaluation {
-        evaluation,
-        evidence: capture.rows,
-    })
+    );
+    evidenced_outcome(evaluation, capture.rows, scope)
+}
+
+fn evidenced_outcome<S: Admission, D: TermDictionary, const N: usize>(
+    evaluation: Result<Evaluation<D, N>, EvalError<D::Error>>,
+    mut rows: crate::evidence::DerivationEvidence<S>,
+    scope: NegationScope,
+) -> Result<EvidencedOutcome<S, D, N>, EvalError<D::Error>>
+where
+    Arity<N>: StoreShape<N>,
+{
+    use purrdf_core::evidence::{
+        EvidenceRecord, Frame, Information, InformationMap, SearchCompleteness,
+    };
+    match evaluation {
+        Ok(evaluation) => Ok(EvidencedOutcome::Complete(EvidencedEvaluation {
+            evaluation,
+            evidence: rows,
+        })),
+        Err(EvalError::ComparisonUndetermined {
+            rule,
+            site,
+            evidence,
+        }) => {
+            let search = rows
+                .workspace_mut()
+                .intern(|memory| {
+                    EvidenceRecord::from_parts(
+                        &InformationMap::uniform(Information::Neither),
+                        scope.completeness.worse(SearchCompleteness::Undetermined),
+                        &Frame::actual(),
+                        &[],
+                        &[],
+                        memory,
+                    )
+                })
+                .map_err(EvalError::Evidence)?;
+            Ok(EvidencedOutcome::Undetermined(UndeterminedEvaluation {
+                rule,
+                site,
+                comparison: evidence,
+                evidence: rows,
+                search,
+            }))
+        }
+        Err(error) => Err(error),
+    }
 }
 
 fn evaluate_with_evidence<D: TermDictionary, const N: usize>(

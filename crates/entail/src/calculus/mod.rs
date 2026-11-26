@@ -425,10 +425,15 @@ fn constraint_clause(rule: ChaseRule, clause: &DlClause) -> DlClause {
     let marker = clash_marker(rule);
     let first = bound.first().cloned().unwrap_or_else(|| marker.clone());
     let second = bound.get(1).cloned().unwrap_or_else(|| first.clone());
-    DlClause::datalog(
-        ClauseAtom::quad(marker, ClauseTerm::literal(CLASH_RELATION), first, second),
-        clause.body().to_vec(),
-    )
+    clause
+        .clone()
+        .with_constraint_witness(ClauseAtom::quad(
+            marker,
+            ClauseTerm::literal(CLASH_RELATION),
+            first,
+            second,
+        ))
+        .expect("only a declared constraint is lowered to a clash witness")
 }
 
 /// The DL-clause program that STATES — and RUNS — `regime`'s calculus, in a fixed order.

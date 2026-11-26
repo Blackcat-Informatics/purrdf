@@ -233,8 +233,8 @@ where
         /// Original checked input terms, in declared order.
         inputs: Box<[String]>,
     },
-    /// A rule application names a clause carrying callbacks
-    /// ([`crate::guard`]). The checker has no interpretation for these, so
+    /// A rule application names a clause carrying guards this checker cannot
+    /// replay from lexical proof terms alone. The checker has no interpretation for these, so
     /// it cannot re-derive the step — and it refuses rather than accept a step it did not
     /// check.
     GuardedRule {
@@ -927,7 +927,7 @@ where
                     .iter()
                     .flat_map(crate::guard::Negation::guards),
             )
-            .any(|guard| guard.operation() == GuardOperation::Callback)
+            .any(|guard| guard.operation() != GuardOperation::NotEqual)
         {
             return Err(ProofError::GuardedRule { rule });
         }

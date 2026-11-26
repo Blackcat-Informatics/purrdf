@@ -256,15 +256,8 @@ The native structural APIs accept explicit limits; ordinary dataset parsing
 uses their default. Foreign signatures and input-options schemas are unchanged.
 
 The native `configured_yamlld_context_reaches_shared_expansion` case includes an
-expected structural oracle and native resource refusal. The
-`pinned_w3c_structural_expansion_samples` case compares unchanged comment,
-acyclic-alias and two-document-stream fixtures with their expected structures
-using the actual manifest selection. These are samples, not a qualified Expand
-family. The pinned scalar context document is a bare vocabulary mapping without
-the required remote `@context` wrapper; its corpus-policy question remains
-unqualified. No wrapper is synthesized and registry/import invariants remain.
-This native capability does not establish full JSON-LD or YAML-LD conformance,
-HTML document loading, framing or compaction algorithm coverage.
+expected structural oracle and native resource refusal. The full pinned Expand
+inventory and the cases it qualifies are described below.
 
 Native `flatten_jsonld_with_context` and `flatten_yamlld_with_context` implement
 context-free flattening under sections 7.1 and 7.2 of the same Recommendation.
@@ -315,10 +308,22 @@ actual `extractAllScripts` option and comparing native RDF construction with
 pinned N-Quads by dataset isomorphism. It covers anchor-name independence,
 shared explicit blank nodes across documents, mixed empty/nonempty streams,
 standalone and zero-document streams, and leading/trailing empty documents.
-The two informative Extended YAML ToRDF entries are explicitly excluded. The
-other 81 normative cases and other required upstream suites remain unqualified
-by this family; the full corpus inventory is preserved for those remaining
-contracts. This is not a complete YAML-LD Basic conformance claim.
+The two informative Extended YAML ToRDF entries are explicitly excluded.
+
+The native `yaml_mapping_keys::pinned_w3c_structural_expansion` case accounts
+for all 80 Expand entries. It compares 32 positive cases against exact
+expanded document structures and 22 negative cases against their expected
+error codes and checks that each refusal has a source location. PurRDF uses
+hyphens for the spaces in the two upstream error names. Contexts come from the
+unchanged corpus through an explicit
+offline registry. Nineteen expected successes refer to a remote YAML-LD
+context document with a bare `@vocab` mapping. The
+[JSON-LD Context Processing Algorithm](https://www.w3.org/TR/json-ld11-api/#context-processing-algorithm)
+requires the remote document to contain `@context`. The harness records their
+refusal separately and never counts them as passes or rewrites the fixture.
+Four positives require HTML script loading and are inventoried separately.
+Three informative Extended YAML entries are explicitly excluded. These
+results do not establish complete YAML-LD Basic conformance.
 
 Source-cover RDF export and strict reconstruction are implemented through the
 `purrdf::yaml` facade and shared host boundary. Native
