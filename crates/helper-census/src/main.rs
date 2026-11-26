@@ -34,7 +34,8 @@ mod toml;
 mod wasm_imports;
 mod wasm_package;
 
-use std::path::PathBuf;
+use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use crate::normalize::MIN_TOKENS;
@@ -111,15 +112,25 @@ enum Mode {
 /// Parsed arguments.
 #[derive(Debug)]
 struct Arguments {
-    root: PathBuf,
+    root: Option<PathBuf>,
     ledger: Option<PathBuf>,
     mode: Mode,
     base: Option<non_rust::Base>,
     target: Option<non_rust::Target>,
 }
 
+impl Arguments {
+    /// Resolve the compiled checkout only for commands that read it.
+    fn workspace_root(&self) -> Cow<'_, Path> {
+        self.root.as_deref().map_or_else(
+            || Cow::Owned(purrdf_testkit::paths::workspace_root!()),
+            Cow::Borrowed,
+        )
+    }
+}
+
 fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, String> {
-    let mut root = purrdf_testkit::paths::workspace_root!();
+    let mut root = None;
     let mut ledger = None;
     let mut mode = None;
     let mut base = None;
@@ -134,7 +145,7 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
     let mut pending: Vec<String> = Vec::new();
     while let Some(arg) = pending.pop().or_else(|| args.next()) {
         match arg.as_str() {
-            "--root" => root = args.next().ok_or("--root needs a directory")?.into(),
+            "--root" => root = Some(args.next().ok_or("--root needs a directory")?.into()),
             "--ledger" => ledger = Some(args.next().ok_or("--ledger needs a file")?.into()),
             "--baseline" => {
                 let path = match args.next() {
@@ -251,20 +262,22 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         }
         Mode::SelfTest => return Ok(self_test()),
         Mode::AsmReports => return asm_reports::run(),
-        Mode::NoFeatures => return policy::no_features(&arguments.root),
-        Mode::PythonBindingTests => return policy::python_binding_tests(&arguments.root),
+        Mode::NoFeatures => return policy::no_features(&arguments.workspace_root()),
+        Mode::PythonBindingTests => {
+            return policy::python_binding_tests(&arguments.workspace_root());
+        }
         Mode::NonRustRatchet => {
             let (Some(base), Some(target)) = (&arguments.base, &arguments.target) else {
                 unreachable!("parse_arguments requires both");
             };
-            return non_rust::run(&arguments.root, base, target);
+            return non_rust::run(&arguments.workspace_root(), base, target);
         }
         _ => {}
     }
-    let root = arguments
-        .root
+    let requested_root = arguments.workspace_root();
+    let root = requested_root
         .canonicalize()
-        .map_err(|error| format!("{}: {error}", arguments.root.display()))?;
+        .map_err(|error| format!("{}: {error}", requested_root.display()))?;
     let ledger_path = arguments
         .ledger
         .clone()
