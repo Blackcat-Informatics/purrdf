@@ -34,18 +34,19 @@ fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
     let mut builder =
         SegmentedBuilder::new(SegmentedBuildLimits::new(512, 200_000, 512, 1024, 8).unwrap())
             .unwrap();
-    let terms: Vec<_> = ["urn:left", "urn:right", "urn:x", "urn:y"]
+    let terms: Vec<_> = ["urn:left", "urn:right", "urn:x", "urn:y", "urn:third"]
         .into_iter()
         .map(TermValue::iri)
         .chain((0..192).map(|n| TermValue::iri(format!("urn:subject:{n:04}"))))
         .collect();
     let mut ids = Vec::new();
     builder.intern_batch(&terms, |_, id| ids.push(id)).unwrap();
-    let [p, q, x, y] = ids[..4] else {
+    let [p, q, x, y, r] = ids[..5] else {
         unreachable!()
     };
     let mut push = |s, p, o| builder.push_quad(QuadIds { s, p, o, g: None }).unwrap();
-    for &subject in &ids[4..] {
+    let subjects = &ids[5..];
+    for &subject in subjects {
         push(subject, q, x);
     }
     let matched = ids[ids.len() - 90];
@@ -55,6 +56,10 @@ fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
     }
     push(tail, p, x);
     push(tail, p, y);
+    push(matched, r, x);
+    push(matched, r, y);
+    push(tail, r, y);
+    push(*subjects.last().unwrap(), r, x);
     let triple = TermValue::Triple {
         s: TermBox::new(terms[2].clone()),
         p: TermBox::new(terms[0].clone()),
@@ -135,6 +140,16 @@ fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
     assert_eq!(actual, expected);
     assert_eq!(actual.1.len(), 2);
 
+    let query = "SELECT ?s ?a ?b ?c WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b . ?s <urn:third> ?c } ORDER BY ?s ?a ?b ?c";
+    let (actual, actual_io) = run(query, false);
+    let (expected, expected_io) = run(query, true);
+    assert_eq!(actual, expected);
+    assert_eq!(actual.1.len(), 10);
+    assert!(
+        actual_io < expected_io,
+        "three-arm ordered query requested {actual_io} bytes, control {expected_io}"
+    );
+
     use purrdf_sparql_eval::eval::CursorBufferReason;
     for (query, structural, expected_rows, buffers) in [
         (
@@ -153,6 +168,24 @@ fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
             "SELECT ?s WHERE { ?s <urn:left> ?o . ?s <urn:right> ?o }",
             false,
             3,
+            true,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b . ?s <urn:third> ?c }",
+            false,
+            10,
+            false,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b . ?s <urn:third> ?c }",
+            true,
+            10,
+            true,
+        ),
+        (
+            "SELECT ?s WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b . ?s <urn:third> ?b }",
+            false,
+            4,
             true,
         ),
     ] {
@@ -201,11 +234,11 @@ fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
             GraphMatch::Default,
         )
     };
-    let mut left = range(ids[4], ids[8]);
+    let mut left = range(subjects[0], subjects[4]);
     let mut right = range(tail, ids[ids.len() - 1]);
     assert_eq!(
         source.checked_read(|_| left.next()).unwrap().unwrap().s,
-        ids[4]
+        subjects[0]
     );
     assert_eq!(
         source.checked_read(|_| right.next()).unwrap().unwrap().s,
@@ -219,6 +252,46 @@ fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
             host_code: Some(5),
         })
     ));
+
+    provider.refuse.store(false, Ordering::Relaxed);
+    let source = SegmentedSession::open(
+        provider.clone(),
+        image.receipt(),
+        SegmentedReadLimits::new(CEILING, 1, 65_536, 100_000_000, 8),
+    )
+    .unwrap();
+    let engine = NativeSparqlEngine::new().with_eval_options(EvalOptions {
+        disable_shapes: true,
+        ..EvalOptions::default()
+    });
+    let prepared = engine
+        .prepare_query(
+            "SELECT ?s WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b . ?s <urn:third> ?c }",
+            None,
+        )
+        .unwrap();
+    let mut cursor = engine
+        .open_select_cursor_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
+        .unwrap();
+    assert!(cursor.next_row().unwrap().is_some());
+    provider.refuse.store(true, Ordering::Relaxed);
+    let failure = loop {
+        match cursor.next_row() {
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the ordered join completed after the source refused a needed read"),
+            Err(failure) => break failure,
+        }
+    };
+    let expected = SegmentedError::Provider {
+        operation: "ordered bookmark reload",
+        host_code: Some(5),
+    };
+    assert_eq!(failure.operational_error(), Some(&expected));
+    provider.refuse.store(false, Ordering::Relaxed);
+    let sticky = cursor
+        .settle()
+        .expect_err("settlement retains the original source refusal");
+    assert_eq!(sticky.operational_error(), Some(&expected));
 }
 
 #[test]

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Merge two certified subject-ordered scans without retaining equal-key runs.
+//! Merge certified subject-ordered scans without retaining equal-key runs.
 
 use purrdf_core::{
     DatasetView, GraphMatch, QuadIds, StatisticsStream, SubjectOrderedScan, ViewTermId,
@@ -120,8 +120,7 @@ pub(super) fn start<'a, D: DatasetView + Sync>(
     program: &CompiledBgp<D::Id>,
     ctx: &EvalCtx<'a, D>,
 ) -> Result<Option<Cursor<'a, D::Id>>, EvalError> {
-    // Finite production/order evidence still belongs to the existing plan.
-    // Selecting this operator does not alter its declared charge sequence.
+    // Finite execution and evidence retain their existing charge sequence.
     if ctx.stop_signal().is_some()
         || ctx.governor_state().is_some()
         || ctx.may_have_evidence()
@@ -131,48 +130,58 @@ pub(super) fn start<'a, D: DatasetView + Sync>(
     {
         return Ok(None);
     }
-    let Some([left_pattern, right_pattern]) = program.compiled.as_deref() else {
+    let Some(patterns @ [driver, _, ..]) = program.compiled.as_deref() else {
         return Ok(None);
     };
-    let (Pos::Slot(left_key), Pos::Slot(right_key)) = (&left_pattern.s, &right_pattern.s) else {
+    let Pos::Slot(subject) = driver.s else {
         return Ok(None);
     };
-    if left_key != right_key {
-        return Ok(None);
-    }
-    // A second shared slot needs a composite order. Replaying a subject
-    // run and then filtering on object could otherwise turn a selective
-    // indexed lookup into quadratic candidate work.
-    if matches!(
-        (&left_pattern.o, &right_pattern.o),
-        (Pos::Slot(left), Pos::Slot(right)) if left == right
-    ) || [&left_pattern.o, &right_pattern.o]
-        .into_iter()
-        .any(|object| matches!(object, Pos::Slot(slot) if slot == left_key))
-    {
-        return Ok(None);
-    }
     let GraphScope::One(graph) = ctx.active_dataset.scope_for(ctx.active_graph) else {
         return Ok(None);
     };
-    let (Some(left_arm), Some(right_arm)) = (
-        Arm::from_pattern(left_pattern, graph),
-        Arm::from_pattern(right_pattern, graph),
-    ) else {
+    // A second shared slot requires a composite order, not filtering after
+    // constructing a potentially much larger run product. Complete structural
+    // selection before opening a source cursor or admitting its storage.
+    for (index, pattern) in patterns.iter().enumerate() {
+        if !matches!(pattern.s, Pos::Slot(key) if key == subject)
+            || Arm::from_pattern(pattern, graph).is_none()
+            || matches!(pattern.o, Pos::Slot(slot)
+                if slot == subject || patterns[..index]
+                    .iter()
+                    .any(|previous| matches!(previous.o, Pos::Slot(previous_slot) if previous_slot == slot)))
+        {
+            return Ok(None);
+        }
+    }
+    let required_arm = |pattern: &CompiledPattern<D::Id>| {
+        Arm::from_pattern(pattern, graph)
+            .ok_or_else(|| EvalError::internal("ordered join lost an eligible pattern"))
+    };
+    let driver_arm = required_arm(driver)?;
+    let Some(driver_scan) = driver_arm.open(ctx, None, None)? else {
         return Ok(None);
     };
-    let Some(left_rows) = left_arm.open(ctx, None, None)? else {
-        return Ok(None);
+    let probes = match &patterns[1..] {
+        [only] => Probes::One(Probe::new(required_arm(only)?)),
+        many => {
+            let mut probes = AdmittedVec::with_capacity(many.len(), &ctx.growth)?;
+            for pattern in many {
+                probes.push_reserved(Probe::new(required_arm(pattern)?));
+            }
+            Probes::Many(probes)
+        }
     };
+
     let width = program.working.len();
     let unit = RetainedRow::from_cells(width, core::iter::repeat_n(None, width), &ctx.growth)?;
     Ok(Some(Cursor {
-        left: left_rows,
-        right: None,
-        left_arm,
-        right_arm,
+        driver: driver_scan,
+        driver_arm,
+        probes,
         unit,
         group: None,
+        depth: None,
+        initialized: false,
         ended: false,
     }))
 }
@@ -239,26 +248,142 @@ impl<I: ViewTermId> Scan<'_, I> {
     }
 }
 
-struct Group<'a, I: ViewTermId> {
-    key: I,
-    first: Option<RetainedRow<I>>,
-    run: ProbeRun<I>,
-    replay: Option<(Scan<'a, I>, RetainedRow<I>)>,
-}
-
 enum ProbeRun<I> {
     Unread,
     One(QuadIds<I>),
     Many,
 }
 
+enum ProbePass<'a, I: ViewTermId> {
+    Primary,
+    Singleton(Option<QuadIds<I>>),
+    Replay(Scan<'a, I>),
+}
+
+struct Probe<'a, I: ViewTermId> {
+    arm: Arm<I>,
+    primary: Option<Scan<'a, I>>,
+    run: ProbeRun<I>,
+    pass: ProbePass<'a, I>,
+    prefix: Option<RetainedRow<I>>,
+}
+
+impl<'a, I: ViewTermId> Probe<'a, I> {
+    fn new(arm: Arm<I>) -> Self {
+        Self {
+            arm,
+            primary: None,
+            run: ProbeRun::Unread,
+            pass: ProbePass::Primary,
+            prefix: None,
+        }
+    }
+
+    fn open<'d: 'a, D: DatasetView<Id = I> + Sync>(
+        &self,
+        ctx: &EvalCtx<'d, D>,
+        first: Option<I>,
+        last: Option<I>,
+    ) -> Result<Scan<'a, I>, EvalError> {
+        self.arm
+            .open(ctx, first, last)?
+            .ok_or_else(|| EvalError::internal("ordered subject capability changed within a read"))
+    }
+
+    fn begin<'d: 'a, D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        key: I,
+        prefix: RetainedRow<I>,
+        ctx: &EvalCtx<'d, D>,
+    ) -> Result<(), EvalError> {
+        self.pass = match self.run {
+            ProbeRun::Unread => ProbePass::Primary,
+            ProbeRun::One(row) => ProbePass::Singleton(Some(row)),
+            ProbeRun::Many => ProbePass::Replay(self.open(ctx, Some(key), Some(key))?),
+        };
+        self.prefix = Some(prefix);
+        Ok(())
+    }
+
+    fn next<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        pattern: &CompiledPattern<I>,
+        key: I,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Option<RetainedRow<I>>, EvalError> {
+        let prefix = self
+            .prefix
+            .as_ref()
+            .ok_or_else(|| EvalError::internal("ordered probe lost its parent binding"))?;
+        loop {
+            let row = match &mut self.pass {
+                ProbePass::Primary => {
+                    let scan = self.primary.as_mut().ok_or_else(|| {
+                        EvalError::internal("ordered probe lost its primary scan")
+                    })?;
+                    let row = scan.peek(ctx)?.filter(|row| row.s == key);
+                    if let Some(row) = row {
+                        scan.pop();
+                        self.run = match self.run {
+                            ProbeRun::Unread => ProbeRun::One(row),
+                            ProbeRun::One(_) | ProbeRun::Many => ProbeRun::Many,
+                        };
+                    }
+                    row
+                }
+                ProbePass::Singleton(row) => row.take(),
+                ProbePass::Replay(scan) => {
+                    let row = scan.peek(ctx)?;
+                    scan.pop();
+                    row
+                }
+            };
+            let Some(row) = row else {
+                self.prefix = None;
+                self.pass = ProbePass::Primary;
+                return Ok(None);
+            };
+            if let Some(binding) = bind_row(prefix, pattern, &row, ctx)? {
+                return Ok(Some(binding));
+            }
+        }
+    }
+}
+
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a binary join retains its existing inline probe without a second admission"
+)]
+enum Probes<'a, I: ViewTermId> {
+    One(Probe<'a, I>),
+    Many(AdmittedVec<Probe<'a, I>>),
+}
+
+impl<'a, I: ViewTermId> Probes<'a, I> {
+    fn len(&self) -> usize {
+        match self {
+            Self::One(_) => 1,
+            Self::Many(probes) => probes.len(),
+        }
+    }
+
+    fn as_mut_slice(&mut self) -> &mut [Probe<'a, I>] {
+        match self {
+            Self::One(probe) => core::slice::from_mut(probe),
+            Self::Many(probes) => probes.as_mut_slice(),
+        }
+    }
+}
+
 pub(super) struct Cursor<'a, I: ViewTermId> {
-    left: Scan<'a, I>,
-    right: Option<Scan<'a, I>>,
-    left_arm: Arm<I>,
-    right_arm: Arm<I>,
+    driver: Scan<'a, I>,
+    driver_arm: Arm<I>,
+    probes: Probes<'a, I>,
     unit: RetainedRow<I>,
-    group: Option<Group<'a, I>>,
+    group: Option<I>,
+    // The active probe depth, if a driver row has bound successfully.
+    depth: Option<usize>,
+    initialized: bool,
     ended: bool,
 }
 
@@ -271,22 +396,22 @@ impl<'a, I: ViewTermId> Cursor<'a, I> {
         if self.ended {
             return Ok(None);
         }
-        let Some([left, right]) = program.compiled.as_deref() else {
-            return Err(EvalError::internal("ordered join lost its two patterns"));
-        };
-        if self.right.is_none() {
-            let Some(first) = self.left.peek(ctx)? else {
+        let patterns = program
+            .compiled
+            .as_deref()
+            .filter(|patterns| patterns.len() == self.probes.len() + 1)
+            .ok_or_else(|| EvalError::internal("ordered join lost its patterns"))?;
+        if !self.initialized {
+            let Some(first) = self.driver.peek(ctx)? else {
                 self.ended = true;
                 return Ok(None);
             };
-            // The first actual driver key and the certified final candidate
-            // bound enclose every possible matching probe subject.
             let upper = ctx
                 .dataset
                 .ordered_subject_upper_bound(
-                    Some(self.left_arm.predicate),
-                    self.left_arm.object,
-                    self.left_arm.graph,
+                    Some(self.driver_arm.predicate),
+                    self.driver_arm.object,
+                    self.driver_arm.graph,
                 )
                 .map_err(|error| ctx.workspace.source_error(error))?;
             if upper.is_some_and(|bound| bound < first.s) {
@@ -294,95 +419,79 @@ impl<'a, I: ViewTermId> Cursor<'a, I> {
                     "ordered subject upper bound excludes its first row",
                 ));
             }
-            self.right = Some(self.open_probe(ctx, Some(first.s), upper)?);
-        }
-        loop {
-            let probe = self.right.as_mut().expect("initialized probe scan");
-            if let Some(group) = self.group.as_mut() {
-                if let Some(binding) = &group.first {
-                    if let Some(quad) = probe.peek(ctx)?.filter(|quad| quad.s == group.key) {
-                        probe.pop();
-                        group.run = match group.run {
-                            ProbeRun::Unread => ProbeRun::One(quad),
-                            ProbeRun::One(_) | ProbeRun::Many => ProbeRun::Many,
-                        };
-                        if let Some(row) = bind_row(binding, right, &quad, ctx)? {
-                            return Ok(Some(row));
-                        }
-                        continue;
-                    }
-                    group.first = None;
-                }
-                if let Some((scan, binding)) = &mut group.replay {
-                    if let Some(quad) = scan.peek(ctx)? {
-                        scan.pop();
-                        if let Some(row) = bind_row(binding, right, &quad, ctx)? {
-                            return Ok(Some(row));
-                        }
-                        continue;
-                    }
-                    group.replay = None;
-                }
-                if let Some(quad) = self.left.peek(ctx)?.filter(|quad| quad.s == group.key) {
-                    self.left.pop();
-                    if let Some(binding) = bind_row(&self.unit, left, &quad, ctx)? {
-                        match group.run {
-                            // Repeated drivers against a single probe row
-                            // do not need to revisit the storage directory.
-                            ProbeRun::One(candidate) => {
-                                if let Some(row) = bind_row(&binding, right, &candidate, ctx)? {
-                                    return Ok(Some(row));
-                                }
-                            }
-                            ProbeRun::Many => {
-                                let scan = self
-                                    .right_arm
-                                    .open(ctx, Some(group.key), Some(group.key))?
-                                    .ok_or_else(|| {
-                                        EvalError::internal("ordered subject replay unavailable")
-                                    })?;
-                                group.replay = Some((scan, binding));
-                            }
-                            ProbeRun::Unread => {
-                                return Err(EvalError::internal("matching probe run was not read"));
-                            }
-                        }
-                    }
-                    continue;
-                }
-                self.group = None;
+            for probe in self.probes.as_mut_slice() {
+                probe.primary = Some(probe.open(ctx, Some(first.s), upper)?);
             }
-            let (Some(driver), Some(candidate)) = (self.left.peek(ctx)?, probe.peek(ctx)?) else {
-                self.ended = true;
-                return Ok(None);
-            };
-            match driver.s.cmp(&candidate.s) {
-                core::cmp::Ordering::Less => self.left.advance_to(candidate.s, ctx)?,
-                core::cmp::Ordering::Greater => probe.advance_to(driver.s, ctx)?,
-                core::cmp::Ordering::Equal => {
-                    self.left.pop();
-                    if let Some(binding) = bind_row(&self.unit, left, &driver, ctx)? {
-                        self.group = Some(Group {
-                            key: driver.s,
-                            first: Some(binding),
-                            run: ProbeRun::Unread,
-                            replay: None,
-                        });
-                    }
+            self.initialized = true;
+        }
+
+        loop {
+            if let Some(depth) = self.depth {
+                let key = self
+                    .group
+                    .ok_or_else(|| EvalError::internal("ordered product lost its subject key"))?;
+                let probes = self.probes.as_mut_slice();
+                if let Some(prefix) = probes[depth].next(&patterns[depth + 1], key, ctx)? {
+                    let next = depth + 1;
+                    let Some(probe) = probes.get_mut(next) else {
+                        return Ok(Some(prefix));
+                    };
+                    probe.begin(key, prefix, ctx)?;
+                    self.depth = Some(next);
+                } else {
+                    self.depth = depth.checked_sub(1);
                 }
+                continue;
+            }
+
+            let driver = if let Some(driver) = self
+                .driver
+                .peek(ctx)?
+                .filter(|row| Some(row.s) == self.group)
+            {
+                driver
+            } else {
+                let Some(driver) = self.align(ctx)? else {
+                    self.ended = true;
+                    return Ok(None);
+                };
+                self.group = Some(driver.s);
+                for probe in self.probes.as_mut_slice() {
+                    probe.run = ProbeRun::Unread;
+                }
+                driver
+            };
+            self.driver.pop();
+            if let Some(prefix) = bind_row(&self.unit, &patterns[0], &driver, ctx)? {
+                self.probes.as_mut_slice()[0].begin(driver.s, prefix, ctx)?;
+                self.depth = Some(0);
             }
         }
     }
 
-    fn open_probe<'d: 'a, D: DatasetView<Id = I> + Sync>(
-        &self,
-        ctx: &EvalCtx<'d, D>,
-        first: Option<I>,
-        last: Option<I>,
-    ) -> Result<Scan<'a, I>, EvalError> {
-        self.right_arm
-            .open(ctx, first, last)?
-            .ok_or_else(|| EvalError::internal("ordered subject capability changed within a read"))
+    fn align<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        ctx: &EvalCtx<'_, D>,
+    ) -> Result<Option<QuadIds<I>>, EvalError> {
+        'driver: while let Some(driver) = self.driver.peek(ctx)? {
+            for probe in self.probes.as_mut_slice() {
+                let scan = probe.primary.as_mut().ok_or_else(|| {
+                    EvalError::internal("ordered alignment lost its primary scan")
+                })?;
+                if !scan.ended && scan.head.is_none_or(|row| row.s < driver.s) {
+                    scan.advance_to(driver.s, ctx)?;
+                }
+                let Some(candidate) = scan.peek(ctx)? else {
+                    return Ok(None);
+                };
+                if candidate.s > driver.s {
+                    self.driver.advance_to(candidate.s, ctx)?;
+                    continue 'driver;
+                }
+            }
+            return Ok(Some(driver));
+        }
+        Ok(None)
     }
 }
 
