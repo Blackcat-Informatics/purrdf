@@ -9,7 +9,10 @@ use purrdf_core::ir::validate::{self, Kind};
 use purrdf_core::sink::{ByteDrain, TextSink};
 use purrdf_gts::dictionary::{DictionaryError, TermKey, TermLease, TermStorage};
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression, TermKind};
-use purrdf_gts::reader::{FrameContext, ReadOptions, StreamingReadResult};
+use purrdf_gts::reader::{
+    FrameContext, GtsReadLimits, ReadOptions, StreamingReadResult, StreamingSink,
+    read_to_sink_from_reader_with_dictionary_and_limits, read_to_sink_with_dictionary,
+};
 use purrdf_gts::segment_decode::{ResolutionStorage, ResolvedSink, SegmentResolver};
 use purrdf_lex::allocation::{Admission, Memory};
 use purrdf_lex::cbor::{ReplayStorage, Value};
@@ -650,6 +653,80 @@ where
     D: ResolutionStorage<TermKey>,
     D::Error: purrdf_hash::error::NativeError + 'static,
 {
+    export_with_dictionary(
+        dictionary,
+        resolution,
+        replay,
+        drain,
+        memory,
+        |store, sink| {
+            read_to_sink_with_dictionary(bytes, ReadOptions::new(true, None), store, sink)
+        },
+    )
+}
+
+/// Stream a generation-one GTS RDF projection from a caller-owned reader.
+///
+/// The source is read one CBOR item at a time under `limits`. The same emitter,
+/// dictionary, replay stores and drain as [`export_gts_rdf_nquads_with_dictionary`]
+/// preserve row order and sidecars without retaining the entire input or output.
+/// EOF between complete items ends the source. This projection does not check an
+/// expected head or authenticate signatures.
+///
+/// Unlike slice preflight, prospective resource admission can only progress
+/// as bytes arrive. Do not publish drained bytes until success. Dictionary
+/// storage can commit before final drain settlement and is not an output
+/// transaction.
+///
+/// # Errors
+/// Preserves reader, limit, storage, allocation, cancellation and drain failures.
+/// The caller must discard any provisional output on refusal.
+pub fn export_gts_rdf_nquads_from_reader_with_dictionary<D, A: Admission + ?Sized>(
+    reader: impl std::io::Read,
+    limits: GtsReadLimits,
+    dictionary: &mut dyn TermStorage,
+    resolution: &mut D,
+    replay: [Box<dyn ReplayStorage>; 3],
+    drain: &mut dyn ByteDrain,
+    memory: &mut Memory<'_, A>,
+) -> Result<GtsTextExport, RdfDiagnostic>
+where
+    D: ResolutionStorage<TermKey>,
+    D::Error: purrdf_hash::error::NativeError + 'static,
+{
+    export_with_dictionary(
+        dictionary,
+        resolution,
+        replay,
+        drain,
+        memory,
+        |store, sink| {
+            read_to_sink_from_reader_with_dictionary_and_limits(
+                reader,
+                ReadOptions::new(true, None),
+                limits,
+                store,
+                sink,
+            )
+        },
+    )
+}
+
+fn export_with_dictionary<D, A: Admission + ?Sized>(
+    dictionary: &mut dyn TermStorage,
+    resolution: &mut D,
+    replay: [Box<dyn ReplayStorage>; 3],
+    drain: &mut dyn ByteDrain,
+    memory: &mut Memory<'_, A>,
+    read: impl FnOnce(
+        &mut dyn TermStorage,
+        &mut dyn StreamingSink,
+    ) -> Result<StreamingReadResult, DictionaryError>,
+) -> Result<GtsTextExport, RdfDiagnostic>
+where
+    D: ResolutionStorage<TermKey>,
+    D::Error: purrdf_hash::error::NativeError + 'static,
+{
     let baseline = memory.admitted_bytes();
     let diagnostic_bytes = std::cell::Cell::new(0);
     let result = (|| {
@@ -676,12 +753,7 @@ where
                 annotations,
                 dictionary_import_failure::<std::io::Error>,
             )?;
-            let read = purrdf_gts::reader::read_to_sink_with_dictionary(
-                bytes,
-                ReadOptions::new(true, None),
-                &mut read_dictionary,
-                &mut resolver,
-            );
+            let read = read(&mut read_dictionary, &mut resolver);
             if let Some(error) = resolver.take_error() {
                 return Err(error);
             }
@@ -740,7 +812,7 @@ where
 /// Returns the first whole-read refusal followed by the ordinary export errors.
 pub fn export_gts_rdf_nquads_with_dictionary_and_limits<D, A: Admission + ?Sized>(
     bytes: &[u8],
-    limits: purrdf_gts::reader::GtsReadLimits,
+    limits: GtsReadLimits,
     dictionary: &mut dyn TermStorage,
     resolution: &mut D,
     replay: [Box<dyn ReplayStorage>; 3],
