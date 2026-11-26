@@ -2496,7 +2496,8 @@ mod tests {
             ),
         );
         assert_eq!(report.stored_facts(), 1);
-        assert!(session.recorded_prefix().unwrap().0.is_empty());
+        assert_eq!(session.budget().term_arena_bytes(), bytes);
+        assert_eq!(session.recorded_prefix().unwrap().0.len(), 0);
         session.verify_recorded_prefix(seed()).unwrap();
 
         let ChaseAdvance::Complete(outcome) = session.advance_with(&exact, None).unwrap() else {
