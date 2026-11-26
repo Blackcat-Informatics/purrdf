@@ -70,20 +70,9 @@ pub const ALL_FAMILIES: [&str; 11] = [
 ];
 
 /// The original eight families. Use [`ALL_FAMILIES`] for the full inventory.
-pub const FAMILIES: [&str; 8] = {
-    let [
-        blake3,
-        crc32,
-        csv,
-        deflate,
-        distance,
-        hex,
-        numeric,
-        sha1,
-        ..,
-    ] = ALL_FAMILIES;
-    [blake3, crc32, csv, deflate, distance, hex, numeric, sha1]
-};
+pub const FAMILIES: [&str; 8] = [
+    "blake3", "crc32", "csv", "deflate", "distance", "hex", "numeric", "sha1",
+];
 
 /// A family of named execution paths of one function.
 ///
@@ -333,7 +322,8 @@ fn parse(
         .filter(|entry| !entry.is_empty())
     {
         entries += 1;
-        let Some((entry_family, path)) = entry.split_once(':') else {
+        let Some((entry_family, path)) = entry.split_once(':').filter(|(_, path)| !path.is_empty())
+        else {
             return Err(format!(
                 "{REQUIRE_SIMD_PATHS} entry `{entry}` is not `family:path`; set the variable \
                  to `1` or to a comma-separated list of `family:path` entries, or unset it to \
@@ -464,6 +454,16 @@ mod tests {
         assert!(parse("0", "csv", &KNOWN, only_portable).is_err());
         // The neighbour: `1` is the one bare value.
         assert!(parse("1", "csv", &KNOWN, only_portable).is_ok());
+    }
+
+    #[test]
+    fn an_entry_without_a_path_is_refused_even_for_another_family() {
+        let refusal = parse("sha512:", "csv", &KNOWN, only_portable).unwrap_err();
+        assert!(refusal.contains("is not `family:path`"), "{refusal}");
+        assert_eq!(
+            parse("sha512:portable", "csv", &KNOWN, only_portable),
+            Ok(Vec::new())
+        );
     }
 
     #[test]
