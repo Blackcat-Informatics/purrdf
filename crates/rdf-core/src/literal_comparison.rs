@@ -77,6 +77,13 @@ pub enum LiteralComparisonProfileError {
     TimeDatatype,
 }
 
+impl purrdf_hash::error::StructuredError for LiteralComparisonProfileError {
+    purrdf_hash::error_visit! {
+        DuplicateDatatype => "literal-comparison-profile-duplicate-datatype" {},
+        TimeDatatype => "literal-comparison-profile-time-datatype" {},
+    }
+}
+
 /// Explicit caller vocabulary for comparable digest literals.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct LiteralComparisonProfile {
@@ -325,7 +332,7 @@ pub fn compare_literals<'a, S: Admission + ?Sized>(
     memory: &mut Memory<'_, S>,
 ) -> Result<LiteralComparison<'a>, StorageError> {
     let baseline = memory.admitted_bytes();
-    let verdict = (|| {
+    let verdict = memory.scope(|memory| {
         let left = match prepare(left, LiteralOperandSide::Left, profile, memory)? {
             Ok(value) => value,
             Err(refusal) => return Ok(LiteralComparisonVerdict::Undetermined(refusal)),
@@ -335,7 +342,7 @@ pub fn compare_literals<'a, S: Admission + ?Sized>(
             Err(refusal) => return Ok(LiteralComparisonVerdict::Undetermined(refusal)),
         };
         settle(&left, &right, operation, memory)
-    })();
+    })?;
     // The closure owns both parsed values. At this boundary their allocations
     // have been destroyed on every result path, including refusal of the right.
     let charged = memory
@@ -347,7 +354,7 @@ pub fn compare_literals<'a, S: Admission + ?Sized>(
         left,
         right,
         operation,
-        verdict: verdict?,
+        verdict,
     })
 }
 
@@ -519,5 +526,55 @@ mod tests {
             }
         }
         memory.release_vec(prior).unwrap();
+    }
+
+    #[test]
+    fn secondary_refund_refusal_cannot_replace_operation_failure() {
+        #[derive(Default)]
+        struct Grant {
+            live: usize,
+            peak: usize,
+            ceiling: Option<usize>,
+            refused_growth: bool,
+            attempted_refund: bool,
+        }
+        impl Admission for Grant {
+            fn resize(&mut self, next: usize) -> Result<(), StorageError> {
+                if self.ceiling.is_some_and(|ceiling| next > ceiling) {
+                    self.refused_growth = true;
+                    return Err(StorageError::SizeOverflow);
+                }
+                if self.refused_growth && next < self.live {
+                    self.attempted_refund = true;
+                    return Err(StorageError::AdmissionFailed);
+                }
+                self.live = next;
+                self.peak = self.peak.max(next);
+                Ok(())
+            }
+        }
+        let time = operand(
+            "2026-04-04T09:12:12.345678901234567890123456789012345678901234567890123456789Z",
+            TIME,
+        );
+        let profile = &LiteralComparisonProfile::TIME_ONLY;
+        let mut baseline = Grant::default();
+        let mut scratch = Memory::new(&mut baseline);
+        let left = prepare(time, LiteralOperandSide::Left, profile, &mut scratch).unwrap();
+        assert!(left.is_ok() && scratch.admitted_bytes() > 0);
+        drop(left);
+        let mut grant = Grant {
+            ceiling: Some(baseline.peak),
+            ..Grant::default()
+        };
+        let error = compare_literals(
+            time,
+            time,
+            LiteralComparisonOp::Equal,
+            profile,
+            &mut Memory::new(&mut grant),
+        );
+        assert_eq!(error, Err(StorageError::SizeOverflow));
+        assert!(grant.refused_growth && grant.attempted_refund);
     }
 }
