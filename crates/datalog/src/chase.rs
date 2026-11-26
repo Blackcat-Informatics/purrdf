@@ -1185,35 +1185,116 @@ where
     outcome
 }
 
-/// The original executor; only checked preparation can enter this private path.
-fn execute<const N: usize>(
-    program: &[DlClause<N>],
-    edb: RelationStore<TermInterner, N>,
-    options: &EvalOptions,
-    stop: Option<&dyn StopSignal>,
-    termination: ChaseTermination,
-) -> Result<ChaseOutcome<N>, ChaseError>
+/// A restricted chase paused between rounds or ready to start.
+///
+/// The original store, immutable checked program, committed witnesses and
+/// cumulative work remain bound to this session. It cannot be rebound to
+/// another source or expose a complete model before reaching its fixpoint.
+pub struct ChaseSession<'p, const N: usize = 4>
 where
     Arity<N>: StoreShape<N>,
 {
-    let firings = plan_firings(program)?;
+    program: &'p [DlClause<N>],
+    termination: ChaseTermination,
+    firings: Vec<Firing>,
+    state: ChaseState<N>,
+}
 
-    let mut state = ChaseState {
-        store: edb,
-        derivations: Vec::new(),
-        witnesses: SkolemRegistry::default(),
-        meter: StepMeter::new(options.max_join_steps()),
-        options: *options,
-    };
-    state.check_budget()?;
+impl<const N: usize> fmt::Debug for ChaseSession<'_, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ChaseSession")
+            .field("budget", &self.budget())
+            .finish_non_exhaustive()
+    }
+}
 
+/// An advanced chase either reached its fixpoint or retained its state at a
+/// caller-requested stop before starting another round.
+#[derive(Debug)]
+pub enum ChaseProgress<'p, const N: usize = 4>
+where
+    Arity<N>: StoreShape<N>,
+{
+    /// The complete result and its original termination evidence.
+    Complete(ChaseOutcome<N>),
+    /// No complete model is available. A fresh signal can advance this session.
+    Paused(ChaseSession<'p, N>),
+}
+
+impl<'p, const N: usize> ChaseSession<'p, N>
+where
+    Arity<N>: StoreShape<N>,
+{
+    fn start(
+        program: &'p [DlClause<N>],
+        edb: RelationStore<TermInterner, N>,
+        options: &EvalOptions,
+        termination: ChaseTermination,
+    ) -> Result<Self, ChaseError> {
+        let firings = plan_firings(program)?;
+        let state = ChaseState {
+            store: edb,
+            derivations: Vec::new(),
+            witnesses: SkolemRegistry::default(),
+            meter: StepMeter::new(options.max_join_steps()),
+            options: *options,
+        };
+        state.check_budget()?;
+        Ok(Self {
+            program,
+            termination,
+            firings,
+            state,
+        })
+    }
+
+    /// Cumulative work and stored fact and term counts at this round boundary.
+    #[must_use]
+    pub fn budget(&self) -> BudgetReport {
+        self.state.report()
+    }
+
+    /// Continue with the original limits and a fresh caller signal if needed.
+    ///
+    /// The signal is polled before the next round. A pause does not replay a
+    /// committed round. Budget and execution failures do not retain a session.
+    ///
+    /// # Errors
+    /// Returns the original execution or budget failure.
+    pub fn advance(
+        self,
+        stop: Option<&dyn StopSignal>,
+    ) -> Result<ChaseProgress<'p, N>, ChaseError> {
+        advance_session(self, stop)
+    }
+}
+
+fn advance_session<'p, const N: usize>(
+    session: ChaseSession<'p, N>,
+    stop: Option<&dyn StopSignal>,
+) -> Result<ChaseProgress<'p, N>, ChaseError>
+where
+    Arity<N>: StoreShape<N>,
+{
+    let ChaseSession {
+        program,
+        termination,
+        firings,
+        mut state,
+    } = session;
     loop {
         // The caller's stop signal, polled BEFORE the round it would prevent — the same
         // place, and for the same reason, `crate::seminaive` polls it.
         if is_stopped(stop) {
-            return Err(ChaseError::Stopped {
-                report: state.report(),
-            });
+            return Ok(ChaseProgress::Paused(ChaseSession {
+                program,
+                termination,
+                firings,
+                state,
+            }));
         }
         // One round's candidate facts → the clause credited with them, in total lexical
         // order and deduplicated: two clauses deriving the same fact, or one clause firing
@@ -1307,7 +1388,7 @@ where
         state.check_budget()?;
     }
 
-    Ok(ChaseOutcome {
+    Ok(ChaseProgress::Complete(ChaseOutcome {
         budget: state.report(),
         facts: state.store,
         // `derived` is the same sequence with the attribution projected away, materialised
@@ -1320,7 +1401,7 @@ where
         derivations: state.derivations,
         witnesses: state.witnesses,
         termination,
-    })
+    }))
 }
 
 #[cfg(test)]
@@ -1499,6 +1580,54 @@ mod tests {
             report.join_steps() > 0,
             "the first admitted round must have recorded work before the refusal"
         );
+    }
+
+    /// A stop between rounds preserves the same witnesses, derivations and
+    /// work as completing the same existential chain without interruption.
+    #[test]
+    fn stopped_chase_resumes_without_replaying_committed_rounds() {
+        let program = [
+            restriction(),
+            DlClause::new(
+                vec![HeadDisjunct::new(vec![concept("?z", CONCEPT_D)])],
+                Vec::new(),
+                vec![concept("?z", CONCEPT_C)],
+            ),
+        ];
+        let edb = || store_of(&[("a", TYPE, A), ("b", TYPE, A)]);
+        let options = EvalOptions::default();
+        let uninterrupted = chase_with(&program, edb(), &options, None).unwrap();
+        let prepared = certify(&program)
+            .unwrap()
+            .prepare(&program, AnalysisLimits::default(), None)
+            .unwrap();
+        let session = prepared.start_session(edb(), &options).unwrap();
+        prepared.close().unwrap();
+        let stop = AfterNPolls(std::sync::atomic::AtomicU64::new(1));
+        let ChaseProgress::Paused(paused) = session.advance(Some(&stop)).unwrap() else {
+            panic!("the second round boundary must retain a continuation");
+        };
+        let partial = paused.budget();
+        assert_eq!(partial.stored_facts(), 6);
+        assert!(partial.join_steps() > 0);
+        let ChaseProgress::Paused(paused) = paused.advance(Some(&Fixed(true))).unwrap() else {
+            panic!("an already-fired replacement signal must not start another round");
+        };
+        assert_eq!(paused.budget(), partial);
+        let ChaseProgress::Complete(resumed) = paused.advance(None).unwrap() else {
+            panic!("an unstopped certified chase reaches its fixpoint");
+        };
+        assert_eq!(resumed.budget().stored_facts(), 8);
+        assert_eq!(closure(&resumed), closure(&uninterrupted));
+        assert_eq!(resumed.derivations(), uninterrupted.derivations());
+        assert!(
+            resumed
+                .witnesses()
+                .witnesses()
+                .eq(uninterrupted.witnesses().witnesses())
+        );
+        assert_eq!(resumed.termination(), uninterrupted.termination());
+        assert_eq!(resumed.budget(), uninterrupted.budget());
     }
 
     // ── The caller's stored-fact and join-step limits ─────────────────────────
