@@ -46,8 +46,8 @@ and 32 full batches. It also saw the final empty batch drain.
 
 | Claims | Output bytes | Reference instructions | Native instructions | Allocations | Requested bytes | Retained bytes | Peak working heap bytes |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| 128 | 68,296 | 6,061,176 | 6,050,627 | 607 | 318,874 | 73,746 | 97,825 |
-| 512 | 274,504 | 25,483,742 | 25,409,226 | 1,967 | 1,268,582 | 294,930 | 394,157 |
+| 128 | 68,296 | 6,061,176 | 6,050,472 | 607 | 318,874 | 73,746 | 97,825 |
+| 512 | 274,504 | 25,483,742 | 25,408,663 | 1,967 | 1,268,582 | 294,930 | 394,157 |
 
 All four heap measures are identical on the two builds. The native
 batch also uses fixed stack storage, which is not part of the measured
