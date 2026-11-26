@@ -886,11 +886,16 @@ jobs:
           restore-keys: |
             simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-
       - name: Install the C cross toolchain
-        if: startsWith(matrix.config, 'aarch64') || startsWith(matrix.config, 'wasm32')
+        if: startsWith(matrix.config, 'aarch64')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+      - name: Install the WASM assembly tools
+        if: startsWith(matrix.config, 'wasm32')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends clang llvm
       - name: Record measurement inputs
         run: |
           mkdir -p target/asm-diagnostics
