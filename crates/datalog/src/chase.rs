@@ -1143,14 +1143,7 @@ impl fmt::Display for ChaseProofError {
     }
 }
 
-impl std::error::Error for ChaseProofError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Storage(error) => Some(error),
-            _ => None,
-        }
-    }
-}
+purrdf_hash::error_sources!(ChaseProofError, Storage);
 
 impl<const N: usize> ChaseDerivation<N>
 where
