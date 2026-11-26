@@ -416,7 +416,7 @@ pub struct PreparedChase<'p, A: Admission, const N: usize = 4> {
     verification: AnalysisReport,
 }
 purrdf_hash::debug_non_exhaustive!(['p, A: Admission, const N: usize] PreparedChase<'p, A, N> { certificate, verification });
-impl<A: Admission, const N: usize> PreparedChase<'_, A, N> {
+impl<'p, A: Admission, const N: usize> PreparedChase<'p, A, N> {
     /// The original verified admission evidence.
     #[must_use]
     pub const fn certificate(&self) -> &ChaseCertificate<A> {
@@ -439,7 +439,29 @@ impl<A: Admission, const N: usize> PreparedChase<'_, A, N> {
     where
         Arity<N>: StoreShape<N>,
     {
-        super::execute(self.program, edb, options, stop, self.certificate.summary())
+        match self.start_session(edb, options)?.advance(stop)? {
+            super::ChaseProgress::Complete(outcome) => Ok(outcome),
+            super::ChaseProgress::Paused(session) => Err(ChaseError::Stopped {
+                report: session.budget(),
+            }),
+        }
+    }
+
+    /// Bind a chase to its original source and certified program without running
+    /// a round. The session owns its termination summary and borrows only the
+    /// immutable program, not this preparation's evidence account.
+    ///
+    /// # Errors
+    /// Returns the original unsupported fragment or initial budget refusal.
+    pub fn start_session(
+        &self,
+        edb: RelationStore<TermInterner, N>,
+        options: &EvalOptions,
+    ) -> Result<super::ChaseSession<'p, N>, ChaseError>
+    where
+        Arity<N>: StoreShape<N>,
+    {
+        super::ChaseSession::start(self.program, edb, options, self.certificate.summary())
     }
     /// Destroy evidence before releasing its original account.
     /// # Errors
