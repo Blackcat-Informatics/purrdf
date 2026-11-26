@@ -203,7 +203,10 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
             .unwrap();
     }
     let image = builder.seal().unwrap();
-    let certified = SegmentedImage::certify(image.bytes().to_vec()).unwrap();
+    let input = image.bytes().to_vec();
+    let original_allocation = input.as_ptr();
+    let certified = SegmentedImage::certify(input).unwrap();
+    assert_eq!(certified.bytes().as_ptr(), original_allocation);
     assert_eq!(certified.bytes(), image.bytes());
     // Read the persisted stream descriptors, not a reconstruction of their
     // encoder: dictionary/reverse descriptors begin at bytes 48 and 72.
@@ -323,6 +326,12 @@ fn byte_packed_dictionaries_round_trip_with_sparse_high_id_reads() {
         );
         assert_eq!(after.evictions(), before.evictions());
     }
+
+    let provider = certified.provider();
+    drop((certified, read, sequential, routed));
+    let mut prefix = [0; 64];
+    purrdf_core::SegmentedProvider::read_at(&provider, 0, &mut prefix).unwrap();
+    assert_eq!(prefix, image.bytes()[..prefix.len()]);
 }
 
 fn oversized_encoded_terms_keep_fixed_pages_and_round_trip() {
