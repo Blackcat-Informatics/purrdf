@@ -67,10 +67,10 @@ fn guard(left: &str, right: &str, operation: Op, negated: bool) -> Guard {
     )
 }
 
-fn input<'a>(
-    literals: &'a FastMap<u32, RdfLiteral>,
+fn input(
+    literals: &FastMap<u32, RdfLiteral>,
     rows: impl IntoIterator<Item = [u32; 3]>,
-) -> RelationStore<IntegerDictionary<'a>, 3> {
+) -> RelationStore<IntegerDictionary<'_>, 3> {
     let dictionary = IntegerDictionary::with_symbols(&SYMBOLS)
         .unwrap()
         .with_rdf_literals(literals);
