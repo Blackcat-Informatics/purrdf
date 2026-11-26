@@ -15,6 +15,8 @@
 //!
 //! * `seal`: `SegmentedBuilder::seal`, which writes and certifies the image.
 //! * `capture`: the first source version of a one-image stack.
+//! * `removal_visibility`: an ordinary scan across three nonempty removal
+//!   carriers and a newer resident reinsertion.
 //! * `feed_layers`: the change feed after replacing that image with one whose
 //!   middle row changed.
 //! * `feed_head`: the same change in a resident head.
@@ -59,9 +61,10 @@ use purrdf_testkit::bench::counter::{CountRows, CountWork, run_count_rows};
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
 
-const ROWS: [&str; 10] = [
+const ROWS: [&str; 11] = [
     "seal",
     "capture",
+    "removal_visibility",
     "feed_layers",
     "feed_head",
     "feed_regroup",
@@ -141,12 +144,19 @@ fn layer(dataset: &RdfDataset) -> Arc<SegmentedLayer> {
 }
 
 fn sealed(builder: SegmentedBuilder) -> Arc<SegmentedLayer> {
+    sealed_with_metadata(builder, SegmentedLayerMetadata::default())
+}
+
+fn sealed_with_metadata(
+    builder: SegmentedBuilder,
+    metadata: SegmentedLayerMetadata,
+) -> Arc<SegmentedLayer> {
     let image = builder.seal().unwrap();
     Arc::new(
         SegmentedLayer::new(
             Arc::new(image.provider()),
             image.receipt().clone(),
-            SegmentedLayerMetadata::default(),
+            metadata,
         )
         .unwrap(),
     )
@@ -174,6 +184,28 @@ fn prepare(row: &str, count: usize) -> CountWork {
                 let query = snapshot.query(limits()).unwrap();
                 let version = black_box(query.source_version().unwrap().unwrap());
                 u64::try_from(version.statement_count()).unwrap()
+            })
+        }
+        "removal_visibility" => {
+            let restored = source_snapshot::dataset(1, false, false);
+            let other_revision = source_snapshot::dataset(1, true, false);
+            let mut layers = vec![layer(&original)];
+            for removed in [Arc::clone(&restored), other_revision, Arc::clone(&restored)] {
+                let metadata = SegmentedLayerMetadata::new(Some(removed), None).unwrap();
+                layers.push(sealed_with_metadata(
+                    builder_of(&original, |_| false),
+                    metadata,
+                ));
+            }
+            let mut stack = SegmentedStack::default();
+            stack.publish(layers, limits()).unwrap();
+            stack.set_head(Some(head(restored)));
+            let snapshot = stack.snapshot().unwrap();
+            Box::new(move || {
+                let query = snapshot.query(limits()).unwrap();
+                let visible = black_box(query.quads().count());
+                query.check_ready().unwrap();
+                u64::try_from(visible).unwrap()
             })
         }
         "identity_resident" => {

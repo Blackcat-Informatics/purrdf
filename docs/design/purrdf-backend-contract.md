@@ -844,6 +844,14 @@ empty physical streams are skipped before translating a bound pattern, without
 skipping descriptor validation. Raw and prepared evaluator entries consume this
 guarded view, preserving solution multiplicity and unbound cells.
 
+Removal probes reuse recent source-local translations of query terms by
+position in the pattern. The query holds a fixed-size memo, so the number of
+rows and touched terms cannot grow its storage. A completed lookup may prove
+absence. A read or admission failure never enters the memo, and the original
+operation and final descriptor checks still govern the result.
+The [removal translation benchmark](../benchmarks/segmented-removal-translation.md)
+records work and allocation traffic separately from live query memory.
+
 Operation evidence retains the original publication identity and immutable prefix
 of source-qualified requests. That identity compares original descriptor and
 resident carrier owners; it is not a portable content digest. Returned term guards,
