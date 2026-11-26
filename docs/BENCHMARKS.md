@@ -94,16 +94,13 @@ simply not narrated here:
   planning and execution with cold join-order caches.
 - `crates/sparql-eval/benches/numeric_eval.rs` — end-to-end SPARQL numeric
   evaluation: in-range integer and decimal arithmetic, `ORDER BY`, `SUM`/`AVG`
-  and `FILTER`, and values past machine words, ungoverned and governed. Exact
-  numerics cost the machine-word path nothing measurable: against `main` at
-  `87382f718`, the median of five single-threaded (`RAYON_NUM_THREADS=1`)
-  load-independent instruction counts of each `numeric_eval_in_range` lane is
-  within 1.5% (integer arithmetic −0.8%, decimal arithmetic −0.6%, `ORDER BY`
-  +0.4%, integer `SUM`/`AVG` +0.5%, decimal `SUM`/`AVG` +0.2%, comparison
-  −1.4%). The `numeric_eval_exact` lanes have no `main` counterpart: there the
-  forty-digit column and the hundred-digit integer do not parse, so the queries
-  compute nothing. Against the exact numerics before every tower operation was
-  governed, pricing them costs 2% to 7% of their instructions.
+  and `FILTER`, and values past machine words, ungoverned and governed. The
+  in-range lanes now use the exact tower, so their names describe the inputs,
+  not a separate arithmetic path. Each run checks its solution count and
+  rejects query errors and governor trips. A historical comparison at
+  `87382f718` placed the six in-range rows within 1.5% of their contemporary
+  bounded baseline. The wide rows have no comparable baseline at that revision,
+  where those literals did not parse.
 - `crates/sparql-eval/benches/cost_based_bgp_planner.rs` — regression watch on
   the cost-based BGP join planner; the deterministic win over the retired
   structural heuristic is gated by the `bgp` unit tests (which count real
@@ -385,6 +382,28 @@ its original wrapper and output law. These retained-output figures
 include a common indirect call and exclude setup, validation and destruction;
 they establish neither complete-query speed nor full bounded parity. General
 semantics execute natively; portable release builds are a separate obligation.
+
+**Logical numeric pricing in full queries.** Ungoverned expression arithmetic
+and value rendering skip the cost estimate when no governor or worker journal
+can observe it. Actual workspace admission is unchanged. The table reports
+median retired user instructions from three one-worker native optimized test
+profile runs of each query on the same 20,000-row fixture. Each process runs
+one benchmark iteration. A no-match run of the same binary provides the setup
+instruction count subtracted from its sample. This comparison uses the exact
+tower on both sides and does not measure bounded parity.
+
+| Query | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| Integer arithmetic filter | 1,187,762,115 | 1,152,212,475 | −2.99% |
+| Decimal arithmetic sum | 565,315,164 | 553,097,687 | −2.16% |
+| Decimal order | 293,323,553 | 293,207,973 | −0.04% |
+| Integer sum and average | 298,550,785 | 298,547,784 | −0.001% |
+| Decimal sum and average | 329,183,350 | 329,059,700 | −0.04% |
+| Comparison filter | 425,164,395 | 425,261,141 | +0.023% |
+
+The arithmetic rows improve. The difference in the comparison filter is
+smaller than the spread of repetitions for either build. Changes in the
+remaining rows are below 0.05%. These are instruction counts, not timings.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without

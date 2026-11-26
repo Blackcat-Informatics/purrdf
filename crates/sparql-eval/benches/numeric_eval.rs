@@ -8,9 +8,9 @@
 //! End-to-end SPARQL numeric evaluation through [`NativeSparqlEngine`], over a
 //! 20 000-row dataset of `xsd:integer` and `xsd:decimal` values.
 //!
-//! Every value of the `in_range` group fits the bounded representations (`i128`,
-//! and an `i128` mantissa with at most eighteen fractional digits), so these
-//! lanes measure the bounded path and its dispatch:
+//! The `in_range` inputs fit the old bounded integer and decimal representations.
+//! These lanes measure the current evaluator using the exact tower on small
+//! values. They do not measure an independent bounded implementation:
 //!
 //! - `a_integer_arithmetic_filter` — `+ − × ÷` over `?i` inside a `FILTER`.
 //! - `b_decimal_arithmetic_sum`    — `×` and `+` over `?d`, folded by `SUM`.
@@ -42,56 +42,65 @@ use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 use purrdf_core::{RdfDataset, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{GovernedOutcome, NativeSparqlEngine, QueryGovernors, QueryOptions};
-use support::governor_workloads::{GROUPED, grouped_answer, numeric_dataset};
+use support::governor_workloads::{GROUPED, GROUPS, grouped_answer, numeric_dataset};
 use support::squaring_chain;
 
-const IN_RANGE: &[(&str, &str)] = &[
+const IN_RANGE: &[(&str, &str, usize)] = &[
     (
         "a_integer_arithmetic_filter",
         "PREFIX ex: <https://example.org/> SELECT ?s WHERE { ?s ex:i ?i \
          FILTER((?i * 3 + 7) - ?i / 4 > 250000) }",
+        18_174,
     ),
     (
         "b_decimal_arithmetic_sum",
         "PREFIX ex: <https://example.org/> SELECT (SUM(?d * 1.5 + 0.25) AS ?t) \
          WHERE { ?s ex:d ?d }",
+        1,
     ),
     (
         "c_order_by_decimal",
         "PREFIX ex: <https://example.org/> SELECT ?s ?d WHERE { ?s ex:d ?d } \
          ORDER BY DESC(?d) ?s LIMIT 10",
+        10,
     ),
     (
         "d_sum_avg_integer",
         "PREFIX ex: <https://example.org/> SELECT (SUM(?i) AS ?t) (AVG(?i) AS ?m) \
          WHERE { ?s ex:i ?i }",
+        1,
     ),
     (
         "e_sum_avg_decimal",
         "PREFIX ex: <https://example.org/> SELECT (SUM(?d) AS ?t) (AVG(?d) AS ?m) \
          WHERE { ?s ex:d ?d }",
+        1,
     ),
     (
         "f_filter_compare",
         "PREFIX ex: <https://example.org/> SELECT ?s WHERE { ?s ex:i ?i ; ex:d ?d \
          FILTER(?d >= 500.5 && ?i < 600000) }",
+        6_002,
     ),
 ];
 
-const EXACT: &[(&str, &str)] = &[
+const EXACT: &[(&str, &str, usize)] = &[
     (
         "x_big_multiply_sum",
         "PREFIX ex: <https://example.org/> SELECT (SUM(?b * ?b) AS ?t) \
          WHERE { ?s ex:b ?b }",
+        1,
     ),
     (
         "y_big_order_by",
         "PREFIX ex: <https://example.org/> SELECT ?s ?b WHERE { ?s ex:b ?b } \
          ORDER BY DESC(?b) LIMIT 10",
+        10,
     ),
     (
         "z_big_avg",
         "PREFIX ex: <https://example.org/> SELECT (AVG(?b) AS ?m) WHERE { ?s ex:b ?b }",
+        1,
     ),
 ];
 
@@ -103,13 +112,19 @@ fn request(query: &str) -> SparqlRequest<'_> {
     }
 }
 
-/// Run one query, returning its solution count, or zero for an evaluation error
-/// (the same file builds against an engine that refuses the exact lanes).
-fn run(engine: &NativeSparqlEngine, ds: &Arc<RdfDataset>, query: &str) -> usize {
-    match engine.query(ds, request(query)) {
-        Ok(SparqlResult::Solutions { rows, .. }) => rows.len(),
-        Ok(_) | Err(_) => 0,
-    }
+fn check_solutions(result: SparqlResult, query: &str, count: usize) -> usize {
+    let SparqlResult::Solutions { rows, .. } = result else {
+        panic!("numeric benchmark did not return solutions: {query}");
+    };
+    assert_eq!(rows.len(), count, "unexpected solution count: {query}");
+    rows.len()
+}
+
+fn run(engine: &NativeSparqlEngine, ds: &Arc<RdfDataset>, query: &str, count: usize) -> usize {
+    let result = engine
+        .query(ds, request(query))
+        .unwrap_or_else(|err| panic!("numeric benchmark query failed: {query}\n{err}"));
+    check_solutions(result, query, count)
 }
 
 fn governed(
@@ -117,24 +132,25 @@ fn governed(
     ds: &Arc<RdfDataset>,
     query: &str,
     governors: &QueryGovernors,
-) -> bool {
-    matches!(
-        engine.query_governed(ds, request(query), &QueryOptions::EMPTY, governors),
-        Ok(GovernedOutcome::Complete { .. })
-    )
+    count: usize,
+) -> usize {
+    let outcome = engine
+        .query_governed(ds, request(query), &QueryOptions::EMPTY, governors)
+        .unwrap_or_else(|err| panic!("governed numeric benchmark query failed: {query}\n{err}"));
+    let GovernedOutcome::Complete { result, .. } = outcome else {
+        panic!("numeric benchmark query did not complete: {query}\n{outcome:?}");
+    };
+    check_solutions(result, query, count)
 }
 
 fn bench_in_range(c: &mut Bench) {
     let ds = numeric_dataset();
     let engine = NativeSparqlEngine::new();
-    for &(label, query) in IN_RANGE {
-        assert!(run(&engine, &ds, query) > 0, "case {label} is a no-op");
-    }
     let mut group = c.benchmark_group("numeric_eval_in_range");
     group.sample_size(10);
-    for &(label, query) in IN_RANGE {
+    for &(label, query, count) in IN_RANGE {
         group.bench_function(label, |bencher| {
-            bencher.iter(|| std::hint::black_box(run(&engine, &ds, query)));
+            bencher.iter(|| std::hint::black_box(run(&engine, &ds, query, count)));
         });
     }
     group.finish();
@@ -145,30 +161,18 @@ fn bench_exact(c: &mut Bench) {
     let engine = NativeSparqlEngine::new();
     let chain = squaring_chain(100, 6);
     let fits = QueryGovernors::UNBOUNDED.with_fuel(1_000_000_000);
-    // An error or a trip would be timed as if it were the work: prove each lane answers.
-    for &(label, query) in EXACT {
-        assert!(run(&engine, &ds, query) > 0, "case {label} is a no-op");
-    }
-    assert!(
-        run(&engine, &ds, &chain) > 0,
-        "the squaring chain is a no-op"
-    );
-    assert!(
-        governed(&engine, &ds, &chain, &fits),
-        "the squaring chain completes under its fuel ceiling"
-    );
     let mut group = c.benchmark_group("numeric_eval_exact");
     group.sample_size(10);
-    for &(label, query) in EXACT {
+    for &(label, query, count) in EXACT {
         group.bench_function(label, |bencher| {
-            bencher.iter(|| std::hint::black_box(run(&engine, &ds, query)));
+            bencher.iter(|| std::hint::black_box(run(&engine, &ds, query, count)));
         });
     }
     group.bench_function("squaring_chain_ungoverned", |bencher| {
-        bencher.iter(|| std::hint::black_box(run(&engine, &ds, &chain)));
+        bencher.iter(|| std::hint::black_box(run(&engine, &ds, &chain, 1)));
     });
     group.bench_function("squaring_chain_governed", |bencher| {
-        bencher.iter(|| std::hint::black_box(governed(&engine, &ds, &chain, &fits)));
+        bencher.iter(|| std::hint::black_box(governed(&engine, &ds, &chain, &fits, 1)));
     });
     group.finish();
 }
@@ -195,11 +199,12 @@ fn bench_group_by(c: &mut Bench) {
     let mut group = c.benchmark_group("numeric_eval_group");
     group.sample_size(10);
     group.bench_function("group_by_exact_ungoverned", |bencher| {
-        bencher.iter(|| std::hint::black_box(run(&engine, &ds, GROUPED)));
+        bencher.iter(|| std::hint::black_box(run(&engine, &ds, GROUPED, GROUPS)));
     });
     for (label, governors) in &lanes {
         group.bench_function(format!("group_by_exact_{label}"), |bencher| {
-            bencher.iter(|| std::hint::black_box(governed(&engine, &ds, GROUPED, governors)));
+            bencher
+                .iter(|| std::hint::black_box(governed(&engine, &ds, GROUPED, governors, GROUPS)));
         });
     }
     group.finish();
