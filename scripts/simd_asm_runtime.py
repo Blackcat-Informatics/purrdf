@@ -280,8 +280,8 @@ def merge_reports(gate, manifest, directory, identity):
     request = dict(directory=str(directory), schema=identity["schema"],
                    source=identity["source"], manifest=identity["manifest"],
                    configurations=gate.CONFIG_NAMES, sites=sorted(manifest.ids()))
-    result = subprocess.run(
-        ["cargo", "run", "-q", "--locked", "-p", "helper-census", "--", "--merge-asm-reports"],
+    result = subprocess.run(([helper] if (helper := os.getenv("PURRDF_ASM_REPORT_HELPER")) is not None else
+        ["cargo", "run", "-q", "--locked", "-p", "helper-census", "--"]) + ["--merge-asm-reports"],
         cwd=gate.REPO_ROOT, input=json.dumps(request), text=True, capture_output=True)
     if result.returncode:
         raise gate.GateError(f"native assembly aggregation failed: {result.stderr.strip()}")

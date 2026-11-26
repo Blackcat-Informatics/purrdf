@@ -27,6 +27,92 @@ use purrdf_sparql_eval::{
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
 #[test]
+fn skewed_ordered_join_does_not_retain_equal_key_runs() {
+    use purrdf_core::{QuadIds, SegmentedBuildLimits, SegmentedBuilder};
+    use purrdf_sparql_eval::{SolutionTerm, eval::CursorBufferReason};
+
+    const BLOCK_BYTES: u32 = 1024;
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(
+            "SELECT ?s ?a ?b WHERE { ?s <urn:left> ?a . ?s <urn:right> ?b }",
+            None,
+        )
+        .unwrap();
+    let case = |scale: usize| {
+        let hot = 9 * scale;
+        let terms: Vec<_> = ["urn:left", "urn:right", "urn:hot", "urn:a0", "urn:a1"]
+            .into_iter()
+            .map(TermValue::iri)
+            .chain((0..hot).map(|i| TermValue::iri(format!("urn:b:{i:05}"))))
+            .chain((0..scale).map(|i| TermValue::iri(format!("urn:cold:{i:05}"))))
+            .collect();
+        let limit = u32::try_from(terms.len() + 2).unwrap();
+        let mut builder = SegmentedBuilder::new(
+            SegmentedBuildLimits::new(limit, 1_000_000, limit, BLOCK_BYTES, 16).unwrap(),
+        )
+        .unwrap();
+        let mut ids = Vec::new();
+        builder.intern_batch(&terms, |_, id| ids.push(id)).unwrap();
+        let [left, right, subject, a0, a1] = ids[..5] else {
+            unreachable!()
+        };
+        let objects = &ids[5..5 + hot];
+        let mut quad = |s, p, o| builder.push_quad(QuadIds { s, p, o, g: None }).unwrap();
+        quad(subject, left, a0);
+        quad(subject, left, a1);
+        for &object in objects {
+            quad(subject, right, object);
+        }
+        for &cold in &ids[5 + hot..] {
+            quad(cold, right, objects[0]);
+        }
+
+        let image = builder.seal().unwrap();
+        let source = open_with_evidence(&image, CEILING, 2, 8192);
+        let opening_evictions = source.evidence().evictions();
+        let mut cursor = engine
+            .open_select_cursor_fallible_view(&source, &prepared, &[], &QueryOptions::EMPTY)
+            .unwrap();
+        // Only the oracle retains per-pair state. Sample charged working storage
+        // at yields, excluding the reader's request ledger and cache slots.
+        let mut seen = vec![[false; 2]; hot];
+        let mut peak_at_yield = 0;
+        while let Some(row) = cursor.next_row().unwrap() {
+            let [
+                Some(SolutionTerm::Existing(s)),
+                Some(SolutionTerm::Existing(a)),
+                Some(SolutionTerm::Existing(b)),
+            ] = row.cells()
+            else {
+                panic!("expected three stored bindings");
+            };
+            assert_eq!(*s, subject);
+            let pair = [a0, a1].iter().position(|value| value == a).unwrap();
+            let object = objects.binary_search(b).unwrap();
+            assert!(!core::mem::replace(&mut seen[object][pair], true));
+            let evidence = source.evidence();
+            peak_at_yield = peak_at_yield.max(evidence.live_bytes() - evidence.bookkeeping_bytes());
+        }
+        assert!(seen.iter().all(|pair| *pair == [true, true]));
+        assert_eq!(cursor.settle().unwrap().query.delivered, 2 * hot);
+        assert!(
+            !cursor
+                .buffering_report()
+                .contains(CursorBufferReason::IntermediateRelation)
+        );
+        assert!(source.evidence().evictions() > opening_evictions);
+        peak_at_yield
+    };
+    let small = case(32);
+    let large = case(512);
+    assert!(
+        large <= small + u64::from(BLOCK_BYTES),
+        "sampled working bytes grew from {small} to {large} with unchanged block size"
+    );
+}
+
+#[test]
 fn ordered_segmented_join_keeps_equal_key_bag_and_skips_disjoint_prefix() {
     use purrdf_core::{QuadIds, SegmentedBuildLimits, SegmentedBuilder, StatisticsStream, TermBox};
     use purrdf_sparql_eval::EvalOptions;

@@ -62,6 +62,11 @@
 use std::fmt;
 
 use crate::clause::ClauseAtom;
+use purrdf_core::RdfLiteral;
+use purrdf_core::literal_comparison::{
+    LiteralComparisonOp, LiteralComparisonProfile, LiteralComparisonRefusal,
+};
+
 use crate::dictionary::{DictionaryTerm, DictionaryValue, TermDictionary};
 use crate::id::TermId;
 use crate::store::{Arity, RelationStore, StoreShape, TermInterner};
@@ -83,26 +88,78 @@ pub enum GuardOperation {
     Callback,
     /// Keep a row when its two bound term identities differ exactly.
     NotEqual,
+    /// Compare the data values of two RDF literals under a declared profile.
+    LiteralComparison,
 }
 
 impl purrdf_hash::error::StructuredError for GuardOperation {
     purrdf_hash::error_visit! {
         Callback => "datalog-guard-callback" {},
         NotEqual => "datalog-guard-not-equal" {},
+        LiteralComparison => "datalog-guard-literal-comparison" {},
     }
 }
 
 impl GuardOperation {
-    /// Decide a native filter; callback guards have no built-in interpretation.
+    /// Decide a term-identity filter from the terms alone.
     pub(crate) fn filter<T: PartialEq>(self, inputs: &[T]) -> Option<bool> {
         match self {
-            Self::Callback => None,
+            Self::Callback | Self::LiteralComparison => None,
             Self::NotEqual => {
                 assert_eq!(inputs.len(), 2, "native inequality has two declared inputs");
                 Some(inputs[0] != inputs[1])
             }
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Implementation {
+    Callback,
+    NotEqual,
+    LiteralComparison(Box<Comparison>),
+}
+
+/// The operation, polarity and vocabulary declared by a literal comparison guard.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Comparison {
+    /// Relation to test over the comparable values.
+    pub operation: LiteralComparisonOp,
+    /// Negate decided truth, but leave a refusal undetermined.
+    pub negated: bool,
+    /// Explicit datatype declarations for digest values.
+    pub profile: LiteralComparisonProfile,
+}
+
+/// Typed evidence retained when a comparison cannot settle either polarity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndeterminedComparison {
+    /// The original inputs in comparison order, absent for non-literal inputs
+    /// or dictionaries with no typed literal view.
+    pub operands: [Option<RdfLiteral>; 2],
+    /// The relation the rule asked to test.
+    pub operation: LiteralComparisonOp,
+    /// The authored polarity.
+    pub negated: bool,
+    /// Why neither truth polarity is settled.
+    pub reason: LiteralComparisonRefusal,
+}
+
+impl purrdf_hash::error::StructuredError for UndeterminedComparison {
+    purrdf_hash::error_visit! {
+        @record self { operands, operation, negated, reason } => "datalog-comparison-undetermined" {
+            "reason" => Record(&self.reason),
+            "operation" => Record(&self.operation),
+            "negated" => Boolean(self.negated),
+            "left" => Value(operand_evidence(self.operands[0].as_ref())),
+            "right" => Value(operand_evidence(self.operands[1].as_ref())),
+        }
+    }
+}
+
+fn operand_evidence(literal: Option<&RdfLiteral>) -> purrdf_hash::error::ErrorValue<'_> {
+    use purrdf_hash::error::ErrorValue;
+    literal.map_or(ErrorValue::Absent, |literal| ErrorValue::Term(literal))
 }
 
 /// One guard literal: a native filter or caller code over named inputs and outputs.
@@ -113,7 +170,7 @@ impl GuardOperation {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Guard {
     /// Native operation or explicit caller callback; names never select behavior.
-    operation: GuardOperation,
+    implementation: Implementation,
     /// The guard's content identity, as the caller names it.
     name: String,
     /// The variables read, in the order the evaluator receives them.
@@ -149,7 +206,7 @@ impl Guard {
             );
         }
         Self {
-            operation: GuardOperation::Callback,
+            implementation: Implementation::Callback,
             name: name.into(),
             inputs,
             outputs,
@@ -166,14 +223,38 @@ impl Guard {
     /// Equality is exact term identity, without numeric coercion or normalization.
     pub fn not_equal(left: impl Into<String>, right: impl Into<String>) -> Self {
         Self {
-            operation: GuardOperation::NotEqual,
+            implementation: Implementation::NotEqual,
             ..Self::filter("!=", vec![left.into(), right.into()])
         }
     }
 
+    /// A native typed comparison over two bound RDF literal variables.
+    pub fn compare_literals(
+        left: impl Into<String>,
+        right: impl Into<String>,
+        comparison: Comparison,
+    ) -> Self {
+        Self {
+            implementation: Implementation::LiteralComparison(Box::new(comparison)),
+            ..Self::filter("literal comparison", vec![left.into(), right.into()])
+        }
+    }
+
     /// Whether this guard is a native operation or a caller callback.
-    pub fn operation(&self) -> GuardOperation {
-        self.operation
+    pub const fn operation(&self) -> GuardOperation {
+        match self.implementation {
+            Implementation::Callback => GuardOperation::Callback,
+            Implementation::NotEqual => GuardOperation::NotEqual,
+            Implementation::LiteralComparison(_) => GuardOperation::LiteralComparison,
+        }
+    }
+
+    /// The declared comparison, if the guard tests literal values.
+    pub fn comparison(&self) -> Option<&Comparison> {
+        match &self.implementation {
+            Implementation::LiteralComparison(comparison) => Some(comparison),
+            Implementation::Callback | Implementation::NotEqual => None,
+        }
     }
 
     /// A pure assignment of one fresh `output` from `inputs`.

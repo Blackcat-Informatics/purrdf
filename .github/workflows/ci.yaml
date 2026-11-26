@@ -69,6 +69,10 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    outputs:
+      helper-artifact: ${{ steps.helper.outputs.artifact }}
+      helper-digest: ${{ steps.helper.outputs.digest }}
+      helper-context: ${{ steps.helper.outputs.context }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -84,6 +88,32 @@ jobs:
 
       - name: Enforce no Cargo features
         run: cargo run -q --locked -p helper-census -- --no-features
+
+      - name: Record the built assembly report validator
+        id: helper
+        shell: bash
+        run: |
+          helper=target/debug/helper-census
+          test -x "$helper"
+          digest=$(sha256sum "$helper" | cut -d ' ' -f 1)
+          {
+            echo "artifact=assembly-report-helper-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            echo "digest=$digest"
+            echo 'context<<HELPER_CONTEXT'
+            git rev-parse HEAD 'HEAD^{tree}'
+            printf '%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:?}"
+            getconf GNU_LIBC_VERSION
+            rustc -vV
+            echo HELPER_CONTEXT
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload the assembly report validator
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ${{ steps.helper.outputs.artifact }}
+          path: target/debug/helper-census
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Check every workflow installs the toolchain rust-toolchain.toml pins
         run: python3 scripts/check-toolchain-pin.py
@@ -1036,7 +1066,7 @@ jobs:
           if-no-files-found: error
 
   simd-asm:
-    needs: [simd-asm-compiler, simd-asm-config]
+    needs: [simd-asm-compiler, simd-asm-config, workspace-hygiene]
     if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1045,6 +1075,10 @@ jobs:
         env:
           MATRIX_RESULT: ${{ needs.simd-asm-config.result }}
         run: test "$MATRIX_RESULT" = success
+      - name: Require a validator from this run
+        env:
+          HELPER_ARTIFACT: ${{ needs.workspace-hygiene.outputs.helper-artifact }}
+        run: '[[ "$HELPER_ARTIFACT" =~ ^assembly-report-helper-$GITHUB_RUN_ID-[1-9][0-9]*$ ]]'
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -1059,10 +1093,29 @@ jobs:
           pattern: simd-asm-*
           merge-multiple: true
           path: target/asm-reports
+      - name: Download the exact report validator
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: ${{ needs.workspace-hygiene.outputs.helper-artifact }}
+          path: ${{ runner.temp }}/assembly-report-helper
       - name: Check complete matrix and document parity
+        shell: bash
         env:
           PRODUCER_COMPILER: ${{ needs.simd-asm-compiler.outputs.version }}
+          PURRDF_ASM_REPORT_HELPER: ${{ runner.temp }}/assembly-report-helper/helper-census
+          HELPER_DIGEST: ${{ needs.workspace-hygiene.outputs.helper-digest }}
+          HELPER_CONTEXT: ${{ needs.workspace-hygiene.outputs.helper-context }}
         run: |
+          [[ "$HELPER_DIGEST" =~ ^[0-9a-f]{64}$ ]]
+          printf '%s  %s\n' "$HELPER_DIGEST" "$PURRDF_ASM_REPORT_HELPER" | sha256sum --strict --check
+          # The helper's compiler is provenance, not the report compiler.
+          # Match checkout and ABI without requiring floating nightly to
+          # resolve to the same date on an aggregate-only retry.
+          context="$(git rev-parse HEAD 'HEAD^{tree}'
+            printf '%s\n' "$RUNNER_OS" "$RUNNER_ARCH" "${ImageOS:?}"
+            getconf GNU_LIBC_VERSION)"
+          [[ "$HELPER_CONTEXT" == "$context"$'\n'rustc\ * ]]
+          chmod u+x "$PURRDF_ASM_REPORT_HELPER"
           test -n "$PRODUCER_COMPILER"
           printf '%s\n' "$PRODUCER_COMPILER" > target/asm-reports/compiler-receipt.txt
           make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"

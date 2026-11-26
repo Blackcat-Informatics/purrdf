@@ -34,6 +34,8 @@ pub use stack::{
 
 use std::sync::Arc;
 
+use purrdf_lex::allocation::shared::Shared;
+
 use crate::StopCause;
 use purrdf_hash::Domain;
 
@@ -457,12 +459,27 @@ impl SegmentedReceipt {
     }
 }
 
+#[derive(Clone)]
+enum SegmentedByteStorage {
+    External(Arc<[u8]>),
+    Certified(Shared<Vec<u8>>),
+}
+
+impl SegmentedByteStorage {
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            Self::External(bytes) => bytes,
+            Self::Certified(bytes) => bytes.as_slice(),
+        }
+    }
+}
+
 /// A bounded resident byte provider, useful for fixtures and browser-owned bytes.
 /// The source bytes are outside a reader's residency budget; the reader's copies,
 /// pins, metadata, scratch and exact evidence are inside it.
 #[derive(Clone)]
 pub struct SegmentedBytes {
-    bytes: Arc<[u8]>,
+    bytes: SegmentedByteStorage,
     snapshot: SegmentedSnapshot,
 }
 purrdf_hash::debug_non_exhaustive!(SegmentedBytes { snapshot });
@@ -472,7 +489,17 @@ impl SegmentedBytes {
     /// the certification receipt at open, and every actual read is authenticated.
     #[must_use]
     pub fn new(bytes: Arc<[u8]>, snapshot: SegmentedSnapshot) -> Self {
-        Self { bytes, snapshot }
+        Self {
+            bytes: SegmentedByteStorage::External(bytes),
+            snapshot,
+        }
+    }
+
+    fn from_certified(bytes: Shared<Vec<u8>>, snapshot: SegmentedSnapshot) -> Self {
+        Self {
+            bytes: SegmentedByteStorage::Certified(bytes),
+            snapshot,
+        }
     }
 }
 impl SegmentedProvider for SegmentedBytes {
@@ -480,7 +507,7 @@ impl SegmentedProvider for SegmentedBytes {
         self.snapshot
     }
     fn byte_len(&self) -> u64 {
-        u64::try_from(self.bytes.len()).expect("resident byte length fits u64")
+        u64::try_from(self.bytes.as_slice().len()).expect("resident byte length fits u64")
     }
     fn read_at(&self, position: u64, output: &mut [u8]) -> Result<(), SegmentedError> {
         let start = usize::try_from(position).map_err(|_| SegmentedError::AddressExhausted)?;
@@ -489,6 +516,7 @@ impl SegmentedProvider for SegmentedBytes {
             .ok_or(SegmentedError::AddressExhausted)?;
         output.copy_from_slice(
             self.bytes
+                .as_slice()
                 .get(start..end)
                 .ok_or(SegmentedError::Corrupt("truncated provider range"))?,
         );

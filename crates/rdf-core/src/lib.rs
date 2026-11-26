@@ -128,6 +128,8 @@ pub mod graph_roles;
 pub mod imports;
 // The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
+/// Strict, caller-declared comparison of time and digest literals.
+pub mod literal_comparison;
 // Generic provenance sidecar for the immutable RDF 1.2 dataset:
 // UnitId/ArtifactId/OriginSetId newtypes, interners, AssertionOccurrence,
 // DatasetProvenance, and the provenance gate. No PurRDF-specific concepts here.
