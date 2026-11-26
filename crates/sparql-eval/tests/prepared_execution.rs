@@ -723,7 +723,7 @@ fn declaring_one_parameter_twice_is_refused() {
 
     // The neighbour: two DISTINCT parameters prepare fine, including one the query
     // does not mention — `prepare_execution` admits it, and refusing it is the
-    // host's opt-in `check_parameters_mentioned` (`prepared_parameter_mentions.rs`).
+    // host's opt-in `check_parameters_mentioned` (the parameter mention tests).
     let execution = engine
         .prepare_execution(QUERY, None, &["this", "other"], &QueryOptions::EMPTY)
         .expect("distinct parameters must prepare");
