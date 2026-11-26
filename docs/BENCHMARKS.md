@@ -173,9 +173,12 @@ simply not narrated here:
   inline small-value path beside the public `XsdValue` operators, which now
   use the same exact tower. These rows do not compare with historical bounded
   arithmetic; that comparison requires a separate baseline checkout. It covers
-  its cost growth from 40 to 40,000 digits, and the schoolbook/Karatsuba
-  crossover, and decimal products at eighteen and twenty fractional digits,
-  both with inline coefficients. The `rational_balanced` rows exercise
+  cost growth from 40 to 40,000 digits and decimal products at eighteen and
+  twenty fractional digits, both with inline coefficients. The historical
+  schoolbook and Karatsuba labels use nominal widths, not dispatch boundaries.
+  The [asymmetric integer product report](benchmarks/asymmetric-integer-multiplication.md)
+  records instruction and allocation observations for exact binary limb widths.
+  The `rational_balanced` rows exercise
   reduction through the public rational constructor with operands of
   comparable widths. Each routine
   runs its body once under `--test`, so `perf stat -e instructions:u` of
