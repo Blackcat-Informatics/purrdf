@@ -26,9 +26,10 @@
 //!   a job on a known or emulated processor names what that processor must
 //!   run.
 //!
-//! Unset, nothing is required. Any other value fails the run, as does an
-//! entry naming a family outside [`ALL_FAMILIES`] or a path its family does not
-//! have: a misspelt requirement must fail rather than require nothing.
+//! Unset, nothing is required. Every parser invocation rejects malformed
+//! settings and unknown families. Tests reject unknown paths when they
+//! check the named family. A targeted run can still use settings that
+//! also name paths for other families.
 //!
 //! What "required" then asserts is the family's contract: that the path is
 //! available ([`assert_required_available`]), and for some families that it
@@ -49,7 +50,7 @@ pub const REQUIRE_SIMD_PATHS: &str = "PURRDF_REQUIRE_SIMD_PATHS";
 /// | `deflate` | DEFLATE match copy, compare and window hashing (`purrdf_deflate`) |
 /// | `distance` | the vector distance arithmetic (`purrdf_core::distance`) |
 /// | `hex` | base16 encoding (`purrdf_hash::hex`) |
-/// | `numeric` | directed binary64 endpoint products (`purrdf_xsd::math::FloatProductBackend`) |
+/// | `numeric` | directed products of IEEE `binary64` endpoints (`purrdf_xsd::math::FloatProductBackend`) |
 /// | `sha1` | the SHA-1 block function (`purrdf_hash::sha1`) |
 /// | `sha256` | SHA-224 and SHA-256 compression (`purrdf_hash::sha2`) |
 /// | `sha256-batch` | batching independent SHA-256 messages (`purrdf_hash::sha2`) |
