@@ -3,7 +3,8 @@
 
 //! SHA-256 and SHA-512 on the Arm crypto extensions. Their state and
 //! schedule groups follow FIPS 180-4 §6.2.2 and §6.4.2 and the Arm
-//! SHA256H/H2, SHA256SU0/SU1, SHA512H/H2 and SHA512SU0/SU1 definitions.
+//! `SHA256H`, `SHA256H2`, `SHA256SU0`, `SHA256SU1`, `SHA512H`,
+//! `SHA512H2`, `SHA512SU0`, and `SHA512SU1` definitions.
 
 use core::arch::aarch64::{
     vaddq_u32, vld1q_u8, vld1q_u32, vreinterpretq_u32_u8, vrev32q_u8, vsha256h2q_u32,
