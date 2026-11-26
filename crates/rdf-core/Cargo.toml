@@ -148,6 +148,11 @@ name = "freeze_alloc"
 harness = false
 
 [[bench]]
+# Allocation windows for native freeze and segmented seal over reified claims.
+name = "segmented_seal_alloc"
+harness = false
+
+[[bench]]
 # Allocations and retired instructions of the segmented seal, the first source
 # version and the change feed. Report-only; no clock is read.
 name = "source_change_counts"
