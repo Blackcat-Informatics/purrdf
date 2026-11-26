@@ -25,6 +25,7 @@ mod changes;
 mod statistics;
 pub(crate) use changes::SegmentedSourceVersion;
 mod view;
+use view::RemovalTranslationMemo;
 pub use view::SegmentedStackTermGuard;
 
 /// A dictionary in the pinned chronological publication. Layer indexes are oldest
@@ -88,6 +89,7 @@ pub struct SegmentedStackQuery<'a> {
     snapshot: &'a SegmentedStackSnapshot,
     sessions: Vec<SegmentedSession>,
     identities: Mutex<Identities>,
+    removal_translations: Mutex<RemovalTranslationMemo>,
     _sessions_storage: QueryStorage,
     operation: SegmentedOperation,
 }
@@ -125,6 +127,7 @@ impl SegmentedStackSnapshot {
             snapshot: self,
             sessions,
             identities: Mutex::new(identities),
+            removal_translations: Mutex::default(),
             _sessions_storage: storage,
             operation,
         };
