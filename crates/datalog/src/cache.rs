@@ -415,9 +415,9 @@ fn hash_guards<E>(hasher: &mut RuleHasher<'_, E>, guards: &[Guard], native: bool
 /// what [`PlanIdentity`] keys a cached PLAN on. Connectivity-first ordering changes
 /// candidate work, so `v2` deliberately changes the calculus identity too; the canonical
 /// authored clause encoding remains unchanged.
-/// Version 3 also refuses unrepresentable chase work instead of permitting a
-/// saturated counter to continue past the full-width limit.
-pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v3";
+/// The calculus refuses unrepresentable chase work and retries a witness
+/// address when its blank-node surface is already occupied.
+pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v4";
 
 /// Domain-separation tag for [`contract_hash`].
 ///
@@ -1593,10 +1593,8 @@ mod tests {
     /// The frozen values are the point. Recomputing the digest twice in one process proves
     /// nothing about a second process, so the expected hex is pinned here — under the
     /// historical browser and native finite profiles, each explicitly stated, so both pins hold on
-    /// every target. If this assertion fails, exactly one of two things happened: the
-    /// digest's ENCODING changed (legitimate, and the new value goes here in the same
-    /// change that bumps [`CALCULUS_VERSION`]), or an input drifted without anyone
-    /// deciding it should.
+    /// every target. When evaluator semantics change, bump [`CALCULUS_VERSION`]
+    /// and update both pins. An unexpected difference indicates input or encoding drift.
     #[test]
     fn the_contract_hash_is_frozen() {
         let wasm = EvalOptions::default()
@@ -1604,20 +1602,18 @@ mod tests {
             .with_max_join_steps(1_048_576)
             .with_max_stored_facts(131_072)
             .with_max_term_arena_bytes(1 << 24);
-        assert_eq!(
-            contract_hash_with(&transitive_step(Q), &wasm).to_hex(),
-            "6edbbc243f3c2950ceee43f91d10a6455330673ac4b95feec8b034b07d94c4af",
-            "the contract hash of the fixture program under the historical browser profile moved"
-        );
         let native = EvalOptions::default()
             .with_derivation_mode(crate::seminaive::DerivationMode::Record)
             .with_max_join_steps(1_048_576)
             .with_max_stored_facts(4_194_304)
             .with_max_term_arena_bytes(1 << 24);
         assert_eq!(
-            contract_hash_with(&transitive_step(Q), &native).to_hex(),
-            "fd72be9b6d8509748d2e4e4d534a72550b0c151577023c0e3b50b6c4bbf261b0",
-            "the contract hash of the fixture program under the historical native profile moved"
+            [wasm, native].map(|policy| contract_hash_with(&transitive_step(Q), &policy).to_hex()),
+            [
+                "e2ef94032870b98ca16b4024764d7bfa3e70f9060d2ad1460ca0fdf7fff4b262",
+                "2f1c6f98d1ba5327310887f0e2f80e67e8ca8e56dac50f9313e7e0904933895f",
+            ],
+            "the contract hash of the fixture under the historical browser and native profiles moved"
         );
         let hash = contract_hash(&transitive_step(Q));
         // Recomputation is stable, and the two renderings agree.
@@ -1676,13 +1672,13 @@ mod tests {
         );
         assert_eq!(
             contract_hash_with(&guarded_step(Q), &stated_options()).to_hex(),
-            "381da965e54dd12704070b50ae495c4bb9e7524089ab435abbee0db497f247dc",
+            "a45595fb4e329ce99f994821c5137ac093367a8ab41b34c980c0a82a469ca1ef",
             "the guarded contract re-fold moved"
         );
         let schedule = Schedule::new(vec![crate::schedule::Layer::new(vec![vec![0]], Vec::new())]);
         assert_eq!(
             scheduled_contract_hash(&transitive_step(Q), &schedule, &stated_options()).to_hex(),
-            "6662384d35a3137e23e8b73c4e7d6db87f7fb1877fbe4ba33f1493551f143fac",
+            "3c5cbf8c819ed0b9b55f094dd982ed0b50e9166edf571172d0fb4f585a0de870",
             "the scheduled contract hash moved"
         );
         assert_eq!(
