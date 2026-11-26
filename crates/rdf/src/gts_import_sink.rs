@@ -52,8 +52,8 @@ use crate::{
 mod export;
 mod indexed;
 pub use export::{
-    GtsTextExport, export_gts_rdf_nquads_with_dictionary,
-    export_gts_rdf_nquads_with_dictionary_and_limits,
+    GtsTextExport, export_gts_rdf_nquads_from_reader_with_dictionary,
+    export_gts_rdf_nquads_with_dictionary, export_gts_rdf_nquads_with_dictionary_and_limits,
 };
 pub use indexed::import_gts_indexed_term;
 

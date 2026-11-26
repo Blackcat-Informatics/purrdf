@@ -896,6 +896,149 @@ fn source_chain_has(
 }
 
 #[test]
+fn forward_text_export_preserves_exact_rows_eof_and_late_input_refusal() {
+    use std::fs::{self, File};
+    use std::io::{self, Read};
+
+    use purrdf_gts::reader::GtsReadLimits;
+    use purrdf_hash::error::IoFailure;
+    use purrdf_rdf::export_gts_rdf_nquads_from_reader_with_dictionary;
+
+    const REFUSAL: i32 = 77;
+    #[derive(Clone, Copy)]
+    enum Boundary {
+        Eof,
+        Refusal,
+    }
+    struct ShortFile {
+        file: File,
+        position: usize,
+        boundary: Option<(usize, Boundary)>,
+    }
+    impl Read for ShortFile {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            if output.is_empty() {
+                return Ok(0);
+            }
+            let mut available = output.len().min(17);
+            if let Some((position, boundary)) = self.boundary {
+                if position == self.position {
+                    return match boundary {
+                        Boundary::Eof => {
+                            self.boundary = None;
+                            Ok(0)
+                        }
+                        Boundary::Refusal => Err(io::Error::from_raw_os_error(REFUSAL)),
+                    };
+                }
+                available = available.min(position - self.position);
+            }
+            let read = self.file.read(&mut output[..available])?;
+            self.position += read;
+            Ok(read)
+        }
+    }
+
+    let directory = purrdf_testkit::temp_dir!().expect("forward export directory");
+    let root = directory.path();
+    // The first segment emits more than one drain window before the second
+    // segment reaches its final item. That makes earlier output provisional.
+    let first = fixture::source(400, false);
+    let complete = [first.as_slice(), &fixture::source(1, true)].concat();
+    let source_path = root.join("source.gts");
+    fs::write(&source_path, &complete).expect("host input file");
+    let reference = |name: &str, bytes: &[u8]| {
+        let path = root.join(name);
+        let mut raw = storage::Files::new(&path);
+        let mut resolution = storage::Resolution::new(&path.join("resolution"));
+        let replay = raw.replay();
+        let mut output = WriterDrain(Vec::new());
+        let mut ceiling = Ceiling(128 * 1024);
+        let report = export_gts_rdf_nquads_with_dictionary(
+            bytes,
+            &mut raw,
+            &mut resolution,
+            replay,
+            &mut output,
+            &mut Memory::new(&mut ceiling),
+        )
+        .expect("exact slice comparison");
+        (output.0, report)
+    };
+    let full = reference("slice-full", &complete);
+    let prefix = reference("slice-prefix", &first);
+    assert!(prefix.0.len() > purrdf_core::sink::DRAIN_BUFFER_BYTES);
+
+    for (name, boundary, expected) in [
+        ("complete", None, Some(&full)),
+        ("eof", Some((first.len(), Boundary::Eof)), Some(&prefix)),
+        (
+            "refused",
+            Some((complete.len() - 1, Boundary::Refusal)),
+            None,
+        ),
+    ] {
+        let path = root.join(name);
+        let mut raw = storage::Files::new(&path);
+        let mut resolution = storage::Resolution::new(&path.join("resolution"));
+        let replay = raw.replay();
+        let output_path = path.join("output.nq");
+        let mut output = WriterDrain(File::create(&output_path).expect("host output file"));
+        let mut source = ShortFile {
+            file: File::open(&source_path).expect("forward source"),
+            position: 0,
+            boundary,
+        };
+        let mut limit = GtsReadLimits::UNBOUNDED;
+        limit.encoded_input_bytes = complete.len();
+        let mut ceiling = Ceiling(128 * 1024);
+        let mut memory = Memory::new(&mut ceiling);
+        let result = export_gts_rdf_nquads_from_reader_with_dictionary(
+            &mut source,
+            limit,
+            &mut raw,
+            &mut resolution,
+            replay,
+            &mut output,
+            &mut memory,
+        );
+        assert_eq!(memory.admitted_bytes(), 0, "{name} refunds emitter scratch");
+        drop(output);
+        let output = fs::read(output_path).expect("read file after settlement");
+        if let Some((reference, report)) = expected {
+            let result = result.expect("valid complete stream");
+            assert_eq!(&output, reference);
+            assert_eq!(result.written, report.written);
+            assert_eq!(result.envelope, report.envelope);
+            assert_eq!(result.read.segment_heads, report.read.segment_heads);
+            assert_eq!(result.read.segment_profiles, report.read.segment_profiles);
+            assert_eq!(result.read.segment_meta, report.read.segment_meta);
+            assert!(result.read.torn.is_none());
+            assert!(
+                result.read.diagnostics.is_empty(),
+                "{:?}",
+                result.read.diagnostics
+            );
+            if boundary.is_some() {
+                assert_eq!(source.position, first.len(), "no reads after framed EOF");
+            }
+        } else {
+            let error = result.expect_err("late source refusal does not settle output");
+            assert!(
+                source_chain_has(&error, |cause| {
+                    cause
+                        .downcast_ref::<IoFailure>()
+                        .is_some_and(|io| io.original().raw_os_error() == Some(REFUSAL))
+                }),
+                "{error:?}"
+            );
+            assert!(!output.is_empty(), "earlier drain bytes are provisional");
+            assert!(full.0.starts_with(&output));
+        }
+    }
+}
+
+#[test]
 fn text_refusal_refunds_partial_blank_label_scratch_before_returning() {
     let directory = purrdf_testkit::temp_dir!().expect("refusal directory");
     let mut writer = Writer::new("rdf12");

@@ -2798,6 +2798,7 @@ fn result_allows_storage_commit(result: &StreamingReadResult) -> bool {
 struct StreamingCountingReader<R> {
     inner: R,
     pos: u64,
+    clean_eof: bool,
     address_exhausted: Option<(u64, usize)>,
     maximum: Option<usize>,
     input_maximum: Option<u64>,
@@ -2896,7 +2897,7 @@ fn finish_bounded_input<R: Read>(
     sink: &mut dyn StreamingSink,
     scan_items: bool,
 ) -> BoundedTailOutcome {
-    if !sink.continue_reading() {
+    if reader.clean_eof || !sink.continue_reading() {
         return BoundedTailOutcome::default();
     }
     let mut torn = None;
@@ -3030,7 +3031,12 @@ fn next_stream_item<R: Read>(
             .transpose()
     }) {
         Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
-        Ok(None) => Ok(None),
+        Ok(None) => {
+            // Tail admission is for a fold that stopped before reaching EOF.
+            // Do not read again after the source ended between complete items.
+            reader.clean_eof = true;
+            Ok(None)
+        }
         Err(cause) => Err(TornAppendError {
             offset: start,
             cause,
@@ -3744,6 +3750,7 @@ pub fn read_to_sink_from_reader<R: Read>(
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
+        clean_eof: false,
         address_exhausted: None,
         maximum: sink.encoded_frame_limit(),
         input_maximum,
@@ -3772,6 +3779,7 @@ pub fn read_to_sink_from_reader_with_limits<R: Read>(
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
+        clean_eof: false,
         address_exhausted: None,
         maximum: Some(limits.encoded_frame_bytes),
         input_maximum: Some(input_maximum),
@@ -3830,6 +3838,7 @@ pub fn read_to_sink_from_reader_with_dictionary<R: Read>(
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
+        clean_eof: false,
         address_exhausted: None,
         maximum: Some(
             limits
@@ -3869,6 +3878,7 @@ pub fn read_to_sink_from_reader_with_dictionary_and_limits<R: Read>(
     let mut reader = StreamingCountingReader {
         inner: reader,
         pos: 0,
+        clean_eof: false,
         address_exhausted: None,
         maximum: Some(read_limits.encoded_frame_bytes),
         input_maximum: Some(input_maximum),
@@ -4630,6 +4640,7 @@ mod transformed_payload_tests {
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: (1 << 32) + 7,
+            clean_eof: false,
             address_exhausted: None,
             maximum: None,
             input_maximum: None,
@@ -4640,6 +4651,7 @@ mod transformed_payload_tests {
         let mut reader = StreamingCountingReader {
             inner: std::io::Cursor::new([1u8]),
             pos: u64::MAX,
+            clean_eof: false,
             address_exhausted: None,
             maximum: None,
             input_maximum: None,
