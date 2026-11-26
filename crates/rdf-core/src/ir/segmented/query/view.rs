@@ -53,6 +53,53 @@ fn local_index(id: TermId) -> u64 {
     u64::from(id.raw() - 1)
 }
 
+fn resident_term_id(index: u64) -> Result<TermId, SegmentedError> {
+    let index = u32::try_from(index).map_err(|_| SegmentedError::AddressExhausted)?;
+    TermId::from_index(index).map_err(|error| StorageError::from(error).into())
+}
+
+fn translate_probe<I>(
+    pattern: ProbePattern<GlobalTermId>,
+    mut lookup: impl FnMut(usize, GlobalTermId) -> Result<Option<I>, SegmentedError>,
+) -> Result<Option<ProbePattern<I>>, SegmentedError> {
+    let (s, p, o) = (
+        pattern.s.map(|id| lookup(0, id)).transpose()?,
+        pattern.p.map(|id| lookup(1, id)).transpose()?,
+        pattern.o.map(|id| lookup(2, id)).transpose()?,
+    );
+    if matches!(s, Some(None)) || matches!(p, Some(None)) || matches!(o, Some(None)) {
+        return Ok(None);
+    }
+    let g = match pattern.g {
+        GraphMatch::Any => GraphMatch::Any,
+        GraphMatch::Default => GraphMatch::Default,
+        GraphMatch::Named(id) => {
+            let Some(id) = lookup(3, id)? else {
+                return Ok(None);
+            };
+            GraphMatch::Named(id)
+        }
+    };
+    Ok(Some(ProbePattern {
+        s: s.flatten(),
+        p: p.flatten(),
+        o: o.flatten(),
+        g,
+    }))
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct RemovalTranslations {
+    source: Option<usize>,
+    columns: [Option<(GlobalTermId, Option<TermId>)>; 4],
+}
+
+/// One recent translation per role for each of a few adjacent removal layers.
+/// The publication is pinned and immutable. The memo adds no retained heap and
+/// never grows with the number of touched terms or layers.
+#[derive(Debug, Default)]
+pub(super) struct RemovalTranslationMemo([RemovalTranslations; 4]);
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stream {
     Ordinary,
@@ -111,67 +158,92 @@ impl SegmentedStackQuery<'_> {
         local: impl Fn(u64) -> Result<D::Id, SegmentedError>,
         error: impl Fn(D::ReadError) -> SegmentedError,
     ) -> Result<Option<ProbePattern<D::Id>>, SegmentedError> {
-        let convert = |id: Option<GlobalTermId>| {
-            id.map(|id| {
-                // IDs originally imported from this source already carry its
-                // exact local address. Do not materialize and reverse-search
-                // that same value again for each annotation membership probe.
-                let original = {
-                    let identities = lock_read_state(&self.identities);
-                    usize::try_from(id.index())
-                        .ok()
-                        .and_then(|index| identities.representatives.get(index))
-                        .map(|representative| representative.term)
-                };
-                if let Some(term) = original.filter(|term| term.source == origin) {
-                    return local(term.index).map(Some);
-                }
-                let value = self.term_value(id)?;
-                source.term_id_by_value(value.value()).map_err(&error)
-            })
-            .transpose()
-        };
-        let (s, p, o) = (
-            convert(pattern.s)?,
-            convert(pattern.p)?,
-            convert(pattern.o)?,
-        );
-        if s == Some(None) || p == Some(None) || o == Some(None) {
-            return Ok(None);
-        }
-        let g = match pattern.g {
-            GraphMatch::Any => GraphMatch::Any,
-            GraphMatch::Default => GraphMatch::Default,
-            GraphMatch::Named(id) => {
-                let Some(Some(id)) = convert(Some(id))? else {
-                    return Ok(None);
-                };
-                GraphMatch::Named(id)
-            }
-        };
-        Ok(Some(ProbePattern {
-            s: s.flatten(),
-            p: p.flatten(),
-            o: o.flatten(),
-            g,
-        }))
+        translate_probe(pattern, |_, id| {
+            self.translate_term(source, origin, id, &local, &error)
+        })
     }
 
-    fn rows_from<'a, D: DatasetView, R: Iterator<Item = QuadIds<D::Id>> + 'a>(
-        &'a self,
-        dataset: &'a D,
+    fn translate_term<D: DatasetView>(
+        &self,
+        source: &D,
         origin: SegmentedStackSource,
-        rows: impl Fn(ProbePattern<D::Id>) -> R + 'a,
-        pattern: ProbePattern<GlobalTermId>,
-        ids: (
-            impl Fn(D::Id) -> u64 + Copy + 'a,
-            impl Fn(u64) -> Result<D::Id, SegmentedError>,
-        ),
+        id: GlobalTermId,
+        local: impl Fn(u64) -> Result<D::Id, SegmentedError>,
         error: impl Fn(D::ReadError) -> SegmentedError,
+    ) -> Result<Option<D::Id>, SegmentedError> {
+        // IDs originally imported from this source already carry its exact
+        // local address, so no value materialization or reverse lookup is needed.
+        let original = {
+            let identities = lock_read_state(&self.identities);
+            usize::try_from(id.index())
+                .ok()
+                .and_then(|index| identities.representatives.get(index))
+                .map(|representative| representative.term)
+        };
+        if let Some(term) = original.filter(|term| term.source == origin) {
+            return local(term.index).map(Some);
+        }
+        let value = self.term_value(id)?;
+        source.term_id_by_value(value.value()).map_err(error)
+    }
+
+    fn translate_resident_pattern(
+        &self,
+        source: &crate::RdfDataset,
+        origin: SegmentedStackSource,
+        pattern: ProbePattern<GlobalTermId>,
+    ) -> Result<Option<ProbePattern<TermId>>, SegmentedError> {
+        let index = match origin {
+            SegmentedStackSource::Removals(index) => index,
+            SegmentedStackSource::HeadRemovals => self.sessions.len(),
+            _ => {
+                return self.translate_pattern(
+                    source,
+                    origin,
+                    pattern,
+                    resident_term_id,
+                    |error| match error {},
+                );
+            }
+        };
+        let mut memo = {
+            let memos = lock_read_state(&self.removal_translations);
+            memos.0[index % memos.0.len()]
+        };
+        if memo.source != Some(index) {
+            memo = RemovalTranslations {
+                source: Some(index),
+                ..RemovalTranslations::default()
+            };
+        }
+        let translated = translate_probe(pattern, |column, id| {
+            if let Some((key, local)) = memo.columns[column]
+                && key == id
+            {
+                return Ok(local);
+            }
+            let local =
+                self.translate_term(source, origin, id, resident_term_id, |error| match error {})?;
+            memo.columns[column] = Some((id, local));
+            Ok(local)
+        })?;
+        // Only successful queries of the original resident dictionary can
+        // populate a slot. Do not hold the memo lock across provider reads.
+        let mut memos = lock_read_state(&self.removal_translations);
+        let slot = index % memos.0.len();
+        memos.0[slot] = memo;
+        drop(memos);
+        Ok(translated)
+    }
+
+    fn rows_from<'a, I: crate::ViewTermId, R: Iterator<Item = QuadIds<I>> + 'a>(
+        &'a self,
+        origin: SegmentedStackSource,
+        rows: impl Fn(ProbePattern<I>) -> R + 'a,
+        pattern: Result<Option<ProbePattern<I>>, SegmentedError>,
+        index: impl Fn(I) -> u64 + Copy + 'a,
     ) -> impl Iterator<Item = QuadIds<GlobalTermId>> + 'a {
-        let (index, local) = ids;
-        let pattern = self
-            .translate_pattern(dataset, origin, pattern, local, error)
+        let pattern = pattern
             .or_else(|error| self.operation.fail(error))
             .ok()
             .flatten();
@@ -225,8 +297,17 @@ impl SegmentedStackQuery<'_> {
             })
             .flat_map(move |source| {
                 let values = values.clone();
-                self.rows_from(
+                let translated = self.translate_pattern(
                     source,
+                    origin,
+                    pattern,
+                    |index| {
+                        GlobalTermId::from_index(index)
+                            .map_err(|error| StorageError::from(error).into())
+                    },
+                    |error| error,
+                );
+                self.rows_from(
                     origin,
                     move |pattern| {
                         source.stream_range(
@@ -235,12 +316,8 @@ impl SegmentedStackQuery<'_> {
                             values.clone(),
                         )
                     },
-                    pattern,
-                    (GlobalTermId::index, |index| {
-                        GlobalTermId::from_index(index)
-                            .map_err(|error| StorageError::from(error).into())
-                    }),
-                    |error| error,
+                    translated,
+                    GlobalTermId::index,
                 )
             })
             .chain(
@@ -255,8 +332,8 @@ impl SegmentedStackQuery<'_> {
                             }
                     })
                     .flat_map(move |source| {
+                        let translated = self.translate_resident_pattern(source, origin, pattern);
                         self.rows_from(
-                            source,
                             origin,
                             move |pattern| {
                                 let dataset = source;
@@ -334,14 +411,8 @@ impl SegmentedStackQuery<'_> {
                                             }),
                                     )
                             },
-                            pattern,
-                            (local_index, |index| {
-                                let index = u32::try_from(index)
-                                    .map_err(|_| SegmentedError::AddressExhausted)?;
-                                TermId::from_index(index)
-                                    .map_err(|error| StorageError::from(error).into())
-                            }),
-                            |error| match error {},
+                            translated,
+                            local_index,
                         )
                     }),
             )

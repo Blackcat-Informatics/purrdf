@@ -744,6 +744,72 @@ fn chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs() {
     );
 }
 
+fn layered_removal_translation_preserves_chronological_visibility() {
+    use purrdf_core::QuadValues;
+
+    for (count, shared) in [(32, true), (128, true), (128, false)] {
+        let iri = |field, ordinal| {
+            TermValue::iri(format!(
+                "urn:translation:{field}:{ordinal:04}:a-long-value-to-observe-materialization"
+            ))
+        };
+        let mut expected: Vec<_> = (0..count)
+            .map(|ordinal| {
+                let key = if shared { 0 } else { ordinal };
+                QuadValues {
+                    s: iri("subject", key),
+                    p: iri("predicate", key),
+                    o: iri("object", ordinal),
+                    g: Some(iri("graph", key)),
+                }
+            })
+            .collect();
+        let initial = statement_layer([&expected, &[], &[]], SegmentedLayerMetadata::default());
+        let retained = expected[count / 2].clone();
+        let discarded = expected.remove(count - 1);
+        let mut unrelated = expected[0].clone();
+        unrelated.o = iri("object", count);
+        let mut layers = vec![initial];
+        for removed in [[retained.clone()], [discarded], [unrelated]] {
+            let metadata =
+                SegmentedLayerMetadata::new(Some(removal_carrier(&removed)), None).unwrap();
+            layers.push(statement_layer([&[], &[], &[]], metadata));
+        }
+        layers.push(statement_layer(
+            [&[retained], &[], &[]],
+            SegmentedLayerMetadata::default(),
+        ));
+        let mut stack = SegmentedStack::default();
+        stack.publish(layers, limits()).unwrap();
+        let snapshot = stack.snapshot().unwrap();
+        let query = snapshot.query(limits()).unwrap();
+        let mut ids = Vec::with_capacity(count);
+        let window = CurrentThreadWindow::open();
+        ids.extend(query.quads());
+        let work = window.close();
+        query.check_ready().unwrap();
+
+        let value = |id| query.term_value(id).unwrap().value().clone();
+        let mut actual: Vec<_> = ids
+            .into_iter()
+            .map(|row| QuadValues {
+                s: value(row.s),
+                p: value(row.p),
+                o: value(row.o),
+                g: row.g.map(value),
+            })
+            .collect();
+        actual.sort_unstable_by(|a, b| a.o.cmp(&b.o));
+        assert_eq!(actual, expected);
+        if shared {
+            // The scan still pays for distinct objects, admitted identities,
+            // and statement reads. Reusing the shared terms stays below the
+            // work of materializing them for every removal carrier and row.
+            assert!(work.allocations < 10 * count as u64, "{work:?}");
+        }
+    }
+}
+
 fn effective_annotation_classification_uses_original_chronology_and_first_occurrence() {
     use purrdf_core::DatasetView;
     let annotations: Vec<_> = (0..4)
@@ -1381,6 +1447,7 @@ purrdf_testkit::harness_main!(
     empty_certified_streams_do_not_probe_dictionary_for_bound_head_row,
     persisted_purge_rewrites_only_affected_source_and_releases_old_pins_last,
     chronological_view_removes_reinserts_and_preserves_explicit_empty_graphs,
+    layered_removal_translation_preserves_chronological_visibility,
     effective_annotation_classification_uses_original_chronology_and_first_occurrence,
     removal_only_minted_nested_scoped_value_roundtrips_through_dataset_view,
     fallible_evidence_pins_complete_publication_and_immutable_request_prefix,
