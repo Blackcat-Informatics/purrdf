@@ -1182,17 +1182,7 @@ fn bench_canonicalize(c: &mut Bench) {
             prev = cur;
         }
     }
-    // The ring: every blank looks identical at first degree.
-    let ring: Vec<TermId> = (0..RING)
-        .map(|i| {
-            b.intern_blank(&format!("r{i}"), BlankScope::DEFAULT)
-                .unwrap()
-        })
-        .collect();
-    for i in 0..RING as usize {
-        b.push_quad(ring[i], next, ring[(i + 1) % RING as usize], None)
-            .unwrap();
-    }
+    append_canonical_ring(&mut b, next, RING);
     let ds = b.freeze().expect("bench fixture freezes");
 
     let mut group = c.benchmark_group("ir_canonicalize");
@@ -1212,7 +1202,116 @@ fn bench_canonicalize(c: &mut Bench) {
             )
         });
     });
+    for (name, count, dataset, searches) in [
+        (
+            "reifier_claims_128",
+            128,
+            canonical_reifier_claims(128),
+            false,
+        ),
+        (
+            "reifier_claims_512",
+            512,
+            canonical_reifier_claims(512),
+            false,
+        ),
+        ("collision_ring_6", 6, canonical_ring(6), true),
+        ("collision_ring_12", 12, canonical_ring(12), true),
+    ] {
+        let mut reported = false;
+        group.bench_function(name, |b| {
+            if !reported {
+                report_canonical_allocation(name, &dataset, count, searches);
+                reported = true;
+            }
+            b.iter(|| {
+                let mut control = purrdf_core::CanonicalizationControl::new(
+                    purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY,
+                    None,
+                );
+                purrdf_core::rdfc12::try_canonicalize(&dataset, &mut control).unwrap()
+            });
+        });
+    }
     group.finish();
+}
+
+fn append_canonical_ring(builder: &mut RdfDatasetBuilder, next: TermId, count: u32) {
+    // Every blank looks identical at first degree.
+    let ring: Vec<_> = (0..count)
+        .map(|i| {
+            builder
+                .intern_blank(&format!("r{i}"), BlankScope::DEFAULT)
+                .unwrap()
+        })
+        .collect();
+    for (i, &blank) in ring.iter().enumerate() {
+        builder
+            .push_quad(blank, next, ring[(i + 1) % ring.len()], None)
+            .unwrap();
+    }
+}
+
+fn canonical_ring(count: u32) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let next = builder.intern_iri("http://example.org/next").unwrap();
+    append_canonical_ring(&mut builder, next, count);
+    builder.freeze().unwrap()
+}
+
+fn canonical_reifier_claims(count: u32) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let subject = builder.intern_iri("http://example.org/subject").unwrap();
+    let predicate = builder.intern_iri("http://example.org/claims").unwrap();
+    let annotations = ["score", "source", "status"].map(|name| {
+        builder
+            .intern_iri(&format!("http://example.org/{name}"))
+            .unwrap()
+    });
+    for i in 0..count {
+        let value = builder
+            .intern_literal(RdfLiteral::simple(format!("claim {i}")))
+            .unwrap();
+        let triple = builder.intern_triple(subject, predicate, value).unwrap();
+        let reifier = builder
+            .intern_blank(&format!("claim{i}"), BlankScope::DEFAULT)
+            .unwrap();
+        builder.push_reifier(reifier, triple).unwrap();
+        for annotation in annotations {
+            builder.push_annotation(reifier, annotation, value).unwrap();
+        }
+    }
+    builder.freeze().unwrap()
+}
+
+fn report_canonical_allocation(name: &str, dataset: &RdfDataset, count: usize, searches: bool) {
+    let mut control =
+        purrdf_core::CanonicalizationControl::new(purrdf_core::rdfc12::RDFC_V2_CORPUS_POLICY, None);
+    let window = CurrentThreadWindow::open();
+    let result = purrdf_core::rdfc12::try_canonicalize(dataset, &mut control).unwrap();
+    let measurement = window.close();
+    let [receipt] = control.receipts() else {
+        panic!("expected one canonicalization receipt");
+    };
+    assert!(receipt.completed);
+    let permutations = receipt
+        .work
+        .count(purrdf_core::SearchEvent::RdfcPermutation);
+    assert_eq!(result.label_count(), count);
+    assert_eq!(permutations > 0, searches, "{name}");
+    let mut labels = purrdf_hash::blake3::Hasher::new();
+    for (id, label) in result.labels() {
+        labels.update(&u64::try_from(id.index()).unwrap().to_le_bytes());
+        labels.update(label.as_bytes());
+        labels.update(b"\n");
+    }
+    let bytes = purrdf_hash::blake3::hash(result.nquads().as_bytes());
+    let labels = labels.finalize();
+    let bytes = purrdf_hash::hex::encode(bytes.as_bytes());
+    let labels = purrdf_hash::hex::encode(labels.as_bytes());
+    println!(
+        "[ir_canonicalize] {name} blanks={count} permutations={permutations} {measurement} bytes={bytes} labels={labels}"
+    );
 }
 
 fn bench_word_prefixes(c: &mut Bench) {

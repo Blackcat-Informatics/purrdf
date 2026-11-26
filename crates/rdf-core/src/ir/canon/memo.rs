@@ -460,19 +460,19 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
                 !issuer.has(id),
                 "a cached suffix extends its original caller"
             );
-            issuer.issue(id);
+            issuer.issue(id)?;
         }
         Ok(Some(value.hash))
     }
 
-    /// The suspended parent candidate still owns the exact child-entry issuer.
-    /// Successful children preserve that prefix, so no key is owned per depth.
+    /// A successful child leaves the exact entry prefix in the live issuer.
+    /// Its length suffices to recover the key without owning it per depth.
     pub(super) fn completed<D: DatasetView<Id = Id>, S: Admission + ?Sized>(
         &mut self,
         state: &CanonState<'_, D>,
         (focus, hash): (Id, HashHex),
         issuer: &IdIssuer<Id>,
-        entry: &IdIssuer<Id>,
+        entry_count: usize,
         memory: &mut Memory<'_, S>,
         observe: impl FnMut(Id),
     ) -> Result<(), CanonError<D::ReadError>> {
@@ -481,14 +481,8 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
             .workspace
             .as_mut()
             .expect("a completed child initialized its resident workspace");
-        let prefix = workspace.prepare(
-            state,
-            self.footprints,
-            focus,
-            issuer,
-            entry.order().len(),
-            memory,
-        )?;
+        let prefix =
+            workspace.prepare(state, self.footprints, focus, issuer, entry_count, memory)?;
         workspace.observe_dependencies(state, focus, observe)?;
         if self
             .table
@@ -497,7 +491,7 @@ impl<'a, Id: ViewTermId> Memo<'a, Id> {
         {
             return Ok(());
         }
-        let suffix = &issuer.order()[entry.order().len()..];
+        let suffix = &issuer.order()[entry_count..];
         loop {
             state.check_stop().map_err(CanonError::with_read_error)?;
             let table = &mut self.table;

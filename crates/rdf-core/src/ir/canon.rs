@@ -1288,27 +1288,33 @@ fn relabel_recording(
         run,
     )
     .issue_labels()?
-    .canonical
-    .issued;
-    rebuild_with_labels(ds, &labels, record, run)
+    .canonical;
+    rebuild_with_labels(
+        ds,
+        labels.order().len(),
+        |id| labels.issued_for(id),
+        record,
+        run,
+    )
 }
 
 /// Rewrite `ds` with each blank node of `labels` at its label and every other
 /// term unchanged, reaching inside composite literals so an embedded blank
 /// node takes the same label as the node elsewhere. The one rewrite both
 /// canonical families share.
-fn rebuild_with_labels(
+fn rebuild_with_labels<'a>(
     ds: &RdfDataset,
-    labels: &BTreeMap<TermId, Box<str>>,
+    label_count: usize,
+    labels: impl Fn(TermId) -> Option<&'a str>,
     record: impl FnMut(RelabelSource<'_>, TermId),
-    run: &SearchRun<'_>,
+    run: &'a SearchRun<'a>,
 ) -> Result<RdfDataset, CanonError> {
     // Declaration-only blank graphs are invisible to canonicalization (they own
     // no statement), so continue the canonical numbering over them in a
     // value-deterministic order.
     let mut unseen: Vec<(&str, BlankScope, TermId)> = ds
         .named_graphs()
-        .filter(|g| !labels.contains_key(g))
+        .filter(|&g| labels(g).is_none())
         .filter_map(|g| match ds.resolve(g) {
             TermRef::Blank { label, scope } => Some((label, scope, g)),
             _ => None,
@@ -1319,7 +1325,7 @@ fn rebuild_with_labels(
         .iter()
         .enumerate()
         .map(|(i, &(_, _, id))| {
-            let label = format!("{CANON_PREFIX}{}", labels.len() + i);
+            let label = format!("{CANON_PREFIX}{}", label_count + i);
             (id, label.into_boxed_str())
         })
         .collect();
@@ -1339,17 +1345,21 @@ fn rebuild_with_labels(
 
 /// The [`canonical_relabel`] mapper: blanks take their issued `c14n{n}` label
 /// at [`BlankScope::DEFAULT`]; every other term passes through unchanged.
-struct CanonicalRelabeler<'a, R> {
+struct CanonicalRelabeler<'a, R, L> {
     stop: Option<&'a dyn crate::StopSignal>,
     /// The canonicalization's issued labels ([`Canonicalized::labels`]).
-    labels: &'a BTreeMap<TermId, Box<str>>,
+    labels: L,
     /// Continuation labels for declaration-only blank graphs.
     extra: BTreeMap<TermId, Box<str>>,
     /// Receives actual term pairs during the same rebuild traversal.
     record: R,
 }
 
-impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, R> {
+impl<'a, R, L> TermMapper for CanonicalRelabeler<'a, R, L>
+where
+    R: FnMut(RelabelSource<'_>, TermId),
+    L: Fn(TermId) -> Option<&'a str>,
+{
     type Error = CanonError;
 
     fn map_blank(
@@ -1360,10 +1370,8 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
         _scope: BlankScope,
     ) -> Result<TermId, CanonError> {
         check_stop(self.stop)?;
-        let label = self
-            .labels
-            .get(&id)
-            .or_else(|| self.extra.get(&id))
+        let label = (self.labels)(id)
+            .or_else(|| self.extra.get(&id).map(Box::as_ref))
             .expect("every blank node holds a canonical or continuation label");
         Ok(builder.intern_blank(label, BlankScope::DEFAULT)?)
     }
@@ -2278,11 +2286,18 @@ impl<'a, Id: ViewTermId> BlankRender<'a, Id> {
 
 /// The RDFC-1.0 "identifier issuer": mints prefixed ids (`c14n0`, `b0`, …) in a
 /// stable order, remembering each blank's id and the issuance order.
-#[derive(Clone)]
+#[cfg_attr(test, derive(Clone))]
 struct IdIssuer<Id> {
     prefix: &'static str,
-    issued: BTreeMap<Id, Box<str>>,
+    issued: BTreeMap<Id, usize>,
+    text: String,
     order: Vec<Id>,
+}
+
+#[derive(Clone, Copy)]
+struct IssuerPrefix {
+    count: usize,
+    bytes: usize,
 }
 
 type IssuedHash<Id> = (HashHex, IdIssuer<Id>);
@@ -2292,31 +2307,117 @@ impl<Id: ViewTermId> IdIssuer<Id> {
         Self {
             prefix,
             issued: BTreeMap::new(),
+            text: String::new(),
             order: Vec::new(),
         }
     }
 
+    /// Canonical issuance assigns every ordinal below count exactly once.
+    fn reserve_complete(
+        &mut self,
+        count: usize,
+    ) -> Result<(), purrdf_lex::allocation::StorageError> {
+        use purrdf_lex::allocation::{Resident, StorageError};
+
+        let mut bytes = count
+            .checked_mul(self.prefix.len() + 1)
+            .ok_or(StorageError::SizeOverflow)?;
+        // Each crossed power of ten costs all remaining labels one extra digit.
+        let mut boundary = 10_usize;
+        while boundary < count {
+            bytes = bytes
+                .checked_add(count - boundary)
+                .ok_or(StorageError::SizeOverflow)?;
+            let Some(next) = boundary.checked_mul(10) else {
+                break;
+            };
+            boundary = next;
+        }
+        let mut resident = Resident;
+        let mut memory = Memory::new(&mut resident);
+        memory.reserve(&mut self.order, count)?;
+        memory.reserve_string(&mut self.text, bytes)
+    }
+
     /// Issue (or return the already-issued) id for `b`.
-    fn issue(&mut self, b: Id) -> &str {
+    fn issue(&mut self, b: Id) -> Result<&str, purrdf_lex::allocation::StorageError> {
         // One tree descent for both outcomes (`entry`), instead of the
         // contains + insert + get triple this replaced. The id is still numbered
         // from `order.len()` BEFORE the push, so the issued sequence is unchanged.
         let next = self.order.len();
-        match self.issued.entry(b) {
-            std::collections::btree_map::Entry::Occupied(e) => e.into_mut(),
-            std::collections::btree_map::Entry::Vacant(e) => {
-                self.order.push(b);
-                e.insert(format!("{}{next}", self.prefix).into_boxed_str())
+        let range = match self.issued.entry(b) {
+            std::collections::btree_map::Entry::Occupied(e) => {
+                Self::label_range(self.prefix, &self.text, *e.get())
             }
-        }
+            std::collections::btree_map::Entry::Vacant(e) => {
+                // The arena and order outlive individual search grants. Keep their
+                // physical allocation fallible until the owner adopts the arena.
+                let live = self
+                    .order
+                    .capacity()
+                    .checked_mul(size_of::<Id>())
+                    .and_then(|bytes| bytes.checked_add(self.text.capacity()))
+                    .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+                let mut resident = purrdf_lex::allocation::Resident;
+                let mut memory = Memory::resume(&mut resident, live);
+                memory.reserve_for_push(&mut self.order)?;
+                let start = self.text.len();
+                if let Err(error) = memory.append_text(&mut self.text, |out| {
+                    out.push_str(self.prefix);
+                    // Decimal formatting cannot fail independently of the admitted sink.
+                    let _ = write!(out, "{next}");
+                }) {
+                    self.text.truncate(start);
+                    return Err(error);
+                }
+                self.order.push(b);
+                e.insert(start);
+                start..self.text.len()
+            }
+        };
+        Ok(&self.text[range])
     }
 
     fn issued_for(&self, b: Id) -> Option<&str> {
-        self.issued.get(&b).map(Box::as_ref)
+        self.issued
+            .get(&b)
+            .map(|&start| &self.text[Self::label_range(self.prefix, &self.text, start)])
+    }
+
+    /// A label ends at the first non-digit after its prefix, or at EOF.
+    /// Both fixed prefixes begin with a letter, so only the current label's
+    /// digits are inspected, not the remainder of the arena.
+    fn label_range(prefix: &str, text: &str, start: usize) -> std::ops::Range<usize> {
+        let digits = start + prefix.len();
+        let end = text.as_bytes()[digits..]
+            .iter()
+            .position(|byte| !byte.is_ascii_digit())
+            .map_or(text.len(), |offset| digits + offset);
+        start..end
     }
 
     fn has(&self, b: Id) -> bool {
         self.issued.contains_key(&b)
+    }
+
+    fn prefix(&self) -> IssuerPrefix {
+        IssuerPrefix {
+            count: self.order.len(),
+            bytes: self.text.len(),
+        }
+    }
+
+    fn has_before(&self, b: Id, prefix: IssuerPrefix) -> bool {
+        self.issued
+            .get(&b)
+            .is_some_and(|&start| start < prefix.bytes)
+    }
+
+    fn rewind(&mut self, prefix: IssuerPrefix) {
+        for id in self.order.drain(prefix.count..) {
+            self.issued.remove(&id);
+        }
+        self.text.truncate(prefix.bytes);
     }
 
     /// The blanks in issuance order.
@@ -2361,7 +2462,7 @@ impl<Id> PathScratch<Id> {
 /// none of these owners recursively contains another frame.
 struct NDegreeFrame<Id> {
     identifier: Id,
-    issuer: IdIssuer<Id>,
+    entry_count: usize,
     related: std::collections::btree_map::IntoIter<HashHex, Vec<Id>>,
     data: String,
     group: Option<NDegreeGroup<Id>>,
@@ -2370,13 +2471,13 @@ struct NDegreeFrame<Id> {
 struct NDegreeGroup<Id> {
     permutations: Permutations<Id>,
     fresh_distinct: bool,
+    prefix: IssuerPrefix,
     chosen_path: Option<String>,
-    chosen_issuer: Option<IdIssuer<Id>>,
+    chosen_suffix: Vec<Id>,
     candidate: Option<NDegreeCandidate<Id>>,
 }
 
 struct NDegreeCandidate<Id> {
-    issuer: IdIssuer<Id>,
     path: String,
     recursion: std::vec::IntoIter<Id>,
     pending: Option<Id>,
@@ -3256,17 +3357,20 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         rendering::ScratchGrant::new(reservation).run(|memory| {
             canonical.emit_canonical_lines(memory, &mut result)?;
             result.reserve_labels(canonical.canonical.issued.len())?;
-            for (id, label) in canonical.canonical.issued {
+            let prefix = canonical.canonical.prefix;
+            let text = canonical.canonical.text;
+            for (id, start) in canonical.canonical.issued {
                 canonical
                     .run
                     .check_stop()
                     .map_err(|_| CanonError::Stopped)?;
-                result.label(id, label)?;
+                result.issued_label(id, IdIssuer::<D::Id>::label_range(prefix, &text, start))?;
             }
             canonical
                 .run
                 .check_stop()
                 .map_err(|_| CanonError::Stopped)?;
+            result.adopt_label_text(text)?;
             result.finish(canonical.stop)
         })
     }
@@ -3369,7 +3473,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         by_hash.extend(0..first_degree.len());
         by_hash.sort_unstable_by(|&a, &b| first_degree[a].cmp(&first_degree[b]).then(a.cmp(&b)));
         self.first_degree = first_degree;
-        let result = self.issue_degree_groups(&by_hash, footprints, memory);
+        let result = self
+            .canonical
+            .reserve_complete(self.blanks.len())
+            .map_err(CanonError::Storage)
+            .and_then(|()| self.issue_degree_groups(&by_hash, footprints, memory));
         let groups_released = memory.release_vec(by_hash).map_err(CanonError::Storage);
         let digests_released = memory
             .release_vec(std::mem::take(&mut self.first_degree))
@@ -3390,7 +3498,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         for group in groups.clone() {
             self.check_stop().map_err(CanonError::with_read_error)?;
             if let [blank] = group {
-                self.canonical.issue(self.blanks[*blank]);
+                self.canonical.issue(self.blanks[*blank])?;
             }
         }
 
@@ -3407,7 +3515,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     continue;
                 }
                 let mut temp = IdIssuer::new(TEMP_PREFIX);
-                temp.issue(b);
+                temp.issue(b)?;
                 let (result_hash, result_issuer) = self
                     .hash_n_degree(b, temp, footprints, memory)
                     .inspect_err(|error| {
@@ -3427,7 +3535,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             for (_h, issuer) in hash_paths {
                 for &b in issuer.order() {
                     self.check_stop().map_err(CanonError::with_read_error)?;
-                    self.canonical.issue(b);
+                    self.canonical.issue(b)?;
                 }
             }
         }
@@ -3510,11 +3618,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn hash_n_degree<S: Admission + ?Sized>(
         &self,
         identifier: D::Id,
-        issuer: IdIssuer<D::Id>,
+        mut issuer: IdIssuer<D::Id>,
         footprints: &memo::Footprints<D::Id>,
         memory: &mut Memory<'_, S>,
     ) -> Result<IssuedHash<D::Id>, CanonError<D::ReadError>> {
-        let mut frame = self.n_degree_frame(identifier, issuer, footprints, || {
+        // The active path owns one issuer. A group tries permutations from
+        // its entry prefix and saves only its winning extension. A child
+        // continues the same live path without copying the parent's prefix.
+        let mut frame = self.n_degree_frame(identifier, &issuer, footprints, || {
             (
                 RdfcSearchContext::InitialFrame {
                     root_ordinal: self.blank_ordinal(identifier),
@@ -3537,16 +3648,15 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             candidate.dependency_prefix = candidate
                                 .dependency_prefix
                                 .max(group.permutations.items.len() - candidate.recursion.len());
-                            let child_issuer = candidate.issuer.clone();
                             candidate.pending = Some(related);
                             group.candidate = Some(candidate);
-                            let mut child =
-                                self.n_degree_frame(related, child_issuer, footprints, || {
+                            let child =
+                                self.n_degree_frame(related, &issuer, footprints, || {
                                     let depth = parents.len();
                                     let observation = self.refusal_group(
                                         self.blank_ordinal(frame_identifier),
                                         depth,
-                                        &frame.issuer,
+                                        &issuer,
                                         group,
                                     );
                                     let parent_group = observation.active.group;
@@ -3557,7 +3667,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                         parent_group,
                                     };
                                     let (path, groups) =
-                                        self.refusal_path(observation, &mut parents);
+                                        self.refusal_path(observation, &issuer, &mut parents);
                                     (context, path, Some(groups))
                                 })?;
                             let permutations = &group.permutations;
@@ -3565,14 +3675,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                 .candidate
                                 .as_mut()
                                 .expect("the parent retained its suspended candidate");
-                            reused =
-                                memo.lookup(self, related, &mut child.issuer, memory, |id| {
-                                    if candidate.dependency_prefix < permutations.items.len() {
-                                        candidate.dependency_prefix = candidate
-                                            .dependency_prefix
-                                            .max(permutations.required_prefix(id));
-                                    }
-                                })?;
+                            reused = memo.lookup(self, related, &mut issuer, memory, |id| {
+                                if candidate.dependency_prefix < permutations.items.len() {
+                                    candidate.dependency_prefix = candidate
+                                        .dependency_prefix
+                                        .max(permutations.required_prefix(id));
+                                }
+                            })?;
                             parents.push(frame);
                             frame = child;
                             continue;
@@ -3584,7 +3693,19 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             .is_none_or(|best| candidate.path.as_str() < best.as_str())
                         {
                             group.chosen_path = Some(candidate.path);
-                            group.chosen_issuer = Some(candidate.issuer);
+                            if !group.permutations.done {
+                                let suffix = &issuer.order()[group.prefix.count..];
+                                group.chosen_suffix.clear();
+                                group.chosen_suffix.try_reserve(suffix.len()).map_err(|_| {
+                                    purrdf_lex::allocation::StorageError::AllocationFailed
+                                })?;
+                                group.chosen_suffix.extend_from_slice(suffix);
+                            }
+                        }
+                        // A sole candidate already owns the winning extension.
+                        // Only reset the live state if another candidate can run.
+                        if !group.permutations.done {
+                            issuer.rewind(group.prefix);
                         }
                     }
 
@@ -3595,7 +3716,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                             let frame_ordinal = self.blank_ordinal(frame_identifier);
                             let depth = parents.len();
                             let observation =
-                                self.refusal_group(frame_ordinal, depth, &frame.issuer, group);
+                                self.refusal_group(frame_ordinal, depth, &issuer, group);
                             let group = observation.active.group;
                             let context = RdfcSearchContext::Permutation {
                                 root_ordinal: self.blank_ordinal(identifier),
@@ -3603,11 +3724,11 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                 depth,
                                 group,
                             };
-                            let (path, groups) = self.refusal_path(observation, &mut parents);
+                            let (path, groups) =
+                                self.refusal_path(observation, &issuer, &mut parents);
                             (context, path, Some(groups))
                         })
                         .map_err(CanonError::with_read_error)?;
-                        let mut issuer = frame.issuer.clone();
                         let mut path = String::new();
                         let mut recursion = Vec::new();
                         let mut pruned = false;
@@ -3621,7 +3742,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                     recursion.push(related);
                                 }
                                 path.push_str("_:");
-                                path.push_str(issuer.issue(related));
+                                path.push_str(issuer.issue(related)?);
                             }
                             // 5.4.4.3: appending cannot repair a strictly greater
                             // lexicographic prefix, even when it is shorter than best.
@@ -3636,7 +3757,6 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                         }
                         if !pruned {
                             group.candidate = Some(NDegreeCandidate {
-                                issuer,
                                 path,
                                 recursion: recursion.into_iter(),
                                 pending: None,
@@ -3646,6 +3766,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                                     group.permutations.items.len()
                                 },
                             });
+                        } else {
+                            issuer.rewind(group.prefix);
                         }
                         continue;
                     }
@@ -3655,8 +3777,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     frame
                         .data
                         .push_str(group.chosen_path.as_deref().unwrap_or(""));
-                    if let Some(issuer) = group.chosen_issuer {
-                        frame.issuer = issuer;
+                    for id in group.chosen_suffix {
+                        issuer.issue(id)?;
                     }
                     continue;
                 }
@@ -3667,7 +3789,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     let fixed_label = |id| {
                         self.canonical
                             .issued_for(id)
-                            .or_else(|| frame.issuer.issued_for(id))
+                            .or_else(|| issuer.issued_for(id))
                     };
                     // Distinct fresh IDs always emit the same complete initial label path
                     // and leave the same next ordinal, regardless of their identities.
@@ -3694,8 +3816,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     frame.group = Some(NDegreeGroup {
                         permutations: Permutations::new(related, single),
                         fresh_distinct,
+                        prefix: issuer.prefix(),
                         chosen_path: None,
-                        chosen_issuer: None,
+                        chosen_suffix: Vec::new(),
                         candidate: None,
                     });
                     continue;
@@ -3705,7 +3828,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             let hash = cached.unwrap_or_else(|| digest_hex(self.hash, frame.data.as_bytes()));
             let Some(mut parent) = parents.pop() else {
                 memo.release(memory).map_err(CanonError::Storage)?;
-                return Ok((hash, frame.issuer));
+                return Ok((hash, issuer));
             };
             let group = parent.group.as_mut().expect("a child has a parent group");
             let candidate = group
@@ -3718,8 +3841,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 memo.completed(
                     self,
                     (frame_identifier, hash),
-                    &frame.issuer,
-                    &candidate.issuer,
+                    &issuer,
+                    frame.entry_count,
                     memory,
                     |id| {
                         if *dependency_prefix < permutations.items.len() {
@@ -3734,11 +3857,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                 .take()
                 .expect("a child has its related ID");
             candidate.path.push_str("_:");
-            candidate.path.push_str(candidate.issuer.issue(related));
+            candidate.path.push_str(
+                issuer
+                    .issued_for(related)
+                    .expect("a child preserves the temporary label issued by its parent"),
+            );
             candidate.path.push('<');
             candidate.path.push_str(hash.as_str());
             candidate.path.push('>');
-            candidate.issuer = frame.issuer;
             // 5.4.5.5: after appending the complete child result, a strictly
             // greater prefix cannot win regardless of the remaining children.
             if group
@@ -3756,13 +3882,14 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     .skip_remaining_prefix(candidate.dependency_prefix);
                 self.check_stop().map_err(CanonError::with_read_error)?;
                 group.candidate = None;
+                issuer.rewind(group.prefix);
             }
             frame = parent;
         }
     }
 
-    /// Inspect only terminal state. The frame issuer remains unchanged while a
-    /// group runs; the candidate issuer would hide its initially unissued IDs.
+    /// Inspect the issuance prefix at group entry, excluding all labels added
+    /// by the current candidate or any suspended descendants.
     fn refusal_group(
         &self,
         frame_ordinal: usize,
@@ -3784,7 +3911,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         for &related in &group.permutations.items {
             let stats = if self.canonical.has(related) {
                 &mut labels.canonical
-            } else if issuer.has(related) {
+            } else if issuer.has_before(related, group.prefix) {
                 &mut labels.temporary
             } else {
                 &mut labels.unissued
@@ -3815,6 +3942,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn refusal_path(
         &self,
         at_refusal: RdfcGroupObservation,
+        issuer: &IdIssuer<D::Id>,
         parents: &mut WorkList<NDegreeFrame<D::Id>, 8>,
     ) -> (RdfcActivePath, RdfcGroupObservations) {
         let mut root = at_refusal;
@@ -3828,7 +3956,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             let observation = self.refusal_group(
                 self.blank_ordinal(parent.identifier),
                 parents.len(),
-                &parent.issuer,
+                issuer,
                 group,
             );
             if observation.active.group.occurrences > largest.active.group.occurrences
@@ -3856,7 +3984,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     fn n_degree_frame(
         &self,
         identifier: D::Id,
-        issuer: IdIssuer<D::Id>,
+        issuer: &IdIssuer<D::Id>,
         footprints: &memo::Footprints<D::Id>,
         context: impl FnOnce() -> (
             RdfcSearchContext,
@@ -3875,7 +4003,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             self.related_blanks(
                 comp,
                 identifier,
-                &issuer,
+                issuer,
                 &mut paths,
                 &mut |related, related_hash| {
                     hn.entry(related_hash).or_default().push(related);
@@ -3885,7 +4013,7 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
 
         Ok(NDegreeFrame {
             identifier,
-            issuer,
+            entry_count: issuer.order().len(),
             related: hn.into_iter(),
             data: String::new(),
             group: None,
@@ -5002,7 +5130,7 @@ impl<T: Copy + PartialEq> Permutations<T> {
         }
         if self.first {
             self.first = false;
-            self.done = self.single;
+            self.done = self.single || self.items.len() <= 1;
         } else if !next_permutation(&mut self.idx) {
             self.done = true;
             return false;
@@ -8648,7 +8776,7 @@ mod tests {
                 state.first_degree.push(hash);
             }
             let mut issuer = IdIssuer::new(TEMP_PREFIX);
-            issuer.issue(blanks[0]);
+            issuer.issue(blanks[0]).unwrap();
             let (_, issuer) = state
                 .hash_n_degree(blanks[0], issuer, &footprints, &mut memory)
                 .unwrap();
@@ -8684,7 +8812,7 @@ mod tests {
         signal.0.store(1000, std::sync::atomic::Ordering::Relaxed);
         let blank = state.blanks[0];
         let mut issuer = IdIssuer::new(TEMP_PREFIX);
-        issuer.issue(blank);
+        issuer.issue(blank).unwrap();
         assert!(matches!(
             memory.try_scope(|memory| state.hash_n_degree(blank, issuer, &footprints, memory)),
             Err(CanonError::Stopped)
@@ -8741,9 +8869,9 @@ mod tests {
 
     fn memo_entry(root: TermId, branches: impl IntoIterator<Item = TermId>) -> IdIssuer<TermId> {
         let mut issuer = IdIssuer::new(TEMP_PREFIX);
-        issuer.issue(root);
+        issuer.issue(root).unwrap();
         for id in branches {
-            issuer.issue(id);
+            issuer.issue(id).unwrap();
         }
         issuer
     }
@@ -8825,7 +8953,7 @@ mod tests {
                     state.first_degree.push(hash);
                 }
                 let mut entry = IdIssuer::new(TEMP_PREFIX);
-                entry.issue(root);
+                entry.issue(root).unwrap();
                 let (hash, issuer) = state
                     .hash_n_degree(root, entry, &footprints, &mut memory)
                     .expect("the selected star must complete within the finite corpus policy");
@@ -8902,7 +9030,7 @@ mod tests {
             &state,
             (fixture.branches[0], hash),
             &completed,
-            &entry,
+            entry.order().len(),
             &mut memory,
             |_| {},
         )
@@ -8918,8 +9046,9 @@ mod tests {
                 &mut memory,
             )
             .unwrap();
-        let mut frame = state
-            .n_degree_frame(fixture.branches[0], alternate.clone(), &footprints, || {
+        let mut replayed = alternate.clone();
+        state
+            .n_degree_frame(fixture.branches[0], &replayed, &footprints, || {
                 (
                     RdfcSearchContext::InitialFrame {
                         root_ordinal: state.blank_ordinal(fixture.branches[0]),
@@ -8935,7 +9064,7 @@ mod tests {
             memo.lookup(
                 &state,
                 fixture.branches[0],
-                &mut frame.issuer,
+                &mut replayed,
                 &mut memory,
                 |_| {},
             )
@@ -8949,14 +9078,14 @@ mod tests {
         );
         assert_eq!(run.work(), work, "replay adds no search charges");
         assert_eq!(
-            &frame.issuer.order()[..alternate.order().len()],
+            &replayed.order()[..alternate.order().len()],
             alternate.order()
         );
         assert!(hash == expected_hash);
-        assert_eq!(frame.issuer.order(), expected.order());
-        assert_eq!(frame.issuer.issued, expected.issued);
+        assert_eq!(replayed.order(), expected.order());
+        assert_eq!(replayed.issued, expected.issued);
         assert_eq!(
-            &frame.issuer.order()[alternate.order().len()..],
+            &replayed.order()[alternate.order().len()..],
             &[fixture.tails[0]]
         );
 
@@ -8971,10 +9100,10 @@ mod tests {
             .into_iter()
             .chain(fixture.branches[2..].iter().copied())
         {
-            changed_frontier.issue(id);
+            changed_frontier.issue(id).unwrap();
         }
         let mut changed_counter = entry;
-        changed_counter.issue(fixture.unrelated);
+        changed_counter.issue(fixture.unrelated).unwrap();
         for (name, mut issuer) in [
             ("new frontier", newly_labeled_tail),
             ("focus label", changed_focus),
@@ -8996,7 +9125,7 @@ mod tests {
         }
         memo.release(&mut memory).unwrap();
         let mut seed = IdIssuer::new(TEMP_PREFIX);
-        seed.issue(fixture.root);
+        seed.issue(fixture.root).unwrap();
         let (_, result) = state
             .hash_n_degree(fixture.root, seed, &footprints, &mut memory)
             .unwrap();
@@ -9034,7 +9163,7 @@ mod tests {
             let hash = first_degree_of(&state, id, &footprints).unwrap();
             state.first_degree.push(hash);
         }
-        let entry = memo_entry(fixture.root, fixture.branches);
+        let mut entry = memo_entry(fixture.root, fixture.branches);
         let (hash, completed) = state
             .hash_n_degree(fixture.branches[0], entry.clone(), &footprints, &mut memory)
             .unwrap();
@@ -9043,13 +9172,13 @@ mod tests {
             &state,
             (fixture.branches[0], hash),
             &completed,
-            &entry,
+            entry.order().len(),
             &mut memory,
             |_| {},
         )
         .unwrap();
-        let mut frame = state
-            .n_degree_frame(fixture.branches[0], entry, &footprints, || {
+        state
+            .n_degree_frame(fixture.branches[0], &entry, &footprints, || {
                 (
                     RdfcSearchContext::InitialFrame {
                         root_ordinal: state.blank_ordinal(fixture.branches[0]),
@@ -9063,13 +9192,7 @@ mod tests {
         let work = run.work();
         signal.0.store(3, std::sync::atomic::Ordering::Relaxed);
         assert!(matches!(
-            memo.lookup(
-                &state,
-                fixture.branches[0],
-                &mut frame.issuer,
-                &mut memory,
-                |_| {},
-            ),
+            memo.lookup(&state, fixture.branches[0], &mut entry, &mut memory, |_| {},),
             Err(CanonError::Stopped)
         ));
         assert_eq!(fixture.view.reads.get(), reads);
