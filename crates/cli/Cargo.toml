@@ -108,9 +108,6 @@ purrdf-gts = { workspace = true }
 # Both are already workspace-pinned (purrdf-gts links them); test-only here.
 purrdf-deflate = { workspace = true }
 purrdf-zstd = { workspace = true }
-# The integration tests recompute the SHA-256 identities the binary prints, in
-# lowercase hex.
-sha2 = { workspace = true }
 
 # The real CLI pack path, timed: mmap/immutable vs owned acquisition, verification,
 # and reasoning over a zero-copy `PackView` vs an owned-dataset rebuild.

@@ -194,8 +194,7 @@ impl Default for RegistryId {
 pub(crate) use purrdf_hash::frame::frame_be_labelled as append_framed_part;
 
 /// The existing declaration fingerprint preimage streamed into its digest.
-pub(crate) fn digest_framed_part(out: &mut sha2::Sha256, label: &str, value: &[u8]) {
-    use sha2::Digest as _;
+pub(crate) fn digest_framed_part(out: &mut purrdf_hash::sha2::Sha256, label: &str, value: &[u8]) {
     purrdf_hash::frame::frame_be_labelled_with(label, value, &mut |bytes| {
         out.update(bytes);
     });

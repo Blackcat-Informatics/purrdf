@@ -264,6 +264,7 @@ exactly once; missing, ignored, duplicate or skipped selections fail.
 | `purrdf-hnsw` / `wasm_reassociated` | scalar | `an_image_recorded_on_another_wasm_path_is_refused_by_name`, `the_image_records_the_path_and_shape_this_build_was_made_for` | Actual WASM arithmetic backend identity |
 | `purrdf-columnar` / `golden_bytes` | scalar | `seeded_files_are_the_pinned_bytes` | Frozen native Parquet bytes |
 | `purrdf-hash-conformance` / `blake3` | scalar | `required_backends_are_available` | Actual WASM backend availability |
+| `purrdf-hash-conformance` / `digest_differential` | scalar | `sha2_portable_dispatch_preserves_the_frozen_boundary` | Portable SHA-2 dispatch and the frozen 129-byte digest identity |
 | `purrdf-testkit` / `bench` | scalar | `the_store_options_are_refused_on_wasm32`, `a_measured_run_reports_its_estimates` | WASM host clock and unavailable filesystem |
 | `purrdf-stack` / `on_stack` | scalar | `an_in_floor_request_runs`, `a_scoped_in_floor_request_borrows_the_caller_s_locals`, `an_over_floor_request_is_refused`, `an_over_floor_scoped_request_is_refused` | Actual WASM shadow-stack floor |
 | `purrdf-deflate` / `deflate_conformance` | scalar | `selected_backend_is_reported` | Actual WASM codec backend dispatch |

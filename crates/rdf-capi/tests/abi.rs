@@ -15,7 +15,7 @@ use std::ffi::CString;
 #[path = "abi/rule_coordinates.rs"]
 mod rule_coordinates;
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use purrdf::buffer::{PurrdfBuffer, purrdf_buffer_data, purrdf_buffer_free};
 use purrdf::cursor::{

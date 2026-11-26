@@ -6,9 +6,9 @@
 //! (frozen in `tests/vectors/strictness_vectors.txt`) and paired with the
 //! valid neighbour each refusal borders.
 
+use purrdf_hash::sha2::Sha512;
 use purrdf_testkit::rng::SplitMix64;
 use purrdf_testkit::vectors::{VectorFile, encode_str};
-use sha2::{Digest as _, Sha512};
 
 use crate::point::Point;
 use crate::scalar::Scalar;
@@ -109,7 +109,7 @@ fn challenge(r: &[u8; 32], a: &[u8; 32], message: &[u8]) -> Scalar {
     hasher.update(r);
     hasher.update(a);
     hasher.update(message);
-    Scalar::from_bytes_wide(&hasher.finalize().into())
+    Scalar::from_bytes_wide(&hasher.finalize())
 }
 
 #[test]

@@ -29,7 +29,7 @@
 use std::fmt;
 
 use purrdf_hash::hex::Lower;
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use super::identity::Identity;
 use crate::bytes::{read_u32_le, read_u64_le};
@@ -378,7 +378,7 @@ impl ArtifactBuilder {
 
         let digests: Vec<[u8; 32]> = sections
             .iter()
-            .map(|(_, body)| Sha256::digest(body).into())
+            .map(|(_, body)| Sha256::digest(body))
             .collect();
 
         let mut out = Vec::with_capacity(file_len);
@@ -434,7 +434,7 @@ impl ArtifactBuilder {
         debug_assert_eq!(out.len(), trailer_offset);
 
         // -- Trailer, sealing every byte ahead of it ---------------------------
-        let container_digest: [u8; 32] = Sha256::digest(&out).into();
+        let container_digest: [u8; 32] = Sha256::digest(&out);
         out.extend_from_slice(&TRAILER_MAGIC);
         out.extend_from_slice(&spec.format_version.to_le_bytes());
         out.extend_from_slice(&0u32.to_le_bytes()); // reserved
@@ -595,7 +595,7 @@ impl<'a> ArtifactView<'a> {
             let body = bytes.get(offset..end).ok_or(ArtifactError::Truncated)?;
             check_padding(bytes, unpadded_end, offset)?;
 
-            let computed: [u8; 32] = Sha256::digest(body).into();
+            let computed: [u8; 32] = Sha256::digest(body);
             if computed != stored_digest {
                 return Err(ArtifactError::SectionDigestMismatch { kind });
             }
@@ -620,7 +620,7 @@ impl<'a> ArtifactView<'a> {
         check_padding(bytes, unpadded_end, trailer_offset)?;
 
         // -- Identity: digest first, then its own framing ----------------------
-        let computed_identity: [u8; 32] = Sha256::digest(identity_bytes).into();
+        let computed_identity: [u8; 32] = Sha256::digest(identity_bytes);
         if computed_identity != identity_digest {
             return Err(ArtifactError::Malformed(
                 "artifact: header identity digest disagrees with the identity region",
@@ -646,7 +646,7 @@ impl<'a> ArtifactView<'a> {
         }
 
         // -- The outermost seal --------------------------------------------------
-        let container_digest: [u8; 32] = Sha256::digest(&bytes[..trailer_offset]).into();
+        let container_digest: [u8; 32] = Sha256::digest(&bytes[..trailer_offset]);
         if container_digest != trailer_digest {
             return Err(ArtifactError::ContainerDigestMismatch {
                 expected: trailer_digest,

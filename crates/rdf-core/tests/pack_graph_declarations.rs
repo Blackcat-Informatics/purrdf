@@ -49,8 +49,8 @@ fn as_version_one(bytes: &[u8], dataset: &RdfDataset) -> Vec<u8> {
 }
 
 fn sha2_digest(bytes: &[u8]) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(bytes).into()
+    use purrdf_hash::sha2::Sha256;
+    Sha256::digest(bytes)
 }
 
 fn blank(label: &str) -> TermValue {

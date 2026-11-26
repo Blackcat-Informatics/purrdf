@@ -10,11 +10,9 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
-use sha2::{Digest as _, Sha256};
-
 use purrdf_core::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 use purrdf_core::{
-    ContentDigest, ExtensionSection, MatrixCommitment, ProjectionCommitment,
+    ContentDigest, ContentHasher, ExtensionSection, MatrixCommitment, ProjectionCommitment,
     checked_matrix_byte_length,
 };
 use purrdf_xsd::ieee::Binary64Scope;
@@ -438,7 +436,8 @@ impl<W: Write + Seek> EmbeddingStreamWriter<W> {
         }
         let mut layout = FileLayout::plan(source_exact_digest, descriptors)?;
         for payload in &payloads {
-            layout.set_section_digest(payload.key, Sha256::digest(&payload.bytes).into())?;
+            layout
+                .set_section_digest(payload.key, *ContentDigest::of(&payload.bytes).as_bytes())?;
         }
         write_stream_skeleton(&mut output, &layout, &payloads)?;
 
@@ -522,7 +521,7 @@ impl<W: Write + Seek> EmbeddingStreamWriter<W> {
             .ok_or(EmbeddingError::MissingReference("MATRIX_DATA layout"))?;
         self.output.seek(SeekFrom::Start(entry.offset()))?;
 
-        let mut section_hasher = Sha256::new();
+        let mut section_hasher = ContentHasher::default();
         let mut matrix_hasher = matrix_content_hasher(&commitment)?;
         let mut target_set_hasher = target_set_hasher(commitment.row_count);
         let mut projections = projection_hashers(&commitment)?;
@@ -580,7 +579,7 @@ impl<W: Write + Seek> EmbeddingStreamWriter<W> {
         DigestKind::Matrix.verify(commitment.matrix_id.as_bytes(), actual_matrix_id.as_bytes())?;
         verify_projection_hashers(&commitment, projections, actual_matrix_id)?;
         self.layout
-            .set_section_digest(section_key, section_hasher.finalize().into())?;
+            .set_section_digest(section_key, *section_hasher.finish().as_bytes())?;
         self.next_matrix += 1;
         Ok(())
     }

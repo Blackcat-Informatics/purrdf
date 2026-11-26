@@ -359,31 +359,110 @@ summary = "the required-literal prefilter in front of `xsd_regex::CompiledPatter
   forbid_relaxed = true
 
 [[site]]
-id = "sha2.sha256-compress"
-summary = "SHA-256 block compression (content digests): sha2's SHA-NI kernel on x86_64, its portable code elsewhere"
+id = "hash.sha256-compress"
+summary = "Native SHA-256 compression with SHA-NI, Arm SHA2, and portable dispatch"
 
-  # sha2 dispatches at run time (cpufeatures) to its SHA-NI kernel; no x86-64 level
-  # implies the SHA extensions, so all three builds keep it out of line.
-  # Measured v126 (x86_64, x86_64-v3), v122 (x86_64-v4).
   [[site.measure]]
   label = "sha-ni"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
-  crate = "sha2"
-  symbol = "sha2::sha256::x86_sha::compress"
-  min_vector_ops = 61
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha2_x86::sha256_kernel"
+  min_vector_ops = 120
   require_mnemonics = ["sha256rnds2", "sha256msg1", "sha256msg2"]
   max_fma = 0
   forbid_relaxed = true
 
-  # sha2 0.10 compiles its ARMv8 crypto-extension backend only under its `asm` Cargo
-  # feature, which this workspace does not enable, so aarch64 runs the portable
-  # compression: general-register code with no vector work. wasm32 has only the
-  # portable code. Measured v0 on all four configurations.
+  [[site.measure]]
+  label = "arm-sha2"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha2_aarch64::sha256_kernel"
+  min_vector_ops = 78
+  require_mnemonics = ["sha256h", "sha256h2", "sha256su0", "sha256su1"]
+  max_fma = 0
+  forbid_relaxed = true
+
   [[site.measure]]
   label = "portable"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::sha2::compress32"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.sha512-compress"
+summary = "Native SHA-512 compression and the paired AVX-512VL message schedule"
+
+  [[site.measure]]
+  label = "x86-sha512"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha2_x86::sha512_instruction_kernel"
+  min_vector_ops = 12
+  require_mnemonics = ["vsha512rnds2", "vsha512msg1", "vsha512msg2"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512vl schedule"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha2_x86::sha512_kernel"
+  min_vector_ops = 40
+  require_mnemonics = ["vprolq", "vpternlogq", "rorxq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512vl schedule"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha2_x86::sha512_entry"
+  min_vector_ops = 40
+  require_mnemonics = ["vprolq", "vpternlogq", "rorxq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "arm-sha512"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha2_aarch64::sha512_kernel"
+  min_vector_ops = 23
+  require_mnemonics = ["sha512h", "sha512h2", "sha512su0", "sha512su1"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::sha2::compress64"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.sha256-batch"
+summary = "Independent SHA-256 messages in the AVX-512 batch drain"
+
+  [[site.measure]]
+  label = "avx512 lanes"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::sha256_batch::compress"
+  min_vector_ops = 536
+  require_mnemonics = ["vpgatherdd", "vprold", "vpternlogd"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "portable lanes"
   configs = ["aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "sha2"
-  symbol = "sha2::sha256::compress256"
+  crate = "purrdf_hash"
+  symbol = "<purrdf_hash::sha2::batch::Sha256Batch>::finish_reset"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

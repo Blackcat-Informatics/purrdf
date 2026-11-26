@@ -20,8 +20,8 @@ use purrdf_geo_kernel::{
     PreparedGeodesic, Rat,
 };
 use purrdf_hash::Backend as _;
+use purrdf_hash::sha2::Sha256;
 use purrdf_xsd::math::FloatProductBackend;
-use sha2::{Digest as _, Sha256};
 use std::{
     io::{self, BufRead},
     time::Instant,

@@ -10,8 +10,7 @@ identifies RFC 8032 as the Ed25519 specification and documents the field and
 scalar representations. This history record does not assert a clean-room
 process or grant rights in another implementation.
 
-SHA-512 is computed by the separately licensed `sha2` dependency; linked
-artifact inventories preserve that dependency’s actual license texts.
+SHA-512 is computed by `purrdf_hash::sha2` from FIPS 180-4.
 `tests/vectors/` records decoding and verification answers from the former
 `ed25519-dalek` engine. Its file headers specify generated inputs, record counts
 and SHA-256 body digests. These are recorded outcomes, not copied implementation

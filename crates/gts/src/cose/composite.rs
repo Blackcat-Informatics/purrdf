@@ -32,7 +32,7 @@
 
 use purrdf_ed25519 as ed25519;
 use purrdf_hash::Domain;
-use sha2::{Digest as _, Sha512};
+use purrdf_hash::sha2::Sha512;
 
 use crate::mldsa65;
 

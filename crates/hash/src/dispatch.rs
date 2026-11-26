@@ -26,9 +26,10 @@
 //!   a job on a known or emulated processor names what that processor must
 //!   run.
 //!
-//! Unset, nothing is required. Any other value fails the run, as does an
-//! entry naming a family outside [`FAMILIES`] or a path its family does not
-//! have: a misspelt requirement must fail rather than require nothing.
+//! Unset, nothing is required. Every parser invocation rejects malformed
+//! settings and unknown families. Tests reject unknown paths when they
+//! check the named family. A targeted run can still use settings that
+//! also name paths for other families.
 //!
 //! What "required" then asserts is the family's contract: that the path is
 //! available ([`assert_required_available`]), and for some families that it
@@ -49,8 +50,26 @@ pub const REQUIRE_SIMD_PATHS: &str = "PURRDF_REQUIRE_SIMD_PATHS";
 /// | `deflate` | DEFLATE match copy, compare and window hashing (`purrdf_deflate`) |
 /// | `distance` | the vector distance arithmetic (`purrdf_core::distance`) |
 /// | `hex` | base16 encoding (`purrdf_hash::hex`) |
-/// | `numeric` | directed binary64 endpoint products (`purrdf_xsd::math::FloatProductBackend`) |
+/// | `numeric` | directed products of IEEE `binary64` endpoints (`purrdf_xsd::math::FloatProductBackend`) |
 /// | `sha1` | the SHA-1 block function (`purrdf_hash::sha1`) |
+/// | `sha256` | SHA-224 and SHA-256 compression (`purrdf_hash::sha2`) |
+/// | `sha256-batch` | batching independent SHA-256 messages (`purrdf_hash::sha2`) |
+/// | `sha512` | SHA-384 and SHA-512 compression (`purrdf_hash::sha2`) |
+pub const ALL_FAMILIES: [&str; 11] = [
+    "blake3",
+    "crc32",
+    "csv",
+    "deflate",
+    "distance",
+    "hex",
+    "numeric",
+    "sha1",
+    "sha256",
+    "sha256-batch",
+    "sha512",
+];
+
+/// The original eight families. Use [`ALL_FAMILIES`] for the full inventory.
 pub const FAMILIES: [&str; 8] = [
     "blake3", "crc32", "csv", "deflate", "distance", "hex", "numeric", "sha1",
 ];
@@ -211,7 +230,7 @@ pub fn host_advertises(flags: &[&str]) -> bool {
 ///
 /// # Panics
 ///
-/// When `family` is not in [`FAMILIES`], or the variable is set and is not
+/// When `family` is not in [`ALL_FAMILIES`], or the variable is set and is not
 /// UTF-8, is neither `1` nor a list of `family:path` entries, or names an
 /// unknown family, or a path `family` does not have.
 #[must_use]
@@ -284,9 +303,9 @@ fn parse(
     expected_here: impl Fn(&'static str) -> bool,
 ) -> Result<Vec<&'static str>, String> {
     assert!(
-        FAMILIES.contains(&family),
+        ALL_FAMILIES.contains(&family),
         "`{family}` is not a family of {REQUIRE_SIMD_PATHS}; the families are: {}",
-        FAMILIES.join(", ")
+        ALL_FAMILIES.join(", ")
     );
     if value.trim() == "1" {
         return Ok(known
@@ -303,18 +322,19 @@ fn parse(
         .filter(|entry| !entry.is_empty())
     {
         entries += 1;
-        let Some((entry_family, path)) = entry.split_once(':') else {
+        let Some((entry_family, path)) = entry.split_once(':').filter(|(_, path)| !path.is_empty())
+        else {
             return Err(format!(
                 "{REQUIRE_SIMD_PATHS} entry `{entry}` is not `family:path`; set the variable \
                  to `1` or to a comma-separated list of `family:path` entries, or unset it to \
                  require nothing"
             ));
         };
-        if !FAMILIES.contains(&entry_family) {
+        if !ALL_FAMILIES.contains(&entry_family) {
             return Err(format!(
                 "{REQUIRE_SIMD_PATHS} entry `{entry}` names `{entry_family}`, which is not a \
                  family; the families are: {}",
-                FAMILIES.join(", ")
+                ALL_FAMILIES.join(", ")
             ));
         }
         if entry_family != family {
@@ -346,7 +366,7 @@ fn parse(
 
 #[cfg(test)]
 mod tests {
-    use super::{Backend, FAMILIES, host_advertises, parse};
+    use super::{ALL_FAMILIES, Backend, host_advertises, parse};
     use crate::backend::{Crc32Backend, HexBackend, Sha1Backend};
     use crate::blake3::Backend as Blake3Backend;
 
@@ -437,6 +457,16 @@ mod tests {
     }
 
     #[test]
+    fn an_entry_without_a_path_is_refused_even_for_another_family() {
+        let refusal = parse("sha512:", "csv", &KNOWN, only_portable).unwrap_err();
+        assert!(refusal.contains("is not `family:path`"), "{refusal}");
+        assert_eq!(
+            parse("sha512:portable", "csv", &KNOWN, only_portable),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
     fn a_value_naming_nothing_is_refused() {
         for empty in ["", " ", ",", " , ,"] {
             let refusal = parse(empty, "csv", &KNOWN, only_portable).unwrap_err();
@@ -457,7 +487,7 @@ mod tests {
 
     #[test]
     fn the_families_are_sorted_and_unique() {
-        assert!(FAMILIES.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(ALL_FAMILIES.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
     #[test]

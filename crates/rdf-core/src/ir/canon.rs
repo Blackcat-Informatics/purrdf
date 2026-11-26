@@ -168,7 +168,7 @@ pub use control::{
     CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
     SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
 };
-use sha2::{Digest, Sha256, Sha384};
+use purrdf_hash::sha2::{Sha256, Sha384};
 
 use super::dataset::{QuadIds, RdfDataset, TermRef};
 use super::skolem::{TermMapper, rebuild_dataset};
@@ -430,6 +430,20 @@ fn hash_lines<'a>(
     };
     check_stop(stop)?;
     Ok(result)
+}
+
+fn record_first_degree_batch<Id: Copy>(
+    batch: &mut purrdf_hash::sha2::Sha256Batch,
+    ids: &[Option<Id>],
+    record: &mut impl FnMut(Id, HashHex),
+) {
+    let (digests, count) = batch.finish_reset();
+    for (id, digest) in ids[..count].iter().copied().zip(digests) {
+        record(
+            id.expect("every accepted digest has a blank"),
+            hex_of(&digest),
+        );
+    }
 }
 
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`], returning a typed
@@ -768,7 +782,7 @@ fn digest_document(document: &str, run: &SearchRun<'_>) -> Result<ContentDigest,
         digest.update(chunk);
     }
     run.check_stop().map_err(|_| CanonError::Stopped)?;
-    Ok(ContentDigest::from_raw(digest.finalize().into()))
+    Ok(ContentDigest::from_raw(digest.finalize()))
 }
 
 // -----------------------------------------------------------------------------
@@ -3318,11 +3332,26 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         let source = self.ds;
         rendering::ScratchGrant::deferred(|| source.reserve_workspace(0)).run(|scratch| {
             let mut lines = rendering::LineArena::default();
-            for &b in &self.blanks {
-                self.check_stop().map_err(CanonError::with_read_error)?;
-                let h = self.hash_first_degree(b, footprints, &mut lines, scratch)?;
+            let mut record = |b, h| {
                 first_degree.insert(b, h);
                 by_hash.entry(h).or_default().push(b);
+            };
+            if self.hash == CanonHash::Sha256
+                && self.stop.is_none()
+                && self.blanks.len() >= purrdf_hash::sha2::Sha256Batch::CAPACITY
+                && purrdf_hash::sha2::Sha256Batch::is_parallel()
+                // The batch caller and drain used under 12 KiB of stack in
+                // the native release build. Leave room for build variation
+                // without borrowing the renderer's normal stack margin.
+                && purrdf_stack::remaining() >= purrdf_stack::MARGIN_BYTES + 32 * 1024
+            {
+                self.hash_first_degree_batch(footprints, &mut lines, scratch, &mut record)?;
+            } else {
+                for &b in &self.blanks {
+                    self.check_stop().map_err(CanonError::with_read_error)?;
+                    let h = self.hash_first_degree(b, footprints, &mut lines, scratch)?;
+                    record(b, h);
+                }
             }
             lines.release(scratch).map_err(CanonError::Storage)
         })?;
@@ -3392,6 +3421,17 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         lines: &mut rendering::LineArena,
         memory: &mut Memory<'_, S>,
     ) -> Result<HashHex, CanonError<D::ReadError>> {
+        self.render_first_degree(b, footprints, lines, memory)?;
+        hash_lines(self.hash, lines.iter(), self.stop).map_err(CanonError::with_read_error)
+    }
+
+    fn render_first_degree<S: Admission + ?Sized>(
+        &self,
+        b: D::Id,
+        footprints: &memo::Footprints<D::Id>,
+        lines: &mut rendering::LineArena,
+        memory: &mut Memory<'_, S>,
+    ) -> Result<(), CanonError<D::ReadError>> {
         let render = BlankRender::FirstDegree { focus: b };
         lines.clear();
         for &(_, index) in footprints.incident(b) {
@@ -3402,7 +3442,45 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             memory.push(&mut lines.spans, (start, lines.text.len()))?;
         }
         lines.sort();
-        hash_lines(self.hash, lines.iter(), self.stop).map_err(CanonError::with_read_error)
+        Ok(())
+    }
+
+    /// Keep the source read and map insertion order. Only the digest work
+    /// for already rendered messages moves together. A caller with an
+    /// installed stop signal retains the original polling checkpoints.
+    #[inline(never)]
+    fn hash_first_degree_batch<S: Admission + ?Sized>(
+        &self,
+        footprints: &memo::Footprints<D::Id>,
+        lines: &mut rendering::LineArena,
+        memory: &mut Memory<'_, S>,
+        record: &mut impl FnMut(D::Id, HashHex),
+    ) -> Result<(), CanonError<D::ReadError>> {
+        use purrdf_hash::sha2::Sha256Batch;
+
+        let mut batch = Sha256Batch::new();
+        let mut ids = [None; Sha256Batch::CAPACITY];
+        let mut pending = 0;
+        for &b in &self.blanks {
+            self.check_stop().map_err(CanonError::with_read_error)?;
+            self.render_first_degree(b, footprints, lines, memory)?;
+            if batch.push(lines.iter().map(str::as_bytes)) {
+                ids[pending] = Some(b);
+                pending += 1;
+                if pending == Sha256Batch::CAPACITY {
+                    record_first_degree_batch(&mut batch, &ids, record);
+                    pending = 0;
+                }
+            } else {
+                record_first_degree_batch(&mut batch, &ids, record);
+                pending = 0;
+                let digest = hash_lines(self.hash, lines.iter(), None)
+                    .map_err(CanonError::with_read_error)?;
+                record(b, digest);
+            }
+        }
+        record_first_degree_batch(&mut batch, &ids, record);
+        Ok(())
     }
 
     /// Hash N-Degree Quads (RDFC-1.0 §4.8): the gossip-path permutation search.
@@ -8437,6 +8515,57 @@ mod tests {
                 assert_eq!(actual.presentation(), expected.presentation());
             }
         }
+    }
+
+    /// Batch groups, oversized scalar neighbors and a partial tail preserve the
+    /// complete RDFC result on both the normal and stack-limited paths.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn first_degree_batch_preserves_bytes_on_a_small_stack() {
+        use purrdf_hash::dispatch::{assert_required_available, host_advertises};
+        use purrdf_hash::sha2::{Sha256Batch, Sha256BatchBackend};
+
+        let required = assert_required_available("sha256-batch", |path| match path {
+            Sha256BatchBackend::Portable => true,
+            Sha256BatchBackend::X86Avx512 => {
+                cfg!(target_arch = "x86_64") && host_advertises(&["avx512f", "avx512bw"])
+            }
+        });
+        if required.contains(&Sha256BatchBackend::X86Avx512) {
+            assert!(
+                Sha256Batch::is_parallel()
+                    && purrdf_stack::remaining() >= purrdf_stack::MARGIN_BYTES + 32 * 1024,
+                "the required RDFC batch route needs AVX-512 and a normal thread stack"
+            );
+        }
+        let mut builder = RdfDatasetBuilder::new();
+        let predicate = iri(&mut builder, "edge");
+        for index in 0..2 * Sha256Batch::CAPACITY + 7 {
+            let blank = builder
+                .intern_blank(&format!("blank{index}"), BlankScope(0))
+                .unwrap();
+            let identifier = if index == Sha256Batch::CAPACITY + 4 {
+                "x".repeat(Sha256Batch::MAX_INPUT_LEN + 1)
+            } else {
+                format!("object{index}")
+            };
+            let object = iri(&mut builder, &identifier);
+            builder.push_quad(blank, predicate, object, None).unwrap();
+        }
+        let dataset = builder.freeze().unwrap();
+        let canonicalize = || {
+            try_canonicalize_view(
+                &*dataset,
+                CanonHash::Sha256,
+                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+            )
+            .unwrap()
+        };
+        let expected = canonicalize();
+        let actual = purrdf_stack::on_stack_scoped(purrdf_stack::MARGIN_BYTES, canonicalize)
+            .expect("the small-stack canonicalization fits");
+        assert_eq!(actual.nquads(), expected.nquads());
+        assert!(actual.labels().eq(expected.labels()));
     }
 
     /// An interrupted incidence pass cannot publish a partial prepared inventory.

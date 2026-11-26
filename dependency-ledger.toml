@@ -191,7 +191,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "crypto"
 reason = "AES-256-GCM for GTS COSE_Encrypt0 envelopes"
 distinct = "AES-256-GCM authenticated encryption for GTS COSE_Encrypt0; PurRDF has no native block cipher or AEAD"
-metrics = { direct = true, exclusive_closure = 12, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 17, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.aho-corasick]
 category = "transitive:regex"
@@ -236,10 +236,10 @@ holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.block-buffer]
-category = "transitive:sha2"
-reason = "block buffering for RustCrypto digests"
-distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
-holder = "sha2"
+category = "transitive:aes-gcm"
+reason = "block buffering inside the cipher traits used by AES-GCM"
+distinct = "internal dependency; no first-party code calls it"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.bumpalo]
@@ -250,10 +250,10 @@ holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cfg-if]
-category = "transitive:sha2"
-reason = "cfg dispatch helper used across RustCrypto and others"
-distinct = "a cfg dispatch macro inside sha2, getrandom, wasm-bindgen and the RustCrypto crates; no first-party code calls it"
-holder = "sha2"
+category = "transitive:wasm-bindgen"
+reason = "conditional compilation inside wasm-bindgen and getrandom"
+distinct = "internal dependency; no first-party code calls it"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cipher]
@@ -304,13 +304,6 @@ distinct = "internal to clap's terminal output; PurRDF has no command-line parse
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.const-oid]
-category = "transitive:sha2"
-reason = "ASN.1 OIDs for RustCrypto digest identifiers"
-distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
-holder = "sha2"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.cpubits]
 category = "transitive:aes-gcm"
 reason = "target word-size detection for RustCrypto"
@@ -319,10 +312,10 @@ holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cpufeatures]
-category = "transitive:sha2"
-reason = "runtime CPU feature detection for SIMD crypto"
-distinct = "runtime CPU detection inside sha2 and aes-gcm; purrdf_hash dispatches its own kernels, but this one serves only those two crates' internals"
-holder = "sha2"
+category = "transitive:aes-gcm"
+reason = "runtime CPU feature detection inside AES and POLYVAL"
+distinct = "internal dependency; no first-party code calls it"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.crossbeam-deque]
@@ -347,10 +340,10 @@ holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.crypto-common]
-category = "transitive:sha2"
-reason = "common RustCrypto traits"
-distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
-holder = "sha2"
+category = "transitive:aes-gcm"
+reason = "common RustCrypto traits used by AES-GCM"
+distinct = "internal dependency; no first-party code calls it"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ctr]
@@ -365,13 +358,6 @@ category = "transitive:aes-gcm"
 reason = "constant-time utilities for RustCrypto"
 distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
 holder = "aes-gcm"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.digest]
-category = "transitive:sha2"
-reason = "digest traits for RustCrypto hashes"
-distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
-holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.either]
@@ -402,10 +388,10 @@ holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.hybrid-array]
-category = "transitive:sha2"
-reason = "const-generic arrays for RustCrypto"
-distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
-holder = "sha2"
+category = "transitive:aes-gcm"
+reason = "const-generic arrays for the RustCrypto cipher traits"
+distinct = "internal dependency; no first-party code calls it"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.inout]
@@ -563,12 +549,6 @@ distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScr
 holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = true }
 
-[packages.sha2]
-category = "crypto"
-reason = "SHA-2 family digests for SPARQL SHA256/384/512, RDF canonicalization and GTS"
-distinct = "the single SHA-2 implementation (a native build was benchmarked and did not beat it)"
-metrics = { direct = true, exclusive_closure = 3, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.strsim]
 category = "transitive:clap"
 reason = "string similarity for clap suggestions"
@@ -590,10 +570,10 @@ holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.typenum]
-category = "transitive:sha2"
-reason = "type-level numbers for RustCrypto arrays"
-distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
-holder = "sha2"
+category = "transitive:aes-gcm"
+reason = "type-level lengths for the RustCrypto cipher arrays"
+distinct = "internal dependency; no first-party code calls it"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.unicode-ident]

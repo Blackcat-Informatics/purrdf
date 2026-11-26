@@ -8,9 +8,9 @@ use std::path::Path;
 mod support;
 use support::{run, run_with_input as run_with_stdin};
 
+use purrdf_hash::sha2::Sha256;
 use purrdf_lex::json;
 use purrdf_rdf::{ProjectionConfig, ProjectionPackage};
-use sha2::{Digest, Sha256};
 
 const ATTACHED_ARCHIVE_SHA256: &str =
     "d714b63370b0026a28281f605794520fd4d1bc388ae8e5fdd367c5152cb95f6b";

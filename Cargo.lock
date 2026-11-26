@@ -181,12 +181,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d07550c9036bf2ae0c684c4297d503f838287c83c53686d05370d0e139ae570"
 
 [[package]]
-name = "const-oid"
-version = "0.10.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
-
-[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -251,17 +245,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "261af4dc7a06ea8a527a8717d8cbba3417530d6ea14e1edb3de6b67806be474f"
 dependencies = [
  "cmov",
-]
-
-[[package]]
-name = "digest"
-version = "0.11.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
-dependencies = [
- "block-buffer",
- "const-oid",
- "crypto-common",
 ]
 
 [[package]]
@@ -426,7 +409,6 @@ dependencies = [
  "purrdf-xsd",
  "purrdf-yaml",
  "rayon",
- "sha2",
 ]
 
 [[package]]
@@ -458,7 +440,6 @@ dependencies = [
  "purrdf-sparql-results",
  "purrdf-testkit",
  "purrdf-validate",
- "sha2",
 ]
 
 [[package]]
@@ -498,7 +479,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-validate",
  "purrdf-zstd",
- "sha2",
 ]
 
 [[package]]
@@ -545,7 +525,6 @@ dependencies = [
  "purrdf-xsd",
  "regex",
  "regex-syntax",
- "sha2",
 ]
 
 [[package]]
@@ -576,7 +555,6 @@ dependencies = [
  "purrdf-hash",
  "purrdf-lex",
  "purrdf-testkit",
- "sha2",
 ]
 
 [[package]]
@@ -642,7 +620,6 @@ dependencies = [
  "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
- "sha2",
 ]
 
 [[package]]
@@ -676,7 +653,6 @@ dependencies = [
  "purrdf-xsd",
  "purrdf-zstd",
  "rayon",
- "sha2",
 ]
 
 [[package]]
@@ -824,7 +800,6 @@ dependencies = [
  "purrdf-xsd",
  "rayon",
  "regex",
- "sha2",
  "syn",
 ]
 
@@ -915,7 +890,6 @@ dependencies = [
  "purrdf-testkit",
  "rayon",
  "regex",
- "sha2",
 ]
 
 [[package]]
@@ -974,7 +948,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
- "sha2",
 ]
 
 [[package]]
@@ -1007,7 +980,6 @@ dependencies = [
  "purrdf-hash",
  "regex",
  "regex-syntax",
- "sha2",
  "wasm-bindgen",
 ]
 
@@ -1060,7 +1032,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "purrdf-yaml",
- "sha2",
 ]
 
 [[package]]
@@ -1236,17 +1207,6 @@ name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
-
-[[package]]
-name = "sha2"
-version = "0.11.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
-dependencies = [
- "cfg-if",
- "cpufeatures",
- "digest",
-]
 
 [[package]]
 name = "strsim"

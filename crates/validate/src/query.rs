@@ -10,10 +10,10 @@
 //! identity whichever host answered it. [`CoordinateInputs`] decodes supplied
 //! time and entropy once, independently of that query-text identity.
 
+use purrdf_hash::sha2::Sha256;
 use purrdf_sparql_eval::{AggregateRegistry, QueryOptions};
 use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance};
 use purrdf_xsd::temporal::{DateTime, parse_datetime};
-use sha2::{Digest as _, Sha256};
 
 /// Captures native observations for a host whose ordinary result has no receipt field.
 /// The observer owns the first started native receipt rather than re-reading inputs.

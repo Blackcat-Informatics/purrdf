@@ -44,7 +44,7 @@
 
 use std::fmt::{self, Write as _};
 
-use sha2::{Digest as _, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 /// The header field naming the number of body records.
 pub const COUNT_KEY: &str = "vector-count";

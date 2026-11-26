@@ -17,6 +17,7 @@ use purrdf_hash::hex::{
     encode_to_slice, encode_upper_to_slice,
 };
 use purrdf_hash::md5::Md5;
+use purrdf_hash::sha2::{Sha256, Sha512};
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::xorshift64_next;
@@ -50,6 +51,8 @@ fn digests(c: &mut Bench) {
             backend.digest(data).map_or(0, |digest| digest[0])
         });
     }
+    bench_one(c, "sha256", "selected", &|data| Sha256::digest(data)[0]);
+    bench_one(c, "sha512", "selected", &|data| Sha512::digest(data)[0]);
     bench_one(c, "sha3-224", "portable", &|data| Sha3_224::digest(data)[0]);
     bench_one(c, "sha3-256", "portable", &|data| Sha3_256::digest(data)[0]);
     bench_one(c, "sha3-384", "portable", &|data| Sha3_384::digest(data)[0]);

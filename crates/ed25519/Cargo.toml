@@ -31,9 +31,6 @@ name = "purrdf_ed25519"
 [dependencies]
 # The base16 codec the `Debug` renderings of keys and signatures print with.
 purrdf-hash = { workspace = true }
-# SHA-512, which RFC 8032 fixes as Ed25519's hash: the workspace's single SHA-2
-# implementation.
-sha2 = { workspace = true }
 
 [dev-dependencies]
 # The SplitMix64 stream the seeded tests draw from, and the frozen-vector

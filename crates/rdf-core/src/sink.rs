@@ -68,9 +68,7 @@
 
 use core::fmt;
 
-use sha2::{Digest as _, Sha256};
-
-use crate::content_store::ContentDigest;
+use crate::content_store::{ContentDigest, ContentHasher};
 
 /// The staging window a draining sink holds between writes.
 ///
@@ -317,22 +315,19 @@ impl ByteDrain for Measure {
 ///
 /// Pair it with [`Tee`] to write a document and digest it in one pass over the
 /// emitter, rather than materializing it and walking the bytes twice.
-pub struct Digest(Sha256);
+pub struct Digest(ContentHasher);
 
 impl Digest {
     /// A fresh SHA-256 drain.
     #[must_use]
     pub fn new() -> Self {
-        Self(Sha256::new())
+        Self(ContentHasher::default())
     }
 
     /// The digest of everything drained so far.
     #[must_use]
     pub fn finish(self) -> ContentDigest {
-        let out = self.0.finalize();
-        let mut raw = [0u8; 32];
-        raw.copy_from_slice(&out);
-        ContentDigest::from_raw(raw)
+        self.0.finish()
     }
 }
 

@@ -115,7 +115,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use super::canon::CanonError;
 use super::canon::labelled::{try_graph_digest_view as graph_digest32, try_hash_document_view};
@@ -557,11 +557,11 @@ impl<H> BundleCore<H> {
         resource_entries.sort_unstable();
         for (identity, digest) in resource_entries {
             hasher.update(identity.as_bytes());
-            hasher.update([SEP_FIELD]);
+            hasher.update(&[SEP_FIELD]);
             hasher.update(digest.as_bytes());
-            hasher.update([SEP_RECORD]);
+            hasher.update(&[SEP_RECORD]);
         }
-        hasher.update([SEP_SECTION]);
+        hasher.update(&[SEP_SECTION]);
 
         // 3. Each blob's ContentDigest in the store, SORTED (the store is a hash map,
         //    so iteration order is otherwise nondeterministic).
@@ -570,9 +570,9 @@ impl<H> BundleCore<H> {
         blob_digests.sort_unstable();
         for d in blob_digests {
             hasher.update(d.as_bytes());
-            hasher.update([SEP_RECORD]);
+            hasher.update(&[SEP_RECORD]);
         }
-        hasher.update([SEP_SECTION]);
+        hasher.update(&[SEP_SECTION]);
 
         // 4. The PUBLIC provenance projection (quad index, unit names, kinds, artifact
         //    paths, locations) — NEVER the runtime numeric ids (S0.5). The projection
@@ -581,15 +581,15 @@ impl<H> BundleCore<H> {
         //    the same (unit, artifact, location) are preserved as distinct rows.
         for (quad_idx, unit, kind, artifact, location) in self.provenance.public_projection() {
             hasher.update(quad_idx.to_string().as_bytes());
-            hasher.update([SEP_FIELD]);
+            hasher.update(&[SEP_FIELD]);
             hasher.update(unit.as_bytes());
-            hasher.update([SEP_FIELD]);
+            hasher.update(&[SEP_FIELD]);
             hasher.update(kind.as_bytes());
-            hasher.update([SEP_FIELD]);
+            hasher.update(&[SEP_FIELD]);
             hasher.update(artifact.as_bytes());
-            hasher.update([SEP_FIELD]);
+            hasher.update(&[SEP_FIELD]);
             hasher.update(location.as_deref().unwrap_or("").as_bytes());
-            hasher.update([SEP_RECORD]);
+            hasher.update(&[SEP_RECORD]);
         }
     }
 
@@ -604,7 +604,7 @@ impl<H> BundleCore<H> {
         try_hash_document_view(view, control, &mut hasher)
             .map_err(|source| canon_refusal(CanonScopeName::Carrier, source))?;
         DigestWorkCounter::bump(&self.work.dataset_canonicalizations);
-        hasher.update([SEP_SECTION]);
+        hasher.update(&[SEP_SECTION]);
         self.fold_sidecars(&mut hasher);
         Ok(finish(hasher))
     }
@@ -631,16 +631,16 @@ impl<H> BundleCore<H> {
     ) -> ContentDigest {
         let mut hasher = Sha256::new();
         hasher.update(PIPELINE_ROOT_DOMAIN.as_bytes());
-        hasher.update([SEP_SECTION]);
+        hasher.update(&[SEP_SECTION]);
         for (graph, digest) in leaves {
             hasher.update(graph.as_bytes());
-            hasher.update([SEP_FIELD]);
+            hasher.update(&[SEP_FIELD]);
             hasher.update(digest.as_bytes());
-            hasher.update([SEP_RECORD]);
+            hasher.update(&[SEP_RECORD]);
         }
-        hasher.update([SEP_SECTION]);
+        hasher.update(&[SEP_SECTION]);
         hasher.update(residue.as_bytes());
-        hasher.update([SEP_SECTION]);
+        hasher.update(&[SEP_SECTION]);
         self.fold_sidecars(&mut hasher);
         finish(hasher)
     }
@@ -648,10 +648,7 @@ impl<H> BundleCore<H> {
 
 /// Close a fold into a [`ContentDigest`].
 fn finish(hasher: Sha256) -> ContentDigest {
-    let out = hasher.finalize();
-    let mut buf = [0u8; 32];
-    buf.copy_from_slice(&out);
-    ContentDigest::from_raw(buf)
+    ContentDigest::from_raw(hasher.finalize())
 }
 
 /// The IRI-named graphs `view` addresses, sorted and deduplicated.
@@ -2861,7 +2858,7 @@ mod tests {
                         .unwrap();
                 let mut oracle = Sha256::new();
                 oracle.update(built.nquads().as_bytes());
-                oracle.update([SEP_SECTION]);
+                oracle.update(&[SEP_SECTION]);
                 bundle.core.fold_sidecars(&mut oracle);
                 assert_eq!(
                     bundle.digest(&mut control()).unwrap(),

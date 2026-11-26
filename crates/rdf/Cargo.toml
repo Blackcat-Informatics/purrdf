@@ -90,11 +90,6 @@ purrdf-lex = { workspace = true }
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
 # execution there (same pattern as purrdf-slice's catalog scan).
 rayon = { workspace = true }
-# RDFC-1.0 digest of the compaction certificate's content projection
-# (`gts_certify`): default features (std) re-enabled, matching `purrdf-core`'s
-# own canonicalizer — the workspace-level entry is default-features = false
-# for the wasm-clean eval path.
-sha2 = { workspace = true, default-features = true }
 # Lowercase hex rendering of those SHA-256 digests.
 purrdf-hash = { workspace = true }
 

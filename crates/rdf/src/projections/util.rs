@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Write as _};
 
-use sha2::{Digest, Sha256};
+use purrdf_hash::sha2::Sha256;
 
 use super::{ProjectionError, ProjectionLimits};
 use purrdf_lex::json::record::ToJson;
@@ -406,7 +406,7 @@ pub fn stable_identifier(prefix: &str, key: &[u8]) -> Result<String, ProjectionE
 /// The SHA-256 digest a [`stable_identifier`] spells after its prefix.
 #[must_use]
 pub(crate) fn stable_digest(key: &[u8]) -> [u8; 32] {
-    Sha256::digest(key).into()
+    Sha256::digest(key)
 }
 
 /// Validate a mandatory absolute IRI configuration field.
