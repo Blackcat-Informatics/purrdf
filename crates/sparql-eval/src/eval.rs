@@ -48,6 +48,7 @@ use crate::governor::GovernorState;
 use crate::governor::ledger::ChargeLedger;
 use crate::governor::lift::{CompletionForm, Evaluated, ExpressionBarrier, Truncation};
 use crate::governor::soundness::CapPushdown;
+use crate::join_plan::DistinctPlanning;
 use crate::scratch::{ScratchInterner, SolutionTerm};
 use crate::solution::{SolutionSeq, VarSchema};
 use crate::vm::RowContinuation as _;
@@ -655,8 +656,6 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// The exact verdict which stopped the original answer producer, if any.
     pub(crate) evidence_stop: Option<purrdf_core::evidence::WitnessVerdict>,
     pub(crate) annotation_range: Option<crate::expr::AnnotationRanges>,
-    /// Paired admission and execution policy for a retained governed SELECT.
-    pub(crate) distinct_planning: crate::join_plan::DistinctPlanning,
     pub(crate) bgp_cursor_sources: Option<crate::bgp::BgpSourceFactory<D>>,
     cursor_delivery: CursorDelivery,
     cursor_buffering: Option<cursor_buffering::BufferingTrace>,
@@ -1500,7 +1499,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: None,
-            distinct_planning: crate::join_plan::DistinctPlanning::Ordinary,
             bgp_cursor_sources: None,
             cursor_delivery: CursorDelivery::Retained,
             cursor_buffering: None,
@@ -3019,7 +3017,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: self.annotation_range.clone(),
-            distinct_planning: crate::join_plan::DistinctPlanning::Ordinary,
             bgp_cursor_sources: self.bgp_cursor_sources,
             cursor_delivery: self.cursor_delivery,
             cursor_buffering: self.cursor_buffering.clone(),
@@ -3416,7 +3413,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             evidence_verdict: None,
             evidence_stop: None,
             annotation_range: None,
-            distinct_planning: crate::join_plan::DistinctPlanning::Ordinary,
             bgp_cursor_sources: self.bgp_cursor_sources,
             cursor_delivery: self.cursor_delivery,
             cursor_buffering: self.cursor_buffering.clone(),
@@ -11250,7 +11246,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    evaluate_query_evaluated_over(query, None, ctx)
+    evaluate_query_evaluated_over(query, None, DistinctPlanning::Ordinary, ctx)
 }
 
 /// [`evaluate_query_evaluated`], numbering `query` through `kept` when its owner keeps a
@@ -11336,6 +11332,7 @@ fn finish_solution_query<D: DatasetView + Sync>(
 pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
     query: &Query,
     kept: Option<&crate::plan::PlanCache>,
+    distinct_planning: DistinctPlanning,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
     begin_query_evaluated(query, kept, ctx)?;
@@ -11344,8 +11341,7 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
         // pattern's variables; a caller-built one need not, so a shared blank's column
         // (see `crate::blank_scope`) is dropped from the answer here either way.
         Query::Select { pattern, .. } | Query::Ask { pattern, .. } => {
-            let evaluated = if ctx.distinct_planning
-                == crate::join_plan::DistinctPlanning::Factorized
+            let evaluated = if distinct_planning == DistinctPlanning::Factorized
                 && kept.is_some()
                 && matches!(query, Query::Select { .. })
                 && ctx.evidence_verdict.is_none()
@@ -11460,7 +11456,7 @@ pub(crate) fn evaluate_query_over<D: DatasetView + Sync>(
         Some(joined) => (joined, None),
         None => (query, kept),
     };
-    match evaluate_query_evaluated_over(query, kept, ctx)? {
+    match evaluate_query_evaluated_over(query, kept, DistinctPlanning::Ordinary, ctx)? {
         EvaluatedOutcome::Complete(outcome) => Ok(outcome),
         EvaluatedOutcome::Truncated {
             outcome,
