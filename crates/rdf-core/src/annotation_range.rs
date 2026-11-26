@@ -263,13 +263,34 @@ pub(crate) fn seal_intervals(
     seal_intervals_with(rows, |id| Ok(dataset.resolve(id)))
 }
 
+enum SealValue<'a> {
+    String(&'a str),
+    Owned(XsdValue),
+}
+
+impl SealValue<'_> {
+    fn order(
+        &self,
+        other: &Self,
+        memory: &mut Memory<'_, purrdf_lex::allocation::Resident>,
+    ) -> Result<Option<Ordering>, StorageError> {
+        match (self, other) {
+            (Self::String(left), Self::String(right)) => Ok(Some(left.cmp(right))),
+            (Self::Owned(left), Self::Owned(right)) => compare(left, right, memory),
+            // Groups are keyed by the exact datatype, so a borrowed xsd:string
+            // and a value from the owned parser never share a group.
+            _ => Ok(None),
+        }
+    }
+}
+
 pub(crate) fn seal_intervals_with<'a, I: crate::ViewTermId + 'a, E: From<StorageError>>(
     rows: impl Iterator<Item = QuadIds<I>>,
     resolve: impl Fn(I) -> Result<TermRef<'a, I>, E>,
 ) -> Result<Vec<ValueInterval<I>>, E> {
     let mut resident = purrdf_lex::allocation::Resident;
     let mut memory = Memory::new(&mut resident);
-    let mut values: Vec<(I, &'static str, bool, I, XsdValue)> = Vec::new();
+    let mut values: Vec<(I, &'static str, bool, I, SealValue<'a>)> = Vec::new();
     let mut unknown = Vec::new();
     for row in rows {
         let TermRef::Literal {
@@ -290,27 +311,38 @@ pub(crate) fn seal_intervals_with<'a, I: crate::ViewTermId + 'a, E: From<Storage
             memory.push(&mut unknown, row.p)?;
             continue;
         };
-        let purrdf_xsd::value::ParsedValue::Value(value) =
-            purrdf_xsd::value::try_parse_with_memory(lexical, datatype, false, &mut memory)?
-        else {
-            memory.push(&mut unknown, row.p)?;
-            continue;
+        let value = if datatype == XsdDatatype::String {
+            // The dictionary owns the text throughout interval derivation.
+            // Validate the same lexical space without copying overflow values.
+            let Ok(text) = purrdf_xsd::simple::read_xml_string(lexical) else {
+                memory.push(&mut unknown, row.p)?;
+                continue;
+            };
+            SealValue::String(text)
+        } else {
+            let purrdf_xsd::value::ParsedValue::Value(value) =
+                purrdf_xsd::value::try_parse_with_memory(lexical, datatype, false, &mut memory)?
+            else {
+                memory.push(&mut unknown, row.p)?;
+                continue;
+            };
+            let total = matches!(
+                &value,
+                XsdValue::Integer { .. }
+                    | XsdValue::Decimal(_)
+                    | XsdValue::Boolean(_)
+                    | XsdValue::String(_)
+                    | XsdValue::DateTime(_)
+                    | XsdValue::Date(_)
+                    | XsdValue::Time(_)
+            ) || matches!(&value, XsdValue::Float(number) if !number.is_nan())
+                || matches!(&value, XsdValue::Double(number) if !number.is_nan());
+            if !total {
+                memory.push(&mut unknown, row.p)?;
+                continue;
+            }
+            SealValue::Owned(value)
         };
-        let total = matches!(
-            &value,
-            XsdValue::Integer { .. }
-                | XsdValue::Decimal(_)
-                | XsdValue::Boolean(_)
-                | XsdValue::String(_)
-                | XsdValue::DateTime(_)
-                | XsdValue::Date(_)
-                | XsdValue::Time(_)
-        ) || matches!(&value, XsdValue::Float(number) if !number.is_nan())
-            || matches!(&value, XsdValue::Double(number) if !number.is_nan());
-        if !total {
-            memory.push(&mut unknown, row.p)?;
-            continue;
-        }
         let bytes = lexical.as_bytes();
         let zoned = lexical.ends_with('Z')
             || (bytes.len() >= 6
@@ -327,12 +359,10 @@ pub(crate) fn seal_intervals_with<'a, I: crate::ViewTermId + 'a, E: From<Storage
             start + values[start..].partition_point(|value| (value.0, value.1, value.2) == key);
         let (mut minimum, mut maximum) = (start, start);
         for index in start + 1..end {
-            if compare(&values[index].4, &values[minimum].4, &mut memory)? == Some(Ordering::Less) {
+            if values[index].4.order(&values[minimum].4, &mut memory)? == Some(Ordering::Less) {
                 minimum = index;
             }
-            if compare(&values[index].4, &values[maximum].4, &mut memory)?
-                == Some(Ordering::Greater)
-            {
+            if values[index].4.order(&values[maximum].4, &mut memory)? == Some(Ordering::Greater) {
                 maximum = index;
             }
         }
@@ -346,12 +376,11 @@ pub(crate) fn seal_intervals_with<'a, I: crate::ViewTermId + 'a, E: From<Storage
             match &mut middle {
                 None => middle = Some((index, index)),
                 Some((low, high)) => {
-                    if compare(&values[index].4, &values[*low].4, &mut memory)?
-                        == Some(Ordering::Less)
+                    if values[index].4.order(&values[*low].4, &mut memory)? == Some(Ordering::Less)
                     {
                         *low = index;
                     }
-                    if compare(&values[index].4, &values[*high].4, &mut memory)?
+                    if values[index].4.order(&values[*high].4, &mut memory)?
                         == Some(Ordering::Greater)
                     {
                         *high = index;

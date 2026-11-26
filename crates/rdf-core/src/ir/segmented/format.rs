@@ -369,18 +369,10 @@ impl<'a> Reader<'a> {
     }
 }
 
-pub(super) fn push_text(out: &mut Vec<u8>, value: &str) -> Result<(), SegmentedError> {
-    out.extend_from_slice(
-        &u32::try_from(value.len())
-            .map_err(|_| SegmentedError::AddressExhausted)?
-            .to_le_bytes(),
-    );
-    out.extend_from_slice(value.as_bytes());
-    Ok(())
-}
-
-pub(super) fn push_id(out: &mut Vec<u8>, id: GlobalTermId) {
-    out.extend_from_slice(&id_bytes(id));
+fn text_length(value: &str) -> Result<[u8; 4], SegmentedError> {
+    Ok(u32::try_from(value.len())
+        .map_err(|_| SegmentedError::AddressExhausted)?
+        .to_le_bytes())
 }
 
 pub(super) fn id_bytes(id: GlobalTermId) -> [u8; 8] {
@@ -402,45 +394,99 @@ pub(super) fn encoded_term_size<Id>(term: &TermRef<'_, Id>) -> Result<usize, Seg
     .ok_or(SegmentedError::AddressExhausted)
 }
 
+/// Wire fragments borrow text from its original owner, including across pages.
+pub(super) struct TermEncoding<'a> {
+    prefix: [u8; 25],
+    prefix_len: usize,
+    text: &'a [u8],
+    suffix: [u8; 5],
+    suffix_len: usize,
+    language: &'a [u8],
+    direction: [u8; 1],
+}
+
+impl<'a> TermEncoding<'a> {
+    pub(super) fn new(term: TermRef<'a, GlobalTermId>) -> Result<Self, SegmentedError> {
+        let mut encoding = Self {
+            prefix: [0; 25],
+            prefix_len: 0,
+            text: &[],
+            suffix: [0; 5],
+            suffix_len: 0,
+            language: &[],
+            direction: [0],
+        };
+        match term {
+            TermRef::Iri(iri) => {
+                encoding.prefix[1..5].copy_from_slice(&text_length(iri)?);
+                encoding.prefix_len = 5;
+                encoding.text = iri.as_bytes();
+            }
+            TermRef::Blank { label, scope } => {
+                encoding.prefix[0] = 1;
+                crate::bytes::put_u32_le(&mut encoding.prefix, 1, scope.ordinal())
+                    .expect("fixed blank scope field");
+                encoding.prefix[5..9].copy_from_slice(&text_length(label)?);
+                encoding.prefix_len = 9;
+                encoding.text = label.as_bytes();
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                encoding.prefix[0] = 2;
+                encoding.prefix[1..9].copy_from_slice(&id_bytes(datatype));
+                encoding.prefix[9..13].copy_from_slice(&text_length(lexical)?);
+                encoding.prefix_len = 13;
+                encoding.text = lexical.as_bytes();
+                encoding.suffix_len = 1;
+                if let Some(language) = language {
+                    encoding.suffix[0] = 1;
+                    encoding.suffix[1..5].copy_from_slice(&text_length(language)?);
+                    encoding.suffix_len = 5;
+                    encoding.language = language.as_bytes();
+                }
+                encoding.direction[0] = match direction {
+                    None => 0,
+                    Some(RdfTextDirection::Ltr) => 1,
+                    Some(RdfTextDirection::Rtl) => 2,
+                };
+            }
+            TermRef::Triple { s, p, o } => {
+                encoding.prefix[0] = 3;
+                for (dst, id) in encoding.prefix[1..]
+                    .as_chunks_mut::<8>()
+                    .0
+                    .iter_mut()
+                    .zip([s, p, o])
+                {
+                    *dst = id_bytes(id);
+                }
+                encoding.prefix_len = 25;
+            }
+        }
+        Ok(encoding)
+    }
+
+    pub(super) fn parts(&self) -> [&[u8]; 5] {
+        [
+            &self.prefix[..self.prefix_len],
+            self.text,
+            &self.suffix[..self.suffix_len],
+            self.language,
+            &self.direction[..usize::from(self.suffix_len != 0)],
+        ]
+    }
+}
+
 pub(super) fn encode_term(
     term: TermRef<'_, GlobalTermId>,
     out: &mut Vec<u8>,
 ) -> Result<(), SegmentedError> {
-    match term {
-        TermRef::Iri(iri) => {
-            out.push(0);
-            push_text(out, iri)?;
-        }
-        TermRef::Blank { label, scope } => {
-            out.push(1);
-            out.extend_from_slice(&scope.ordinal().to_le_bytes());
-            push_text(out, label)?;
-        }
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            out.push(2);
-            push_id(out, datatype);
-            push_text(out, lexical)?;
-            out.push(u8::from(language.is_some()));
-            if let Some(language) = language {
-                push_text(out, language)?;
-            }
-            out.push(match direction {
-                None => 0,
-                Some(RdfTextDirection::Ltr) => 1,
-                Some(RdfTextDirection::Rtl) => 2,
-            });
-        }
-        TermRef::Triple { s, p, o } => {
-            out.push(3);
-            for id in [s, p, o] {
-                push_id(out, id);
-            }
-        }
+    for part in TermEncoding::new(term)?.parts() {
+        out.extend_from_slice(part);
     }
     Ok(())
 }
@@ -487,88 +533,272 @@ pub(super) fn decode_term(bytes: &[u8]) -> Result<TermRef<'_, GlobalTermId>, Seg
     Ok(term)
 }
 
-pub(super) fn record_block<'a>(
-    records: &(impl ExactSizeIterator<Item = (GlobalTermId, &'a [u8])> + Clone),
+/// A wire key borrows lexical text without gathering it into a flat array.
+pub(super) enum WireKey<'a> {
+    Term(TermEncoding<'a>),
+    #[cfg(test)]
+    Flat(&'a [u8]),
+}
+
+impl WireKey<'_> {
+    pub(super) fn parts(&self) -> [&[u8]; 5] {
+        match self {
+            Self::Term(term) => term.parts(),
+            #[cfg(test)]
+            Self::Flat(bytes) => [bytes, &[], &[], &[], &[]],
+        }
+    }
+
+    fn len(&self) -> usize {
+        self.parts().into_iter().map(<[u8]>::len).sum()
+    }
+
+    fn suffix(&self, mut skip: usize) -> impl Iterator<Item = &[u8]> {
+        self.parts().into_iter().filter_map(move |part| {
+            let offset = skip.min(part.len());
+            skip -= offset;
+            (offset < part.len()).then(|| &part[offset..])
+        })
+    }
+}
+
+/// Return the equal prefix length and order of the concatenated, not padded, parts.
+pub(super) fn compare_key_parts<'a, 'b>(
+    left: impl Iterator<Item = &'a [u8]>,
+    right: impl Iterator<Item = &'b [u8]>,
+) -> (usize, core::cmp::Ordering) {
+    let mut left = left.filter(|part| !part.is_empty());
+    let mut right = right.filter(|part| !part.is_empty());
+    let mut a = &[][..];
+    let mut b = &[][..];
+    let mut equal = 0;
+    loop {
+        if a.is_empty() {
+            a = left.next().unwrap_or_default();
+        }
+        if b.is_empty() {
+            b = right.next().unwrap_or_default();
+        }
+        if a.is_empty() || b.is_empty() {
+            return (equal, a.len().cmp(&b.len()));
+        }
+        let width = a.len().min(b.len());
+        let prefix = purrdf_deflate::common_prefix_len(&a[..width], &b[..width]);
+        equal += prefix;
+        if prefix != width {
+            return (equal, a[prefix].cmp(&b[prefix]));
+        }
+        a = &a[width..];
+        b = &b[width..];
+    }
+}
+
+type WireRecord<'a> = Result<(GlobalTermId, WireKey<'a>), SegmentedError>;
+
+/// The selected prefix and its packing, independent of any output buffer.
+pub(super) struct RecordLayout {
+    pub used: usize,
+    pub compressed: bool,
+}
+
+pub(super) fn plan_record_block<'a>(
+    records: &(impl ExactSizeIterator<Item = WireRecord<'a>> + Clone),
     block_bytes: usize,
-) -> Result<(Vec<u8>, usize), SegmentedError> {
-    let raw = raw_record_block(records.clone(), block_bytes)?;
+) -> Result<RecordLayout, SegmentedError> {
+    let raw = raw_records(records.clone(), block_bytes, |_, _, _, _| {})?;
     let decoded_limit = block_bytes
         .checked_mul(records.len())
         .ok_or(SegmentedError::AddressExhausted)?;
     let mut count = records.len();
-    while count > raw.1 {
+    while count > raw.count {
         let decoded = records
             .clone()
             .take(count)
-            .try_fold(0_usize, |size, (_, key)| {
-                size.checked_add(key.len())
+            .try_fold(0_usize, |size, record| {
+                let (_, key) = record?;
+                let len = key.len();
+                if len
+                    .checked_add(RECORD_HEADER + 16)
+                    .is_none_or(|width| width > block_bytes)
+                {
+                    return Err(SegmentedError::ConstructionLimit);
+                }
+                size.checked_add(len)
                     .ok_or(SegmentedError::AddressExhausted)
             })?;
         if decoded > decoded_limit {
-            count = raw.1 + (count - raw.1) / 2;
+            count = raw.count + (count - raw.count) / 2;
             continue;
         }
-        if records.clone().take(count).any(|(_, key)| {
-            key.len()
-                .checked_add(RECORD_HEADER + 16)
-                .is_none_or(|size| size > block_bytes)
-        }) {
-            return Err(SegmentedError::ConstructionLimit);
-        }
-        let mut previous = &[][..];
-        let mut framed = RECORD_HEADER;
-        for (_, key) in records.clone().take(count) {
-            let prefix = purrdf_deflate::common_prefix_len(previous, key);
-            framed = framed
-                .checked_add(16)
-                .and_then(|bytes| bytes.checked_add(key.len() - prefix))
-                .ok_or(SegmentedError::AddressExhausted)?;
-            previous = key;
-        }
-        let (candidate, used) = raw_record_block(records.clone().take(count), framed)?;
-        let payload = usize::try_from(
-            read_u32_le(&candidate, 9)
-                .ok_or(SegmentedError::Corrupt("record encoder omitted its header"))?,
-        )
-        .map_err(|_| SegmentedError::AddressExhausted)?;
-        let compressed = purrdf_deflate::deflate::compress(
-            &candidate[RECORD_HEADER..RECORD_HEADER + payload],
-            purrdf_deflate::Level::DEFAULT,
-        );
-        if used > raw.1
+        let compressed = compress_records(records.clone().take(count), |_, _| Ok(()))?;
+        if compressed.count > raw.count
             && compressed
-                .len()
+                .payload
                 .checked_add(RECORD_HEADER)
                 .is_some_and(|size| size <= block_bytes)
         {
-            let mut block = candidate[..RECORD_HEADER].to_vec();
-            crate::bytes::put_u32_le(
-                &mut block,
-                9,
-                u32::try_from(compressed.len()).map_err(|_| SegmentedError::AddressExhausted)?
-                    | COMPRESSED_RECORDS,
-            )
-            .expect("record header is present");
-            block.extend_from_slice(&compressed);
-            block.resize(block_bytes, 0);
-            return Ok((block, used));
+            return Ok(RecordLayout {
+                used: compressed.count,
+                compressed: true,
+            });
         }
         // Actual compressed size need not be monotone. Probe deterministic
         // shorter prefixes; every selected block has independently fitted.
-        count = raw.1 + (count - raw.1) / 2;
+        count = raw.count + (count - raw.count) / 2;
     }
-    Ok(raw)
+    Ok(RecordLayout {
+        used: raw.count,
+        compressed: false,
+    })
 }
 
-fn raw_record_block<'a>(
-    records: impl Iterator<Item = (GlobalTermId, &'a [u8])> + Clone,
+pub(super) fn replay_record_block<'a>(
+    records: impl ExactSizeIterator<Item = WireRecord<'a>> + Clone,
+    compressed: bool,
+    destination: &mut [u8],
+) -> Result<(), SegmentedError> {
+    let expected = records.len();
+    let capacity = destination.len();
+    let (header, payload) =
+        destination
+            .split_at_mut_checked(RECORD_HEADER)
+            .ok_or(SegmentedError::Corrupt(
+                "dictionary record header does not fit",
+            ))?;
+    let layout = if compressed {
+        compress_records(records, |position, bytes| {
+            let target = payload
+                .get_mut(position..)
+                .and_then(|tail| tail.get_mut(..bytes.len()))
+                .ok_or(SegmentedError::Corrupt(
+                    "selected compressed record exceeds its page",
+                ))?;
+            target.copy_from_slice(bytes);
+            Ok(())
+        })?
+    } else {
+        raw_records(records, capacity, |position, fields, key, prefix| {
+            write_record_payload(payload, position, fields, key, prefix);
+        })?
+    };
+    if layout.count != expected {
+        return Err(SegmentedError::Corrupt(
+            "selected dictionary prefix changed during emission",
+        ));
+    }
+    write_record_header(header, layout, compressed)
+}
+
+/// The frame prefix describes one predecessor and is shared by raw and compressed pages.
+fn record_fields(
+    prefix: usize,
+    suffix: usize,
+    id: GlobalTermId,
+) -> Result<[u8; 16], SegmentedError> {
+    let mut fields = [0; 16];
+    let prefix = u32::try_from(prefix).map_err(|_| SegmentedError::AddressExhausted)?;
+    let suffix = u32::try_from(suffix).map_err(|_| SegmentedError::AddressExhausted)?;
+    crate::bytes::put_u32_le(&mut fields, 0, prefix).expect("fixed prefix field");
+    crate::bytes::put_u32_le(&mut fields, 4, suffix).expect("fixed suffix field");
+    fields[8..].copy_from_slice(&id_bytes(id));
+    Ok(fields)
+}
+
+#[derive(Clone, Copy, Default)]
+struct RecordContents {
+    count: usize,
+    decoded: u32,
+    payload: usize,
+}
+
+impl RecordContents {
+    fn record(&mut self, width: usize) -> Result<(), SegmentedError> {
+        self.decoded = self
+            .decoded
+            .checked_add(u32::try_from(width).map_err(|_| SegmentedError::AddressExhausted)?)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        self.count += 1;
+        Ok(())
+    }
+}
+
+fn write_record_header(
+    header: &mut [u8],
+    layout: RecordContents,
+    compressed: bool,
+) -> Result<(), SegmentedError> {
+    header[0] = DICTIONARY;
+    crate::bytes::put_u32_le(
+        header,
+        1,
+        u32::try_from(layout.count).map_err(|_| SegmentedError::AddressExhausted)?,
+    )
+    .expect("record header is present");
+    crate::bytes::put_u32_le(header, 5, layout.decoded).expect("record header is present");
+    let payload = u32::try_from(layout.payload).map_err(|_| SegmentedError::AddressExhausted)?;
+    let flags = if compressed { COMPRESSED_RECORDS } else { 0 };
+    crate::bytes::put_u32_le(header, 9, payload | flags).expect("record header is present");
+    Ok(())
+}
+
+/// Run one DEFLATE stream during sizing or writing without owning a full framed
+/// payload. Ordinary DEFLATE writes are chunk invariant. Never flush between records.
+fn compress_records<'a>(
+    records: impl Iterator<Item = WireRecord<'a>>,
+    mut write: impl FnMut(usize, &[u8]) -> Result<(), SegmentedError>,
+) -> Result<RecordContents, SegmentedError> {
+    let mut deflater = purrdf_deflate::deflate::Deflater::new(purrdf_deflate::Level::DEFAULT);
+    let mut staged = Vec::new();
+    let mut written = 0_usize;
+    let mut transfer = |bytes: &mut Vec<u8>| -> Result<(), SegmentedError> {
+        let end = written
+            .checked_add(bytes.len())
+            .ok_or(SegmentedError::AddressExhausted)?;
+        write(written, bytes)?;
+        written = end;
+        bytes.clear();
+        Ok(())
+    };
+    let mut layout = RecordContents::default();
+    let mut framed = 0_u32;
+    let mut previous = None;
+    for record in records {
+        let (id, key) = record?;
+        let prefix = key_prefix(previous.as_ref(), &key);
+        let width = key.len();
+        let suffix = width - prefix;
+        let fields = record_fields(prefix, suffix, id)?;
+        framed = framed
+            .checked_add(16)
+            .and_then(|n| n.checked_add(u32::try_from(suffix).ok()?))
+            .ok_or(SegmentedError::AddressExhausted)?;
+        layout.record(width)?;
+        deflater.write(&fields, &mut staged);
+        transfer(&mut staged)?;
+        for part in key.suffix(prefix) {
+            for piece in part.chunks(8192) {
+                deflater.write(piece, &mut staged);
+                transfer(&mut staged)?;
+            }
+        }
+        previous = Some(key);
+    }
+    deflater.finish(&mut staged);
+    transfer(&mut staged)?;
+    layout.payload = written;
+    Ok(layout)
+}
+
+fn raw_records<'a>(
+    records: impl Iterator<Item = WireRecord<'a>> + Clone,
     block_bytes: usize,
-) -> Result<(Vec<u8>, usize), SegmentedError> {
+    mut write: impl FnMut(usize, &[u8; 16], &WireKey<'a>, usize),
+) -> Result<RecordContents, SegmentedError> {
     let (_, first) = records
         .clone()
         .next()
-        .ok_or(SegmentedError::Corrupt("empty record block input"))?;
-    // Routing reads the first decoded record; no second copy of its key is stored.
+        .ok_or(SegmentedError::Corrupt("empty record block input"))??;
+    // Routing reads the first decoded record and stores no second key.
     let first_bytes = first
         .len()
         .checked_add(RECORD_HEADER + 16)
@@ -576,54 +806,86 @@ fn raw_record_block<'a>(
     if first_bytes > block_bytes {
         return Err(SegmentedError::ConstructionLimit);
     }
-    let mut out = Vec::with_capacity(block_bytes);
-    out.push(DICTIONARY);
-    out.extend_from_slice(&0_u32.to_le_bytes());
-    out.extend_from_slice(&0_u32.to_le_bytes());
-    out.extend_from_slice(&0_u32.to_le_bytes());
-    let mut previous = &[][..];
-    let mut count = 0_usize;
-    let mut decoded = 0_u32;
-    for (id, key) in records {
-        let prefix = purrdf_deflate::common_prefix_len(previous, key);
-        let next = out
-            .len()
+    let capacity = block_bytes - RECORD_HEADER;
+    let mut layout = RecordContents::default();
+    let mut previous = None;
+    for record in records {
+        let (id, key) = record?;
+        let prefix = key_prefix(previous.as_ref(), &key);
+        let width = key.len();
+        let suffix = width - prefix;
+        let next = layout
+            .payload
             .checked_add(16)
-            .and_then(|bytes| bytes.checked_add(key.len() - prefix))
+            .and_then(|bytes| bytes.checked_add(suffix))
             .ok_or(SegmentedError::AddressExhausted)?;
-        if next > block_bytes {
+        if next > capacity {
             break;
         }
-        decoded = decoded
-            .checked_add(u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?)
-            .ok_or(SegmentedError::AddressExhausted)?;
-        out.extend_from_slice(
-            &u32::try_from(prefix)
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .to_le_bytes(),
-        );
-        out.extend_from_slice(
-            &u32::try_from(key.len() - prefix)
-                .map_err(|_| SegmentedError::AddressExhausted)?
-                .to_le_bytes(),
-        );
-        push_id(&mut out, id);
-        out.extend_from_slice(&key[prefix..]);
-        previous = key;
-        count += 1;
+        let fields = record_fields(prefix, suffix, id)?;
+        layout.record(width)?;
+        write(layout.payload, &fields, &key, prefix);
+        layout.payload = next;
+        previous = Some(key);
     }
-    crate::bytes::put_u32_le(
-        &mut out,
-        1,
-        u32::try_from(count).map_err(|_| SegmentedError::AddressExhausted)?,
-    )
-    .expect("record header is present");
-    crate::bytes::put_u32_le(&mut out, 5, decoded).expect("record header is present");
-    let payload =
-        u32::try_from(out.len() - RECORD_HEADER).map_err(|_| SegmentedError::AddressExhausted)?;
-    crate::bytes::put_u32_le(&mut out, 9, payload).expect("record header is present");
-    out.resize(block_bytes, 0);
-    Ok((out, count))
+    Ok(layout)
+}
+
+fn key_prefix(previous: Option<&WireKey<'_>>, key: &WireKey<'_>) -> usize {
+    previous.map_or(0, |prior| {
+        compare_key_parts(prior.parts().into_iter(), key.parts().into_iter()).0
+    })
+}
+
+fn write_record_payload(
+    payload: &mut [u8],
+    position: usize,
+    fields: &[u8; 16],
+    key: &WireKey<'_>,
+    prefix: usize,
+) {
+    let mut tail = &mut payload[position..];
+    let (header, rest) = tail.split_at_mut(fields.len());
+    header.copy_from_slice(fields);
+    tail = rest;
+    for part in key.suffix(prefix) {
+        let (destination, rest) = tail.split_at_mut(part.len());
+        destination.copy_from_slice(part);
+        tail = rest;
+    }
+}
+
+#[cfg(test)]
+fn record_block<'a>(
+    records: &(impl ExactSizeIterator<Item = (GlobalTermId, &'a [u8])> + Clone),
+    block_bytes: usize,
+) -> Result<(Vec<u8>, usize), SegmentedError> {
+    let records = records
+        .clone()
+        .map(|(id, key)| Ok((id, WireKey::Flat(key))));
+    let layout = plan_record_block(&records, block_bytes)?;
+    let mut block = vec![0; block_bytes];
+    replay_record_block(
+        records.clone().take(layout.used),
+        layout.compressed,
+        &mut block,
+    )?;
+    Ok((block, layout.used))
+}
+
+#[cfg(test)]
+fn raw_record_block<'a>(
+    records: impl Iterator<Item = (GlobalTermId, &'a [u8])> + Clone,
+    block_bytes: usize,
+) -> Result<(Vec<u8>, usize), SegmentedError> {
+    let mut block = vec![0; block_bytes];
+    let records = records.map(|(id, key)| Ok((id, WireKey::Flat(key))));
+    let layout = raw_records(records, block_bytes, |position, fields, key, prefix| {
+        write_record_payload(&mut block[RECORD_HEADER..], position, fields, key, prefix);
+    })?;
+    let count = layout.count;
+    write_record_header(&mut block[..RECORD_HEADER], layout, false)?;
+    Ok((block, count))
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -635,7 +897,7 @@ pub(super) struct OverflowSpan {
 impl OverflowSpan {
     pub(super) fn blocks(self, block_bytes: usize) -> Result<u64, SegmentedError> {
         let capacity = block_bytes
-            .checked_sub(5)
+            .checked_sub(OVERFLOW_HEADER_BYTES)
             .filter(|&n| n > 0)
             .ok_or(SegmentedError::Corrupt("invalid overflow page size"))?;
         Ok(u64::from(self.bytes).div_ceil(capacity as u64))
@@ -654,33 +916,14 @@ impl OverflowSpan {
     }
 }
 
-pub(super) fn spanned_record(
-    id: GlobalTermId,
-    key: &[u8],
-    overflow: &mut Vec<Vec<u8>>,
-    block_bytes: usize,
-) -> Result<Vec<u8>, SegmentedError> {
-    let span = OverflowSpan {
-        first: overflow.len() as u64,
-        bytes: u32::try_from(key.len()).map_err(|_| SegmentedError::AddressExhausted)?,
-    };
-    for chunk in key.chunks(block_bytes - 5) {
-        let mut page = Vec::with_capacity(block_bytes);
-        page.push(OVERFLOW);
-        page.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
-        page.extend_from_slice(chunk);
-        page.resize(block_bytes, 0);
-        overflow.push(page);
-    }
-    let mut descriptor = Vec::with_capacity(block_bytes);
-    descriptor.push(SPANNED_DICTIONARY);
-    descriptor.extend_from_slice(&1_u32.to_le_bytes());
-    descriptor.extend_from_slice(&span.bytes.to_le_bytes());
-    descriptor.extend_from_slice(&16_u32.to_le_bytes());
-    push_id(&mut descriptor, id);
-    descriptor.extend_from_slice(&span.first.to_le_bytes());
-    descriptor.resize(block_bytes, 0);
-    Ok(descriptor)
+pub(super) fn write_spanned_record(id: GlobalTermId, span: OverflowSpan, block: &mut [u8]) {
+    block[0] = SPANNED_DICTIONARY;
+    crate::bytes::put_u32_le(block, 1, 1).expect("overflow record count");
+    crate::bytes::put_u32_le(block, 5, span.bytes).expect("overflow decoded length");
+    crate::bytes::put_u32_le(block, 9, 16).expect("overflow payload length");
+    block[RECORD_HEADER..RECORD_HEADER + 8].copy_from_slice(&id_bytes(id));
+    crate::bytes::put_u64_le(block, RECORD_HEADER + 8, span.first)
+        .expect("fixed first overflow page field");
 }
 
 pub(super) fn overflow_descriptor(
@@ -710,6 +953,25 @@ pub(super) fn overflow_descriptor(
     Ok((id, span))
 }
 
+pub(super) const OVERFLOW_HEADER_BYTES: usize = 5;
+
+pub(super) fn overflow_payload(page: &[u8], width: usize) -> Result<&[u8], SegmentedError> {
+    let end = OVERFLOW_HEADER_BYTES
+        .checked_add(width)
+        .ok_or(SegmentedError::AddressExhausted)?;
+    let Some((record, padding)) = page.split_at_checked(end) else {
+        return Err(SegmentedError::Corrupt("noncanonical overflow page"));
+    };
+    if record[0] != OVERFLOW
+        || read_u32_le(record, 1)
+            != Some(u32::try_from(width).map_err(|_| SegmentedError::AddressExhausted)?)
+        || padding.iter().any(|&byte| byte != 0)
+    {
+        return Err(SegmentedError::Corrupt("noncanonical overflow page"));
+    }
+    Ok(&record[OVERFLOW_HEADER_BYTES..])
+}
+
 /// Visit authenticated page payloads. A stopped visit is a selective read, never
 /// a certification of unvisited bytes; certification always visits the full span.
 pub(super) fn visit_overflow(
@@ -733,14 +995,8 @@ pub(super) fn visit_overflow(
             .and_then(|n| n.checked_add(offset))
             .ok_or(SegmentedError::AddressExhausted)?;
         read(slot, &mut page)?;
-        let expected = remaining.min(block_bytes - 5);
-        if page[0] != OVERFLOW
-            || read_u32_le(&page, 1) != Some(expected as u32)
-            || page[5 + expected..].iter().any(|&byte| byte != 0)
-        {
-            return Err(SegmentedError::Corrupt("noncanonical overflow page"));
-        }
-        if visit(&page[5..5 + expected]).is_break() {
+        let expected = remaining.min(block_bytes - OVERFLOW_HEADER_BYTES);
+        if visit(overflow_payload(&page, expected)?).is_break() {
             memory.release_vec(page)?;
             return Ok(core::ops::ControlFlow::Break(()));
         }
@@ -787,19 +1043,202 @@ pub(super) fn decode_scratch_bytes(
     max_records: u32,
     max_decoded: u64,
 ) -> Result<u64, SegmentedError> {
-    let (count, decoded, payload) = record_header(bytes, max_records, max_decoded)?;
+    let (_, _, payload) = record_header(bytes, max_records, max_decoded)?;
     if payload & COMPRESSED_RECORDS == 0 {
         return Ok(0);
     }
-    let workspace = u64::try_from(purrdf_deflate::Inflater::max_live_heap_bytes())
-        .map_err(|_| SegmentedError::AddressExhausted)?;
-    framed_bytes(count, decoded)
-        .checked_add(workspace)
-        .ok_or(SegmentedError::AddressExhausted)
+    u64::try_from(purrdf_deflate::Inflater::max_live_heap_bytes())
+        .map_err(|_| SegmentedError::AddressExhausted)
 }
 
 fn framed_bytes(count: u32, decoded: u32) -> u64 {
     u64::from(decoded) + u64::from(count) * 16
+}
+
+struct RecordInput<'a, 'i> {
+    stored: &'a [u8],
+    inflater: Option<&'i mut purrdf_deflate::Inflater>,
+}
+
+impl RecordInput<'_, '_> {
+    fn fill(&mut self, out: &mut [u8]) -> Result<(), SegmentedError> {
+        if out.is_empty() {
+            return Ok(());
+        }
+        if let Some(inflater) = &mut self.inflater {
+            let progress = inflater
+                .feed(self.stored, out)
+                .map_err(SegmentedError::Compression)?;
+            self.stored = &self.stored[progress.consumed..];
+            if progress.status == purrdf_deflate::inflate::Status::NeedsInput {
+                return Err(SegmentedError::Compression(
+                    purrdf_deflate::Error::Truncated,
+                ));
+            }
+            if progress.written == out.len() {
+                return Ok(());
+            }
+        } else if let Some((head, tail)) = self.stored.split_at_checked(out.len()) {
+            out.copy_from_slice(head);
+            self.stored = tail;
+            return Ok(());
+        }
+        Err(SegmentedError::Corrupt("truncated block record"))
+    }
+
+    fn finish(mut self, decoded: usize, observed: usize) -> Result<(), SegmentedError> {
+        let extra = if let Some(inflater) = &mut self.inflater {
+            let progress = inflater
+                .feed(self.stored, &mut [0])
+                .map_err(SegmentedError::Compression)?;
+            if progress.status == purrdf_deflate::inflate::Status::NeedsInput {
+                return Err(SegmentedError::Compression(
+                    purrdf_deflate::Error::Truncated,
+                ));
+            }
+            if progress.status == purrdf_deflate::inflate::Status::StreamEnd
+                && (progress.consumed != self.stored.len() || !inflater.trailing_bytes().is_empty())
+            {
+                return Err(SegmentedError::Compression(
+                    purrdf_deflate::Error::TrailingData,
+                ));
+            }
+            progress.written != 0
+        } else {
+            !self.stored.is_empty()
+        };
+        if extra || decoded != observed {
+            Err(SegmentedError::Corrupt(
+                "non-canonical record block length/padding",
+            ))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+pub(super) struct InlineFrames<'a, 'i> {
+    input: RecordInput<'a, 'i>,
+    remaining: u32,
+    decoded: usize,
+    observed: usize,
+    previous: Option<usize>,
+}
+
+impl<'a, 'i> InlineFrames<'a, 'i> {
+    pub(super) fn open(
+        bytes: &'a [u8],
+        max_records: u32,
+        max_decoded: u64,
+        inflater: &'i mut Option<purrdf_deflate::Inflater>,
+    ) -> Result<Self, SegmentedError> {
+        let (count, decoded, payload) = record_header(bytes, max_records, max_decoded)?;
+        if bytes[0] != DICTIONARY {
+            return Err(SegmentedError::Corrupt(
+                "wrong inline dictionary block kind",
+            ));
+        }
+        Self::new(bytes, count, decoded, payload, inflater)
+    }
+
+    fn new(
+        bytes: &'a [u8],
+        count: u32,
+        decoded: u32,
+        payload: u32,
+        inflater: &'i mut Option<purrdf_deflate::Inflater>,
+    ) -> Result<Self, SegmentedError> {
+        let end = RECORD_HEADER
+            .checked_add(
+                usize::try_from(payload & !COMPRESSED_RECORDS)
+                    .map_err(|_| SegmentedError::AddressExhausted)?,
+            )
+            .ok_or(SegmentedError::AddressExhausted)?;
+        let stored = bytes
+            .get(RECORD_HEADER..end)
+            .ok_or(SegmentedError::Corrupt("truncated dictionary payload"))?;
+        if bytes[end..].iter().any(|&byte| byte != 0) {
+            return Err(SegmentedError::Corrupt(
+                "non-canonical record block length/padding",
+            ));
+        }
+        let inflater = (payload & COMPRESSED_RECORDS != 0).then(|| {
+            let state = inflater.get_or_insert_with(purrdf_deflate::Inflater::new);
+            state.reset();
+            state.set_limit(framed_bytes(count, decoded));
+            state
+        });
+        Ok(Self {
+            input: RecordInput { stored, inflater },
+            remaining: count,
+            decoded: usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?,
+            observed: 0,
+            previous: None,
+        })
+    }
+
+    fn next(&mut self) -> Result<Option<(GlobalTermId, usize, usize)>, SegmentedError> {
+        if self.remaining == 0 {
+            return Ok(None);
+        }
+        let mut frame = [0; 16];
+        self.input.fill(&mut frame)?;
+        let mut frame = Reader::at(&frame, 0);
+        let prefix = usize::try_from(frame.u32()?).map_err(|_| SegmentedError::AddressExhausted)?;
+        let suffix = usize::try_from(frame.u32()?).map_err(|_| SegmentedError::AddressExhausted)?;
+        let id = frame.id()?;
+        let width = prefix
+            .checked_add(suffix)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        self.observed = self
+            .observed
+            .checked_add(width)
+            .ok_or(SegmentedError::AddressExhausted)?;
+        if self.observed > self.decoded {
+            return Err(SegmentedError::Corrupt("decoded record size is false"));
+        }
+        match self.previous {
+            Some(previous) if prefix > previous => {
+                return Err(SegmentedError::Corrupt(
+                    "front-code prefix exceeds previous record",
+                ));
+            }
+            None if prefix != 0 => {
+                return Err(SegmentedError::Corrupt("first record has a prefix"));
+            }
+            _ => {}
+        }
+        self.previous = Some(width);
+        self.remaining -= 1;
+        Ok(Some((id, prefix, width)))
+    }
+
+    pub(super) fn read_next(
+        &mut self,
+        key: &mut Vec<u8>,
+        memory: &mut purrdf_lex::allocation::Memory<'_, purrdf_lex::allocation::Resident>,
+    ) -> Result<Option<GlobalTermId>, SegmentedError> {
+        let Some((id, prefix, width)) = self.next()? else {
+            return Ok(None);
+        };
+        key.truncate(prefix);
+        if width > key.capacity() {
+            let capacity = purrdf_lex::allocation::growth_capacity::<u8>(key.capacity(), width)?;
+            memory.reserve(key, capacity)?;
+        }
+        key.resize(width, 0);
+        self.input.fill(&mut key[prefix..])?;
+        Ok(Some(id))
+    }
+
+    pub(super) fn finish(self) -> Result<(), SegmentedError> {
+        if self.remaining != 0 {
+            return Err(SegmentedError::Corrupt(
+                "incomplete inline dictionary traversal",
+            ));
+        }
+        self.input.finish(self.decoded, self.observed)
+    }
 }
 
 #[derive(Debug)]
@@ -819,46 +1258,26 @@ impl DecodedRecords {
         mut read: impl FnMut(u64, &mut [u8]) -> Result<(), SegmentedError>,
     ) -> Result<Self, SegmentedError> {
         let (count, decoded, payload) = record_header(bytes, max_records, max_decoded)?;
-        let span = if bytes[0] == SPANNED_DICTIONARY {
-            Some(overflow_descriptor(bytes, overflow)?)
+        let span = (bytes[0] == SPANNED_DICTIONARY)
+            .then(|| overflow_descriptor(bytes, overflow))
+            .transpose()?;
+        let mut inflater = None;
+        let frames = if span.is_none() {
+            Some(InlineFrames::new(
+                bytes,
+                count,
+                decoded,
+                payload,
+                &mut inflater,
+            )?)
         } else {
             None
         };
-        let end = RECORD_HEADER
-            .checked_add(
-                usize::try_from(payload & !COMPRESSED_RECORDS)
-                    .map_err(|_| SegmentedError::AddressExhausted)?,
-            )
-            .ok_or(SegmentedError::AddressExhausted)?;
-        let stored = bytes
-            .get(RECORD_HEADER..end)
-            .ok_or(SegmentedError::Corrupt("truncated dictionary payload"))?;
-        if bytes[end..].iter().any(|&byte| byte != 0) {
-            return Err(SegmentedError::Corrupt(
-                "non-canonical record block length/padding",
-            ));
-        }
         let mut resident = purrdf_lex::allocation::Resident;
         let mut memory = purrdf_lex::allocation::Memory::new(&mut resident);
-        let mut inflated = Vec::new();
-        let framed = if payload & COMPRESSED_RECORDS != 0 {
-            let bound = framed_bytes(count, decoded);
-            memory.reserve(
-                &mut inflated,
-                usize::try_from(bound).map_err(|_| SegmentedError::AddressExhausted)?,
-            )?;
-            purrdf_deflate::inflate::decompress_into(stored, &mut inflated, bound)
-                .map_err(SegmentedError::Compression)?;
-            inflated.as_slice()
-        } else {
-            stored
-        };
-        let mut input = Reader::at(framed, 0);
+        let decoded = usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?;
         let mut arena = Vec::new();
-        memory.reserve(
-            &mut arena,
-            usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?,
-        )?;
+        memory.reserve(&mut arena, decoded)?;
         let mut entries: Vec<(GlobalTermId, core::ops::Range<usize>)> = Vec::new();
         memory.reserve(
             &mut entries,
@@ -874,45 +1293,26 @@ impl DecodedRecords {
                     "incomplete overflow materialization",
                 ));
             }
-            if arena.len() != decoded as usize {
+            if arena.len() != decoded {
                 return Err(SegmentedError::Corrupt("false expanded dictionary size"));
             }
             entries.push((id, 0..arena.len()));
             return Ok(Self { arena, entries });
         }
-        for _ in 0..count {
-            let prefix =
-                usize::try_from(input.u32()?).map_err(|_| SegmentedError::AddressExhausted)?;
-            let suffix =
-                usize::try_from(input.u32()?).map_err(|_| SegmentedError::AddressExhausted)?;
-            let id = input.id()?;
-            let start = arena.len();
-            let next = start
-                .checked_add(prefix)
-                .and_then(|v| v.checked_add(suffix))
-                .ok_or(SegmentedError::AddressExhausted)?;
-            if next > usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)? {
-                return Err(SegmentedError::Corrupt("decoded record size is false"));
-            }
-            if let Some((_, previous)) = entries.last() {
-                if prefix > previous.len() {
-                    return Err(SegmentedError::Corrupt(
-                        "front-code prefix exceeds previous record",
-                    ));
+        if let Some(mut frames) = frames {
+            while let Some((id, prefix, width)) = frames.next()? {
+                let start = arena.len();
+                if let Some((_, previous)) = entries.last() {
+                    arena.extend_from_within(previous.start..previous.start + prefix);
                 }
-                arena.extend_from_within(previous.start..previous.start + prefix);
-            } else if prefix != 0 {
-                return Err(SegmentedError::Corrupt("first record has a prefix"));
+                let suffix_start = arena.len();
+                // Frames checked the running decoded width against the admitted total.
+                let end = start + width;
+                arena.resize(end, 0);
+                frames.input.fill(&mut arena[suffix_start..])?;
+                entries.push((id, start..end));
             }
-            arena.extend_from_slice(input.take(suffix)?);
-            entries.push((id, start..next));
-        }
-        if arena.len() != usize::try_from(decoded).map_err(|_| SegmentedError::AddressExhausted)?
-            || input.remaining() != 0
-        {
-            return Err(SegmentedError::Corrupt(
-                "non-canonical record block length/padding",
-            ));
+            frames.finish()?;
         }
         Ok(Self { arena, entries })
     }
@@ -998,7 +1398,7 @@ mod tests {
         );
         assert_eq!(
             decode_scratch_bytes(&bytes, 1, 512).unwrap(),
-            17 + u64::try_from(purrdf_deflate::Inflater::max_live_heap_bytes()).unwrap()
+            u64::try_from(purrdf_deflate::Inflater::max_live_heap_bytes()).unwrap()
         );
         crate::bytes::put_u32_le(&mut bytes, 5, 513).unwrap();
         assert_eq!(
@@ -1033,6 +1433,18 @@ mod tests {
             assert_eq!(decoded.entries[index].0, *id);
             assert_eq!(decoded.key(index), key);
         }
+        let mut bytes = bytes;
+        let old_payload = Reader::at(&bytes, 9).u32().unwrap();
+        assert_ne!(old_payload & COMPRESSED_RECORDS, 0);
+        let mut decode_with_payload = |payload| {
+            crate::bytes::put_u32_le(&mut bytes, 9, payload).unwrap();
+            DecodedRecords::decode(&bytes, 64, 4096 * 64, Stream::default(), no_external_pages)
+                .unwrap_err()
+        };
+        assert_eq!(
+            decode_with_payload(old_payload + 1),
+            SegmentedError::Compression(purrdf_deflate::Error::TrailingData)
+        );
     }
 
     #[test]
