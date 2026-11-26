@@ -78,8 +78,8 @@
 //!
 //! # Cost, and the budget that bounds it
 //!
-//! Establishing an `owl:AllDifferent` over `n` members costs `n(n−1)/2` re-chases, and
-//! shrinking each of them to a minimal entailing subset costs one more per premise axiom.
+//! Establishing an `owl:AllDifferent` over `n` members takes `n(n−1)/2` clash checks.
+//! Shrinking each proof to a minimal entailing subset takes one decision per candidate axiom.
 //! Both are bounded by [`REFUTATION_BUDGET`], and the two phases are ordered so the bound
 //! can never change a VERDICT into a wrong one: every fact is established first, and only
 //! then is whatever budget is left spent on evidence quality. Exhausting the budget during
@@ -187,7 +187,7 @@ impl Refutation {
         self.irreducible
     }
 
-    /// How many chase re-runs the shrinking search spent.
+    /// How many candidate source removals the shrinking search decided.
     ///
     /// Reported rather than hidden, in the same spirit as
     /// [`Justification::decisions`](crate::Justification::decisions): shrinking is the
