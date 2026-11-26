@@ -3,9 +3,7 @@
 
 //! Retention, typed preparation and operation-budget contracts for public callers.
 
-mod support;
-
-use support::three_subjects_one_value;
+use crate::support::three_subjects_one_value;
 
 use std::sync::Arc;
 

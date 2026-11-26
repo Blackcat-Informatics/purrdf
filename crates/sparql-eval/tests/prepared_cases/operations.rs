@@ -5,9 +5,7 @@
 
 //! Prepared operation execution preserves binding, completeness and shared budgets.
 
-mod support;
-
-use support::three_subjects_one_value;
+use crate::support::{self, three_subjects_one_value};
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
