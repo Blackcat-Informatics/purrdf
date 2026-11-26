@@ -11,6 +11,7 @@ use super::{
     negative::{ScanStep, Selection},
 };
 use crate::dictionary::DictionaryValue;
+use crate::guard::UndeterminedComparison;
 use crate::store::{Arity, StoreShape};
 use purrdf_core::evidence::{EvidenceCombination, EvidenceId};
 
@@ -41,6 +42,10 @@ enum Call<I: TermIdentity> {
     Reserve,
     Invoke(guards::Invocation<I>),
     Rows(std::vec::IntoIter<Vec<DictionaryValue<I>>>),
+    Undetermined {
+        evidence: Option<(GuardSite, Box<UndeterminedComparison>)>,
+        entered: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -71,6 +76,8 @@ where
     stack: Vec<Level<I, N>>,
     next: Option<usize>,
     trace: Option<Trace>,
+    first_undetermined_guard: Option<usize>,
+    undetermined: Option<(GuardSite, Box<UndeterminedComparison>)>,
     outcome: Option<(bool, Option<EvidenceId>)>,
     #[cfg(test)]
     visits: (u64, u64),
@@ -91,6 +98,8 @@ where
                 current: EvidenceId::DEFAULT,
                 witnesses: None,
             }),
+            first_undetermined_guard: None,
+            undetermined: None,
             outcome: None,
             #[cfg(test)]
             visits: (0, 0),
@@ -118,7 +127,7 @@ where
             .interner()
             .check_read()
             .map_err(EvalError::Source)?;
-        self.outcome = Some(match &self.trace {
+        let decision = match &self.trace {
             None => (found, None),
             Some(trace) => {
                 let owner = evidence
@@ -127,7 +136,17 @@ where
                 let (id, blocked) = owner.negative(trace.witnesses)?;
                 (blocked, Some(id))
             }
-        });
+        };
+        if !decision.0
+            && let Some((site, evidence)) = self.undetermined.take()
+        {
+            return Err(EvalError::ComparisonUndetermined {
+                rule: probe.rule,
+                site,
+                evidence,
+            });
+        }
+        self.outcome = Some(decision);
         self.stack = Vec::new();
         self.locals = Vec::new();
         self.next = None;
@@ -187,6 +206,20 @@ where
                         call: Call::Reserve,
                         bound: false,
                     }));
+                } else if let Some(first) = self.first_undetermined_guard {
+                    // The whole extension reached the end, but one conjunct
+                    // was undetermined. It is not a witness. Keep searching for
+                    // a definite one before deciding what absence can mean.
+                    if self.undetermined.is_none() {
+                        let Level::Guard(Guard {
+                            call: Call::Undetermined { evidence, .. },
+                            ..
+                        }) = &mut self.stack[first]
+                        else {
+                            unreachable!("the first undetermined guard remains on its branch")
+                        };
+                        self.undetermined = evidence.take();
+                    }
                 } else if let Some(trace) = &mut self.trace {
                     let owner = evidence
                         .as_deref_mut()
@@ -310,17 +343,42 @@ where
                             guard: &probe.clause.negations()[runtime.index].guards()[guard.index],
                             model: probe.rel,
                         };
-                        invocation.advance_with(&context, governor, || {
+                        let result = invocation.advance_with(&context, governor, || {
                             let inputs = inputs(lowered, probe, &self.locals)?;
                             context.invoke(probe.guards, &inputs)
-                        })?;
-                        if !invocation.is_complete() {
-                            self.stack.push(Level::Guard(guard));
-                            break;
+                        });
+                        match result {
+                            Err(EvalError::ComparisonUndetermined { site, evidence, .. }) => {
+                                guard.call = Call::Undetermined {
+                                    evidence: Some((site, evidence)),
+                                    entered: false,
+                                };
+                            }
+                            Err(error) => return Err(error),
+                            Ok(()) if !invocation.is_complete() => {
+                                self.stack.push(Level::Guard(guard));
+                                break;
+                            }
+                            Ok(()) => {
+                                let invocation =
+                                    std::mem::replace(invocation, guards::Invocation::Uncalled);
+                                guard.call = Call::Rows(invocation.into_rows().into_iter());
+                            }
                         }
-                        let invocation =
-                            std::mem::replace(invocation, guards::Invocation::Uncalled);
-                        guard.call = Call::Rows(invocation.into_rows().into_iter());
+                    }
+                    if let Call::Undetermined { entered, .. } = &mut guard.call {
+                        // A native comparison is a test and binds no outputs.
+                        // A subsequent false conjunct can rule out this branch.
+                        if !*entered {
+                            *entered = true;
+                            self.next = Some(runtime.atoms.len() + guard.index + 1);
+                            self.first_undetermined_guard
+                                .get_or_insert(self.stack.len());
+                            self.stack.push(Level::Guard(guard));
+                        } else if self.first_undetermined_guard == Some(self.stack.len()) {
+                            self.first_undetermined_guard = None;
+                        }
+                        continue;
                     }
                     let Call::Rows(rows) = &mut guard.call else {
                         unreachable!("the original invocation completed its batch admission")

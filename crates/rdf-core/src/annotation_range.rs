@@ -152,7 +152,7 @@ impl AnnotationValueRange<'_> {
     }
 }
 
-fn compare<S: Admission + ?Sized>(
+pub(crate) fn compare<S: Admission + ?Sized>(
     left: &XsdValue,
     right: &XsdValue,
     memory: &mut Memory<'_, S>,

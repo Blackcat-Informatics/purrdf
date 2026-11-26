@@ -129,6 +129,25 @@ and are explicitly refused by that checker.
   the layers, run-once rules and concurrently evaluated groups SHACL 1.2 Inference
   Rules and SPARQL 1.2 RL define; the SPARQL 1.2 RL rule-level stratifier builds
   that schedule, or names the cycle that makes one impossible.
+* **Native comparison guards.** `Guard::not_equal` compares term identity.
+  `Guard::compare_literals` tests `<`, `<=` or `=` over original RDF
+  literal values from the term dictionary. Supply the original literal table
+  with `IntegerDictionary::with_rdf_literals` or implement
+  `TermDictionary::literal_operand` for a typed RDF source. A dictionary with
+  only rendered spellings cannot run the guard. Use it in a rule or in a constraint
+  lowered with `DlClause::with_constraint_witness`. Times with timezones compare
+  by instant, and two timezone-less times compare as local values. Both types
+  apply XML whitespace collapse for value reading. A mixed timezone pair is
+  incomparable. Caller-declared BLAKE3 and SHA-256 datatypes
+  admit exactly 32 bytes as hexadecimal and compare by byte order within the
+  same algorithm. Invalid, unsupported and incomparable operands are
+  distinguished in typed undetermined evidence with the original literal
+  components. Negation does not turn refusal into success or evidence of
+  absence. `evaluate_evidenced_outcome` retains an undetermined search record
+  and the typed cause without publishing a fact, a violation or a completed model.
+  Complete-only execution returns `EvalError::ComparisonUndetermined` instead.
+  The lexical proof checker cannot replay this guard without a typed source and
+  refuses such steps.
 * **Plans are content-addressed.** A compiled program is keyed by a BLAKE3
   digest over the planner version, the caller's contract hash and a canonical
   digest of the clause program. The cache is owned by the caller, never a

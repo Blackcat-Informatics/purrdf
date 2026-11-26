@@ -331,7 +331,26 @@ fn hash_guards<E>(hasher: &mut RuleHasher<'_, E>, guards: &[Guard], native: bool
             hasher.update(&[match guard.operation() {
                 GuardOperation::Callback => 0,
                 GuardOperation::NotEqual => 1,
+                GuardOperation::LiteralComparison => 2,
             }])?;
+            if let Some(comparison) = guard.comparison() {
+                use purrdf_core::literal_comparison::LiteralComparisonOp;
+                hasher.update(&[
+                    1, // Literal-comparison law version.
+                    match comparison.operation {
+                        LiteralComparisonOp::Less => 0,
+                        LiteralComparisonOp::LessOrEqual => 1,
+                        LiteralComparisonOp::Equal => 2,
+                    },
+                    u8::from(comparison.negated),
+                ])?;
+                let digests = comparison.profile.digests();
+                hasher.update(&(digests.len() as u64).to_le_bytes())?;
+                for digest in digests {
+                    hasher.frame(digest.datatype.as_bytes())?;
+                    hasher.frame(digest.algorithm.name().as_bytes())?;
+                }
+            }
         }
         hasher.frame(guard.name().as_bytes())?;
         hasher.update(&(guard.inputs().len() as u64).to_le_bytes())?;
