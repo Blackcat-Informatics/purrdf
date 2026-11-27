@@ -686,6 +686,7 @@ async function refreshQuads() {
 // ---------------------------------------------------------------------------
 
 let latestGalleryLoad;
+let editorRevision = 0;
 
 function buildGallery() {
   const list = $("gallery-list");
@@ -723,8 +724,9 @@ async function loadVignette(id) {
     return;
   }
   const request = Symbol();
+  const revision = editorRevision;
   latestGalleryLoad = request;
-  const isCurrent = () => latestGalleryLoad === request;
+  const isCurrent = () => latestGalleryLoad === request && editorRevision === revision;
   await guard(async () => {
     let state;
     try {
@@ -793,6 +795,18 @@ function wireTabs() {
 }
 
 function wireButtons() {
+  // A gallery load replaces these fields, so a later edit wins even if the
+  // bundled fixture is still being fetched. Keep the gallery selection token
+  // separately so an edit never re-enables permalink startup after a click.
+  const noteEdit = () => { editorRevision++; };
+  for (const id of [
+    "input-text", "canonical-search", "sparql-text", "shapes-text", "graph-a-text", "graph-b-text",
+  ]) {
+    $(id).addEventListener("input", noteEdit);
+  }
+  for (const id of ["input-format", "graph-a-format", "graph-b-format"]) {
+    $(id).addEventListener("change", noteEdit);
+  }
   $("btn-parse").addEventListener("click", doParse);
   $("btn-serialize-all").addEventListener("click", doSerializeAll);
   $("btn-run-query").addEventListener("click", doQuery);
