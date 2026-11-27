@@ -1,0 +1,7 @@
+{"time": "2026-11-27T19:37:38.669888+00:00", "status": "started"}
+{"time": "2026-11-27T19:37:42.177497+00:00", "status": "merging"}
+{"time": "2026-11-27T19:37:44.176297+00:00", "status": "conflicted"}
+{"time": "2026-11-27T19:37:44.208303+00:00", "status": "review_required", "reused_paths": [], "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n"}
+{"time": "2026-11-27T19:38:16.146534+00:00", "status": "committing", "candidate_tree": "b2f2386561d27dba316c7a1d583c684aa19a2c5c", "candidate_patch": "candidate-252022b97b4849b1b62294d9d41337da.patch", "stdout_log": "commit-252022b97b4849b1b62294d9d41337da.stdout.log", "stderr_log": "commit-252022b97b4849b1b62294d9d41337da.stderr.log", "validation_records": []}
+{"time": "2026-11-27T19:41:28.064729+00:00", "status": "commit_returned", "exit_code": 0, "commit_duration_seconds": 191.9129025809234, "stdout_log": "commit-252022b97b4849b1b62294d9d41337da.stdout.log", "stderr_log": "commit-252022b97b4849b1b62294d9d41337da.stderr.log"}
+{"time": "2026-11-27T19:41:29.350834+00:00", "status": "completed", "commit": "1b7aa90e7c891c8ae5a11fbe609a5a7707b9ed8e", "tree": "b2f2386561d27dba316c7a1d583c684aa19a2c5c", "exit_code": 0, "stdout_log": "commit-252022b97b4849b1b62294d9d41337da.stdout.log", "stderr_log": "commit-252022b97b4849b1b62294d9d41337da.stderr.log"}

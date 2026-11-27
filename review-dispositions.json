@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABrqaB4A": {
+    "resolution": "addressed",
+    "reason": "The retained concern describes the prior implementation. The final default matches main for both explicitly empty and absent labels, without altering authored labels or fresh built-in projections. The native regression fails before the correction and passes afterward.",
+    "commit": "10f169025c22c8ff19f653713ee5f6227408790c",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-27T20:04:37Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "cc6a50c86b08a77246cfd49611854f3939fd1bc02ded334723ea13010d76f9b0"
+    }
+  }
+}

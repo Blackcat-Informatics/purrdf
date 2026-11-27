@@ -1,0 +1,2458 @@
+diff --git .github/workflows/release-cargo.yaml .github/workflows/release-cargo.yaml
+index 3f032ab45..3738f2acd 100644
+--- .github/workflows/release-cargo.yaml
++++ .github/workflows/release-cargo.yaml
+@@ -278,14 +278,26 @@ jobs:
+           make capi-bundle
+           python3 scripts/package-text-lexicons.py
+           make w3c-earl W3C_EARL_DIR=target/dist
+-          python3 scripts/check-release-notes.py --checksum-output target/dist/SHA256SUMS
+ 
+-      - name: Attest build provenance for C distribution
++      - name: Build and audit the exact tagged source archive
++        env:
++          RELEASE_TAG: ${{ needs.source.outputs.tag }}
++          RELEASE_SHA: ${{ needs.source.outputs.sha }}
++        run: |
++          set -euo pipefail
++          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
++          version=${RELEASE_TAG#rust-v}
++          bash scripts/package-release-source.sh build "$RELEASE_SHA" "$version" target/dist
++          python3 scripts/check-release-notes.py --version "$version" --checksum-output target/dist/SHA256SUMS
++
++      - name: Attest build provenance for release assets and the source license receipt
+         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+         with:
+           subject-path: |
+             target/dist/purrdf-capi-*.tar.gz
+             target/dist/purrdf-text-lexicons-*.tar.gz
++            target/dist/purrdf-source-*.tar.gz
++            target/dist/purrdf-source-*.license-receipt.json
+             target/dist/purrdf-shacl-earl.ttl
+             target/dist/purrdf-shacl12-earl.ttl
+ 
+@@ -299,6 +311,7 @@ jobs:
+             target/license-evidence-cargo.json
+             target/dist/purrdf-capi-*.tar.gz
+             target/dist/purrdf-text-lexicons-*.tar.gz
++            target/dist/purrdf-source-*.tar.gz
+             target/dist/*.license-receipt.json
+             target/dist/SHA256SUMS
+             target/dist/purrdf-shacl-earl.ttl
+@@ -387,8 +400,13 @@ jobs:
+           sdk="dist/purrdf-capi-$version-x86_64-unknown-linux-gnu"
+           lexicons="dist/purrdf-text-lexicons-$version.tar.gz"
+           earl=(dist/purrdf-shacl-earl.ttl dist/purrdf-shacl12-earl.ttl)
++          # Recovery consumes the exact bundle format used by the tagged workflow.
++          source_assets=()
++          if [[ -f scripts/package-release-source.sh ]]; then
++            source_assets=("dist/purrdf-source-$version.tar.gz" "dist/purrdf-source-$version.license-receipt.json")
++          fi
+           members=(license-evidence-cargo.json dist/SHA256SUMS "$sdk.license-receipt.json"
+-            "$sdk.tar.gz" "$lexicons" "${earl[@]}")
++            "$sdk.tar.gz" "$lexicons" "${earl[@]}" "${source_assets[@]}")
+           actual=$(unzip -Z1 "$archive" | LC_ALL=C sort)
+           expected=$(printf '%s\n' "${members[@]}" | LC_ALL=C sort)
+           test "$actual" = "$expected"
+@@ -396,11 +414,14 @@ jobs:
+           python3 scripts/check-release-notes.py --version "$version" \
+             --checksum-output "$RUNNER_TEMP/release-checksums"
+           cmp target/dist/SHA256SUMS "$RUNNER_TEMP/release-checksums"
+-          for asset in "$sdk.tar.gz" "$lexicons" "${earl[@]}"; do
++          for asset in "$sdk.tar.gz" "$lexicons" "${earl[@]}" "${source_assets[@]}"; do
+             gh attestation verify "target/$asset" --repo "$GITHUB_REPOSITORY" \
+               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml" \
+               --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_SHA"
+           done
++          if [[ ${#source_assets[@]} -ne 0 ]]; then
++            bash scripts/package-release-source.sh verify "$RELEASE_SHA" "$version" target/dist
++          fi
+ 
+       - name: Package release crates from the tagged source
+         run: *package-release
+@@ -510,7 +531,7 @@ jobs:
+       - name: Verify the full registry release against the retained audit
+         run: *verify-registry
+ 
+-      - name: Verify C and lexicon assets on a draft, then publish the immutable GitHub Release
++      - name: Verify draft assets, then publish the immutable GitHub Release
+         if: steps.publish.outputs.complete == 'true'
+         env:
+           GH_TOKEN: ${{ github.token }}
+@@ -518,7 +539,7 @@ jobs:
+           set -euo pipefail
+ 
+           # Publishing locks assets. The helper creates/reuses a draft, uploads
+-          # all seven assets, downloads and verifies every byte, then publishes.
++          # the complete tagged asset set, verifies it by download, then publishes.
+           # Existing immutable releases are verified read-only against their
+           # retained checksums, without comparing a different rebuild.
+           python3 scripts/publish-github-release.py --version "${RELEASE_TAG#rust-v}" \
+diff --git CHANGELOG.md CHANGELOG.md
+index 4584f9e94..15256696d 100644
+--- CHANGELOG.md
++++ CHANGELOG.md
+@@ -8,6 +8,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
+ 
+ ## [Unreleased]
+ 
++- Rust callers can govern fallible SELECT and ASK evidence answers with
++  `NativeSparqlEngine::query_evidence_answer_governed_fallible_view`.
++  Cancellation and deadlines return a typed trip without visiting an answer.
++  A resource trip can visit a certified, incomplete evidence prefix.
++  DISTINCT and REDUCED withhold prefix status because later rows can change
++  the evidence attached to a delivered binding.
+ - **GTS version 1 preserves anonymous blank-node identity.** Each blank term
+   with no value or an empty value names a new node. Fold, streaming import and
+   export use scoped labels so an authored blank cannot collide with that node.
+diff --git PROVENANCE.md PROVENANCE.md
+index f0545b5e8..664da73a4 100644
+--- PROVENANCE.md
++++ PROVENANCE.md
+@@ -377,6 +377,13 @@ snapshot used for the datalog, module-extraction and unify/SLG ports —
+ `8906e41b15d5adaeccede35dab7e36c7eab86147` — is reachable: it is a mainline
+ commit in the sister repository.
+ 
++## Tagged source archive
++
++Git writes the archive from the commit object using its timestamp and tar
++commit record. The release script fixes the tar permission mask and refuses
++export attributes that would remove or substitute paths. GNU gzip omits its
++filename and timestamp fields. [Git archive documentation](https://git-scm.com/docs/git-archive) · [GNU gzip options](https://www.gnu.org/software/gzip/manual/gzip.html#Invoking-gzip)
++
+ ## C ABI verification tool
+ 
+ The Ubuntu C ABI job uses the upstream cargo-c 0.10.23 Linux x86-64
+diff --git crates/rdf-core/src/evidence/answer.rs crates/rdf-core/src/evidence/answer.rs
+index eb58a9e31..8b138caad 100644
+--- crates/rdf-core/src/evidence/answer.rs
++++ crates/rdf-core/src/evidence/answer.rs
+@@ -296,16 +296,33 @@ impl<S: Admission> AnswerAccumulator<S> {
+     /// # Errors
+     /// Refuses unfinished higher-tier enumeration or an unsound verdict stop.
+     pub fn finish(&mut self, exhausted: bool) -> Result<(), AnswerError> {
++        self.require_unfinished()?;
++        if !exhausted && self.witness_stop().is_none() {
++            return Err(AnswerError::EnumerationRequired);
++        }
++        self.finished = Some(exhausted);
++        Ok(())
++    }
++
++    /// Finish an externally bounded prefix without claiming that the unread
++    /// suffix was enumerated. Counts and reasons describe the observed rows.
++    /// The status can report only a verdict that the prefix already settles.
++    ///
++    /// # Errors
++    /// Refuses an aborted or already finished answer.
++    pub fn finish_prefix(&mut self) -> Result<(), AnswerError> {
++        self.require_unfinished()?;
++        self.finished = Some(false);
++        Ok(())
++    }
++
++    fn require_unfinished(&self) -> Result<(), AnswerError> {
+         if self.aborted {
+             return Err(AnswerError::Aborted);
+         }
+         if self.finished.is_some() {
+             return Err(AnswerError::AlreadyFinished);
+         }
+-        if !exhausted && self.witness_stop().is_none() {
+-            return Err(AnswerError::EnumerationRequired);
+-        }
+-        self.finished = Some(exhausted);
+         Ok(())
+     }
+ 
+@@ -456,6 +473,35 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn bounded_prefix_reports_observed_rows_without_settling_an_unread_suffix() {
++        let supported = record(Information::Supported, SearchCompleteness::Complete, &[]);
++        let mut summary = AnswerAccumulator::with_admission(
++            request(AnswerTier::Summary, WitnessQuestion::Contradiction),
++            Resident,
++        );
++        summary
++            .observe(&supported, EvidencePartition::Established)
++            .unwrap();
++        assert_eq!(summary.finish(false), Err(AnswerError::EnumerationRequired));
++        summary.finish_prefix().unwrap();
++        let status = summary.status().unwrap();
++        assert_eq!((status.established, status.undecided), (1, 0));
++        assert_eq!(status.information, Information::Supported);
++        assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
++        assert_eq!(status.verdict, None);
++
++        let mut verdict = AnswerAccumulator::with_admission(
++            request(AnswerTier::Verdict, WitnessQuestion::Support),
++            Resident,
++        );
++        verdict
++            .observe(&supported, EvidencePartition::Established)
++            .unwrap();
++        verdict.finish_prefix().unwrap();
++        assert_eq!(verdict.status().unwrap().verdict, Some(WitnessVerdict::Yes));
++    }
++
+     #[test]
+     fn empty_search_retains_reason_without_fabricating_a_row_or_witness() {
+         let reason = reason();
+diff --git crates/sparql-eval/src/engine.rs crates/sparql-eval/src/engine.rs
+index 96e1b1507..0be1deb8f 100644
+--- crates/sparql-eval/src/engine.rs
++++ crates/sparql-eval/src/engine.rs
+@@ -22,6 +22,7 @@
+ //! across worker-local engines without retaining a global evaluation lock.
+ 
+ mod bounded_workspace;
++mod evidence_answer;
+ mod select_cursor;
+ pub use select_cursor::{FallibleSelectCursor, FallibleSelectSettlement, PreparedSelectCursor};
+ pub(crate) mod coordinates;
+@@ -2061,7 +2062,7 @@ impl NativeSparqlEngine {
+         )?;
+         let outcome =
+             evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?;
+-        materialize(outcome, &ctx)
++        materialize(&outcome, &ctx)
+     }
+ 
+     /// Parse and execute one request over an operationally fallible view.
+@@ -5430,19 +5431,8 @@ impl NativeSparqlEngine {
+         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
+         visit: impl FnOnce(&Outcome<D::Id>, &EvalCtx<'_, D>) -> Result<R, crate::EvalError>,
+     ) -> Result<R, EvaluationFailure> {
+-        let admitted = RequestParameters::of_admitted(
+-            Prebindings::Borrowed(request.substitutions),
+-            options.declared_prebound,
+-            &workspace.capability(),
+-        )?;
+-        let prepared = self.prepare_request_admitted(
+-            request.query,
+-            request.base_iri,
+-            options.env,
+-            &admitted,
+-            options.geo,
+-            &workspace.capability(),
+-        )?;
++        let (prepared, _parameters) =
++            self.prepare_interned_request_admitted(request, options, &workspace.capability())?;
+         let mut ctx = self.query_ctx(dataset, options, workspace)?;
+         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
+         coordinates::capture_query(
+@@ -5452,12 +5442,7 @@ impl NativeSparqlEngine {
+             options,
+             coordinates::Consumer::Discarded,
+         )?;
+-        if let Some(source) = source {
+-            ctx = ctx.with_evidence_source(source)?;
+-        }
+-        ctx.evidence_verdict = answer.filter(|request| {
+-            request.tier == purrdf_core::evidence::AnswerTier::Verdict && request.question.is_some()
+-        });
++        let mut ctx = evidence_answer::attach_query_evidence(ctx, source, answer)?;
+         let outcome = evaluate_with_substitutions(
+             &prepared,
+             Prebindings::Borrowed(request.substitutions),
+@@ -5466,6 +5451,28 @@ impl NativeSparqlEngine {
+         visit(&outcome, &ctx).map_err(EvaluationFailure::Evaluation)
+     }
+ 
++    fn prepare_interned_request_admitted<'a>(
++        &self,
++        request: InternedRequest<'a>,
++        options: &QueryOptions<'a, '_>,
++        workspace: &crate::WorkspaceCapability,
++    ) -> Result<(PreparedHandle, RequestParameters<'a>), EvaluationFailure> {
++        let parameters = RequestParameters::of_admitted(
++            Prebindings::Borrowed(request.substitutions),
++            options.declared_prebound,
++            workspace,
++        )?;
++        let prepared = self.prepare_request_admitted(
++            request.query,
++            request.base_iri,
++            options.env,
++            &parameters,
++            options.geo,
++            workspace,
++        )?;
++        Ok((prepared, parameters))
++    }
++
+     /// [`Self::query_governed_in_operation`] on the **interned** egress.
+     ///
+     /// The governed twin of [`Self::query_interned_view`], and the entry a SHACL
+@@ -6136,6 +6143,23 @@ fn retain_query_result<D: FallibleDatasetView + Sync>(
+     Ok((result, owner))
+ }
+ 
++fn retain_partial_answers<D: FallibleDatasetView + Sync>(
++    dataset: &D,
++    partial: PartialAnswers,
++    workspace: Option<&crate::workspace::QueryWorkspace<D::ReadError>>,
++) -> FallibleControlResult<D, PartialAnswers<crate::RetainedPartialSparqlResult>> {
++    let retain = |partial: PartialSparqlResult| {
++        let positional = partial.is_positional_prefix();
++        retain_query_result(dataset, partial.into_result(), workspace)
++            .map(|(result, _owner)| crate::RetainedPartialSparqlResult::new(result, positional))
++    };
++    Ok(match partial {
++        PartialAnswers::Certain(partial) => PartialAnswers::Certain(retain(partial)?),
++        PartialAnswers::AtMost(partial) => PartialAnswers::AtMost(retain(partial)?),
++        PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
++    })
++}
++
+ /// Report a governed query over a fallible view at its final checkpoint.
+ ///
+ /// The precedence is the ungoverned lane's, extended by one rule: an operational failure
+@@ -6230,26 +6254,13 @@ where
+                         relations: RelationIdentity::EMPTY,
+                         partial,
+                     };
+-                    let retain = |partial: PartialSparqlResult| {
+-                        let positional = partial.is_positional_prefix();
+-                        retain_query_result(dataset, partial.into_result(), workspace)
+-                            .map(|(result, _owner)| {
+-                                crate::RetainedPartialSparqlResult::new(result, positional)
++                    let partial = retain_partial_answers(dataset, exhausted.partial, workspace)
++                        .map_err(|error| {
++                            error.map_evidence(|view| {
++                                GovernedEvidence::new(view, governors.clone())
++                                    .with_coordinates(capture.clone())
+                             })
+-                            .map_err(|error| {
+-                                error.map_evidence(|view| {
+-                                    GovernedEvidence::new(view, governors.clone())
+-                                        .with_coordinates(capture.clone())
+-                                })
+-                            })
+-                    };
+-                    let partial = match exhausted.partial {
+-                        PartialAnswers::Certain(partial) => {
+-                            PartialAnswers::Certain(retain(partial)?)
+-                        }
+-                        PartialAnswers::AtMost(partial) => PartialAnswers::AtMost(retain(partial)?),
+-                        PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
+-                    };
++                        })?;
+                     let (partial, view) = finish_fallible_read(dataset, Ok(partial), workspace)
+                         .map_err(|error| {
+                             error.map_evidence(|view| {
+@@ -6260,7 +6271,7 @@ where
+                     Err(FallibleSparqlError::BudgetExhausted {
+                         tripped: exhausted.tripped,
+                         partial,
+-                        evidence: GovernedEvidence::new(view, governors.clone())
++                        evidence: GovernedEvidence::new(view, governors)
+                             .with_coordinates(capture.clone()),
+                     })
+                 }
+@@ -7809,12 +7820,12 @@ fn borrow_outcome<'a, 'd, D: DatasetView + Sync>(
+ /// `SparqlResult` egress model (the interned-id space ends here: every solution
+ /// cell becomes an owned [`TermValue`](purrdf_core::TermValue)).
+ fn materialize<D: DatasetView + Sync>(
+-    outcome: Outcome<D::Id>,
++    outcome: &Outcome<D::Id>,
+     ctx: &EvalCtx<'_, D>,
+ ) -> Result<SparqlResult, EvaluationFailure> {
+     Ok(match outcome {
+         Outcome::Solutions(seq) => {
+-            let (variables, rows) = crate::eval::materialize_solutions(&seq, ctx)?;
++            let (variables, rows) = crate::eval::materialize_solutions(seq, ctx)?;
+             let aux = ctx.constructed_dataset(&rows)?;
+             SparqlResult::Solutions {
+                 variables,
+@@ -7822,8 +7833,8 @@ fn materialize<D: DatasetView + Sync>(
+                 aux,
+             }
+         }
+-        Outcome::Graph(graph) => SparqlResult::Graph(graph),
+-        Outcome::Boolean(value) => SparqlResult::Boolean(value),
++        Outcome::Graph(graph) => SparqlResult::Graph(graph.clone()),
++        Outcome::Boolean(value) => SparqlResult::Boolean(*value),
+     })
+ }
+ 
+@@ -7896,7 +7907,7 @@ fn materialize_governed<D: DatasetView + Sync>(
+                 relations,
+                 coordinates,
+             } => GovernedOutcome::Complete {
+-                result: materialize(outcome, ctx)?,
++                result: materialize(&outcome, ctx)?,
+                 evidence,
+                 relations,
+                 coordinates,
+@@ -7950,29 +7961,53 @@ fn resolve_governed<D: DatasetView + Sync>(
+     relations: RelationIdentity,
+     coordinates: QueryCoordinates,
+ ) -> Result<GovernedResolution<D::Id>, EvaluationFailure> {
++    resolve_governed_with_prefix(
++        evaluated,
++        ctx,
++        state,
++        relations,
++        coordinates,
++        |_, _, _, _| Ok(None::<()>),
++    )
++    .map(|(resolution, _)| resolution)
++}
++
++/// Settle the public bound before borrowing evidence from an eligible trip.
++/// Ordinary governed entries use a no-op hook, with no extra row ownership.
++fn resolve_governed_with_prefix<D: DatasetView + Sync, R>(
++    evaluated: EvaluatedOutcome<D::Id>,
++    ctx: &mut EvalCtx<'_, D>,
++    state: &GovernorState,
++    relations: RelationIdentity,
++    coordinates: QueryCoordinates,
++    prefix: impl FnOnce(
++        purrdf_core::TrippedGovernor,
++        &Outcome<D::Id>,
++        Option<&crate::governor::lift::Truncation<D::Id>>,
++        &EvalCtx<'_, D>,
++    ) -> Result<Option<R>, EvaluationFailure>,
++) -> Result<(GovernedResolution<D::Id>, Option<R>), EvaluationFailure> {
+     let relations = RelationIdentity {
+         witness: core::mem::take(&mut ctx.witness),
+         ..relations
+     };
+     let ctx = &*ctx;
+-    Ok(match evaluated {
++    let (outcome, certificate, tripped, evidence, partial) = match evaluated {
+         EvaluatedOutcome::Complete(outcome) => {
+             let evidence = state.evidence();
+-            match evidence.tripped {
+-                None => GovernedResolution::Complete {
+-                    outcome,
+-                    evidence,
+-                    relations,
+-                    coordinates,
+-                },
+-                Some(tripped) => GovernedResolution::Exhausted(BudgetExhausted {
+-                    tripped,
+-                    evidence,
+-                    relations,
+-                    coordinates,
+-                    partial: certain_partial(materialize(outcome, ctx)?, true),
+-                }),
+-            }
++            let Some(tripped) = evidence.tripped else {
++                return Ok((
++                    GovernedResolution::Complete {
++                        outcome,
++                        evidence,
++                        relations,
++                        coordinates,
++                    },
++                    None,
++                ));
++            };
++            let partial = certain_partial(materialize(&outcome, ctx)?, true);
++            (outcome, None, tripped, evidence, partial)
+         }
+         EvaluatedOutcome::Truncated {
+             outcome,
+@@ -7990,7 +8025,7 @@ fn resolve_governed<D: DatasetView + Sync>(
+                         .expect("a collapsed bound names the operator that collapsed it"),
+                 ),
+                 bound => {
+-                    let result = materialize(outcome, ctx)?;
++                    let result = materialize(&outcome, ctx)?;
+                     if bound == SpineClass::Certain {
+                         certain_partial(result, certificate.is_positional_prefix())
+                     } else {
+@@ -8001,15 +8036,33 @@ fn resolve_governed<D: DatasetView + Sync>(
+                     }
+                 }
+             };
+-            GovernedResolution::Exhausted(BudgetExhausted {
+-                tripped: certificate.tripped(),
+-                evidence: state.evidence(),
+-                relations,
+-                coordinates,
++            let tripped = certificate.tripped();
++            (
++                outcome,
++                Some(certificate),
++                tripped,
++                state.evidence(),
+                 partial,
+-            })
++            )
+         }
+-    })
++    };
++    let value = if matches!(tripped, purrdf_core::TrippedGovernor::Budget { .. })
++        && matches!(partial, PartialAnswers::Certain(_))
++    {
++        prefix(tripped, &outcome, certificate.as_ref(), ctx)?
++    } else {
++        None
++    };
++    Ok((
++        GovernedResolution::Exhausted(BudgetExhausted {
++            coordinates,
++            tripped,
++            evidence,
++            relations,
++            partial,
++        }),
++        value,
++    ))
+ }
+ 
+ #[cfg(test)]
+diff --git crates/sparql-eval/src/engine/evidence_answer.rs crates/sparql-eval/src/engine/evidence_answer.rs
+new file mode 100644
+index 000000000..655cc8c11
+--- /dev/null
++++ crates/sparql-eval/src/engine/evidence_answer.rs
+@@ -0,0 +1,324 @@
++// SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++//! Fallible publication for the governed borrowed evidence answer.
++
++use std::ops::ControlFlow;
++
++use purrdf_core::evidence::{AnswerRequest, AnswerTier};
++use purrdf_core::{DatasetView, FallibleDatasetView, SparqlResult, TrippedGovernor};
++
++use crate::evidence_exec::EvidenceSource;
++use crate::governor::lift::Truncation;
++use crate::workspace::{QueryWorkspace, SharedWorkspace};
++use crate::{
++    EvalError, EvidenceBudgetExhausted, GovernedEvidenceAnswer, GovernedEvidenceView,
++    PartialAnswers,
++};
++
++use super::{
++    BudgetExhausted, EvalCtx, EvaluationFailure, FallibleScopedResult, FallibleSparqlError,
++    GovernedEvidence, GovernedResolution, GovernorState, InternedRequest, InternedSolutions,
++    NativeSparqlEngine, NonMonotoneBarrier, Outcome, PlanSurveyContext, Prebindings, Query,
++    QueryCoordinates, QueryGovernors, QueryOptions, Sequencing, admit_governor_state,
++    borrow_outcome, bounded_workspace, certain_partial, coordinates,
++    evaluate_governed_with_substitutions, fallible_admission_failure, finish_fallible_read,
++    materialize, prepared_fallible, relation_identity, reserve_fallible_execution,
++    reserve_governed_reporting, resolve_governed_with_prefix, retain_partial_answers,
++};
++
++enum AnswerSettlement<R> {
++    Complete(R),
++    Exhausted {
++        tripped: TrippedGovernor,
++        partial: PartialAnswers,
++        prefix: Option<R>,
++    },
++}
++
++impl<R> AnswerSettlement<R> {
++    fn exhausted(exhausted: BudgetExhausted, prefix: Option<R>) -> Self {
++        let partial = match exhausted.partial {
++            // An upper bound on candidate rows is not an upper bound of false
++            // on existential truth. No certain witness means ASK is unsettled.
++            PartialAnswers::AtMost(bound)
++                if matches!(bound.result(), SparqlResult::Boolean(false)) =>
++            {
++                PartialAnswers::Unknown(NonMonotoneBarrier::named("ask-unsettled"))
++            }
++            partial => partial,
++        };
++        Self::Exhausted {
++            tripped: exhausted.tripped,
++            partial,
++            prefix,
++        }
++    }
++}
++
++impl NativeSparqlEngine {
++    /// Visit a governed SELECT or ASK evidence answer inside a fallible evaluation.
++    ///
++    /// The governors are per call and can share a stop signal across evaluations.
++    /// Stop, deadline and admission refusal do not run the visitor. Only a
++    /// certain resource prefix whose row evidence cannot be merged by DISTINCT
++    /// or REDUCED can run the prefix visitor. An ASK without a certain witness
++    /// never reports `false` as a partial answer.
++    ///
++    /// # Errors
++    /// Refuses other query forms and propagates the original operational and
++    /// evaluation failures. Visitor output is publishable only after this call
++    /// returns `Ok` with its final view and governor receipt.
++    #[allow(
++        clippy::result_large_err,
++        clippy::too_many_arguments,
++        reason = "the scoped evidence ingress carries the same caller inputs and typed receipts as its sibling entries"
++    )]
++    pub fn query_evidence_answer_governed_fallible_view<'d, D, R>(
++        &'d self,
++        dataset: &'d D,
++        request: InternedRequest<'_>,
++        options: &QueryOptions<'d, 'd>,
++        governors: &QueryGovernors,
++        source: &'d dyn EvidenceSource<D::Id>,
++        answer: AnswerRequest,
++        visit: impl FnOnce(GovernedEvidenceView<'_, '_, D>) -> R,
++    ) -> FallibleScopedResult<GovernedEvidenceAnswer<R>, D::Error, GovernedEvidence<D::Evidence>>
++    where
++        D: FallibleDatasetView + Sync,
++    {
++        let reporting = reserve_governed_reporting(dataset, governors)?;
++        let state = admit_governor_state(dataset, governors, &reporting.execution())?;
++        prepared_fallible::preflight_governed_fallible_view(dataset, &state)?;
++        let execution =
++            reserve_fallible_execution(dataset, reporting.execution()).map_err(|error| {
++                error.map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
++            })?;
++        let workspace = &*execution;
++        let publication = crate::user_fn::RefusalPublication::default();
++        let options = publication
++            .options(dataset, *options)
++            .map_err(|diagnostic| {
++                fallible_admission_failure(
++                    dataset,
++                    bounded_workspace::AdmissionError::Query(diagnostic),
++                )
++                .map_evidence(|view| GovernedEvidence::new(view, state.evidence()))
++            })?;
++        let mut capture = QueryCoordinates::NotStarted;
++        let evaluation = self.governed_evidence_answer_admitted(
++            dataset,
++            request,
++            &options,
++            &state,
++            source,
++            answer,
++            workspace,
++            &mut capture,
++            visit,
++        );
++        let receipt =
++            |view| GovernedEvidence::new(view, state.evidence()).with_coordinates(capture.clone());
++        let checked = (|| {
++            let (settlement, view) = finish_fallible_read(dataset, evaluation, Some(workspace))
++                .map_err(|error| error.map_evidence(receipt))?;
++            match settlement {
++                AnswerSettlement::Complete(value) => {
++                    Ok((GovernedEvidenceAnswer::Complete(value), receipt(view)))
++                }
++                AnswerSettlement::Exhausted {
++                    tripped,
++                    partial,
++                    prefix,
++                } => {
++                    let partial = retain_partial_answers(dataset, partial, Some(workspace))
++                        .map_err(|error| error.map_evidence(receipt))?;
++                    let (partial, view) =
++                        finish_fallible_read(dataset, Ok(partial), Some(workspace))
++                            .map_err(|error| error.map_evidence(receipt))?;
++                    let trip = EvidenceBudgetExhausted {
++                        tripped,
++                        partial,
++                        prefix,
++                    };
++                    Ok((GovernedEvidenceAnswer::BudgetExhausted(trip), receipt(view)))
++                }
++            }
++        })();
++        publication.finish(checked, |error| {
++            matches!(error, FallibleSparqlError::Query { .. })
++        })
++    }
++
++    #[allow(
++        clippy::too_many_arguments,
++        reason = "the original governor, evidence policy, reporting coordinate and execution owner cross one admission boundary"
++    )]
++    fn governed_evidence_answer_admitted<'d, D: DatasetView + Sync, R>(
++        &'d self,
++        dataset: &'d D,
++        request: InternedRequest<'_>,
++        options: &QueryOptions<'d, 'd>,
++        state: &SharedWorkspace<GovernorState>,
++        source: &'d dyn EvidenceSource<D::Id>,
++        answer: AnswerRequest,
++        workspace: &QueryWorkspace<D::ReadError>,
++        capture: &mut QueryCoordinates,
++        visit: impl FnOnce(GovernedEvidenceView<'_, '_, D>) -> R,
++    ) -> Result<AnswerSettlement<R>, EvaluationFailure> {
++        let capability = workspace.capability();
++        let (prepared, parameters) =
++            self.prepare_interned_request_admitted(request, options, &capability)?;
++        if !matches!(prepared.query, Query::Select { .. } | Query::Ask { .. }) {
++            return Err(
++                EvalError::unsupported("governed evidence answers require SELECT or ASK").into(),
++            );
++        }
++        parameters.check_admitted(&prepared, options, &capability)?;
++        let mut identity = relation_identity(&prepared, options.property_functions(), &capability)?;
++        let survey =
++            PlanSurveyContext::new(options, !request.substitutions.is_empty(), true).retained();
++        if let Some(refusal) = self.admit_refusal(
++            dataset,
++            &prepared.query,
++            survey,
++            state,
++            &mut identity.value,
++            workspace,
++        ) {
++            return refusal.map(|exhausted| AnswerSettlement::exhausted(exhausted, None));
++        }
++        let mut ctx = self.governed_ctx(dataset, state.clone(), options, workspace)?;
++        // This evidence-only egress does not publish a relation witness. Keep
++        // the ungoverned evidence entry's refusal for unwitnessed incomplete relations.
++        ctx.witnessing = false;
++        ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
++        let bindings = Prebindings::Borrowed(request.substitutions);
++        *capture = coordinates::capture_query(
++            &ctx,
++            &prepared,
++            bindings,
++            options,
++            coordinates::Consumer::Retained,
++        )?;
++        let mut ctx = attach_query_evidence(ctx, Some(source), Some(answer))?;
++        let evaluated = evaluate_governed_with_substitutions(
++            &prepared,
++            bindings,
++            survey.distinct_planning::<D>(&prepared.query),
++            &mut ctx,
++        )?;
++        // A host callback in the last operator can signal a stop without
++        // another charge or operator boundary. Latch it before resolution.
++        let _ = ctx.stop_check();
++        let mut visit = Some(visit);
++        let (resolution, prefix) = resolve_governed_with_prefix(
++            evaluated,
++            &mut ctx,
++            state,
++            identity.value,
++            capture.clone(),
++            |tripped, outcome, certificate, ctx| {
++                visit_prefix(tripped, outcome, certificate, ctx, answer, &mut visit)
++                    .map_err(EvaluationFailure::Evaluation)
++            },
++        )?;
++        match resolution {
++            GovernedResolution::Complete { outcome, .. } => {
++                let visit = visit.ok_or_else(|| {
++                    EvalError::internal("a prefix already consumed the completed evidence visitor")
++                })?;
++                let value = Self::visit_evidence_answer(
++                    &outcome,
++                    &ctx,
++                    answer,
++                    |outcome, rows, status| {
++                        // Status construction calls the host's evidence source.
++                        // Observe a stop before giving the caller a view.
++                        if let Some(tripped) = ctx.stop_check() {
++                            return ControlFlow::Break(tripped);
++                        }
++                        ControlFlow::Continue(visit(GovernedEvidenceView::Complete {
++                            outcome,
++                            rows,
++                            status,
++                        }))
++                    },
++                )?;
++                Ok(match value {
++                    ControlFlow::Continue(value) => AnswerSettlement::Complete(value),
++                    ControlFlow::Break(tripped) => AnswerSettlement::Exhausted {
++                        tripped,
++                        partial: certain_partial(materialize(&outcome, &ctx)?, true),
++                        prefix: None,
++                    },
++                })
++            }
++            GovernedResolution::Exhausted(exhausted) => {
++                Ok(AnswerSettlement::exhausted(exhausted, prefix))
++            }
++        }
++    }
++}
++
++pub(super) fn attach_query_evidence<'d, D: DatasetView + Sync>(
++    mut ctx: EvalCtx<'d, D>,
++    source: Option<&'d dyn EvidenceSource<D::Id>>,
++    answer: Option<AnswerRequest>,
++) -> Result<EvalCtx<'d, D>, EvalError> {
++    if let Some(source) = source {
++        ctx = ctx.with_evidence_source(source)?;
++    }
++    ctx.evidence_verdict =
++        answer.filter(|request| request.tier == AnswerTier::Verdict && request.question.is_some());
++    Ok(ctx)
++}
++
++fn visit_prefix<D: DatasetView + Sync, R>(
++    tripped: TrippedGovernor,
++    outcome: &Outcome<D::Id>,
++    certificate: Option<&Truncation<D::Id>>,
++    ctx: &EvalCtx<'_, D>,
++    answer: AnswerRequest,
++    visit: &mut Option<impl FnOnce(GovernedEvidenceView<'_, '_, D>) -> R>,
++) -> Result<Option<R>, EvalError> {
++    let plan = ctx
++        .plan
++        .as_ref()
++        .ok_or_else(|| EvalError::internal("an evidence prefix lost its numbered query plan"))?;
++    if plan.shape().coalesces_row_evidence() {
++        return Ok(None);
++    }
++    let rows = match outcome {
++        Outcome::Solutions(rows) => Some(rows),
++        Outcome::Boolean(true) => certificate.map_or(ctx.evidence_answer.as_ref(), |certificate| {
++            Some(certificate.rows())
++        }),
++        _ => None,
++    }
++    .ok_or_else(|| EvalError::internal("a certified evidence prefix lost its original rows"))?;
++    let input = ctx
++        .evidence_input
++        .as_ref()
++        .ok_or_else(|| EvalError::internal("an evidence prefix lost its source"))?;
++    let visit = visit
++        .take()
++        .ok_or_else(|| EvalError::internal("the evidence prefix visitor was already used"))?;
++    input.with_prefix_answer_status(rows, answer, &ctx.growth, |status| {
++        // The first resource trip stays latched, but a subsequent host stop
++        // still withholds the prefix visitor.
++        if ctx
++            .governors
++            .as_ref()
++            .is_some_and(|state| state.poll_stop().is_some())
++        {
++            return None;
++        }
++        Some(visit(GovernedEvidenceView::Prefix {
++            tripped,
++            outcome: borrow_outcome(outcome, ctx),
++            rows: InternedSolutions::new(rows, ctx),
++            status,
++        }))
++    })
++}
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index f015bb0a0..def20f80d 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -10266,11 +10266,22 @@ pub(crate) fn eval_answer_pattern<D: DatasetView + Sync>(
+     let Some(request) = ctx.evidence_verdict.take() else {
+         return eval_evaluated(pattern, ctx);
+     };
++    // A verdict can settle before visiting any algebra node. A host stop
++    // still takes precedence over that shortcut and uses the normal trip path.
++    if let Some(tripped) = ctx.stop_check() {
++        ctx.record_trip(tripped);
++        return eval_evaluated(pattern, ctx);
++    }
+     let request = ctx
+         .evidence_input
+         .as_ref()
+         .ok_or_else(|| EvalError::internal("verdict lost its original evidence source"))?
+         .answer_request(request)?;
++    // The host supplies the scope declaration. It can signal a stop before
++    // the verdict shortcut, which otherwise need not visit an algebra node.
++    if ctx.stop_check().is_some() {
++        return eval_evaluated(pattern, ctx);
++    }
+     let workspace = ctx.growth.clone();
+     with_native_answer(request, &workspace, |answer| {
+         if let Some(verdict) = answer.witness_stop() {
+@@ -11318,6 +11329,14 @@ fn begin_query_evaluated<D: DatasetView + Sync>(
+     Ok(())
+ }
+ 
++fn has_ask_witness<I: ViewTermId>(rows: &SolutionSeq<I>, tracked: bool) -> bool {
++    if tracked {
++        rows.rows.iter().any(|row| !row.evidence().is_undecided())
++    } else {
++        !rows.is_empty()
++    }
++}
++
+ fn finish_solution_query<D: DatasetView + Sync>(
+     query: &Query,
+     evaluated: Evaluated<D::Id>,
+@@ -11342,25 +11361,20 @@ fn finish_solution_query<D: DatasetView + Sync>(
+                 let tracked = ctx.may_have_evidence()
+                     || seq.rows.may_have_evidence_attachment()
+                     || !seq.rows.search_evidence().is_virtual();
+-                let supported = if tracked {
+-                    seq.rows.iter().any(|row| !row.evidence().is_undecided())
+-                } else {
+-                    !seq.is_empty()
+-                };
++                let supported = has_ask_witness(&seq, tracked);
+                 if tracked {
+                     ctx.evidence_answer = Some(seq);
+                 }
+                 Ok(EvaluatedOutcome::Complete(Outcome::Boolean(supported)))
+             }
+             Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
+-                // A non-empty certain lower bound settles the semantic value `true`, but
+-                // the execution still stopped operationally. Keep the typed exhaustion
+-                // and carry that settled boolean as its certified partial instead of
+-                // contradicting the evidence with `Complete + tripped`.
++                // A certain ASK witness can settle `true` but never makes a trip
++                // complete. Evidence answers use the same witness criterion as
++                // their complete branch: an undecided row cannot settle ASK.
+                 outcome: Outcome::Boolean(
+                     certificate
+                         .certain_rows()
+-                        .is_some_and(|rows| !rows.is_empty()),
++                        .is_some_and(|rows| has_ask_witness(rows, ctx.evidence_input.is_some())),
+                 ),
+                 certificate,
+             }),
+diff --git crates/sparql-eval/src/evidence_exec.rs crates/sparql-eval/src/evidence_exec.rs
+index 24412cf1e..f054d0995 100644
+--- crates/sparql-eval/src/evidence_exec.rs
++++ crates/sparql-eval/src/evidence_exec.rs
+@@ -590,10 +590,33 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
+     pub(crate) fn with_answer_status<R>(
+         &self,
+         rows: &crate::solution::SolutionSeq<I>,
+-        mut request: purrdf_core::evidence::AnswerRequest,
++        request: purrdf_core::evidence::AnswerRequest,
+         workspace: &WorkspaceCapability,
+         exhausted: bool,
+         visit: impl FnOnce(purrdf_core::evidence::AnswerStatus<'_>) -> R,
++    ) -> Result<R, EvalError> {
++        self.with_observed_answer(rows, request, workspace, Some(exhausted), visit)
++    }
++
++    pub(crate) fn with_prefix_answer_status<R>(
++        &self,
++        rows: &crate::solution::SolutionSeq<I>,
++        request: purrdf_core::evidence::AnswerRequest,
++        workspace: &WorkspaceCapability,
++        visit: impl FnOnce(purrdf_core::evidence::AnswerStatus<'_>) -> R,
++    ) -> Result<R, EvalError> {
++        self.with_observed_answer(rows, request, workspace, None, visit)
++    }
++
++    /// An ordinary answer supplies its enumeration boundary. A governor prefix
++    /// supplies no completeness claim and need not settle a verdict.
++    fn with_observed_answer<R>(
++        &self,
++        rows: &crate::solution::SolutionSeq<I>,
++        mut request: purrdf_core::evidence::AnswerRequest,
++        workspace: &WorkspaceCapability,
++        exhausted: Option<bool>,
++        visit: impl FnOnce(purrdf_core::evidence::AnswerStatus<'_>) -> R,
+     ) -> Result<R, EvalError> {
+         request = self.answer_request(request)?;
+         request.input_completeness = request.input_completeness.worse(
+@@ -610,8 +633,12 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
+                 })
+                 .map_err(StatusFailure::Evaluation)?
+                 .map_err(StatusFailure::Answer)?;
+-            observe_answer_rows(answer, rows)?;
+-            answer.finish(exhausted).map_err(StatusFailure::Answer)?;
++            observe_answer_rows_until(answer, rows, exhausted.is_some())?;
++            match exhausted {
++                Some(exhausted) => answer.finish(exhausted),
++                None => answer.finish_prefix(),
++            }
++            .map_err(StatusFailure::Answer)?;
+             Ok(visit(answer.status().map_err(StatusFailure::Answer)?))
+         })
+     }
+@@ -971,6 +998,14 @@ pub(crate) fn answer_failure(error: StatusFailure, workspace: &WorkspaceCapabili
+ pub(crate) fn observe_answer_rows<I: purrdf_core::ViewTermId, S: Admission>(
+     answer: &mut purrdf_core::evidence::AnswerAccumulator<S>,
+     rows: &crate::solution::SolutionSeq<I>,
++) -> Result<(), StatusFailure> {
++    observe_answer_rows_until(answer, rows, true)
++}
++
++fn observe_answer_rows_until<I: purrdf_core::ViewTermId, S: Admission>(
++    answer: &mut purrdf_core::evidence::AnswerAccumulator<S>,
++    rows: &crate::solution::SolutionSeq<I>,
++    stop_on_verdict: bool,
+ ) -> Result<(), StatusFailure> {
+     use purrdf_core::evidence::EvidencePartition;
+     for row in &rows.rows {
+@@ -983,7 +1018,7 @@ pub(crate) fn observe_answer_rows<I: purrdf_core::ViewTermId, S: Admission>(
+             .with_record(|record| answer.observe(record, partition))
+             .map_err(StatusFailure::Evaluation)?
+             .map_err(StatusFailure::Answer)?;
+-        if answer.witness_stop().is_some() {
++        if stop_on_verdict && answer.witness_stop().is_some() {
+             break;
+         }
+     }
+diff --git crates/sparql-eval/src/interned.rs crates/sparql-eval/src/interned.rs
+index 09c4d8263..d991d826a 100644
+--- crates/sparql-eval/src/interned.rs
++++ crates/sparql-eval/src/interned.rs
+@@ -559,6 +559,54 @@ pub enum InternedOutcome<'a, 'd, D: DatasetView + Sync> {
+     Graph(InternedGraph<'a>),
+ }
+ 
++/// A scoped visit to a governed evidence answer or a certified resource prefix.
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum GovernedEvidenceView<'a, 'd, D: DatasetView + Sync> {
++    /// The same outcome, rows and status as the ungoverned evidence visitor.
++    Complete {
++        /// The SELECT or ASK outcome.
++        outcome: InternedOutcome<'a, 'd, D>,
++        /// The original evidence-bearing rows.
++        rows: InternedSolutions<'a, 'd, D>,
++        /// The status of the requested answer tier.
++        status: purrdf_core::evidence::AnswerStatus<'a>,
++    },
++    /// A resource trip with a certified lower bound and sound row evidence.
++    Prefix {
++        /// The resource governor that tripped.
++        tripped: purrdf_core::TrippedGovernor,
++        /// The certified SELECT rows or a witnessed ASK `true`.
++        outcome: InternedOutcome<'a, 'd, D>,
++        /// The evidence-bearing rows in the certified prefix.
++        rows: InternedSolutions<'a, 'd, D>,
++        /// Incomplete status describing only the observed prefix.
++        status: purrdf_core::evidence::AnswerStatus<'a>,
++    },
++}
++
++/// The scoped visitor's return, distinguished from an incomplete execution.
++#[derive(Debug)]
++#[non_exhaustive]
++pub enum GovernedEvidenceAnswer<R> {
++    /// The visitor ran with the normal evidence answer.
++    Complete(R),
++    /// The execution stopped under a governor or was refused before evaluation.
++    BudgetExhausted(EvidenceBudgetExhausted<R>),
++}
++
++/// An incomplete governed evidence answer and its certified partial bound.
++#[derive(Debug)]
++#[non_exhaustive]
++pub struct EvidenceBudgetExhausted<R> {
++    /// The governor that stopped or refused this execution.
++    pub tripped: purrdf_core::TrippedGovernor,
++    /// The certified dataset-independent partial bound, with its retention owner.
++    pub partial: crate::PartialAnswers<crate::RetainedPartialSparqlResult>,
++    /// The visitor's return for an eligible certain resource prefix, if any.
++    pub prefix: Option<R>,
++}
++
+ /// The outcome of a governed interned execution.
+ ///
+ /// The interned twin of [`GovernedOutcome`](crate::GovernedOutcome), differing in
+diff --git crates/sparql-eval/src/lib.rs crates/sparql-eval/src/lib.rs
+index 907b7f229..96c54b3d0 100644
+--- crates/sparql-eval/src/lib.rs
++++ crates/sparql-eval/src/lib.rs
+@@ -255,8 +255,8 @@ pub use governor::{
+ // caller that reads two columns of a wide row does not pay for the other twenty.
+ // Additive beside `SparqlResult`, never a replacement for it.
+ pub use interned::{
+-    InternedGoverned, InternedGraph, InternedOutcome, InternedRequest, InternedSolutions,
+-    Prebinding,
++    EvidenceBudgetExhausted, GovernedEvidenceAnswer, GovernedEvidenceView, InternedGoverned,
++    InternedGraph, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
+ };
+ pub use plan_cache::{CacheLimits, CacheStats};
+ pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};
+diff --git crates/sparql-eval/src/plan/mod.rs crates/sparql-eval/src/plan/mod.rs
+index 6172e4bd4..1c4312e6a 100644
+--- crates/sparql-eval/src/plan/mod.rs
++++ crates/sparql-eval/src/plan/mod.rs
+@@ -252,6 +252,13 @@ pub(crate) struct PlanShape {
+ }
+ 
+ impl PlanShape {
++    /// DISTINCT and REDUCED can still merge evidence into an emitted binding.
++    pub(crate) fn coalesces_row_evidence(&self) -> bool {
++        self.rows
++            .iter()
++            .any(|row| matches!(row.kind.label(), "Distinct" | "Reduced"))
++    }
++
+     /// Whether the actual prepared algebra can invoke a native relation.
+     pub(crate) const fn has_property_functions(&self) -> bool {
+         self.has_property_functions
+diff --git crates/sparql-eval/tests/evidence_ingress.rs crates/sparql-eval/tests/evidence_ingress.rs
+index 15c7907a5..22dc2650b 100644
+--- crates/sparql-eval/tests/evidence_ingress.rs
++++ crates/sparql-eval/tests/evidence_ingress.rs
+@@ -3967,7 +3967,7 @@ fn fallible_evidence_doors_keep_original_rows_and_all_query_form_status() {
+ fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
+     use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
+     use purrdf_core::{PageId, PagedQueryError, PagedQueryEvidence, PagedQueryLimits};
+-    use purrdf_sparql_eval::FallibleSparqlError;
++    use purrdf_sparql_eval::{FallibleSparqlError, QueryGovernors};
+     use support::fallible::{ScriptedFault, two_page_faulting_dataset};
+     fn refused(error: FallibleSparqlError<PagedQueryError, PagedQueryEvidence>) {
+         assert!(error.diagnostic().is_none());
+@@ -4010,6 +4010,19 @@ fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
+             .unwrap_err(),
+     );
+     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++    let error = engine
++        .query_evidence_answer_governed_fallible_view(
++            &view,
++            request(query),
++            &QueryOptions::EMPTY,
++            &QueryGovernors::METERED.with_max_answers(1),
++            &claims,
++            answer,
++            |_| panic!("a failed view cannot publish an evidence answer"),
++        )
++        .unwrap_err();
++    refused(error.map_evidence(|receipt| receipt.view));
++    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+     refused(
+         engine
+             .query_evidence_status_fallible_view(
+@@ -4067,7 +4080,465 @@ fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
+     assert_eq!(evidence.consumed_pages, 2);
+ }
+ 
++fn governed_evidence_answer_for(
++    tier: purrdf_core::evidence::AnswerTier,
++) -> purrdf_core::evidence::AnswerRequest {
++    use purrdf_core::evidence::{AnswerRequest, StandpointKey, WitnessQuestion};
++    AnswerRequest {
++        tier,
++        question: Some(WitnessQuestion::Support),
++        standpoint: StandpointKey::Unscoped,
++        input_completeness: SearchCompleteness::Complete,
++        closure_declared: true,
++    }
++}
++
++fn governed_evidence_matches_unbounded_select_and_ask() {
++    use purrdf_core::PagedQueryLimits;
++    use purrdf_core::evidence::{AnswerStatus, AnswerTier};
++    use purrdf_sparql_eval::{
++        GovernedEvidenceAnswer, GovernedEvidenceView, InternedSolutions, QueryGovernors,
++    };
++
++    let paged = healthy_paged_evidence_source();
++    let engine = NativeSparqlEngine::new();
++    let claims = uniform_claims();
++    let options = QueryOptions::EMPTY.with_entropy_seed(67);
++    fn inspect<D: purrdf_core::DatasetView + Sync>(
++        outcome: &InternedOutcome<'_, '_, D>,
++        rows: &InternedSolutions<'_, '_, D>,
++        status: AnswerStatus<'_>,
++    ) -> impl std::fmt::Debug + PartialEq + use<D> {
++        let form = match outcome {
++            InternedOutcome::Boolean(value) => Some(*value),
++            InternedOutcome::Solutions(_) => None,
++            InternedOutcome::Graph(_) => panic!("not a graph query"),
++        };
++        let bindings = rows
++            .rows()
++            .iter()
++            .map(|row| {
++                let cells: Vec<_> = row
++                    .iter()
++                    .map(|cell| cell.map(|term| rows.try_value_of(term).unwrap()))
++                    .collect();
++                (
++                    cells,
++                    row.evidence()
++                        .with_record(EvidenceRecord::identity)
++                        .unwrap(),
++                )
++            })
++            .collect::<Vec<_>>();
++        (
++            form,
++            bindings,
++            status.information,
++            status.completeness,
++            status.established,
++            status.undecided,
++            status.reasons.to_vec(),
++            status.verdict,
++        )
++    }
++    for query in ["SELECT ?s WHERE { ?s ?p ?o }", "ASK { ?s ?p ?o }"] {
++        for tier in [AnswerTier::Rows, AnswerTier::Summary, AnswerTier::Verdict] {
++            let answer = governed_evidence_answer_for(tier);
++            let older = paged.query_view(PagedQueryLimits::UNBOUNDED);
++            let (expected, expected_view) = engine
++                .query_evidence_answer_fallible_view(
++                    &older,
++                    request(query),
++                    &options,
++                    &claims,
++                    answer,
++                    |outcome, rows, status| inspect(&outcome, &rows, status),
++                )
++                .unwrap();
++            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++            let (settled, receipt) = engine
++                .query_evidence_answer_governed_fallible_view(
++                    &view,
++                    request(query),
++                    &options,
++                    &QueryGovernors::UNBOUNDED,
++                    &claims,
++                    answer,
++                    |event| match event {
++                        GovernedEvidenceView::Complete {
++                            outcome,
++                            rows,
++                            status,
++                        } => inspect(&outcome, &rows, status),
++                        _ => panic!("unbounded evaluation cannot publish a resource prefix"),
++                    },
++                )
++                .unwrap();
++            let GovernedEvidenceAnswer::Complete(actual) = settled else {
++                panic!("unbounded evaluation completes");
++            };
++            assert_eq!(actual, expected);
++            assert_eq!(receipt.view.consumed_pages, expected_view.consumed_pages);
++            assert_eq!(receipt.governors.tripped, None);
++        }
++    }
++    for query in [
++        "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
++        "DESCRIBE ?s WHERE { ?s ?p ?o }",
++    ] {
++        use purrdf_sparql_eval::{FallibleSparqlError, QueryCoordinates};
++        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++        let failure = engine
++            .query_evidence_answer_governed_fallible_view(
++                &view,
++                request(query),
++                &options,
++                &QueryGovernors::METERED,
++                &claims,
++                governed_evidence_answer_for(AnswerTier::Rows),
++                |_: GovernedEvidenceView<'_, '_, _>| panic!("unsupported query forms cannot visit"),
++            )
++            .unwrap_err();
++        let FallibleSparqlError::Query { evidence, .. } = failure else {
++            panic!("unsupported forms are typed query errors: {failure:?}");
++        };
++        assert_eq!(evidence.coordinates, QueryCoordinates::NotStarted);
++        assert_eq!(evidence.view.consumed_pages, 0);
++        assert_eq!(
++            evidence
++                .governors
++                .consumed_in(purrdf_core::ResourceDimension::Fuel),
++            0
++        );
++    }
++}
++
++fn governed_evidence_withholds_host_stops_even_before_a_verdict_shortcut() {
++    use purrdf_core::evidence::{AnswerTier, WitnessQuestion};
++    use purrdf_core::{PagedQueryLimits, ResourceDimension, StopCause, TrippedGovernor};
++    use purrdf_sparql_eval::{
++        CancellationFlag, GovernedEvidenceAnswer, QueryGovernors, StopSignal,
++    };
++    use std::sync::Arc;
++
++    #[derive(Debug)]
++    struct Expired;
++    impl StopSignal for Expired {
++        fn poll(&self) -> Option<StopCause> {
++            Some(StopCause::Deadline)
++        }
++    }
++    struct CancellingClaims<'a> {
++        claims: UniformClaims,
++        stop: &'a CancellationFlag,
++    }
++    impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for CancellingClaims<'_> {
++        fn claim(&self, quad: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
++            self.stop.cancel();
++            self.claims.claim(quad)
++        }
++        fn scope(&self, graph: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
++            self.claims.scope(graph)
++        }
++        fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
++            Ok(None)
++        }
++    }
++    let paged = healthy_paged_evidence_source();
++    let engine = NativeSparqlEngine::new();
++    let claims = uniform_claims();
++    let mut answer = governed_evidence_answer_for(AnswerTier::Verdict);
++    answer.question = Some(WitnessQuestion::ClosedAbsence);
++    answer.closure_declared = false;
++    let stopped = Arc::new(CancellationFlag::new());
++    let governors = QueryGovernors::METERED.with_stop_signal(stopped.clone());
++    let query = "SELECT ?s WHERE { ?s ?p ?o }";
++    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++    let (outcome, _) = engine
++        .query_evidence_answer_governed_fallible_view(
++            &view,
++            request(query),
++            &QueryOptions::EMPTY,
++            &governors,
++            &claims,
++            answer,
++            |_| (),
++        )
++        .unwrap();
++    assert!(matches!(outcome, GovernedEvidenceAnswer::Complete(())));
++    stopped.cancel();
++    let expired = QueryGovernors::METERED.with_stop_signal(Arc::new(Expired));
++    for (cause, governors) in [
++        (StopCause::Cancelled, governors),
++        (StopCause::Deadline, expired),
++    ] {
++        for query in [query, "ASK { ?s ?p ?o }"] {
++            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++            let (outcome, receipt) = engine
++                .query_evidence_answer_governed_fallible_view(
++                    &view,
++                    request(query),
++                    &QueryOptions::EMPTY,
++                    &governors,
++                    &claims,
++                    answer,
++                    |_| panic!("a host stop must not run the visitor"),
++                )
++                .unwrap();
++            let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
++                panic!("typed host stop");
++            };
++            assert_eq!(trip.tripped, TrippedGovernor::Stopped { cause });
++            assert_eq!(receipt.governors.tripped, Some(trip.tripped));
++            assert_eq!(receipt.governors.consumed_in(ResourceDimension::Fuel), 0);
++            assert_eq!(receipt.view.consumed_pages, 0);
++            assert_eq!(trip.prefix, None::<()>);
++        }
++    }
++    let stop = Arc::new(CancellationFlag::new());
++    let governors = QueryGovernors::METERED.with_stop_signal(stop.clone());
++    let claims = CancellingClaims {
++        claims,
++        stop: &stop,
++    };
++    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++    let (outcome, receipt) = engine
++        .query_evidence_answer_governed_fallible_view(
++            &view,
++            request(query),
++            &QueryOptions::EMPTY,
++            &governors,
++            &claims,
++            governed_evidence_answer_for(AnswerTier::Rows),
++            |_| panic!("a stop during evaluation must not run the visitor"),
++        )
++        .unwrap();
++    let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
++        panic!("the source-triggered signal stops the active evaluation");
++    };
++    assert_eq!(
++        trip.tripped,
++        TrippedGovernor::Stopped {
++            cause: StopCause::Cancelled
++        }
++    );
++    assert_eq!(trip.prefix, None::<()>);
++    assert_eq!(receipt.governors.tripped, Some(trip.tripped));
++    assert!(receipt.governors.consumed_in(ResourceDimension::Fuel) > 0);
++    assert!(receipt.view.consumed_pages > 0);
++}
++
++fn governed_evidence_checks_host_stop_after_scope_callbacks() {
++    use purrdf_core::evidence::{AnswerTier, WitnessQuestion};
++    use purrdf_core::{PagedQueryLimits, StopCause, TrippedGovernor};
++    use purrdf_sparql_eval::{GovernedEvidenceAnswer, QueryGovernors, StopSignal};
++    use std::sync::Arc;
++    use std::sync::atomic::{AtomicBool, Ordering};
++
++    #[derive(Debug)]
++    struct ScopeStop {
++        cause: StopCause,
++        signalled: AtomicBool,
++    }
++    impl StopSignal for ScopeStop {
++        fn poll(&self) -> Option<StopCause> {
++            self.signalled.load(Ordering::Relaxed).then_some(self.cause)
++        }
++    }
++    struct Claims<'a> {
++        claims: UniformClaims,
++        stop: &'a ScopeStop,
++    }
++    impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for Claims<'_> {
++        fn claim(&self, quad: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
++            self.claims.claim(quad)
++        }
++        fn scope(&self, graph: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
++            self.stop.signalled.store(true, Ordering::Relaxed);
++            self.claims.scope(graph)
++        }
++        fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
++            Ok(None)
++        }
++    }
++    let paged = healthy_paged_evidence_source();
++    let engine = NativeSparqlEngine::new();
++    // The verdict requests scope before walking the algebra. The rows tier
++    // asks for scope only when publishing the status of this scan-free query.
++    let mut verdict = governed_evidence_answer_for(AnswerTier::Verdict);
++    verdict.question = Some(WitnessQuestion::ClosedAbsence);
++    verdict.closure_declared = false;
++    let rows = governed_evidence_answer_for(AnswerTier::Rows);
++    for (query, answer, cause, cap) in [
++        (
++            "SELECT ?s WHERE { ?s ?p ?o }",
++            verdict,
++            StopCause::Cancelled,
++            None,
++        ),
++        ("ASK { }", rows, StopCause::Deadline, None),
++        (
++            "SELECT ?s WHERE { VALUES ?s { <urn:s1> <urn:s2> } }",
++            rows,
++            StopCause::Cancelled,
++            Some(1),
++        ),
++    ] {
++        let stop = Arc::new(ScopeStop {
++            cause,
++            signalled: AtomicBool::new(false),
++        });
++        let claims = Claims {
++            claims: uniform_claims(),
++            stop: &stop,
++        };
++        let governors = QueryGovernors::METERED.with_stop_signal(stop.clone());
++        let governors = if let Some(cap) = cap {
++            governors.with_max_answers(cap)
++        } else {
++            governors
++        };
++        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++        let (outcome, receipt) = engine
++            .query_evidence_answer_governed_fallible_view(
++                &view,
++                request(query),
++                &QueryOptions::EMPTY,
++                &governors,
++                &claims,
++                answer,
++                |_| panic!("a stop during a scope callback must withhold the visitor"),
++            )
++            .unwrap();
++        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
++            panic!("the scope callback stopped the query");
++        };
++        assert!(stop.signalled.load(Ordering::Relaxed));
++        if cap.is_some() {
++            assert!(matches!(trip.tripped, TrippedGovernor::Budget { .. }));
++        } else {
++            assert_eq!(trip.tripped, TrippedGovernor::Stopped { cause });
++        }
++        assert_eq!(receipt.governors.tripped, Some(trip.tripped));
++        assert_eq!(receipt.view.consumed_pages, 0);
++        assert_eq!(trip.prefix, None::<()>);
++    }
++}
++
++fn governed_evidence_resource_trip_publishes_only_certain_prefixes() {
++    use purrdf_core::evidence::AnswerTier;
++    use purrdf_core::{PagedQueryLimits, ResourceDimension, TrippedGovernor};
++    use purrdf_sparql_eval::{
++        GovernedEvidenceAnswer, GovernedEvidenceView, PartialAnswers, QueryGovernors,
++    };
++
++    let paged = healthy_paged_evidence_source();
++    let engine = NativeSparqlEngine::new();
++    let claims = uniform_claims();
++    let answer = governed_evidence_answer_for(AnswerTier::Summary);
++    let query = "ASK { ?s ?p ?o }";
++    let run = |query, governors: &QueryGovernors| {
++        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
++        engine
++            .query_evidence_answer_governed_fallible_view(
++                &view,
++                request(query),
++                &QueryOptions::EMPTY,
++                governors,
++                &claims,
++                answer,
++                |event| match event {
++                    GovernedEvidenceView::Prefix {
++                        tripped,
++                        outcome,
++                        rows,
++                        status,
++                    } => {
++                        assert!(matches!(tripped, TrippedGovernor::Budget { .. }));
++                        assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
++                        assert_eq!(status.information, Information::Supported);
++                        assert_eq!(status.established, rows.len() as u64);
++                        assert_eq!(status.undecided, 0);
++                        (
++                            matches!(outcome, InternedOutcome::Boolean(true)),
++                            rows.len(),
++                        )
++                    }
++                    GovernedEvidenceView::Complete { rows, .. } => (false, rows.len()),
++                    _ => panic!("unknown visit"),
++                },
++            )
++            .unwrap()
++    };
++    let (_, receipt) = run(query, &QueryGovernors::METERED);
++    let cost = receipt.governors.consumed_in(ResourceDimension::Fuel);
++    let mut settled = false;
++    let mut withheld = false;
++    for fuel in 0..cost {
++        let (outcome, receipt) = run(query, &QueryGovernors::UNBOUNDED.with_fuel(fuel));
++        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
++            panic!("fuel below execution cost");
++        };
++        assert_eq!(receipt.governors.tripped, Some(trip.tripped));
++        match trip.partial {
++            PartialAnswers::Certain(partial) => {
++                assert_eq!(partial.result().boolean(), Some(true));
++                assert!(matches!(trip.prefix, Some((true, 1..))));
++                settled = true;
++            }
++            PartialAnswers::Unknown(_) => {
++                assert_eq!(trip.prefix, None);
++                withheld = true;
++            }
++            PartialAnswers::AtMost(_) => panic!("plain ASK has no upper-bound barrier"),
++        }
++        if settled && withheld {
++            break;
++        }
++    }
++    assert!(
++        settled && withheld,
++        "the sweep must cover both witnessed and unsettled ASK trips"
++    );
++
++    // A right-hand MINUS trip can leave an upper bound of candidate rows.
++    // Even then, ASK cannot turn its lack of a certain witness into false.
++    let query = "ASK { ?s ?p ?o MINUS { ?s ?q ?z } }";
++    let (_, receipt) = run(query, &QueryGovernors::METERED);
++    let cost = receipt.governors.consumed_in(ResourceDimension::Fuel);
++    assert!(cost > 0);
++    for fuel in 0..cost {
++        let (outcome, _) = run(query, &QueryGovernors::UNBOUNDED.with_fuel(fuel));
++        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
++            panic!("fuel below the MINUS execution cost");
++        };
++        assert!(matches!(trip.partial, PartialAnswers::Unknown(_)));
++        assert_eq!(trip.prefix, None);
++    }
++
++    let governors = QueryGovernors::UNBOUNDED.with_max_answers(1);
++    for (query, prefix) in [
++        ("SELECT ?s WHERE { ?s ?p ?o }", Some((false, 1))),
++        ("SELECT DISTINCT ?s WHERE { ?s ?p ?o }", None),
++        (
++            "SELECT ?s WHERE { { SELECT REDUCED ?s WHERE { ?s ?p ?o } } }",
++            None,
++        ),
++    ] {
++        let (outcome, _) = run(query, &governors);
++        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
++            panic!("two rows exceed the cap");
++        };
++        assert!(matches!(trip.partial, PartialAnswers::Certain(_)));
++        assert_eq!(trip.prefix, prefix);
++    }
++}
++
+ purrdf_testkit::harness_main!(
++    governed_evidence_matches_unbounded_select_and_ask,
++    governed_evidence_withholds_host_stops_even_before_a_verdict_shortcut,
++    governed_evidence_checks_host_stop_after_scope_callbacks,
++    governed_evidence_resource_trip_publishes_only_certain_prefixes,
+     count_admission_preserves_the_evidence_cursor_execution_path,
+     fallible_evidence_doors_keep_original_rows_and_all_query_form_status,
+     fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers,
+diff --git crates/sparql-eval/tests/relation_witness.rs crates/sparql-eval/tests/relation_witness.rs
+index 6073068bd..6f47505bd 100644
+--- crates/sparql-eval/tests/relation_witness.rs
++++ crates/sparql-eval/tests/relation_witness.rs
+@@ -431,6 +431,77 @@ fn an_ungoverned_entry_still_answers_a_relation_that_declares_nothing_short() {
+     assert_eq!(row_count(&result), 1);
+ }
+ 
++#[test]
++fn governed_evidence_refuses_a_relation_shortfall_without_a_witness_receipt() {
++    use purrdf_core::evidence::{
++        AnswerRequest, AnswerTier, EvidenceRecord, ReasonDescription, ReasonId, SearchCompleteness,
++        StandpointKey,
++    };
++    use purrdf_core::{GraphMatch, QuadIds, TermId};
++    use purrdf_sparql_eval::evidence_exec::{EvidenceScope, EvidenceSource};
++    use purrdf_sparql_eval::{GovernedEvidenceAnswer, GovernedEvidenceView};
++
++    struct OrdinaryClaims;
++    impl EvidenceSource<TermId> for OrdinaryClaims {
++        fn claim(&self, _: &QuadIds<TermId>) -> Result<Option<&EvidenceRecord>, EvalError> {
++            Ok(None)
++        }
++        fn scope(&self, _: GraphMatch<TermId>) -> Result<EvidenceScope, EvalError> {
++            Ok(EvidenceScope {
++                completeness: SearchCompleteness::Complete,
++                closure_declared: true,
++                missing_reason: None,
++            })
++        }
++        fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
++            Ok(None)
++        }
++    }
++
++    let engine = NativeSparqlEngine::new();
++    let dataset = dataset();
++    for (declares, short) in [
++        (Declares::Generation("gen-7"), false),
++        (Declares::UndeclaredThenIncomplete(SHARD_REASON), true),
++    ] {
++        let relations = registry("ff", declares);
++        let result = engine.query_evidence_answer_governed_fallible_view(
++            &*dataset,
++            InternedRequest {
++                query: ONE_CALL,
++                base_iri: None,
++                substitutions: &[],
++            },
++            &with_env(&relations),
++            &QueryGovernors::UNBOUNDED,
++            &OrdinaryClaims,
++            AnswerRequest {
++                tier: AnswerTier::Rows,
++                question: None,
++                standpoint: StandpointKey::Unscoped,
++                input_completeness: SearchCompleteness::Complete,
++                closure_declared: true,
++            },
++            |event| match event {
++                GovernedEvidenceView::Complete { rows, .. } => rows.len(),
++                _ => panic!("unbounded complete relation"),
++            },
++        );
++        if short {
++            let failure = result.unwrap_err();
++            assert_eq!(
++                failure.diagnostic().unwrap().code,
++                EvalError::RELATION_INCOMPLETE_CODE
++            );
++        } else {
++            assert!(matches!(
++                result.unwrap().0,
++                GovernedEvidenceAnswer::Complete(1)
++            ));
++        }
++    }
++}
++
+ /// The witnessed prepared door hands back the run's witness beside the answer, and —
+ /// having somewhere to put it — reports a relation's declared shortfall instead of
+ /// refusing the run. Its unwitnessed twin, [`NativeSparqlEngine::execute`], over the
+diff --git docs/RELEASE.md docs/RELEASE.md
+index 876227c50..ba9e9abc4 100644
+--- docs/RELEASE.md
++++ docs/RELEASE.md
+@@ -281,19 +281,28 @@ fallback to the full history. The workflow makes no repository commits.
+ 
+ The GitHub Release is titled `PurRDF <version>` and hosts the Linux x86_64 GNU C
+ SDK tar, its license receipt, the Cargo archive license receipt, the text
+-lexicon data tar and the two W3C SHACL EARL reports, `purrdf-shacl-earl.ttl`
+-(SHACL 2017) and `purrdf-shacl12-earl.ttl` (SHACL 1.2). The workflow generates
+-the reports with `make w3c-earl W3C_EARL_DIR=target/dist` on the tagged commit,
+-before `SHA256SUMS` is written, and attests them with the C distribution. Its
+-`SHA256SUMS` hashes the six other actual uploaded files, with one sorted
+-`<SHA-256>  <basename>` line per file. GitHub also supplies source ZIP and tar.gz
+-downloads of the tagged repository. These source archives are distinct from the
+-compiled C SDK. Preserve the full `CHANGELOG.md` history and commit both notes
+-sources **before** pushing the release tag.
++lexicon data tar, the tagged source archive and its license receipt, and the two
++W3C SHACL EARL reports, `purrdf-shacl-earl.ttl` (SHACL 2017) and
++`purrdf-shacl12-earl.ttl` (SHACL 1.2). The workflow generates the reports with
++`make w3c-earl W3C_EARL_DIR=target/dist` on the tagged commit before writing
++`SHA256SUMS`. The manifest hashes the eight other uploaded files, with one
++sorted `<SHA-256>  <basename>` line per file. Preserve the full `CHANGELOG.md`
++history and commit both notes sources **before** pushing the release tag.
++
++`purrdf-source-<version>.tar.gz` carries the exact tree named by the Rust release
++tag under one versioned directory. It uses the tagged commit's timestamps and
++omits gzip's filename and timestamp. Untracked build products, local working
++files and Git history are outside this archive. The source license receipt
++binds the archive digest and commit to the tagged licensing inventory and checks the
++first-party license texts, documentation grant, and licensing guidance against
++the archive bytes. Vendored material retains its own notices and grants in the
++tree. The workflow attests build provenance for both the archive and its
++license receipt. The GitHub-generated source ZIP and tar.gz are separate and
++are not covered by `SHA256SUMS`.
+ 
+ GitHub release immutability locks every asset when the release is published.
+ `scripts/publish-github-release.py` therefore creates or reuses a **draft**,
+-attaches all seven files, downloads and verifies their sizes, GitHub SHA-256
++attaches all nine files, downloads and verifies their sizes, GitHub SHA-256
+ digests and the retained checksum manifest against the audited local files,
+ then publishes the draft. It checks that the remote tag resolves to the exact
+ workflow commit before uploading and again before publication. Only a literal
+@@ -304,7 +313,7 @@ tagged workflow to resume. See GitHub's
+ 
+ An already published release is verified **read-only** against its retained
+ checksum manifest and downloaded assets, rather than against a fresh rebuild.
+-Its tag identity, reviewed notes and complete seven-file asset set must match.
++Its tag identity, reviewed notes and complete tagged asset set must match.
+ Missing or corrupt assets fail the lane explicitly; the publisher never
+ deletes a release, recreates it or moves a tag to work around immutability.
+ 
+@@ -515,6 +524,30 @@ neither a version bump nor a new package release is required.
+ 
+ ## Verification
+ 
++For a release with the checksummed source asset, use a local checkout that has
++the release tag. Download the attached assets into an empty directory and verify
++the manifest and the tagged workflow's attestations for the source and receipt:
++
++```sh
++VERSION=5.0.2
++TAG="rust-v$VERSION"
++REPO=Blackcat-Informatics/purrdf
++SOURCE_COMMIT=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
++mkdir "purrdf-release-$VERSION"
++cd "purrdf-release-$VERSION"
++gh release download "$TAG" --repo "$REPO" --pattern '*'
++sha256sum --strict --check SHA256SUMS
++for asset in "purrdf-source-$VERSION.tar.gz" "purrdf-source-$VERSION.license-receipt.json"; do
++  gh attestation verify "$asset" --repo "$REPO" \
++    --signer-workflow "$REPO/.github/workflows/release-cargo.yaml" \
++    --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_COMMIT"
++done
++```
++
++The archive can also be rebuilt from the tagged checkout with
++`bash scripts/package-release-source.sh build "$SOURCE_COMMIT" "$VERSION" path/to/output-directory`.
++Use the same Git and gzip implementations when comparing compressed bytes.
++
+ Download a published crate and verify its GitHub attestation:
+ 
+ ```sh
+diff --git docs/book/po/zh-Hans.po docs/book/po/zh-Hans.po
+index 1306b6b38..4c5555df1 100644
+--- docs/book/po/zh-Hans.po
++++ docs/book/po/zh-Hans.po
+@@ -27970,10 +27970,21 @@ msgstr ""
+ "UTF-8 体积上限；发布说明不会被截断。"
+ 
+ #: src/project/releases.md:165
++msgid ""
++"The GitHub Release attaches `purrdf-source-<version>.tar.gz` from the exact "
++"Rust release tag. The archive and its license receipt are both listed in "
++"`SHA256SUMS` and carry build provenance attestations. GitHub's automatically "
++"generated source downloads are separate and are not covered by that manifest."
++msgstr ""
++"GitHub 发布页附带从 Rust 发布标签所指提交生成的 "
++"`purrdf-source-<version>.tar.gz`。该归档及其许可证凭据均列在 `SHA256SUMS` "
++"中，并带有构建来源证明。GitHub 自动生成的源码下载项与此归档不同，不在该校验清单内。"
++
++#: src/project/releases.md:170
+ msgid "Citing PurRDF"
+ msgstr "引用 PurRDF"
+ 
+-#: src/project/releases.md:167
++#: src/project/releases.md:172
+ msgid ""
+ "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
+ "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
+diff --git docs/book/src/project/releases.md docs/book/src/project/releases.md
+index 204f53d63..9045a7f0e 100644
+--- docs/book/src/project/releases.md
++++ docs/book/src/project/releases.md
+@@ -162,6 +162,11 @@ the committed reviewed summary in `docs/releases/<version>.md`, linked to the
+ complete changelog. The shared checker validates the exact version and 64 KiB
+ UTF-8 size ceiling before tags and publication; no notes are truncated.
+ 
++The GitHub Release attaches `purrdf-source-<version>.tar.gz` from the exact
++Rust release tag. The archive and its license receipt are both listed in
++`SHA256SUMS` and carry build provenance attestations. GitHub's automatically
++generated source downloads are separate and are not covered by that manifest.
++
+ ## Citing PurRDF
+ 
+ Releases carry a DOI; if you use PurRDF in research, please cite it — see
+diff --git docs/releases/5.0.2.zh-Hans.md docs/releases/5.0.2.zh-Hans.md
+new file mode 100644
+index 000000000..c1342d915
+--- /dev/null
++++ docs/releases/5.0.2.zh-Hans.md
+@@ -0,0 +1,15 @@
++<!-- SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca> -->
++<!-- SPDX-License-Identifier: CC-BY-4.0 -->
++
++# PurRDF 5.0.2 发布说明
++
++## 源码归档
++
++GitHub 发布页附带 `purrdf-source-5.0.2.tar.gz`，其中包含 `rust-v5.0.2`
++标签所指提交的完整源码树。归档内包含项目许可证文本、第三方声明及其来源记录。
++该归档不是已编译的 C SDK，也不同于 GitHub 自动生成的源码下载项。
++
++`SHA256SUMS` 同时列出源码归档及其许可证凭据
++`purrdf-source-5.0.2.license-receipt.json`。两者都有构建来源证明。
++下载发布附件后，可按[发布资产验证说明](../RELEASE.md#verification)校验文件，
++并确认构建来源证明绑定到相同的发布标签和提交。
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 427c4339c..7941b3723 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3429,7 +3429,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3445,7 +3445,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3461,7 +3461,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3477,7 +3477,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3493,7 +3493,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3510,7 +3510,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3527,7 +3527,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3543,7 +3543,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3559,7 +3559,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3575,7 +3575,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3591,7 +3591,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:f6dd5849e4da1ed9",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3608,7 +3608,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:f6dd5849e4da1ed9",
+     "crates/purrdf/src/embedding/writer.rs=source:fcd5578b9b87c1ac",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3625,7 +3625,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:f6dd5849e4da1ed9",
+     "crates/purrdf/src/embedding/writer.rs=source:fcd5578b9b87c1ac",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3642,7 +3642,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3659,7 +3659,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3676,7 +3676,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3693,7 +3693,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3710,7 +3710,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3727,7 +3727,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3744,7 +3744,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3757,7 +3757,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3770,7 +3770,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3787,7 +3787,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:e1cb21fc9bd13b2c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3804,7 +3804,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:e1cb21fc9bd13b2c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3821,7 +3821,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3838,7 +3838,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3856,7 +3856,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3874,7 +3874,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3888,7 +3888,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:edcb6e9ea5596e7b",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3905,7 +3905,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3922,7 +3922,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3939,7 +3939,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3956,7 +3956,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3975,7 +3975,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f2f20a9f69cab08c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3994,7 +3994,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f2f20a9f69cab08c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4013,7 +4013,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f2f20a9f69cab08c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4030,7 +4030,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4047,7 +4047,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4064,7 +4064,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:03e67042d7d1489a"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]
+diff --git scripts/check-release-notes.py scripts/check-release-notes.py
+index 9dfe656cb..666768b6f 100755
+--- scripts/check-release-notes.py
++++ scripts/check-release-notes.py
+@@ -25,14 +25,22 @@ import tomllib
+ 
+ ROOT = Path(__file__).resolve().parent.parent
+ MAXIMUM_BYTES = 64 * 1024
+-EARL_FILES = ("purrdf-shacl-earl.ttl", "purrdf-shacl12-earl.ttl")
++CARGO_RECEIPT = "license-evidence-cargo.json"
++
++
++def checksum_asset_names(version: str) -> tuple[str, ...]:
++    """The uploaded assets covered by SHA256SUMS, in manifest order."""
++    sdk = f"purrdf-capi-{version}-x86_64-unknown-linux-gnu"
++    source = f"purrdf-source-{version}"
++    return tuple(sorted((CARGO_RECEIPT, sdk + ".tar.gz", sdk + ".license-receipt.json",
++        source + ".tar.gz", source + ".license-receipt.json", f"purrdf-text-lexicons-{version}.tar.gz",
++        "purrdf-shacl-earl.ttl", "purrdf-shacl12-earl.ttl")))
+ 
+ 
+ def workspace_version(root: Path) -> str:
+     """The existing single workspace release version."""
+-    version = tomllib.loads((root / "Cargo.toml").read_text())["workspace"]["package"][
+-        "version"
+-    ]
++    with (root / "Cargo.toml").open("rb") as manifest:
++        version = tomllib.load(manifest)["workspace"]["package"]["version"]
+     if not isinstance(version, str) or not re.fullmatch(
+         r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?",
+         version,
+@@ -66,28 +74,23 @@ def release_notes(root: Path, requested: str | None = None) -> tuple[str, bytes]
+     return version, body
+ 
+ 
++def checksum_path(root: Path, name: str) -> Path:
++    """Cargo retains its license audit beside the distribution directory."""
++    return root / "target" / (name if name == CARGO_RECEIPT else f"dist/{name}")
++
++
+ def checksum_bytes(root: Path, version: str) -> bytes:
+-    """Hash exactly the C SDK, its legal receipts, lexicons and the two EARL reports."""
+-    directory = root / "target" / "dist"
+-    archives = sorted(directory.glob(f"purrdf-capi-{version}-*.tar.gz"))
+-    if len(archives) != 1:
++    """Hash the complete upload set without buffering whole archives."""
++    if len(list((root / "target/dist").glob(f"purrdf-capi-{version}-*.tar.gz"))) != 1:
+         raise ValueError("release checksums need exactly one current C SDK archive")
+-    archive = archives[0]
+-    paths = [
+-        archive,
+-        archive.with_name(
+-            archive.name.removesuffix(".tar.gz") + ".license-receipt.json"
+-        ),
+-        root / "target" / "license-evidence-cargo.json",
+-        directory / f"purrdf-text-lexicons-{version}.tar.gz",
+-        *(directory / name for name in EARL_FILES),
+-    ]
+     lines = []
+-    for path in sorted(paths, key=lambda item: item.name):
++    for name in checksum_asset_names(version):
++        path = checksum_path(root, name)
+         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+-            raise ValueError("release checksum input is missing, empty or a symlink")
+-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+-        lines.append(f"{digest}  {path.name}\n")
++            raise ValueError(f"release checksum input is missing, empty or a symlink: {name}")
++        with path.open("rb") as source:
++            digest = hashlib.file_digest(source, "sha256").hexdigest()
++        lines.append(f"{digest}  {name}\n")
+     return "".join(lines).encode("ascii")
+ 
+ 
+@@ -140,39 +143,36 @@ def self_test() -> None:
+         refused(lambda: release_notes(root))
+         path.unlink()
+         path.write_bytes(notes)
+-        (root / "CHANGELOG.md").write_text("## [2.0.2]\nOld.\n")
+-        refused(lambda: release_notes(root))
+-        (root / "CHANGELOG.md").write_text("## [3.0.0]\nA.\n## [3.0.0]\nB.\n")
+-        refused(lambda: release_notes(root))
++        for history in ("## [2.0.2]\nOld.\n", "## [3.0.0]\nA.\n## [3.0.0]\nB.\n"):
++            (root / "CHANGELOG.md").write_text(history)
++            refused(lambda: release_notes(root))
+         (root / "CHANGELOG.md").write_text("## [3.0.0]\nFull history.\n")
+         assert release_notes(root)[1] == notes
+ 
+         directory = root / "target/dist"
+         directory.mkdir()
+-        archive = directory / "purrdf-capi-3.0.0-x86_64-unknown-linux-gnu.tar.gz"
+-        archive.write_bytes(b"actual SDK fixture")
+-        receipt = archive.with_name(
+-            archive.name.removesuffix(".tar.gz") + ".license-receipt.json"
+-        )
+-        receipt.write_bytes(b"actual C receipt fixture")
+-        cargo = root / "target/license-evidence-cargo.json"
+-        cargo.write_bytes(b"actual Cargo receipt fixture")
+-        for name in ("purrdf-text-lexicons-3.0.0.tar.gz", *EARL_FILES):
+-            (directory / name).write_bytes(b"fixture " + name.encode())
++        fixtures = ("purrdf-capi-3.0.0-x86_64-unknown-linux-gnu.tar.gz",
++            "purrdf-capi-3.0.0-x86_64-unknown-linux-gnu.license-receipt.json",
++            "purrdf-source-3.0.0.tar.gz", "purrdf-source-3.0.0.license-receipt.json",
++            "purrdf-text-lexicons-3.0.0.tar.gz", "purrdf-shacl-earl.ttl", "purrdf-shacl12-earl.ttl",
++            "license-evidence-cargo.json")
++        for name in fixtures:
++            checksum_path(root, name).write_bytes(b"fixture " + name.encode())
+         expected = b"".join(
+             f"{hashlib.sha256(item.read_bytes()).hexdigest()}  {item.name}\n".encode()
+-            for item in sorted([*directory.iterdir(), cargo], key=lambda i: i.name)
++            for item in (checksum_path(root, name) for name in sorted(fixtures))
+         )
+         assert checksum_bytes(root, "3.0.0") == expected
+-        archive.write_bytes(b"changed SDK fixture")
++        (directory / "purrdf-source-3.0.0.tar.gz").write_bytes(b"changed source fixture")
+         assert checksum_bytes(root, "3.0.0") != expected
+         extra = directory / "purrdf-capi-3.0.0-other.tar.gz"
+         extra.write_bytes(b"ambiguous SDK")
+         refused(lambda: checksum_bytes(root, "3.0.0"))
+         extra.unlink()
++        receipt = directory / "purrdf-source-3.0.0.license-receipt.json"
+         receipt.unlink()
+         refused(lambda: checksum_bytes(root, "3.0.0"))
+-        receipt.symlink_to(cargo)
++        receipt.symlink_to(root / "target/license-evidence-cargo.json")
+         refused(lambda: checksum_bytes(root, "3.0.0"))
+         output.unlink()
+         output.symlink_to(path)
+diff --git scripts/package-release-source.sh scripts/package-release-source.sh
+new file mode 100644
+index 000000000..a20bc3fd1
+--- /dev/null
++++ scripts/package-release-source.sh
+@@ -0,0 +1,75 @@
++#!/usr/bin/env bash
++# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
++# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
++
++# Assemble a Git source archive without a gzip filename or timestamp. The audit
++# binds the release receipt to the actual archive and its tagged legal texts.
++set -euo pipefail
++unset GZIP TAR_OPTIONS
++export GIT_NO_REPLACE_OBJECTS=1
++
++fail() {
++    printf 'Release source archive: %s\n' "$1" >&2
++    exit 1
++}
++
++[[ $# == 4 ]] || fail 'usage: package-release-source.sh BUILD_OR_VERIFY COMMIT VERSION DIST'
++mode=$1
++commit=$2
++version=$3
++dist=$4
++[[ "$mode" == build || "$mode" == verify ]] || fail 'use build or verify'
++[[ "$commit" =~ ^[a-f0-9]{40}$ && "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
++    fail 'expected a full commit ID and a release version'
++[[ $(git rev-parse --verify "$commit^{commit}") == "$commit" ]] || fail 'commit is not present'
++prefix=$(git rev-parse --show-prefix)
++[[ -z "$prefix" ]] || fail 'run from the repository root'
++
++stem="purrdf-source-$version"
++archive="$dist/$stem.tar.gz"
++receipt="$dist/$stem.license-receipt.json"
++
++if [[ "$mode" == build ]]; then
++    git ls-tree -r "$commit" | awk '$1 == "160000" { print "Source archive cannot include a gitlink: " $0 > "/dev/stderr"; refused = 1 } END { exit refused }'
++    export GIT_ATTR_NOSYSTEM=1
++    git ls-tree -r -t --name-only -z "$commit" |
++        git -c core.attributesFile=/dev/null check-attr --source="$commit" -z --stdin export-ignore export-subst |
++        while IFS= read -r -d '' path && IFS= read -r -d '' attribute && IFS= read -r -d '' value; do
++            [[ "$value" == unspecified || "$value" == unset ]] ||
++                fail "$attribute would transform the tagged tree at $path"
++        done
++    mkdir -p -- "$dist"
++    [[ ! -e "$archive" && ! -L "$archive" && ! -e "$receipt" && ! -L "$receipt" ]] ||
++        fail 'refusing to replace existing source files'
++    git -c core.attributesFile=/dev/null -c tar.umask=0002 archive --format=tar --prefix="$stem/" "$commit" |
++        gzip --no-name > "$archive"
++fi
++
++[[ -s "$archive" && -f "$archive" && ! -L "$archive" ]] || fail 'missing regular source archive'
++archived_commit=$(gzip --decompress --stdout -- "$archive" | {
++    git get-tar-commit-id || fail 'cannot read the archived Git commit'
++    cat >/dev/null
++})
++[[ "$archived_commit" == "$commit" ]] || fail 'archive commit differs from tagged source'
++
++notices=(LICENSE-MIT LICENSE-APACHE LICENSE-MULAN LICENSES/CC-BY-4.0.txt LICENSING.md license-inventory.toml)
++for notice in "${notices[@]}"; do
++    tagged=$(git cat-file blob "$commit:$notice" | sha256sum)
++    packaged=$(tar -xOzf "$archive" -- "$stem/$notice" | sha256sum)
++    [[ "$tagged" == "$packaged" ]] || fail "tagged legal evidence differs in the archive: $notice"
++done
++
++digest=$(sha256sum < "$archive")
++inventory=$(git cat-file blob "$commit:license-inventory.toml" | sha256sum)
++body=$(jq -nS --arg artifact "$stem.tar.gz" --arg sha256 "${digest%% *}" \
++    --arg source_commit "$commit" --arg license_inventory_sha256 "${inventory%% *}" \
++    --argjson notice_files "${#notices[@]}" \
++    '{schema: 1, artifacts: [{artifact: $artifact, profile: "source", sha256: $sha256,
++      source_commit: $source_commit, license_inventory_sha256: $license_inventory_sha256,
++      notice_files: $notice_files, runtime_notice_files: 0, status: "passed"}]}')
++if [[ "$mode" == build ]]; then
++    printf '%s\n' "$body" > "$receipt"
++else
++    [[ -f "$receipt" && ! -L "$receipt" ]] || fail 'missing regular source license receipt'
++    printf '%s\n' "$body" | cmp - "$receipt" || fail 'source license receipt does not match the archive'
++fi
+diff --git scripts/publish-github-release.py scripts/publish-github-release.py
+index 7f179ae80..ae37b4039 100755
+--- scripts/publish-github-release.py
++++ scripts/publish-github-release.py
+@@ -183,14 +183,7 @@ class GitHub:
+ 
+ 
+ def asset_names(version: str) -> set[str]:
+-    stem = f"purrdf-capi-{version}-x86_64-unknown-linux-gnu"
+-    return {
+-        stem + ".tar.gz",
+-        stem + ".license-receipt.json",
+-        "license-evidence-cargo.json",
+-        f"purrdf-text-lexicons-{version}.tar.gz",
+-        "SHA256SUMS",
+-    } | set(notes_module.EARL_FILES)
++    return {*notes_module.checksum_asset_names(version), "SHA256SUMS"}
+ 
+ 
+ def identity(release: dict, tag: str, title: str, notes: bytes, *, draft: bool):
+@@ -232,9 +225,7 @@ def verify_assets(
+         raise ReleaseError(f"release needs exactly {len(names)} release assets")
+     by_name = {asset.get("name"): asset for asset in assets if isinstance(asset, dict)}
+     if set(by_name) != names:
+-        raise ReleaseError(
+-            "release asset names differ from the complete C and lexicon distribution"
+-        )
++        raise ReleaseError("release asset names differ from the complete distribution")
+     hashes = {}
+     manifest = None
+     with tempfile.TemporaryDirectory(prefix="purrdf-release-verify-") as temporary:
+@@ -308,12 +299,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
+     notes_module.write_output(manifest_path, manifest)
+     paths = []
+     for name in sorted(asset_names(version)):
+-        directory = (
+-            root / "target"
+-            if name == "license-evidence-cargo.json"
+-            else root / "target/dist"
+-        )
+-        path = directory / name
++        path = notes_module.checksum_path(root, name)
+         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+             raise ReleaseError(
+                 f"audited release input missing, empty or a symlink: {name}"
+diff --git scripts/test_github_release.py scripts/test_github_release.py
+index 589fbb437..ed3d6ad5a 100644
+--- scripts/test_github_release.py
++++ scripts/test_github_release.py
+@@ -197,11 +197,8 @@ class PublicationTests(unittest.TestCase):
+         notes.write_text("# PurRDF 3.0.1\n\nComplete reviewed release.\n")
+         self.inputs = []
+         for name in publisher.asset_names(VERSION) - {"SHA256SUMS"}:
+-            directory = self.root / (
+-                "target" if name == "license-evidence-cargo.json" else "target/dist"
+-            )
+-            directory.mkdir(parents=True, exist_ok=True)
+-            path = directory / name
++            path = publisher.notes_module.checksum_path(self.root, name)
++            path.parent.mkdir(parents=True, exist_ok=True)
+             path.write_bytes((name + " audited content").encode())
+             self.inputs.append(path)
+         self.github = FakeGitHub()
+@@ -253,8 +250,9 @@ class PublicationTests(unittest.TestCase):
+ 
+     def test_missing_immutable_assets_fail_without_any_mutation(self):
+         self.published()
+-        self.github.record["assets"] = []
+-        with self.assertRaisesRegex(publisher.ReleaseError, "exactly 7"):
++        assets = self.github.record["assets"]
++        assets[:] = [asset for asset in assets if asset["name"] != f"purrdf-source-{VERSION}.tar.gz"]
++        with self.assertRaisesRegex(publisher.ReleaseError, "exactly 9"):
+             self.publish()
+         self.assertEqual(set(self.github.events), {"tag", "read"})
+ 
+@@ -354,7 +352,7 @@ class PublicationTests(unittest.TestCase):
+ 
+         def corrupt(tag, paths):
+             original(tag, paths)
+-            name = next(name for name in self.github.bytes if name.endswith(".tar.gz"))
++            name = f"purrdf-source-{VERSION}.tar.gz"
+             self.github.bytes[name] += b"corruption"
+             self.github.refresh_assets()
+ 

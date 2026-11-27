@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1450-anonymous-gts-blank-node-projects-under",
+  "branch": "paudley/1450-anonymous-gts-blank-node-projects-under",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "a3169c4a39c1bbef1d10fff7819996d63b840731",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1450-anonymous-gts-blank-node-projects-under/.stage/anonymous-gts-blank-node-projects-under/sync/20261127T193737-c2dbb39600d44a20a7a521f7bc914e56",
+  "conflicts": [
+    "CHANGELOG.md"
+  ],
+  "status": "completed",
+  "base": "1b3ffc14a7ead03fd24778991fa3a85f842757df",
+  "merge_bases": [
+    "2d96ab4f49bcc18948505546b7f2d6d144718848"
+  ],
+  "merge_index": "bdc4da591fd4ccfa031751c32d4eef2f2288ad72dd8dff7d76cd5e7f57274383",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'CHANGELOG.md'\n",
+  "candidate_tree": "b2f2386561d27dba316c7a1d583c684aa19a2c5c",
+  "candidate_patch": "candidate-252022b97b4849b1b62294d9d41337da.patch",
+  "stdout_log": "commit-252022b97b4849b1b62294d9d41337da.stdout.log",
+  "stderr_log": "commit-252022b97b4849b1b62294d9d41337da.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 191.9129025809234,
+  "commit": "1b7aa90e7c891c8ae5a11fbe609a5a7707b9ed8e",
+  "tree": "b2f2386561d27dba316c7a1d583c684aa19a2c5c",
+  "exit_code": 0
+}
