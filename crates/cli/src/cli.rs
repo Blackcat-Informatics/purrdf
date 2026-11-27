@@ -423,6 +423,47 @@ pub(crate) struct GlobPlanOptions {
     pub max_work: u64,
 }
 
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum GlobDescriptionAction {
+    Create,
+    Verify,
+}
+
+#[derive(clap::ValueEnum, Debug, Clone, Copy)]
+pub(crate) enum GlobDescriptionLaw {
+    Blake3V1,
+}
+
+/// Create or verify a portable compiled-plan description.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobDescriptionRdfArgs {
+    #[arg(value_enum)]
+    pub action: GlobDescriptionAction,
+    pub plan: String,
+    /// Absolute IRI of the authored plan.
+    #[arg(long)]
+    pub root: String,
+    /// Absolute IRI of the separate compiled description.
+    #[arg(long)]
+    pub description: String,
+    /// Caller vocabulary class for the description.
+    #[arg(long)]
+    pub description_class: String,
+    /// Caller vocabulary predicate for the digest literal.
+    #[arg(long)]
+    pub digest_predicate: String,
+    /// Explicit digest and framing version.
+    #[arg(long, value_enum)]
+    pub law: GlobDescriptionLaw,
+    /// Explicit role=IRI mappings for all authored plan roles.
+    #[arg(long = "vocabulary", required = true)]
+    pub vocabulary: Vec<String>,
+    #[arg(long, value_enum)]
+    pub from: CliNativeRdfFormat,
+    #[arg(long, value_enum)]
+    pub to: CliNativeRdfFormat,
+}
+
 /// The pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
@@ -451,6 +492,8 @@ pub(crate) enum Command {
     GlobRdf(GlobRdfArgs),
     /// Expand an RDF-authored path plan within a Linux directory and emit provenance.
     GlobFilesRdf(GlobFilesRdfArgs),
+    /// Create or verify a versioned compiled RDF glob description.
+    GlobDescriptionRdf(GlobDescriptionRdfArgs),
     /// Return every matching index from an ordered compiled pattern set.
     GlobSet(GlobSetArgs),
     /// Match one complete literal or explicitly selected IRI surface.
@@ -3597,6 +3640,7 @@ impl Cli {
                 paths.push(PathBuf::from(&args.plan));
                 paths.push(args.directory.clone());
             }
+            Command::GlobDescriptionRdf(args) => paths.push(PathBuf::from(&args.plan)),
             Command::GlobSet(GlobSetArgs { .. }) | Command::Fingerprint(FingerprintArgs { .. }) => {
             }
             Command::WordId { command } => command.paths(&mut paths),

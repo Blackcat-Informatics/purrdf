@@ -669,6 +669,186 @@ ex:datum ex:value {input} .
         }
     }
 
+    fn compiled_description() -> purrdf::glob::rdf::description::Description<'static> {
+        use purrdf::glob::rdf::description::{Description, Law};
+        Description {
+            identity: "https://example.org/id/compiled",
+            class: "https://example.org/custom/Compiled",
+            digest_predicate: "https://example.org/custom/checksum",
+            law: Law::Blake3V1,
+        }
+    }
+
+    #[test]
+    fn compiled_description_refuses_before_losing_graphs_or_exceeding_output_admission() {
+        use std::error::Error as _;
+        let source = data(&document("literal", "needle*", "other", r#""needle""#));
+        let description = compiled_description();
+        let plan = prepared(source.clone());
+        let budget = Budget::new(usize::MAX);
+        drop(plan.describe(description, budget.clone()).unwrap());
+        let exact_peak = budget.peak.load(Ordering::Relaxed);
+        assert!(exact_peak > 0);
+        let refused = plan
+            .describe(description, Budget::new(exact_peak - 1))
+            .unwrap_err();
+        let cause = refused.error().source().expect("typed output refusal");
+        let storage = cause.downcast_ref::<StorageError>().or_else(|| {
+            match cause.downcast_ref::<purrdf_core::NativeBuildError>() {
+                Some(purrdf_core::NativeBuildError::Storage(error)) => Some(error),
+                _ => None,
+            }
+        });
+        assert_eq!(storage, Some(&StorageError::AdmissionFailed));
+        let exact = Budget::new(exact_peak);
+        drop(plan.describe(description, exact).unwrap());
+
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        builder.push_dataset(&source).unwrap();
+        let graph = builder
+            .intern_iri("https://example.org/id/empty-graph")
+            .unwrap();
+        builder.declare_named_graph(graph).unwrap();
+        let refused = prepared(builder.freeze().unwrap())
+            .describe(description, Resident)
+            .unwrap_err();
+        assert!(matches!(
+            Capture::read(&refused).field("reason"),
+            ErrorValue::Code("named-graphs-not-portable")
+        ));
+
+        let described = plan.describe(description, Resident).unwrap();
+        let mut builder = purrdf_core::RdfDatasetBuilder::new();
+        builder.push_dataset(&described).unwrap();
+        let [owner, subject, predicate, object] = [
+            description.identity,
+            "https://example.org/id/a",
+            "https://example.org/id/p",
+            "https://example.org/id/b",
+        ]
+        .map(|value| builder.intern_iri(value).unwrap());
+        let triple = builder.intern_triple(subject, predicate, object).unwrap();
+        builder.push_reifier(owner, triple).unwrap();
+        let altered = builder.freeze().unwrap();
+        let root = id(&altered, "plan");
+        let refused = PreparedPlan::compile_described(
+            altered.into(),
+            root,
+            &vocabulary(),
+            description,
+            Resident,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            Capture::read(&refused).field("reason"),
+            ErrorValue::Code("unexpected-statement-layer-field")
+        ));
+        let root = id(&described, "plan");
+        let occupied = PreparedPlan::compile(described, root, &vocabulary(), Resident).unwrap();
+        let refused = occupied.describe(description, Resident).unwrap_err();
+        assert!(matches!(
+            Capture::read(&refused).field("reason"),
+            ErrorValue::Code("occupied-description-identity")
+        ));
+    }
+
+    #[test]
+    fn compiled_glob_description_round_trips_and_refuses_stale_source() {
+        use crate::{run, stderr};
+        use std::path::Path;
+
+        let description = compiled_description();
+        let source_text = document("literal", "needle*", "other", r#""needle""#);
+        let prepared = prepared(data(&source_text));
+        let described = prepared.describe(description, Resident).unwrap();
+
+        let temp = purrdf_testkit::temp_dir!().unwrap();
+        let path = temp.path().join("plan.rdf");
+        let command = |action, path: &Path, from, to| {
+            let mut args = [
+                "glob-description-rdf",
+                action,
+                path.to_str().unwrap(),
+                "--root",
+                "https://example.org/id/plan",
+                "--description",
+                description.identity,
+                "--description-class",
+                description.class,
+                "--digest-predicate",
+                description.digest_predicate,
+                "--law",
+                "blake3-v1",
+                "--from",
+                from,
+                "--to",
+                to,
+            ]
+            .map(str::to_owned)
+            .to_vec();
+            for (role, term) in ROLES.into_iter().zip(TERMS) {
+                args.extend(["--vocabulary".to_owned(), format!("{role}={term}")]);
+            }
+            run(&args.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        std::fs::write(&path, &source_text).unwrap();
+        let created = command("create", &path, "turtle", "ntriples");
+        assert!(created.status.success(), "{}", stderr(&created));
+        let expected =
+            serialize_dataset_to_format(&*described, NativeRdfFormat::NTriples, None).unwrap();
+        assert_eq!(created.stdout, expected.bytes);
+        std::fs::write(&path, &created.stdout).unwrap();
+        let as_turtle = command("verify", &path, "ntriples", "turtle");
+        assert!(as_turtle.status.success(), "{}", stderr(&as_turtle));
+        std::fs::write(&path, &as_turtle.stdout).unwrap();
+        let verified = command("verify", &path, "turtle", "ntriples");
+        assert!(verified.status.success(), "{}", stderr(&verified));
+        let round_trip = parse_dataset(&verified.stdout, "application/n-triples", None).unwrap();
+        let checked = PreparedPlan::compile_described(
+            round_trip.clone().into(),
+            id(&round_trip, "plan"),
+            &vocabulary(),
+            description,
+            Resident,
+        )
+        .unwrap();
+        let value = input(&round_trip);
+        let execution = checked
+            .execute(round_trip.into(), value, u64::MAX, Resident)
+            .unwrap();
+        assert_eq!(execution.indices(), &[0, 2]);
+
+        let encoded = String::from_utf8(created.stdout).unwrap();
+        assert!(
+            encoded.contains("2a4882b0a61b342ba77f195d58b8274d9d7b187ab09c3650ab4eedf0fcf7d14f")
+        );
+        for (original, changed, diagnostic) in [
+            ("needle*", "needle?", "is stale"),
+            (
+                description.law.version(),
+                "purrdf-glob-compiled-blake3-v2",
+                "incompatible-version",
+            ),
+            (
+                "<https://example.org/id/compiled> <https://example.org/custom/plan> <https://example.org/id/plan>",
+                "<https://example.org/id/compiled> <https://example.org/custom/plan> <https://example.org/id/other>",
+                "wrong-source-plan",
+            ),
+        ] {
+            let edited = encoded.replacen(original, changed, 1);
+            assert_ne!(edited, encoded);
+            std::fs::write(&path, edited).unwrap();
+            let rejected = command("verify", &path, "ntriples", "turtle");
+            assert_eq!(rejected.status.code(), Some(1));
+            assert_eq!(rejected.stdout, b"");
+            assert!(
+                stderr(&rejected).contains(diagnostic),
+                "{}",
+                stderr(&rejected)
+            );
+        }
+    }
+
     #[test]
     fn facade_rdf_plans_preserve_occurrences_metadata_and_lexical_iri_surfaces() {
         for (surface, positive, negative, value) in [
