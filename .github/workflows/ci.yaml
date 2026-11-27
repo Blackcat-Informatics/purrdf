@@ -10,6 +10,15 @@ on:
   # Any branch can be run on demand, without opening a pull request for it.
   workflow_dispatch:
     inputs:
+      rolling_phase:
+        description: Select the isolated rolling cache measurement
+        type: choice
+        options: [seed, compare]
+        default: compare
+      rolling_seed_run:
+        description: Successful seed workflow run ID for the comparison
+        type: string
+        default: ""
       native_profile:
         description: Capture matched native compilation and C phase cold/warm arms
         type: boolean
@@ -998,7 +1007,7 @@ jobs:
   # An explicit dispatch generates a projection independently of ordinary parity
   # checks. Its output is reviewed and committed separately; it never commits or pushes.
   simd-asm-projection:
-    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name != 'trial/native-rolling-cache'
     runs-on: ubuntu-latest
     # Complete cold generation and checked replay of all seven configurations.
     timeout-minutes: 360
@@ -1074,6 +1083,194 @@ jobs:
             target/simd-asm/contexts/**/cargo.graph-*.stderr.log
             target/simd-asm/contexts/**/evidence/*.json
           if-no-files-found: error
+
+  native-rolling-cache-trial:
+    # This experiment is runnable only on the isolated trial branch.
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name == 'trial/native-rolling-cache'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: ${{ fromJSON(inputs.rolling_phase == 'seed' && '["rolling"]' || '["stock","rolling"]') }}
+    env:
+      CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
+      CARGO_BUILD_FINGERPRINT: content
+      PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:sse2,blake3:sse2,deflate:sse2,csv:sse2
+    steps:
+      - name: Reclaim runner disk before the workspace test build
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /usr/share/swift
+          df -h /
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly"
+      - name: Restore the current stock native cache
+        id: stock
+        if: matrix.arm == 'stock'
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: workspace-test-checksums-v2
+          cache-workspace-crates: true
+          save-if: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Use the stock shard Cargo environment
+        run: |
+          {
+            printf 'CARGO_HOME=%s\n' "${CARGO_HOME:-$HOME/.cargo}"
+            printf 'CARGO_INCREMENTAL=0\nCARGO_TERM_COLOR=always\n'
+          } >> "$GITHUB_ENV"
+      - name: Bind the native cache identity
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/native-rolling-evidence"
+          mkdir "$evidence"
+          export LC_ALL=C
+          if ! names=$(compgen -e | sort -u); then
+            echo '::error::Cannot inventory the inherited build environment'
+            exit 1
+          fi
+          {
+            printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:?}" "${ImageVersion:?}" "native-integration-2"
+            rustc -vV
+            cargo -Vv
+            cc --version
+            ld --version
+            ar --version
+            make --version
+            node --version
+            cargo -Z unstable-options config get --format json 2>/dev/null | sha256sum
+            git ls-files -z 'Cargo.lock' '**/Cargo.toml' 'Cargo.toml' '.cargo/*' 'rust-toolchain.toml' 'Makefile' |
+              xargs -0 sha256sum
+            while IFS= read -r name; do
+              case "$name" in
+                CARGO_TOKEN|CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_*_TOKEN) ;;
+                CARGO_*|RUST*|MAKEFLAGS|MAKEOVERRIDES|MFLAGS|CC|CC_*|AR|AR_*|CFLAGS|CFLAGS_*|CXX|CXX_*|CXXFLAGS|CXXFLAGS_*|CPPFLAGS|LDFLAGS)
+                  printf '%s\0%s\0' "$name" "${!name}"
+                  ;;
+              esac
+            done <<< "$names" | sha256sum
+          } > "$evidence/context.txt"
+          git rev-parse HEAD 'HEAD^{tree}' > "$evidence/source.txt"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain=v1)"
+          cat "$evidence/source.txt"
+          uname -sr > "$evidence/kernel.txt"
+          lscpu > "$evidence/cpu.txt"
+          nproc > "$evidence/cpu-count.txt"
+          du -sb "${CARGO_HOME:?}"/registry > "$evidence/registry-before.txt" 2>/dev/null ||
+            printf 'absent\n' > "$evidence/registry-before.txt"
+          df -B1 "$PWD" > "$evidence/disk-before.txt"
+          free -b > "$evidence/memory-before.txt"
+      - name: Require a full stock cache hit
+        if: matrix.arm == 'stock'
+        env:
+          STOCK_HIT: ${{ steps.stock.outputs.cache-hit }}
+        run: test "$STOCK_HIT" = true
+      - name: Verify the exact successful seed workflow before download
+        id: seed
+        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'compare'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SEED_RUN: ${{ inputs.rolling_seed_run }}
+        run: |
+          set -euo pipefail
+          [[ "$SEED_RUN" =~ ^[1-9][0-9]{0,19}$ ]]
+          evidence="$RUNNER_TEMP/native-rolling-evidence"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SEED_RUN" > "$evidence/seed-run.json"
+          jq -e --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF_NAME" '
+            .event == "workflow_dispatch" and .conclusion == "success"
+            and .workflow_id != null and .path == ".github/workflows/ci.yaml"
+            and .head_sha == $sha and .head_branch == $ref
+          ' "$evidence/seed-run.json"
+          attempt=$(jq -er '.run_attempt | select(type == "number" and . >= 1)' "$evidence/seed-run.json")
+          echo "artifact=rolling-native-seed-snapshot-$attempt" >> "$GITHUB_OUTPUT"
+      - name: Download only the selected seed artifact
+        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'compare'
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.rolling_seed_run }}
+          name: ${{ steps.seed.outputs.artifact }}
+          path: ${{ runner.temp }}/native-rolling-archive
+      - name: Admit the restored snapshot before using Cargo output
+        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'compare'
+        run: |
+          set -euo pipefail
+          test ! -e target
+          archive="$RUNNER_TEMP/native-rolling-archive"
+          evidence="$RUNNER_TEMP/native-rolling-evidence"
+          cmp "$archive/context.txt" "$evidence/context.txt"
+          cmp "$archive/source.txt" "$evidence/source.txt"
+          (cd "$archive"; sha256sum -c SHA256SUMS)
+          /usr/bin/time -v -o "$evidence/extract.time" tar -I zstd -xf "$archive/target.tar.zst"
+          test -d target/debug
+      - name: Run the actual workspace integration shard
+        if: inputs.rolling_phase == 'compare'
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/native-rolling-evidence"
+          /usr/bin/time -v -o "$evidence/shard.time" env CARGO_TERM_VERBOSE=true \
+            make test-shard SHARD=integration-2 > "$evidence/cargo.log" 2>&1
+          du -sb "${CARGO_HOME:?}"/registry > "$evidence/registry-after.txt"
+          du -sb target > "$evidence/target-bytes.txt"
+          df -B1 "$PWD" > "$evidence/disk-after.txt"
+          free -b > "$evidence/memory-after.txt"
+          if test -r /sys/fs/cgroup/memory.peak; then
+            cat /sys/fs/cgroup/memory.peak > "$evidence/runner-memory-peak.txt"
+          fi
+      - name: Build shared test-profile libraries for the next run
+        if: inputs.rolling_phase == 'seed'
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/native-rolling-evidence"
+          test ! -e target
+          /usr/bin/time -v -o "$evidence/seed.time" env CARGO_TERM_VERBOSE=true \
+            cargo build --workspace --lib --profile test --locked > "$evidence/cargo.log" 2>&1
+          du -sb target > "$evidence/target-bytes.txt"
+          df -B1 "$PWD" > "$evidence/disk-after.txt"
+      - name: Package one measured rolling snapshot
+        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'seed'
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/native-rolling-evidence"
+          archive="$RUNNER_TEMP/native-rolling-archive"
+          mkdir "$archive"
+          cp "$evidence/context.txt" "$evidence/source.txt" "$archive/"
+          /usr/bin/time -v -o "$evidence/package.time" tar -I 'zstd -T2 -3' -cf "$archive/target.tar.zst" target
+          du -b "$archive/target.tar.zst" > "$evidence/archive-bytes.txt"
+          bytes=$(stat -c %s "$archive/target.tar.zst")
+          if (( bytes > 1250000000 )); then
+            echo "::error::The experiment archive exceeds the 1.25 GB reservation"
+            exit 1
+          fi
+          (cd "$archive"; sha256sum context.txt source.txt target.tar.zst > SHA256SUMS)
+      - name: Upload the snapshot without evicting production caches
+        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'seed'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rolling-native-seed-snapshot-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-rolling-archive/
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
+      - name: Retain exact build and test evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: rolling-native-${{ inputs.rolling_phase }}-${{ matrix.arm }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/native-rolling-evidence/
+          if-no-files-found: error
+
 
   simd-asm:
     needs: [simd-asm-compiler, simd-asm-config, workspace-hygiene]
