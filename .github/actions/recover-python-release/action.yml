@@ -1,0 +1,32 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Recover qualified Python distributions
+description: Verify retained release bytes and check both live PyPI inventories.
+runs:
+  using: composite
+  steps:
+    - name: Retrieve and verify the original qualified distributions
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: bash scripts/recover-python-release.sh "$RUNNER_TEMP/purrdf-recovered"
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      with:
+        python-version: "3.13"
+        architecture: x64
+    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+      with:
+        enable-cache: false
+    - name: Verify both projects against the live PyPI inventories
+      shell: bash
+      run: |
+        publisher_env="$(mktemp -d "$RUNNER_TEMP/purrdf-python-publisher.XXXXXX")"
+        uv venv --python 3.13 "$publisher_env"
+        python="$publisher_env/bin/python"
+        uv pip sync --python "$python" --require-hashes --only-binary :all: \
+          scripts/python-publisher-requirements.txt
+        bash scripts/publish-python-release.sh purrdf 5.0.1 \
+          "$RUNNER_TEMP/purrdf-recovered/release-dist" "$python" preflight
+        bash scripts/publish-python-release.sh purrdf-rdflib 5.0.1 \
+          "$RUNNER_TEMP/purrdf-recovered/release-shadow" "$python" preflight
+        printf 'PURRDF_RECOVERY_PYTHON=%s\n' "$python" >> "$GITHUB_ENV"

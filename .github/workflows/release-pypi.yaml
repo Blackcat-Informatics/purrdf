@@ -13,13 +13,22 @@ name: Publish coordinated PurRDF Python distributions
 permissions: {}
 
 concurrency:
-  # Rehearsals use their own group and cannot replace a pending publish.
-  group: python-release-${{ github.event_name == 'workflow_dispatch' && (inputs.publish && 'py-v5.0.1' || 'rehearsal-py-v5.0.1') || github.ref_name }}
+  # Rehearsals and rejected recovery requests cannot replace a pending publish.
+  group: >-
+    python-release-${{ github.event_name == 'workflow_dispatch' &&
+      (inputs.publish && (!inputs.recover ||
+        (github.repository == 'Blackcat-Informatics/purrdf' &&
+         github.ref == 'refs/heads/main' && github.ref_protected)) &&
+       'py-v5.0.1' || 'rehearsal-py-v5.0.1') || github.ref_name }}
   cancel-in-progress: false
 
 on:
   workflow_dispatch:
     inputs:
+      recover:
+        description: Reuse the retained qualification for 5.0.1 without rebuilding
+        type: boolean
+        default: false
       publish:
         description: Publish missing wheels for the existing 5.0.1 release
         type: boolean
@@ -30,6 +39,7 @@ on:
 
 jobs:
   qualify:
+    if: github.event_name != 'workflow_dispatch' || !inputs.recover
     uses: ./.github/workflows/qualify-python-release.yaml
     permissions:
       contents: read
@@ -39,7 +49,7 @@ jobs:
 
   publish-main:
     needs: qualify
-    if: github.event_name == 'push' || inputs.publish
+    if: github.event_name == 'push' || (inputs.publish && !inputs.recover)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -146,3 +156,42 @@ jobs:
             scripts/python-publisher-requirements.txt
           bash scripts/publish-python-release.sh purrdf-rdflib "$RELEASE_VERSION" release-shadow \
             "$publisher_env/bin/python"
+
+  recover-preflight:
+    # An invalid publish request also fails here, without signing permissions.
+    if: github.event_name == 'workflow_dispatch' && inputs.recover && (!inputs.publish || github.repository != 'Blackcat-Informatics/purrdf' || github.ref != 'refs/heads/main' || !github.ref_protected)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+    steps:
+      - name: Require protected main
+        run: |
+          if [[ "$GITHUB_REPOSITORY" != Blackcat-Informatics/purrdf ||
+                "$GITHUB_REF" != refs/heads/main || "$GITHUB_REF_PROTECTED" != true ]]; then
+            echo '::error::Recovery requires a dispatch from protected main'
+            exit 1
+          fi
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/recover-python-release
+
+  publish-recovered-native:
+    if: github.event_name == 'workflow_dispatch' && inputs.recover && inputs.publish && github.repository == 'Blackcat-Informatics/purrdf' && github.ref == 'refs/heads/main' && github.ref_protected
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      attestations: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/recover-python-release
+      - name: Publish only missing native wheels with Trusted Publishing
+        run: |
+          bash scripts/publish-python-release.sh purrdf 5.0.1 \
+            "$RUNNER_TEMP/purrdf-recovered/release-dist" "$PURRDF_RECOVERY_PYTHON"
