@@ -544,3 +544,16 @@ jobs:
           # retained checksums, without comparing a different rebuild.
           python3 scripts/publish-github-release.py --version "${RELEASE_TAG#rust-v}" \
             --repository "$GITHUB_REPOSITORY" --sha "$RELEASE_SHA"
+
+  published-rust-quickstart:
+    name: Check the published Rust quickstart
+    needs: [source, publish]
+    if: ${{ needs.source.result == 'success' && needs.publish.result == 'success' }}
+    uses: ./.github/workflows/published-rust-quickstart.yaml
+    permissions:
+      contents: read
+      attestations: read
+    with:
+      release_tag: ${{ needs.source.outputs.tag }}
+      release_sha: ${{ needs.source.outputs.sha }}
+      toolchain: ${{ needs.source.outputs.toolchain }}

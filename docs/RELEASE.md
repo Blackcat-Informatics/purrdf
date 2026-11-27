@@ -23,6 +23,13 @@ The release lane follows the `gmeow-gts` cargo release pattern:
 - crates.io publication uses Trusted Publishing through GitHub Actions OIDC,
   not a long-lived repository secret.
 
+After the Cargo publisher succeeds, a read-only quickstart job checks the
+facade crate's registry checksum and build provenance, then runs the Rust
+programs from both tagged READMEs against that exact published version on
+stable Rust. The run artifact retains the sources, lockfile and both results.
+To check an older immutable release without publishing again, run
+**Check the published Rust quickstart** from `main` with its `rust-v` tag.
+
 ## Cutting a release
 
 The suite ships **one** version to crates.io, PyPI, and npm. Cutting a release

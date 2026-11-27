@@ -18,6 +18,10 @@ a sub-crate.
 cargo add purrdf
 ```
 
+This example uses the published [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1).
+The install command may select a newer release. Cargo records the selected
+version in `Cargo.lock`.
+
 The MSRV is Rust **1.98** on the stable channel: by policy the code uses zero
 nightly (unstable) features, so stable 1.98 builds it. The repository's own
 toolchain floats on nightly for its sharper lints; see
@@ -98,6 +102,14 @@ map is in the
 
 Every release crate builds cleanly for `wasm32-unknown-unknown`, so the same
 Rust code paths work in native and wasm hosts.
+
+## Track development
+
+To build against current repository source, add the Git dependency.
+
+```sh
+cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
+```
 
 ## Next steps
 

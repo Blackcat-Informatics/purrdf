@@ -335,10 +335,11 @@ PurRDF 第一方代码的许可表达式为 `MIT OR Apache-2.0 OR MulanPSL-2.0`�
 ### Rust
 
 ```sh
-cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
+cargo add purrdf
 ```
 
-该 Git 依赖使用当前源码。需要由注册表固定版本的依赖时，请使用 crates.io 上已发布的版本。
+本示例使用已发布的 [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1)。
+安装命令可能选用更新的版本。Cargo 将选用的版本记录在 `Cargo.lock` 中。
 
 ```rust
 use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
@@ -360,6 +361,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 随着应用的增长，可使用门面 crate 的 `sparql`、`shapes`、`shex`、`datalog`、`entail`、
 `retrieval`、`geo`、`columnar`、`json`、`yaml`、`toml`、`mime` 与 `markdown` 模块。
 [更多 Rust 示例](./docs/book/src/getting-started/rust.md)。
+
+#### 跟踪开发
+
+如需使用仓库当前源码构建，请添加 Git 依赖。
+
+```sh
+cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
+```
 
 ### Python
 

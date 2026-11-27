@@ -735,6 +735,15 @@ msgstr ""
 
 #: src/getting-started/rust.md:21
 msgid ""
+"This example uses the published [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1). "
+"The install command may select a newer release. Cargo records the selected "
+"version in `Cargo.lock`."
+msgstr ""
+"本示例使用已发布的 [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1)。"
+"安装命令可能选用更新的版本。Cargo 将选用的版本记录在 `Cargo.lock` 中。"
+
+#: src/getting-started/rust.md:21
+msgid ""
 "The MSRV is Rust **1.98** on the stable channel: by policy the code uses "
 "zero nightly (unstable) features, so stable 1.98 builds it. The repository's "
 "own toolchain floats on nightly for its sharper lints; see [Versioning & "
@@ -907,6 +916,14 @@ msgid ""
 msgstr ""
 "每个发布的 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同样的 Rust "
 "代码路径在原生宿主与 wasm 宿主中都能工作。"
+
+#: src/getting-started/rust.md:104
+msgid "Track development"
+msgstr "跟踪开发"
+
+#: src/getting-started/rust.md:106
+msgid "To build against current repository source, add the Git dependency."
+msgstr "如需使用仓库当前源码构建，请添加 Git 依赖。"
 
 #: src/getting-started/rust.md:102 src/getting-started/python.md:158
 msgid "Next steps"
