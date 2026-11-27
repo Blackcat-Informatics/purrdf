@@ -244,6 +244,8 @@ fn chronological_walk(graph: GraphSelector) {
 struct UnobservedSource<'a> {
     inner: &'a RdfDataset,
     summary: Option<&'a RdfDataset>,
+    // Full indexing may scan annotations. The delta fixtures forbid that scan.
+    foreign_terms: Option<&'a [purrdf_core::TermId]>,
     failure: u8,
     failed: std::sync::atomic::AtomicBool,
 }
@@ -303,7 +305,15 @@ impl purrdf_core::DatasetView for UnobservedSource<'_> {
         purrdf_core::DatasetView::quads_for_pattern_with_plan(self.inner, plan, s, p, o, g)
     }
     fn annotation_quads(&self) -> impl Iterator<Item = purrdf_core::QuadIds<Self::Id>> + '_ {
-        std::iter::from_fn(|| panic!("delta update must not enumerate all annotations"))
+        let mut annotations = self
+            .foreign_terms
+            .map(|_| purrdf_core::DatasetView::annotation_quads(self.inner));
+        std::iter::from_fn(move || {
+            annotations
+                .as_mut()
+                .expect("delta update must not enumerate all annotations")
+                .next()
+        })
     }
     fn annotations_of_with_graph(
         &self,
@@ -312,6 +322,16 @@ impl purrdf_core::DatasetView for UnobservedSource<'_> {
         self.inner.annotations_of_with_graph(reifier)
     }
     fn resolve(&self, id: Self::Id) -> Result<Self::TermGuard<'_>, Self::ReadError> {
+        if self.foreign_terms.is_some_and(|terms| terms.contains(&id)) {
+            // The dataset view's term-value lookup rejects a literal whose
+            // datatype ID resolves to a literal instead of an IRI.
+            return Ok(purrdf_core::TermRef::Literal {
+                lexical: "malformed",
+                datatype: id,
+                language: None,
+                direction: None,
+            });
+        }
         purrdf_core::DatasetView::resolve(self.inner, id).map_err(|never| match never {})
     }
     fn term_id_by_value(&self, value: &TermValue) -> Result<Option<Self::Id>, Self::ReadError> {
@@ -360,6 +380,68 @@ impl purrdf_core::DatasetView for UnobservedSource<'_> {
 }
 
 #[test]
+fn index_retains_the_first_foreign_term_and_its_source_row_role() {
+    use purrdf_core::{DatasetView, QuadValues, TermLookupError};
+    use purrdf_testkit::error_capture::Capture;
+
+    let object = TermValue::typed_literal("ordinary text", purrdf_xsd::datatype::XSD_STRING);
+    let graph = TermValue::iri("http://example.org/graph");
+    let subject = TermValue::iri("http://example.org/document");
+    let dataset = walk_dataset(&[QuadValues {
+        s: subject.clone(),
+        p: TermValue::iri(NOTE),
+        o: object.clone(),
+        g: Some(graph.clone()),
+    }]);
+    let terms = [object, graph, subject].map(|term| {
+        DatasetView::term_id_by_value(&*dataset, &term)
+            .unwrap()
+            .unwrap()
+    });
+    let mut source = UnobservedSource {
+        inner: &dataset,
+        summary: None,
+        foreign_terms: Some(&[]),
+        failure: 0,
+        failed: std::sync::atomic::AtomicBool::new(false),
+    };
+    assert_eq!(
+        TextIndex::from_dataset(&source, &config())
+            .unwrap()
+            .fingerprint(),
+        index_of(&dataset).fingerprint()
+    );
+
+    let detail = TermLookupError::<std::convert::Infallible>::ForeignId;
+    for (offset, role) in [
+        "text-source-object-lookup",
+        "text-source-graph-lookup",
+        "text-source-subject-lookup",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        source.foreign_terms = Some(&terms[offset..]);
+        let error = TextIndex::from_dataset(&source, &config()).unwrap_err();
+        let fields = Capture::read(&error);
+        assert_eq!(fields.code, "text-foreign-source-term");
+        let lookup = fields.child("cause");
+        assert_eq!(lookup.code, role);
+        assert_eq!(lookup.child("cause").code, "term-lookup-foreign-id");
+        assert_eq!(
+            error.to_string(),
+            format!("text-index input error: {detail}")
+        );
+        let error = purrdf_sparql_eval::EvalError::from(error);
+        assert_eq!(
+            Capture::read(&error).child("cause").child("cause").code,
+            role
+        );
+        assert_eq!(error.to_string(), format!("malformed RDF input: {detail}"));
+    }
+}
+
+#[test]
 fn native_metadata_and_subject_probes_update_without_full_source_iterators() {
     let original = dataset_of(&CORPUS);
     let added = dataset_of(&[("d0", "quick river river")]);
@@ -373,6 +455,7 @@ fn native_metadata_and_subject_probes_update_without_full_source_iterators() {
     let source = UnobservedSource {
         inner: &next,
         summary: None,
+        foreign_terms: None,
         failure: 3,
         failed: std::sync::atomic::AtomicBool::new(false),
     };
@@ -397,6 +480,7 @@ fn summary_delta_refuses_different_rows_with_matching_accounting() {
     let mut source = UnobservedSource {
         inner: &expected,
         summary: Some(&expected),
+        foreign_terms: None,
         failure: 3,
         failed: std::sync::atomic::AtomicBool::new(false),
     };
@@ -436,6 +520,7 @@ fn summary_delta_preserves_the_original_literal_population_underflow() {
     let mut source = UnobservedSource {
         inner: &next,
         summary: None,
+        foreign_terms: None,
         failure: 3,
         failed: std::sync::atomic::AtomicBool::new(false),
     };
@@ -475,6 +560,7 @@ fn invalid_corpus_shape_refuses_before_capturing_source_observation() {
     let source = UnobservedSource {
         inner: &dataset,
         summary: None,
+        foreign_terms: None,
         failure: 4,
         failed: std::sync::atomic::AtomicBool::new(false),
     };
@@ -506,6 +592,7 @@ fn unavailable_source_evidence_refuses_without_scanning_and_preserves_read_failu
         let source = UnobservedSource {
             inner: &dataset,
             summary: None,
+            foreign_terms: None,
             failure,
             failed: std::sync::atomic::AtomicBool::new(false),
         };

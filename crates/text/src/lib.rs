@@ -136,7 +136,7 @@ pub use analysis::{
     UnicodeVersions, unicode_versions,
 };
 pub use corpus::{CorpusProfile, GraphFree, GraphLanguage};
-pub use error::{TextDeltaError, TextError};
+pub use error::{ForeignSourceTerm, TextDeltaError, TextError};
 pub use fixed::{Fixed, SCALE_DIGITS};
 pub use index::{
     Document, GraphSelector, PartitionKey, PartitionStats, SourceCoverage, TextIndex,

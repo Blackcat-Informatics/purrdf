@@ -2591,17 +2591,17 @@ where
         datatype,
         language,
         direction,
-    } = resolve_value(dataset, object)?
+    } = resolve_value(dataset, object, crate::ForeignSourceTerm::Object)?
     else {
         return Ok(None);
     };
     let graph = match graph {
-        Some(id) => Some(resolve_value(dataset, id)?),
+        Some(id) => Some(resolve_value(dataset, id, crate::ForeignSourceTerm::Graph)?),
         None => None,
     };
     Ok(Some(SourceRow {
         graph: P::retain_graph(graph)?,
-        subject: resolve_value(dataset, subject)?,
+        subject: resolve_value(dataset, subject, crate::ForeignSourceTerm::Subject)?,
         predicate: clone_source_term(predicate)?,
         datatype,
         lexical_form,
@@ -2626,12 +2626,16 @@ fn clone_source_term(term: &TermValue) -> Result<TermValue, TextError> {
 ///
 /// [`TextError`] naming the inconsistency when the view hands back an id that is not
 /// its own — a literal whose datatype does not resolve to an IRI.
-fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError>
+fn resolve_value<D: DatasetView>(
+    dataset: &D,
+    id: D::Id,
+    foreign: crate::ForeignSourceTerm,
+) -> Result<TermValue, TextError>
 where
     D::ReadError: purrdf_hash::error::StructuredError,
 {
     dataset.term_value(id).map_err(|error| match error {
-        foreign @ purrdf_core::TermLookupError::ForeignId => TextError::data(foreign.to_string()),
+        purrdf_core::TermLookupError::ForeignId => TextError::ForeignSourceTerm(foreign),
         purrdf_core::TermLookupError::Read(error) => TextError::source_read(error),
     })
 }
