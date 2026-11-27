@@ -135,15 +135,15 @@ pub enum ProductDimension {
     /// In both directions the bytes are not the problem; what cannot be honoured
     /// is the promise they would make.
     UnsupportedCapability,
-    /// A structure nests deeper than the decoder's fixed depth ceiling. The
-    /// ceiling exists so that untrusted bytes cannot drive the decoder into
-    /// unbounded recursion.
+    /// A structure exceeds the decoder's fixed depth ceiling or recursive
+    /// preparation reaches a known native stack safety margin.
     DepthLimit,
     /// The bytes are structurally invalid in a way no other dimension names: a
     /// field is out of range, a length disagrees with its payload, or a
     /// reference points outside the container.
     Malformed,
-    /// The native workspace could not admit or allocate the required storage.
+    /// The native workspace could not admit or allocate the required storage,
+    /// or a preparation guard could not read the native stack floor.
     Resource,
     /// The encoded declarative model differs from the model bound by the identity.
     Model,
