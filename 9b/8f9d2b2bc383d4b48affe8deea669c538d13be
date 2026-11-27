@@ -1,0 +1,18 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 68d92a3aa90426aa83c9847ec0249d370d23a1d1
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1606
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1606
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 9392436f729c7b72065a1490a26112ed0289f520
+GhpRsq-Head-Ref: paudley/1605-release-the-ci-concurrency-slot-when-a
+GhpRsq-Head-OID: 68d92a3aa90426aa83c9847ec0249d370d23a1d1
+GhpRsq-Result-Tree: 84e13c1a885b9575e713c66cfb92fc1f626b3dbd
+GhpRsq-Result-Commit: 9b8f9d2b2bc383d4b48affe8deea669c538d13be
+GhpRsq-Parent-Hashes: 68d92a3aa90426aa83c9847ec0249d370d23a1d1
+GhpRsq-Squash-Notes-SHA256: 4a3371db7cd579edf364f3bcabda31f8ca8d89d28a44bdf4cef27202b1a39a6a
+GhpRsq-Stage-Evidence: none
