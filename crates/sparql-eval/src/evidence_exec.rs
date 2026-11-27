@@ -590,9 +590,32 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
     pub(crate) fn with_answer_status<R>(
         &self,
         rows: &crate::solution::SolutionSeq<I>,
-        mut request: purrdf_core::evidence::AnswerRequest,
+        request: purrdf_core::evidence::AnswerRequest,
         workspace: &WorkspaceCapability,
         exhausted: bool,
+        visit: impl FnOnce(purrdf_core::evidence::AnswerStatus<'_>) -> R,
+    ) -> Result<R, EvalError> {
+        self.with_observed_answer(rows, request, workspace, Some(exhausted), visit)
+    }
+
+    pub(crate) fn with_prefix_answer_status<R>(
+        &self,
+        rows: &crate::solution::SolutionSeq<I>,
+        request: purrdf_core::evidence::AnswerRequest,
+        workspace: &WorkspaceCapability,
+        visit: impl FnOnce(purrdf_core::evidence::AnswerStatus<'_>) -> R,
+    ) -> Result<R, EvalError> {
+        self.with_observed_answer(rows, request, workspace, None, visit)
+    }
+
+    /// An ordinary answer supplies its enumeration boundary. A governor prefix
+    /// supplies no completeness claim and need not settle a verdict.
+    fn with_observed_answer<R>(
+        &self,
+        rows: &crate::solution::SolutionSeq<I>,
+        mut request: purrdf_core::evidence::AnswerRequest,
+        workspace: &WorkspaceCapability,
+        exhausted: Option<bool>,
         visit: impl FnOnce(purrdf_core::evidence::AnswerStatus<'_>) -> R,
     ) -> Result<R, EvalError> {
         request = self.answer_request(request)?;
@@ -610,8 +633,12 @@ impl<'d, I: purrdf_core::ViewTermId> EvidenceInput<'d, I> {
                 })
                 .map_err(StatusFailure::Evaluation)?
                 .map_err(StatusFailure::Answer)?;
-            observe_answer_rows(answer, rows)?;
-            answer.finish(exhausted).map_err(StatusFailure::Answer)?;
+            observe_answer_rows_until(answer, rows, exhausted.is_some())?;
+            match exhausted {
+                Some(exhausted) => answer.finish(exhausted),
+                None => answer.finish_prefix(),
+            }
+            .map_err(StatusFailure::Answer)?;
             Ok(visit(answer.status().map_err(StatusFailure::Answer)?))
         })
     }
@@ -972,6 +999,14 @@ pub(crate) fn observe_answer_rows<I: purrdf_core::ViewTermId, S: Admission>(
     answer: &mut purrdf_core::evidence::AnswerAccumulator<S>,
     rows: &crate::solution::SolutionSeq<I>,
 ) -> Result<(), StatusFailure> {
+    observe_answer_rows_until(answer, rows, true)
+}
+
+fn observe_answer_rows_until<I: purrdf_core::ViewTermId, S: Admission>(
+    answer: &mut purrdf_core::evidence::AnswerAccumulator<S>,
+    rows: &crate::solution::SolutionSeq<I>,
+    stop_on_verdict: bool,
+) -> Result<(), StatusFailure> {
     use purrdf_core::evidence::EvidencePartition;
     for row in &rows.rows {
         let partition = if row.evidence().is_undecided() {
@@ -983,7 +1018,7 @@ pub(crate) fn observe_answer_rows<I: purrdf_core::ViewTermId, S: Admission>(
             .with_record(|record| answer.observe(record, partition))
             .map_err(StatusFailure::Evaluation)?
             .map_err(StatusFailure::Answer)?;
-        if answer.witness_stop().is_some() {
+        if stop_on_verdict && answer.witness_stop().is_some() {
             break;
         }
     }

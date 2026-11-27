@@ -3967,7 +3967,7 @@ fn fallible_evidence_doors_keep_original_rows_and_all_query_form_status() {
 fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
     use purrdf_core::evidence::{AnswerRequest, AnswerTier, StandpointKey};
     use purrdf_core::{PageId, PagedQueryError, PagedQueryEvidence, PagedQueryLimits};
-    use purrdf_sparql_eval::FallibleSparqlError;
+    use purrdf_sparql_eval::{FallibleSparqlError, QueryGovernors};
     use support::fallible::{ScriptedFault, two_page_faulting_dataset};
     fn refused(error: FallibleSparqlError<PagedQueryError, PagedQueryEvidence>) {
         assert!(error.diagnostic().is_none());
@@ -4009,6 +4009,19 @@ fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
             )
             .unwrap_err(),
     );
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let error = engine
+        .query_evidence_answer_governed_fallible_view(
+            &view,
+            request(query),
+            &QueryOptions::EMPTY,
+            &QueryGovernors::METERED.with_max_answers(1),
+            &claims,
+            answer,
+            |_| panic!("a failed view cannot publish an evidence answer"),
+        )
+        .unwrap_err();
+    refused(error.map_evidence(|receipt| receipt.view));
     let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
     refused(
         engine
@@ -4067,7 +4080,367 @@ fn fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers() {
     assert_eq!(evidence.consumed_pages, 2);
 }
 
+fn governed_evidence_answer_for(
+    tier: purrdf_core::evidence::AnswerTier,
+) -> purrdf_core::evidence::AnswerRequest {
+    use purrdf_core::evidence::{AnswerRequest, StandpointKey, WitnessQuestion};
+    AnswerRequest {
+        tier,
+        question: Some(WitnessQuestion::Support),
+        standpoint: StandpointKey::Unscoped,
+        input_completeness: SearchCompleteness::Complete,
+        closure_declared: true,
+    }
+}
+
+fn governed_evidence_matches_unbounded_select_and_ask() {
+    use purrdf_core::PagedQueryLimits;
+    use purrdf_core::evidence::{AnswerStatus, AnswerTier};
+    use purrdf_sparql_eval::{
+        GovernedEvidenceAnswer, GovernedEvidenceView, InternedSolutions, QueryGovernors,
+    };
+
+    let paged = healthy_paged_evidence_source();
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    let options = QueryOptions::EMPTY.with_entropy_seed(67);
+    fn inspect<D: purrdf_core::DatasetView + Sync>(
+        outcome: &InternedOutcome<'_, '_, D>,
+        rows: &InternedSolutions<'_, '_, D>,
+        status: AnswerStatus<'_>,
+    ) -> impl std::fmt::Debug + PartialEq + use<D> {
+        let form = match outcome {
+            InternedOutcome::Boolean(value) => Some(*value),
+            InternedOutcome::Solutions(_) => None,
+            InternedOutcome::Graph(_) => panic!("not a graph query"),
+        };
+        let bindings = rows
+            .rows()
+            .iter()
+            .map(|row| {
+                let cells: Vec<_> = row
+                    .iter()
+                    .map(|cell| cell.map(|term| rows.try_value_of(term).unwrap()))
+                    .collect();
+                (
+                    cells,
+                    row.evidence()
+                        .with_record(EvidenceRecord::identity)
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>();
+        (
+            form,
+            bindings,
+            status.information,
+            status.completeness,
+            status.established,
+            status.undecided,
+            status.reasons.to_vec(),
+            status.verdict,
+        )
+    }
+    for query in ["SELECT ?s WHERE { ?s ?p ?o }", "ASK { ?s ?p ?o }"] {
+        for tier in [AnswerTier::Rows, AnswerTier::Summary, AnswerTier::Verdict] {
+            let answer = governed_evidence_answer_for(tier);
+            let older = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let (expected, expected_view) = engine
+                .query_evidence_answer_fallible_view(
+                    &older,
+                    request(query),
+                    &options,
+                    &claims,
+                    answer,
+                    |outcome, rows, status| inspect(&outcome, &rows, status),
+                )
+                .unwrap();
+            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let (settled, receipt) = engine
+                .query_evidence_answer_governed_fallible_view(
+                    &view,
+                    request(query),
+                    &options,
+                    &QueryGovernors::UNBOUNDED,
+                    &claims,
+                    answer,
+                    |event| match event {
+                        GovernedEvidenceView::Complete {
+                            outcome,
+                            rows,
+                            status,
+                        } => inspect(&outcome, &rows, status),
+                        _ => panic!("unbounded evaluation cannot publish a resource prefix"),
+                    },
+                )
+                .unwrap();
+            let GovernedEvidenceAnswer::Complete(actual) = settled else {
+                panic!("unbounded evaluation completes");
+            };
+            assert_eq!(actual, expected);
+            assert_eq!(receipt.view.consumed_pages, expected_view.consumed_pages);
+            assert_eq!(receipt.governors.tripped, None);
+        }
+    }
+    for query in [
+        "CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }",
+        "DESCRIBE ?s WHERE { ?s ?p ?o }",
+    ] {
+        use purrdf_sparql_eval::{FallibleSparqlError, QueryCoordinates};
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let failure = engine
+            .query_evidence_answer_governed_fallible_view(
+                &view,
+                request(query),
+                &options,
+                &QueryGovernors::METERED,
+                &claims,
+                governed_evidence_answer_for(AnswerTier::Rows),
+                |_: GovernedEvidenceView<'_, '_, _>| panic!("unsupported query forms cannot visit"),
+            )
+            .unwrap_err();
+        let FallibleSparqlError::Query { evidence, .. } = failure else {
+            panic!("unsupported forms are typed query errors: {failure:?}");
+        };
+        assert_eq!(evidence.coordinates, QueryCoordinates::NotStarted);
+        assert_eq!(evidence.view.consumed_pages, 0);
+        assert_eq!(
+            evidence
+                .governors
+                .consumed_in(purrdf_core::ResourceDimension::Fuel),
+            0
+        );
+    }
+}
+
+fn governed_evidence_withholds_host_stops_even_before_a_verdict_shortcut() {
+    use purrdf_core::evidence::{AnswerTier, WitnessQuestion};
+    use purrdf_core::{PagedQueryLimits, ResourceDimension, StopCause, TrippedGovernor};
+    use purrdf_sparql_eval::{
+        CancellationFlag, GovernedEvidenceAnswer, QueryGovernors, StopSignal,
+    };
+    use std::sync::Arc;
+
+    #[derive(Debug)]
+    struct Expired;
+    impl StopSignal for Expired {
+        fn poll(&self) -> Option<StopCause> {
+            Some(StopCause::Deadline)
+        }
+    }
+    struct CancellingClaims<'a> {
+        claims: UniformClaims,
+        stop: &'a CancellationFlag,
+    }
+    impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for CancellingClaims<'_> {
+        fn claim(&self, quad: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
+            self.stop.cancel();
+            self.claims.claim(quad)
+        }
+        fn scope(&self, graph: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
+            self.claims.scope(graph)
+        }
+        fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
+            Ok(None)
+        }
+    }
+    let paged = healthy_paged_evidence_source();
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    let mut answer = governed_evidence_answer_for(AnswerTier::Verdict);
+    answer.question = Some(WitnessQuestion::ClosedAbsence);
+    answer.closure_declared = false;
+    let stopped = Arc::new(CancellationFlag::new());
+    let governors = QueryGovernors::METERED.with_stop_signal(stopped.clone());
+    let query = "SELECT ?s WHERE { ?s ?p ?o }";
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let (outcome, _) = engine
+        .query_evidence_answer_governed_fallible_view(
+            &view,
+            request(query),
+            &QueryOptions::EMPTY,
+            &governors,
+            &claims,
+            answer,
+            |_| (),
+        )
+        .unwrap();
+    assert!(matches!(outcome, GovernedEvidenceAnswer::Complete(())));
+    stopped.cancel();
+    let expired = QueryGovernors::METERED.with_stop_signal(Arc::new(Expired));
+    for (cause, governors) in [
+        (StopCause::Cancelled, governors),
+        (StopCause::Deadline, expired),
+    ] {
+        for query in [query, "ASK { ?s ?p ?o }"] {
+            let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+            let (outcome, receipt) = engine
+                .query_evidence_answer_governed_fallible_view(
+                    &view,
+                    request(query),
+                    &QueryOptions::EMPTY,
+                    &governors,
+                    &claims,
+                    answer,
+                    |_| panic!("a host stop must not run the visitor"),
+                )
+                .unwrap();
+            let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
+                panic!("typed host stop");
+            };
+            assert_eq!(trip.tripped, TrippedGovernor::Stopped { cause });
+            assert_eq!(receipt.governors.tripped, Some(trip.tripped));
+            assert_eq!(receipt.governors.consumed_in(ResourceDimension::Fuel), 0);
+            assert_eq!(receipt.view.consumed_pages, 0);
+            assert_eq!(trip.prefix, None::<()>);
+        }
+    }
+    let stop = Arc::new(CancellationFlag::new());
+    let governors = QueryGovernors::METERED.with_stop_signal(stop.clone());
+    let claims = CancellingClaims {
+        claims,
+        stop: &stop,
+    };
+    let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+    let (outcome, receipt) = engine
+        .query_evidence_answer_governed_fallible_view(
+            &view,
+            request(query),
+            &QueryOptions::EMPTY,
+            &governors,
+            &claims,
+            governed_evidence_answer_for(AnswerTier::Rows),
+            |_| panic!("a stop during evaluation must not run the visitor"),
+        )
+        .unwrap();
+    let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
+        panic!("the source-triggered signal stops the active evaluation");
+    };
+    assert_eq!(
+        trip.tripped,
+        TrippedGovernor::Stopped {
+            cause: StopCause::Cancelled
+        }
+    );
+    assert_eq!(trip.prefix, None::<()>);
+    assert_eq!(receipt.governors.tripped, Some(trip.tripped));
+    assert!(receipt.governors.consumed_in(ResourceDimension::Fuel) > 0);
+    assert!(receipt.view.consumed_pages > 0);
+}
+
+fn governed_evidence_resource_trip_publishes_only_certain_prefixes() {
+    use purrdf_core::evidence::AnswerTier;
+    use purrdf_core::{PagedQueryLimits, ResourceDimension, TrippedGovernor};
+    use purrdf_sparql_eval::{
+        GovernedEvidenceAnswer, GovernedEvidenceView, PartialAnswers, QueryGovernors,
+    };
+
+    let paged = healthy_paged_evidence_source();
+    let engine = NativeSparqlEngine::new();
+    let claims = uniform_claims();
+    let answer = governed_evidence_answer_for(AnswerTier::Summary);
+    let query = "ASK { ?s ?p ?o }";
+    let run = |query, governors: &QueryGovernors| {
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        engine
+            .query_evidence_answer_governed_fallible_view(
+                &view,
+                request(query),
+                &QueryOptions::EMPTY,
+                governors,
+                &claims,
+                answer,
+                |event| match event {
+                    GovernedEvidenceView::Prefix {
+                        tripped,
+                        outcome,
+                        rows,
+                        status,
+                    } => {
+                        assert!(matches!(tripped, TrippedGovernor::Budget { .. }));
+                        assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
+                        assert_eq!(status.information, Information::Supported);
+                        assert_eq!(status.established, rows.len() as u64);
+                        assert_eq!(status.undecided, 0);
+                        (
+                            matches!(outcome, InternedOutcome::Boolean(true)),
+                            rows.len(),
+                        )
+                    }
+                    GovernedEvidenceView::Complete { rows, .. } => (false, rows.len()),
+                    _ => panic!("unknown visit"),
+                },
+            )
+            .unwrap()
+    };
+    let (_, receipt) = run(query, &QueryGovernors::METERED);
+    let cost = receipt.governors.consumed_in(ResourceDimension::Fuel);
+    let mut settled = false;
+    let mut withheld = false;
+    for fuel in 0..cost {
+        let (outcome, receipt) = run(query, &QueryGovernors::UNBOUNDED.with_fuel(fuel));
+        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
+            panic!("fuel below execution cost");
+        };
+        assert_eq!(receipt.governors.tripped, Some(trip.tripped));
+        match trip.partial {
+            PartialAnswers::Certain(partial) => {
+                assert_eq!(partial.result().boolean(), Some(true));
+                assert!(matches!(trip.prefix, Some((true, 1..))));
+                settled = true;
+            }
+            PartialAnswers::Unknown(_) => {
+                assert_eq!(trip.prefix, None);
+                withheld = true;
+            }
+            PartialAnswers::AtMost(_) => panic!("plain ASK has no upper-bound barrier"),
+        }
+        if settled && withheld {
+            break;
+        }
+    }
+    assert!(
+        settled && withheld,
+        "the sweep must cover both witnessed and unsettled ASK trips"
+    );
+
+    // A right-hand MINUS trip can leave an upper bound of candidate rows.
+    // Even then, ASK cannot turn its lack of a certain witness into false.
+    let query = "ASK { ?s ?p ?o MINUS { ?s ?q ?z } }";
+    let (_, receipt) = run(query, &QueryGovernors::METERED);
+    let cost = receipt.governors.consumed_in(ResourceDimension::Fuel);
+    assert!(cost > 0);
+    for fuel in 0..cost {
+        let (outcome, _) = run(query, &QueryGovernors::UNBOUNDED.with_fuel(fuel));
+        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
+            panic!("fuel below the MINUS execution cost");
+        };
+        assert!(matches!(trip.partial, PartialAnswers::Unknown(_)));
+        assert_eq!(trip.prefix, None);
+    }
+
+    let governors = QueryGovernors::UNBOUNDED.with_max_answers(1);
+    for (query, prefix) in [
+        ("SELECT ?s WHERE { ?s ?p ?o }", Some((false, 1))),
+        ("SELECT DISTINCT ?s WHERE { ?s ?p ?o }", None),
+        (
+            "SELECT ?s WHERE { { SELECT REDUCED ?s WHERE { ?s ?p ?o } } }",
+            None,
+        ),
+    ] {
+        let (outcome, _) = run(query, &governors);
+        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
+            panic!("two rows exceed the cap");
+        };
+        assert!(matches!(trip.partial, PartialAnswers::Certain(_)));
+        assert_eq!(trip.prefix, prefix);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    governed_evidence_matches_unbounded_select_and_ask,
+    governed_evidence_withholds_host_stops_even_before_a_verdict_shortcut,
+    governed_evidence_resource_trip_publishes_only_certain_prefixes,
     count_admission_preserves_the_evidence_cursor_execution_path,
     fallible_evidence_doors_keep_original_rows_and_all_query_form_status,
     fallible_evidence_refuses_mid_query_reads_and_prepared_execution_recovers,

@@ -431,6 +431,77 @@ fn an_ungoverned_entry_still_answers_a_relation_that_declares_nothing_short() {
     assert_eq!(row_count(&result), 1);
 }
 
+#[test]
+fn governed_evidence_refuses_a_relation_shortfall_without_a_witness_receipt() {
+    use purrdf_core::evidence::{
+        AnswerRequest, AnswerTier, EvidenceRecord, ReasonDescription, ReasonId, SearchCompleteness,
+        StandpointKey,
+    };
+    use purrdf_core::{GraphMatch, QuadIds, TermId};
+    use purrdf_sparql_eval::evidence_exec::{EvidenceScope, EvidenceSource};
+    use purrdf_sparql_eval::{GovernedEvidenceAnswer, GovernedEvidenceView};
+
+    struct OrdinaryClaims;
+    impl EvidenceSource<TermId> for OrdinaryClaims {
+        fn claim(&self, _: &QuadIds<TermId>) -> Result<Option<&EvidenceRecord>, EvalError> {
+            Ok(None)
+        }
+        fn scope(&self, _: GraphMatch<TermId>) -> Result<EvidenceScope, EvalError> {
+            Ok(EvidenceScope {
+                completeness: SearchCompleteness::Complete,
+                closure_declared: true,
+                missing_reason: None,
+            })
+        }
+        fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    let engine = NativeSparqlEngine::new();
+    let dataset = dataset();
+    for (declares, short) in [
+        (Declares::Generation("gen-7"), false),
+        (Declares::UndeclaredThenIncomplete(SHARD_REASON), true),
+    ] {
+        let relations = registry("ff", declares);
+        let result = engine.query_evidence_answer_governed_fallible_view(
+            &*dataset,
+            InternedRequest {
+                query: ONE_CALL,
+                base_iri: None,
+                substitutions: &[],
+            },
+            &with_env(&relations),
+            &QueryGovernors::UNBOUNDED,
+            &OrdinaryClaims,
+            AnswerRequest {
+                tier: AnswerTier::Rows,
+                question: None,
+                standpoint: StandpointKey::Unscoped,
+                input_completeness: SearchCompleteness::Complete,
+                closure_declared: true,
+            },
+            |event| match event {
+                GovernedEvidenceView::Complete { rows, .. } => rows.len(),
+                _ => panic!("unbounded complete relation"),
+            },
+        );
+        if short {
+            let failure = result.unwrap_err();
+            assert_eq!(
+                failure.diagnostic().unwrap().code,
+                EvalError::RELATION_INCOMPLETE_CODE
+            );
+        } else {
+            assert!(matches!(
+                result.unwrap().0,
+                GovernedEvidenceAnswer::Complete(1)
+            ));
+        }
+    }
+}
+
 /// The witnessed prepared door hands back the run's witness beside the answer, and —
 /// having somewhere to put it — reports a relation's declared shortfall instead of
 /// refusing the run. Its unwitnessed twin, [`NativeSparqlEngine::execute`], over the

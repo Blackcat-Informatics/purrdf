@@ -559,6 +559,54 @@ pub enum InternedOutcome<'a, 'd, D: DatasetView + Sync> {
     Graph(InternedGraph<'a>),
 }
 
+/// A scoped visit to a governed evidence answer or a certified resource prefix.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum GovernedEvidenceView<'a, 'd, D: DatasetView + Sync> {
+    /// The same outcome, rows and status as the ungoverned evidence visitor.
+    Complete {
+        /// The SELECT or ASK outcome.
+        outcome: InternedOutcome<'a, 'd, D>,
+        /// The original evidence-bearing rows.
+        rows: InternedSolutions<'a, 'd, D>,
+        /// The status of the requested answer tier.
+        status: purrdf_core::evidence::AnswerStatus<'a>,
+    },
+    /// A resource trip with a certified lower bound and sound row evidence.
+    Prefix {
+        /// The resource governor that tripped.
+        tripped: purrdf_core::TrippedGovernor,
+        /// The certified SELECT rows or a witnessed ASK `true`.
+        outcome: InternedOutcome<'a, 'd, D>,
+        /// The evidence-bearing rows in the certified prefix.
+        rows: InternedSolutions<'a, 'd, D>,
+        /// Incomplete status describing only the observed prefix.
+        status: purrdf_core::evidence::AnswerStatus<'a>,
+    },
+}
+
+/// The scoped visitor's return, distinguished from an incomplete execution.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum GovernedEvidenceAnswer<R> {
+    /// The visitor ran with the normal evidence answer.
+    Complete(R),
+    /// The execution stopped under a governor or was refused before evaluation.
+    BudgetExhausted(EvidenceBudgetExhausted<R>),
+}
+
+/// An incomplete governed evidence answer and its certified partial bound.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct EvidenceBudgetExhausted<R> {
+    /// The governor that stopped or refused this execution.
+    pub tripped: purrdf_core::TrippedGovernor,
+    /// The certified dataset-independent partial bound, with its retention owner.
+    pub partial: crate::PartialAnswers<crate::RetainedPartialSparqlResult>,
+    /// The visitor's return for an eligible certain resource prefix, if any.
+    pub prefix: Option<R>,
+}
+
 /// The outcome of a governed interned execution.
 ///
 /// The interned twin of [`GovernedOutcome`](crate::GovernedOutcome), differing in

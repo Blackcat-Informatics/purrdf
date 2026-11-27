@@ -252,6 +252,13 @@ pub(crate) struct PlanShape {
 }
 
 impl PlanShape {
+    /// DISTINCT and REDUCED can still merge evidence into an emitted binding.
+    pub(crate) fn coalesces_row_evidence(&self) -> bool {
+        self.rows
+            .iter()
+            .any(|row| matches!(row.kind.label(), "Distinct" | "Reduced"))
+    }
+
     /// Whether the actual prepared algebra can invoke a native relation.
     pub(crate) const fn has_property_functions(&self) -> bool {
         self.has_property_functions

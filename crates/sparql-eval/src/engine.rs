@@ -22,6 +22,7 @@
 //! across worker-local engines without retaining a global evaluation lock.
 
 mod bounded_workspace;
+mod evidence_answer;
 mod select_cursor;
 pub use select_cursor::{FallibleSelectCursor, FallibleSelectSettlement, PreparedSelectCursor};
 pub(crate) mod coordinates;
@@ -2061,7 +2062,7 @@ impl NativeSparqlEngine {
         )?;
         let outcome =
             evaluate_with_substitutions(prepared, Prebindings::Owned(substitutions), &mut ctx)?;
-        materialize(outcome, &ctx)
+        materialize(&outcome, &ctx)
     }
 
     /// Parse and execute one request over an operationally fallible view.
@@ -5430,19 +5431,8 @@ impl NativeSparqlEngine {
         workspace: &crate::workspace::QueryWorkspace<D::ReadError>,
         visit: impl FnOnce(&Outcome<D::Id>, &EvalCtx<'_, D>) -> Result<R, crate::EvalError>,
     ) -> Result<R, EvaluationFailure> {
-        let admitted = RequestParameters::of_admitted(
-            Prebindings::Borrowed(request.substitutions),
-            options.declared_prebound,
-            &workspace.capability(),
-        )?;
-        let prepared = self.prepare_request_admitted(
-            request.query,
-            request.base_iri,
-            options.env,
-            &admitted,
-            options.geo,
-            &workspace.capability(),
-        )?;
+        let (prepared, _parameters) =
+            self.prepare_interned_request_admitted(request, options, &workspace.capability())?;
         let mut ctx = self.query_ctx(dataset, options, workspace)?;
         ctx.options.force_sequential |= Sequencing::for_view::<D>() == Sequencing::Sequential;
         coordinates::capture_query(
@@ -5452,18 +5442,35 @@ impl NativeSparqlEngine {
             options,
             coordinates::Consumer::Discarded,
         )?;
-        if let Some(source) = source {
-            ctx = ctx.with_evidence_source(source)?;
-        }
-        ctx.evidence_verdict = answer.filter(|request| {
-            request.tier == purrdf_core::evidence::AnswerTier::Verdict && request.question.is_some()
-        });
+        let mut ctx = evidence_answer::attach_query_evidence(ctx, source, answer)?;
         let outcome = evaluate_with_substitutions(
             &prepared,
             Prebindings::Borrowed(request.substitutions),
             &mut ctx,
         )?;
         visit(&outcome, &ctx).map_err(EvaluationFailure::Evaluation)
+    }
+
+    fn prepare_interned_request_admitted<'a>(
+        &self,
+        request: InternedRequest<'a>,
+        options: &QueryOptions<'a, '_>,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<(PreparedHandle, RequestParameters<'a>), EvaluationFailure> {
+        let parameters = RequestParameters::of_admitted(
+            Prebindings::Borrowed(request.substitutions),
+            options.declared_prebound,
+            workspace,
+        )?;
+        let prepared = self.prepare_request_admitted(
+            request.query,
+            request.base_iri,
+            options.env,
+            &parameters,
+            options.geo,
+            workspace,
+        )?;
+        Ok((prepared, parameters))
     }
 
     /// [`Self::query_governed_in_operation`] on the **interned** egress.
@@ -6136,6 +6143,23 @@ fn retain_query_result<D: FallibleDatasetView + Sync>(
     Ok((result, owner))
 }
 
+fn retain_partial_answers<D: FallibleDatasetView + Sync>(
+    dataset: &D,
+    partial: PartialAnswers,
+    workspace: Option<&crate::workspace::QueryWorkspace<D::ReadError>>,
+) -> FallibleControlResult<D, PartialAnswers<crate::RetainedPartialSparqlResult>> {
+    let retain = |partial: PartialSparqlResult| {
+        let positional = partial.is_positional_prefix();
+        retain_query_result(dataset, partial.into_result(), workspace)
+            .map(|(result, _owner)| crate::RetainedPartialSparqlResult::new(result, positional))
+    };
+    Ok(match partial {
+        PartialAnswers::Certain(partial) => PartialAnswers::Certain(retain(partial)?),
+        PartialAnswers::AtMost(partial) => PartialAnswers::AtMost(retain(partial)?),
+        PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
+    })
+}
+
 /// Report a governed query over a fallible view at its final checkpoint.
 ///
 /// The precedence is the ungoverned lane's, extended by one rule: an operational failure
@@ -6230,26 +6254,13 @@ where
                         relations: RelationIdentity::EMPTY,
                         partial,
                     };
-                    let retain = |partial: PartialSparqlResult| {
-                        let positional = partial.is_positional_prefix();
-                        retain_query_result(dataset, partial.into_result(), workspace)
-                            .map(|(result, _owner)| {
-                                crate::RetainedPartialSparqlResult::new(result, positional)
+                    let partial = retain_partial_answers(dataset, exhausted.partial, workspace)
+                        .map_err(|error| {
+                            error.map_evidence(|view| {
+                                GovernedEvidence::new(view, governors.clone())
+                                    .with_coordinates(capture.clone())
                             })
-                            .map_err(|error| {
-                                error.map_evidence(|view| {
-                                    GovernedEvidence::new(view, governors.clone())
-                                        .with_coordinates(capture.clone())
-                                })
-                            })
-                    };
-                    let partial = match exhausted.partial {
-                        PartialAnswers::Certain(partial) => {
-                            PartialAnswers::Certain(retain(partial)?)
-                        }
-                        PartialAnswers::AtMost(partial) => PartialAnswers::AtMost(retain(partial)?),
-                        PartialAnswers::Unknown(barrier) => PartialAnswers::Unknown(barrier),
-                    };
+                        })?;
                     let (partial, view) = finish_fallible_read(dataset, Ok(partial), workspace)
                         .map_err(|error| {
                             error.map_evidence(|view| {
@@ -6260,7 +6271,7 @@ where
                     Err(FallibleSparqlError::BudgetExhausted {
                         tripped: exhausted.tripped,
                         partial,
-                        evidence: GovernedEvidence::new(view, governors.clone())
+                        evidence: GovernedEvidence::new(view, governors)
                             .with_coordinates(capture.clone()),
                     })
                 }
@@ -7809,12 +7820,12 @@ fn borrow_outcome<'a, 'd, D: DatasetView + Sync>(
 /// `SparqlResult` egress model (the interned-id space ends here: every solution
 /// cell becomes an owned [`TermValue`](purrdf_core::TermValue)).
 fn materialize<D: DatasetView + Sync>(
-    outcome: Outcome<D::Id>,
+    outcome: &Outcome<D::Id>,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<SparqlResult, EvaluationFailure> {
     Ok(match outcome {
         Outcome::Solutions(seq) => {
-            let (variables, rows) = crate::eval::materialize_solutions(&seq, ctx)?;
+            let (variables, rows) = crate::eval::materialize_solutions(seq, ctx)?;
             let aux = ctx.constructed_dataset(&rows)?;
             SparqlResult::Solutions {
                 variables,
@@ -7822,8 +7833,8 @@ fn materialize<D: DatasetView + Sync>(
                 aux,
             }
         }
-        Outcome::Graph(graph) => SparqlResult::Graph(graph),
-        Outcome::Boolean(value) => SparqlResult::Boolean(value),
+        Outcome::Graph(graph) => SparqlResult::Graph(graph.clone()),
+        Outcome::Boolean(value) => SparqlResult::Boolean(*value),
     })
 }
 
@@ -7896,7 +7907,7 @@ fn materialize_governed<D: DatasetView + Sync>(
                 relations,
                 coordinates,
             } => GovernedOutcome::Complete {
-                result: materialize(outcome, ctx)?,
+                result: materialize(&outcome, ctx)?,
                 evidence,
                 relations,
                 coordinates,
@@ -7950,29 +7961,53 @@ fn resolve_governed<D: DatasetView + Sync>(
     relations: RelationIdentity,
     coordinates: QueryCoordinates,
 ) -> Result<GovernedResolution<D::Id>, EvaluationFailure> {
+    resolve_governed_with_prefix(
+        evaluated,
+        ctx,
+        state,
+        relations,
+        coordinates,
+        |_, _, _, _| Ok(None::<()>),
+    )
+    .map(|(resolution, _)| resolution)
+}
+
+/// Settle the public bound before borrowing evidence from an eligible trip.
+/// Ordinary governed entries use a no-op hook, with no extra row ownership.
+fn resolve_governed_with_prefix<D: DatasetView + Sync, R>(
+    evaluated: EvaluatedOutcome<D::Id>,
+    ctx: &mut EvalCtx<'_, D>,
+    state: &GovernorState,
+    relations: RelationIdentity,
+    coordinates: QueryCoordinates,
+    prefix: impl FnOnce(
+        purrdf_core::TrippedGovernor,
+        &Outcome<D::Id>,
+        Option<&crate::governor::lift::Truncation<D::Id>>,
+        &EvalCtx<'_, D>,
+    ) -> Result<Option<R>, EvaluationFailure>,
+) -> Result<(GovernedResolution<D::Id>, Option<R>), EvaluationFailure> {
     let relations = RelationIdentity {
         witness: core::mem::take(&mut ctx.witness),
         ..relations
     };
     let ctx = &*ctx;
-    Ok(match evaluated {
+    let (outcome, certificate, tripped, evidence, partial) = match evaluated {
         EvaluatedOutcome::Complete(outcome) => {
             let evidence = state.evidence();
-            match evidence.tripped {
-                None => GovernedResolution::Complete {
-                    outcome,
-                    evidence,
-                    relations,
-                    coordinates,
-                },
-                Some(tripped) => GovernedResolution::Exhausted(BudgetExhausted {
-                    tripped,
-                    evidence,
-                    relations,
-                    coordinates,
-                    partial: certain_partial(materialize(outcome, ctx)?, true),
-                }),
-            }
+            let Some(tripped) = evidence.tripped else {
+                return Ok((
+                    GovernedResolution::Complete {
+                        outcome,
+                        evidence,
+                        relations,
+                        coordinates,
+                    },
+                    None,
+                ));
+            };
+            let partial = certain_partial(materialize(&outcome, ctx)?, true);
+            (outcome, None, tripped, evidence, partial)
         }
         EvaluatedOutcome::Truncated {
             outcome,
@@ -7990,7 +8025,7 @@ fn resolve_governed<D: DatasetView + Sync>(
                         .expect("a collapsed bound names the operator that collapsed it"),
                 ),
                 bound => {
-                    let result = materialize(outcome, ctx)?;
+                    let result = materialize(&outcome, ctx)?;
                     if bound == SpineClass::Certain {
                         certain_partial(result, certificate.is_positional_prefix())
                     } else {
@@ -8001,15 +8036,33 @@ fn resolve_governed<D: DatasetView + Sync>(
                     }
                 }
             };
-            GovernedResolution::Exhausted(BudgetExhausted {
-                tripped: certificate.tripped(),
-                evidence: state.evidence(),
-                relations,
-                coordinates,
+            let tripped = certificate.tripped();
+            (
+                outcome,
+                Some(certificate),
+                tripped,
+                state.evidence(),
                 partial,
-            })
+            )
         }
-    })
+    };
+    let value = if matches!(tripped, purrdf_core::TrippedGovernor::Budget { .. })
+        && matches!(partial, PartialAnswers::Certain(_))
+    {
+        prefix(tripped, &outcome, certificate.as_ref(), ctx)?
+    } else {
+        None
+    };
+    Ok((
+        GovernedResolution::Exhausted(BudgetExhausted {
+            coordinates,
+            tripped,
+            evidence,
+            relations,
+            partial,
+        }),
+        value,
+    ))
 }
 
 #[cfg(test)]

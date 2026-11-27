@@ -6,6 +6,15 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+- Rust callers can govern fallible SELECT and ASK evidence answers with
+  `NativeSparqlEngine::query_evidence_answer_governed_fallible_view`.
+  Cancellation and deadlines return a typed trip without visiting an answer.
+  A resource trip can visit a certified, incomplete evidence prefix.
+  DISTINCT and REDUCED withhold prefix status because later rows can change
+  the evidence attached to a delivered binding.
+
 ## [5.0.1] - 2026-11-23
 
 - **Security: Python validation authenticates exact native store classes before
