@@ -151,6 +151,14 @@ simply not narrated here:
 - `crates/entail/benches/chase.rs` — RDFS forward-materialization chase scaling
   (`materialize(ds, Regime::Rdfs)` end to end, so the declared clause program and
   `purrdf-datalog`'s semi-naive fixpoint are both inside the timed loop).
+  The `owl_rl_refutation_shrink/named_role` rows exercise a default-world
+  role clash with alternate default support and a duplicate row in a named
+  graph. Each invocation shrinks the premises and checks the warrant. On
+  x86-64 Linux with one worker, the median retired user instructions over
+  three release-derived `--test --exact` processes fell from 4,846,099,435
+  to 517,983,939 with 16 unrelated default rows and from 31,721,144,427 to
+  1,572,299,223 with 64. These totals include harness and fixture setup.
+  Named rows stay out of the default-world seed and the selected premises.
 - `crates/entail/benches/classify.rs` — OWL-Direct classification latency over
   a synthetic `EL` terminology at three signature sizes, since classification
   cost is superlinear in the signature rather than in the axiom count.

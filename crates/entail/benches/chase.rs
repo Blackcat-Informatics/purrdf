@@ -36,9 +36,11 @@ use purrdf_entail::{
     certain_answers, entails, materialize, verify,
 };
 
-use purrdf_iri::vocab::owl::{CLASS, COMPLEMENT_OF, DISJOINT_WITH};
+use purrdf_iri::vocab::owl::{
+    CLASS, COMPLEMENT_OF, DIFFERENT_FROM, DISJOINT_WITH, PROPERTY_DISJOINT_WITH,
+};
 use purrdf_iri::vocab::rdf::TYPE;
-use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASSOF;
+use purrdf_iri::vocab::rdfs::{SUB_CLASS_OF as SUBCLASSOF, SUB_PROPERTY_OF};
 
 /// The fixture namespace. `example.org` per the project rule: a bench mints no
 /// vocabulary of its own, and a reserved-for-documentation authority is the only
@@ -170,6 +172,62 @@ fn refutation_premise(unrelated: usize) -> Arc<RdfDataset> {
     builder.freeze().unwrap()
 }
 
+fn named_role_premise(unrelated: usize) -> (Arc<RdfDataset>, Arc<RdfDataset>) {
+    let mut builder = RdfDatasetBuilder::new();
+    let [
+        member,
+        left,
+        right,
+        p,
+        q,
+        alternate,
+        graph,
+        disjoint,
+        sub,
+        ty,
+        class,
+    ] = [
+        "http://example.org/member",
+        "http://example.org/left",
+        "http://example.org/right",
+        "http://example.org/p",
+        "http://example.org/q",
+        "http://example.org/alternate",
+        "http://example.org/named/",
+        PROPERTY_DISJOINT_WITH,
+        SUB_PROPERTY_OF,
+        TYPE,
+        CLASS,
+    ]
+    .map(|iri| builder.intern_iri(iri).unwrap());
+    for [s, pred, o] in [
+        [p, disjoint, q],
+        [member, p, left],
+        [member, q, right],
+        [member, alternate, left],
+        [alternate, sub, p],
+    ] {
+        builder.push_quad(s, pred, o, None).unwrap();
+    }
+    builder.push_quad(member, p, left, Some(graph)).unwrap();
+    for index in 0..unrelated {
+        let iri = builder
+            .intern_iri(&format!("{EX}Unrelated/{index}"))
+            .unwrap();
+        builder.push_quad(iri, ty, class, None).unwrap();
+    }
+    let premise = builder.freeze().unwrap();
+    let mut target = RdfDatasetBuilder::new();
+    let [left, neq, right] = [
+        "http://example.org/left",
+        DIFFERENT_FROM,
+        "http://example.org/right",
+    ]
+    .map(|iri| target.intern_iri(iri).unwrap());
+    target.push_quad(left, neq, right, None).unwrap();
+    (premise, target.freeze().unwrap())
+}
+
 fn bench_refutation_shrink(c: &mut Bench) {
     let mut builder = RdfDatasetBuilder::new();
     let [member, girl, ty, class, complement] = [
@@ -195,24 +253,29 @@ fn bench_refutation_shrink(c: &mut Bench) {
     let imports = ImportMap::default();
     let mut group = c.benchmark_group("owl_rl_refutation_shrink");
     for count in [16, 64] {
-        let premise = refutation_premise(count);
-        group.bench_with_input(
-            BenchmarkId::from_parameter(count),
-            &premise,
-            |bch, premise| {
+        let named = named_role_premise(count);
+        for (id, premise, target) in [
+            (
+                BenchmarkId::from_parameter(count),
+                refutation_premise(count),
+                &conclusion,
+            ),
+            (BenchmarkId::new("named_role", count), named.0, &named.1),
+        ] {
+            group.bench_with_input(id, &premise, |bch, premise| {
                 bch.iter(|| {
                     let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Refutation(_)) =
-                        entails(premise, &conclusion, Regime::OwlRl, &imports)
+                        entails(premise, target, Regime::OwlRl, &imports)
                             .unwrap()
                             .into_parts()
                             .0
                     else {
                         panic!("expected a refutation warrant");
                     };
-                    assert!(verify(&warrant, premise, &conclusion));
+                    assert!(verify(&warrant, premise, target));
                 });
-            },
-        );
+            });
+        }
     }
     group.finish();
 }
