@@ -1134,6 +1134,47 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         }
     }
 
+    fn same_term_first_boolean<D: DatasetView<Id = I> + Sync>(
+        ctx: &mut EvalCtx<'_, D>,
+        equal: bool,
+    ) -> Result<bool, EvalError> {
+        let term = helpers::intern_boolean(ctx, equal)?;
+        Ok(helpers::ebv_term(ctx, term)? == Some(true))
+    }
+
+    /// Select one already admitted row of an evidence-free resident worker.
+    ///
+    /// Each worker counts actual evaluations, not input positions. The first
+    /// two preserve constant resolution and registration even for an unbound
+    /// variable. The enclosing row checkpoint owns admission and cloning order.
+    pub(crate) fn select_same_term_row<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        selection: (Option<usize>, usize),
+        warmed: &mut u8,
+        row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Result<bool, EvalError> {
+        if *warmed < 2 {
+            let keep = self.ebv(None, row, schema, ctx)? == Some(true);
+            *warmed += 1;
+            return Ok(keep);
+        }
+        let (Some(column), constant) = selection else {
+            return Ok(false);
+        };
+        let (Some(term), ConstCell::Read(Some(constant))) = (row[column], self.consts[constant])
+        else {
+            return Ok(false);
+        };
+        let equal = term == constant;
+        if ctx.cached_bool_terms[usize::from(equal)].is_some() {
+            Ok(equal)
+        } else {
+            Self::same_term_first_boolean(ctx, equal)
+        }
+    }
+
     /// Select original rows from one ungoverned, evidence-free worker chunk.
     pub(crate) fn select_same_term<D: DatasetView<Id = I> + Sync>(
         &mut self,
@@ -1172,8 +1213,7 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
                     // selections first, just as the row loop would.
                     copy_selected(block, selected, ctx, output)?;
                     selected = 0;
-                    let term = helpers::intern_boolean(ctx, equal)?;
-                    let keep = helpers::ebv_term(ctx, term)? == Some(true);
+                    let keep = Self::same_term_first_boolean(ctx, equal)?;
                     known[slot] = true;
                     keep
                 } else {

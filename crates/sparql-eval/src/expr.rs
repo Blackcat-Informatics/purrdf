@@ -992,7 +992,6 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
         && !cfg!(target_arch = "wasm32")
         && crate::engine::Sequencing::for_view::<D>() == crate::engine::Sequencing::Free
         && !ctx.sequential_operation_required()
-        && ctx.governor_state().is_none()
         && ctx.expression_barrier.observed().is_none()
         && !ctx.may_have_evidence()
         && !seq.rows.may_have_evidence_attachment()
@@ -1002,7 +1001,7 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     } else {
         None
     };
-    let rows = if let Some(selection) = selection {
+    let rows = if let Some(selection) = selection.filter(|_| ctx.governor_state().is_none()) {
         let (rows, witnesses) = crate::parallel::par_chunk_try_map_slice(
             false,
             &seq.rows,
@@ -1031,16 +1030,23 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
                 let mut child = ctx.fork_for_loop_worker(snapshot.as_ref())?;
                 let mut checkpoint = checkpoint.clone();
                 checkpoint.defer(&mut child);
-                Ok((child, checkpoint, linked.fresh()))
+                Ok((child, checkpoint, linked.fresh(), 0_u8))
             },
             |worker, acc, row| {
-                let (child, checkpoint, linked) = worker;
+                let (child, checkpoint, linked, warmed) = worker;
                 if !checkpoint.reaches(crate::parallel::index_in(admissible, row))
                     || checkpoint.pass(child).is_err()
                 {
                     return Ok(());
                 }
-                let (keep, evidence) = linked.filter(expr, row, &schema, child)?;
+                let (keep, evidence) = if let Some(selection) = selection {
+                    (
+                        linked.select_same_term_row(selection, warmed, row, &schema, child)?,
+                        None,
+                    )
+                } else {
+                    linked.filter(expr, row, &schema, child)?
+                };
                 if keep {
                     acc.push(
                         row.clone_admitted(&child.growth)?
