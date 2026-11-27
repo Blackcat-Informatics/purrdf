@@ -62,6 +62,10 @@ mod rational_float_rounding;
 #[path = "support/decimal_division.rs"]
 mod decimal_division;
 
+#[cfg(target_os = "linux")]
+#[path = "../tests/support/decimal_rounding.rs"]
+mod decimal_rounding;
+
 /// Operations per small-path routine.
 const SMALL_OPS: usize = 1024;
 
@@ -557,6 +561,8 @@ fn operation_categories(operation: &str) -> [&'static str; 3] {
         "rounding" => rational_float_rounding::CATEGORIES,
         #[cfg(target_os = "linux")]
         "division" => decimal_division::CATEGORIES,
+        #[cfg(target_os = "linux")]
+        "decimal_rounding" => decimal_rounding::CATEGORIES,
         _ => panic!("unknown exact operation: {operation}"),
     }
 }
@@ -622,10 +628,40 @@ fn decimal_division_sample(category: &str) {
 }
 
 #[cfg(target_os = "linux")]
+fn decimal_rounding_sample(category: &str) {
+    use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
+    let empty = category == "empty";
+    let fixture = decimal_rounding::Fixture::new(if empty { "compact" } else { category });
+    let mut output = Vec::with_capacity(decimal_rounding::CASES);
+    for _ in 0..3 {
+        fixture.run(&mut output);
+        fixture.validate(&output);
+        output.clear();
+    }
+    let mut counter = CounterControl::required().expect("acknowledged instruction counter");
+    counter.command(CounterCommand::Enable).unwrap();
+    if !empty {
+        fixture.run(&mut output);
+    }
+    counter.command(CounterCommand::Disable).unwrap();
+    if !empty {
+        fixture.validate(&output);
+        for (index, value) in output.iter().enumerate() {
+            println!("{index} {value}");
+        }
+    }
+    println!("validated category={category} outputs={}", output.len());
+}
+
+#[cfg(target_os = "linux")]
 fn operation_sample(operation: &str, category: &str) {
     use purrdf_testkit::bench::counter::{CounterCommand, CounterControl};
     if operation == "division" {
         decimal_division_sample(category);
+        return;
+    }
+    if operation == "decimal_rounding" {
+        decimal_rounding_sample(category);
         return;
     }
     let empty = category == "empty";
@@ -729,6 +765,11 @@ fn main() -> std::process::ExitCode {
             Some("--decimal-division-instructions") => {
                 assert_eq!(args.len(), 2, "collection requires a new report directory");
                 collect_operation("division", std::path::Path::new(&args[1]));
+                return std::process::ExitCode::SUCCESS;
+            }
+            Some("--decimal-round-instructions") => {
+                assert_eq!(args.len(), 2, "collection requires a new report directory");
+                collect_operation("decimal_rounding", std::path::Path::new(&args[1]));
                 return std::process::ExitCode::SUCCESS;
             }
             _ => {}

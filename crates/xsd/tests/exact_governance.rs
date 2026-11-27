@@ -30,6 +30,46 @@ mod rational_float_rounding;
 #[path = "../benches/support/decimal_division.rs"]
 mod decimal_division;
 
+#[path = "support/decimal_rounding.rs"]
+mod decimal_rounding;
+
+fn decimal_round_preserves_values_and_reports_allocations() {
+    for category in decimal_rounding::CATEGORIES {
+        let fixture = decimal_rounding::Fixture::new(category);
+        let mut output = Vec::with_capacity(decimal_rounding::CASES);
+        let ((), allocation) = measured(|| fixture.run(&mut output));
+        fixture.validate(&output);
+        println!(
+            "decimal round {category} operations={} {allocation:?}",
+            output.len()
+        );
+    }
+}
+
+fn wide_decimal_power_preserves_two_destination_scratch_admission() {
+    use purrdf_xsd::bigint::{BigInt, LimbScratch, LimbScratchError};
+
+    for exponent in [127u32, 128, 129] {
+        // These powers have seven limbs and need two simultaneous
+        // destinations. The adjacent exponents exercise both constructions
+        // and a whole-limb shift next to a partial shift.
+        let exact = LimbScratch::new(2, 7).unwrap();
+        let value = BigInt::pow10_in(exponent, &exact).unwrap();
+        assert_eq!(
+            value.to_string(),
+            format!("1{}", "0".repeat(exponent as usize))
+        );
+        let short = LimbScratch::new(2, 6).unwrap();
+        assert!(matches!(
+            BigInt::pow10_in(exponent, &short),
+            Err(LimbScratchError::Capacity {
+                required_limbs: 7,
+                admitted_limbs: 6,
+            })
+        ));
+    }
+}
+
 /// Retain exact-first outputs while measuring the public numeric route.
 fn exact_first_decimal_division_matches_the_oracle_and_measures_heap() {
     for category in decimal_division::CATEGORIES {
@@ -1757,6 +1797,8 @@ fn canonical_decimal_reserves_one_exact_output_destination() {
 }
 
 purrdf_testkit::harness_main!(
+    decimal_round_preserves_values_and_reports_allocations,
+    wide_decimal_power_preserves_two_destination_scratch_admission,
     exact_first_decimal_division_matches_the_oracle_and_measures_heap,
     rational_float_rounding_preserves_bits_and_reports_allocations,
     rational_reciprocal_preserves_values_and_reports_allocations,

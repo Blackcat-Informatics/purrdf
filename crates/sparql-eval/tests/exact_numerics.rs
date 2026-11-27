@@ -384,6 +384,43 @@ fn governed(query: &str, governors: &QueryGovernors) -> GovernedOutcome {
 }
 
 #[test]
+fn wide_decimal_rounding_and_integer_cast_admit_work_before_building_a_power() {
+    use purrdf_core::ResourceDimension::Fuel;
+
+    let wide = format!("-21.5{}1", "0".repeat(3_998));
+    let small = "-21.5001";
+    let query = |operation: &str, value: &str| {
+        format!("SELECT ({operation}(\"{value}\"^^xsd:decimal) AS ?y) WHERE {{}}")
+    };
+    // The same exact lexical input must already be affordable. Boolean
+    // conversion finishes without constructing a decimal power or quotient.
+    let input_control = governed(&query("xsd:boolean", &wide), &QueryGovernors::METERED);
+    assert!(matches!(input_control, GovernedOutcome::Complete { .. }));
+    let ceiling =
+        QueryGovernors::UNBOUNDED.with_fuel(input_control.evidence().consumed_in(Fuel) + 1_000);
+    for (operation, answer) in [
+        ("ROUND", "-22.0^^decimal"),
+        ("CEIL", "-21.0^^decimal"),
+        ("FLOOR", "-22.0^^decimal"),
+        ("xsd:integer", "-21^^integer"),
+    ] {
+        let refused = governed(&query(operation, &wide), &ceiling);
+        assert!(
+            matches!(refused, GovernedOutcome::BudgetExhausted(_)),
+            "{operation}"
+        );
+        for (value, governor) in [(small, &ceiling), (wide.as_str(), &QueryGovernors::METERED)] {
+            let GovernedOutcome::Complete { result, .. } =
+                governed(&query(operation, value), governor)
+            else {
+                panic!("{operation} must succeed for its valid input and allowance");
+            };
+            assert_eq!(cells(&result), vec![vec![answer.to_owned()]]);
+        }
+    }
+}
+
+#[test]
 fn the_governor_refuses_a_squaring_blow_up_and_admits_its_large_neighbour() {
     let ceiling = QueryGovernors::UNBOUNDED.with_fuel(2_000_000);
     // Twenty squarings of a thousand-digit integer would reach a billion digits;

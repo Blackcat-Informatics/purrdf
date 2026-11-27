@@ -1353,7 +1353,7 @@ impl BigInt {
     }
 
     pub(crate) fn pow10_using(exp: u32, storage: &impl Allocate) -> Result<Self, LimbScratchError> {
-        Self::one().mul_power_using(10, exp, DECIMAL_CHUNK as u32, storage)
+        Self::pow10_wide_using(u64::from(exp), storage)
     }
 
     /// Exact multiplication by a power of five through limb-sized factors.
@@ -1375,23 +1375,24 @@ impl BigInt {
         exp: u32,
         storage: &impl Allocate,
     ) -> Result<Self, LimbScratchError> {
-        self.mul_power_using(5, exp, 27, storage)
-    }
-
-    fn mul_power_using(
-        &self,
-        base: u64,
-        exp: u32,
-        chunk: u32,
-        storage: &impl Allocate,
-    ) -> Result<Self, LimbScratchError> {
-        self.mul_power_wide_using(base, u64::from(exp), chunk, storage)
+        self.mul_power_wide_using(5, u64::from(exp), 27, storage)
     }
 
     pub(crate) fn pow10_wide_using(
         exp: u64,
         storage: &impl Allocate,
     ) -> Result<Self, LimbScratchError> {
+        // Wide powers use larger chunks on shorter magnitudes, then make one
+        // exact shift. The shift's destination is exactly the old result width.
+        // At this cutoff the other live destination, 5^exp, is smaller than
+        // even the old penultimate magnitude (10^(exp - 38) or larger).
+        if exp >= 128 {
+            let fives = Self::one().mul_power_wide_using(5, exp, 27, storage)?;
+            return Ok(Self::from_parts(
+                false,
+                mag_shl(&fives.magnitude, exp, storage)?,
+            ));
+        }
         Self::one().mul_power_wide_using(10, exp, DECIMAL_CHUNK as u32, storage)
     }
 

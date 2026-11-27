@@ -387,7 +387,7 @@ pub(crate) fn pow5_layout(
     NumericOperationLayout::bytes(peak, bytes)
 }
 
-/// Checked old/new destination overlap of the native word-chunk 10^digits body.
+/// Checked destination overlap for the word-chunk power and the final shift.
 pub(crate) fn power_of_ten_layout(
     digits: u64,
 ) -> Result<NumericOperationLayout, crate::bigint::LimbScratchError> {
