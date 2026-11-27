@@ -791,27 +791,19 @@ fn short_backend(backend: Backend) -> Backend {
 }
 
 fn hash_mode(data: &[u8], mode: &Mode) -> Hash {
-    #[cfg(target_arch = "x86")]
-    if data.len() <= CHUNK {
-        return hash_on(data, Backend::Portable, *mode);
-    }
     let backend = Backend::selected();
     let one_shot = one_shot_backend(backend, data.len());
-    if data.len() <= CHUNK {
+    if data.len() <= MAX_BATCH_MESSAGE {
         hash_on(data, one_shot, *mode)
     } else {
-        tree_output(data, 0, one_shot, *mode).root(if data.len() <= MAX_BATCH_MESSAGE {
-            one_shot
-        } else {
-            short_backend(backend)
-        })
+        tree_output(data, 0, one_shot, *mode).root(short_backend(backend))
     }
 }
 
 /// x86-64 instruction counts favor the AVX2 block kernel for one chunk and
 /// the AVX-512 complete tree for two through four. With AVX2 but no AVX-512,
 /// the four-lane chunk path avoids padding to eight for those small trees.
-/// Other architectures retain their prior single-message policy.
+/// Other architectures keep the detected backend for one-shot hashing.
 fn one_shot_backend(backend: Backend, len: usize) -> Backend {
     if cfg!(target_arch = "x86_64") {
         if len <= CHUNK && backend == Backend::Avx512 && Backend::Avx2.is_available() {
@@ -835,6 +827,14 @@ fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
             mode.flags | START | END | ROOT,
         );
         return Hash::from_cv(cv);
+    }
+    #[cfg(target_arch = "x86")]
+    if backend == Backend::Sse2 && (CHUNK + 1..=2 * CHUNK).contains(&data.len()) {
+        // Two real chunks cost less than padding them to four parallel lanes.
+        let (left, right) = data.split_at(CHUNK);
+        let left = chunk(left, 0, backend, mode).chaining(backend);
+        let right = chunk(right, 1, backend, mode).chaining(backend);
+        return parent(left, right, mode).root(backend);
     }
     tree_output(data, 0, backend, mode).root(backend)
 }

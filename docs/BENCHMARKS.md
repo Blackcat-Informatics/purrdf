@@ -1216,7 +1216,8 @@ message individually and the batch calls the independent-message API.
 The report retains every available named backend, the default dispatcher,
 and the raw counter and witness receipts. It does not measure elapsed time.
 
-On an AMD Ryzen AI Max+ 395 with `rustc 1.102.0-nightly (5df8c02af)`, the
+With the x86-64 ABI on an AMD Ryzen AI Max+ 395 and
+`rustc 1.102.0-nightly (5df8c02af)`, the
 default dispatcher gives the following median userspace retired instructions
 per message. The older single-input probe used the same processor, compiler,
 release optimization, fixed work count, and witness values. It did not sample
@@ -1252,7 +1253,29 @@ instruction per message at every measured length. For example, the default
 16-byte single hash and reused derivation both retired about 393 instructions
 per message.
 
-These are native measurements on this x86-64 host, not a claim about other
+To measure the 32-bit ABI on the same hardware, add
+`--target i686-unknown-linux-gnu` before the bench arguments. For one chunk,
+the dispatcher uses the detected SSE2 compressor when available. For two
+chunks, it compresses each leaf with SSE2 and combines the two chaining
+values. This avoids doing four lanes of leaf work for two chunks. The
+portable compressor remains the fallback when SSE2 is unavailable.
+
+The same host and compiler gave these medians for the 32-bit binary, in
+userspace retired instructions per message. The prior column uses portable
+compression for one chunk and four padded lanes for two.
+
+| Bytes | Prior default | Current default | Current forced portable |
+| ---: | ---: | ---: | ---: |
+| 32 | 1,387.05 | 799.05 | 1,396.09 |
+| 1024 | 21,444.08 | 11,643.06 | 21,455.07 |
+| 1025 | 33,310.10 | 12,148.06 | 24,271.06 |
+| 2048 | 33,015.09 | 22,356.07 | 44,243.07 |
+
+The detected path retired fewer instructions than both alternatives at the
+first byte of the second chunk and at each sampled block boundary through
+two chunks. Across the full size matrix, prepared derivation did not add
+more than 0.031 instruction per message in any measured row. These
+measurements do not establish instruction counts for other
 microarchitectures, `AArch64`, or Wasm. The named SIMD128 execution checks
 digest parity, not hardware instruction counts.
 
