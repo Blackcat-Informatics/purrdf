@@ -730,12 +730,10 @@ fn positive_number<'a>(
     if !policy.charge(1) {
         return true;
     }
-    if purrdf_stack::is_low() {
-        policy
-            .error
-            .get_or_insert(super::ToolSchemaError::StackMargin {
-                location: "numeric carrier traversal".to_owned(),
-            });
+    if let Err(refusal) = purrdf_stack::check_margin() {
+        policy.error.get_or_insert_with(|| {
+            super::ToolSchemaError::stack_guard("numeric carrier traversal".to_owned(), refusal)
+        });
         return true;
     }
     let Some(object) = value.as_object() else {

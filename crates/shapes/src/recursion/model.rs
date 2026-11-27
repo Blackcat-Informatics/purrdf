@@ -525,12 +525,9 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
         &mut self.depth
     }
     fn enter(&mut self) -> Result<(), WalkError> {
-        if purrdf_stack::is_low() {
-            return Err(PreparationRefusal::StackMargin {
-                construct: "SHACL recursion model walk",
-            }
-            .into());
-        }
+        purrdf_stack::check_margin().map_err(|cause| {
+            PreparationRefusal::stack_guard("SHACL recursion model walk", cause)
+        })?;
         self.depth = self
             .depth
             .checked_add(1)

@@ -162,6 +162,44 @@ pub enum XsdRegexError {
     Compile(regex::Error),
 }
 
+impl purrdf_hash::error::StructuredError for XsdRegexError {
+    purrdf_hash::error_visit! {
+        Storage(cause) => "xsd-regex-storage" { "cause" => Cause(cause) },
+        UnsupportedFlag(flag) => "xsd-regex-unsupported-flag" { "flag" => Character(*flag) },
+        UnsupportedConstruct(construct) => "xsd-regex-unsupported-construct" { "construct" => Text(construct) },
+        Backreference(reference) => "xsd-regex-backreference" { "reference" => Text(reference) },
+        UnknownBlock(name) => "xsd-regex-unknown-block" { "name" => Text(name) },
+        UnknownCategory(name) => "xsd-regex-unknown-category" { "name" => Text(name) },
+        DanglingBackslash => "xsd-regex-dangling-backslash" {},
+        UnterminatedCharacterClass => "xsd-regex-unterminated-class" {},
+        UnescapedClassOpen => "xsd-regex-unescaped-class-open" {},
+        UnescapedClassClose => "xsd-regex-unescaped-class-close" {},
+        LiteralClassCloseAtHead => "xsd-regex-literal-class-close-at-head" {},
+        ContentAfterClassSubtraction { found } => "xsd-regex-content-after-subtraction" { "found" => Character(*found) },
+        UnsupportedGroupConstruct { found } => "xsd-regex-unsupported-group" { "found" => Text(found) },
+        UnsupportedNulEscape => "xsd-regex-unsupported-nul-escape" {},
+        UnsupportedEscape { escape } => "xsd-regex-unsupported-escape" { "escape" => Character(*escape) },
+        UnterminatedBlockName { escape } => "xsd-regex-unterminated-block" { "escape" => Character(*escape) },
+        BadBackreference { reference, opened_groups } => "xsd-regex-bad-backreference" {
+            "reference" => Text(reference), "opened_groups" => Unsigned(u128::from(*opened_groups))
+        },
+        TooLarge { bytes, limit } => "xsd-regex-too-large" { "bytes" => ByteCount(*bytes as u128), "limit" => ByteCount(*limit as u128) },
+        TooManyFoldedClassEscapes { count, limit } => "xsd-regex-folded-class-limit" {
+            "count" => Unsigned(*count as u128), "limit" => Unsigned(*limit as u128)
+        },
+        Compile(error) => "xsd-regex-compile" {
+            "message" => Value(match error {
+                regex::Error::Syntax(message) => purrdf_hash::error::ErrorValue::Message(message),
+                _ => purrdf_hash::error::ErrorValue::Absent,
+            }),
+            "byte_limit" => Value(match error {
+                regex::Error::CompiledTooBig(limit) => purrdf_hash::error::ErrorValue::ByteCount(*limit as u128),
+                _ => purrdf_hash::error::ErrorValue::Absent,
+            })
+        },
+    }
+}
+
 impl fmt::Display for XsdRegexError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

@@ -493,6 +493,7 @@ pub struct LinkmlError {
 enum LinkmlCause {
     Loss(Box<::purrdf_rdf::LossSoundnessError>),
     Import(Box<crate::schema_import::SchemaImportError>),
+    StackFloor(purrdf_stack::FloorError),
 }
 
 purrdf_lex::constructors! {
@@ -513,6 +514,7 @@ impl LinkmlError {
         match &self.cause {
             Some(LinkmlCause::Loss(cause)) => Some(cause.as_ref()),
             Some(LinkmlCause::Import(cause)) => Some(cause.as_ref()),
+            Some(LinkmlCause::StackFloor(cause)) => Some(cause),
             None => None,
         }
     }
@@ -521,6 +523,13 @@ impl LinkmlError {
         Self {
             detail: format!("LinkML import model: {cause}"),
             cause: Some(LinkmlCause::Import(Box::new(cause))),
+        }
+    }
+
+    fn stack_floor(detail: std::fmt::Arguments<'_>, cause: purrdf_stack::FloorError) -> Self {
+        Self {
+            detail: format!("{detail}: {cause}"),
+            cause: Some(LinkmlCause::StackFloor(cause)),
         }
     }
 }

@@ -72,22 +72,19 @@ pub(crate) mod height;
 /// margin.
 #[inline]
 pub(crate) fn check(construct: &'static str) -> Result<(), EvalError> {
-    if is_low() {
-        return Err(EvalError::StackExhausted { construct });
-    }
-    Ok(())
+    check_with(|| construct)
 }
 
-/// Whether less than [`purrdf_stack::MARGIN_BYTES`] of stack are left.
-///
-/// [`check`] is this with the error attached; a caller that names its construct only
-/// once it knows it is refusing (so the name is never computed on the hot path), or a
-/// walk that cannot return an [`EvalError`] itself and latches the refusal for its
-/// caller, calls this directly. The hot path is [`purrdf_stack::is_low`]'s: one
-/// thread-local load, one subtraction and one comparison.
+/// Interpret the original margin check, naming the construct only on refusal.
 #[inline]
-pub(crate) fn is_low() -> bool {
-    purrdf_stack::is_low()
+pub(crate) fn check_with(construct: impl FnOnce() -> &'static str) -> Result<(), EvalError> {
+    purrdf_stack::check_margin().map_err(|refusal| {
+        let construct = construct();
+        match refusal.floor_error() {
+            Some(cause) => EvalError::UnknownStackFloor { construct, cause },
+            None => EvalError::StackExhausted { construct },
+        }
+    })
 }
 
 #[cfg(test)]

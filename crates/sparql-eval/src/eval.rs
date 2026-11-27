@@ -9833,11 +9833,7 @@ impl<I: ViewTermId> NodeBoundary<I> {
                 "raw evaluation without an engine drain reservation",
             ));
         }
-        if crate::stack::is_low() {
-            return Err(EvalError::StackExhausted {
-                construct: pattern_construct(pattern),
-            });
-        }
+        crate::stack::check_with(|| pattern_construct(pattern))?;
         let local_cap = install_local_slice_pushdown(pattern, ctx)?;
         let mut pending = ResidentPending {
             child: Some(Self {
