@@ -440,11 +440,17 @@ caller's optional latching `StopSignal` still apply. Counter overflow refuses
 rather than wrapping or saturating.
 
 Each canonicalization run starts a fresh ceiling. Composite operations retain
-ordered receipts for every constituent run and have no aggregate ceiling. Cache
+constituent receipts in order and have no aggregate ceiling. Cache
 hits perform no canonicalization and add no run. Structural comparison shortcuts
 record a completed output with zero search work. The caller owns the control and
 may choose to discard its evidence. A composite boundary snapshots only the
 receipt range belonging to its own operation.
+
+Canonicalization obtains storage for the receipt and its exact graph name, if
+selected, before starting source work. Storage refusal at that boundary leaves
+earlier receipts and observations unchanged. Complete-state identity obtains
+receipt storage after releasing the scoped source workspace. Storage refusal
+preserves any original operation error and publishes no successful identity.
 
 A finalized `SearchReceipt` states the algorithm/profile version, label hash,
 presentation, exact selection, output operation/digest algorithm, effective
@@ -461,8 +467,10 @@ canonicalize. A refused or stopped run publishes no partial identity.
 
 Successful canonical bytes and their content digests do not incorporate policy
 or observed work. Execution configuration is separate evidence. Unlimited search
-makes no whole-operation physical-memory containment claim: preparation, search
-and receipt storage admission remain separate work. Output is admitted. A document
+makes no whole-operation physical-memory containment claim. The control's
+receipt storage is fallible but does not retain a caller budget. Composite
+receipt storage and remaining preparation and search allocations are outside
+that guarantee. Output is admitted. A document
 run charges its ordered line structures to the scratch account and the document,
 labels and result header to the owned account. A digest-only run (the SHA-256 and
 BLAKE3 digest entries) hashes each line in final order and builds no document: it

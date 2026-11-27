@@ -26,12 +26,11 @@ use std::collections::BTreeMap;
 
 use purrdf_hash::hex::Digest32;
 
-use super::control::SearchRun;
+use super::control::{SearchRequest, SearchRun};
 use super::result::ResultBuilder;
 use super::{
     CanonError, CanonOutput, CanonPhase, CanonicalRelabeling, CanonicalizationControl,
-    Canonicalized, RelabelMapping, SearchConfiguration, SearchPolicy, rebuild_with_labels,
-    rendering::ScratchGrant,
+    Canonicalized, RelabelMapping, SearchPolicy, rebuild_with_labels, rendering::ScratchGrant,
 };
 use crate::canonical_labelling::{
     InputReason, Labelling, Limit, Refusal, Scope, ViewError, label_view_with_memory,
@@ -228,7 +227,8 @@ pub(crate) fn try_hash_document_view<D: DatasetView>(
     hasher: &mut purrdf_hash::sha2::Sha256,
 ) -> Result<(), CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::Sha256Digest),
+        SearchRequest::labelling(None, CanonOutput::Sha256Digest),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 labelled(view, Scope::Dataset, run, |labelling| {
@@ -283,7 +283,8 @@ pub fn try_canonicalize_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::Document),
+        SearchRequest::labelling(None, CanonOutput::Document),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 labelled(view, Scope::Dataset, run, |labelling| {
@@ -305,7 +306,8 @@ pub fn try_canonical_digest_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<Digest32, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::LinesDigest),
+        SearchRequest::labelling(None, CanonOutput::LinesDigest),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 labelled(view, Scope::Dataset, run, |labelling| Ok(digest(labelling)))
@@ -325,7 +327,8 @@ pub fn try_canonicalize_digest_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> DocumentAndDigest<D::Id, D::ReadError> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::DocumentLinesDigest),
+        SearchRequest::labelling(None, CanonOutput::DocumentLinesDigest),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 labelled(view, Scope::Dataset, run, |labelling| {
@@ -355,7 +358,8 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::labelling(Some(graph), CanonOutput::Document),
+        SearchRequest::labelling(Some(graph), CanonOutput::Document),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 labelled(view, Scope::Graph(graph), run, |labelling| {
@@ -377,7 +381,8 @@ pub fn try_graph_digest_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<Digest32, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::labelling(Some(graph), CanonOutput::LinesDigest),
+        SearchRequest::labelling(Some(graph), CanonOutput::LinesDigest),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 labelled(view, Scope::Graph(graph), run, |labelling| {
@@ -403,7 +408,8 @@ pub fn try_canonicalize_checked_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> CheckedResult<D, Canonicalized<D::Id>> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::Document),
+        SearchRequest::labelling(None, CanonOutput::Document),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |view| {
             labelled(view, Scope::Dataset, run, |labelling| {
                 document(view, labelling, run)
@@ -426,7 +432,8 @@ pub fn try_canonicalize_checked_graph_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> CheckedResult<D, Canonicalized<D::Id>> {
     control.run(
-        SearchConfiguration::labelling(Some(graph), CanonOutput::Document),
+        SearchRequest::labelling(Some(graph), CanonOutput::Document),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |view| {
             labelled(view, Scope::Graph(graph), run, |labelling| {
                 document(view, labelling, run)
@@ -448,7 +455,8 @@ pub fn try_canonical_digest_checked_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> CheckedResult<D, Digest32> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::LinesDigest),
+        SearchRequest::labelling(None, CanonOutput::LinesDigest),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |view| {
             labelled(view, Scope::Dataset, run, |labelling| Ok(digest(labelling)))
         }) {
@@ -518,7 +526,8 @@ pub fn canonical_relabel(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<RdfDataset, CanonError> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::RelabeledDataset),
+        SearchRequest::labelling(None, CanonOutput::RelabeledDataset),
+        CanonError::Storage,
         |run| {
             labelled(ds, Scope::Dataset, run, |labelling| {
                 let labels = labels_of(labelling);
@@ -545,7 +554,8 @@ pub fn canonical_relabel_with_mapping(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<CanonicalRelabeling, CanonError> {
     control.run(
-        SearchConfiguration::labelling(None, CanonOutput::RelabeledMapping),
+        SearchRequest::labelling(None, CanonOutput::RelabeledMapping),
+        CanonError::Storage,
         |run| {
             labelled(ds, Scope::Dataset, run, |labelling| {
                 let mut mapping = RelabelMapping::new(ds)?;
@@ -617,7 +627,7 @@ mod tests {
         };
         assert_eq!(
             receipt.configuration,
-            SearchConfiguration::Labelling {
+            crate::SearchConfiguration::Labelling {
                 version: CANON_LABELLING_VERSION,
                 selection: crate::CanonSelection::Dataset,
                 output: CanonOutput::Document,

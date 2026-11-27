@@ -16,8 +16,8 @@ use purrdf_hash::{Domain, blake3, frame::frame_le, hex::Digest32};
 use purrdf_lex::walk::WorkList;
 
 use super::{
-    CanonPhase, CanonicalizationControl, SearchConfiguration, SearchEvent, SearchPolicy,
-    SearchRefusal, SearchRun, SearchWork,
+    CanonPhase, CanonicalizationControl, SearchEvent, SearchPolicy, SearchRefusal, SearchRun,
+    SearchWork,
 };
 use crate::dataset_view::{
     DrainFailure, FallibleDatasetView, TermGuard, WorkspaceReservation, checkpointed_drain,
@@ -56,26 +56,31 @@ impl DatasetStateDigest {
         view: &D,
         control: &mut CanonicalizationControl<'_>,
     ) -> StateResult<D, Self> {
-        control.run(SearchConfiguration::DatasetStateV1, |run| {
-            checkpointed_drain(view, |view| {
-                run.check_stop().map_err(DatasetStateError::SearchControl)?;
-                let mut reservation = view.reserve_workspace(0).map_err(DatasetStateError::Read)?;
-                let mut state = Captured::new(view, &mut reservation, run)?;
-                state.collect()?;
-                run.phase(CanonPhase::Search);
-                let bytes = state.canonical_bytes()?;
-                run.phase(CanonPhase::Output);
-                let mut hasher = blake3::Hasher::new();
-                hasher.update(STATE_DOMAIN.as_bytes());
-                for chunk in bytes.chunks(64 * 1024) {
+        control.run(
+            super::control::SearchRequest::DatasetStateV1,
+            DatasetStateError::Storage,
+            |run| {
+                checkpointed_drain(view, |view| {
                     run.check_stop().map_err(DatasetStateError::SearchControl)?;
-                    hasher.update(chunk);
-                }
-                run.check_stop().map_err(DatasetStateError::SearchControl)?;
-                Ok(Self(Digest32::new(*hasher.finalize().as_bytes())))
-            })
-            .map_err(DatasetStateError::Operation)?
-        })
+                    let mut reservation =
+                        view.reserve_workspace(0).map_err(DatasetStateError::Read)?;
+                    let mut state = Captured::new(view, &mut reservation, run)?;
+                    state.collect()?;
+                    run.phase(CanonPhase::Search);
+                    let bytes = state.canonical_bytes()?;
+                    run.phase(CanonPhase::Output);
+                    let mut hasher = blake3::Hasher::new();
+                    hasher.update(STATE_DOMAIN.as_bytes());
+                    for chunk in bytes.chunks(64 * 1024) {
+                        run.check_stop().map_err(DatasetStateError::SearchControl)?;
+                        hasher.update(chunk);
+                    }
+                    run.check_stop().map_err(DatasetStateError::SearchControl)?;
+                    Ok(Self(Digest32::new(*hasher.finalize().as_bytes())))
+                })
+                .map_err(DatasetStateError::Operation)?
+            },
+        )
     }
 
     /// The 32 identity bytes.
@@ -111,6 +116,8 @@ pub enum DatasetStateError<Error, Evidence> {
     InvalidTerm,
     /// The required byte or workspace size cannot be represented.
     Capacity,
+    /// The control could not obtain storage for a successful run's receipt.
+    Storage(purrdf_lex::allocation::StorageError),
     /// Exact canonical search reached the caller-selected finite event ceiling.
     SearchBudgetExceeded {
         /// The caller-selected finite ceiling.
@@ -138,6 +145,7 @@ impl<E: fmt::Display, V> fmt::Display for DatasetStateError<E, V> {
             }
             Self::InvalidTerm => f.write_str("dataset-state literal datatype is not an IRI"),
             Self::Capacity => f.write_str("dataset-state workspace size is unrepresentable"),
+            Self::Storage(error) => error.fmt(f),
             Self::SearchBudgetExceeded { limit, work } => write!(
                 f,
                 "dataset-state canonical search reached caller limit {limit} after {} charged events",
@@ -158,6 +166,7 @@ impl<E: std::error::Error + 'static, V: fmt::Debug> std::error::Error for Datase
         match self {
             Self::Operation(failure) => Some(&failure.error),
             Self::Read(error) => Some(error),
+            Self::Storage(error) => Some(error),
             _ => None,
         }
     }
@@ -172,6 +181,7 @@ impl<E: purrdf_hash::error::StructuredError, V: purrdf_hash::error::StructuredEr
         IncoherentEmbeddedBlank => "dataset-state-incoherent-blank" {},
         InvalidTerm => "dataset-state-invalid-term" {},
         Capacity => "dataset-state-capacity" {},
+        Storage(cause) => "dataset-state-storage" { "cause" => Cause(cause) },
         SearchBudgetExceeded { limit, work } => "dataset-state-search-budget" {
             "limit" => Unsigned(u128::from(*limit)), "work" => Record(work),
         },

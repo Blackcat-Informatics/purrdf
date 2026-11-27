@@ -163,11 +163,11 @@ use purrdf_lex::walk::WorkList;
 mod control;
 pub mod labelled;
 mod memo;
-use control::SearchRun;
 pub use control::{
     CanonOutput, CanonPhase, CanonSelection, CanonicalizationControl, SearchConfiguration,
     SearchEvent, SearchPolicy, SearchPosition, SearchReceipt, SearchRefusal, SearchWork,
 };
+use control::{SearchRequest, SearchRun};
 use purrdf_hash::sha2::{Sha256, Sha384};
 
 use super::dataset::{QuadIds, RdfDataset, TermRef};
@@ -509,12 +509,13 @@ pub fn try_canonicalize_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::Overlay,
             None,
             CanonOutput::Document,
         ),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 CanonState::new(
@@ -543,12 +544,13 @@ pub fn try_canonical_blake3_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<[u8; 32], CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::Overlay,
             None,
             CanonOutput::Blake3Digest,
         ),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 CanonState::new(
@@ -576,12 +578,13 @@ pub fn try_canonical_sha256_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::Overlay,
             None,
             CanonOutput::Sha256Digest,
         ),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 CanonState::new(
@@ -621,12 +624,13 @@ fn canonical_sha256_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> CanonicalDigestResult<D::Id, D::ReadError> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::Overlay,
             None,
             CanonOutput::DocumentSha256Digest,
         ),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 let canonical = CanonState::new(
@@ -659,16 +663,21 @@ pub(super) fn check_stop(stop: Option<&dyn crate::StopSignal>) -> Result<(), Can
 /// during its work; successful completion also requires the final native stop check.
 ///
 /// # Errors
-/// Preserves the callback's refusal or the final native cancellation refusal.
+/// Preserves receipt storage refusal before the callback starts, the callback's
+/// refusal, or the final native cancellation refusal.
 pub fn comparison_preparation<T, E: From<CanonError>>(
     control: &mut CanonicalizationControl<'_>,
     operation: impl FnOnce(Option<&dyn crate::StopSignal>) -> Result<T, E>,
 ) -> Result<T, E> {
-    control.run(SearchConfiguration::ComparisonPreparation, |run| {
-        let result = operation(run.stop())?;
-        run.check_stop().map_err(|_| E::from(CanonError::Stopped))?;
-        Ok(result)
-    })
+    control.run(
+        SearchRequest::ComparisonPreparation,
+        |cause| E::from(CanonError::Storage(cause)),
+        |run| {
+            let result = operation(run.stop())?;
+            run.check_stop().map_err(|_| E::from(CanonError::Stopped))?;
+            Ok(result)
+        },
+    )
 }
 
 /// Canonicalize the subgraph of `view` asserted in the named graph `graph` (an IRI),
@@ -707,12 +716,13 @@ pub fn try_canonicalize_graph_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<Canonicalized<D::Id>, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::Overlay,
             Some(graph),
             CanonOutput::Document,
         ),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 run.check_stop().map_err(|_| CanonError::Stopped)?;
@@ -743,12 +753,13 @@ pub fn try_graph_digest_view<D: DatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, CanonError<D::ReadError>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             CanonHash::Sha256,
             CanonPresentation::Overlay,
             Some(graph),
             CanonOutput::Sha256Digest,
         ),
+        CanonError::Storage,
         |run| {
             view.checked_read(|view| {
                 run.check_stop().map_err(|_| CanonError::Stopped)?;
@@ -860,12 +871,13 @@ pub fn try_canonicalize_flat_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::FlatAssertion,
             None,
             CanonOutput::Document,
         ),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |v| {
             CanonState::new(
                 v,
@@ -904,12 +916,13 @@ pub fn try_canonicalize_flat_graph_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> FlatViewResult<D> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::FlatAssertion,
             Some(graph),
             CanonOutput::Document,
         ),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |v| {
             run.check_stop().map_err(|_| CanonError::Stopped)?;
             match graph_scope(v, graph) {
@@ -979,12 +992,13 @@ pub fn try_flat_digest_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<ContentDigest, ViewCanonError<D::Error, D::Evidence>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::FlatAssertion,
             None,
             CanonOutput::Sha256Digest,
         ),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |view| {
             CanonState::new(
                 view,
@@ -1022,12 +1036,13 @@ pub fn try_flat_blake3_view<D: FallibleDatasetView>(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<[u8; 32], ViewCanonError<D::Error, D::Evidence>> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::FlatAssertion,
             None,
             CanonOutput::Blake3Digest,
         ),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |view| {
             CanonState::new(
                 view,
@@ -1069,12 +1084,13 @@ pub fn try_flat_blake3_measured_view<D: FallibleDatasetView>(
 ) -> Result<FlatBlake3Measured, ViewCanonError<D::Error, D::Evidence>> {
     let mut bytes = 0u64;
     let digest = control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             hash,
             CanonPresentation::FlatAssertion,
             None,
             CanonOutput::Blake3Digest,
         ),
+        |cause| ViewCanonError::Refused(CanonError::Storage(cause)),
         |run| match checkpointed_drain(view, |view| {
             CanonState::new(
                 view,
@@ -1159,12 +1175,13 @@ pub fn canonical_relabel(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<RdfDataset, CanonError> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             CanonHash::Sha256,
             CanonPresentation::Overlay,
             None,
             CanonOutput::RelabeledDataset,
         ),
+        CanonError::Storage,
         |run| relabel_recording(ds, |_, _| {}, run),
     )
 }
@@ -1231,12 +1248,13 @@ pub fn canonical_relabel_with_mapping(
     control: &mut CanonicalizationControl<'_>,
 ) -> Result<CanonicalRelabeling, CanonError> {
     control.run(
-        SearchConfiguration::rdfc(
+        SearchRequest::rdfc(
             CanonHash::Sha256,
             CanonPresentation::Overlay,
             None,
             CanonOutput::RelabeledMapping,
         ),
+        CanonError::Storage,
         |run| {
             run.check_stop().map_err(|_| CanonError::Stopped)?;
             let mut mapping = RelabelMapping::new(ds)?;
@@ -6740,16 +6758,22 @@ mod tests {
         .unwrap();
         let projected = projected_owner.nquads();
         assert!(!projected.is_empty(), "the graph must hold content");
+        let mut graph_control = CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None);
         assert_eq!(
-            try_canonicalize_graph_view(
-                &*ds,
-                graph,
-                CanonHash::Sha256,
-                &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None)
-            )
-            .unwrap()
-            .nquads(),
+            try_canonicalize_graph_view(&*ds, graph, CanonHash::Sha256, &mut graph_control)
+                .unwrap()
+                .nquads(),
             projected
+        );
+        assert_eq!(
+            graph_control.receipts()[0].configuration,
+            SearchConfiguration::Rdfc {
+                profile_version: CANON_PROFILE_VERSION,
+                hash: CanonHash::Sha256,
+                presentation: CanonPresentation::Overlay,
+                selection: CanonSelection::NamedGraph(graph.to_owned()),
+                output: CanonOutput::Document,
+            }
         );
         assert_eq!(
             try_graph_digest_view(
@@ -6778,6 +6802,19 @@ mod tests {
             .unwrap()
             .nquads(),
             ""
+        );
+        let absent_text = absent.to_owned();
+        let canonical =
+            labelled::try_canonicalize_graph_view(&*ds, &absent_text, &mut graph_control).unwrap();
+        drop(absent_text);
+        assert_eq!(canonical.nquads(), "");
+        assert_eq!(
+            graph_control.receipts()[1].configuration,
+            SearchConfiguration::Labelling {
+                version: crate::canonical_labelling::VERSION,
+                selection: CanonSelection::NamedGraph(absent.to_owned()),
+                output: CanonOutput::Document,
+            }
         );
         assert_eq!(
             try_canonicalize_graph_view(
@@ -8470,6 +8507,35 @@ mod tests {
                 largest: root,
             }),
         };
+        assert_eq!(
+            control.last_rdfc_refusal(),
+            Some((first_position, expected))
+        );
+
+        // A graph receipt must own the exact IRI before any engine work can
+        // start. A failed preparation is not a later run and must not erase
+        // the observation belonging to the previous finite search.
+        let graph = "http://example.org/owned-graph";
+        let graph_request = SearchRequest::rdfc(
+            CanonHash::Sha256,
+            CanonPresentation::Overlay,
+            Some(graph),
+            CanonOutput::Document,
+        );
+        let next_position = control.position();
+        let storage_refused: Result<(), CanonError> = control.run_with_receipt_storage(
+            graph_request,
+            &mut purrdf_lex::allocation::Ceiling(0),
+            CanonError::Storage,
+            |_| panic!("a refused graph receipt must not start a run"),
+        );
+        assert_eq!(
+            storage_refused,
+            Err(CanonError::Storage(
+                purrdf_lex::allocation::StorageError::AdmissionFailed
+            ))
+        );
+        assert_eq!(control.position(), next_position);
         assert_eq!(
             control.last_rdfc_refusal(),
             Some((first_position, expected))
