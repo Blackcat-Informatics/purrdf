@@ -1224,7 +1224,8 @@ impl CanonicalRelabeling {
 /// here as well. Mapping is observational: it never skips positional checks.
 ///
 /// # Errors
-/// Returns exactly [`canonical_relabel`]'s admission and search-budget refusals.
+/// Returns [`canonical_relabel`]'s refusals or [`CanonError::Storage`] when
+/// the term mapping cannot be allocated.
 pub fn canonical_relabel_with_mapping(
     ds: &RdfDataset,
     control: &mut CanonicalizationControl<'_>,
@@ -1238,26 +1239,10 @@ pub fn canonical_relabel_with_mapping(
         ),
         |run| {
             run.check_stop().map_err(|_| CanonError::Stopped)?;
-            let mut terms = vec![None; ds.term_count()].into_boxed_slice();
-            let dataset = relabel_recording(
-                ds,
-                |source, target| {
-                    let source = match source {
-                        RelabelSource::Term(id) => Some(id),
-                        RelabelSource::IndirectIri(iri) => ds.term_id_by_iri(iri),
-                    };
-                    if let Some(source) = source {
-                        let slot = &mut terms[source.index()];
-                        assert!(
-                            slot.is_none_or(|previous| previous == target),
-                            "a canonical term rewrite must agree across occurrences"
-                        );
-                        *slot = Some(target);
-                    }
-                },
-                run,
-            )?;
-            Ok(CanonicalRelabeling { dataset, terms })
+            let mut mapping = RelabelMapping::new(ds)?;
+            let dataset =
+                relabel_recording(ds, |source, target| mapping.record(&source, target), run)?;
+            Ok(mapping.finish(dataset))
         },
     )
 }
@@ -1268,6 +1253,49 @@ enum RelabelSource<'a> {
     Term(TermId),
     /// A lexical or implicit reifier IRI; only the mapping consumer looks it up.
     IndirectIri(&'a str),
+}
+
+/// Resident term correspondence shared by both native relabeling families.
+struct RelabelMapping<'a> {
+    source: &'a RdfDataset,
+    terms: Box<[Option<TermId>]>,
+}
+
+impl<'a> RelabelMapping<'a> {
+    fn new(source: &'a RdfDataset) -> Result<Self, CanonError> {
+        let count = source.term_count();
+        let mut resident = purrdf_lex::allocation::Resident;
+        let mut memory = Memory::new(&mut resident);
+        let mut terms = Vec::new();
+        memory
+            .reserve(&mut terms, count)
+            .map_err(CanonError::Storage)?;
+        terms.resize(count, None);
+        let terms = memory.boxed_slice(terms).map_err(CanonError::Storage)?;
+        Ok(Self { source, terms })
+    }
+
+    fn record(&mut self, source: &RelabelSource<'_>, target: TermId) {
+        let source = match source {
+            RelabelSource::Term(id) => Some(*id),
+            RelabelSource::IndirectIri(iri) => self.source.term_id_by_iri(iri),
+        };
+        if let Some(source) = source {
+            let slot = &mut self.terms[source.index()];
+            assert!(
+                slot.is_none_or(|previous| previous == target),
+                "a canonical term rewrite must agree across occurrences"
+            );
+            *slot = Some(target);
+        }
+    }
+
+    fn finish(self, dataset: RdfDataset) -> CanonicalRelabeling {
+        CanonicalRelabeling {
+            dataset,
+            terms: self.terms,
+        }
+    }
 }
 
 /// Shared label search and native traversal. The no-op recorder monomorphizes

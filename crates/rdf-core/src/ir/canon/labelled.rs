@@ -30,7 +30,7 @@ use super::control::SearchRun;
 use super::result::ResultBuilder;
 use super::{
     CanonError, CanonOutput, CanonPhase, CanonicalRelabeling, CanonicalizationControl,
-    Canonicalized, RelabelSource, SearchConfiguration, SearchPolicy, rebuild_with_labels,
+    Canonicalized, RelabelMapping, SearchConfiguration, SearchPolicy, rebuild_with_labels,
     rendering::ScratchGrant,
 };
 use crate::canonical_labelling::{
@@ -538,7 +538,8 @@ pub fn canonical_relabel(
 /// established, as [`canonical_relabel`] and one labelling.
 ///
 /// # Errors
-/// As [`try_canonicalize`].
+/// As [`canonical_relabel`], or [`CanonError::Storage`] when the term
+/// mapping cannot be allocated.
 pub fn canonical_relabel_with_mapping(
     ds: &RdfDataset,
     control: &mut CanonicalizationControl<'_>,
@@ -547,29 +548,16 @@ pub fn canonical_relabel_with_mapping(
         SearchConfiguration::labelling(None, CanonOutput::RelabeledMapping),
         |run| {
             labelled(ds, Scope::Dataset, run, |labelling| {
-                let mut terms = vec![None; ds.term_count()].into_boxed_slice();
+                let mut mapping = RelabelMapping::new(ds)?;
                 let labels = labels_of(labelling);
                 let dataset = rebuild_with_labels(
                     ds,
                     labels.len(),
                     |id| labels.get(&id).map(Box::as_ref),
-                    |source, target| {
-                        let source = match source {
-                            RelabelSource::Term(id) => Some(id),
-                            RelabelSource::IndirectIri(iri) => ds.term_id_by_iri(iri),
-                        };
-                        if let Some(source) = source {
-                            let slot = &mut terms[source.index()];
-                            assert!(
-                                slot.is_none_or(|previous| previous == target),
-                                "a canonical term rewrite must agree across occurrences"
-                            );
-                            *slot = Some(target);
-                        }
-                    },
+                    |source, target| mapping.record(&source, target),
                     run,
                 )?;
-                Ok(CanonicalRelabeling { dataset, terms })
+                Ok(mapping.finish(dataset))
             })
         },
     )
