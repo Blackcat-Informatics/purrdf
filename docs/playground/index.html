@@ -6,10 +6,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
+      data-zh-description="PurRDF 的 RDF 1.2 控制台可在浏览器中解析、序列化、查询、验证和比较图，无需服务器。"
       content="PurRDF · a client-side RDF-1.2 console. Parse, serialize, query (SPARQL), validate (SHACL), and compare graphs entirely in your browser — no server."
     />
     <meta name="color-scheme" content="light dark" />
-    <title>PurRDF · RDF-1.2 console</title>
+    <title data-zh-text="PurRDF · RDF 1.2 控制台">PurRDF · RDF-1.2 console</title>
     <link rel="stylesheet" href="./style.css" />
     <link rel="manifest" href="./manifest.webmanifest" />
     <!-- Inline data-URI icon: no external asset, no favicon.ico round-trip. -->
@@ -19,21 +20,26 @@
     />
   </head>
   <body>
-    <a class="skip-link" href="#pane-input">Skip to console</a>
+    <a class="skip-link" href="#pane-input" data-zh-text="跳转到控制台">Skip to console</a>
 
     <header class="app-header">
       <div class="brand">
-        <h1>PurRDF <span class="dot">·</span> RDF-1.2 console</h1>
-        <p class="tagline">
+        <h1 data-zh-html="PurRDF &lt;span class=&quot;dot&quot;&gt;·&lt;/span&gt; RDF 1.2 控制台">PurRDF <span class="dot">·</span> RDF-1.2 console</h1>
+        <p class="tagline" data-zh-html="RDF 1.2 工作台无需服务器。PurRDF 的 WebAssembly 引擎直接在浏览器中运行。">
           A zero-backend RDF-1.2 workbench: everything runs in your browser via
           the PurRDF wasm engine.
         </p>
       </div>
       <div class="header-meta">
-        <span id="app-version" class="chip" aria-label="engine version">purrdf</span>
-        <a class="chip chip-link" href="../">The PurRDF Book</a>
-        <a class="chip chip-link" href="./purrdf/licenses/NOTICE.txt">Licenses and notices</a>
-        <button id="btn-permalink" type="button" class="btn-mini">
+        <label for="interface-language" data-zh-text="界面语言">Interface language</label>
+        <select id="interface-language" class="select">
+          <option value="en" lang="en">English</option>
+          <option value="zh-Hans" lang="zh-Hans">简体中文</option>
+        </select>
+        <span id="app-version" class="chip" aria-label="engine version" data-zh-label="引擎版本">purrdf</span>
+        <a class="chip chip-link" href="../" data-zh-text="《PurRDF 手册》">The PurRDF Book</a>
+        <a class="chip chip-link" href="./purrdf/licenses/NOTICE.txt" data-zh-text="许可证与声明">Licenses and notices</a>
+        <button id="btn-permalink" type="button" class="btn-mini" data-zh-text="复制永久链接">
           Copy permalink
         </button>
       </div>
@@ -55,36 +61,36 @@
       hidden
     ></div>
 
-    <p class="jsonld-note" role="note">
+    <p class="jsonld-note" role="note" data-zh-html="JSON-LD 和 YAML-LD 都是&lt;strong&gt;一等双向&lt;/strong&gt;编解码器。JSON-LD-star 的 &lt;code&gt;@triple&lt;/code&gt; 编码可无损往返转换宾语位置的所引用三元组。">
       Note: JSON-LD and YAML-LD are <strong>first-class bidirectional</strong> codecs
       here. Their JSON-LD-star <code>@triple</code> encoding round-trips
       object-position quoted triples losslessly.
     </p>
 
     <div class="field">
-      <label for="canonical-search">Canonical search limit</label>
-      <input id="canonical-search" class="input" type="text" placeholder="Enter a call limit or unlimited" aria-describedby="canonical-search-help" />
-      <p id="canonical-search-help">Required for graph identity, round-trip comparison and SHACL entailment. A finite limit stops difficult blank-node searches; unlimited removes that limit.</p>
+      <label for="canonical-search" data-zh-text="规范化搜索上限">Canonical search limit</label>
+      <input id="canonical-search" class="input" type="text" placeholder="Enter a call limit or unlimited" data-zh-placeholder="输入调用次数上限或 unlimited" aria-describedby="canonical-search-help" />
+      <p id="canonical-search-help" data-zh-html="图标识、往返比较和 SHACL 蕴涵需要此设置。有限上限可终止复杂的空节点搜索；输入 &lt;code&gt;unlimited&lt;/code&gt; 则取消该限制。">Required for graph identity, round-trip comparison and SHACL entailment. A finite limit stops difficult blank-node searches; unlimited removes that limit.</p>
     </div>
 
-    <nav class="tabs" aria-label="Console panes">
-      <div role="tablist" aria-label="Console panes">
-        <button id="tab-input" role="tab" aria-selected="true" aria-controls="pane-input" class="tab">Input</button>
-        <button id="tab-roundtrip" role="tab" aria-selected="false" aria-controls="pane-roundtrip" class="tab" tabindex="-1">Round-trip</button>
+    <nav class="tabs" aria-label="Console panes" data-zh-label="控制台面板">
+      <div role="tablist" aria-label="Console panes" data-zh-label="控制台面板">
+        <button id="tab-input" role="tab" aria-selected="true" aria-controls="pane-input" class="tab" data-zh-text="输入">Input</button>
+        <button id="tab-roundtrip" role="tab" aria-selected="false" aria-controls="pane-roundtrip" class="tab" tabindex="-1" data-zh-text="往返转换">Round-trip</button>
         <button id="tab-sparql" role="tab" aria-selected="false" aria-controls="pane-sparql" class="tab" tabindex="-1">SPARQL</button>
         <button id="tab-shacl" role="tab" aria-selected="false" aria-controls="pane-shacl" class="tab" tabindex="-1">SHACL</button>
-        <button id="tab-identity" role="tab" aria-selected="false" aria-controls="pane-identity" class="tab" tabindex="-1">Graph identity</button>
-        <button id="tab-quads" role="tab" aria-selected="false" aria-controls="pane-quads" class="tab" tabindex="-1">Quad table</button>
-        <button id="tab-gallery" role="tab" aria-selected="false" aria-controls="pane-gallery" class="tab" tabindex="-1">Gallery</button>
+        <button id="tab-identity" role="tab" aria-selected="false" aria-controls="pane-identity" class="tab" tabindex="-1" data-zh-text="图标识">Graph identity</button>
+        <button id="tab-quads" role="tab" aria-selected="false" aria-controls="pane-quads" class="tab" tabindex="-1" data-zh-text="四元组表">Quad table</button>
+        <button id="tab-gallery" role="tab" aria-selected="false" aria-controls="pane-gallery" class="tab" tabindex="-1" data-zh-text="示例库">Gallery</button>
       </div>
     </nav>
 
     <main>
       <!-- INPUT -->
       <section id="pane-input" class="pane" role="tabpanel" aria-labelledby="tab-input">
-        <h2>Input graph</h2>
+        <h2 data-zh-text="输入图">Input graph</h2>
         <div class="field">
-          <label for="input-format">Parse format</label>
+          <label for="input-format" data-zh-text="解析格式">Parse format</label>
           <select id="input-format" class="select">
             <option value="turtle">Turtle</option>
             <option value="ntriples">N-Triples</option>
@@ -98,24 +104,24 @@
           </select>
         </div>
         <div class="field">
-          <label for="input-text">RDF document</label>
+          <label for="input-text" data-zh-text="RDF 文档">RDF document</label>
           <textarea id="input-text" class="code" spellcheck="false" rows="14" aria-describedby="input-summary"></textarea>
         </div>
         <div class="actions">
-          <button id="btn-parse" type="button" class="btn btn-primary">Parse</button>
+          <button id="btn-parse" type="button" class="btn btn-primary" data-zh-text="解析">Parse</button>
         </div>
         <p id="input-summary" class="muted" aria-live="polite"></p>
       </section>
 
       <!-- ROUND-TRIP -->
       <section id="pane-roundtrip" class="pane" role="tabpanel" aria-labelledby="tab-roundtrip" hidden>
-        <h2>Round-trip &amp; differential</h2>
-        <p class="muted">
+        <h2 data-zh-text="往返转换与差异比较">Round-trip &amp; differential</h2>
+        <p class="muted" data-zh-html="并排显示当前图的各种序列化格式。规范化逐行 N-Quads 形式是图的确定性标识。">
           Render the current graph in all nine serialize formats side-by-side. The
           canonical line-sequence N-Quads form is the graph's deterministic identity.
         </p>
         <div class="actions">
-          <button id="btn-serialize-all" type="button" class="btn btn-primary">
+          <button id="btn-serialize-all" type="button" class="btn btn-primary" data-zh-text="序列化为所有格式">
             Serialize to all formats
           </button>
         </div>
@@ -126,17 +132,17 @@
       <!-- SPARQL -->
       <section id="pane-sparql" class="pane" role="tabpanel" aria-labelledby="tab-sparql" hidden>
         <h2>SPARQL</h2>
-        <p class="muted">
+        <p class="muted" data-zh-html="SELECT 和 ASK 分别显示表格和布尔值；CONSTRUCT 和 DESCRIBE 显示 Turtle。浏览器没有服务器，SERVICE 和 LOAD 失败时会在上方显示错误。">
           SELECT / ASK render as a table / boolean; CONSTRUCT / DESCRIBE render as
           Turtle. SERVICE and LOAD hard-fail (there is no server) — the error lands
           in the banner above.
         </p>
         <div class="field">
-          <label for="sparql-text">Query</label>
+          <label for="sparql-text" data-zh-text="查询">Query</label>
           <textarea id="sparql-text" class="code" spellcheck="false" rows="10"></textarea>
         </div>
         <div class="actions">
-          <button id="btn-run-query" type="button" class="btn btn-primary">Run</button>
+          <button id="btn-run-query" type="button" class="btn btn-primary" data-zh-text="运行">Run</button>
         </div>
         <div id="sparql-results" class="results" aria-live="polite"></div>
       </section>
@@ -144,38 +150,38 @@
       <!-- SHACL -->
       <section id="pane-shacl" class="pane" role="tabpanel" aria-labelledby="tab-shacl" hidden>
         <h2>SHACL</h2>
-        <p class="muted">
+        <p class="muted" data-zh-html="将当前图序列化为 N-Triples 后，依据所提供的形状进行验证。结果采用 SARIF 2.1.0。物化会应用 SHACL-AF 的 &lt;code&gt;sh:rule&lt;/code&gt; 推理。">
           The current graph is serialized to N-Triples and validated against your
           shapes. Results are a SARIF 2.1.0 report. Materialize applies SHACL-AF
           <code>sh:rule</code> inferences.
         </p>
         <div class="field">
-          <label for="shapes-text">Shapes (Turtle)</label>
+          <label for="shapes-text" data-zh-text="形状（Turtle）">Shapes (Turtle)</label>
           <textarea id="shapes-text" class="code" spellcheck="false" rows="14"></textarea>
         </div>
         <div class="actions">
-          <button id="btn-validate" type="button" class="btn btn-primary">Validate</button>
-          <button id="btn-entail" type="button" class="btn">Materialize (entail)</button>
-          <button id="btn-download-sarif" type="button" class="btn" disabled>
+          <button id="btn-validate" type="button" class="btn btn-primary" data-zh-text="验证">Validate</button>
+          <button id="btn-entail" type="button" class="btn" data-zh-text="物化（蕴涵）">Materialize (entail)</button>
+          <button id="btn-download-sarif" type="button" class="btn" disabled data-zh-text="下载 report.sarif">
             Download report.sarif
           </button>
         </div>
         <div id="sarif-results" class="results" aria-live="polite"></div>
-        <h3>Entailed N-Triples</h3>
+        <h3 data-zh-text="蕴涵所得的 N-Triples">Entailed N-Triples</h3>
         <pre id="entail-output" class="code-out" aria-live="polite"></pre>
       </section>
 
       <!-- IDENTITY -->
       <section id="pane-identity" class="pane" role="tabpanel" aria-labelledby="tab-identity" hidden>
-        <h2>Graph identity &amp; diff</h2>
-        <p class="muted">
+        <h2 data-zh-text="图标识与差异">Graph identity &amp; diff</h2>
+        <p class="muted" data-zh-html="当且仅当两个图的规范化逐行形式逐字节相同，两者才表示同一个 RDF 图。空节点改名或重排不影响结果。">
           Two graphs denote the same RDF graph iff their canonical line-sequence forms
           are byte-identical — even after blank-node relabeling and reordering.
         </p>
         <div class="two-col">
           <div>
             <div class="field">
-              <label for="graph-a-format">Graph A format</label>
+              <label for="graph-a-format" data-zh-text="图 A 的格式">Graph A format</label>
               <select id="graph-a-format" class="select">
                 <option value="turtle">Turtle</option>
                 <option value="ntriples">N-Triples</option>
@@ -187,13 +193,13 @@
               </select>
             </div>
             <div class="field">
-              <label for="graph-a-text">Graph A</label>
+              <label for="graph-a-text" data-zh-text="图 A">Graph A</label>
               <textarea id="graph-a-text" class="code" spellcheck="false" rows="10"></textarea>
             </div>
           </div>
           <div>
             <div class="field">
-              <label for="graph-b-format">Graph B format</label>
+              <label for="graph-b-format" data-zh-text="图 B 的格式">Graph B format</label>
               <select id="graph-b-format" class="select">
                 <option value="turtle">Turtle</option>
                 <option value="ntriples">N-Triples</option>
@@ -205,39 +211,39 @@
               </select>
             </div>
             <div class="field">
-              <label for="graph-b-text">Graph B</label>
+              <label for="graph-b-text" data-zh-text="图 B">Graph B</label>
               <textarea id="graph-b-text" class="code" spellcheck="false" rows="10"></textarea>
             </div>
           </div>
         </div>
         <div class="actions">
-          <button id="btn-compare" type="button" class="btn btn-primary">Compare</button>
+          <button id="btn-compare" type="button" class="btn btn-primary" data-zh-text="比较">Compare</button>
         </div>
         <p id="identity-result" class="identity-verdict" aria-live="polite"></p>
         <div class="two-col">
           <div>
-            <h3>Canonical A</h3>
+            <h3 data-zh-text="图 A 的规范形式">Canonical A</h3>
             <pre id="canon-a" class="code-out"></pre>
           </div>
           <div>
-            <h3>Canonical B</h3>
+            <h3 data-zh-text="图 B 的规范形式">Canonical B</h3>
             <pre id="canon-b" class="code-out"></pre>
           </div>
         </div>
-        <h3>Line diff</h3>
+        <h3 data-zh-text="逐行差异">Line diff</h3>
         <div id="canon-diff" class="diff"></div>
       </section>
 
       <!-- QUAD TABLE -->
       <section id="pane-quads" class="pane" role="tabpanel" aria-labelledby="tab-quads" hidden>
-        <h2>Quad table</h2>
-        <p class="muted">
+        <h2 data-zh-text="四元组表">Quad table</h2>
+        <p class="muted" data-zh-html="以主语、谓语、宾语和图显示解析后的数据。点击任意项，使用 &lt;code&gt;match()&lt;/code&gt; 筛选表格。">
           The parsed graph as (subject, predicate, object, graph). Click any term
           to filter the table with <code>match()</code>.
         </p>
         <div class="actions">
-          <button id="btn-refresh-quads" type="button" class="btn btn-primary">Refresh</button>
-          <button id="btn-clear-filter" type="button" class="btn" hidden>Clear filter</button>
+          <button id="btn-refresh-quads" type="button" class="btn btn-primary" data-zh-text="刷新">Refresh</button>
+          <button id="btn-clear-filter" type="button" class="btn" hidden data-zh-text="清除筛选条件">Clear filter</button>
         </div>
         <p id="filter-info" class="muted" aria-live="polite"></p>
         <div id="quad-table" class="results"></div>
@@ -245,8 +251,8 @@
 
       <!-- GALLERY -->
       <section id="pane-gallery" class="pane" role="tabpanel" aria-labelledby="tab-gallery" hidden>
-        <h2>RDF-1.2 vignette gallery</h2>
-        <p class="muted">
+        <h2 data-zh-text="RDF 1.2 示例库">RDF-1.2 vignette gallery</h2>
+        <p class="muted" data-zh-html="示例均使用 &lt;code&gt;http://example.org/&lt;/code&gt; 命名空间。加载示例会填充并运行控制台；复制永久链接可分享当前状态。">
           Curated, self-contained examples in the <code>http://example.org/</code>
           namespace. Load one to populate the whole console and run it; copy a
           permalink to share the exact state.
@@ -256,7 +262,7 @@
     </main>
 
     <footer class="app-footer">
-      <p>
+      <p data-zh-html="PurRDF 完全在客户端运行，加载的图不会离开浏览器。PurRDF 不创建词汇表，这里仅使用标准 &lt;code&gt;rdf:&lt;/code&gt;、&lt;code&gt;sh:&lt;/code&gt; 和 &lt;code&gt;xsd:&lt;/code&gt; 词汇。">
         PurRDF runs entirely client-side. No graph you load here ever leaves your
         browser. Standard <code>rdf:</code>/<code>sh:</code>/<code>xsd:</code>
         vocabulary only — PurRDF mints none of its own.

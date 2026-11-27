@@ -42,7 +42,7 @@ IGNORED_PARTS = {"tests", "examples", "benches", "testdata", ".github"}
 PLAYGROUND_SHELL = {
     **{name: "docs/playground/" + name for name in (
         "index.html", "app.mjs", "engine.worker.mjs", "permalink.mjs", "sarif.mjs",
-        "style.css", "sw.mjs", "manifest.webmanifest", "examples/gallery.mjs",
+        "style.css", "sw.mjs", "locale.mjs", "manifest.webmanifest", "examples/gallery.mjs",
     )},
     **{"examples/museum/" + name: "crates/purrdf/examples/museum/" + name
        for name in ("collection.ttl", "attributions.rq")},
