@@ -1159,7 +1159,8 @@ impl Refuter {
         self
     }
 
-    /// Admit premises whose seed is exactly their independent asserted rows.
+    /// Admit premises whose default-world seed is exactly their independent
+    /// default-graph asserted rows.
     pub(crate) fn admits_source_trials(&self, ds: &RdfDataset) -> bool {
         self.regime == Regime::OwlRl
             && axioms_for(self.regime).is_empty()
@@ -1170,8 +1171,9 @@ impl Refuter {
             && self.options.max_term_arena_bytes() == u64::MAX
             && self.options.stated_max_term_generating_rounds().is_none()
             && self.options.stated_max_generated_terms().is_none()
-            && ds.named_graphs().next().is_none()
-            && ds.quads().all(|quad| {
+            // The refutation seed and source shrinker both select only the
+            // default graph. Unselected rows cannot contribute a trial source.
+            && ds.quads().filter(|quad| quad.g.is_none()).all(|quad| {
                 let TermRef::Iri(predicate) = ds.resolve(quad.p) else {
                     return false;
                 };
