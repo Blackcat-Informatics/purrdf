@@ -406,6 +406,9 @@ parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
 
 ## Quickstart
 
+PurRDF's first-party code is available under `MIT OR Apache-2.0 OR MulanPSL-2.0`.
+See the [licensing guide](./LICENSING.md) for details.
+
 ### Rust
 
 ```sh

@@ -329,6 +329,9 @@ ECMA-262 模式求值 draft 2020-12、2019-09 与 07。元模式、资源注册�
 
 ## 快速入门
 
+PurRDF 第一方代码的许可表达式为 `MIT OR Apache-2.0 OR MulanPSL-2.0`，
+其中 `MulanPSL-2.0` 即木兰宽松许可证（第 2 版）。详见[中文许可说明](./docs/LICENSING.zh-Hans.md)。
+
 ### Rust
 
 ```sh

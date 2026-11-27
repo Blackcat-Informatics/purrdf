@@ -32,6 +32,11 @@ primitives, Turtle/TriG/N-Triples/N-Quads/RDF/XML/JSON-LD codecs, RDFC-1.0
 canonicalization, SPARQL 1.1/1.2, SHACL Core validation, the GTS
 append-only graph transport, and Python/WebAssembly/C bindings.
 
+### Short description
+
+PurRDF is a Rust toolkit for RDF 1.2 with first-party code available under
+`MIT OR Apache-2.0 OR MulanPSL-2.0`.
+
 ## Family system
 
 PurRDF shares the black-cat silhouette of the "g + cat-sound" family (see
