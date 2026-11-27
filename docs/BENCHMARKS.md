@@ -377,6 +377,11 @@ retains its existing cold native path. Canonical rendering consumes the existing
 Integer digit preparation and emits the prepared group widths at their one
 shared home, without another output allocation.
 
+Decimal group accumulation writes the initialized limbs of its admitted
+destination directly and appends at most one carry limb. Power multiplication
+borrows the input for the first nonzero chunk. The parse-only rows in
+`xsd_exact_growth` measure parsing separately from rendering.
+
 A native arithmetic-source comparison holds current hash/lex foundations
 constant and retains all 1,024 results outside
 each acknowledged instruction window. Fixed seeds and unchanged release/bench

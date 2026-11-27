@@ -313,21 +313,19 @@ fn mag_mul_small_add(
     addend: u64,
     storage: &impl Allocate,
 ) -> Result<Mag, LimbScratchError> {
-    let mut out: Mag = storage.destination(
-        a.len()
-            .checked_add(1)
-            .ok_or(LimbScratchError::SizeOverflow)?,
-        0,
-    )?;
+    let capacity = a
+        .len()
+        .checked_add(1)
+        .ok_or(LimbScratchError::SizeOverflow)?;
+    let mut out = storage.destination(capacity, a.len())?;
     let mut carry = u128::from(addend);
-    for &limb in a {
+    for (word, &limb) in out.iter_mut().zip(a) {
         let cur = u128::from(limb) * u128::from(multiplier) + carry;
-        storage.push(&mut out, cur as u64)?;
+        *word = cur as u64;
         carry = cur >> 64;
     }
-    while carry != 0 {
+    if carry != 0 {
         storage.push(&mut out, carry as u64)?;
-        carry >>= 64;
     }
     mag_trim(&mut out);
     Ok(out)
@@ -1403,15 +1401,22 @@ impl BigInt {
         chunk: u32,
         storage: &impl Allocate,
     ) -> Result<Self, LimbScratchError> {
-        let mut magnitude = storage.copy(&self.magnitude)?;
+        if exp == 0 {
+            return self.copy_using(storage);
+        }
         let mut remaining = exp;
-        while remaining != 0 {
+        let mut magnitude;
+        let mut input = &self.magnitude;
+        loop {
             let step =
                 u32::try_from(remaining.min(u64::from(chunk))).expect("bounded by a machine chunk");
-            magnitude = mag_mul_small_add(&magnitude, base.pow(step), 0, storage)?;
+            magnitude = mag_mul_small_add(input, base.pow(step), 0, storage)?;
             remaining -= u64::from(step);
+            if remaining == 0 {
+                return Ok(Self::from_parts(self.negative, magnitude));
+            }
+            input = &magnitude;
         }
-        Ok(Self::from_parts(self.negative, magnitude))
     }
 
     /// Remove at most `limit` exact factors of five. Full 27-factor chunks
