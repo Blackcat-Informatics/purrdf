@@ -1331,7 +1331,7 @@ fn relabel_recording(
 /// node takes the same label as the node elsewhere. The one rewrite both
 /// canonical families share.
 fn rebuild_with_labels<'a>(
-    ds: &RdfDataset,
+    ds: &'a RdfDataset,
     label_count: usize,
     labels: impl Fn(TermId) -> Option<&'a str>,
     record: impl FnMut(RelabelSource<'_>, TermId),
@@ -1340,29 +1340,31 @@ fn rebuild_with_labels<'a>(
     // Declaration-only blank graphs are invisible to canonicalization (they own
     // no statement), so continue the canonical numbering over them in a
     // value-deterministic order.
-    let mut unseen: Vec<(&str, BlankScope, TermId)> = ds
-        .named_graphs()
-        .filter(|&g| labels(g).is_none())
-        .filter_map(|g| match ds.resolve(g) {
-            TermRef::Blank { label, scope } => Some((label, scope, g)),
-            _ => None,
-        })
-        .collect();
+    let mut resident = purrdf_lex::allocation::Resident;
+    let mut memory = Memory::new(&mut resident);
+    let mut unseen = Vec::new();
+    for graph in ds.named_graphs().filter(|&graph| labels(graph).is_none()) {
+        if let TermRef::Blank { label, scope } = ds.resolve(graph) {
+            memory.push(&mut unseen, (label, scope, graph))?;
+        }
+    }
     unseen.sort_unstable();
-    let extra: BTreeMap<TermId, Box<str>> = unseen
-        .iter()
-        .enumerate()
-        .map(|(i, &(_, _, id))| {
-            let label = format!("{CANON_PREFIX}{}", label_count + i);
-            (id, label.into_boxed_str())
-        })
-        .collect();
+    let mut continuation_label = String::new();
+    if let Some(last) = unseen.len().checked_sub(1) {
+        let last = label_count
+            .checked_add(last)
+            .ok_or(purrdf_lex::allocation::StorageError::SizeOverflow)?;
+        let width = last.checked_ilog10().unwrap_or(0) as usize + 1;
+        memory.reserve_string(&mut continuation_label, CANON_PREFIX.len() + width)?;
+    }
     run.phase(CanonPhase::Output);
     let result = rebuild_dataset(
         ds,
         &mut CanonicalRelabeler {
             labels,
-            extra,
+            unseen,
+            label_count,
+            continuation_label,
             record,
             stop: run.stop(),
         },
@@ -1377,8 +1379,12 @@ struct CanonicalRelabeler<'a, R, L> {
     stop: Option<&'a dyn crate::StopSignal>,
     /// The canonicalization's issued labels ([`Canonicalized::labels`]).
     labels: L,
-    /// Continuation labels for declaration-only blank graphs.
-    extra: BTreeMap<TermId, Box<str>>,
+    /// The source order determining each declaration-only graph's continuation rank.
+    unseen: Vec<(&'a str, BlankScope, TermId)>,
+    /// The first continuation ordinal, after all issued labels.
+    label_count: usize,
+    /// One admitted spelling buffer reused across all continuation labels.
+    continuation_label: String,
     /// Receives actual term pairs during the same rebuild traversal.
     record: R,
 }
@@ -1394,13 +1400,34 @@ where
         &mut self,
         builder: &mut super::builder::RdfDatasetBuilder,
         id: TermId,
-        _label: &str,
-        _scope: BlankScope,
+        label: &str,
+        scope: BlankScope,
     ) -> Result<TermId, CanonError> {
         check_stop(self.stop)?;
-        let label = (self.labels)(id)
-            .or_else(|| self.extra.get(&id).map(Box::as_ref))
-            .expect("every blank node holds a canonical or continuation label");
+        let label = if let Some(label) = (self.labels)(id) {
+            label
+        } else {
+            // The rebuild visits only blanks in statements or named graph
+            // declarations. A blank with no issued label is a declaration
+            // collected from this same frozen dataset.
+            let rank = self
+                .unseen
+                .binary_search(&(label, scope, id))
+                .expect("every declaration-only blank graph has a continuation rank");
+            // The largest rank and its spelling were admitted before the rebuild.
+            let ordinal = self.label_count + rank;
+            self.continuation_label.clear();
+            let mut resident = purrdf_lex::allocation::Resident;
+            Memory::resume(&mut resident, self.continuation_label.capacity()).append_text(
+                &mut self.continuation_label,
+                |out| {
+                    out.push_str(CANON_PREFIX);
+                    // The admitted sink retains any failure.
+                    let _ = write!(out, "{ordinal}");
+                },
+            )?;
+            &self.continuation_label
+        };
         Ok(builder.intern_blank(label, BlankScope::DEFAULT)?)
     }
 
@@ -6557,31 +6584,58 @@ mod tests {
     fn canonical_relabel_covers_a_declaration_only_blank_graph() {
         use crate::blank_label::{LabelAlphabet, is_valid_label};
         let mut b = RdfDatasetBuilder::new();
-        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let (p, o) = (iri(&mut b, "p"), iri(&mut b, "o"));
         let seen = b.intern_blank("seen blank", BlankScope::DEFAULT).unwrap();
         b.push_quad(seen, p, o, None).unwrap();
-        let _ = s;
-        // A blank named graph that owns no quads: invisible to canonicalization,
-        // still relabeled (continuation numbering).
-        let empty_graph = b.intern_blank("empty graph blank", BlankScope(4)).unwrap();
-        b.declare_named_graph(empty_graph).unwrap();
+        // These empty graphs are invisible to the RDFC search. They continue
+        // its numbering by source label and scope, not insertion order.
+        let declarations = [
+            ("z", 4, "c14n4"),
+            ("a", 9, "c14n2"),
+            ("b", 0, "c14n3"),
+            ("a", 2, "c14n1"),
+        ]
+        .map(|(label, scope, expected)| {
+            let graph = b.intern_blank(label, BlankScope(scope)).unwrap();
+            b.declare_named_graph(graph).unwrap();
+            (graph, expected)
+        });
         let ds = b.freeze().expect("valid");
-        let out = canonical_relabel(
+        let relabeled = canonical_relabel_with_mapping(
             &ds,
             &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
         )
         .expect("relabel");
-        let got = output_blanks(&out);
-        assert_eq!(got.len(), 2, "both blanks survive: {got:?}");
+        let out = relabeled.dataset();
+        let got = output_blanks(out);
+        assert_eq!(got.len(), 5, "all blanks survive: {got:?}");
         for (label, scope) in &got {
             assert_eq!(*scope, BlankScope::DEFAULT);
             assert!(label.starts_with(CANON_PREFIX), "{label:?}");
             assert!(is_valid_label(label, LabelAlphabet::BlankNodeLabel));
             assert!(is_valid_label(label, LabelAlphabet::NcName));
         }
-        assert!(
-            out.named_graphs().count() >= 1,
-            "the declaration survives the rewrite"
+        assert_eq!(out.named_graphs().count(), declarations.len());
+        for (source, expected) in declarations {
+            let graph = relabeled.map_term(source).unwrap();
+            assert!(out.has_named_graph(graph));
+            assert_eq!(
+                out.resolve(graph),
+                TermRef::Blank {
+                    label: expected,
+                    scope: BlankScope::DEFAULT
+                }
+            );
+        }
+        let unmapped = canonical_relabel(
+            &ds,
+            &mut CanonicalizationControl::new(RDFC_V2_CORPUS_POLICY, None),
+        )
+        .expect("relabel without a mapping");
+        assert_eq!(output_blanks(&unmapped), got);
+        assert_eq!(
+            crate::ContentIdentified::content_identity(&unmapped).unwrap(),
+            crate::ContentIdentified::content_identity(out).unwrap()
         );
     }
 
