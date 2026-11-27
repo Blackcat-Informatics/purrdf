@@ -191,7 +191,7 @@ test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
 });
 
 test("the museum gallery permalink preserves both dated attributions", async () => {
-  const { findVignette, vignetteState } =
+  const { findVignette, matchesBundledMuseumQuery, vignetteState } =
     await import(pathToFileURL(join(playgroundOut, "examples/gallery.mjs")).href);
   const { encodeState, decodeState } =
     await import(pathToFileURL(join(playgroundOut, "permalink.mjs")).href);
@@ -207,6 +207,17 @@ test("the museum gallery permalink preserves both dated attributions", async () 
   assert.equal(state.activePane, "sparql");
   const restored = await decodeState(await encodeState(state));
   assert.deepEqual(restored, state, "the actual permalink codec must preserve the UTF-8 state");
+  const asset = async (url) => new Response(await readFile(url));
+  assert.equal(await matchesBundledMuseumQuery(restored, asset), true);
+  assert.equal(await matchesBundledMuseumQuery({ ...restored, locale: "zh-Hans" }, asset), true);
+  for (const changed of [
+    { input: restored.input.replace("1723-09-08", "1724-09-08") },
+    { query: "ASK { }" },
+    { inputFormat: "ntriples" },
+    { activePane: "input" },
+  ]) {
+    assert.equal(await matchesBundledMuseumQuery({ ...restored, ...changed }, asset), false);
+  }
 
   const expected = JSON.parse(await readFile(new URL("expected.srj", canonical), "utf8"));
   const query = async (input) => {

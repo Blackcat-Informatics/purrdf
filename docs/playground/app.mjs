@@ -5,7 +5,9 @@
 // the aria-live error banner. The main thread NEVER touches the wasm engine —
 // it is a pure view/message client over the worker.
 
-import { VIGNETTES, findVignette, DEFAULT_STATE, vignetteState } from "./examples/gallery.mjs";
+import {
+  VIGNETTES, findVignette, DEFAULT_STATE, matchesBundledMuseumQuery, vignetteState,
+} from "./examples/gallery.mjs";
 import { decodeState, encodeState } from "./permalink.mjs";
 import { assertSarifVersion, describeSarif } from "./sarif.mjs";
 
@@ -72,7 +74,7 @@ function showStatus(message) {
 async function guard(fn) {
   clearError();
   try {
-    await fn();
+    return await fn();
   } catch (e) {
     showError(String(e?.message ?? e));
   }
@@ -257,14 +259,17 @@ function selectPane(pane) {
 // Pane: Input
 // ---------------------------------------------------------------------------
 
+let latestParse;
+
 async function doParse() {
-  await guard(async () => {
-    const text = $("input-text").value;
-    const format = $("input-format").value;
-    const res = await call("parse", { text, format });
-    $("input-summary").textContent = `Parsed ${res.size} quad(s) as ${format}.`;
+  const request = { text: $("input-text").value, format: $("input-format").value };
+  latestParse = request;
+  return guard(async () => {
+    const res = await call("parse", request);
+    $("input-summary").textContent = `Parsed ${res.size} quad(s) as ${request.format}.`;
     renderQuadTable(res.rows, res.size, null);
     showStatus(`Graph updated: ${res.size} quad(s).`);
+    return request;
   });
 }
 
@@ -412,7 +417,10 @@ async function doSerializeAll() {
 // Pane: SPARQL
 // ---------------------------------------------------------------------------
 
+let queryStarted = false;
+
 async function doQuery() {
+  queryStarted = true;
   await guard(async () => {
     const sparql = $("sparql-text").value;
     const res = await call("query", { sparql });
@@ -824,13 +832,13 @@ async function boot() {
   buildGallery();
 
   // Restore permalink state if present; otherwise the default console.
-  let restored = false;
+  let restored;
   if (location.hash.length > 1) {
     try {
       const state = await decodeState(location.hash.slice(1));
       if (state) {
         applyState(state);
-        restored = true;
+        restored = state;
       }
     } catch (e) {
       showError(`could not restore permalink: ${e.message ?? e}`);
@@ -840,9 +848,30 @@ async function boot() {
 
   await initHeader();
   // Parse the initial input so every pane has a live graph to work with.
-  await doParse();
+  const parsed = await doParse();
 
   registerServiceWorker();
+
+  // The general query worker has no startup deadline or result bound. Auto-run
+  // only the known example, and leave the Run button in charge of other links.
+  if (!restored || !parsed || !stillAtRestoredQuery(restored, parsed)) return;
+  try {
+    if (await matchesBundledMuseumQuery(restored) && stillAtRestoredQuery(restored, parsed)) {
+      await doQuery();
+    }
+  } catch (error) {
+    if (stillAtRestoredQuery(restored, parsed)) {
+      showError(`could not verify bundled museum example: ${error.message ?? error}`);
+    }
+  }
+}
+
+function stillAtRestoredQuery(state, parsed) {
+  return !queryStarted && !latestGalleryLoad && latestParse === parsed &&
+    activePane === "sparql" && state.activePane === "sparql" &&
+    parsed.text === state.input && parsed.format === state.inputFormat &&
+    $("input-text").value === parsed.text && $("input-format").value === parsed.format &&
+    $("sparql-text").value === state.query;
 }
 
 boot();

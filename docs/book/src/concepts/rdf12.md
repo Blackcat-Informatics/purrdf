@@ -59,8 +59,9 @@ Neither date overrides the other.
 In the [playground](https://blackcat-informatics.github.io/purrdf/playground/),
 open **Gallery**, then select **Load & run** for **Museum collection (Chinese
 labels)**. **Copy permalink** on the gallery entry creates a link that
-restores the original Turtle and query. Open the link and choose **Run**
-to see the two rows. In the Input pane, replace `1723-09-08` with
+restores the original Turtle and query. Open that link to see the two rows
+automatically. Links with edited or different input or queries wait for
+**Run**. In the Input pane, replace `1723-09-08` with
 `1724-09-08`, parse the updated Turtle, and rerun the query. Only the
 conservation notebook's row changes.
 

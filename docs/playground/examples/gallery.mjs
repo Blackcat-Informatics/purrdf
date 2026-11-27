@@ -178,6 +178,15 @@ export async function vignetteState(v, fetchAsset = (url) => fetch(url)) {
   return s;
 }
 
+/** Only the bundled museum graph and query can run on permalink startup. */
+export async function matchesBundledMuseumQuery(state, fetchAsset) {
+  const museum = findVignette("museum-attributions");
+  if (state?.activePane !== "sparql" || state.inputFormat !== museum.inputFormat ||
+      typeof state.input !== "string" || typeof state.query !== "string") return false;
+  const bundled = await vignetteState(museum, fetchAsset);
+  return state.input === bundled.input && state.query === bundled.query;
+}
+
 /** The default console state used on a cold load (no permalink). */
 export const DEFAULT_STATE = {
   input: `@prefix ex: <http://example.org/> .
