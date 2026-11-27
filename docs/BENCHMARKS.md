@@ -1197,6 +1197,65 @@ is larger at the target scales and regresses every measured query shape. The
 measured production decision is therefore to retain both FoQ posting indexes;
 pack bytes and decoding behavior remain unchanged.
 
+## Independent BLAKE3 messages
+
+On Linux with a native instruction counter, run the fixed-work comparison
+with a new receipts directory.
+
+```bash
+cargo bench --locked -p purrdf-hash-conformance --bench digests -- \
+  --blake3-instructions .stage/blake3-instructions
+```
+
+Each row processes 16,384 deterministic messages and records three
+unscaled `instructions:u` samples. The single and prepared derive-key
+rows use the same input mutation, output width, and witness loop. Context
+preparation is outside the counter. The grouped control and the batch
+use the same sixteen inputs and output slots. The control hashes each
+message individually and the batch calls the independent-message API.
+The report retains every available named backend, the default dispatcher,
+and the raw counter and witness receipts. It does not measure elapsed time.
+
+On an AMD Ryzen AI Max+ 395 with `rustc 1.102.0-nightly (5df8c02af)`, the
+default dispatcher gives the following median userspace retired instructions
+per message. The older single-input probe used the same processor, compiler,
+release optimization, fixed work count, and witness values. It did not sample
+the three rows marked with a dash. The grouped control shows the cost of
+hashing the same batch inputs individually on the current build.
+
+| Bytes | Prior single | Single | Prepared derive-key | Grouped singles | Batch |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 | 993.02 | 393.03 | 393.03 | 390.63 | 237.88 |
+| 32 | 991.02 | 391.03 | 391.03 | 388.63 | 235.88 |
+| 63 | 991.03 | 391.04 | 391.03 | 388.63 | 235.88 |
+| 64 | 991.02 | 391.03 | 391.03 | 388.63 | 235.88 |
+| 65 | 2,015.03 | 821.03 | 821.03 | 818.63 | 295.88 |
+| 100 | 2,008.03 | 814.03 | 814.03 | 811.63 | 295.88 |
+| 128 | 2,008.03 | 814.03 | 814.03 | 811.63 | 295.88 |
+| 256 | 3,884.03 | 1,496.03 | 1,496.03 | 1,493.63 | 425.88 |
+| 512 | 7,636.03 | 2,860.03 | 2,860.03 | 2,857.63 | 673.89 |
+| 1024 | 15,140.03 | 5,588.03 | 5,588.03 | 5,585.63 | 1,200.88 |
+| 1025 | 17,032.07 | 16,451.03 | 16,451.03 | 16,448.44 | 1,428.07 |
+| 2048 | 16,767.08 | 16,186.04 | 16,186.04 | 16,183.72 | 2,386.15 |
+| 2049 | — | 17,233.04 | 17,233.04 | 17,230.72 | 2,613.23 |
+| 3072 | — | 16,968.04 | 16,968.04 | 16,965.72 | 3,571.79 |
+| 3073 | — | 16,426.04 | 16,426.04 | 16,423.72 | 3,794.29 |
+| 4096 | 6,837.03 | 6,256.05 | 6,256.04 | 6,253.72 | 4,750.97 |
+
+Among the forced paths, AVX2 had the lowest single-message count for the
+sampled lengths through 1024 bytes. AVX-512 had the lowest count from 1025
+through 4096 bytes on this host. It also had the lowest sampled batch counts.
+The default single call and a forced call have different feature checks, so
+their total instruction counts need not match even for the same kernel. The
+default plain and reused derive-key medians differ by less than 0.01
+instruction per message at every measured length. For example, the default
+16-byte single hash and reused derivation both retired about 393 instructions
+per message.
+
+These are native measurements on this x86-64 host, not a claim about other
+microarchitectures, `AArch64`, or Wasm. The named SIMD128 execution checks
+digest parity, not hardware instruction counts.
+
 ## Python compat harness (`bench_compat.py`)
 
 `bindings/python/benchmarks/bench_compat.py` times the shim and the genuine

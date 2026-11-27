@@ -78,6 +78,7 @@ fn load_block(bytes: &[u8; 4096], block: usize) -> [V; 16] {
     out
 }
 super::blake3_lanes::blake3_lanes!("neon", 4);
+super::blake3_lanes::blake3_messages!("neon", 4, lane_compress);
 
 use core::arch::aarch64::vextq_u32;
 impl V {

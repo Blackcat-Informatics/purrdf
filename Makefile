@@ -878,6 +878,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				official_modes_and_extended_output \
 				xof_large_output_and_seek_boundaries \
 				derived_context_trees_match_across_backends \
+				mixed_message_batch_simd_dispatch \
 				random_inputs_cover_irregular_trees_and_alignment \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

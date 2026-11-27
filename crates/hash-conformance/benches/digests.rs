@@ -19,7 +19,7 @@ use purrdf_hash::hex::{
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha2::{Sha256, Sha512};
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
-use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group};
 use purrdf_testkit::rng::xorshift64_next;
 
 const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB")];
@@ -339,4 +339,15 @@ fn word_ids(c: &mut Bench) {
 }
 
 bench_group!(benches, digests, hex, blake3, blake3_backends, word_ids);
-bench_main!(benches);
+
+#[cfg(target_os = "linux")]
+#[path = "support/blake3_instructions.rs"]
+mod blake3_instructions;
+
+fn main() -> std::process::ExitCode {
+    #[cfg(target_os = "linux")]
+    if blake3_instructions::dispatch() {
+        return std::process::ExitCode::SUCCESS;
+    }
+    purrdf_testkit::bench::main(option_env!("CARGO_TARGET_TMPDIR"), &[benches])
+}
