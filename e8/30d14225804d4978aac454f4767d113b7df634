@@ -1,0 +1,18 @@
+ghprsq source head backlink metadata
+
+parent_hashes: e830d14225804d4978aac454f4767d113b7df634
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1609
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1609
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 03a80a8788764db5d2d2923e4d8a8c85d3805d4d
+GhpRsq-Head-Ref: paudley/558-structured-access-to-error-variants-and
+GhpRsq-Head-OID: e830d14225804d4978aac454f4767d113b7df634
+GhpRsq-Result-Tree: c6e9860a5683ed844e48e35f027f0f551282baac
+GhpRsq-Result-Commit: cf430d7632cbe7a28c6877c3b3013af0b590b90e
+GhpRsq-Parent-Hashes: e830d14225804d4978aac454f4767d113b7df634
+GhpRsq-Squash-Notes-SHA256: a8952c4c9b063f52b655465a2c983f668a00380014a154d5b03bfcdbaa9b0d22
+GhpRsq-Stage-Evidence: none
