@@ -4328,6 +4328,103 @@ fn governed_evidence_withholds_host_stops_even_before_a_verdict_shortcut() {
     assert!(receipt.view.consumed_pages > 0);
 }
 
+fn governed_evidence_checks_host_stop_after_scope_callbacks() {
+    use purrdf_core::evidence::{AnswerTier, WitnessQuestion};
+    use purrdf_core::{PagedQueryLimits, StopCause, TrippedGovernor};
+    use purrdf_sparql_eval::{GovernedEvidenceAnswer, QueryGovernors, StopSignal};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[derive(Debug)]
+    struct ScopeStop {
+        cause: StopCause,
+        signalled: AtomicBool,
+    }
+    impl StopSignal for ScopeStop {
+        fn poll(&self) -> Option<StopCause> {
+            self.signalled.load(Ordering::Relaxed).then_some(self.cause)
+        }
+    }
+    struct Claims<'a> {
+        claims: UniformClaims,
+        stop: &'a ScopeStop,
+    }
+    impl<I: purrdf_core::ViewTermId> EvidenceSource<I> for Claims<'_> {
+        fn claim(&self, quad: &QuadIds<I>) -> Result<Option<&EvidenceRecord>, EvalError> {
+            self.claims.claim(quad)
+        }
+        fn scope(&self, graph: GraphMatch<I>) -> Result<EvidenceScope, EvalError> {
+            self.stop.signalled.store(true, Ordering::Relaxed);
+            self.claims.scope(graph)
+        }
+        fn reason(&self, _: ReasonId) -> Result<Option<ReasonDescription<'_>>, EvalError> {
+            Ok(None)
+        }
+    }
+    let paged = healthy_paged_evidence_source();
+    let engine = NativeSparqlEngine::new();
+    // The verdict requests scope before walking the algebra. The rows tier
+    // asks for scope only when publishing the status of this scan-free query.
+    let mut verdict = governed_evidence_answer_for(AnswerTier::Verdict);
+    verdict.question = Some(WitnessQuestion::ClosedAbsence);
+    verdict.closure_declared = false;
+    let rows = governed_evidence_answer_for(AnswerTier::Rows);
+    for (query, answer, cause, cap) in [
+        (
+            "SELECT ?s WHERE { ?s ?p ?o }",
+            verdict,
+            StopCause::Cancelled,
+            None,
+        ),
+        ("ASK { }", rows, StopCause::Deadline, None),
+        (
+            "SELECT ?s WHERE { VALUES ?s { <urn:s1> <urn:s2> } }",
+            rows,
+            StopCause::Cancelled,
+            Some(1),
+        ),
+    ] {
+        let stop = Arc::new(ScopeStop {
+            cause,
+            signalled: AtomicBool::new(false),
+        });
+        let claims = Claims {
+            claims: uniform_claims(),
+            stop: &stop,
+        };
+        let governors = QueryGovernors::METERED.with_stop_signal(stop.clone());
+        let governors = if let Some(cap) = cap {
+            governors.with_max_answers(cap)
+        } else {
+            governors
+        };
+        let view = paged.query_view(PagedQueryLimits::UNBOUNDED);
+        let (outcome, receipt) = engine
+            .query_evidence_answer_governed_fallible_view(
+                &view,
+                request(query),
+                &QueryOptions::EMPTY,
+                &governors,
+                &claims,
+                answer,
+                |_| panic!("a stop during a scope callback must withhold the visitor"),
+            )
+            .unwrap();
+        let GovernedEvidenceAnswer::BudgetExhausted(trip) = outcome else {
+            panic!("the scope callback stopped the query");
+        };
+        assert!(stop.signalled.load(Ordering::Relaxed));
+        if cap.is_some() {
+            assert!(matches!(trip.tripped, TrippedGovernor::Budget { .. }));
+        } else {
+            assert_eq!(trip.tripped, TrippedGovernor::Stopped { cause });
+        }
+        assert_eq!(receipt.governors.tripped, Some(trip.tripped));
+        assert_eq!(receipt.view.consumed_pages, 0);
+        assert_eq!(trip.prefix, None::<()>);
+    }
+}
+
 fn governed_evidence_resource_trip_publishes_only_certain_prefixes() {
     use purrdf_core::evidence::AnswerTier;
     use purrdf_core::{PagedQueryLimits, ResourceDimension, TrippedGovernor};
@@ -4440,6 +4537,7 @@ fn governed_evidence_resource_trip_publishes_only_certain_prefixes() {
 purrdf_testkit::harness_main!(
     governed_evidence_matches_unbounded_select_and_ask,
     governed_evidence_withholds_host_stops_even_before_a_verdict_shortcut,
+    governed_evidence_checks_host_stop_after_scope_callbacks,
     governed_evidence_resource_trip_publishes_only_certain_prefixes,
     count_admission_preserves_the_evidence_cursor_execution_path,
     fallible_evidence_doors_keep_original_rows_and_all_query_form_status,

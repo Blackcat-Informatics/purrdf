@@ -10277,6 +10277,11 @@ pub(crate) fn eval_answer_pattern<D: DatasetView + Sync>(
         .as_ref()
         .ok_or_else(|| EvalError::internal("verdict lost its original evidence source"))?
         .answer_request(request)?;
+    // The host supplies the scope declaration. It can signal a stop before
+    // the verdict shortcut, which otherwise need not visit an algebra node.
+    if ctx.stop_check().is_some() {
+        return eval_evaluated(pattern, ctx);
+    }
     let workspace = ctx.growth.clone();
     with_native_answer(request, &workspace, |answer| {
         if let Some(verdict) = answer.witness_stop() {

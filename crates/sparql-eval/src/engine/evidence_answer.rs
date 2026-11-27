@@ -3,6 +3,8 @@
 
 //! Fallible publication for the governed borrowed evidence answer.
 
+use std::ops::ControlFlow;
+
 use purrdf_core::evidence::{AnswerRequest, AnswerTier};
 use purrdf_core::{DatasetView, FallibleDatasetView, SparqlResult, TrippedGovernor};
 
@@ -19,10 +21,10 @@ use super::{
     GovernedEvidence, GovernedResolution, GovernorState, InternedRequest, InternedSolutions,
     NativeSparqlEngine, NonMonotoneBarrier, Outcome, PlanSurveyContext, Prebindings, Query,
     QueryCoordinates, QueryGovernors, QueryOptions, Sequencing, admit_governor_state,
-    borrow_outcome, bounded_workspace, coordinates, evaluate_governed_with_substitutions,
-    fallible_admission_failure, finish_fallible_read, prepared_fallible, relation_identity,
-    reserve_fallible_execution, reserve_governed_reporting, resolve_governed_with_prefix,
-    retain_partial_answers,
+    borrow_outcome, bounded_workspace, certain_partial, coordinates,
+    evaluate_governed_with_substitutions, fallible_admission_failure, finish_fallible_read,
+    materialize, prepared_fallible, relation_identity, reserve_fallible_execution,
+    reserve_governed_reporting, resolve_governed_with_prefix, retain_partial_answers,
 };
 
 enum AnswerSettlement<R> {
@@ -206,6 +208,9 @@ impl NativeSparqlEngine {
             survey.distinct_planning::<D>(&prepared.query),
             &mut ctx,
         )?;
+        // A host callback in the last operator can signal a stop without
+        // another charge or operator boundary. Latch it before resolution.
+        let _ = ctx.stop_check();
         let mut visit = Some(visit);
         let (resolution, prefix) = resolve_governed_with_prefix(
             evaluated,
@@ -228,14 +233,26 @@ impl NativeSparqlEngine {
                     &ctx,
                     answer,
                     |outcome, rows, status| {
-                        visit(GovernedEvidenceView::Complete {
+                        // Status construction calls the host's evidence source.
+                        // Observe a stop before giving the caller a view.
+                        if let Some(tripped) = ctx.stop_check() {
+                            return ControlFlow::Break(tripped);
+                        }
+                        ControlFlow::Continue(visit(GovernedEvidenceView::Complete {
                             outcome,
                             rows,
                             status,
-                        })
+                        }))
                     },
                 )?;
-                Ok(AnswerSettlement::Complete(value))
+                Ok(match value {
+                    ControlFlow::Continue(value) => AnswerSettlement::Complete(value),
+                    ControlFlow::Break(tripped) => AnswerSettlement::Exhausted {
+                        tripped,
+                        partial: certain_partial(materialize(&outcome, &ctx)?, true),
+                        prefix: None,
+                    },
+                })
             }
             GovernedResolution::Exhausted(exhausted) => {
                 Ok(AnswerSettlement::exhausted(exhausted, prefix))
@@ -287,14 +304,21 @@ fn visit_prefix<D: DatasetView + Sync, R>(
     let visit = visit
         .take()
         .ok_or_else(|| EvalError::internal("the evidence prefix visitor was already used"))?;
-    input
-        .with_prefix_answer_status(rows, answer, &ctx.growth, |status| {
-            visit(GovernedEvidenceView::Prefix {
-                tripped,
-                outcome: borrow_outcome(outcome, ctx),
-                rows: InternedSolutions::new(rows, ctx),
-                status,
-            })
-        })
-        .map(Some)
+    input.with_prefix_answer_status(rows, answer, &ctx.growth, |status| {
+        // The first resource trip stays latched, but a subsequent host stop
+        // still withholds the prefix visitor.
+        if ctx
+            .governors
+            .as_ref()
+            .is_some_and(|state| state.poll_stop().is_some())
+        {
+            return None;
+        }
+        Some(visit(GovernedEvidenceView::Prefix {
+            tripped,
+            outcome: borrow_outcome(outcome, ctx),
+            rows: InternedSolutions::new(rows, ctx),
+            status,
+        }))
+    })
 }
