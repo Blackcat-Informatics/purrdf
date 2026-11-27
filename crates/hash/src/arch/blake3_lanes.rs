@@ -191,6 +191,147 @@ macro_rules! blake3_lanes {
 }
 pub(crate) use blake3_lanes;
 
+// Each live lane is an independent message. The exact same vector arithmetic
+// also compresses its parent nodes, without a scalar detour for mixed lengths.
+macro_rules! blake3_messages {
+    ($feature:literal, $width:literal, $compress:ident) => {
+        use crate::blake3::{CHUNK, END, Hash, PARENT, ROOT, START};
+
+        #[target_feature(enable = $feature)]
+        pub(super) fn messages(inputs: &[&[u8]], mode: crate::blake3::Mode, out: &mut [Hash]) {
+            for (inputs, out) in inputs.chunks($width).zip(out.chunks_mut($width)) {
+                let lengths: [usize; $width] = core::array::from_fn(|lane| {
+                    inputs
+                        .get(lane)
+                        .map_or(0, |s| s.len().div_ceil(CHUNK).max(1))
+                });
+                // A group is nonempty and the public entry admits at most four chunks.
+                let count = lengths.iter().copied().max().unwrap_or(0);
+                let mut chunks = [[V::splat(0); 8]; 4];
+                for (index, cv) in chunks[..count].iter_mut().enumerate() {
+                    *cv = message_chunk(inputs, &lengths, index, mode);
+                }
+                let root = message_root(chunks, &lengths, count, mode);
+                let words = root.map(|column| column.array());
+                for (lane, digest) in out.iter_mut().enumerate() {
+                    *digest = Hash::from_cv(core::array::from_fn(|word| words[word][lane]));
+                }
+            }
+        }
+
+        #[target_feature(enable = $feature)]
+        fn message_chunk(
+            inputs: &[&[u8]],
+            lengths: &[usize; $width],
+            chunk: usize,
+            mode: crate::blake3::Mode,
+        ) -> [V; 8] {
+            let mut padded = [0; CHUNK * $width];
+            let mut last = [0; $width];
+            let mut blocks = [0; $width];
+            for (lane, &input) in inputs.iter().enumerate() {
+                if chunk >= lengths[lane] {
+                    continue;
+                }
+                let offset = chunk * CHUNK;
+                let bytes = &input[offset..input.len().min(offset + CHUNK)];
+                let start = lane * CHUNK;
+                padded[start..start + bytes.len()].copy_from_slice(bytes);
+                blocks[lane] = bytes.len().div_ceil(64).max(1);
+                last[lane] = bytes.len() - (blocks[lane] - 1) * 64;
+            }
+            let max = blocks.iter().copied().max().unwrap_or(0);
+            let whole = blocks.iter().copied().min().unwrap_or(0);
+            let mut cv = mode.key.map(|word| V::splat(word));
+            let low = V::splat(chunk as u32);
+            let high = V::splat(0);
+            for block in 0..max {
+                let words = load_block(&padded, block);
+                let flags = V::load(core::array::from_fn(|lane| {
+                    let mut flags = mode.flags | if block == 0 { START } else { 0 };
+                    if block + 1 == blocks[lane] {
+                        flags |= END;
+                        if lengths[lane] == 1 {
+                            flags |= ROOT;
+                        }
+                    }
+                    flags
+                }));
+                let size = V::load(core::array::from_fn(|lane| {
+                    if block + 1 == blocks[lane] {
+                        last[lane] as u32
+                    } else {
+                        64
+                    }
+                }));
+                let next = $compress!(cv, words, low, high, size, flags);
+                if block < whole {
+                    cv = next;
+                } else {
+                    let live = V::load(blocks.map(|n| if block < n { u32::MAX } else { 0 }));
+                    for i in 0..8 {
+                        cv[i] = cv[i].select(live, next[i]);
+                    }
+                }
+            }
+            cv
+        }
+
+        #[target_feature(enable = $feature)]
+        fn message_root(
+            [first, second, third, fourth]: [[V; 8]; 4],
+            lengths: &[usize; $width],
+            count: usize,
+            mode: crate::blake3::Mode,
+        ) -> [V; 8] {
+            if count == 1 {
+                return first;
+            }
+            let mut left = first;
+            let mut right = second;
+            if count >= 3 {
+                let pair = message_parent(first, second, mode, 0);
+                let has_third = V::load(lengths.map(|n| if n >= 3 { u32::MAX } else { 0 }));
+                let end = if count == 4 {
+                    let pair = message_parent(third, fourth, mode, 0);
+                    let has_fourth = V::load(lengths.map(|n| if n == 4 { u32::MAX } else { 0 }));
+                    core::array::from_fn(|i| third[i].select(has_fourth, pair[i]))
+                } else {
+                    third
+                };
+                for i in 0..8 {
+                    left[i] = first[i].select(has_third, pair[i]);
+                    right[i] = second[i].select(has_third, end[i]);
+                }
+            }
+            let root = message_parent(left, right, mode, ROOT);
+            let multiple = V::load(lengths.map(|n| if n >= 2 { u32::MAX } else { 0 }));
+            core::array::from_fn(|i| first[i].select(multiple, root[i]))
+        }
+
+        #[target_feature(enable = $feature)]
+        fn message_parent(
+            left: [V; 8],
+            right: [V; 8],
+            mode: crate::blake3::Mode,
+            flags: u32,
+        ) -> [V; 8] {
+            let mut words = [V::splat(0); 16];
+            words[..8].copy_from_slice(&left);
+            words[8..].copy_from_slice(&right);
+            $compress!(
+                mode.key.map(|word| V::splat(word)),
+                words,
+                V::splat(0),
+                V::splat(0),
+                V::splat(64),
+                V::splat(mode.flags | PARENT | flags)
+            )
+        }
+    };
+}
+pub(crate) use blake3_messages;
+
 macro_rules! blake3_single4 {
     ($feature:literal) => {
         /// One block: four independent quarter rounds occupy four SIMD lanes.

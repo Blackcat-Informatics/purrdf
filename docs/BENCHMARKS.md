@@ -1197,6 +1197,87 @@ is larger at the target scales and regresses every measured query shape. The
 measured production decision is therefore to retain both FoQ posting indexes;
 pack bytes and decoding behavior remain unchanged.
 
+## Independent BLAKE3 messages
+
+On Linux with a native instruction counter, run the fixed-work comparison
+with a new receipts directory.
+
+```bash
+cargo bench --locked -p purrdf-hash-conformance --bench digests -- \
+  --blake3-instructions .stage/blake3-instructions
+```
+
+Each row processes 16,384 deterministic messages and records three
+unscaled `instructions:u` samples. The single and prepared derive-key
+rows use the same input mutation, output width, and witness loop. Context
+preparation is outside the counter. The grouped control and the batch
+use the same sixteen inputs and output slots. The control hashes each
+message individually and the batch calls the independent-message API.
+The report retains every available named backend, the default dispatcher,
+and the raw counter and witness receipts. It does not measure elapsed time.
+
+With the x86-64 ABI on an AMD Ryzen AI Max+ 395 and
+`rustc 1.102.0-nightly (5df8c02af)`, the default dispatcher gives the
+following median userspace retired instructions per message. Both builds
+use the same processor, compiler, release optimization, fixed work count,
+and matching digest witnesses. The grouped control shows the cost of hashing
+the same batch inputs individually on the current build.
+
+| Bytes | Prior single | Single | Prepared derive-key | Grouped singles | Batch |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 | 993.03 | 395.03 | 395.03 | 392.63 | 237.88 |
+| 32 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
+| 63 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
+| 64 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
+| 65 | 2,015.03 | 844.03 | 844.03 | 841.63 | 295.88 |
+| 100 | 2,008.03 | 837.03 | 837.03 | 834.63 | 295.88 |
+| 128 | 2,008.03 | 837.03 | 837.03 | 834.63 | 295.88 |
+| 256 | 3,884.03 | 1,519.03 | 1,519.03 | 1,516.63 | 425.88 |
+| 512 | 7,636.03 | 2,883.03 | 2,883.03 | 2,880.63 | 673.88 |
+| 1024 | 15,140.03 | 5,611.03 | 5,611.03 | 5,608.63 | 1,200.88 |
+| 1025 | 17,032.03 | 16,459.03 | 16,459.05 | 16,456.63 | 1,428.07 |
+| 2048 | 16,767.03 | 16,194.04 | 16,194.04 | 16,191.72 | 2,385.78 |
+| 2049 | 17,814.03 | 17,241.05 | 17,241.08 | 17,238.73 | 2,613.78 |
+| 3072 | 17,549.03 | 16,976.07 | 16,976.04 | 16,973.75 | 3,571.79 |
+| 3073 | 17,007.05 | 16,434.04 | 16,434.04 | 16,431.53 | 3,795.59 |
+| 4096 | 6,837.03 | 6,264.03 | 6,264.03 | 6,261.72 | 4,753.59 |
+
+Among the forced paths, AVX2 had the lowest single-message count for the
+sampled lengths through 1024 bytes. AVX-512 had the lowest count from 1025
+through 4096 bytes on this host. It also had the lowest sampled batch counts.
+The default single call and a forced call have different feature checks, so
+their total instruction counts need not match even for the same kernel. The
+default plain and reused derive-key medians differ by less than 0.03
+instruction per message at every measured length. For example, the default
+32-byte single hash and reused derivation both retired about 393 instructions
+per message.
+
+To measure the 32-bit ABI on the same hardware, add
+`--target i686-unknown-linux-gnu` before the bench arguments. For one chunk,
+the dispatcher uses the detected SSE2 compressor when available. For two
+chunks, it compresses each leaf with SSE2 and combines the two chaining
+values. This avoids doing four lanes of leaf work for two chunks. The
+portable compressor remains the fallback when SSE2 is unavailable.
+
+The same host and compiler gave these medians for the 32-bit binary, in
+userspace retired instructions per message. The prior column uses portable
+compression for one chunk and four padded lanes for two.
+
+| Bytes | Prior default | Current default | Current forced portable |
+| ---: | ---: | ---: | ---: |
+| 32 | 1,387.05 | 799.05 | 1,396.09 |
+| 1024 | 21,444.08 | 11,643.06 | 21,455.07 |
+| 1025 | 33,310.10 | 12,148.06 | 24,271.06 |
+| 2048 | 33,015.09 | 22,356.07 | 44,243.07 |
+
+The detected path retired fewer instructions than both alternatives at the
+first byte of the second chunk and at each sampled block boundary through
+two chunks. Across the full size matrix, prepared derivation did not add
+more than 0.031 instruction per message in any measured row. These
+measurements do not establish instruction counts for other
+microarchitectures, `AArch64`, or Wasm. The named SIMD128 execution checks
+digest parity, not hardware instruction counts.
+
 ## Python compat harness (`bench_compat.py`)
 
 `bindings/python/benchmarks/bench_compat.py` times the shim and the genuine

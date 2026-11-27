@@ -431,6 +431,100 @@ macro_rules! wide {
     }};
 }
 
+use core::arch::x86_64::{__m512i as MessageVector, _mm512_and_si512};
+
+#[derive(Clone, Copy)]
+struct V(MessageVector);
+
+impl V {
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    fn splat(word: u32) -> Self {
+        Self(_mm512_set1_epi32(word as i32))
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    fn load(words: [u32; 16]) -> Self {
+        // SAFETY: one unaligned full vector is inside the array.
+        Self(unsafe { _mm512_loadu_si512(words.as_ptr().cast()) })
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    fn array(self) -> [u32; 16] {
+        let mut words = [0; 16];
+        // SAFETY: one unaligned full vector fits the destination array.
+        unsafe { core::arch::x86_64::_mm512_storeu_si512(words.as_mut_ptr().cast(), self.0) };
+        words
+    }
+
+    #[inline]
+    #[target_feature(enable = "avx512f")]
+    fn select(self, mask: Self, yes: Self) -> Self {
+        Self(_mm512_xor_si512(
+            self.0,
+            _mm512_and_si512(mask.0, _mm512_xor_si512(self.0, yes.0)),
+        ))
+    }
+}
+
+#[inline]
+#[target_feature(enable = "avx512f")]
+fn load_block(bytes: &[u8; 16384], block: usize) -> [V; 16] {
+    assert!(block < 16);
+    let rows = core::array::from_fn(|lane| {
+        // SAFETY: each unaligned load stays within one full padded block.
+        unsafe { _mm512_loadu_si512(bytes.as_ptr().add(lane * 1024 + block * 64).cast()) }
+    });
+    transpose16(&rows).map(V)
+}
+
+macro_rules! message_wide {
+    ($cv:expr, $words:expr, $lo:expr, $hi:expr, $size:expr, $flags:expr) => {{
+        wide!(
+            $cv.map(|word| word.0),
+            $words.map(|word| word.0),
+            $lo.0,
+            $hi.0,
+            $size.0,
+            $flags.0
+        )
+        .map(V)
+    }};
+}
+super::blake3_lanes::blake3_messages!("avx512f", 16, message_wide);
+
+/// Convert block rows to sixteen independent lanes per message word.
+#[inline]
+#[target_feature(enable = "avx512f")]
+fn transpose16(rows: &[MessageVector; 16]) -> [MessageVector; 16] {
+    let mut pairs = [_mm512_setzero_si512(); 16];
+    for i in (0..16).step_by(2) {
+        pairs[i] = _mm512_unpacklo_epi32(rows[i], rows[i + 1]);
+        pairs[i + 1] = _mm512_unpackhi_epi32(rows[i], rows[i + 1]);
+    }
+    let mut groups = [_mm512_setzero_si512(); 16];
+    for i in (0..16).step_by(4) {
+        groups[i] = _mm512_unpacklo_epi64(pairs[i], pairs[i + 2]);
+        groups[i + 1] = _mm512_unpackhi_epi64(pairs[i], pairs[i + 2]);
+        groups[i + 2] = _mm512_unpacklo_epi64(pairs[i + 1], pairs[i + 3]);
+        groups[i + 3] = _mm512_unpackhi_epi64(pairs[i + 1], pairs[i + 3]);
+    }
+    let mut m = [_mm512_setzero_si512(); 16];
+    for col in 0..4 {
+        let a = _mm512_shuffle_i32x4::<0x44>(groups[col], groups[col + 4]);
+        let b = _mm512_shuffle_i32x4::<0x44>(groups[col + 8], groups[col + 12]);
+        let c = _mm512_shuffle_i32x4::<0xee>(groups[col], groups[col + 4]);
+        let d = _mm512_shuffle_i32x4::<0xee>(groups[col + 8], groups[col + 12]);
+        m[col] = _mm512_shuffle_i32x4::<0x88>(a, b);
+        m[col + 4] = _mm512_shuffle_i32x4::<0xdd>(a, b);
+        m[col + 8] = _mm512_shuffle_i32x4::<0x88>(c, d);
+        m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
+    }
+    m
+}
+
 #[inline]
 #[target_feature(enable = "avx512f")]
 unsafe fn chunk_columns16(
@@ -466,30 +560,7 @@ unsafe fn chunk_columns16(
                 )
             };
         }
-        // Transpose sixteen contiguous block loads into word-parallel lanes.
-        let mut pairs = [_mm512_setzero_si512(); 16];
-        for i in (0..16).step_by(2) {
-            pairs[i] = _mm512_unpacklo_epi32(rows[i], rows[i + 1]);
-            pairs[i + 1] = _mm512_unpackhi_epi32(rows[i], rows[i + 1]);
-        }
-        let mut groups = [_mm512_setzero_si512(); 16];
-        for i in (0..16).step_by(4) {
-            groups[i] = _mm512_unpacklo_epi64(pairs[i], pairs[i + 2]);
-            groups[i + 1] = _mm512_unpackhi_epi64(pairs[i], pairs[i + 2]);
-            groups[i + 2] = _mm512_unpacklo_epi64(pairs[i + 1], pairs[i + 3]);
-            groups[i + 3] = _mm512_unpackhi_epi64(pairs[i + 1], pairs[i + 3]);
-        }
-        let mut m = [_mm512_setzero_si512(); 16];
-        for col in 0..4 {
-            let a = _mm512_shuffle_i32x4::<0x44>(groups[col], groups[col + 4]);
-            let b = _mm512_shuffle_i32x4::<0x44>(groups[col + 8], groups[col + 12]);
-            let c = _mm512_shuffle_i32x4::<0xee>(groups[col], groups[col + 4]);
-            let d = _mm512_shuffle_i32x4::<0xee>(groups[col + 8], groups[col + 12]);
-            m[col] = _mm512_shuffle_i32x4::<0x88>(a, b);
-            m[col + 4] = _mm512_shuffle_i32x4::<0xdd>(a, b);
-            m[col + 8] = _mm512_shuffle_i32x4::<0x88>(c, d);
-            m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
-        }
+        let m = transpose16(&rows);
         cv = wide!(
             cv,
             m,
@@ -731,30 +802,7 @@ unsafe fn parents16_inner(children: &[[u32; 8]; 32], mode: crate::blake3::Mode) 
     let rows: [_; 16] = core::array::from_fn(|i| unsafe {
         _mm512_loadu_si512(children.as_ptr().add(i * 2).cast())
     });
-    // Transpose sixteen contiguous block loads into word-parallel lanes.
-    let mut pairs = [_mm512_setzero_si512(); 16];
-    for i in (0..16).step_by(2) {
-        pairs[i] = _mm512_unpacklo_epi32(rows[i], rows[i + 1]);
-        pairs[i + 1] = _mm512_unpackhi_epi32(rows[i], rows[i + 1]);
-    }
-    let mut groups = [_mm512_setzero_si512(); 16];
-    for i in (0..16).step_by(4) {
-        groups[i] = _mm512_unpacklo_epi64(pairs[i], pairs[i + 2]);
-        groups[i + 1] = _mm512_unpackhi_epi64(pairs[i], pairs[i + 2]);
-        groups[i + 2] = _mm512_unpacklo_epi64(pairs[i + 1], pairs[i + 3]);
-        groups[i + 3] = _mm512_unpackhi_epi64(pairs[i + 1], pairs[i + 3]);
-    }
-    let mut m = [_mm512_setzero_si512(); 16];
-    for col in 0..4 {
-        let a = _mm512_shuffle_i32x4::<0x44>(groups[col], groups[col + 4]);
-        let b = _mm512_shuffle_i32x4::<0x44>(groups[col + 8], groups[col + 12]);
-        let c = _mm512_shuffle_i32x4::<0xee>(groups[col], groups[col + 4]);
-        let d = _mm512_shuffle_i32x4::<0xee>(groups[col + 8], groups[col + 12]);
-        m[col] = _mm512_shuffle_i32x4::<0x88>(a, b);
-        m[col + 4] = _mm512_shuffle_i32x4::<0xdd>(a, b);
-        m[col + 8] = _mm512_shuffle_i32x4::<0x88>(c, d);
-        m[col + 12] = _mm512_shuffle_i32x4::<0xdd>(c, d);
-    }
+    let m = transpose16(&rows);
 
     let initial: [_; 8] = core::array::from_fn(|i| _mm512_set1_epi32(mode.key[i] as i32));
     let cv = wide!(

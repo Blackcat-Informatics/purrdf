@@ -109,6 +109,7 @@ macro_rules! rotate_sse2 {
 }
 four_words!("sse2", rotate_sse2);
 super::blake3_lanes::blake3_lanes!("sse2", 4);
+super::blake3_lanes::blake3_messages!("sse2", 4, lane_compress);
 
 use intrinsics::_mm_shuffle_epi32;
 impl V {

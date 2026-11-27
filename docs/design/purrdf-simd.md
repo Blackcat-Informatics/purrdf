@@ -220,14 +220,27 @@ can lose overall through buffer initialization, copies, dispatch or tree work.
 
 **Scalar can win inside a block.** BLAKE3's four independent scalar quarter
 rounds give an out-of-order x86 processor multiple dependency chains to schedule.
-Putting those four rounds in a vector creates one instruction chain. Measurements
-on the Ryzen AI Max+ 395 favored scalar ARX through one 1 KiB chunk, even with
-AVX-512 available. Default x86 one-shot hashes and short stream finalizations use
-that path; explicit backend forcing retains each SIMD single-block kernel for
-tests and comparison. Independent *chunks* still benefit from SIMD. Match batch width to the live
+Putting those four rounds in a vector creates one instruction chain. Earlier
+latency measurements on the Ryzen AI Max+ 395 favored scalar ARX through a 1 KiB
+chunk, even with AVX-512 available. Short x86 stream finalizations retain that
+path. The one-shot path uses a separate retired-instruction comparison, with
+explicit backend forcing retained for tests and comparison. Independent chunks
+still benefit from SIMD. Match batch width to the live
 input too: the AVX-512VL four-chunk path avoids a padded 16 KiB batch for
 messages through 4 KiB, while full batches keep sixteen lanes. This is a
 workload decision, not a claim that scalar always wins on other processors.
+
+**Put independent messages in lanes.** BLAKE3 uses the same word-parallel
+rounds for independent messages as for chunks of one message. The batch APIs
+accept up to 4096 bytes per message and publish results in input order into
+caller storage. Each lane owns its length, chunk counter, and root designation.
+Completed lanes retain their last chaining value while longer neighbors
+continue. The parent stage also runs in the vector lanes. SSE2, NEON and
+SIMD128 process four messages per group, AVX2 processes eight, and AVX-512
+processes sixteen. The portable backend hashes each message independently.
+The `digests` benchmark's `--blake3-instructions` selection compares single
+calls, individual calls on a prearranged group, and actual SIMD batching.
+It also measures reuse of a prepared derive-key context.
 
 **Specialization must survive code generation.** SHA-3's rho/pi indices and
 rotation counts are mathematical constants. A compact indexed loop left variable
