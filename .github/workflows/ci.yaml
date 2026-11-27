@@ -351,9 +351,10 @@ jobs:
         run: make rdf-core-hygiene
 
   # Keep the workspace result tied to both independent jobs.
+  # Report failed dependencies on a live run, but release cancelled runs.
   workspace:
     needs: [workspace-compiler, workspace-hygiene]
-    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -458,7 +459,7 @@ jobs:
   # shard did.
   test:
     needs: test-shard
-    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1067,7 +1068,7 @@ jobs:
 
   simd-asm:
     needs: [simd-asm-compiler, simd-asm-config, workspace-hygiene]
-    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -1338,7 +1339,7 @@ jobs:
   # Keep one check for the independent architecture suites.
   cross-arch:
     needs: [cross-arch-i686, cross-arch-i586]
-    if: always() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection)
+    if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
