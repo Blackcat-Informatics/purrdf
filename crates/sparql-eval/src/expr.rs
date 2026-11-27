@@ -988,7 +988,37 @@ fn begin_filter_sequence<'e, D: DatasetView + Sync>(
             program, expr, pattern, &schema, ctx,
         )?,
     };
-    let rows = if forked {
+    let selection = if forked
+        && !cfg!(target_arch = "wasm32")
+        && crate::engine::Sequencing::for_view::<D>() == crate::engine::Sequencing::Free
+        && !ctx.sequential_operation_required()
+        && ctx.governor_state().is_none()
+        && ctx.expression_barrier.observed().is_none()
+        && !ctx.may_have_evidence()
+        && !seq.rows.may_have_evidence_attachment()
+        && seq.rows.search_evidence().is_virtual()
+    {
+        linked.same_term_selection()
+    } else {
+        None
+    };
+    let rows = if let Some(selection) = selection {
+        let (rows, witnesses) = crate::parallel::par_chunk_try_map_slice(
+            false,
+            &seq.rows,
+            || Ok((ctx.fork_for_loop_worker(None)?, linked.fresh())),
+            |(child, linked), output, slice| {
+                linked.select_same_term(selection, slice, &schema, child, output)
+            },
+            |(child, _)| core::mem::take(&mut child.witness),
+        )?;
+        ctx.absorb_worker_witnesses(witnesses)?;
+        RowsBuilder::from_storage(
+            crate::AdmittedVec::from_parts(rows, None, &ctx.growth),
+            &ctx.growth,
+        )
+        .finish()?
+    } else if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Preserve worker witnesses alongside the original admitted predicate
         // rows and their ordered checkpoints.

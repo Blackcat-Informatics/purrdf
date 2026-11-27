@@ -1123,6 +1123,69 @@ impl<'e, I: purrdf_core::ViewTermId> Linked<'e, I> {
         }
     }
 
+    /// Linked shape of `sameTerm(?variable, constant)` in either operand order.
+    pub(crate) fn same_term_selection(&self) -> Option<(Option<usize>, usize)> {
+        match self.program.ops.as_slice() {
+            [Op::Var(slot), Op::Const(constant), Op::SameTerm]
+            | [Op::Const(constant), Op::Var(slot), Op::SameTerm] => {
+                Some((self.slots[*slot as usize], *constant as usize))
+            }
+            _ => None,
+        }
+    }
+
+    /// Select original rows from one ungoverned, evidence-free worker chunk.
+    pub(crate) fn select_same_term<D: DatasetView<Id = I> + Sync>(
+        &mut self,
+        selection: (Option<usize>, usize),
+        rows: &[crate::solution::RetainedRow<I>],
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+        output: &mut Vec<crate::solution::RetainedRow<I>>,
+    ) -> Result<(), EvalError> {
+        // The ordinary VM interns the constant on the first actual row and
+        // registers its computed identity on the second. Keep both operations
+        // at their source positions, even if the variable is unbound.
+        let (initial, rest) = rows.split_at(rows.len().min(2));
+        for row in initial {
+            if self.ebv(None, row, schema, ctx)? == Some(true) {
+                output.push(row.clone_admitted(&ctx.growth)?);
+            }
+        }
+        let (Some(column), constant) = selection else {
+            return Ok(());
+        };
+        let ConstCell::Read(Some(constant)) = self.consts[constant] else {
+            return Ok(());
+        };
+        let mut known = ctx.cached_bool_terms.map(|term| term.is_some());
+        for block in rest.chunks(u64::BITS as usize) {
+            let mut selected = 0_u64;
+            for (index, row) in block.iter().enumerate() {
+                let Some(term) = row[column] else {
+                    continue;
+                };
+                let equal = term == constant;
+                let slot = usize::from(equal);
+                let keep = if !known[slot] {
+                    // The first Boolean intern can refuse. Publish earlier
+                    // selections first, just as the row loop would.
+                    copy_selected(block, selected, ctx, output)?;
+                    selected = 0;
+                    let term = helpers::intern_boolean(ctx, equal)?;
+                    let keep = helpers::ebv_term(ctx, term)? == Some(true);
+                    known[slot] = true;
+                    keep
+                } else {
+                    equal
+                };
+                selected |= u64::from(keep) << index;
+            }
+            copy_selected(block, selected, ctx, output)?;
+        }
+        Ok(())
+    }
+
     /// The expression's effective boolean value over `row` (`Ok(None)` is an error or
     /// unbound).
     pub(crate) fn ebv<D: DatasetView<Id = I> + Sync>(
@@ -1762,6 +1825,21 @@ fn call_custom<'d, D: DatasetView + Sync>(
         }));
     }
     helpers::apply_custom_host(iri.as_str(), vals, ctx, evidence).map(VmStep::Value)
+}
+
+/// Keep physical row owners and copy surviving rows in source order.
+fn copy_selected<D: DatasetView + Sync>(
+    rows: &[crate::solution::RetainedRow<D::Id>],
+    mut selection: u64,
+    ctx: &EvalCtx<'_, D>,
+    output: &mut Vec<crate::solution::RetainedRow<D::Id>>,
+) -> Result<(), EvalError> {
+    while selection != 0 {
+        let index = selection.trailing_zeros() as usize;
+        selection &= selection - 1;
+        output.push(rows[index].clone_admitted(&ctx.growth)?);
+    }
+    Ok(())
 }
 
 /// Resolve a suspension by running the pattern evaluation it waits on, now.
