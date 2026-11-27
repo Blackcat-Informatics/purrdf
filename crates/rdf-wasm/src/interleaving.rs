@@ -141,6 +141,12 @@ pub const LEDGER: &[ThreadLocal] = &[
     },
     ThreadLocal {
         file: "crates/stack/src/lib.rs",
+        name: "INSTALLED_FLOOR",
+        safety: Safety::NotCompiledIn,
+        reason: "Tracks a native context's floor separately from operating-system bounds. The declaration is excluded on wasm32, so asynchronous jobs cannot see it.",
+    },
+    ThreadLocal {
+        file: "crates/stack/src/lib.rs",
         name: "WALK",
         safety: Safety::Swapped,
         reason: STACK_CONTEXT,
