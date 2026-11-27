@@ -1967,13 +1967,13 @@ run restored the original seed with the matching context.
 
 Packing the 366,284,309-byte seed took 6.72 s and uploading it took 2.64 s.
 The resumed run downloaded the 366,284,447-byte artifact in 18.98 s, unwrapped
-it in 1.27 s, and extracted the seed in 1.70 s. The jobs took 42 min 01 s and
-4 min 11 s end to end, respectively. The first also packed, uploaded, and tried
+it in 1.27 s, and extracted the seed in 1.70 s. The recorded job times were
+42 min 03 s and 4 min 11 s. The first job packed, uploaded, and tried
 restoring the seed. The second includes the edit control. This measures Actions
 artifact transport, not cache-service latency or ordinary matrix wall time.
 
 Ordinary CI does not cache compiled Neoverse outputs. At the measurement
-review, the repository reported 411 cache entries and 10,748,677,280 active
+review, the repository reported 408 cache entries and 10,748,886,524 active
 bytes against a configured 10 GB limit and seven-day retention. A seed of the
 measured size would add about 366 MB, and changing the shared assembly action
 would also rotate the existing x86 compiled-cache key. The measured reduction
