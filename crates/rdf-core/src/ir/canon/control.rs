@@ -3,6 +3,8 @@
 
 //! Caller-selected search policy and measured, per-run execution evidence.
 
+use purrdf_lex::allocation::{Admission, Memory, Resident, StorageError};
+use std::alloc::Layout;
 use std::cell::Cell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -83,32 +85,70 @@ pub enum SearchConfiguration {
     ComparisonPreparation,
 }
 
-impl SearchConfiguration {
-    pub(super) fn labelling(graph: Option<&str>, output: CanonOutput) -> Self {
-        Self::Labelling {
-            version: crate::canonical_labelling::VERSION,
-            selection: graph.map_or(CanonSelection::Dataset, |iri| {
-                CanonSelection::NamedGraph(iri.to_owned())
-            }),
+/// Borrowed coordinates until the control can own the exact recorded graph.
+pub(super) enum SearchRequest<'a> {
+    Rdfc {
+        hash: CanonHash,
+        presentation: CanonPresentation,
+        graph: Option<&'a str>,
+        output: CanonOutput,
+    },
+    Labelling {
+        graph: Option<&'a str>,
+        output: CanonOutput,
+    },
+    DatasetStateV1,
+    ComparisonPreparation,
+}
+
+impl<'a> SearchRequest<'a> {
+    pub(super) const fn labelling(graph: Option<&'a str>, output: CanonOutput) -> Self {
+        Self::Labelling { graph, output }
+    }
+
+    pub(super) const fn rdfc(
+        hash: CanonHash,
+        presentation: CanonPresentation,
+        graph: Option<&'a str>,
+        output: CanonOutput,
+    ) -> Self {
+        Self::Rdfc {
+            hash,
+            presentation,
+            graph,
             output,
         }
     }
 
-    pub(super) fn rdfc(
-        hash: CanonHash,
-        presentation: CanonPresentation,
-        graph: Option<&str>,
-        output: CanonOutput,
-    ) -> Self {
-        Self::Rdfc {
-            profile_version: CANON_PROFILE_VERSION,
-            hash,
-            presentation,
-            selection: graph.map_or(CanonSelection::Dataset, |iri| {
-                CanonSelection::NamedGraph(iri.to_owned())
-            }),
-            output,
-        }
+    fn prepare(
+        self,
+        memory: &mut Memory<'_, impl Admission>,
+    ) -> Result<SearchConfiguration, StorageError> {
+        let mut selection = |graph| match graph {
+            Some(iri) => memory.string(iri).map(CanonSelection::NamedGraph),
+            None => Ok(CanonSelection::Dataset),
+        };
+        Ok(match self {
+            Self::Rdfc {
+                hash,
+                presentation,
+                graph,
+                output,
+            } => SearchConfiguration::Rdfc {
+                profile_version: CANON_PROFILE_VERSION,
+                hash,
+                presentation,
+                selection: selection(graph)?,
+                output,
+            },
+            Self::Labelling { graph, output } => SearchConfiguration::Labelling {
+                version: crate::canonical_labelling::VERSION,
+                selection: selection(graph)?,
+                output,
+            },
+            Self::DatasetStateV1 => SearchConfiguration::DatasetStateV1,
+            Self::ComparisonPreparation => SearchConfiguration::ComparisonPreparation,
+        })
     }
 }
 
@@ -205,7 +245,7 @@ impl purrdf_hash::error::StructuredError for SearchRefusal {
     }
 }
 
-/// Immutable execution evidence finalized by the actual engine on every return.
+/// Immutable execution evidence finalized by the actual engine.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SearchReceipt {
     /// Exact algorithm and selection coordinates.
@@ -233,8 +273,9 @@ pub struct SearchPosition(usize);
 ///
 /// Each engine invocation gets a fresh ceiling. Composite operations retain all
 /// constituent receipts and have no aggregate search ceiling. Native callers own
-/// this evidence and may choose to discard it. Receipt storage does not yet claim
-/// whole-operation physical memory admission.
+/// this evidence and may choose to discard it. Canonicalization obtains receipt
+/// storage before starting. Complete-state receipts grow after the scoped source
+/// workspace is released. This is not whole-operation memory admission.
 #[derive(Debug)]
 pub struct CanonicalizationControl<'a> {
     policy: SearchPolicy,
@@ -267,9 +308,9 @@ impl<'a> CanonicalizationControl<'a> {
         &self.receipts
     }
 
-    /// Read the last run's finite RDFC observation and its exact receipt position.
-    /// A successful or non-RDFC last run has no such observation. Earlier runs are
-    /// never substituted, and consuming the receipts does not transfer this observation.
+    /// Read the latest finalized receipt's finite RDFC observation and position.
+    /// A successful or non-RDFC receipt has no such observation. Earlier receipts
+    /// are never substituted, and consuming the receipts does not transfer it.
     #[must_use]
     pub fn last_rdfc_refusal(&self) -> Option<(SearchPosition, RdfcRefusalObservation)> {
         self.last_rdfc_refusal.map(|observation| {
@@ -323,12 +364,37 @@ impl<'a> CanonicalizationControl<'a> {
 
     pub(super) fn run<T, E>(
         &mut self,
-        configuration: SearchConfiguration,
+        request: SearchRequest<'_>,
+        storage_error: impl Fn(StorageError) -> E,
         operation: impl FnOnce(&SearchRun<'_>) -> Result<T, E>,
     ) -> Result<T, E> {
-        self.last_rdfc_refusal = None;
+        self.run_with_receipt_storage(request, &mut Resident, storage_error, operation)
+    }
+
+    pub(super) fn run_with_receipt_storage<T, E>(
+        &mut self,
+        request: SearchRequest<'_>,
+        storage: &mut impl Admission,
+        storage_error: impl Fn(StorageError) -> E,
+        operation: impl FnOnce(&SearchRun<'_>) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let complete_state = matches!(request, SearchRequest::DatasetStateV1);
+        let mut memory = Memory::new(storage);
+        let configuration = request.prepare(&mut memory).map_err(&storage_error)?;
+        if !complete_state {
+            // A canonical run can only start once its exact coordinates and
+            // final slot are owned. Failure preserves the previous run.
+            self.reserve_receipt_slot(&mut memory)
+                .map_err(&storage_error)?;
+        }
         let run = SearchRun::new(self.policy, self.stop);
         let result = operation(&run);
+        // A complete-state run admits all of its source work under a single
+        // scoped owner. Receipt growth must not add a detached allocation
+        // to that working set. Preserve an original refusal if both fail.
+        if complete_state && let Err(error) = self.reserve_receipt_slot(&mut memory) {
+            return result.and_then(|_| Err(storage_error(error)));
+        }
         self.receipts.push(SearchReceipt {
             configuration,
             policy: self.policy,
@@ -345,6 +411,19 @@ impl<'a> CanonicalizationControl<'a> {
         });
         self.last_rdfc_refusal = run.rdfc_refusal.get();
         result
+    }
+
+    fn reserve_receipt_slot(
+        &mut self,
+        memory: &mut Memory<'_, impl Admission>,
+    ) -> Result<(), StorageError> {
+        if self.receipts.len() == self.receipts.capacity() {
+            let old = Layout::array::<SearchReceipt>(self.receipts.capacity())
+                .map_err(|_| StorageError::SizeOverflow)?;
+            memory.add_bytes(old.size())?;
+            memory.reserve_for_push(&mut self.receipts)?;
+        }
+        Ok(())
     }
 }
 
@@ -466,5 +545,65 @@ impl crate::StopSignal for ObservedStop<'_> {
             self.observed.store(true, Ordering::Relaxed);
         }
         stopped
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use purrdf_lex::allocation::Ceiling;
+
+    #[test]
+    fn a_refused_receipt_slot_does_not_start_a_run() {
+        let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+        let initial = control.position();
+        let result: Result<(), StorageError> = control.run_with_receipt_storage(
+            SearchRequest::ComparisonPreparation,
+            &mut Ceiling(0),
+            std::convert::identity,
+            |_| panic!("a run must own its receipt slot before executing"),
+        );
+        assert_eq!(result, Err(StorageError::AdmissionFailed));
+        assert_eq!(control.position(), initial);
+
+        control
+            .run(
+                SearchRequest::ComparisonPreparation,
+                std::convert::identity,
+                |_| Ok(()),
+            )
+            .unwrap();
+        let [receipt] = control.since(initial).unwrap() else {
+            panic!("only the admitted run finalizes a receipt");
+        };
+        assert!(receipt.completed);
+        assert_eq!(
+            receipt.configuration,
+            SearchConfiguration::ComparisonPreparation
+        );
+    }
+
+    #[test]
+    fn a_complete_state_receipt_refusal_does_not_displace_an_operation_refusal() {
+        let mut control = CanonicalizationControl::new(SearchPolicy::Unlimited, None);
+        let initial = control.position();
+        for (operation, expected) in [
+            (Ok(()), StorageError::AdmissionFailed),
+            (Err(StorageError::SizeOverflow), StorageError::SizeOverflow),
+        ] {
+            let ended = Cell::new(false);
+            let result = control.run_with_receipt_storage(
+                SearchRequest::DatasetStateV1,
+                &mut Ceiling(0),
+                std::convert::identity,
+                |_| {
+                    ended.set(true);
+                    operation
+                },
+            );
+            assert!(ended.get());
+            assert_eq!(result, Err(expected));
+            assert_eq!(control.position(), initial);
+        }
     }
 }
