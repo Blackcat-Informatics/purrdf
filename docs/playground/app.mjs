@@ -677,6 +677,8 @@ async function refreshQuads() {
 // Pane: Gallery
 // ---------------------------------------------------------------------------
 
+let latestGalleryLoad;
+
 function buildGallery() {
   const list = $("gallery-list");
   list.replaceChildren();
@@ -712,15 +714,28 @@ async function loadVignette(id) {
     showError(`unknown vignette: ${id}`);
     return;
   }
+  const request = Symbol();
+  latestGalleryLoad = request;
+  const isCurrent = () => latestGalleryLoad === request;
   await guard(async () => {
-    applyState(await vignetteState(v));
-    await runActiveForState(v);
+    let state;
+    try {
+      state = await vignetteState(v);
+    } catch (error) {
+      // A slower, superseded fetch must not replace the current banner.
+      if (isCurrent()) throw error;
+      return;
+    }
+    if (!isCurrent()) return;
+    applyState(state);
+    await runActiveForState(v, isCurrent);
   });
 }
 
 /** After loading a vignette, run the engine action its pane demonstrates. */
-async function runActiveForState(v) {
+async function runActiveForState(v, isCurrent) {
   await doParse();
+  if (!isCurrent()) return;
   switch (v.activePane) {
     case "roundtrip":
       await doSerializeAll();
@@ -730,7 +745,7 @@ async function runActiveForState(v) {
       break;
     case "shacl":
       await doValidate();
-      await doEntail();
+      if (isCurrent()) await doEntail();
       break;
     case "identity":
       await doCompare();
