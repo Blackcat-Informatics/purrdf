@@ -48,8 +48,9 @@ use purrdf_sparql_algebra::{
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value,
     numeric::{
-        CostOp, computed_numeric_render_cost, numeric_cost, numeric_render_cost,
-        numeric_to_float_cost, numeric_unary_cost, temporal_subtract_cost, timezone_adjust_cost,
+        CostOp, computed_numeric_render_cost, numeric_cost, numeric_integral_round_cost,
+        numeric_render_cost, numeric_to_float_cost, numeric_unary_cost, temporal_subtract_cost,
+        timezone_adjust_cost,
     },
 };
 #[cfg(test)]
@@ -6872,13 +6873,17 @@ fn eval_xsd_cast<D: DatasetView + Sync>(
         if target.is_numeric() || target == XsdDatatype::Boolean {
             // A conversion to a binary format, or a truncation or copy on the tower,
             // is priced before it runs.
-            let cost = if matches!(target, XsdDatatype::Double | XsdDatatype::Float) {
-                numeric_to_float_cost(&value)
-            } else {
-                numeric_unary_cost(&value)
-            };
-            if !numeric_step_admitted(ctx, cost) {
-                return Ok(None);
+            if observes_numeric_cost(ctx) {
+                let cost = if matches!(target, XsdDatatype::Double | XsdDatatype::Float) {
+                    numeric_to_float_cost(&value)
+                } else if target.is_integer_family() {
+                    numeric_integral_round_cost(&value)
+                } else {
+                    numeric_unary_cost(&value)
+                };
+                if !numeric_step_admitted(ctx, cost) {
+                    return Ok(None);
+                }
             }
             // A failed cast is an expression error; failed interning is operational.
             let capability = ctx.growth.clone();
@@ -8597,8 +8602,16 @@ fn apply_unary_numeric<D: DatasetView + Sync>(
     value: &crate::parsed_value::ParsedValue,
     op: purrdf_xsd::numeric::NumericUnaryOperator,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    if !numeric_step_admitted(ctx, numeric_unary_cost(value)) {
-        return Ok(None);
+    if observes_numeric_cost(ctx) {
+        use purrdf_xsd::numeric::NumericUnaryOperator::{Ceil, Floor, Round};
+        let cost = if matches!(op, Ceil | Floor | Round) {
+            numeric_integral_round_cost(value)
+        } else {
+            numeric_unary_cost(value)
+        };
+        if !numeric_step_admitted(ctx, cost) {
+            return Ok(None);
+        }
     }
     let capability = ctx.growth.clone();
     let mut frame = crate::native_numeric::NumericFrame::new(&capability);

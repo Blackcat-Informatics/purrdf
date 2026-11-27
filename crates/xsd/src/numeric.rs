@@ -411,9 +411,9 @@ fn tower_cost(a: &XsdValue, b: &XsdValue, op: CostOp, force_exact: bool) -> crat
     }
 }
 
-/// The cost of a unary numeric function over `value` — negation, `fn:abs`,
-/// `fn:ceiling`, `fn:floor`, `fn:round` — when it runs on the exact tower (an
-/// exact integer or decimal operand outside the inline representation); zero otherwise.
+/// The cost of copying, negating or taking the absolute value of a numeric
+/// value outside the inline representation. Integral rounding can build a
+/// power and quotient and uses [`numeric_integral_round_cost`] instead.
 #[must_use]
 pub fn numeric_unary_cost(value: &XsdValue) -> crate::exact::Cost {
     match value {
@@ -432,6 +432,20 @@ pub fn numeric_unary_cost(value: &XsdValue) -> crate::exact::Cost {
             decimal.unary_cost()
         }
         _ => crate::exact::Cost::ZERO,
+    }
+}
+
+/// The cost of rounding to an integral value on the tower, including decimal
+/// truncation for an integer cast. Inline values carry no tower charge.
+#[must_use]
+pub fn numeric_integral_round_cost(value: &XsdValue) -> crate::exact::Cost {
+    match value {
+        XsdValue::Decimal(decimal)
+            if decimal.unscaled().as_i128().is_none() || decimal.scale() > 18 =>
+        {
+            decimal.round_cost(0)
+        }
+        _ => numeric_unary_cost(value),
     }
 }
 

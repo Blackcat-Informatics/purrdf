@@ -307,6 +307,34 @@ Boundary inputs' requested bytes fell from 6,930,432 to 5,718,016 and peak worki
 bytes from 896 to 680. These counts establish no whole-query or geographic
 performance result; `to_f32` shares the production body but is not measured here.
 
+The admitted decimal rounding probe measures eight signed values on both
+sides of a halfway point. Input construction and output validation sit
+outside the acknowledged instruction and allocation windows. Each result
+stays live through the close. At 128 places and above, the native power
+builder forms a shorter power of five and shifts it to the same exact
+power of ten. The complete rounding operation still includes division.
+
+```bash
+cargo bench -p purrdf-xsd --bench exact -- --decimal-round-instructions "$PWD/target/decimal-round"
+cargo test --release -p purrdf-xsd --test exact_governance decimal_round_preserves_values_and_reports_allocations -- --exact --nocapture
+```
+
+On x86-64 Linux with `rustc 1.102.0-nightly (5df8c02af)`, ten fresh-process
+samples gave the following median retired instructions per eight operations.
+The empty window was 391 instructions in both builds. Every canonical
+output matched. The allocation case retained zero bytes in each row.
+
+| Fractional places | Instructions before | After | Heap requests before | After |
+| --- | ---: | ---: | ---: | ---: |
+| 8 | 4,048 | 4,004 | 0 | 0 |
+| 4,000 | 9,145,277 | 4,619,522 | 1,688 | 1,200 |
+| 40,000 | 818,668,452 | 397,535,340 | 16,848 | 11,864 |
+
+Requested bytes fell from 1,458,048 to 758,400 at 4,000 places and
+from 140,502,720 to 69,472,960 at 40,000 places. Peak working bytes
+fell from 5,016 to 5,008 at 4,000 places and stayed at 49,864 at
+40,000 places. These counts do not measure whole SPARQL queries.
+
 The small decimal parse/render rows include canonical text's reservation of its
 complete prepared length. The public allocation control
 `canonical_decimal_reserves_one_exact_output_destination` in
