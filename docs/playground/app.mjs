@@ -185,7 +185,9 @@ async function copyText(text) {
   document.body.append(ta);
   try {
     ta.select();
-    document.execCommand("copy");
+    if (!document.execCommand("copy")) {
+      throw new InterfaceError("the browser refused the copy command", "浏览器拒绝执行复制命令");
+    }
   } catch (error) {
     throw interfaceFailure("could not copy to clipboard", "无法复制到剪贴板", error);
   } finally {
