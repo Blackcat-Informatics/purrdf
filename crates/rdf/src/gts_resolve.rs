@@ -13,8 +13,8 @@
 //! production storage or import limit. The literal-direction parser below is
 //! shared by the production consuming and streaming importers.
 
-pub(crate) use purrdf_gts::model::anonymous_blank_label;
 use purrdf_gts::model::{Graph, TermKind};
+pub(crate) use purrdf_gts::model::{anonymous_blank_label, unbound_triple_label};
 use purrdf_gts::resolution::SelfReaching;
 
 use crate::{BlankScope, RdfDiagnostic, RdfTextDirection};
@@ -32,23 +32,6 @@ use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 /// label spelled by the document and by the projection is two nodes.
 pub(crate) const SYNTHETIC_BLANK_SCOPE: BlankScope =
     purrdf_core::blank_label::UNBOUND_TRIPLE_BLANK_SCOPE;
-
-/// The label of the node a triple term that states no triple projects as, inside
-/// [`SYNTHETIC_BLANK_SCOPE`]. A folded graph numbers its terms file-wide, so the term
-/// id alone names one; a streamed file numbers terms per segment, so it adds the
-/// segment.
-pub(crate) fn unbound_triple_label(segment: Option<u64>, term: usize) -> impl std::fmt::Display {
-    struct Label(Option<u64>, usize);
-    impl std::fmt::Display for Label {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self.0 {
-                Some(segment) => write!(f, "unbound_triple_{segment}_{}", self.1),
-                None => write!(f, "unbound_triple_{}", self.1),
-            }
-        }
-    }
-    Label(segment, term)
-}
 
 /// Render authored and synthetic blank labels in the same injective
 /// `(label, scope)` alphabet for fold view tokens and streaming text.

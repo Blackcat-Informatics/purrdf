@@ -423,7 +423,7 @@ impl ResolvedSink for EventEmitter<'_> {
     ) -> Result<Self::Id, Self::Error> {
         self.intern_projected_blank(
             segment_index,
-            format_args!("unbound_triple_{segment_index}_{gts_id}"),
+            crate::model::unbound_triple_label(Some(segment_index), gts_id),
         )
     }
 

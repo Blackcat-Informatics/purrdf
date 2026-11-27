@@ -211,7 +211,11 @@ pub trait ResolvedSink {
         segment_index: u64,
         gts_id: usize,
     ) -> Result<Self::Id, Self::Error> {
-        self.intern_blank(segment_index, gts_id, &format!("unbound_triple_{gts_id}"))
+        self.intern_blank(
+            segment_index,
+            gts_id,
+            &crate::model::unbound_triple_label(None, gts_id).to_string(),
+        )
     }
 
     /// Intern a resolved literal term, returning its target id. The datatype (if

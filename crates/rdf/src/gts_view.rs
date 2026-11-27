@@ -1615,7 +1615,7 @@ mod term_walk_tests {
             TermKind::Iri => write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_deref() {
                 Some(value) if !value.is_empty() => {
-                    write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out)
+                    write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out);
                 }
                 _ => write_blank(
                     &blank_token(

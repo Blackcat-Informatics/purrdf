@@ -176,16 +176,45 @@ pub struct Term {
 /// by itself: projections keep it separate from every authored label's scope.
 #[must_use]
 pub fn anonymous_blank_label(segment: Option<u64>, term: usize) -> impl std::fmt::Display {
-    struct Label(Option<u64>, usize);
+    projected_blank_label("gts_anon", segment, term)
+}
+
+/// A synthetic blank label for a v1 triple term that states no triple (§7.3).
+///
+/// Like [`anonymous_blank_label`], this is unique only in its own scope.
+#[must_use]
+pub fn unbound_triple_label(segment: Option<u64>, term: usize) -> impl std::fmt::Display {
+    projected_blank_label("unbound_triple", segment, term)
+}
+
+fn projected_blank_label(
+    prefix: &'static str,
+    segment: Option<u64>,
+    term: usize,
+) -> impl std::fmt::Display {
+    struct Label {
+        prefix: &'static str,
+        segment: Option<u64>,
+        term: usize,
+    }
     impl std::fmt::Display for Label {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            match self.0 {
-                Some(segment) => write!(f, "gts_anon_{segment}_{}", self.1),
-                None => write!(f, "gts_anon_{}", self.1),
+            let Self {
+                prefix,
+                segment,
+                term,
+            } = self;
+            match segment {
+                Some(segment) => write!(f, "{prefix}_{segment}_{term}"),
+                None => write!(f, "{prefix}_{term}"),
             }
         }
     }
-    Label(segment, term)
+    Label {
+        prefix,
+        segment,
+        term,
+    }
 }
 
 impl Term {
