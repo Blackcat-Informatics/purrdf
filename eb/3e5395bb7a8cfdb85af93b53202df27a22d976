@@ -1,0 +1,18 @@
+ghprsq source head backlink metadata
+
+parent_hashes: eb3e5395bb7a8cfdb85af93b53202df27a22d976
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash-head-backlink
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1613
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1613
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: 076e97588401f037499e85ccfe01933ed553898a
+GhpRsq-Head-Ref: paudley/489-finish-memory-admission-for-the-rdfc
+GhpRsq-Head-OID: eb3e5395bb7a8cfdb85af93b53202df27a22d976
+GhpRsq-Result-Tree: 92b4076b421e43f5d9ac5e8d9607092a7da09d8d
+GhpRsq-Result-Commit: 737158ba6d5b047f84fc751a574fbad65bba4745
+GhpRsq-Parent-Hashes: eb3e5395bb7a8cfdb85af93b53202df27a22d976
+GhpRsq-Squash-Notes-SHA256: 0c7a37bf41d11efa12f773aaddfadb974985b34d074a33b24d854b643a72fb13
+GhpRsq-Stage-Evidence: none
