@@ -47,6 +47,7 @@ use super::triple::{OrdinalRows, compare_masked, component_mask, masked_permutat
 
 mod inspection;
 mod statistics;
+mod subject_order;
 
 /// Declare the shared sparse frozen-row location lookup on resident carriers.
 macro_rules! source_location_method {

@@ -27,6 +27,154 @@ use purrdf_sparql_eval::{
 static GLOBAL: purrdf_alloc_probe::CountingAllocator = purrdf_alloc_probe::CountingAllocator;
 
 #[test]
+fn resident_subject_join_borrows_warm_runs_and_declines_an_unordered_probe() {
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, StatisticsStream, SubjectOrderedScan};
+    use purrdf_sparql_eval::eval::CursorBufferReason;
+
+    let build = || {
+        let mut builder = RdfDatasetBuilder::new();
+        let [s, t, p, q, mixed, x, y, g] = [
+            "urn:subject:s",
+            "urn:subject:t",
+            "urn:pred:left",
+            "urn:pred:right",
+            "urn:pred:mixed",
+            "urn:obj:x",
+            "urn:obj:y",
+            "urn:graph:other",
+        ]
+        .map(|iri| builder.intern_iri(iri).unwrap());
+        for subject in [s, t] {
+            builder.push_quad(subject, p, x, None).unwrap();
+            builder.push_quad(subject, q, x, None).unwrap();
+        }
+        builder.push_quad(s, q, y, Some(g)).unwrap();
+        builder.push_quad(t, mixed, y, None).unwrap();
+        let triple = builder.intern_triple(x, p, y).unwrap();
+        for subject in [s, t] {
+            builder
+                .push_reifier_in_graph(subject, triple, None)
+                .unwrap();
+            builder
+                .push_annotation_in_graph(subject, q, y, None)
+                .unwrap();
+        }
+        builder.push_annotation_in_graph(s, mixed, y, None).unwrap();
+        (builder.freeze().unwrap(), [s, t, p, q, mixed, x, y])
+    };
+    let (dataset, [s, t, p, q, mixed, x, y]) = build();
+    let left = Some(p);
+    let right = Some(q);
+    let graph = GraphMatch::Default;
+    // A global predicate/object run is not a license to scan other graphs.
+    assert_eq!(
+        dataset
+            .quads_for_pattern(None, right, Some(y), GraphMatch::Any)
+            .count(),
+        1
+    );
+    assert_eq!(
+        dataset
+            .annotation_quads_for_pattern(right, Some(y), graph)
+            .count(),
+        2
+    );
+    assert!(!dataset.may_scan_in_subject_order(right, Some(y), graph));
+
+    let run = |dataset: &RdfDataset, query: &str| {
+        let engine = NativeSparqlEngine::new();
+        let result = engine
+            .query_with_options_view(
+                dataset,
+                SparqlRequest {
+                    query,
+                    base_iri: None,
+                    substitutions: &[],
+                },
+                &QueryOptions::EMPTY,
+            )
+            .unwrap();
+        support::solutions(result)
+    };
+    let exact = "SELECT ?s WHERE { ?s <urn:pred:left> <urn:obj:x> . ?s <urn:pred:right> <urn:obj:y> } ORDER BY ?s";
+    let unordered = "SELECT ?s ?o WHERE { ?s <urn:pred:left> <urn:obj:x> . ?s <urn:pred:right> ?o } ORDER BY ?s ?o";
+    let sample = "SELECT (SAMPLE(?s) AS ?chosen) WHERE { ?s <urn:pred:mixed> <urn:obj:y> . ?s <urn:pred:left> <urn:obj:x> }";
+    // No other query may warm the asserted graph index before the indexed
+    // baseline. In particular the mixed-stream SAMPLE still reads that index
+    // when it declines the subject-ordered evaluator.
+    let (cold_dataset, [_, _, cold_p, cold_q, _, cold_x, cold_y]) = build();
+    assert!(!cold_dataset.may_scan_in_subject_order(Some(cold_p), Some(cold_x), graph));
+    assert!(!cold_dataset.may_scan_in_subject_order(Some(cold_q), Some(cold_y), graph));
+    let cold = run(&cold_dataset, exact);
+    let first_sample = run(&dataset, sample);
+    let unselected = run(&dataset, unordered);
+
+    // Warm through the normal graph-specific probe. The default graph gets
+    // its annotation matches without walking the asserted named-graph row.
+    assert_eq!(
+        dataset
+            .quads_for_pattern(None, right, Some(y), graph)
+            .count(),
+        0
+    );
+    assert_eq!(
+        dataset
+            .annotation_quads_for_pattern(left, Some(x), graph)
+            .count(),
+        0
+    );
+    assert!(dataset.may_scan_in_subject_order(left, Some(x), graph));
+    assert!(dataset.may_scan_in_subject_order(right, Some(y), graph));
+    assert!(!dataset.may_scan_in_subject_order(right, None, graph));
+    assert!(!dataset.may_scan_in_subject_order(Some(mixed), Some(y), graph));
+
+    let window = purrdf_alloc_probe::CurrentThreadWindow::open();
+    let mut cursor = dataset
+        .ordered_subject_quads(
+            StatisticsStream::Asserted,
+            Some(s),
+            Some(t),
+            left,
+            Some(x),
+            graph,
+        )
+        .expect("warm exact asserted run");
+    cursor.advance_to(t);
+    assert_eq!(cursor.next().map(|row| row.s), Some(t));
+    assert!(cursor.next().is_none());
+    assert_eq!(window.close().allocations, 0, "borrowed warm seek");
+
+    assert_eq!(cold.1.len(), 2);
+    assert_eq!(unselected.1.len(), 4);
+    assert_eq!(run(&dataset, exact), cold);
+    assert_eq!(run(&dataset, unordered), unselected);
+    assert_eq!(
+        run(&dataset, sample),
+        first_sample,
+        "warmth must not change the aggregate"
+    );
+    let engine = NativeSparqlEngine::new();
+    for (query, expected, buffered) in [(exact, 2, false), (unordered, 4, true)] {
+        let query = query.split_once(" ORDER BY").unwrap().0;
+        let prepared = engine.prepare_query(query, None).unwrap();
+        let mut query_cursor = engine
+            .open_select_cursor(dataset.as_ref(), &prepared, &[], &QueryOptions::EMPTY)
+            .unwrap();
+        let mut seen = 0;
+        while query_cursor.next_row().unwrap().is_some() {
+            seen += 1;
+        }
+        assert_eq!(seen, expected);
+        assert_eq!(
+            query_cursor
+                .buffering_report()
+                .contains(CursorBufferReason::IntermediateRelation),
+            buffered
+        );
+    }
+}
+
+#[test]
 fn skewed_ordered_join_does_not_retain_equal_key_runs() {
     use purrdf_core::{QuadIds, SegmentedBuildLimits, SegmentedBuilder};
     use purrdf_sparql_eval::{SolutionTerm, eval::CursorBufferReason};

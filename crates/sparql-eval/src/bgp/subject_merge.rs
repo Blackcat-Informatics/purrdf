@@ -143,12 +143,17 @@ pub(super) fn start<'a, D: DatasetView + Sync>(
     // constructing a potentially much larger run product. Complete structural
     // selection before opening a source cursor or admitting its storage.
     for (index, pattern) in patterns.iter().enumerate() {
+        let Some(arm) = Arm::from_pattern(pattern, graph) else {
+            return Ok(None);
+        };
         if !matches!(pattern.s, Pos::Slot(key) if key == subject)
-            || Arm::from_pattern(pattern, graph).is_none()
             || matches!(pattern.o, Pos::Slot(slot)
                 if slot == subject || patterns[..index]
                     .iter()
                     .any(|previous| matches!(previous.o, Pos::Slot(previous_slot) if previous_slot == slot)))
+            || !ctx
+                .dataset
+                .may_scan_in_subject_order(Some(arm.predicate), arm.object, arm.graph)
         {
             return Ok(None);
         }

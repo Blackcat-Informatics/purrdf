@@ -101,13 +101,37 @@ pub(super) struct OrdinalRows<'a, T> {
     range: Range<usize>,
 }
 
+impl<T> OrdinalRows<'_, T> {
+    fn row(&self, index: usize) -> &T {
+        &self.rows[self.ordinals.map_or(index, |order| order[index] as usize)]
+    }
+
+    pub(super) fn last_row(&self) -> Option<&T> {
+        (!self.range.is_empty()).then(|| self.row(self.range.end - 1))
+    }
+
+    fn prefix_len(&self, predicate: impl Fn(&T) -> bool) -> usize {
+        match self.ordinals {
+            Some(order) => order[self.range.clone()]
+                .partition_point(|&ordinal| predicate(&self.rows[ordinal as usize])),
+            None => self.rows[self.range.clone()].partition_point(predicate),
+        }
+    }
+
+    pub(super) fn skip_prefix(&mut self, predicate: impl Fn(&T) -> bool) {
+        self.range.start += self.prefix_len(predicate);
+    }
+
+    pub(super) fn keep_prefix(&mut self, predicate: impl Fn(&T) -> bool) {
+        self.range.end = self.range.start + self.prefix_len(predicate);
+    }
+}
+
 impl<T: Copy> Iterator for OrdinalRows<'_, T> {
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.range
-            .next()
-            .map(|index| self.rows[self.ordinals.map_or(index, |order| order[index] as usize)])
+        self.range.next().map(|index| *self.row(index))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -150,9 +174,19 @@ pub(super) fn masked_rows<'a, T: Copy + Ord>(
     let ordinals = cell
         .map(|cell| masked_permutation(cell, rows, capacity, mask, &components))
         .transpose()?;
-    Ok(ordinal_range(rows, ordinals, |row| {
+    Ok(masked_ordinal_range(rows, ordinals, pattern, components))
+}
+
+pub(super) fn masked_ordinal_range<'a, T>(
+    rows: &'a [T],
+    ordinals: Option<&'a [u32]>,
+    pattern: [Option<TermId>; 3],
+    components: impl Fn(&T) -> [TermId; 3],
+) -> OrdinalRows<'a, T> {
+    let mask = component_mask(pattern);
+    ordinal_range(rows, ordinals, |row| {
         masked_key(components(row), mask).cmp(&pattern)
-    }))
+    })
 }
 
 /// The three physical access orders of a graph-free table.
