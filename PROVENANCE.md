@@ -377,6 +377,13 @@ snapshot used for the datalog, module-extraction and unify/SLG ports —
 `8906e41b15d5adaeccede35dab7e36c7eab86147` — is reachable: it is a mainline
 commit in the sister repository.
 
+## Tagged source archive
+
+Git writes the archive from the commit object using its timestamp and tar
+commit record. The release script fixes the tar permission mask and refuses
+export attributes that would remove or substitute paths. GNU gzip omits its
+filename and timestamp fields. [Git archive documentation](https://git-scm.com/docs/git-archive) · [GNU gzip options](https://www.gnu.org/software/gzip/manual/gzip.html#Invoking-gzip)
+
 ## C ABI verification tool
 
 The Ubuntu C ABI job uses the upstream cargo-c 0.10.23 Linux x86-64

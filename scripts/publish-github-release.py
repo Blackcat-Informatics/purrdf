@@ -183,14 +183,7 @@ class GitHub:
 
 
 def asset_names(version: str) -> set[str]:
-    stem = f"purrdf-capi-{version}-x86_64-unknown-linux-gnu"
-    return {
-        stem + ".tar.gz",
-        stem + ".license-receipt.json",
-        "license-evidence-cargo.json",
-        f"purrdf-text-lexicons-{version}.tar.gz",
-        "SHA256SUMS",
-    } | set(notes_module.EARL_FILES)
+    return {*notes_module.checksum_asset_names(version), "SHA256SUMS"}
 
 
 def identity(release: dict, tag: str, title: str, notes: bytes, *, draft: bool):
@@ -232,9 +225,7 @@ def verify_assets(
         raise ReleaseError(f"release needs exactly {len(names)} release assets")
     by_name = {asset.get("name"): asset for asset in assets if isinstance(asset, dict)}
     if set(by_name) != names:
-        raise ReleaseError(
-            "release asset names differ from the complete C and lexicon distribution"
-        )
+        raise ReleaseError("release asset names differ from the complete distribution")
     hashes = {}
     manifest = None
     with tempfile.TemporaryDirectory(prefix="purrdf-release-verify-") as temporary:
@@ -308,12 +299,7 @@ def publish(root: Path, github: GitHub, version: str, sha: str):
     notes_module.write_output(manifest_path, manifest)
     paths = []
     for name in sorted(asset_names(version)):
-        directory = (
-            root / "target"
-            if name == "license-evidence-cargo.json"
-            else root / "target/dist"
-        )
-        path = directory / name
+        path = notes_module.checksum_path(root, name)
         if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
             raise ReleaseError(
                 f"audited release input missing, empty or a symlink: {name}"

@@ -197,11 +197,8 @@ class PublicationTests(unittest.TestCase):
         notes.write_text("# PurRDF 3.0.1\n\nComplete reviewed release.\n")
         self.inputs = []
         for name in publisher.asset_names(VERSION) - {"SHA256SUMS"}:
-            directory = self.root / (
-                "target" if name == "license-evidence-cargo.json" else "target/dist"
-            )
-            directory.mkdir(parents=True, exist_ok=True)
-            path = directory / name
+            path = publisher.notes_module.checksum_path(self.root, name)
+            path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes((name + " audited content").encode())
             self.inputs.append(path)
         self.github = FakeGitHub()
@@ -253,8 +250,9 @@ class PublicationTests(unittest.TestCase):
 
     def test_missing_immutable_assets_fail_without_any_mutation(self):
         self.published()
-        self.github.record["assets"] = []
-        with self.assertRaisesRegex(publisher.ReleaseError, "exactly 7"):
+        assets = self.github.record["assets"]
+        assets[:] = [asset for asset in assets if asset["name"] != f"purrdf-source-{VERSION}.tar.gz"]
+        with self.assertRaisesRegex(publisher.ReleaseError, "exactly 9"):
             self.publish()
         self.assertEqual(set(self.github.events), {"tag", "read"})
 
@@ -354,7 +352,7 @@ class PublicationTests(unittest.TestCase):
 
         def corrupt(tag, paths):
             original(tag, paths)
-            name = next(name for name in self.github.bytes if name.endswith(".tar.gz"))
+            name = f"purrdf-source-{VERSION}.tar.gz"
             self.github.bytes[name] += b"corruption"
             self.github.refresh_assets()
 

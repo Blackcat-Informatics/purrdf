@@ -162,6 +162,11 @@ the committed reviewed summary in `docs/releases/<version>.md`, linked to the
 complete changelog. The shared checker validates the exact version and 64 KiB
 UTF-8 size ceiling before tags and publication; no notes are truncated.
 
+The GitHub Release attaches `purrdf-source-<version>.tar.gz` from the exact
+Rust release tag. The archive and its license receipt are both listed in
+`SHA256SUMS` and carry build provenance attestations. GitHub's automatically
+generated source downloads are separate and are not covered by that manifest.
+
 ## Citing PurRDF
 
 Releases carry a DOI; if you use PurRDF in research, please cite it — see

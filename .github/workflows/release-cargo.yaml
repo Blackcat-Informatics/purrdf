@@ -278,14 +278,26 @@ jobs:
           make capi-bundle
           python3 scripts/package-text-lexicons.py
           make w3c-earl W3C_EARL_DIR=target/dist
-          python3 scripts/check-release-notes.py --checksum-output target/dist/SHA256SUMS
 
-      - name: Attest build provenance for C distribution
+      - name: Build and audit the exact tagged source archive
+        env:
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+          RELEASE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          version=${RELEASE_TAG#rust-v}
+          bash scripts/package-release-source.sh build "$RELEASE_SHA" "$version" target/dist
+          python3 scripts/check-release-notes.py --version "$version" --checksum-output target/dist/SHA256SUMS
+
+      - name: Attest build provenance for release assets and the source license receipt
         uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
         with:
           subject-path: |
             target/dist/purrdf-capi-*.tar.gz
             target/dist/purrdf-text-lexicons-*.tar.gz
+            target/dist/purrdf-source-*.tar.gz
+            target/dist/purrdf-source-*.license-receipt.json
             target/dist/purrdf-shacl-earl.ttl
             target/dist/purrdf-shacl12-earl.ttl
 
@@ -299,6 +311,7 @@ jobs:
             target/license-evidence-cargo.json
             target/dist/purrdf-capi-*.tar.gz
             target/dist/purrdf-text-lexicons-*.tar.gz
+            target/dist/purrdf-source-*.tar.gz
             target/dist/*.license-receipt.json
             target/dist/SHA256SUMS
             target/dist/purrdf-shacl-earl.ttl
@@ -387,8 +400,13 @@ jobs:
           sdk="dist/purrdf-capi-$version-x86_64-unknown-linux-gnu"
           lexicons="dist/purrdf-text-lexicons-$version.tar.gz"
           earl=(dist/purrdf-shacl-earl.ttl dist/purrdf-shacl12-earl.ttl)
+          # Recovery consumes the exact bundle format used by the tagged workflow.
+          source_assets=()
+          if [[ -f scripts/package-release-source.sh ]]; then
+            source_assets=("dist/purrdf-source-$version.tar.gz" "dist/purrdf-source-$version.license-receipt.json")
+          fi
           members=(license-evidence-cargo.json dist/SHA256SUMS "$sdk.license-receipt.json"
-            "$sdk.tar.gz" "$lexicons" "${earl[@]}")
+            "$sdk.tar.gz" "$lexicons" "${earl[@]}" "${source_assets[@]}")
           actual=$(unzip -Z1 "$archive" | LC_ALL=C sort)
           expected=$(printf '%s\n' "${members[@]}" | LC_ALL=C sort)
           test "$actual" = "$expected"
@@ -396,11 +414,14 @@ jobs:
           python3 scripts/check-release-notes.py --version "$version" \
             --checksum-output "$RUNNER_TEMP/release-checksums"
           cmp target/dist/SHA256SUMS "$RUNNER_TEMP/release-checksums"
-          for asset in "$sdk.tar.gz" "$lexicons" "${earl[@]}"; do
+          for asset in "$sdk.tar.gz" "$lexicons" "${earl[@]}" "${source_assets[@]}"; do
             gh attestation verify "target/$asset" --repo "$GITHUB_REPOSITORY" \
               --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml" \
               --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_SHA"
           done
+          if [[ ${#source_assets[@]} -ne 0 ]]; then
+            bash scripts/package-release-source.sh verify "$RELEASE_SHA" "$version" target/dist
+          fi
 
       - name: Package release crates from the tagged source
         run: *package-release
@@ -510,7 +531,7 @@ jobs:
       - name: Verify the full registry release against the retained audit
         run: *verify-registry
 
-      - name: Verify C and lexicon assets on a draft, then publish the immutable GitHub Release
+      - name: Verify draft assets, then publish the immutable GitHub Release
         if: steps.publish.outputs.complete == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -518,7 +539,7 @@ jobs:
           set -euo pipefail
 
           # Publishing locks assets. The helper creates/reuses a draft, uploads
-          # all seven assets, downloads and verifies every byte, then publishes.
+          # the complete tagged asset set, verifies it by download, then publishes.
           # Existing immutable releases are verified read-only against their
           # retained checksums, without comparing a different rebuild.
           python3 scripts/publish-github-release.py --version "${RELEASE_TAG#rust-v}" \

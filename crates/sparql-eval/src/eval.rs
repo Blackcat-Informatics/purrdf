@@ -10266,11 +10266,22 @@ pub(crate) fn eval_answer_pattern<D: DatasetView + Sync>(
     let Some(request) = ctx.evidence_verdict.take() else {
         return eval_evaluated(pattern, ctx);
     };
+    // A verdict can settle before visiting any algebra node. A host stop
+    // still takes precedence over that shortcut and uses the normal trip path.
+    if let Some(tripped) = ctx.stop_check() {
+        ctx.record_trip(tripped);
+        return eval_evaluated(pattern, ctx);
+    }
     let request = ctx
         .evidence_input
         .as_ref()
         .ok_or_else(|| EvalError::internal("verdict lost its original evidence source"))?
         .answer_request(request)?;
+    // The host supplies the scope declaration. It can signal a stop before
+    // the verdict shortcut, which otherwise need not visit an algebra node.
+    if ctx.stop_check().is_some() {
+        return eval_evaluated(pattern, ctx);
+    }
     let workspace = ctx.growth.clone();
     with_native_answer(request, &workspace, |answer| {
         if let Some(verdict) = answer.witness_stop() {
@@ -11318,6 +11329,14 @@ fn begin_query_evaluated<D: DatasetView + Sync>(
     Ok(())
 }
 
+fn has_ask_witness<I: ViewTermId>(rows: &SolutionSeq<I>, tracked: bool) -> bool {
+    if tracked {
+        rows.rows.iter().any(|row| !row.evidence().is_undecided())
+    } else {
+        !rows.is_empty()
+    }
+}
+
 fn finish_solution_query<D: DatasetView + Sync>(
     query: &Query,
     evaluated: Evaluated<D::Id>,
@@ -11342,25 +11361,20 @@ fn finish_solution_query<D: DatasetView + Sync>(
                 let tracked = ctx.may_have_evidence()
                     || seq.rows.may_have_evidence_attachment()
                     || !seq.rows.search_evidence().is_virtual();
-                let supported = if tracked {
-                    seq.rows.iter().any(|row| !row.evidence().is_undecided())
-                } else {
-                    !seq.is_empty()
-                };
+                let supported = has_ask_witness(&seq, tracked);
                 if tracked {
                     ctx.evidence_answer = Some(seq);
                 }
                 Ok(EvaluatedOutcome::Complete(Outcome::Boolean(supported)))
             }
             Evaluated::Truncated(certificate) => Ok(EvaluatedOutcome::Truncated {
-                // A non-empty certain lower bound settles the semantic value `true`, but
-                // the execution still stopped operationally. Keep the typed exhaustion
-                // and carry that settled boolean as its certified partial instead of
-                // contradicting the evidence with `Complete + tripped`.
+                // A certain ASK witness can settle `true` but never makes a trip
+                // complete. Evidence answers use the same witness criterion as
+                // their complete branch: an undecided row cannot settle ASK.
                 outcome: Outcome::Boolean(
                     certificate
                         .certain_rows()
-                        .is_some_and(|rows| !rows.is_empty()),
+                        .is_some_and(|rows| has_ask_witness(rows, ctx.evidence_input.is_some())),
                 ),
                 certificate,
             }),
