@@ -371,6 +371,11 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.simd_projection
     name: test (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    # Integration shard 4 alone sets these outputs. Consume that job's
+    # artifact rather than the newest artifact with a name from any attempt.
+    outputs:
+      sparql-artifact: ${{ steps.sparql-upload.outputs.artifact-id && format('sparql-conformance-{0}', github.run_attempt) || '' }}
+      sparql-complete: ${{ job.status == 'success' && steps.sparql-conformance.outcome == 'success' && steps.sparql-upload.outputs.artifact-id || '' }}
     # Allow cold compilation and the complete selected test suite to finish.
     timeout-minutes: 60
     strategy:
@@ -454,6 +459,25 @@ jobs:
       - name: Test downstream preserve-order feature unification
         if: matrix.shard == 'lib'
         run: cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
+
+      # The full SPARQL corpus and inventory targets already link in this
+      # shard. Run the original reporter against the same Cargo directory.
+      - name: Report SPARQL conformance from the native build
+        id: sparql-conformance
+        if: matrix.shard == 'integration-4'
+        run: |
+          awk '/^MemAvailable:/ {print "Runner memory available before report:", $2, "KiB"}' /proc/meminfo
+          /usr/bin/time -f 'SPARQL report elapsed: %e s, maximum process RSS: %M KiB' \
+            make conformance CONFORMANCE_ARGS="--shard sparql --emit-results target/conformance-results/sparql.json"
+
+      - name: Upload SPARQL conformance rows
+        id: sparql-upload
+        if: ${{ !cancelled() && matrix.shard == 'integration-4' && (steps.sparql-conformance.outcome == 'success' || steps.sparql-conformance.outcome == 'failure') }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: sparql-conformance-${{ github.run_attempt }}
+          path: target/conformance-results/sparql.json
+          if-no-files-found: error
 
   # The stable name for the sharded workspace tests: it succeeds only when every
   # shard did.
@@ -1630,7 +1654,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [core, sparql, shapes]
+        shard: [core, shapes]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -1663,7 +1687,7 @@ jobs:
           if-no-files-found: error
 
   conformance:
-    needs: [conformance-shard, pytest]
+    needs: [conformance-shard, pytest, test-shard]
     # Runs whatever the shards concluded, so a red suite is still reported in the one
     # scoreboard; a shard that wrote no rows fails here by name.
     if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || !inputs.simd_projection) }}
@@ -1682,6 +1706,13 @@ jobs:
           merge-multiple: true
           path: target/conformance-results
 
+      - name: Download the SPARQL producer's rows
+        if: needs.test-shard.outputs.sparql-artifact != ''
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: ${{ needs.test-shard.outputs.sparql-artifact }}
+          path: target/conformance-results
+
       - name: Conformance matrix (native Rust suites + rdflib gate)
         run: make conformance CONFORMANCE_ARGS="--from-results target/conformance-results"
 
@@ -1689,7 +1720,11 @@ jobs:
         env:
           SHARDS_RESULT: ${{ needs.conformance-shard.result }}
           PYTHON_RESULT: ${{ needs.pytest.result }}
-        run: test "$SHARDS_RESULT" = success && test "$PYTHON_RESULT" = success
+          SPARQL_RESULT: ${{ needs.test-shard.outputs.sparql-complete }}
+        run: |
+          test "$SHARDS_RESULT" = success
+          test "$PYTHON_RESULT" = success
+          test -n "$SPARQL_RESULT"
   # Optional controlled experiment. Required workspace/test/capi jobs above are
   # unchanged and continue to provide the strict lint/hygiene acceptance gates.
   native-profile-admission:
