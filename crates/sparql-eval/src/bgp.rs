@@ -4308,16 +4308,24 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
             )?;
             continue;
         }
-        if survey.factorized_distinct
+        let root_count_group = survey.factorized_count && survey.shape.is_root_count_group(pattern);
+        let selected_factor = if survey.factorized_distinct
             && std::ptr::eq(root, pattern)
-            && let Some(distinct) =
-                crate::join_plan::FactorizedDistinct::build(pattern, &workspace)?
+            && matches!(pattern, GraphPattern::Distinct { .. })
         {
+            crate::join_plan::FactorizedDistinct::build(pattern, &workspace)?
+                .map(|distinct| (distinct.factors, distinct.selected))
+        } else if root_count_group {
+            crate::join_plan::DisjointBgp::for_distinct_count::<D>(pattern, &workspace)?
+        } else {
+            None
+        };
+        if let Some((factors, selected)) = selected_factor {
             let mut selected_rows = 0;
             let mut peak = PlanEstimate::new(0, 0, 0);
             let mut inputs = AdmittedVec::new(&workspace);
             let mut impossible = false;
-            distinct.factors.visit(&workspace, |triples, members| {
+            factors.visit(&workspace, |triples, members| {
                 let input =
                     compile_forecast_bgp(dataset, triples, &SeedEstimate::default(), account)?;
                 if input.compiled.is_none() {
@@ -4342,7 +4350,7 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                     None,
                     account,
                 )?;
-                if *component == distinct.selected {
+                if *component == selected {
                     selected_rows = estimate.rows;
                 }
                 if estimate.peak_cells() >= peak.peak_cells() {
@@ -4350,13 +4358,15 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 }
             }
             survey.record(
-                distinct.factors.input,
+                factors.input,
                 PlanEstimate::new(selected_rows, peak.peak_rows, peak.columns),
             );
+            if root_count_group {
+                survey.record_output_bound(pattern, Some(1));
+            }
             continue;
         }
-        if survey.factorized_count
-            && survey.shape.is_root_count_group(pattern)
+        if root_count_group
             && let Some(count) = crate::join_plan::DisjointBgp::for_count(pattern, &workspace)?
         {
             let mut rows = 1_u64;

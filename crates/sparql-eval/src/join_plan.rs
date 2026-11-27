@@ -13,7 +13,7 @@ use purrdf_lex::allocation::Memory;
 #[cfg(test)]
 use purrdf_sparql_algebra::walk_pre_post;
 use purrdf_sparql_algebra::{
-    AggregateFunction, Child, Flow, GraphPattern, NodeRef, TriplePattern, Visit,
+    AggregateFunction, Child, Expression, Flow, GraphPattern, NodeRef, TriplePattern, Visit,
     fold_post_order_with_memory, walk_pre_post_with_memory,
 };
 
@@ -387,6 +387,41 @@ impl<'a> DisjointBgp<'a> {
         Self::build(inner.as_ref(), workspace)
     }
 
+    /// A global DISTINCT count can consume the operand from one factor.
+    pub(crate) fn for_distinct_count<D: purrdf_core::DatasetView>(
+        node: &'a GraphPattern,
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<(Self, usize)>, crate::EvalError> {
+        use crate::engine::Sequencing;
+        let GraphPattern::Group {
+            inner,
+            variables,
+            aggregates,
+        } = node
+        else {
+            return Ok(None);
+        };
+        let [(_, aggregate)] = aggregates.as_slice() else {
+            return Ok(None);
+        };
+        let [Expression::Variable(variable)] = aggregate.args() else {
+            return Ok(None);
+        };
+        if !variables.is_empty()
+            || !matches!(aggregate.function(), AggregateFunction::Count)
+            || !aggregate.distinct
+            || !aggregate.order_by().is_empty()
+            || Sequencing::for_view::<D>() != Sequencing::Free
+        {
+            return Ok(None);
+        }
+        let Some(factors) = Self::build(inner.as_ref(), workspace)? else {
+            return Ok(None);
+        };
+        let selected = factors.select_component(std::slice::from_ref(variable), workspace)?;
+        Ok(selected.map(|component| (factors, component)))
+    }
+
     fn build(
         input: &'a GraphPattern,
         workspace: &crate::WorkspaceCapability,
@@ -450,6 +485,40 @@ impl<'a> DisjointBgp<'a> {
         }
         Ok(())
     }
+
+    /// Find the one component that binds every requested visible variable.
+    fn select_component(
+        &self,
+        variables: &[VariableKey],
+        workspace: &crate::WorkspaceCapability,
+    ) -> Result<Option<usize>, crate::EvalError> {
+        let mut missing = AdmittedMap::default();
+        for variable in variables {
+            if crate::blank_scope::is_joined_blank(variable) {
+                return Ok(None);
+            }
+            missing.insert_admitted(variable, (), workspace)?;
+        }
+        let mut selected = None;
+        for &(root, index) in &self.members {
+            let mut spans_components = false;
+            crate::bgp::visit_triple_slots_admitted(&self.triples[index], workspace, |slot| {
+                if let crate::bgp::SlotKey::Variable(variable) = slot
+                    && missing.remove(variable).is_some()
+                {
+                    spans_components |= *selected.get_or_insert(root) != root;
+                }
+                Ok(())
+            })?;
+            if spans_components {
+                return Ok(None);
+            }
+            if missing.is_empty() {
+                return Ok(selected);
+            }
+        }
+        Ok(None)
+    }
 }
 
 /// The paired admission and execution policy for a retained DISTINCT.
@@ -484,34 +553,7 @@ impl<'a> FactorizedDistinct<'a> {
         let Some(factors) = DisjointBgp::build(inner.as_ref(), workspace)? else {
             return Ok(None);
         };
-        let mut missing = AdmittedMap::default();
-        for variable in variables {
-            if crate::blank_scope::is_joined_blank(variable) {
-                return Ok(None);
-            }
-            missing.insert_admitted(variable, (), workspace)?;
-        }
-        let mut selected = None;
-        for &(root, index) in &factors.members {
-            let mut spans_components = false;
-            crate::bgp::visit_triple_slots_admitted(&factors.triples[index], workspace, |slot| {
-                if let crate::bgp::SlotKey::Variable(variable) = slot
-                    && missing.remove(variable).is_some()
-                {
-                    spans_components |= *selected.get_or_insert(root) != root;
-                }
-                Ok(())
-            })?;
-            if spans_components {
-                return Ok(None);
-            }
-            if missing.is_empty() {
-                break;
-            }
-        }
-        if !missing.is_empty() {
-            return Ok(None);
-        }
+        let selected = factors.select_component(variables, workspace)?;
         Ok(selected.map(|selected| Self {
             project: project.as_ref(),
             variables,
