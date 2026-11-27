@@ -10,6 +10,13 @@ compiler_sha=a9c1c9ab765535974b0d7e1f4863ee2016f94b13a0a15c9fcd616bb4616f3e22
 manifest_sha=23dfb91389e8028e8a7594aab1448b9624569dff43c8c782efbb1b5a5eaab2eb
 stock_source=67c6957b8a76f67a694689d9658f64f5f909711e2446f146b5c127c6a7c0d5bb
 stock_cells=a806c60f2fb45c784d1a1ea355ead657527cd228adbef4eaa4bd804eb7478cc0
+baseline_run=46047659305
+baseline_head=fab51ad9f89c160c05089f79bdaa61a3c39a91d1
+baseline_branch=paudley/1469-qualify-compiled-assembly-cache-reuse
+baseline_context=42846becc244d99157eb60e04c05e3938cec8c344039c89b8ff0941adb84c565
+assembly_context=8b2fb22c061b1b984a0934cc1398495344e5eeba878ad212ca9cbf8de50fe5dc
+seed_sha=b260969e5774bee5894da292a6e1a8465e5ba5a216c7f7266d0d99b0f89353f3
+measured_workspace=/home/runner/work/purrdf/purrdf
 output_paths=(target/release "target/$triple/release" target/simd-asm)
 
 fail() {
@@ -40,11 +47,35 @@ validate_report() {
         fail "assembly cells differ from the checked stock result: $file"
 }
 
+validate_baseline() {
+    local baseline=$1 current=$2
+    [[ $(sha "$baseline/context.txt") == "$baseline_context" &&
+        $(cat "$baseline/context.sha256") == "$baseline_context" ]] ||
+        fail "retained baseline context digest differs"
+    cmp "$baseline/context.txt" "$baseline/stock-context.txt" ||
+        fail "original stock arm used a different context"
+    cmp "$baseline/stock-context.txt" "$current" ||
+        fail "runner, checkout path, compiler or toolchain context differs from stock"
+    [[ $(cat "$baseline/stock/gate.exit") == 0 &&
+        $(cat "$baseline/stock/graph-count.txt") == 4 &&
+        $(cat "$baseline/stock/gate.seconds") == 2455.91 &&
+        $(cat "$baseline/stock/rustc-counts.txt") == $'host_rustc=21\narm_rustc=137' &&
+        $(cat "$baseline/stock/cache-context.txt") == stock_context=present_in_archive &&
+        $(cat "$baseline/seed.sha256") == "$seed_sha" ]] ||
+        fail "the retained stock arm did not record the approved successful measurement and seed"
+    diff -q "$baseline/stock/graph-contexts.txt" <(
+        printf '%s\n' "$measured_workspace/target/simd-asm/contexts/$assembly_context"{,,,}
+    ) >/dev/null || fail "the retained stock graph did not use the approved assembly context"
+    validate_report "$baseline/stock/report.json" "$stock_source"
+    jq -e --arg config "$config" '.timings[$config].rustc_invocations == 137' \
+        "$baseline/stock/report.json" >/dev/null || fail "the retained stock report disagrees with the compiler count"
+}
+
 # The hosted gate draws its source identity from the measured checkout, not this harness.
-if [[ ${1:-} == validate-report ]]; then
-    validate_report "$2" "${3:-$stock_source}"
-    exit
-fi
+case "${1:-}" in
+    validate-report) validate_report "$2" "${3:-$stock_source}"; exit ;;
+    validate-baseline) validate_baseline "$2" "$3"; exit ;;
+esac
 
 cd "${GITHUB_WORKSPACE:?}"
 evidence=${TRIAL:?}/evidence
@@ -94,6 +125,60 @@ check_clean_source() {
         fail "the pinned source is not clean or differs from the stock report"
 }
 
+fetch_original() {
+    local id=$1 kind=$2 digest=$3 bytes=$4
+    local endpoint="repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+    gh api "$endpoint" > "$evidence/original-$kind.json"
+    jq -e --arg name "neoverse-trial-$kind-$baseline_run-1" \
+        --arg digest "sha256:$digest" --arg branch "$baseline_branch" --arg head "$baseline_head" \
+        --argjson id "$id" --argjson run "$baseline_run" --argjson bytes "$bytes" '
+        .id == $id and .name == $name and .digest == $digest and
+        .size_in_bytes == $bytes and .expired == false and
+        (.workflow_run | .id == $run and .head_sha == $head and .head_branch == $branch and
+            .repository_id == 1286258226 and .head_repository_id == 1286258226)
+    ' "$evidence/original-$kind.json" >/dev/null || fail "original $kind artifact identity differs or expired"
+    /usr/bin/time -f '%e' -o "$evidence/$kind-download.seconds" \
+        gh api "$endpoint/zip" > "$TRIAL/$kind.zip"
+    [[ $(sha "$TRIAL/$kind.zip") == "$digest" && $(stat -c%s "$TRIAL/$kind.zip") == "$bytes" ]] ||
+        fail "original $kind ZIP bytes differ from the approved artifact"
+    sha "$TRIAL/$kind.zip" > "$evidence/$kind-zip.sha256"
+}
+
+active_assembly_context() {
+    # Ask the pinned checker which receipt context it would open, and stop
+    # before the lease or any compilation. This uses the gate's own identity.
+    PYTHONPATH=scripts python3 -B -c '
+import contextlib
+import importlib.util
+import sys
+import tomllib
+from types import SimpleNamespace
+
+spec = importlib.util.spec_from_file_location("trial_gate", "scripts/check-simd-asm.py")
+gate = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = gate
+spec.loader.exec_module(gate)
+manifest = gate.load_manifest(tomllib.loads(gate.MANIFEST.read_text(encoding="utf-8")))
+config = gate.CONFIG_BY_NAME[sys.argv[1]]
+runner = gate.runtime.Runner(gate, SimpleNamespace(fresh=False))
+
+class BeforeBuild(Exception):
+    pass
+
+def identify(identity):
+    raise BeforeBuild(gate.runtime.digest(gate.runtime.encoded(identity)))
+
+runner.context = identify
+try:
+    with contextlib.redirect_stdout(sys.stderr):
+        runner.configuration(config, manifest, gate.manifest_keep(manifest)(config))
+except BeforeBuild as result:
+    print(result)
+else:
+    raise SystemExit("checker did not select an assembly context")
+' "$config"
+}
+
 record_graphs() {
     local arm=$1 path graph line graphs=0
     local dir=$evidence/$arm
@@ -119,16 +204,6 @@ record_graphs() {
             END {printf "host_rustc=%d\narm_rustc=%d\n", host, arm}
         ' "$dir"/graph-*.stderr > "$dir/rustc-counts.txt"
     fi
-    if [[ $arm == stock && -s "$dir/graph-contexts.txt" ]]; then
-        local active
-        IFS= read -r active < "$dir/graph-contexts.txt"
-        if grep -Fxq "${active##*/}" "$evidence/stock-cached-contexts.txt"; then
-            echo 'stock_context=present_in_archive' > "$dir/cache-context.txt"
-        else
-            echo 'stock_context=not_in_archive' > "$dir/cache-context.txt"
-            fail "the restored archive does not contain the active stock assembly context"
-        fi
-    fi
 }
 
 measure() {
@@ -136,6 +211,13 @@ measure() {
     local dir=$evidence/$arm
     mkdir "$dir"
     [[ ! -e $report ]] || fail "old report still present before $arm"
+    [[ ! -v ARTIFACT_ID && ! -v ARTIFACT_DIGEST && ! -v GH_TOKEN ]] ||
+        fail "artifact transport environment leaked into the checker step"
+    active_assembly_context > "$dir/preflight-context.txt"
+    [[ $(cat "$dir/preflight-context.txt") == "$assembly_context" ]] ||
+        fail "the checker would not use the exact original receipt context"
+    compgen -G "target/simd-asm/contexts/$assembly_context/evidence/*.json" >/dev/null ||
+        fail "the exact original assembly receipts are missing"
     {
         pwd
         git rev-parse HEAD 'HEAD^{tree}'
@@ -155,6 +237,8 @@ measure() {
         fail "$arm gate exited $rc; no replacement cache or alternate command was used"
     fi
     [[ $(cat "$dir/graph-count.txt") == 4 ]] || fail "$arm missed a required Cargo graph"
+    cmp "$dir/graph-contexts.txt" "$evidence/baseline/stock/graph-contexts.txt" ||
+        fail "$arm used a different assembly context from stock"
     validate_report "$dir/report.json" "$source"
     local reported
     reported=$(jq -er --arg config "$config" '.timings[$config].rustc_invocations' "$dir/report.json")
@@ -198,54 +282,30 @@ case "${1:-}" in
         sha "$evidence/context.txt" > "$evidence/context.sha256"
         df -B1 "$PWD" "$TRIAL" > "$evidence/disk-before.txt"
         ;;
-    stock)
-        date +%s%N > "$evidence/stock-restore-end.ns"
-        printf 'requested=%s\nmatched=%s\nhit=%s\nobserved_key_bytes=%s\n' \
-            "$STOCK_KEY" "$CACHE_MATCH" "$CACHE_HIT" 15296439 \
-            > "$evidence/stock-cache.txt"
-        [[ $CACHE_HIT == true && $CACHE_MATCH == "$STOCK_KEY" && -d target/simd-asm ]] ||
-            fail "the exact stock evidence was not restored"
-        [[ ! -e ${output_paths[0]} && ! -e ${output_paths[1]} ]] ||
-            fail "the stock arm already had compiled Cargo output"
-        du -sb target/simd-asm > "$evidence/stock-expanded-bytes.txt"
-        for directory in target/simd-asm/contexts/*/; do
-            if [[ -d $directory ]]; then
-                basename "$directory"
-            fi
-        done > "$evidence/stock-cached-contexts.txt"
-        check_clean_source
-        check_context stock
-        measure stock "$stock_source"
-        ;;
-    pack)
-        du -sb "${output_paths[@]}" > "$evidence/seed-expanded-bytes.txt"
-        /usr/bin/time -f '%e' -o "$evidence/pack.seconds" \
-            tar --format=posix --zstd -cf "$TRIAL/seed.tar.zst" --exclude='cargo.graph-*' \
-                --exclude='cargo-timing*' "${output_paths[@]}"
-        sha "$TRIAL/seed.tar.zst" > "$evidence/seed.sha256"
-        stat -c%s "$TRIAL/seed.tar.zst" > "$evidence/seed-packed-bytes.txt"
-        ;;
     download)
-        [[ $ARTIFACT_ID =~ ^[0-9]+$ && $ARTIFACT_DIGEST =~ ^[0-9a-f]{64}$ ]] ||
-            fail "the upload did not return a valid artifact receipt"
-        endpoint="repos/$GITHUB_REPOSITORY/actions/artifacts/$ARTIFACT_ID"
-        gh api "$endpoint" > "$evidence/artifact.json"
-        jq -e --arg name "neoverse-trial-seed-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
-            --arg digest "sha256:$ARTIFACT_DIGEST" \
-            --argjson id "$ARTIFACT_ID" --argjson run "$GITHUB_RUN_ID" \
-            '.id == $id and .workflow_run.id == $run and .name == $name and .digest == $digest and .expired == false' \
-            "$evidence/artifact.json" >/dev/null || fail "seed artifact metadata did not match this run"
-        printf '%s\n' "$ARTIFACT_DIGEST" > "$evidence/artifact-upload-digest.txt"
-        /usr/bin/time -f '%e' -o "$evidence/download.seconds" \
-            gh api "$endpoint/zip" > "$TRIAL/received.zip"
-        stat -c%s "$TRIAL/received.zip" > "$evidence/download-bytes.txt"
+        [[ $GITHUB_REPOSITORY == Blackcat-Informatics/purrdf ]] || fail "the trial must run in its original repository"
+        gh api "repos/$GITHUB_REPOSITORY/actions/runs/$baseline_run/attempts/1" > "$evidence/original-attempt.json"
+        jq -e --argjson run "$baseline_run" --arg branch "$baseline_branch" --arg head "$baseline_head" '
+            .id == $run and .run_attempt == 1 and .head_sha == $head and .head_branch == $branch and
+            .path == ".github/workflows/neoverse-cache-trial.yaml" and .event == "push" and
+            .status == "completed" and .conclusion == "failure" and
+            .repository.id == 1286258226 and .head_repository.id == 1286258226
+        ' "$evidence/original-attempt.json" >/dev/null || fail "not the original paired trial attempt"
+        fetch_original 15225466319 evidence 0b1f7e9d24a09f929e191153c4cb72f137a90b48e9f65b3b71f09bf380643dfc 73822
+        unzip -q "$TRIAL/evidence.zip" -d "$evidence/baseline"
+        validate_baseline "$evidence/baseline" "$evidence/context.txt"
+        fetch_original 15225376593 seed 23ec62ebe8e435f1c681bb71782e8251f02e88d8801bd7a68679a09f05c663ba 366284447
+        ;;
+    restore)
+        check_clean_source
+        check_context restore
+        for directory in "${output_paths[@]}"; do
+            [[ ! -e $directory && ! -L $directory ]] || fail "resume has existing output at $directory"
+        done
         /usr/bin/time -f '%e' -o "$evidence/unzip.seconds" \
-            unzip -p "$TRIAL/received.zip" seed.tar.zst > "$TRIAL/received.tar.zst"
-        [[ $(sha "$TRIAL/received.tar.zst") == "$(cat "$evidence/seed.sha256")" ]] ||
+            unzip -p "$TRIAL/seed.zip" seed.tar.zst > "$TRIAL/received.tar.zst"
+        [[ $(sha "$TRIAL/received.tar.zst") == "$seed_sha" ]] ||
             fail "downloaded seed bytes differ from the original tar"
-        mkdir -p "$TRIAL/stock-output/$triple"
-        mv "${output_paths[0]}" "${output_paths[2]}" "$TRIAL/stock-output/"
-        mv "${output_paths[1]}" "$TRIAL/stock-output/$triple/"
         /usr/bin/time -f '%e' -o "$evidence/extract.seconds" \
             tar --zstd -xf "$TRIAL/received.tar.zst"
         df -B1 "$PWD" "$TRIAL" > "$evidence/disk-after-restore.txt"

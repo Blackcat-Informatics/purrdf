@@ -22,7 +22,6 @@ jobs:
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: "true"
       CARGO_BUILD_FINGERPRINT: content
       MEASURED_SHA: a1b641b51b899ae64afa24fb88a9486dfa22aff0
-      STOCK_KEY: simd-asm-v1-Linux-aarch64-neoverse-v1-a9c1c9ab765535974b0d7e1f4863ee2016f94b13a0a15c9fcd616bb4616f3e22-88f975b1a5a16b7216d1bdd72d39a7a50b6ab8df3d9b6c99fcb034f1f122957d-a1b641b51b899ae64afa24fb88a9486dfa22aff0
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -49,41 +48,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross zstd
           bash "$TRIAL/run.sh" prepare
-          date +%s%N > "$TRIAL/evidence/stock-restore-start.ns"
-      - name: Restore the exact stock evidence cache
-        id: stock
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: target/simd-asm
-          key: ${{ env.STOCK_KEY }}
-      - name: Admit only the exact stock cache, then measure and pack
+      - name: Admit the original baseline and retrieve its exact compiled seed
         env:
-          CACHE_HIT: ${{ steps.stock.outputs.cache-hit }}
-          CACHE_MATCH: ${{ steps.stock.outputs.cache-matched-key }}
-        run: |
-          set -euo pipefail
-          bash "$TRIAL/run.sh" stock
-          bash "$TRIAL/run.sh" pack
-          date +%s%N > "$TRIAL/evidence/upload-start.ns"
-      - name: Transport the compiled seed without writing to the cache service
-        id: seed
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: neoverse-trial-seed-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/neoverse-trial/seed.tar.zst
-          compression-level: 0
-          retention-days: 1
-          if-no-files-found: error
-      - name: Restore the compiled seed and run the unchanged and edited arms
-        env:
-          ARTIFACT_ID: ${{ steps.seed.outputs.artifact-id }}
-          ARTIFACT_DIGEST: ${{ steps.seed.outputs.artifact-digest }}
           GH_TOKEN: ${{ github.token }}
+        run: bash "$TRIAL/run.sh" download
+      - name: Restore the compiled seed and run the unchanged and edited arms
         run: |
           set -euo pipefail
-          date +%s%N > "$TRIAL/evidence/upload-end.ns"
-          bash "$TRIAL/run.sh" download
-          unset GH_TOKEN
+          bash "$TRIAL/run.sh" restore
           bash "$TRIAL/run.sh" compiled
           bash "$TRIAL/run.sh" edited
       - name: Record the final runner and trial time
