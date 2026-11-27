@@ -203,17 +203,20 @@ impl<P: CorpusProfile> TextIndex<P> {
                         SourceSide::Next => counts[ordinal].checked_add(1),
                     };
                     let Some(count) = count else {
-                        return ControlFlow::Break(TextError::data(
-                            "observed source coverage population is inconsistent",
-                        ));
+                        return ControlFlow::Break(
+                            TextError::data("observed source coverage population is inconsistent")
+                                .into(),
+                        );
                     };
                     counts[ordinal] = count;
-                    let accounting = observed_hash::<P>(row).and_then(|hash| {
-                        let Some(hash) = hash else {
-                            return Ok(());
-                        };
-                        changes.observe(side, hash)
-                    });
+                    let accounting = observed_hash::<P>(row)
+                        .map_err(TextDeltaError::from)
+                        .and_then(|hash| {
+                            let Some(hash) = hash else {
+                                return Ok(());
+                            };
+                            changes.observe(side, hash)
+                        });
                     match accounting {
                         Ok(()) => ControlFlow::Continue(()),
                         Err(error) => ControlFlow::Break(error),
@@ -236,7 +239,7 @@ impl<P: CorpusProfile> TextIndex<P> {
                         },
                     });
                 }
-                SourceVisit::Stopped(error) => return Err(error.into()),
+                SourceVisit::Stopped(error) => return Err(error),
                 SourceVisit::Unavailable => {}
             }
         }
@@ -261,9 +264,7 @@ impl<P: CorpusProfile> TextIndex<P> {
                         .source_summary(predicate, graph, stream)
                         .map_err(TextError::source_read)?
                         .ok_or(TextDeltaError::SourceObservationUnavailable)?;
-                    digest
-                        .combine(summary.literal_rows()[usize::from(P::GRAPH_FREE)])
-                        .map_err(|error| TextError::data(error.to_string()))?;
+                    digest.combine(summary.literal_rows()[usize::from(P::GRAPH_FREE)])?;
                     counts[ordinal] = counts[ordinal]
                         .checked_add(summary.statement_count())
                         .ok_or_else(|| TextError::data("source coverage population overflow"))?;
@@ -496,13 +497,15 @@ impl SourceChanges {
         })
     }
 
-    fn observe(&mut self, side: SourceSide, hash: [u8; 32]) -> Result<(), TextError> {
+    fn observe(&mut self, side: SourceSide, hash: [u8; 32]) -> Result<(), TextDeltaError> {
         let reverse = match side {
             SourceSide::Previous => 1,
             SourceSide::Next => -1,
         };
         change_count(&mut self.difference, hash, reverse)?;
-        self.accounting.observe(side, hash)
+        self.accounting
+            .observe(side, hash)
+            .map_err(TextDeltaError::from)
     }
 
     fn matches(&self) -> bool {
@@ -661,7 +664,7 @@ fn reverse_accounting(
     mut prior: SourceDigest,
     added_hashes: &[[u8; 32]],
     removed_hashes: &[[u8; 32]],
-) -> Result<SourceDigest, TextError> {
+) -> Result<SourceDigest, TextDeltaError> {
     for &hash in added_hashes {
         prior.observe(SourceSide::Previous, hash)?;
     }

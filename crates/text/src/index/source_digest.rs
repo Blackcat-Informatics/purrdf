@@ -3,7 +3,7 @@
 
 //! Order-independent, multiplicity-sensitive selected-source accounting.
 
-use purrdf_hash::multiset::Multiset256;
+use purrdf_hash::multiset::{Multiset256, MultisetError};
 
 use super::{
     CorpusProfile, SOURCE_DIGEST_DOMAIN, SOURCE_IDENTITY_DOMAIN, Shared, SourceRow,
@@ -39,12 +39,11 @@ impl SourceDigest {
         &mut self,
         side: SourceSide,
         digest: [u8; 32],
-    ) -> Result<(), crate::TextError> {
+    ) -> Result<(), MultisetError> {
         match side {
             SourceSide::Previous => self.state.remove(digest),
             SourceSide::Next => self.state.insert(digest),
         }
-        .map_err(|error| crate::TextError::data(error.to_string()))
     }
 
     #[cfg(test)]
