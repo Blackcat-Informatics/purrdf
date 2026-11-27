@@ -1939,3 +1939,43 @@ It does **not** cover: any other engine, WatDiv's `linear_incremental` and
 or scales beyond the one pinned dataset. It is not a conformance check either —
 that a query returned *n* rows is a measurement, not a claim that *n* is the
 answer any other implementation would produce.
+
+## Hosted Neoverse assembly compilation
+
+The November 27, 2026 measurement used source
+`a1b641b51b899ae64afa24fb88a9486dfa22aff0` on two separate Linux x86-64
+hosted runners with four visible CPUs and Ubuntu image `20261122.9.1`. The
+recorded build contexts were byte-identical, including the checkout path, Rust
+nightly `2026-11-26`, Arm cross-toolchain, Cargo checksum settings, and gate
+inputs. Each arm ran the same four release-profile Cargo graphs, including
+benchmark consumers, for `aarch64-neoverse-v1`.
+[Stock and seed run](https://github.com/Blackcat-Informatics/purrdf/actions/runs/46047659305/attempts/1) ·
+[Restore and edit run](https://github.com/Blackcat-Informatics/purrdf/actions/runs/46053872903/attempts/1)
+
+| Input | Checked gate time | Host compiler invocations | Arm compiler invocations |
+| --- | ---: | ---: | ---: |
+| Stock assembly evidence only | 2,455.91 s | 21 | 137 |
+| Restored compiled outputs, unchanged source | 8.00 s | 0 | 0 |
+| Restored compiled outputs, one-byte source edit | 137.54 s | 0 | 1 |
+
+Each arm emitted a fresh successful report with all 116 checked cells equal.
+The edit changed one byte in a comment in the measured Arm crate, preserving
+the file's inode, length, and nanosecond modification time. The edited unit
+recompiled and the source was restored afterward. The stock gate passed before
+its job refused the initial restore for a receipt-context mismatch. The second
+run restored the original seed with the matching context.
+
+Packing the 366,284,309-byte seed took 6.72 s and uploading it took 2.64 s.
+The resumed run downloaded the 366,284,447-byte artifact in 18.98 s, unwrapped
+it in 1.27 s, and extracted the seed in 1.70 s. The jobs took 42 min 01 s and
+4 min 11 s end to end, respectively. The first also packed, uploaded, and tried
+restoring the seed. The second includes the edit control. This measures Actions
+artifact transport, not cache-service latency or ordinary matrix wall time.
+
+Ordinary CI does not cache compiled Neoverse outputs. At the measurement
+review, the repository reported 411 cache entries and 10,748,677,280 active
+bytes against a configured 10 GB limit and seven-day retention. A seed of the
+measured size would add about 366 MB, and changing the shared assembly action
+would also rotate the existing x86 compiled-cache key. The measured reduction
+in compiler work does not establish that the additional archive fits the cache
+budget.
