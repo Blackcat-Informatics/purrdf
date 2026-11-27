@@ -219,6 +219,127 @@ fn disconnected_count_completes_without_materializing_product_rows() {
 }
 
 #[test]
+fn disconnected_distinct_count_uses_only_the_operand_factor() {
+    use purrdf_core::TermValue;
+    use purrdf_xsd::datatype::{XSD_DECIMAL, XSD_INTEGER};
+
+    let mut builder = RdfDatasetBuilder::new();
+    let predicate = builder.intern_iri("http://example.org/p").unwrap();
+    // Equal numeric values with different RDF identities, each bound repeatedly.
+    let integer = builder
+        .intern_literal(RdfLiteral::typed("1", XSD_INTEGER))
+        .unwrap();
+    let decimal = builder
+        .intern_literal(RdfLiteral::typed("1.0", XSD_DECIMAL))
+        .unwrap();
+    for index in 0..EDGES {
+        let subject = builder
+            .intern_iri(&format!("http://example.org/s{index}"))
+            .unwrap();
+        let object = if index % 2 == 0 { integer } else { decimal };
+        builder.push_quad(subject, predicate, object, None).unwrap();
+    }
+    let dataset = builder.freeze().unwrap();
+    let engine = NativeSparqlEngine::new();
+    let cases = [
+        ("?a ex:p ?x . ?b ex:p ?y", 2),
+        ("?a ex:p ?x . ?b ex:missing ?y", 0),
+        ("?a ex:missing ?x . ?b ex:p ?y", 0),
+        ("?a ex:p ?x . ?b ex:p ex:s0", 0),
+    ];
+    let governors = QueryGovernors::METERED.with_max_intermediate_cells(48);
+    for (patterns, count) in cases {
+        let query = format!(
+            "PREFIX ex: <http://example.org/> SELECT (COUNT(DISTINCT ?x) AS ?total) WHERE {{ {patterns} }}"
+        );
+        let explanation = engine
+            .explain_query_with_bounds(&dataset, &query, None)
+            .unwrap();
+        let group = explanation
+            .explanation()
+            .ledger()
+            .iter()
+            .find(|node| node.label == "Group")
+            .unwrap_or_else(|| panic!("global GROUP is missing\n{}", explanation.render()));
+        assert_eq!(explanation.output_upper_bound(group.ordinal), Some(1));
+        let trace = explanation.explanation();
+        let [first, second] = trace.join_orders() else {
+            panic!("expected both original BGP arms\n{}", explanation.render());
+        };
+        assert!(first.contains("?a") && first.contains("?x"));
+        assert!(second.contains("?b"));
+        if patterns.contains("?y") {
+            assert!(second.contains("?y"));
+        } else {
+            assert!(second.contains("http://example.org/s0"));
+        }
+        if patterns.contains("ex:missing") {
+            assert_eq!(trace.statistics(), &[] as &[String]);
+        } else {
+            let bgp = trace
+                .ledger()
+                .iter()
+                .find(|node| node.label == "Bgp")
+                .unwrap();
+            assert_eq!(trace.statistics().len(), 2);
+            for (index, record) in trace.statistics().iter().enumerate() {
+                assert!(record.starts_with(&format!("#{} pattern={index} ", bgp.ordinal)));
+            }
+        }
+        let prepared = engine.prepare_query(&query, None).unwrap();
+        let results = [
+            engine.query_governed(&dataset, request(&query), &QueryOptions::EMPTY, &governors),
+            engine.query_prepared_governed_view(
+                &dataset,
+                &prepared,
+                &[],
+                &QueryOptions::EMPTY,
+                &governors,
+            ),
+        ];
+        for result in results {
+            let outcome = result.unwrap();
+            let GovernedOutcome::Complete {
+                result:
+                    SparqlResult::Solutions {
+                        variables, rows, ..
+                    },
+                evidence,
+                ..
+            } = outcome
+            else {
+                panic!("distinct count must complete within the factor budget: {outcome:?}");
+            };
+            let value = TermValue::typed_literal(count.to_string(), XSD_INTEGER);
+            assert_eq!(variables, ["total"]);
+            assert_eq!(rows, [vec![Some(value)]]);
+            assert!(evidence.consumed_in(ResourceDimension::IntermediateCells) <= 48);
+        }
+    }
+
+    let starved = engine
+        .query_governed(
+            &dataset,
+            request("SELECT (COUNT(DISTINCT ?x) AS ?total) WHERE { ?a <http://example.org/p> ?x . ?b <http://example.org/p> ?y }"),
+            &QueryOptions::EMPTY,
+            &governors.with_fuel(14),
+        )
+        .unwrap();
+    let (trip, partial, _) = exhausted(&starved);
+    assert!(matches!(
+        trip,
+        TrippedGovernor::Budget {
+            dimension: ResourceDimension::Fuel,
+            ..
+        }
+    ));
+    assert_eq!(
+        partial.result().map_or(0, |rows| row_count(rows.result())),
+        0
+    );
+}
+
+#[test]
 fn disconnected_count_has_no_machine_word_cardinality_ceiling() {
     use purrdf_core::TermValue;
     use purrdf_xsd::datatype::XSD_INTEGER;

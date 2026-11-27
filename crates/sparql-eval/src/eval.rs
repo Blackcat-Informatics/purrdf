@@ -8046,7 +8046,21 @@ fn run_ordinary<'a, 'd: 'a, D: DatasetView + Sync>(
                     }
                     current = next;
                 } else {
-                    let evaluated = dispatch_node(current_pattern, runner.ctx);
+                    let evaluated = if !literal
+                        && !special_operand
+                        && matches!(current_pattern, GraphPattern::Bgp { .. })
+                    {
+                        let parent = runner
+                            .state
+                            .pending
+                            .last()
+                            .or(runner.state.first.as_ref())
+                            .filter(|frame| matches!(frame.after, OrdinaryAfter::Group { .. }))
+                            .map(|frame| frame.position.pattern());
+                        dispatch_ordinary_leaf(current_pattern, parent, runner.ctx)
+                    } else {
+                        dispatch_node(current_pattern, runner.ctx)
+                    };
                     break finish_ordinary_active(
                         &mut runner.state.active,
                         &mut *runner.ctx,
@@ -10401,44 +10415,7 @@ fn evaluate_factorized_distinct<D: DatasetView + Sync>(
         let projected = eval_evaluated_with(plan.project, ctx, |ctx| {
             let project = Lift::at_admitted(plan.project, &ctx.growth)?.detach();
             let factors = eval_evaluated_with(plan.factors.input, ctx, |ctx| {
-                let workspace = ctx.growth.clone();
-                let empty = || Evaluated::Complete(SolutionSeq::empty(VarSchema::empty_shared()));
-                let mut programs = crate::AdmittedVec::new(&workspace);
-                let mut impossible = false;
-                // Like an ordinary BGP, check fixed terms before reading any
-                // rows. Keep each admitted compilation for the actual scan.
-                plan.factors.visit(&workspace, |triples, members| {
-                    let program = crate::bgp::CompiledBgp::compile_factor(triples, ctx)?;
-                    if program.is_impossible() {
-                        impossible = true;
-                        return Ok(false);
-                    }
-                    programs.push((members[0].0, program))?;
-                    Ok(true)
-                })?;
-                if impossible {
-                    return Ok(empty());
-                }
-                let mut selected = None;
-                for (component, program) in &programs {
-                    let factor = program.eval_factor(ctx)?;
-                    if let Some(error) = ctx.dataset.read_error() {
-                        return Err(EvalError::source_read(error));
-                    }
-                    if let Err(tripped) = ctx.observe_cells(factor.rows.len(), factor.schema.len())
-                    {
-                        ctx.record_barrier(tripped);
-                    }
-                    if ctx.stop_check().is_some() || factor.rows.is_empty() {
-                        return Ok(empty());
-                    }
-                    if *component == plan.selected {
-                        selected = Some(factor);
-                    }
-                }
-                let rows = selected
-                    .ok_or_else(|| EvalError::internal("DISTINCT lost its selected factor"))?;
-                Ok(Evaluated::Complete(rows))
+                evaluate_selected_factor(&plan.factors, plan.selected, ctx)
             })?;
             crate::modifier::finish_project(
                 plan.project,
@@ -10450,6 +10427,75 @@ fn evaluate_factorized_distinct<D: DatasetView + Sync>(
         })?;
         crate::modifier::finish_dedup::<_, false>(node, distinct, projected, ctx)
     })
+}
+
+/// Keep the original leaf boundary and GROUP continuation for distinct operands.
+fn dispatch_ordinary_leaf<D: DatasetView + Sync>(
+    node: &GraphPattern,
+    parent: Option<&GraphPattern>,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    if let Some(group @ GraphPattern::Group { inner, .. }) = parent
+        && std::ptr::eq(inner.as_ref(), node)
+        && ctx
+            .plan
+            .as_ref()
+            .is_some_and(|plan| plan.shape().is_root_count_group(group))
+        && crate::join_plan::DisjointBgp::allows(
+            ctx.property_functions,
+            ctx.shapes,
+            ctx.evidence_input.is_some(),
+        )
+        && let Some((factors, selected)) =
+            crate::join_plan::DisjointBgp::for_distinct_count::<D>(group, &ctx.growth)?
+    {
+        return evaluate_selected_factor(&factors, selected, ctx);
+    }
+    dispatch_node(node, ctx)
+}
+
+/// Read the selected factor only if all factors prove the product nonempty.
+fn evaluate_selected_factor<D: DatasetView + Sync>(
+    factors: &crate::join_plan::DisjointBgp<'_>,
+    selected_component: usize,
+    ctx: &EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    let workspace = ctx.growth.clone();
+    let empty = || Evaluated::Complete(SolutionSeq::empty(VarSchema::empty_shared()));
+    let mut programs = crate::AdmittedVec::new(&workspace);
+    let mut impossible = false;
+    // Like an ordinary BGP, resolve fixed terms before reading rows, then
+    // keep each admitted compilation for the scan.
+    factors.visit(&workspace, |triples, members| {
+        let program = crate::bgp::CompiledBgp::compile_factor(triples, ctx)?;
+        if program.is_impossible() {
+            impossible = true;
+            return Ok(false);
+        }
+        programs.push((members[0].0, program))?;
+        Ok(true)
+    })?;
+    if impossible {
+        return Ok(empty());
+    }
+    let mut selected = None;
+    for (component, program) in &programs {
+        let factor = program.eval_factor(ctx)?;
+        if let Some(error) = ctx.dataset.read_error() {
+            return Err(EvalError::source_read(error));
+        }
+        if let Err(tripped) = ctx.observe_cells(factor.rows.len(), factor.schema.len()) {
+            ctx.record_barrier(tripped);
+        }
+        if ctx.stop_check().is_some() || factor.rows.is_empty() {
+            return Ok(empty());
+        }
+        if *component == selected_component {
+            selected = Some(factor);
+        }
+    }
+    let rows = selected.ok_or_else(|| EvalError::internal("BGP lost its selected factor"))?;
+    Ok(Evaluated::Complete(rows))
 }
 
 /// Fold cardinalities, not the individual rows of the Cartesian product.
