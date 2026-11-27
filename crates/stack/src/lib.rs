@@ -47,14 +47,12 @@
 //!   `pthread_get_stacksize_np`, or `GetCurrentThreadStackLimits`, per platform; see that
 //!   module for which targets read which call, and which read nothing. A successful read is
 //!   cached per thread in the same thread-local, so a check costs one thread-local load
-//!   and one comparison. A pointer found *below* the cached floor means the thread is
-//!   running on a different stack than the one the floor was read for (a host that switched
-//!   onto a stack of its own, say), so the floor is read again rather than refusing: a
-//!   stack switch never turns into a refusal. (A stack a host switched to *above* the
-//!   cached floor is measured against the old floor, which overstates what is left: such a
-//!   host installs its own floor with [`replace_floor`], as the wasm asynchronous lane
-//!   does.) A thread started by [`on_stack`] never reads the operating system at all: the
-//!   request gives its floor.
+//!   and one comparison. A pointer below a cached operating-system floor triggers a
+//!   new read, as the thread may be running on a different stack. A host that switches
+//!   to a stack above the cached floor installs its own context rather than relying on
+//!   that detection. A floor installed with [`Context::on_floor`] is authoritative for
+//!   that context: a pointer below it has no space left, even if the physical mapping
+//!   is larger. This is how [`on_stack`] enforces the requested size.
 //! * **A floor that cannot be read** is a failure, never a floor of `0`: on a thread whose
 //!   limit the operating system will not report (a failed call, or a target with no call
 //!   to make) [`try_remaining`] returns the typed [`FloorError`], and every other
@@ -181,6 +179,11 @@ pub const EXHAUSTED: usize = usize::MAX - 1;
 /// The floor's value before anything has been read or installed on this thread.
 const UNKNOWN: usize = usize::MAX;
 
+/// Highest effective installed floor. A saturating reserve must not imitate
+/// the unknown marker or a latched walk refusal.
+#[cfg(not(target_arch = "wasm32"))]
+const SATURATED_FLOOR: usize = EXHAUSTED - 1;
+
 /// Where the running context stands with respect to [`walk`] scopes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WalkState {
@@ -203,6 +206,10 @@ thread_local! {
     /// The floor of the stack this thread is running on; [`UNKNOWN`] until the first
     /// measurement reads it (or a host installs one with [`replace_floor`]).
     static FLOOR: Cell<usize> = const { Cell::new(UNKNOWN) };
+    /// A native context's unreserved installed floor, separate from the
+    /// operating system's mapping and from the effective floor.
+    #[cfg(not(target_arch = "wasm32"))]
+    static INSTALLED_FLOOR: Cell<Option<usize>> = const { Cell::new(None) };
     /// The running context's [`WalkState`].
     static WALK: Cell<WalkState> = const { Cell::new(WalkState::Unscoped) };
     /// The bytes the open [`reserve`] scopes keep above the stack's real floor: `FLOOR`
@@ -217,6 +224,16 @@ thread_local! {
     /// Makes this thread's floor reads fail, as a refused operating-system call does.
     #[cfg(all(test, not(target_arch = "wasm32")))]
     static READ_FAILS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Recover the effective installed floor after a reserve or a walk closes,
+/// even when its previous value was clamped or masked by an outer refusal.
+#[cfg(not(target_arch = "wasm32"))]
+fn installed_effective_floor() -> Option<usize> {
+    INSTALLED_FLOOR.with(Cell::get).map(|base| {
+        base.saturating_add(RESERVED.with(Cell::get))
+            .min(SATURATED_FLOOR)
+    })
 }
 
 /// The current stack pointer, as the address of a local of the calling frame.
@@ -310,8 +327,18 @@ pub fn try_remaining() -> Result<usize, FloorError> {
 /// Only a host that switches the stack pointer onto a stack of its own needs this, or a
 /// guard latching a refusal with [`EXHAUSTED`]; see the [crate documentation](crate).
 /// The value returned may be the "not yet read" marker, which is a valid value to put
-/// back: the next measurement reads the floor again.
+/// back: the next measurement reads the floor again. To make a native floor
+/// authoritative even when the frame is below it, install a context created
+/// by [`Context::on_floor`] with [`replace_context`].
 pub fn replace_floor(floor: usize) -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    INSTALLED_FLOOR.with(|installed| {
+        if floor == UNKNOWN {
+            installed.set(None);
+        } else if floor < SATURATED_FLOOR && installed.get().is_some() {
+            installed.set(Some(floor.saturating_sub(RESERVED.with(Cell::get))));
+        }
+    });
     FLOOR.with(|cell| cell.replace(floor))
 }
 
@@ -326,6 +353,9 @@ pub fn replace_floor(floor: usize) -> usize {
 pub struct Context {
     /// The floor [`replace_floor`] would install.
     floor: usize,
+    /// Unreserved native floor from this context, not physical discovery.
+    #[cfg(not(target_arch = "wasm32"))]
+    installed_floor: Option<usize>,
     /// The walk-scope state.
     walk: WalkState,
     /// The bytes the context's open [`reserve`] scopes keep above its real floor.
@@ -344,6 +374,8 @@ impl Context {
     pub const fn on_floor(floor: usize) -> Self {
         Self {
             floor,
+            #[cfg(not(target_arch = "wasm32"))]
+            installed_floor: if floor == UNKNOWN { None } else { Some(floor) },
             walk: WalkState::Unscoped,
             reserved: 0,
             scopes: 0,
@@ -362,7 +394,9 @@ impl Context {
 /// [Switching contexts](crate#switching-contexts).
 pub fn replace_context(context: Context) -> Context {
     Context {
-        floor: replace_floor(context.floor),
+        floor: FLOOR.with(|cell| cell.replace(context.floor)),
+        #[cfg(not(target_arch = "wasm32"))]
+        installed_floor: INSTALLED_FLOOR.with(|cell| cell.replace(context.installed_floor)),
         walk: WALK.with(|state| state.replace(context.walk)),
         reserved: RESERVED.with(|reserved| reserved.replace(context.reserved)),
         scopes: SCOPES.with(|scopes| scopes.replace(context.scopes)),
@@ -382,8 +416,8 @@ pub fn replace_context(context: Context) -> Context {
 /// the margin *and* the reserve below it. It is the floor that moves, so a check costs
 /// what it always did.
 ///
-/// Reserves nest, and add up. A floor read again while one is open (a native thread
-/// that finds its frame below the cached floor) is raised by what is reserved, and a
+/// Reserves nest, and add up. A cached physical floor read again while one is open
+/// is raised by what is reserved. An installed floor is not read again, and a
 /// host's [`replace_context`] carries the reserve with the computation that made it. On
 /// a thread whose stack bound cannot be read ([`FloorError`]) nothing is reserved: every
 /// check there already refuses.
@@ -404,7 +438,14 @@ pub fn reserve(bytes: usize) -> Reserve {
             thread_bound: PhantomData,
         };
     }
-    FLOOR.with(|cell| cell.set(floor.saturating_add(bytes)));
+    let raised = floor.saturating_add(bytes);
+    #[cfg(not(target_arch = "wasm32"))]
+    let raised = if raised > SATURATED_FLOOR && INSTALLED_FLOOR.with(Cell::get).is_some() {
+        SATURATED_FLOOR
+    } else {
+        raised
+    };
+    FLOOR.with(|cell| cell.set(raised));
     RESERVED.with(|reserved| reserved.set(reserved.get() + bytes));
     SCOPES.with(|scopes| scopes.set(scopes.get() + 1));
     Reserve {
@@ -521,6 +562,17 @@ impl Drop for Reserve {
             return;
         }
         RESERVED.with(|reserved| reserved.set(reserved.get().saturating_sub(bytes)));
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(restored) = installed_effective_floor() {
+            // Keep an outer refusal latched. The walk that owns it restores
+            // the floor from the current reserve total when it closes.
+            FLOOR.with(|cell| {
+                if cell.get() != EXHAUSTED {
+                    cell.set(restored);
+                }
+            });
+            return;
+        }
         match FLOOR.with(Cell::get) {
             // A walk scope inside this reserve refused and has not closed: it put
             // EXHAUSTED in place of the raised floor and puts that floor back when it
@@ -574,7 +626,13 @@ pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
         fn drop(&mut self) {
             let inner = WALK.with(|state| state.replace(self.0));
             if let WalkState::Refused { floor, .. } = inner {
-                replace_floor(floor);
+                #[cfg(not(target_arch = "wasm32"))]
+                let floor = if floor == EXHAUSTED {
+                    floor
+                } else {
+                    installed_effective_floor().unwrap_or(floor)
+                };
+                FLOOR.with(|cell| cell.set(floor));
             }
         }
     }
@@ -650,6 +708,11 @@ fn is_low_cold(sp: usize) -> bool {
 /// the [`FloorError`] when it cannot be read, caching nothing.
 #[cfg(not(target_arch = "wasm32"))]
 fn refresh(sp: usize) -> Result<usize, FloorError> {
+    // The frame is below the context's effective floor, including its reserves.
+    // A physical read could find a larger mapping and widen that floor.
+    if INSTALLED_FLOOR.with(Cell::get).is_some() {
+        return Ok(0);
+    }
     // `platform::stack_floor` reads the thread's bounds directly from the operating
     // system rather than from any particular frame, so — unlike a floor derived from a
     // "bytes left" figure measured a few frames down — this is the thread's exact floor,
@@ -963,8 +1026,8 @@ mod tests {
         );
     }
 
-    /// A floor installed above the running frame (a host that switched away without
-    /// putting the previous floor back) is read again rather than reporting nothing left.
+    /// A cached physical floor above the running frame is read again rather
+    /// than reporting nothing left.
     /// Only on a target whose operating system reports the bound to read again.
     #[cfg(any(
         target_os = "linux",
@@ -979,14 +1042,15 @@ mod tests {
     ))]
     #[test]
     fn a_floor_above_the_frame_is_read_again() {
-        let (low, left) = on_stack(1024 * 1024, || {
-            let previous = replace_floor(stack_pointer() + 4096);
-            let low = is_low();
-            let left = remaining();
-            replace_floor(previous);
-            (low, left)
-        })
-        .expect("spawn");
+        let (low, left) = std::thread::Builder::new()
+            .stack_size(1024 * 1024)
+            .spawn(|| {
+                replace_floor(stack_pointer() + 4096);
+                (is_low(), remaining())
+            })
+            .expect("spawn")
+            .join()
+            .expect("read physical bounds");
         assert!(!low);
         assert!(left > MARGIN_BYTES, "{left} bytes left");
     }
@@ -1186,28 +1250,98 @@ mod tests {
     ))]
     #[test]
     fn a_floor_read_again_keeps_the_reserve() {
-        on_stack(4 * 1024 * 1024, || {
-            // The system's own report of this thread's floor: what a floor read again lands on.
-            let system_floor = platform::stack_floor().expect("a supported platform reads a floor");
-            let kept = reserve(1024 * 1024);
-            // As if the thread had switched stacks: the cached floor is above the frame.
-            replace_floor(stack_pointer() + 4096);
-            let within = remaining();
-            assert_eq!(
-                FLOOR.with(Cell::get),
-                system_floor + 1024 * 1024,
-                "the floor read again is raised"
-            );
-            assert!(
-                (stack_pointer() - system_floor - 1024 * 1024 - 1024
-                    ..stack_pointer() - system_floor - 1024 * 1024 + 1024)
-                    .contains(&within),
-                "{within} bytes left inside a 1 MiB reserve"
-            );
-            drop(kept);
-            assert_eq!(FLOOR.with(Cell::get), system_floor);
-        })
-        .expect("spawn");
+        std::thread::Builder::new()
+            .stack_size(4 * 1024 * 1024)
+            .spawn(|| {
+                // The system's own report of this thread's floor: what a floor read again lands on.
+                let system_floor =
+                    platform::stack_floor().expect("a supported platform reads a floor");
+                let kept = reserve(1024 * 1024);
+                // As if the thread had switched stacks: the cached floor is above the frame.
+                replace_floor(stack_pointer() + 4096);
+                let within = remaining();
+                assert_eq!(
+                    FLOOR.with(Cell::get),
+                    system_floor + 1024 * 1024,
+                    "the floor read again is raised"
+                );
+                assert!(
+                    (stack_pointer() - system_floor - 1024 * 1024 - 1024
+                        ..stack_pointer() - system_floor - 1024 * 1024 + 1024)
+                        .contains(&within),
+                    "{within} bytes left inside a 1 MiB reserve"
+                );
+                drop(kept);
+                assert_eq!(FLOOR.with(Cell::get), system_floor);
+            })
+            .expect("spawn")
+            .join()
+            .expect("read physical bounds");
+    }
+
+    /// A deliberately larger physical mapping must not let a deeper frame
+    /// escape the installed floor, including the bytes kept by nested reserves.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "netbsd",
+        target_os = "freebsd",
+        target_os = "dragonfly",
+        target_os = "openbsd",
+        target_os = "macos",
+        target_os = "ios",
+        windows,
+    ))]
+    #[test]
+    fn installed_floor_does_not_widen_inside_nested_reserves() {
+        std::thread::Builder::new()
+            .stack_size(2 * 1024 * 1024)
+            .spawn(|| {
+                let physical = platform::stack_floor().expect("native bounds");
+                let installed = stack_pointer() - 512 * 1024;
+                assert!(installed > physical + MARGIN_BYTES);
+                let native = replace_context(Context::on_floor(installed));
+
+                let outer = reserve(remaining() - MARGIN_BYTES - 64 * 1024);
+                assert!(!deeper(2, &is_low), "the neighbouring frame has room");
+                let inner = reserve(remaining() - 2048);
+                let (low, left) = deeper(2, &|| (is_low(), try_remaining()));
+                assert!(low, "the deeper frame must refuse with {left:?} left");
+                assert_eq!(left, Ok(0));
+                drop(inner);
+                assert!(!deeper(2, &is_low));
+                drop(outer);
+                assert_eq!(FLOOR.with(Cell::get), installed);
+
+                let adjacent = reserve(4096);
+                let refused = walk(|| {
+                    let overflowing = reserve(usize::MAX - adjacent.bytes());
+                    assert_eq!(reserved(), usize::MAX);
+                    assert_eq!(try_remaining(), Ok(0));
+                    let previous = replace_floor(EXHAUSTED);
+                    assert_eq!(replace_floor(previous), EXHAUSTED);
+                    assert!(walk_is_low("oversized reserve"));
+                    let nested = walk(|| {
+                        assert!(walk_is_low("nested exhaustion"));
+                        drop(overflowing);
+                        assert!(is_low(), "the nested refusal remains latched");
+                    });
+                    assert_eq!(nested, Err("nested exhaustion"));
+                    assert!(is_low(), "the outer refusal remains latched");
+                });
+                assert_eq!(refused, Err("oversized reserve"));
+                assert!(!is_low());
+                assert_eq!(FLOOR.with(Cell::get), installed + adjacent.bytes());
+                drop(adjacent);
+                assert_eq!(FLOOR.with(Cell::get), installed);
+
+                replace_context(native);
+                assert!(remaining() > 512 * 1024);
+                assert_eq!(FLOOR.with(Cell::get), physical);
+            })
+            .expect("native thread")
+            .join()
+            .expect("guarded measurement");
     }
 
     /// A reserve travels with its context: the computation that runs while it waits sees
