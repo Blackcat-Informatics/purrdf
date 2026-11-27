@@ -1305,9 +1305,9 @@ impl RecursionGuard {
             }
             .into());
         }
-        if purrdf_stack::is_low() {
-            return Err(crate::error::ProcessorFailure::ExpressionStackMargin.into());
-        }
+        crate::error::ProcessorFailure::check_stack("node expression evaluation", || {
+            crate::error::ProcessorFailure::ExpressionStackMargin
+        })?;
         self.structural += 1;
         Ok(())
     }
@@ -1343,12 +1343,11 @@ impl RecursionGuard {
             }
             .into());
         }
-        if purrdf_stack::is_low() {
-            return Err(crate::error::ProcessorFailure::CallStackMargin {
+        crate::error::ProcessorFailure::check_stack("custom node-expression function", || {
+            crate::error::ProcessorFailure::CallStackMargin {
                 iri: iri.to_owned(),
             }
-            .into());
-        }
+        })?;
         self.depth += 1;
         Ok(())
     }
@@ -1369,12 +1368,11 @@ impl RecursionGuard {
         shape_id: &Term,
         focus: &Term,
     ) -> Result<(), crate::error::ShapesError> {
-        if purrdf_stack::is_low() {
-            return Err(crate::error::ProcessorFailure::ReentryStackMargin {
+        crate::error::ProcessorFailure::check_stack("SHACL node-expression re-entry", || {
+            crate::error::ProcessorFailure::ReentryStackMargin {
                 shape: Box::new(shape_id.clone()),
             }
-            .into());
-        }
+        })?;
         let key = (shape_id.clone(), focus.clone());
         if self.stack.contains(&key) {
             return Err(crate::error::ProcessorFailure::ReentryCycle {

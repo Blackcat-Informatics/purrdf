@@ -675,6 +675,14 @@ pub enum EvalError {
         construct: &'static str,
     },
 
+    /// The native stack floor could not be measured before evaluation.
+    UnknownStackFloor {
+        /// What was about to be evaluated.
+        construct: &'static str,
+        /// The original stack floor read error.
+        cause: purrdf_stack::FloorError,
+    },
+
     /// On `wasm32`, the request nests deeper than the JavaScript engine's own call
     /// stack holds: the plan is past the host-stack bounds of its admission
     /// (`construct` is then `"query algebra"`), or its graph patterns nest deeper than
@@ -752,6 +760,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
         },
         FloatEnvironment(error) => "sparql-eval-float-environment" { "cause" => Cause(error) },
         StackExhausted { construct } => "sparql-eval-stack-exhausted" { "construct" => Text(construct) },
+        UnknownStackFloor { construct, cause } => "sparql-eval-stack-floor" { "construct" => Text(construct), "cause" => Cause(cause) },
         HostStackExhausted { construct } => "sparql-eval-host-stack-exhausted" { "construct" => Text(construct) },
         HostSourceMissing(missing) => "sparql-eval-host-source-missing" { "input" => Code(missing.input().name()) },
     }
@@ -900,6 +909,7 @@ impl EvalError {
             | Self::Config(_) => None,
             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
             Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
+            Self::UnknownStackFloor { .. } => Some(Self::UNKNOWN_STACK_FLOOR_CODE),
             Self::HostStackExhausted { .. } => Some(Self::HOST_STACK_EXHAUSTED_CODE),
             Self::HostSourceMissing(_) => Some(Self::HOST_SOURCE_MISSING_CODE),
         }
@@ -1033,6 +1043,9 @@ impl EvalError {
     /// request nests deeper than this thread's stack" from every other evaluation
     /// failure, and to know that a larger stack (not a different request) answers it.
     pub const STACK_EXHAUSTED_CODE: &'static str = "native-sparql-evaluation-stack-exhausted";
+
+    /// The stable diagnostic code for a failed native stack floor read.
+    pub const UNKNOWN_STACK_FLOOR_CODE: &'static str = "native-sparql-evaluation-stack-floor";
 
     /// The stable, machine-readable diagnostic code [`Self::HostStackExhausted`] maps to
     /// at the `SparqlEngine` boundary — the string a host compares against to tell "this
@@ -1176,6 +1189,9 @@ impl core::fmt::Display for EvalError {
                     f.write_str("; run it on a thread with a larger stack")
                 }
             }
+            Self::UnknownStackFloor { construct, cause } => {
+                write!(f, "cannot measure the stack floor for {construct}: {cause}")
+            }
             Self::HostStackExhausted { construct } => write!(
                 f,
                 "host call stack budget exceeded: the request's {construct} nests deeper \
@@ -1204,6 +1220,7 @@ impl std::error::Error for EvalError {
             Self::ServiceDenied(error) => Some(error),
             Self::Remote { cause, .. } | Self::ServiceUnconfigured { cause, .. } => Some(cause),
             Self::FloatEnvironment(error) => Some(error),
+            Self::UnknownStackFloor { cause, .. } => Some(cause),
             Self::XPathRegex(error) => Some(error),
             Self::FunctionAdmission(error) | Self::FunctionOperationalNative(error) => {
                 Some(error.cause())
@@ -1247,6 +1264,9 @@ impl EvalError {
             RemoteError::WorkspaceStopped => Self::WorkspaceStopped,
             RemoteError::ExchangeIdExhausted => Self::ExchangeIdExhausted,
             RemoteError::StackExhausted(construct) => Self::StackExhausted { construct },
+            RemoteError::UnknownStackFloor { construct, cause } => {
+                Self::UnknownStackFloor { construct, cause }
+            }
             RemoteError::HostStackExhausted(construct) => Self::HostStackExhausted { construct },
             cause @ (RemoteError::Unconfigured(_) | RemoteError::NoSource) => {
                 Self::ServiceUnconfigured { endpoint, cause }
@@ -1301,6 +1321,10 @@ mod tests {
             RemoteError::Governed(stopped),
             RemoteError::GovernedAfterCompletion(stopped),
             RemoteError::StackExhausted("construct"),
+            RemoteError::UnknownStackFloor {
+                construct: "construct",
+                cause: purrdf_stack::FloorError::Unsupported,
+            },
             RemoteError::HostStackExhausted("construct"),
             RemoteError::SourceRead("r".into()),
             RemoteError::WorkspaceStopped,
@@ -1328,6 +1352,7 @@ mod tests {
                 | RemoteError::Governed(_)
                 | RemoteError::GovernedAfterCompletion(_)
                 | RemoteError::StackExhausted(_)
+                | RemoteError::UnknownStackFloor { .. }
                 | RemoteError::HostStackExhausted(_)
                 | RemoteError::SourceRead(_)
                 | RemoteError::WorkspaceStopped

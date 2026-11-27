@@ -134,6 +134,13 @@ pub enum ToolSchemaError {
         /// Source shape or operation at the refusal.
         location: String,
     },
+    /// The stack floor could not be measured before recursive compilation.
+    UnknownStackFloor {
+        /// Source shape or operation at the refusal.
+        location: String,
+        /// The original stack floor read error.
+        cause: purrdf_stack::FloorError,
+    },
     /// A caller ceiling was reached; no artifact was returned.
     Exhausted {
         /// Exhausted resource.
@@ -182,6 +189,24 @@ pub enum ToolRepresentationError {
     NumericInvariant,
 }
 
+impl purrdf_hash::error::StructuredError for ToolRepresentationError {
+    purrdf_hash::error_visit! {
+        AnnotatedMetadata => "tool-representation-annotated-metadata" {},
+        DynamicDeactivation => "tool-representation-dynamic-deactivation" {},
+        PropertyPath => "tool-representation-property-path" {},
+        MissingDomain => "tool-representation-missing-domain" {},
+        LexicalLength => "tool-representation-lexical-length" {},
+        Constraint(construct) => "tool-representation-constraint" { "construct" => Code(construct) },
+        ClassTarget => "tool-representation-class-target" {},
+        NumericConstant => "tool-representation-numeric-constant" {},
+        SignedZero => "tool-representation-signed-zero" {},
+        NumericDomain => "tool-representation-numeric-domain" {},
+        NumericLogic => "tool-representation-numeric-logic" {},
+        NumericIdentity => "tool-representation-numeric-identity" {},
+        NumericInvariant => "tool-representation-numeric-invariant" {},
+    }
+}
+
 impl std::fmt::Display for ToolRepresentationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -220,6 +245,44 @@ impl std::fmt::Display for ToolRepresentationError {
     }
 }
 impl std::error::Error for ToolRepresentationError {}
+
+impl ToolSchemaError {
+    fn stack_guard(location: String, refusal: purrdf_stack::MarginRefusal) -> Self {
+        match refusal.floor_error() {
+            Some(cause) => Self::UnknownStackFloor { location, cause },
+            None => Self::StackMargin { location },
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ToolSchemaError {
+    purrdf_hash::error_visit! {
+        InvalidRoot { shape } => "tool-schema-invalid-root" { "shape" => Text(shape) },
+        IncompleteBinding { shape, predicate } => "tool-schema-incomplete-binding" { "shape" => Text(shape), "predicate" => Iri(predicate) },
+        DuplicateBinding { shape, predicate } => "tool-schema-duplicate-binding" { "shape" => Text(shape), "predicate" => Iri(predicate) },
+        AmbiguousBinding { shape, member } => "tool-schema-ambiguous-binding" { "shape" => Text(shape), "member" => Text(member) },
+        UnsupportedConstruct { location, predicate, reason } => "tool-schema-unsupported-construct" {
+            "location" => Text(location), "predicate" => Value(optional_predicate(predicate.as_deref())), "reason" => Cause(reason)
+        },
+        Model { location, cause } => "tool-schema-model" { "location" => Text(location), "cause" => Cause(cause) },
+        Compilation { location, cause } => "tool-schema-compilation" { "location" => Text(location), "cause" => Cause(cause) },
+        Pattern { shape, property, predicate, cause } => "tool-schema-pattern" {
+            "shape" => Text(shape), "property" => Text(property), "predicate" => Value(optional_predicate(predicate.as_deref())), "cause" => Cause(cause)
+        },
+        Storage { cause } => "tool-schema-storage" { "cause" => Cause(cause) },
+        StackMargin { location } => "tool-schema-stack-margin" { "location" => Text(location) },
+        UnknownStackFloor { location, cause } => "tool-schema-stack-floor" { "location" => Text(location), "cause" => Cause(cause) },
+        Exhausted { resource, used, limit } => "tool-schema-exhausted" {
+            "resource" => Code(resource), "used" => Unsigned(u128::from(*used)), "limit" => Unsigned(u128::from(*limit))
+        },
+        ArithmeticOverflow { resource } => "tool-schema-arithmetic-overflow" { "resource" => Code(resource) },
+    }
+}
+
+fn optional_predicate(predicate: Option<&str>) -> purrdf_hash::error::ErrorValue<'_> {
+    use purrdf_hash::error::ErrorValue;
+    predicate.map_or(ErrorValue::Absent, ErrorValue::Iri)
+}
 
 impl std::fmt::Display for ToolSchemaError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -274,6 +337,10 @@ impl std::fmt::Display for ToolSchemaError {
                 f,
                 "plain argument compilation at {location} reached the stack safety margin"
             ),
+            Self::UnknownStackFloor { location, cause } => write!(
+                f,
+                "plain argument compilation at {location} could not measure its stack floor: {cause}"
+            ),
             Self::Exhausted {
                 resource,
                 used,
@@ -291,6 +358,7 @@ impl std::fmt::Display for ToolSchemaError {
 impl std::error::Error for ToolSchemaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::UnknownStackFloor { cause, .. } => Some(cause),
             Self::UnsupportedConstruct { reason, .. } => Some(reason),
             Self::Model { cause, .. } => Some(cause),
             Self::Compilation { cause, .. } => Some(cause),
@@ -911,9 +979,9 @@ fn admit_native_clone(value: &Value, policy: &mut ToolPolicy) -> bool {
     if !policy.charge(1) || !policy.native_nodes(1) {
         return false;
     }
-    if purrdf_stack::is_low() {
-        policy.error.get_or_insert(ToolSchemaError::StackMargin {
-            location: "schema value clone".to_owned(),
+    if let Err(refusal) = purrdf_stack::check_margin() {
+        policy.error.get_or_insert_with(|| {
+            ToolSchemaError::stack_guard("schema value clone".to_owned(), refusal)
         });
         return false;
     }
@@ -993,9 +1061,9 @@ fn value_work(value: &Value, policy: &mut ToolPolicy) -> bool {
     if !policy.charge(1) {
         return false;
     }
-    if purrdf_stack::is_low() {
-        policy.error.get_or_insert(ToolSchemaError::StackMargin {
-            location: "schema value traversal".to_owned(),
+    if let Err(refusal) = purrdf_stack::check_margin() {
+        policy.error.get_or_insert_with(|| {
+            ToolSchemaError::stack_guard("schema value traversal".to_owned(), refusal)
         });
         return false;
     }
@@ -1342,10 +1410,10 @@ pub(super) fn admit_object(shape: &Shape, ctx: &mut Ctx<'_>) -> bool {
         policy.refuse(&location, ToolRepresentationError::DynamicDeactivation);
         return false;
     }
-    if purrdf_stack::is_low() {
+    if let Err(refusal) = purrdf_stack::check_margin() {
         policy
             .error
-            .get_or_insert(ToolSchemaError::StackMargin { location });
+            .get_or_insert_with(|| ToolSchemaError::stack_guard(location, refusal));
         return false;
     }
     if !admit_expansion(&shape.constraints, policy) {
@@ -1685,13 +1753,13 @@ pub(super) fn member_schema(
     if !step(ctx) {
         return json!({});
     }
-    if purrdf_stack::is_low() {
+    if let Err(refusal) = purrdf_stack::check_margin() {
         ctx.tool
             .as_mut()
             .expect("plain mode")
             .error
-            .get_or_insert(ToolSchemaError::StackMargin {
-                location: shape_iri.text.to_owned(),
+            .get_or_insert_with(|| {
+                ToolSchemaError::stack_guard(shape_iri.text.to_owned(), refusal)
             });
         return json!({});
     }

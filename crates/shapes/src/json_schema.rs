@@ -927,6 +927,33 @@ pub enum SchemaCompileError {
     },
 }
 
+impl purrdf_hash::error::StructuredError for SchemaCompileError {
+    purrdf_hash::error_visit! {
+        Materialization(cause) => "schema-compile-materialization" { "cause" => Cause(cause) },
+        Pattern { shape, property, reason } => "schema-compile-pattern" {
+            "shape" => Text(shape), "property" => Text(property), "reason" => Text(reason)
+        },
+        Canonicalization { input, cause } => "schema-compile-canonicalization" {
+            "input" => Code(match input {
+                SchemaCompilationInput::Shapes => "shapes",
+                SchemaCompilationInput::Ontology => "ontology",
+            }),
+            "cause" => Cause(cause)
+        },
+        LimitExceeded { resource, limit, observed } => "schema-compile-limit" {
+            "resource" => Code(resource), "limit" => Unsigned(*limit as u128), "observed" => Unsigned(*observed as u128)
+        },
+        SizeOverflow { resource } => "schema-compile-size-overflow" { "resource" => Code(resource) },
+        InvalidOntology { subject, reason } => "schema-compile-ontology" {
+            "subject" => Text(subject), "reason" => Text(reason)
+        },
+        Namespace { iri, reason } => "schema-compile-namespace" { "iri" => Iri(iri), "reason" => Text(reason) },
+        DefinitionCollision { key, first, second } => "schema-compile-definition-collision" {
+            "key" => Text(key), "first" => Text(first), "second" => Text(second)
+        },
+    }
+}
+
 impl std::fmt::Display for SchemaCompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -4790,12 +4817,13 @@ fn compile_negand_guarded(
     ctx: &mut Ctx<'_>,
     active: &mut ShapeProofStack,
 ) -> Option<Vec<Value>> {
-    if purrdf_stack::is_low() {
+    if let Err(cause) = purrdf_stack::check_margin() {
         ctx.pattern_error.get_or_insert_with(|| {
             SchemaCompileError::Materialization(
-                crate::PreparationRefusal::StackMargin {
-                    construct: "JSON Schema negated shape compilation",
-                }
+                crate::PreparationRefusal::stack_guard(
+                    "JSON Schema negated shape compilation",
+                    cause,
+                )
                 .into(),
             )
         });
@@ -5208,11 +5236,9 @@ fn member_excludes_xml(
     model: Option<&ModelOwner>,
     active: &mut ShapeProofStack,
 ) -> Result<bool, crate::PreparationRefusal> {
-    if purrdf_stack::is_low() {
-        return Err(crate::PreparationRefusal::StackMargin {
-            construct: "JSON Schema XML exclusion proof",
-        });
-    }
+    purrdf_stack::check_margin().map_err(|cause| {
+        crate::PreparationRefusal::stack_guard("JSON Schema XML exclusion proof", cause)
+    })?;
     if shape.deactivated || !shape.deactivated_when.is_empty() {
         return Ok(false);
     }
@@ -7958,11 +7984,9 @@ fn value_shape_exact(
     if !tool_arguments::step(ctx) {
         return Ok(false);
     }
-    if purrdf_stack::is_low() {
-        return Err(crate::PreparationRefusal::StackMargin {
-            construct: "JSON Schema exact value-shape proof",
-        });
-    }
+    purrdf_stack::check_margin().map_err(|cause| {
+        crate::PreparationRefusal::stack_guard("JSON Schema exact value-shape proof", cause)
+    })?;
     if shape.deactivated {
         // Every node conforms, and the value schema is `{}`.
         return Ok(true);

@@ -39,6 +39,13 @@ pub enum ShexError {
         /// The recursive parser construct whose next frame was refused.
         construct: &'static str,
     },
+    /// The native stack floor could not be measured before parsing a construct.
+    UnknownStackFloor {
+        /// The parser construct whose next frame was refused.
+        construct: &'static str,
+        /// The original stack floor read error.
+        cause: purrdf_stack::FloorError,
+    },
     /// The ShExC byte stream could not be tokenized. Carries its native reason
     /// and the byte offset at which the lexer gave up.
     Lex {
@@ -134,6 +141,7 @@ pub enum ShexError {
 impl purrdf_hash::error::StructuredError for ShexError {
     purrdf_hash::error_visit! {
         StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
+        UnknownStackFloor { construct, cause } => "shex-stack-floor" { "construct" => Code(construct), "cause" => Cause(cause) },
         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
         Facet { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
         Grammar { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
@@ -180,11 +188,10 @@ impl ShexError {
 
     /// Admit every recursive front-end at the workspace's one stack boundary.
     pub(crate) fn admit_stack(construct: &'static str) -> Result<()> {
-        if purrdf_stack::is_low() {
-            Err(Self::StackMargin { construct })
-        } else {
-            Ok(())
-        }
+        purrdf_stack::check_margin().map_err(|refusal| match refusal.floor_error() {
+            Some(cause) => Self::UnknownStackFloor { construct, cause },
+            None => Self::StackMargin { construct },
+        })
     }
 
     /// Construct a [`ShexError::Iri`] from a `purrdf-iri` failure, prefixing the
@@ -238,6 +245,7 @@ impl ShexError {
             | Self::ShapeMapSyntax { at, .. } => Some(*at),
             Self::Iri { .. }
             | Self::StackMargin { .. }
+            | Self::UnknownStackFloor { .. }
             | Self::JsonMember(_)
             | Self::JsonRead(_)
             | Self::LanguageTag { .. }
@@ -270,6 +278,12 @@ impl fmt::Display for ShexError {
                 write!(
                     f,
                     "ShEx parsing refused {construct}: physical stack margin exhausted"
+                )
+            }
+            Self::UnknownStackFloor { construct, cause } => {
+                write!(
+                    f,
+                    "ShEx parsing could not measure its stack floor for {construct}: {cause}"
                 )
             }
             Self::Lex { reason, at } => write!(f, "ShExC lex error at byte {at}: {reason}"),
@@ -321,6 +335,7 @@ impl fmt::Debug for ShexError {
 }
 
 purrdf_lex::error_source!(ShexError => {
+    Self::UnknownStackFloor { cause, .. } => cause,
     Self::Facet { reason, .. } => &**reason,
     Self::Grammar { reason, .. } => &**reason,
     Self::ShapeMapSyntax { reason, .. } => reason,

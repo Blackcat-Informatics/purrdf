@@ -199,6 +199,14 @@ pub enum RemoteError {
     /// can hold, which is a fact about this host rather than about the invocation, and
     /// the same body evaluated locally raises the same typed refusal.
     StackExhausted(&'static str),
+    /// An in-process source could not measure its native stack floor.
+    /// This execution failure is never swallowed by `SERVICE SILENT`.
+    UnknownStackFloor {
+        /// The forwarded construct the source could not enter.
+        construct: &'static str,
+        /// The original stack floor read error.
+        cause: purrdf_stack::FloorError,
+    },
     /// On `wasm32`, an in-process source's forwarded body nests deeper than the
     /// JavaScript engine's call stack holds: the [`EvalError::HostStackExhausted`] of its
     /// evaluation, naming the construct.
@@ -245,6 +253,7 @@ impl purrdf_hash::error::StructuredError for RemoteError {
             "governor" => Record(governor),
         },
         StackExhausted(construct) => "service-stack-exhausted" { "construct" => Text(construct) },
+        UnknownStackFloor { construct, cause } => "service-stack-floor" { "construct" => Text(construct), "cause" => Cause(cause) },
         HostStackExhausted(construct) => "service-host-stack-exhausted" { "construct" => Text(construct) },
         SourceRead(message) => "service-source-read" { "message" => Text(message) },
         WorkspaceStopped => "service-workspace-stopped" {},
@@ -278,6 +287,14 @@ impl core::fmt::Display for RemoteError {
             Self::StackExhausted(construct) => {
                 write!(f, "{}", EvalError::StackExhausted { construct })
             }
+            Self::UnknownStackFloor { construct, cause } => write!(
+                f,
+                "{}",
+                EvalError::UnknownStackFloor {
+                    construct,
+                    cause: *cause
+                }
+            ),
             Self::HostStackExhausted(construct) => {
                 write!(f, "{}", EvalError::HostStackExhausted { construct })
             }
@@ -293,7 +310,7 @@ impl core::fmt::Display for RemoteError {
     }
 }
 
-impl std::error::Error for RemoteError {}
+purrdf_hash::error_sources!(RemoteError, patterns Self::UnknownStackFloor { cause, .. } => cause);
 
 /// The one spelling of the message for a `SERVICE` that had no remote query source.
 pub(crate) struct NoSourceText<'a>(pub(crate) &'a str);
@@ -1935,6 +1952,12 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
         RemoteError::StackExhausted(construct) => {
             return Err(EvalError::StackExhausted { construct });
         }
+        RemoteError::UnknownStackFloor { construct, cause } => {
+            return Err(EvalError::UnknownStackFloor {
+                construct,
+                cause: *cause,
+            });
+        }
         RemoteError::HostStackExhausted(construct) => {
             return Err(EvalError::HostStackExhausted { construct });
         }
@@ -2122,6 +2145,9 @@ fn remote_error_for(error: EvalError) -> RemoteError {
         EvalError::WorkspaceStopped => RemoteError::WorkspaceStopped,
         EvalError::ExchangeIdExhausted => RemoteError::ExchangeIdExhausted,
         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
+        EvalError::UnknownStackFloor { construct, cause } => {
+            RemoteError::UnknownStackFloor { construct, cause }
+        }
         EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
         EvalError::RetainedServiceFailure(error) => RemoteError::Decode(error.to_string()),
         other => RemoteError::Decode(other.to_string()),
@@ -3028,6 +3054,10 @@ mod tests {
                 "transport" => RemoteError::Transport("connection refused".to_owned()),
                 "decode" => RemoteError::Decode("not a results document".to_owned()),
                 "source-read" => RemoteError::SourceRead("snapshot block unavailable".to_owned()),
+                "unknown-stack-floor" => remote_error_for(EvalError::UnknownStackFloor {
+                    construct: "query algebra",
+                    cause: TEST_FLOOR_READ,
+                }),
                 "exchange-id-exhausted" => RemoteError::ExchangeIdExhausted,
                 "disabled" => RemoteError::Disabled,
                 "unconfigured" => RemoteError::Unconfigured("no handler".to_owned()),
@@ -3053,6 +3083,35 @@ mod tests {
                     });
                 }
             })
+        }
+    }
+
+    const TEST_FLOOR_READ: purrdf_stack::FloorError = purrdf_stack::FloorError::Read {
+        call: "pthread_getattr_np",
+        code: 22,
+    };
+
+    #[test]
+    fn unknown_stack_floor_survives_service_silent_and_remote_conversion() {
+        for silent in ["", "SILENT "] {
+            let query = format!(
+                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/unknown-stack-floor> {{ ?a ?b ?n }} }}"
+            );
+            let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
+            let error = result.expect_err("unknown native stack floor is fatal");
+            assert_eq!(
+                error,
+                EvalError::UnknownStackFloor {
+                    construct: "query algebra",
+                    cause: TEST_FLOOR_READ,
+                }
+            );
+            assert_eq!(
+                std::error::Error::source(&error)
+                    .and_then(|source| source.downcast_ref::<purrdf_stack::FloorError>()),
+                Some(&TEST_FLOOR_READ)
+            );
+            assert!(silenced.is_empty());
         }
     }
 

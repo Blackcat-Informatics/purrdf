@@ -85,12 +85,9 @@ impl<'model> ModelWalk<'model> for Find<'model> {
     }
 
     fn enter(&mut self) -> Result<(), ShapesProductError> {
-        if purrdf_stack::is_low() {
-            return Err(crate::PreparationRefusal::StackMargin {
-                construct: "SHACL fixed-point occurrence walk",
-            }
-            .into());
-        }
+        purrdf_stack::check_margin().map_err(|cause| {
+            crate::PreparationRefusal::stack_guard("SHACL fixed-point occurrence walk", cause)
+        })?;
         self.depth = self
             .depth
             .checked_add(1)

@@ -270,7 +270,10 @@ impl purrdf_hash::error::StructuredError for ShapesProductError {
 impl From<crate::error::PreparationRefusal> for ShapesProductError {
     fn from(error: crate::error::PreparationRefusal) -> Self {
         let dimension = match &error {
-            crate::error::PreparationRefusal::Storage(_) => ProductDimension::Resource,
+            crate::error::PreparationRefusal::Storage(_)
+            | crate::error::PreparationRefusal::UnknownStackFloor { .. } => {
+                ProductDimension::Resource
+            }
             crate::error::PreparationRefusal::StackMargin { .. } => ProductDimension::DepthLimit,
             crate::error::PreparationRefusal::UnqualifiedRecursion(_) => {
                 ProductDimension::UnsupportedCapability

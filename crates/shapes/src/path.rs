@@ -327,11 +327,9 @@ fn eval_planned_inner_ids(
     paths: &[LoweredPath],
     memo: &mut purrdf_core::FastMap<(usize, TermId), IdVec>,
 ) -> Result<IdVec, crate::error::ShapesError> {
-    if purrdf_stack::is_low() {
-        return Err(crate::error::ShapesError::Processor(
-            crate::error::ProcessorFailure::ExpressionStackMargin,
-        ));
-    }
+    crate::error::ProcessorFailure::check_stack("SHACL path evaluation", || {
+        crate::error::ProcessorFailure::ExpressionStackMargin
+    })?;
     Ok(match path {
         LoweredPath::Reference(index) | LoweredPath::SharedReference(index) => {
             let shared = matches!(path, LoweredPath::SharedReference(_));

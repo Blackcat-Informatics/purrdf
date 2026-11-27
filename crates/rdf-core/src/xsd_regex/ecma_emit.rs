@@ -28,6 +28,15 @@ pub enum Ecma262Error {
     Unsupported(&'static str),
 }
 
+impl purrdf_hash::error::StructuredError for Ecma262Error {
+    purrdf_hash::error_visit! {
+        Source(cause) => "ecma-pattern-source" { "cause" => Cause(cause) },
+        Syntax(reason) => "ecma-pattern-syntax" { "reason" => Text(reason) },
+        TooLarge => "ecma-pattern-too-large" { "limit" => ByteCount(MAX_TRANSLATED_BYTES as u128) },
+        Unsupported(construct) => "ecma-pattern-unsupported" { "construct" => Code(construct) },
+    }
+}
+
 impl fmt::Display for Ecma262Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
