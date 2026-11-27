@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "issue": 1258,
+  "repo": "purrdf",
+  "forge": "github",
+  "nwo": "Blackcat-Informatics/purrdf",
+  "read_access": "anon-read",
+  "main_root": "/home/paudley/Active/purrdf",
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence",
+  "branch": "paudley/1258-purrdf-sparql-eval-a-governed-evidence",
+  "slug": "purrdf-sparql-eval-a-governed-evidence",
+  "slug_drift": false,
+  "stage_dir": "/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence/.stage/purrdf-sparql-eval-a-governed-evidence",
+  "stage_tracked": true,
+  "base": "refs/remotes/origin/main",
+  "base_oid": "a1b641b51b899ae64afa24fb88a9486dfa22aff0",
+  "reused": false,
+  "adr_repo": false,
+  "created": [
+    "worktree:/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence",
+    "branch:paudley/1258-purrdf-sparql-eval-a-governed-evidence",
+    "ignored:31243 files (31240 reflinked, 0 written)",
+    "rust-caches:reflinked /home/paudley/Active/purrdf/.worktrees/1358-stack-guards-drop-the-typed-cause-when caches into /home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence plus 0 dependency units from 0 other checkouts in 24.8s; 21286 unchanged files keep their built mtimes; 28 other files take the seed time and rebuild; 7 units naming another checkout rebuild",
+    "stage:/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence/.stage/purrdf-sparql-eval-a-governed-evidence",
+    "issue:/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence/.stage/purrdf-sparql-eval-a-governed-evidence/issue.md"
+  ],
+  "warnings": [],
+  "timestamp": "2026-11-27T09:38:27-0600",
+  "seed_error": "",
+  "tracker": ""
+}

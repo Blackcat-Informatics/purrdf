@@ -1,0 +1,1979 @@
+diff --git README.md README.md
+index 62c349b2a..154c51e95 100644
+--- README.md
++++ README.md
+@@ -406,6 +406,9 @@ parameters and exact logical anchors in JSON, SARIF and the C diagnostic record.
+ 
+ ## Quickstart
+ 
++PurRDF's first-party code is available under `MIT OR Apache-2.0 OR MulanPSL-2.0`.
++See the [licensing guide](./LICENSING.md) for details.
++
+ ### Rust
+ 
+ ```sh
+diff --git README_zh.md README_zh.md
+index 09abb4374..45dee7132 100644
+--- README_zh.md
++++ README_zh.md
+@@ -329,6 +329,9 @@ ECMA-262 模式求值 draft 2020-12、2019-09 与 07。元模式、资源注册
+ 
+ ## 快速入门
+ 
++PurRDF 第一方代码的许可表达式为 `MIT OR Apache-2.0 OR MulanPSL-2.0`，
++其中 `MulanPSL-2.0` 即木兰宽松许可证（第 2 版）。详见[中文许可说明](./docs/LICENSING.zh-Hans.md)。
++
+ ### Rust
+ 
+ ```sh
+diff --git crates/rdf-core/src/ir/union/mod.rs crates/rdf-core/src/ir/union/mod.rs
+index 47b1024c1..6db367df3 100644
+--- crates/rdf-core/src/ir/union/mod.rs
++++ crates/rdf-core/src/ir/union/mod.rs
+@@ -42,6 +42,13 @@ pub enum UnionError<L, R> {
+         /// Zero-based source position refused before entering its wrapper.
+         source: usize,
+     },
++    /// The native stack floor could not be measured before opening a source scope.
++    UnknownStackFloor {
++        /// Zero-based source position refused before entering its wrapper.
++        source: usize,
++        /// The original stack floor read error.
++        cause: purrdf_stack::FloorError,
++    },
+     /// Original checked layout/admission/allocation refusal.
+     Storage(StorageError),
+     /// A supplied source violated its term/reference contract.
+@@ -66,6 +73,12 @@ impl<L: fmt::Display, R: fmt::Display> fmt::Display for UnionError<L, R> {
+                 out,
+                 "insufficient stack for union source {source} checked read"
+             ),
++            Self::UnknownStackFloor { source, cause } => {
++                write!(
++                    out,
++                    "could not measure the stack floor for union source {source}: {cause}"
++                )
++            }
+             Self::Storage(error) => error.fmt(out),
+             Self::Invariant(reason) => write!(out, "invalid union source: {reason}"),
+         }
+@@ -79,6 +92,7 @@ impl<L: std::error::Error + 'static, R: std::error::Error + 'static> std::error:
+             Self::Left(_, error) => Some(error),
+             Self::Right(_, error) => Some(error),
+             Self::Storage(error) => Some(error),
++            Self::UnknownStackFloor { cause, .. } => Some(cause),
+             _ => None,
+         }
+     }
+@@ -95,6 +109,7 @@ impl<L: purrdf_hash::error::StructuredError, R: purrdf_hash::error::StructuredEr
+             "dimension" => Code(*dimension), "actual" => Unsigned(*actual as u128), "limit" => Unsigned(*limit as u128),
+         },
+         Stack { source } => "union-read-stack" { "source" => Unsigned(*source as u128) },
++        UnknownStackFloor { source, cause } => "union-read-stack-floor" { "source" => Unsigned(*source as u128), "cause" => Cause(cause) },
+         Storage(cause) => "union-storage" { "cause" => Cause(cause) },
+         Invariant(reason) => "union-source-invariant" { "reason" => Code(*reason) },
+     }
+@@ -183,8 +198,11 @@ fn checked_sources<A: DatasetView, B: DatasetView>(
+     let Some(source) = sources.get(at) else {
+         return read();
+     };
+-    if purrdf_stack::is_low() {
+-        return Err(UnionError::Stack { source: at });
++    if let Err(refusal) = purrdf_stack::check_margin() {
++        return Err(match refusal.floor_error() {
++            Some(cause) => UnionError::UnknownStackFloor { source: at, cause },
++            None => UnionError::Stack { source: at },
++        });
+     }
+     let mut next = || checked_sources(sources, at + 1, read);
+     match source {
+diff --git crates/rdf-core/src/xsd_regex/ecma_emit.rs crates/rdf-core/src/xsd_regex/ecma_emit.rs
+index cc7417ebf..6d66f548d 100644
+--- crates/rdf-core/src/xsd_regex/ecma_emit.rs
++++ crates/rdf-core/src/xsd_regex/ecma_emit.rs
+@@ -28,6 +28,15 @@ pub enum Ecma262Error {
+     Unsupported(&'static str),
+ }
+ 
++impl purrdf_hash::error::StructuredError for Ecma262Error {
++    purrdf_hash::error_visit! {
++        Source(cause) => "ecma-pattern-source" { "cause" => Cause(cause) },
++        Syntax(reason) => "ecma-pattern-syntax" { "reason" => Text(reason) },
++        TooLarge => "ecma-pattern-too-large" { "limit" => ByteCount(MAX_TRANSLATED_BYTES as u128) },
++        Unsupported(construct) => "ecma-pattern-unsupported" { "construct" => Code(construct) },
++    }
++}
++
+ impl fmt::Display for Ecma262Error {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
+diff --git crates/rdf-core/src/xsd_regex/error.rs crates/rdf-core/src/xsd_regex/error.rs
+index a800c7ac9..06d56f749 100644
+--- crates/rdf-core/src/xsd_regex/error.rs
++++ crates/rdf-core/src/xsd_regex/error.rs
+@@ -162,6 +162,44 @@ pub enum XsdRegexError {
+     Compile(regex::Error),
+ }
+ 
++impl purrdf_hash::error::StructuredError for XsdRegexError {
++    purrdf_hash::error_visit! {
++        Storage(cause) => "xsd-regex-storage" { "cause" => Cause(cause) },
++        UnsupportedFlag(flag) => "xsd-regex-unsupported-flag" { "flag" => Character(*flag) },
++        UnsupportedConstruct(construct) => "xsd-regex-unsupported-construct" { "construct" => Text(construct) },
++        Backreference(reference) => "xsd-regex-backreference" { "reference" => Text(reference) },
++        UnknownBlock(name) => "xsd-regex-unknown-block" { "name" => Text(name) },
++        UnknownCategory(name) => "xsd-regex-unknown-category" { "name" => Text(name) },
++        DanglingBackslash => "xsd-regex-dangling-backslash" {},
++        UnterminatedCharacterClass => "xsd-regex-unterminated-class" {},
++        UnescapedClassOpen => "xsd-regex-unescaped-class-open" {},
++        UnescapedClassClose => "xsd-regex-unescaped-class-close" {},
++        LiteralClassCloseAtHead => "xsd-regex-literal-class-close-at-head" {},
++        ContentAfterClassSubtraction { found } => "xsd-regex-content-after-subtraction" { "found" => Character(*found) },
++        UnsupportedGroupConstruct { found } => "xsd-regex-unsupported-group" { "found" => Text(found) },
++        UnsupportedNulEscape => "xsd-regex-unsupported-nul-escape" {},
++        UnsupportedEscape { escape } => "xsd-regex-unsupported-escape" { "escape" => Character(*escape) },
++        UnterminatedBlockName { escape } => "xsd-regex-unterminated-block" { "escape" => Character(*escape) },
++        BadBackreference { reference, opened_groups } => "xsd-regex-bad-backreference" {
++            "reference" => Text(reference), "opened_groups" => Unsigned(u128::from(*opened_groups))
++        },
++        TooLarge { bytes, limit } => "xsd-regex-too-large" { "bytes" => ByteCount(*bytes as u128), "limit" => ByteCount(*limit as u128) },
++        TooManyFoldedClassEscapes { count, limit } => "xsd-regex-folded-class-limit" {
++            "count" => Unsigned(*count as u128), "limit" => Unsigned(*limit as u128)
++        },
++        Compile(error) => "xsd-regex-compile" {
++            "message" => Value(match error {
++                regex::Error::Syntax(message) => purrdf_hash::error::ErrorValue::Message(message),
++                _ => purrdf_hash::error::ErrorValue::Absent,
++            }),
++            "byte_limit" => Value(match error {
++                regex::Error::CompiledTooBig(limit) => purrdf_hash::error::ErrorValue::ByteCount(*limit as u128),
++                _ => purrdf_hash::error::ErrorValue::Absent,
++            })
++        },
++    }
++}
++
+ impl fmt::Display for XsdRegexError {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
+diff --git crates/shapes/src/constraints.rs crates/shapes/src/constraints.rs
+index 093c8bba1..930a34c7f 100644
+--- crates/shapes/src/constraints.rs
++++ crates/shapes/src/constraints.rs
+@@ -1700,12 +1700,11 @@ fn walk_planned_constraint<'a, S: ResultSink>(
+ }
+ 
+ fn admit_validation(shape: &Term, depth: u32) -> Result<(), crate::error::ShapesError> {
+-    if purrdf_stack::is_low() {
+-        return Err(crate::error::ProcessorFailure::ValidationStackMargin {
++    crate::error::ProcessorFailure::check_stack("SHACL validation", || {
++        crate::error::ProcessorFailure::ValidationStackMargin {
+             shape: Box::new(shape.clone()),
+         }
+-        .into());
+-    }
++    })?;
+     if depth > crate::expression::MAX_RECURSION_DEPTH {
+         return Err(crate::error::ProcessorFailure::ValidationDepth {
+             shape: shape.clone(),
+diff --git crates/shapes/src/constraints/fixed_point/occurrence.rs crates/shapes/src/constraints/fixed_point/occurrence.rs
+index fb468dfac..960765b9c 100644
+--- crates/shapes/src/constraints/fixed_point/occurrence.rs
++++ crates/shapes/src/constraints/fixed_point/occurrence.rs
+@@ -85,12 +85,9 @@ impl<'model> ModelWalk<'model> for Find<'model> {
+     }
+ 
+     fn enter(&mut self) -> Result<(), ShapesProductError> {
+-        if purrdf_stack::is_low() {
+-            return Err(crate::PreparationRefusal::StackMargin {
+-                construct: "SHACL fixed-point occurrence walk",
+-            }
+-            .into());
+-        }
++        purrdf_stack::check_margin().map_err(|cause| {
++            crate::PreparationRefusal::stack_guard("SHACL fixed-point occurrence walk", cause)
++        })?;
+         self.depth = self
+             .depth
+             .checked_add(1)
+diff --git crates/shapes/src/error.rs crates/shapes/src/error.rs
+index 7ca8e9ca7..498defb86 100644
+--- crates/shapes/src/error.rs
++++ crates/shapes/src/error.rs
+@@ -519,6 +519,13 @@ impl ShapesError {
+ #[derive(Debug, Clone, PartialEq, Eq)]
+ #[non_exhaustive]
+ pub enum ProcessorFailure {
++    /// The stack floor needed for a processing frame could not be measured.
++    UnknownStackFloor {
++        /// The processing operation whose next frame was refused.
++        construct: &'static str,
++        /// The original stack floor read error.
++        cause: purrdf_stack::FloorError,
++    },
+     /// Evaluating a node expression would enter the physical stack margin.
+     ExpressionStackMargin,
+     /// Calling an original custom function would enter the physical stack margin.
+@@ -617,8 +624,26 @@ impl purrdf_hash::error::StructuredError for IncompleteRelation {
+     }
+ }
+ 
++impl ProcessorFailure {
++    pub(crate) fn check_stack(
++        construct: &'static str,
++        exhausted: impl FnOnce() -> Self,
++    ) -> Result<(), ShapesError> {
++        purrdf_stack::check_margin().map_err(|refusal| {
++            refusal
++                .floor_error()
++                .map_or_else(exhausted, |cause| Self::UnknownStackFloor {
++                    construct,
++                    cause,
++                })
++                .into()
++        })
++    }
++}
++
+ impl purrdf_hash::error::StructuredError for ProcessorFailure {
+     purrdf_hash::error_visit! {
++        UnknownStackFloor { construct, cause } => "shapes-processor-stack-floor" { "construct" => Code(construct), "cause" => Cause(cause) },
+         ExpressionStackMargin => "shapes-processor-expression-stack" {},
+         CallStackMargin { iri } => "shapes-processor-call-stack" { "iri" => Iri(iri) },
+         ReentryStackMargin { shape } => "shapes-processor-reentry-stack" { "shape" => Term(shape.as_ref()) },
+@@ -650,6 +675,9 @@ impl purrdf_hash::error::StructuredError for ProcessorFailure {
+ impl fmt::Display for ProcessorFailure {
+     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+         match self {
++            Self::UnknownStackFloor { construct, cause } => {
++                write!(f, "{construct} could not measure its stack floor: {cause}")
++            }
+             Self::ExpressionStackMargin => {
+                 f.write_str("node expression evaluation exhausted its stack margin")
+             }
+@@ -721,6 +749,7 @@ impl fmt::Display for ProcessorFailure {
+ impl std::error::Error for ProcessorFailure {
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
++            Self::UnknownStackFloor { cause, .. } => Some(cause),
+             Self::Admission { cause } => Some(cause.as_ref()),
+             Self::Query { cause } => Some(cause.as_ref()),
+             _ => None,
+@@ -826,6 +855,13 @@ pub enum PreparationRefusal {
+         /// Original construct the walk refused to enter.
+         construct: &'static str,
+     },
++    /// The native stack floor could not be measured before entering a frame.
++    UnknownStackFloor {
++        /// Original construct the walk refused to enter.
++        construct: &'static str,
++        /// The error returned by the original floor read.
++        cause: purrdf_stack::FloorError,
++    },
+     /// Two catalog definitions declare the same identity.
+     DuplicateDefinition(std::sync::Arc<crate::term::Term>),
+     /// A definition owns a catalog instead of being a bare catalog member.
+@@ -841,15 +877,23 @@ pub enum PreparationRefusal {
+ }
+ 
+ impl PreparationRefusal {
++    pub(crate) const fn stack_guard(
++        construct: &'static str,
++        refusal: purrdf_stack::MarginRefusal,
++    ) -> Self {
++        match refusal.floor_error() {
++            Some(cause) => Self::UnknownStackFloor { construct, cause },
++            None => Self::StackMargin { construct },
++        }
++    }
++
+     /// Stop a model-inspection walk at its first refusal or physical stack bound.
+     pub(crate) fn admit_walk(refusal: &mut Option<Self>) -> bool {
+         if refusal.is_some() {
+             return false;
+         }
+-        if purrdf_stack::is_low() {
+-            *refusal = Some(Self::StackMargin {
+-                construct: "SHACL model inspection",
+-            });
++        if let Err(cause) = purrdf_stack::check_margin() {
++            *refusal = Some(Self::stack_guard("SHACL model inspection", cause));
+             return false;
+         }
+         true
+@@ -868,6 +912,7 @@ impl fmt::Display for PreparationRefusal {
+             Self::ExpiredIndex => out.write_str("computed shape reference outlived its definition table; keep its exported owning root"),
+             Self::ForeignIndex => out.write_str("computed shape reference names a different model's definition table"),
+             Self::StackMargin { .. } => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
++            Self::UnknownStackFloor { construct, cause } => write!(out, "{construct} could not measure its stack floor: {cause}"),
+             Self::DuplicateDefinition(id) => write!(out, "duplicate shape definition {id}; provide one definition per RDF identity"),
+             Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
+             Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ModelOwner::root"),
+@@ -889,6 +934,7 @@ impl purrdf_hash::error::StructuredError for PreparationRefusal {
+         ExpiredIndex => "shapes-preparation-expired-index" {},
+         ForeignIndex => "shapes-preparation-foreign-index" {},
+         StackMargin { construct } => "shapes-preparation-stack-margin" { "construct" => Text(construct) },
++        UnknownStackFloor { construct, cause } => "shapes-preparation-stack-floor" { "construct" => Text(construct), "cause" => Cause(cause) },
+         DuplicateDefinition(term) => "shapes-preparation-duplicate-definition" { "term" => Term(term.as_ref()) },
+         OwningDefinition(term) => "shapes-preparation-owning-definition" { "term" => Term(term.as_ref()) },
+         UnboundReference => "shapes-preparation-unbound-reference" {},
+@@ -898,7 +944,12 @@ impl purrdf_hash::error::StructuredError for PreparationRefusal {
+     }
+ }
+ 
+-purrdf_hash::error_sources!(PreparationRefusal, Storage, UnqualifiedRecursion);
++purrdf_hash::error_sources!(
++    PreparationRefusal,
++    patterns Self::Storage(cause) => cause,
++    Self::UnqualifiedRecursion(cause) => cause,
++    Self::UnknownStackFloor { cause, .. } => cause,
++);
+ 
+ purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
+ 
+diff --git crates/shapes/src/expression.rs crates/shapes/src/expression.rs
+index ca71798f4..b0a99a42d 100644
+--- crates/shapes/src/expression.rs
++++ crates/shapes/src/expression.rs
+@@ -1305,9 +1305,9 @@ impl RecursionGuard {
+             }
+             .into());
+         }
+-        if purrdf_stack::is_low() {
+-            return Err(crate::error::ProcessorFailure::ExpressionStackMargin.into());
+-        }
++        crate::error::ProcessorFailure::check_stack("node expression evaluation", || {
++            crate::error::ProcessorFailure::ExpressionStackMargin
++        })?;
+         self.structural += 1;
+         Ok(())
+     }
+@@ -1343,12 +1343,11 @@ impl RecursionGuard {
+             }
+             .into());
+         }
+-        if purrdf_stack::is_low() {
+-            return Err(crate::error::ProcessorFailure::CallStackMargin {
++        crate::error::ProcessorFailure::check_stack("custom node-expression function", || {
++            crate::error::ProcessorFailure::CallStackMargin {
+                 iri: iri.to_owned(),
+             }
+-            .into());
+-        }
++        })?;
+         self.depth += 1;
+         Ok(())
+     }
+@@ -1369,12 +1368,11 @@ impl RecursionGuard {
+         shape_id: &Term,
+         focus: &Term,
+     ) -> Result<(), crate::error::ShapesError> {
+-        if purrdf_stack::is_low() {
+-            return Err(crate::error::ProcessorFailure::ReentryStackMargin {
++        crate::error::ProcessorFailure::check_stack("SHACL node-expression re-entry", || {
++            crate::error::ProcessorFailure::ReentryStackMargin {
+                 shape: Box::new(shape_id.clone()),
+             }
+-            .into());
+-        }
++        })?;
+         let key = (shape_id.clone(), focus.clone());
+         if self.stack.contains(&key) {
+             return Err(crate::error::ProcessorFailure::ReentryCycle {
+diff --git crates/shapes/src/json_schema.rs crates/shapes/src/json_schema.rs
+index 737974059..992c23e6e 100644
+--- crates/shapes/src/json_schema.rs
++++ crates/shapes/src/json_schema.rs
+@@ -927,6 +927,33 @@ pub enum SchemaCompileError {
+     },
+ }
+ 
++impl purrdf_hash::error::StructuredError for SchemaCompileError {
++    purrdf_hash::error_visit! {
++        Materialization(cause) => "schema-compile-materialization" { "cause" => Cause(cause) },
++        Pattern { shape, property, reason } => "schema-compile-pattern" {
++            "shape" => Text(shape), "property" => Text(property), "reason" => Text(reason)
++        },
++        Canonicalization { input, cause } => "schema-compile-canonicalization" {
++            "input" => Code(match input {
++                SchemaCompilationInput::Shapes => "shapes",
++                SchemaCompilationInput::Ontology => "ontology",
++            }),
++            "cause" => Cause(cause)
++        },
++        LimitExceeded { resource, limit, observed } => "schema-compile-limit" {
++            "resource" => Code(resource), "limit" => Unsigned(*limit as u128), "observed" => Unsigned(*observed as u128)
++        },
++        SizeOverflow { resource } => "schema-compile-size-overflow" { "resource" => Code(resource) },
++        InvalidOntology { subject, reason } => "schema-compile-ontology" {
++            "subject" => Text(subject), "reason" => Text(reason)
++        },
++        Namespace { iri, reason } => "schema-compile-namespace" { "iri" => Iri(iri), "reason" => Text(reason) },
++        DefinitionCollision { key, first, second } => "schema-compile-definition-collision" {
++            "key" => Text(key), "first" => Text(first), "second" => Text(second)
++        },
++    }
++}
++
+ impl std::fmt::Display for SchemaCompileError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+@@ -4790,12 +4817,13 @@ fn compile_negand_guarded(
+     ctx: &mut Ctx<'_>,
+     active: &mut ShapeProofStack,
+ ) -> Option<Vec<Value>> {
+-    if purrdf_stack::is_low() {
++    if let Err(cause) = purrdf_stack::check_margin() {
+         ctx.pattern_error.get_or_insert_with(|| {
+             SchemaCompileError::Materialization(
+-                crate::PreparationRefusal::StackMargin {
+-                    construct: "JSON Schema negated shape compilation",
+-                }
++                crate::PreparationRefusal::stack_guard(
++                    "JSON Schema negated shape compilation",
++                    cause,
++                )
+                 .into(),
+             )
+         });
+@@ -5208,11 +5236,9 @@ fn member_excludes_xml(
+     model: Option<&ModelOwner>,
+     active: &mut ShapeProofStack,
+ ) -> Result<bool, crate::PreparationRefusal> {
+-    if purrdf_stack::is_low() {
+-        return Err(crate::PreparationRefusal::StackMargin {
+-            construct: "JSON Schema XML exclusion proof",
+-        });
+-    }
++    purrdf_stack::check_margin().map_err(|cause| {
++        crate::PreparationRefusal::stack_guard("JSON Schema XML exclusion proof", cause)
++    })?;
+     if shape.deactivated || !shape.deactivated_when.is_empty() {
+         return Ok(false);
+     }
+@@ -7958,11 +7984,9 @@ fn value_shape_exact(
+     if !tool_arguments::step(ctx) {
+         return Ok(false);
+     }
+-    if purrdf_stack::is_low() {
+-        return Err(crate::PreparationRefusal::StackMargin {
+-            construct: "JSON Schema exact value-shape proof",
+-        });
+-    }
++    purrdf_stack::check_margin().map_err(|cause| {
++        crate::PreparationRefusal::stack_guard("JSON Schema exact value-shape proof", cause)
++    })?;
+     if shape.deactivated {
+         // Every node conforms, and the value schema is `{}`.
+         return Ok(true);
+diff --git crates/shapes/src/json_schema/tool_arguments.rs crates/shapes/src/json_schema/tool_arguments.rs
+index 2db167145..7fb0860a4 100644
+--- crates/shapes/src/json_schema/tool_arguments.rs
++++ crates/shapes/src/json_schema/tool_arguments.rs
+@@ -134,6 +134,13 @@ pub enum ToolSchemaError {
+         /// Source shape or operation at the refusal.
+         location: String,
+     },
++    /// The stack floor could not be measured before recursive compilation.
++    UnknownStackFloor {
++        /// Source shape or operation at the refusal.
++        location: String,
++        /// The original stack floor read error.
++        cause: purrdf_stack::FloorError,
++    },
+     /// A caller ceiling was reached; no artifact was returned.
+     Exhausted {
+         /// Exhausted resource.
+@@ -182,6 +189,24 @@ pub enum ToolRepresentationError {
+     NumericInvariant,
+ }
+ 
++impl purrdf_hash::error::StructuredError for ToolRepresentationError {
++    purrdf_hash::error_visit! {
++        AnnotatedMetadata => "tool-representation-annotated-metadata" {},
++        DynamicDeactivation => "tool-representation-dynamic-deactivation" {},
++        PropertyPath => "tool-representation-property-path" {},
++        MissingDomain => "tool-representation-missing-domain" {},
++        LexicalLength => "tool-representation-lexical-length" {},
++        Constraint(construct) => "tool-representation-constraint" { "construct" => Code(construct) },
++        ClassTarget => "tool-representation-class-target" {},
++        NumericConstant => "tool-representation-numeric-constant" {},
++        SignedZero => "tool-representation-signed-zero" {},
++        NumericDomain => "tool-representation-numeric-domain" {},
++        NumericLogic => "tool-representation-numeric-logic" {},
++        NumericIdentity => "tool-representation-numeric-identity" {},
++        NumericInvariant => "tool-representation-numeric-invariant" {},
++    }
++}
++
+ impl std::fmt::Display for ToolRepresentationError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+@@ -221,6 +246,44 @@ impl std::fmt::Display for ToolRepresentationError {
+ }
+ impl std::error::Error for ToolRepresentationError {}
+ 
++impl ToolSchemaError {
++    fn stack_guard(location: String, refusal: purrdf_stack::MarginRefusal) -> Self {
++        match refusal.floor_error() {
++            Some(cause) => Self::UnknownStackFloor { location, cause },
++            None => Self::StackMargin { location },
++        }
++    }
++}
++
++impl purrdf_hash::error::StructuredError for ToolSchemaError {
++    purrdf_hash::error_visit! {
++        InvalidRoot { shape } => "tool-schema-invalid-root" { "shape" => Text(shape) },
++        IncompleteBinding { shape, predicate } => "tool-schema-incomplete-binding" { "shape" => Text(shape), "predicate" => Iri(predicate) },
++        DuplicateBinding { shape, predicate } => "tool-schema-duplicate-binding" { "shape" => Text(shape), "predicate" => Iri(predicate) },
++        AmbiguousBinding { shape, member } => "tool-schema-ambiguous-binding" { "shape" => Text(shape), "member" => Text(member) },
++        UnsupportedConstruct { location, predicate, reason } => "tool-schema-unsupported-construct" {
++            "location" => Text(location), "predicate" => Value(optional_predicate(predicate.as_deref())), "reason" => Cause(reason)
++        },
++        Model { location, cause } => "tool-schema-model" { "location" => Text(location), "cause" => Cause(cause) },
++        Compilation { location, cause } => "tool-schema-compilation" { "location" => Text(location), "cause" => Cause(cause) },
++        Pattern { shape, property, predicate, cause } => "tool-schema-pattern" {
++            "shape" => Text(shape), "property" => Text(property), "predicate" => Value(optional_predicate(predicate.as_deref())), "cause" => Cause(cause)
++        },
++        Storage { cause } => "tool-schema-storage" { "cause" => Cause(cause) },
++        StackMargin { location } => "tool-schema-stack-margin" { "location" => Text(location) },
++        UnknownStackFloor { location, cause } => "tool-schema-stack-floor" { "location" => Text(location), "cause" => Cause(cause) },
++        Exhausted { resource, used, limit } => "tool-schema-exhausted" {
++            "resource" => Code(resource), "used" => Unsigned(u128::from(*used)), "limit" => Unsigned(u128::from(*limit))
++        },
++        ArithmeticOverflow { resource } => "tool-schema-arithmetic-overflow" { "resource" => Code(resource) },
++    }
++}
++
++fn optional_predicate(predicate: Option<&str>) -> purrdf_hash::error::ErrorValue<'_> {
++    use purrdf_hash::error::ErrorValue;
++    predicate.map_or(ErrorValue::Absent, ErrorValue::Iri)
++}
++
+ impl std::fmt::Display for ToolSchemaError {
+     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+         match self {
+@@ -274,6 +337,10 @@ impl std::fmt::Display for ToolSchemaError {
+                 f,
+                 "plain argument compilation at {location} reached the stack safety margin"
+             ),
++            Self::UnknownStackFloor { location, cause } => write!(
++                f,
++                "plain argument compilation at {location} could not measure its stack floor: {cause}"
++            ),
+             Self::Exhausted {
+                 resource,
+                 used,
+@@ -291,6 +358,7 @@ impl std::fmt::Display for ToolSchemaError {
+ impl std::error::Error for ToolSchemaError {
+     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+         match self {
++            Self::UnknownStackFloor { cause, .. } => Some(cause),
+             Self::UnsupportedConstruct { reason, .. } => Some(reason),
+             Self::Model { cause, .. } => Some(cause),
+             Self::Compilation { cause, .. } => Some(cause),
+@@ -911,9 +979,9 @@ fn admit_native_clone(value: &Value, policy: &mut ToolPolicy) -> bool {
+     if !policy.charge(1) || !policy.native_nodes(1) {
+         return false;
+     }
+-    if purrdf_stack::is_low() {
+-        policy.error.get_or_insert(ToolSchemaError::StackMargin {
+-            location: "schema value clone".to_owned(),
++    if let Err(refusal) = purrdf_stack::check_margin() {
++        policy.error.get_or_insert_with(|| {
++            ToolSchemaError::stack_guard("schema value clone".to_owned(), refusal)
+         });
+         return false;
+     }
+@@ -993,9 +1061,9 @@ fn value_work(value: &Value, policy: &mut ToolPolicy) -> bool {
+     if !policy.charge(1) {
+         return false;
+     }
+-    if purrdf_stack::is_low() {
+-        policy.error.get_or_insert(ToolSchemaError::StackMargin {
+-            location: "schema value traversal".to_owned(),
++    if let Err(refusal) = purrdf_stack::check_margin() {
++        policy.error.get_or_insert_with(|| {
++            ToolSchemaError::stack_guard("schema value traversal".to_owned(), refusal)
+         });
+         return false;
+     }
+@@ -1342,10 +1410,10 @@ pub(super) fn admit_object(shape: &Shape, ctx: &mut Ctx<'_>) -> bool {
+         policy.refuse(&location, ToolRepresentationError::DynamicDeactivation);
+         return false;
+     }
+-    if purrdf_stack::is_low() {
++    if let Err(refusal) = purrdf_stack::check_margin() {
+         policy
+             .error
+-            .get_or_insert(ToolSchemaError::StackMargin { location });
++            .get_or_insert_with(|| ToolSchemaError::stack_guard(location, refusal));
+         return false;
+     }
+     if !admit_expansion(&shape.constraints, policy) {
+@@ -1685,13 +1753,13 @@ pub(super) fn member_schema(
+     if !step(ctx) {
+         return json!({});
+     }
+-    if purrdf_stack::is_low() {
++    if let Err(refusal) = purrdf_stack::check_margin() {
+         ctx.tool
+             .as_mut()
+             .expect("plain mode")
+             .error
+-            .get_or_insert(ToolSchemaError::StackMargin {
+-                location: shape_iri.text.to_owned(),
++            .get_or_insert_with(|| {
++                ToolSchemaError::stack_guard(shape_iri.text.to_owned(), refusal)
+             });
+         return json!({});
+     }
+diff --git crates/shapes/src/json_schema/tool_arguments/numeric.rs crates/shapes/src/json_schema/tool_arguments/numeric.rs
+index 8f6d36b82..c36a7976f 100644
+--- crates/shapes/src/json_schema/tool_arguments/numeric.rs
++++ crates/shapes/src/json_schema/tool_arguments/numeric.rs
+@@ -730,12 +730,10 @@ fn positive_number<'a>(
+     if !policy.charge(1) {
+         return true;
+     }
+-    if purrdf_stack::is_low() {
+-        policy
+-            .error
+-            .get_or_insert(super::ToolSchemaError::StackMargin {
+-                location: "numeric carrier traversal".to_owned(),
+-            });
++    if let Err(refusal) = purrdf_stack::check_margin() {
++        policy.error.get_or_insert_with(|| {
++            super::ToolSchemaError::stack_guard("numeric carrier traversal".to_owned(), refusal)
++        });
+         return true;
+     }
+     let Some(object) = value.as_object() else {
+diff --git crates/shapes/src/linkml.rs crates/shapes/src/linkml.rs
+index d97aa813a..fe4500d1c 100644
+--- crates/shapes/src/linkml.rs
++++ crates/shapes/src/linkml.rs
+@@ -493,6 +493,7 @@ pub struct LinkmlError {
+ enum LinkmlCause {
+     Loss(Box<::purrdf_rdf::LossSoundnessError>),
+     Import(Box<crate::schema_import::SchemaImportError>),
++    StackFloor(purrdf_stack::FloorError),
+ }
+ 
+ purrdf_lex::constructors! {
+@@ -513,6 +514,7 @@ impl LinkmlError {
+         match &self.cause {
+             Some(LinkmlCause::Loss(cause)) => Some(cause.as_ref()),
+             Some(LinkmlCause::Import(cause)) => Some(cause.as_ref()),
++            Some(LinkmlCause::StackFloor(cause)) => Some(cause),
+             None => None,
+         }
+     }
+@@ -523,6 +525,13 @@ impl LinkmlError {
+             cause: Some(LinkmlCause::Import(Box::new(cause))),
+         }
+     }
++
++    fn stack_floor(detail: std::fmt::Arguments<'_>, cause: purrdf_stack::FloorError) -> Self {
++        Self {
++            detail: format!("{detail}: {cause}"),
++            cause: Some(LinkmlCause::StackFloor(cause)),
++        }
++    }
+ }
+ 
+ impl From<::purrdf_rdf::LossSoundnessError<&str>> for LinkmlError {
+diff --git crates/shapes/src/linkml/projection.rs crates/shapes/src/linkml/projection.rs
+index 497b91829..438403b7a 100644
+--- crates/shapes/src/linkml/projection.rs
++++ crates/shapes/src/linkml/projection.rs
+@@ -1721,10 +1721,18 @@ impl<'a> Renderer<'a> {
+                         "{path} contains a cyclic compound slot reference to {key:?}"
+                     )));
+                 }
+-                if purrdf_stack::is_low() {
+-                    return Err(LinkmlError::new(format!(
+-                        "{path} exhausted the stack margin resolving slot reference {key:?}"
+-                    )));
++                if let Err(refusal) = purrdf_stack::check_margin() {
++                    return Err(match refusal.floor_error() {
++                        Some(cause) => LinkmlError::stack_floor(
++                            format_args!(
++                                "{path} could not measure its stack floor resolving slot reference {key:?}"
++                            ),
++                            cause,
++                        ),
++                        None => LinkmlError::new(format!(
++                            "{path} exhausted the stack margin resolving slot reference {key:?}"
++                        )),
++                    });
+                 }
+                 self.slot_references.push(definition);
+                 let expanded = self.render_slot_expression(definition, &definition_path(key));
+diff --git crates/shapes/src/path.rs crates/shapes/src/path.rs
+index b7a04c193..726035f5c 100644
+--- crates/shapes/src/path.rs
++++ crates/shapes/src/path.rs
+@@ -327,11 +327,9 @@ fn eval_planned_inner_ids(
+     paths: &[LoweredPath],
+     memo: &mut purrdf_core::FastMap<(usize, TermId), IdVec>,
+ ) -> Result<IdVec, crate::error::ShapesError> {
+-    if purrdf_stack::is_low() {
+-        return Err(crate::error::ShapesError::Processor(
+-            crate::error::ProcessorFailure::ExpressionStackMargin,
+-        ));
+-    }
++    crate::error::ProcessorFailure::check_stack("SHACL path evaluation", || {
++        crate::error::ProcessorFailure::ExpressionStackMargin
++    })?;
+     Ok(match path {
+         LoweredPath::Reference(index) | LoweredPath::SharedReference(index) => {
+             let shared = matches!(path, LoweredPath::SharedReference(_));
+diff --git crates/shapes/src/plan.rs crates/shapes/src/plan.rs
+index f7848aad2..b44c167bf 100644
+--- crates/shapes/src/plan.rs
++++ crates/shapes/src/plan.rs
+@@ -64,18 +64,14 @@ type LoweringResult<T> = Result<T, PreparationRefusal>;
+ 
+ /// Admit every recursive lowering frame before entering its computation.
+ fn admit_lowering() -> LoweringResult<()> {
+-    if purrdf_stack::is_low() {
+-        Err(PreparationRefusal::StackMargin {
+-            construct: "SHACL plan lowering",
+-        })
+-    } else {
+-        Ok(())
+-    }
++    purrdf_stack::check_margin()
++        .map_err(|cause| PreparationRefusal::stack_guard("SHACL plan lowering", cause))
+ }
+ 
+ /// Infallible footprint callbacks latch refusal in the same native walk scope.
+ fn scoped_lowering<T>(body: impl FnOnce() -> LoweringResult<T>) -> LoweringResult<T> {
+-    purrdf_stack::walk(body).map_err(|construct| PreparationRefusal::StackMargin { construct })?
++    purrdf_stack::walk_with_cause(body)
++        .map_err(|refusal| PreparationRefusal::stack_guard(refusal.construct, refusal.cause))?
+ }
+ 
+ // ── Slots ───────────────────────────────────────────────────────────────────────
+diff --git crates/shapes/src/product/ast.rs crates/shapes/src/product/ast.rs
+index 797b10ffe..91d7faa68 100644
+--- crates/shapes/src/product/ast.rs
++++ crates/shapes/src/product/ast.rs
+@@ -382,12 +382,9 @@ pub(crate) fn open_level(
+     depth: &mut u32,
+     refusal: fn() -> ShapesProductError,
+ ) -> Result<(), ShapesProductError> {
+-    if purrdf_stack::is_low() {
+-        return Err(crate::error::PreparationRefusal::StackMargin {
+-            construct: "SHACL product model nesting",
+-        }
+-        .into());
+-    }
++    purrdf_stack::check_margin().map_err(|cause| {
++        crate::error::PreparationRefusal::stack_guard("SHACL product model nesting", cause)
++    })?;
+     if *depth >= MAX_DEPTH {
+         return Err(refusal());
+     }
+diff --git crates/shapes/src/product/error.rs crates/shapes/src/product/error.rs
+index ca721f59e..387c7f2d9 100644
+--- crates/shapes/src/product/error.rs
++++ crates/shapes/src/product/error.rs
+@@ -135,15 +135,15 @@ pub enum ProductDimension {
+     /// In both directions the bytes are not the problem; what cannot be honoured
+     /// is the promise they would make.
+     UnsupportedCapability,
+-    /// A structure nests deeper than the decoder's fixed depth ceiling. The
+-    /// ceiling exists so that untrusted bytes cannot drive the decoder into
+-    /// unbounded recursion.
++    /// A structure exceeds the decoder's fixed depth ceiling or recursive
++    /// preparation reaches a known native stack safety margin.
+     DepthLimit,
+     /// The bytes are structurally invalid in a way no other dimension names: a
+     /// field is out of range, a length disagrees with its payload, or a
+     /// reference points outside the container.
+     Malformed,
+-    /// The native workspace could not admit or allocate the required storage.
++    /// The native workspace could not admit or allocate the required storage,
++    /// or a preparation guard could not read the native stack floor.
+     Resource,
+     /// The encoded declarative model differs from the model bound by the identity.
+     Model,
+@@ -270,7 +270,10 @@ impl purrdf_hash::error::StructuredError for ShapesProductError {
+ impl From<crate::error::PreparationRefusal> for ShapesProductError {
+     fn from(error: crate::error::PreparationRefusal) -> Self {
+         let dimension = match &error {
+-            crate::error::PreparationRefusal::Storage(_) => ProductDimension::Resource,
++            crate::error::PreparationRefusal::Storage(_)
++            | crate::error::PreparationRefusal::UnknownStackFloor { .. } => {
++                ProductDimension::Resource
++            }
+             crate::error::PreparationRefusal::StackMargin { .. } => ProductDimension::DepthLimit,
+             crate::error::PreparationRefusal::UnqualifiedRecursion(_) => {
+                 ProductDimension::UnsupportedCapability
+diff --git crates/shapes/src/recursion/model.rs crates/shapes/src/recursion/model.rs
+index 16fb32245..b6810ab16 100644
+--- crates/shapes/src/recursion/model.rs
++++ crates/shapes/src/recursion/model.rs
+@@ -525,12 +525,9 @@ impl<'a> ModelWalk<'a, WalkError> for Builder<'a> {
+         &mut self.depth
+     }
+     fn enter(&mut self) -> Result<(), WalkError> {
+-        if purrdf_stack::is_low() {
+-            return Err(PreparationRefusal::StackMargin {
+-                construct: "SHACL recursion model walk",
+-            }
+-            .into());
+-        }
++        purrdf_stack::check_margin().map_err(|cause| {
++            PreparationRefusal::stack_guard("SHACL recursion model walk", cause)
++        })?;
+         self.depth = self
+             .depth
+             .checked_add(1)
+diff --git crates/shapes/src/shapes.rs crates/shapes/src/shapes.rs
+index bec669bc6..9f3c44af8 100644
+--- crates/shapes/src/shapes.rs
++++ crates/shapes/src/shapes.rs
+@@ -2309,6 +2309,21 @@ impl<'s> Parser<'s> {
+         message
+     }
+ 
++    /// Fail immediately while retaining an unreadable floor across textual parser frames.
++    fn admit_parser_frame(
++        &self,
++        construct: &'static str,
++        exhausted: impl FnOnce() -> String,
++    ) -> Result<(), String> {
++        purrdf_stack::check_margin().map_err(|refusal| {
++            refusal.floor_error().map_or_else(exhausted, |cause| {
++                self.retain_native_refusal(
++                    crate::PreparationRefusal::UnknownStackFloor { construct, cause }.into(),
++                )
++            })
++        })
++    }
++
+     /// The parse's error, typed: [`ShapesError::IllFormed`] or
+     /// [`ShapesError::Prebinding`] when the error the parse returned IS the refusal the
+     /// parse recorded, [`ShapesError::ShaclJs`] when it carries the recorded SHACL-JS
+@@ -3159,9 +3174,9 @@ impl<'s> Parser<'s> {
+         key: InFlight,
+         parse: impl FnOnce(&mut Self) -> Result<T, String>,
+     ) -> Result<T, String> {
+-        if purrdf_stack::is_low() {
+-            return Err("SHACL parsing exhausted its stack margin".to_owned());
+-        }
++        self.admit_parser_frame("SHACL parsing", || {
++            "SHACL parsing exhausted its stack margin".to_owned()
++        })?;
+         if !self.in_flight.insert(key.clone()) {
+             return Err(match key {
+                 InFlight::Shape(id) | InFlight::PropertyShape(id) => format!(
+@@ -3819,11 +3834,9 @@ impl<'s> Parser<'s> {
+         shape_id: &Term,
+         in_flight: &mut FastSet<String>,
+     ) -> Result<Path, String> {
+-        if purrdf_stack::is_low() {
+-            return Err(format!(
+-                "SHACL path parsing exhausted its stack margin on {shape_id}"
+-            ));
+-        }
++        self.admit_parser_frame("SHACL path parsing", || {
++            format!("SHACL path parsing exhausted its stack margin on {shape_id}")
++        })?;
+         match path_node {
+             Term::NamedNode(nn) => Ok(Path::Predicate(nn.clone())),
+             Term::BlankNode(label) => {
+diff --git crates/shex/src/error.rs crates/shex/src/error.rs
+index 26631f95d..da25ad91f 100644
+--- crates/shex/src/error.rs
++++ crates/shex/src/error.rs
+@@ -39,6 +39,13 @@ pub enum ShexError {
+         /// The recursive parser construct whose next frame was refused.
+         construct: &'static str,
+     },
++    /// The native stack floor could not be measured before parsing a construct.
++    UnknownStackFloor {
++        /// The parser construct whose next frame was refused.
++        construct: &'static str,
++        /// The original stack floor read error.
++        cause: purrdf_stack::FloorError,
++    },
+     /// The ShExC byte stream could not be tokenized. Carries its native reason
+     /// and the byte offset at which the lexer gave up.
+     Lex {
+@@ -134,6 +141,7 @@ pub enum ShexError {
+ impl purrdf_hash::error::StructuredError for ShexError {
+     purrdf_hash::error_visit! {
+         StackMargin { construct } => "shex-stack-margin" { "construct" => Code(construct) },
++        UnknownStackFloor { construct, cause } => "shex-stack-floor" { "construct" => Code(construct), "cause" => Cause(cause) },
+         Lex { reason, at } => "shex-lex" { "reason" => Cause(reason), "at" => Unsigned(*at as u128) },
+         Facet { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
+         Grammar { reason, at } => "shex-syntax" { "reason" => Cause(&**reason), "at" => Unsigned(*at as u128) },
+@@ -180,11 +188,10 @@ impl ShexError {
+ 
+     /// Admit every recursive front-end at the workspace's one stack boundary.
+     pub(crate) fn admit_stack(construct: &'static str) -> Result<()> {
+-        if purrdf_stack::is_low() {
+-            Err(Self::StackMargin { construct })
+-        } else {
+-            Ok(())
+-        }
++        purrdf_stack::check_margin().map_err(|refusal| match refusal.floor_error() {
++            Some(cause) => Self::UnknownStackFloor { construct, cause },
++            None => Self::StackMargin { construct },
++        })
+     }
+ 
+     /// Construct a [`ShexError::Iri`] from a `purrdf-iri` failure, prefixing the
+@@ -238,6 +245,7 @@ impl ShexError {
+             | Self::ShapeMapSyntax { at, .. } => Some(*at),
+             Self::Iri { .. }
+             | Self::StackMargin { .. }
++            | Self::UnknownStackFloor { .. }
+             | Self::JsonMember(_)
+             | Self::JsonRead(_)
+             | Self::LanguageTag { .. }
+@@ -272,6 +280,12 @@ impl fmt::Display for ShexError {
+                     "ShEx parsing refused {construct}: physical stack margin exhausted"
+                 )
+             }
++            Self::UnknownStackFloor { construct, cause } => {
++                write!(
++                    f,
++                    "ShEx parsing could not measure its stack floor for {construct}: {cause}"
++                )
++            }
+             Self::Lex { reason, at } => write!(f, "ShExC lex error at byte {at}: {reason}"),
+             Self::ShapeMapSyntax { reason, at, .. } => {
+                 write!(f, "ShExC syntax error at byte {at}: {reason}")
+@@ -321,6 +335,7 @@ impl fmt::Debug for ShexError {
+ }
+ 
+ purrdf_lex::error_source!(ShexError => {
++    Self::UnknownStackFloor { cause, .. } => cause,
+     Self::Facet { reason, .. } => &**reason,
+     Self::Grammar { reason, .. } => &**reason,
+     Self::ShapeMapSyntax { reason, .. } => reason,
+diff --git crates/sparql-eval/src/error.rs crates/sparql-eval/src/error.rs
+index 62ca21671..df5f33f86 100644
+--- crates/sparql-eval/src/error.rs
++++ crates/sparql-eval/src/error.rs
+@@ -675,6 +675,14 @@ pub enum EvalError {
+         construct: &'static str,
+     },
+ 
++    /// The native stack floor could not be measured before evaluation.
++    UnknownStackFloor {
++        /// What was about to be evaluated.
++        construct: &'static str,
++        /// The original stack floor read error.
++        cause: purrdf_stack::FloorError,
++    },
++
+     /// On `wasm32`, the request nests deeper than the JavaScript engine's own call
+     /// stack holds: the plan is past the host-stack bounds of its admission
+     /// (`construct` is then `"query algebra"`), or its graph patterns nest deeper than
+@@ -752,6 +760,7 @@ impl purrdf_hash::error::StructuredError for EvalError {
+         },
+         FloatEnvironment(error) => "sparql-eval-float-environment" { "cause" => Cause(error) },
+         StackExhausted { construct } => "sparql-eval-stack-exhausted" { "construct" => Text(construct) },
++        UnknownStackFloor { construct, cause } => "sparql-eval-stack-floor" { "construct" => Text(construct), "cause" => Cause(cause) },
+         HostStackExhausted { construct } => "sparql-eval-host-stack-exhausted" { "construct" => Text(construct) },
+         HostSourceMissing(missing) => "sparql-eval-host-source-missing" { "input" => Code(missing.input().name()) },
+     }
+@@ -900,6 +909,7 @@ impl EvalError {
+             | Self::Config(_) => None,
+             Self::RelationIncomplete { .. } => Some(Self::RELATION_INCOMPLETE_CODE),
+             Self::StackExhausted { .. } => Some(Self::STACK_EXHAUSTED_CODE),
++            Self::UnknownStackFloor { .. } => Some(Self::UNKNOWN_STACK_FLOOR_CODE),
+             Self::HostStackExhausted { .. } => Some(Self::HOST_STACK_EXHAUSTED_CODE),
+             Self::HostSourceMissing(_) => Some(Self::HOST_SOURCE_MISSING_CODE),
+         }
+@@ -1034,6 +1044,9 @@ impl EvalError {
+     /// failure, and to know that a larger stack (not a different request) answers it.
+     pub const STACK_EXHAUSTED_CODE: &'static str = "native-sparql-evaluation-stack-exhausted";
+ 
++    /// The stable diagnostic code for a failed native stack floor read.
++    pub const UNKNOWN_STACK_FLOOR_CODE: &'static str = "native-sparql-evaluation-stack-floor";
++
+     /// The stable, machine-readable diagnostic code [`Self::HostStackExhausted`] maps to
+     /// at the `SparqlEngine` boundary — the string a host compares against to tell "this
+     /// request nests deeper than the JavaScript engine's call stack holds" from a stack a
+@@ -1176,6 +1189,9 @@ impl core::fmt::Display for EvalError {
+                     f.write_str("; run it on a thread with a larger stack")
+                 }
+             }
++            Self::UnknownStackFloor { construct, cause } => {
++                write!(f, "cannot measure the stack floor for {construct}: {cause}")
++            }
+             Self::HostStackExhausted { construct } => write!(
+                 f,
+                 "host call stack budget exceeded: the request's {construct} nests deeper \
+@@ -1204,6 +1220,7 @@ impl std::error::Error for EvalError {
+             Self::ServiceDenied(error) => Some(error),
+             Self::Remote { cause, .. } | Self::ServiceUnconfigured { cause, .. } => Some(cause),
+             Self::FloatEnvironment(error) => Some(error),
++            Self::UnknownStackFloor { cause, .. } => Some(cause),
+             Self::XPathRegex(error) => Some(error),
+             Self::FunctionAdmission(error) | Self::FunctionOperationalNative(error) => {
+                 Some(error.cause())
+@@ -1247,6 +1264,9 @@ impl EvalError {
+             RemoteError::WorkspaceStopped => Self::WorkspaceStopped,
+             RemoteError::ExchangeIdExhausted => Self::ExchangeIdExhausted,
+             RemoteError::StackExhausted(construct) => Self::StackExhausted { construct },
++            RemoteError::UnknownStackFloor { construct, cause } => {
++                Self::UnknownStackFloor { construct, cause }
++            }
+             RemoteError::HostStackExhausted(construct) => Self::HostStackExhausted { construct },
+             cause @ (RemoteError::Unconfigured(_) | RemoteError::NoSource) => {
+                 Self::ServiceUnconfigured { endpoint, cause }
+@@ -1301,6 +1321,10 @@ mod tests {
+             RemoteError::Governed(stopped),
+             RemoteError::GovernedAfterCompletion(stopped),
+             RemoteError::StackExhausted("construct"),
++            RemoteError::UnknownStackFloor {
++                construct: "construct",
++                cause: purrdf_stack::FloorError::Unsupported,
++            },
+             RemoteError::HostStackExhausted("construct"),
+             RemoteError::SourceRead("r".into()),
+             RemoteError::WorkspaceStopped,
+@@ -1328,6 +1352,7 @@ mod tests {
+                 | RemoteError::Governed(_)
+                 | RemoteError::GovernedAfterCompletion(_)
+                 | RemoteError::StackExhausted(_)
++                | RemoteError::UnknownStackFloor { .. }
+                 | RemoteError::HostStackExhausted(_)
+                 | RemoteError::SourceRead(_)
+                 | RemoteError::WorkspaceStopped
+diff --git crates/sparql-eval/src/eval.rs crates/sparql-eval/src/eval.rs
+index 0c399eb58..6eec25f43 100644
+--- crates/sparql-eval/src/eval.rs
++++ crates/sparql-eval/src/eval.rs
+@@ -9833,11 +9833,7 @@ impl<I: ViewTermId> NodeBoundary<I> {
+                 "raw evaluation without an engine drain reservation",
+             ));
+         }
+-        if crate::stack::is_low() {
+-            return Err(EvalError::StackExhausted {
+-                construct: pattern_construct(pattern),
+-            });
+-        }
++        crate::stack::check_with(|| pattern_construct(pattern))?;
+         let local_cap = install_local_slice_pushdown(pattern, ctx)?;
+         let mut pending = ResidentPending {
+             child: Some(Self {
+diff --git crates/sparql-eval/src/protocol.rs crates/sparql-eval/src/protocol.rs
+index b805c2264..0f45cbe18 100644
+--- crates/sparql-eval/src/protocol.rs
++++ crates/sparql-eval/src/protocol.rs
+@@ -1304,6 +1304,7 @@ impl From<&EvalError> for FailureCode {
+             EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
+             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
+             EvalError::SourceRead(_)
++            | EvalError::UnknownStackFloor { .. }
+             | EvalError::NativeDiagnostic(_)
+             | EvalError::RetainedNativeFailure(_)
+             | EvalError::UnstableNativeDiagnostic
+@@ -1369,6 +1370,7 @@ impl From<&RemoteError> for FailureCode {
+     fn from(error: &RemoteError) -> Self {
+         match error {
+             RemoteError::SourceRead(_)
++            | RemoteError::UnknownStackFloor { .. }
+             | RemoteError::WorkspaceStopped
+             | RemoteError::ExchangeIdExhausted => Self::Evaluation,
+             RemoteError::Transport(_)
+diff --git crates/sparql-eval/src/remote.rs crates/sparql-eval/src/remote.rs
+index ad32e672c..3e7f7d6a7 100644
+--- crates/sparql-eval/src/remote.rs
++++ crates/sparql-eval/src/remote.rs
+@@ -199,6 +199,14 @@ pub enum RemoteError {
+     /// can hold, which is a fact about this host rather than about the invocation, and
+     /// the same body evaluated locally raises the same typed refusal.
+     StackExhausted(&'static str),
++    /// An in-process source could not measure its native stack floor.
++    /// This execution failure is never swallowed by `SERVICE SILENT`.
++    UnknownStackFloor {
++        /// The forwarded construct the source could not enter.
++        construct: &'static str,
++        /// The original stack floor read error.
++        cause: purrdf_stack::FloorError,
++    },
+     /// On `wasm32`, an in-process source's forwarded body nests deeper than the
+     /// JavaScript engine's call stack holds: the [`EvalError::HostStackExhausted`] of its
+     /// evaluation, naming the construct.
+@@ -245,6 +253,7 @@ impl purrdf_hash::error::StructuredError for RemoteError {
+             "governor" => Record(governor),
+         },
+         StackExhausted(construct) => "service-stack-exhausted" { "construct" => Text(construct) },
++        UnknownStackFloor { construct, cause } => "service-stack-floor" { "construct" => Text(construct), "cause" => Cause(cause) },
+         HostStackExhausted(construct) => "service-host-stack-exhausted" { "construct" => Text(construct) },
+         SourceRead(message) => "service-source-read" { "message" => Text(message) },
+         WorkspaceStopped => "service-workspace-stopped" {},
+@@ -278,6 +287,14 @@ impl core::fmt::Display for RemoteError {
+             Self::StackExhausted(construct) => {
+                 write!(f, "{}", EvalError::StackExhausted { construct })
+             }
++            Self::UnknownStackFloor { construct, cause } => write!(
++                f,
++                "{}",
++                EvalError::UnknownStackFloor {
++                    construct,
++                    cause: *cause
++                }
++            ),
+             Self::HostStackExhausted(construct) => {
+                 write!(f, "{}", EvalError::HostStackExhausted { construct })
+             }
+@@ -293,7 +310,7 @@ impl core::fmt::Display for RemoteError {
+     }
+ }
+ 
+-impl std::error::Error for RemoteError {}
++purrdf_hash::error_sources!(RemoteError, patterns Self::UnknownStackFloor { cause, .. } => cause);
+ 
+ /// The one spelling of the message for a `SERVICE` that had no remote query source.
+ pub(crate) struct NoSourceText<'a>(pub(crate) &'a str);
+@@ -1935,6 +1952,12 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
+         RemoteError::StackExhausted(construct) => {
+             return Err(EvalError::StackExhausted { construct });
+         }
++        RemoteError::UnknownStackFloor { construct, cause } => {
++            return Err(EvalError::UnknownStackFloor {
++                construct,
++                cause: *cause,
++            });
++        }
+         RemoteError::HostStackExhausted(construct) => {
+             return Err(EvalError::HostStackExhausted { construct });
+         }
+@@ -2122,6 +2145,9 @@ fn remote_error_for(error: EvalError) -> RemoteError {
+         EvalError::WorkspaceStopped => RemoteError::WorkspaceStopped,
+         EvalError::ExchangeIdExhausted => RemoteError::ExchangeIdExhausted,
+         EvalError::StackExhausted { construct } => RemoteError::StackExhausted(construct),
++        EvalError::UnknownStackFloor { construct, cause } => {
++            RemoteError::UnknownStackFloor { construct, cause }
++        }
+         EvalError::HostStackExhausted { construct } => RemoteError::HostStackExhausted(construct),
+         EvalError::RetainedServiceFailure(error) => RemoteError::Decode(error.to_string()),
+         other => RemoteError::Decode(other.to_string()),
+@@ -3028,6 +3054,10 @@ mod tests {
+                 "transport" => RemoteError::Transport("connection refused".to_owned()),
+                 "decode" => RemoteError::Decode("not a results document".to_owned()),
+                 "source-read" => RemoteError::SourceRead("snapshot block unavailable".to_owned()),
++                "unknown-stack-floor" => remote_error_for(EvalError::UnknownStackFloor {
++                    construct: "query algebra",
++                    cause: TEST_FLOOR_READ,
++                }),
+                 "exchange-id-exhausted" => RemoteError::ExchangeIdExhausted,
+                 "disabled" => RemoteError::Disabled,
+                 "unconfigured" => RemoteError::Unconfigured("no handler".to_owned()),
+@@ -3056,6 +3086,35 @@ mod tests {
+         }
+     }
+ 
++    const TEST_FLOOR_READ: purrdf_stack::FloorError = purrdf_stack::FloorError::Read {
++        call: "pthread_getattr_np",
++        code: 22,
++    };
++
++    #[test]
++    fn unknown_stack_floor_survives_service_silent_and_remote_conversion() {
++        for silent in ["", "SILENT "] {
++            let query = format!(
++                "SELECT ?n WHERE {{ SERVICE {silent}<http://example.org/unknown-stack-floor> {{ ?a ?b ?n }} }}"
++            );
++            let (result, silenced) = run_recorded(&local(), Some(&FailingKinds), &query);
++            let error = result.expect_err("unknown native stack floor is fatal");
++            assert_eq!(
++                error,
++                EvalError::UnknownStackFloor {
++                    construct: "query algebra",
++                    cause: TEST_FLOOR_READ,
++                }
++            );
++            assert_eq!(
++                std::error::Error::source(&error)
++                    .and_then(|source| source.downcast_ref::<purrdf_stack::FloorError>()),
++                Some(&TEST_FLOOR_READ)
++            );
++            assert!(silenced.is_empty());
++        }
++    }
++
+     #[test]
+     fn source_read_failure_survives_service_silent_and_remote_conversion() {
+         let mapped = remote_error_for(EvalError::SourceRead(
+diff --git crates/sparql-eval/src/stack.rs crates/sparql-eval/src/stack.rs
+index da244fc5f..9b5513ecc 100644
+--- crates/sparql-eval/src/stack.rs
++++ crates/sparql-eval/src/stack.rs
+@@ -72,22 +72,19 @@ pub(crate) mod height;
+ /// margin.
+ #[inline]
+ pub(crate) fn check(construct: &'static str) -> Result<(), EvalError> {
+-    if is_low() {
+-        return Err(EvalError::StackExhausted { construct });
+-    }
+-    Ok(())
++    check_with(|| construct)
+ }
+ 
+-/// Whether less than [`purrdf_stack::MARGIN_BYTES`] of stack are left.
+-///
+-/// [`check`] is this with the error attached; a caller that names its construct only
+-/// once it knows it is refusing (so the name is never computed on the hot path), or a
+-/// walk that cannot return an [`EvalError`] itself and latches the refusal for its
+-/// caller, calls this directly. The hot path is [`purrdf_stack::is_low`]'s: one
+-/// thread-local load, one subtraction and one comparison.
++/// Interpret the original margin check, naming the construct only on refusal.
+ #[inline]
+-pub(crate) fn is_low() -> bool {
+-    purrdf_stack::is_low()
++pub(crate) fn check_with(construct: impl FnOnce() -> &'static str) -> Result<(), EvalError> {
++    purrdf_stack::check_margin().map_err(|refusal| {
++        let construct = construct();
++        match refusal.floor_error() {
++            Some(cause) => EvalError::UnknownStackFloor { construct, cause },
++            None => EvalError::StackExhausted { construct },
++        }
++    })
+ }
+ 
+ #[cfg(test)]
+diff --git crates/sparql-eval/src/stack/height.rs crates/sparql-eval/src/stack/height.rs
+index e6d5c5242..cca25649e 100644
+--- crates/sparql-eval/src/stack/height.rs
++++ crates/sparql-eval/src/stack/height.rs
+@@ -77,9 +77,9 @@ const LEVEL_WALK_BYTES: usize = if cfg!(target_arch = "wasm32") {
+ 
+ /// Whether a walk `height` levels tall fits the stack left above
+ /// [`purrdf_stack::MARGIN_BYTES`], at [`LEVEL_WALK_BYTES`] a level.
+-fn walkable(height: usize) -> bool {
+-    height.saturating_mul(LEVEL_WALK_BYTES)
+-        <= purrdf_stack::remaining().saturating_sub(purrdf_stack::MARGIN_BYTES)
++fn walkable(height: usize) -> Result<bool, purrdf_stack::FloorError> {
++    Ok(height.saturating_mul(LEVEL_WALK_BYTES)
++        <= purrdf_stack::try_remaining()?.saturating_sub(purrdf_stack::MARGIN_BYTES))
+ }
+ 
+ /// How deep a node sits: in the node kinds the evaluator recurses over (`structural`,
+@@ -120,7 +120,10 @@ impl Depth {
+     /// node.
+     fn admit(self, fits: &mut usize) -> Result<(), EvalError> {
+         if self.structural > *fits {
+-            if !walkable(self.structural) {
++            if !walkable(self.structural).map_err(|cause| EvalError::UnknownStackFloor {
++                construct: "query algebra",
++                cause,
++            })? {
+                 return Err(EvalError::StackExhausted {
+                     construct: "query algebra",
+                 });
+diff --git crates/stack/src/lib.rs crates/stack/src/lib.rs
+index 988a3843e..99a791687 100644
+--- crates/stack/src/lib.rs
++++ crates/stack/src/lib.rs
+@@ -191,17 +191,27 @@ enum WalkState {
+     /// carries on exactly as it would with no guard at all.
+     Unscoped,
+     /// A scope is open and nothing has refused yet.
+-    Scoped,
++    Scoped(Option<FloorError>),
+     /// A walk inside the open scope refused at `construct`; the floor it replaced with
+     /// [`EXHAUSTED`] is `floor`.
+     Refused {
+         /// What refused.
+-        construct: &'static str,
++        refusal: WalkRefusal,
+         /// The floor to put back when the scope closes.
+         floor: usize,
+     },
+ }
+ 
++impl WalkState {
++    const fn floor_error(self) -> Option<FloorError> {
++        match self {
++            Self::Unscoped => None,
++            Self::Scoped(inherited) => inherited,
++            Self::Refused { refusal, .. } => refusal.cause.floor_error(),
++        }
++    }
++}
++
+ thread_local! {
+     /// The floor of the stack this thread is running on; [`UNKNOWN`] until the first
+     /// measurement reads it (or a host installs one with [`replace_floor`]).
+@@ -299,6 +309,54 @@ impl core::fmt::Display for FloorError {
+ 
+ impl std::error::Error for FloorError {}
+ 
++/// Why a frame could not enter before the stack margin.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++#[non_exhaustive]
++pub enum MarginRefusal {
++    /// The known stack has less than the required margin left.
++    Exhausted,
++    /// No floor was available for the check.
++    UnknownFloor(FloorError),
++}
++
++impl MarginRefusal {
++    /// The failed floor read, if the refusal was not ordinary exhaustion.
++    #[must_use]
++    pub const fn floor_error(self) -> Option<FloorError> {
++        match self {
++            Self::Exhausted => None,
++            Self::UnknownFloor(cause) => Some(cause),
++        }
++    }
++}
++
++impl purrdf_hash::error::StructuredError for MarginRefusal {
++    purrdf_hash::error_visit! {
++        Exhausted => "stack-margin-exhausted" {},
++        UnknownFloor(cause) => "stack-margin-unknown-floor" { "cause" => Cause(cause) },
++    }
++}
++
++impl core::fmt::Display for MarginRefusal {
++    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
++        match self {
++            Self::Exhausted => f.write_str("the stack margin is exhausted"),
++            Self::UnknownFloor(cause) => cause.fmt(f),
++        }
++    }
++}
++
++purrdf_hash::error_sources!(MarginRefusal, UnknownFloor);
++
++/// The first refusal latched by an infallible stack walk.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct WalkRefusal {
++    /// The construct the walk could not enter.
++    pub construct: &'static str,
++    /// The outcome of the original margin check.
++    pub cause: MarginRefusal,
++}
++
+ /// The bytes of stack left below the calling frame before the floor, or `0` when the
+ /// frame is already below it, [`EXHAUSTED`] is installed, or the floor cannot be read
+ /// (see [`try_remaining`] for the cause).
+@@ -312,11 +370,16 @@ pub fn remaining() -> usize {
+ /// # Errors
+ ///
+ /// [`FloorError`] when the operating system does not report this thread's stack bounds.
+-/// Nothing is cached from the failure, so the next call reads again.
++/// A failed read is retried by the next call unless a walk scope has latched
++/// its refusal to prevent further descent.
+ pub fn try_remaining() -> Result<usize, FloorError> {
+-    let sp = stack_pointer();
++    remaining_at(stack_pointer())
++}
++
++#[inline]
++fn remaining_at(sp: usize) -> Result<usize, FloorError> {
+     match FLOOR.with(Cell::get) {
+-        EXHAUSTED => Ok(0),
++        EXHAUSTED => WALK.with(|state| state.get().floor_error().map_or(Ok(0), Err)),
+         floor => sp.checked_sub(floor).map_or_else(|| refresh(sp), Ok),
+     }
+ }
+@@ -578,9 +641,9 @@ impl Drop for Reserve {
+             // EXHAUSTED in place of the raised floor and puts that floor back when it
+             // closes, so that is the floor to lower.
+             EXHAUSTED => WALK.with(|state| {
+-                if let WalkState::Refused { construct, floor } = state.get() {
++                if let WalkState::Refused { refusal, floor } = state.get() {
+                     state.set(WalkState::Refused {
+-                        construct,
++                        refusal,
+                         floor: floor.saturating_sub(bytes),
+                     });
+                 }
+@@ -619,6 +682,15 @@ impl Drop for Reserve {
+ ///
+ /// The `construct` a level of the walk named when it refused.
+ pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
++    walk_with_cause(body).map_err(|refusal| refusal.construct)
++}
++
++/// Run an infallible walk as in [`walk`], retaining the original margin check.
++///
++/// # Errors
++///
++/// The first construct and cause latched by [`walk_is_low`].
++pub fn walk_with_cause<T>(body: impl FnOnce() -> T) -> Result<T, WalkRefusal> {
+     /// Closes the scope when the walk returns or unwinds: puts the real floor back if a
+     /// level refused, then the enclosing scope's state.
+     struct Close(WalkState);
+@@ -636,13 +708,17 @@ pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
+             }
+         }
+     }
+-    let close = Close(WALK.with(|state| state.replace(WalkState::Scoped)));
++    let close = Close(WALK.with(|state| {
++        let old = state.get();
++        state.set(WalkState::Scoped(old.floor_error()));
++        old
++    }));
+     let value = body();
+     let outcome = WALK.with(Cell::get);
+     drop(close);
+     match outcome {
+-        WalkState::Refused { construct, .. } => Err(construct),
+-        WalkState::Unscoped | WalkState::Scoped => Ok(value),
++        WalkState::Refused { refusal, .. } => Err(refusal),
++        WalkState::Unscoped | WalkState::Scoped(_) => Ok(value),
+     }
+ }
+ 
+@@ -655,21 +731,21 @@ pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
+ #[inline]
+ #[must_use]
+ pub fn walk_is_low(construct: &'static str) -> bool {
+-    if !is_low() {
+-        return false;
++    match check_margin() {
++        Ok(()) => false,
++        Err(cause) => walk_refuse(WalkRefusal { construct, cause }),
+     }
+-    walk_refuse(construct)
+ }
+ 
+ /// The cold half of [`walk_is_low`]: latch the refusal in the open scope, if any.
+ #[cold]
+ #[inline(never)]
+-fn walk_refuse(construct: &'static str) -> bool {
++fn walk_refuse(refusal: WalkRefusal) -> bool {
+     WALK.with(|state| match state.get() {
+         WalkState::Unscoped => false,
+-        WalkState::Scoped => {
++        WalkState::Scoped(_) => {
+             let floor = replace_floor(EXHAUSTED);
+-            state.set(WalkState::Refused { construct, floor });
++            state.set(WalkState::Refused { refusal, floor });
+             true
+         }
+         WalkState::Refused { .. } => true,
+@@ -683,25 +759,37 @@ fn walk_refuse(construct: &'static str) -> bool {
+ #[inline]
+ #[must_use]
+ pub fn is_low() -> bool {
+-    let sp = stack_pointer();
+-    sp.checked_sub(FLOOR.with(Cell::get))
+-        .is_none_or(|left| left < MARGIN_BYTES)
+-        && is_low_cold(sp)
++    check_margin().is_err()
+ }
+ 
+-/// The cold half of [`is_low`]: the floor was never read on this thread, the frame is
++/// Verify that the current frame has [`MARGIN_BYTES`] of known stack left.
++///
++/// # Errors
++///
++/// Ordinary exhaustion or the original floor read error. The latter is not
++/// recovered by retrying the measurement after a refusal.
++#[inline]
++pub fn check_margin() -> Result<(), MarginRefusal> {
++    let sp = stack_pointer();
++    if sp
++        .checked_sub(FLOOR.with(Cell::get))
++        .is_some_and(|left| left >= MARGIN_BYTES)
++    {
++        return Ok(());
++    }
++    check_margin_cold(sp)
++}
++
++/// The cold half of [`check_margin`]: the floor was never read on this thread, the frame is
+ /// below it, [`EXHAUSTED`] is installed, or the margin really is gone.
+ #[cold]
+ #[inline(never)]
+-fn is_low_cold(sp: usize) -> bool {
+-    let left = match FLOOR.with(Cell::get) {
+-        EXHAUSTED => return true,
+-        // An unreadable floor leaves nothing to measure against: nothing is left.
+-        floor => sp
+-            .checked_sub(floor)
+-            .unwrap_or_else(|| refresh(sp).unwrap_or(0)),
+-    };
+-    left < MARGIN_BYTES
++fn check_margin_cold(sp: usize) -> Result<(), MarginRefusal> {
++    let left = remaining_at(sp).map_err(MarginRefusal::UnknownFloor)?;
++    if left < MARGIN_BYTES {
++        return Err(MarginRefusal::Exhausted);
++    }
++    Ok(())
+ }
+ 
+ /// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it;
+@@ -1608,32 +1696,65 @@ mod tests {
+                     remaining(),
+                     is_low(),
+                     try_remaining(),
++                    check_margin(),
+                     reserve(4096).bytes(),
+                     widen(4096),
+                     scoped(),
+                 );
+-                READ_FAILS.with(|fails| fails.set(false));
++                let walk = walk_with_cause(|| {
++                    assert!(walk_is_low("outer"));
++                    READ_FAILS.with(|fails| fails.set(false));
++                    let inner = walk_with_cause(|| {
++                        assert!(walk_is_low("inner"));
++                        assert_eq!(
++                            try_remaining(),
++                            Err(FloorError::Read {
++                                call: "injected",
++                                code: 12,
++                            })
++                        );
++                    });
++                    assert_eq!(
++                        inner,
++                        Err(WalkRefusal {
++                            construct: "inner",
++                            cause: MarginRefusal::UnknownFloor(FloorError::Read {
++                                call: "injected",
++                                code: 12,
++                            }),
++                        })
++                    );
++                });
+                 let recovered = (is_low(), try_remaining());
+-                (refused, recovered)
++                (refused, walk, recovered)
+             })
+             .expect("spawn")
+             .join()
+             .expect("the thread runs");
+-        let (refused, recovered) = outcome;
++        let (refused, walk, recovered) = outcome;
++        let error = FloorError::Read {
++            call: "injected",
++            code: 12,
++        };
+         assert_eq!(
+             refused,
+             (
+                 0,
+                 true,
+-                Err(FloorError::Read {
+-                    call: "injected",
+-                    code: 12
+-                }),
++                Err(error),
++                Err(MarginRefusal::UnknownFloor(error)),
+                 0,
+                 false,
+                 false
+             )
+         );
++        assert_eq!(
++            walk,
++            Err(WalkRefusal {
++                construct: "outer",
++                cause: MarginRefusal::UnknownFloor(error),
++            })
++        );
+         assert!(!recovered.0, "a thread whose floor reads is not low");
+         assert!(recovered.1.is_ok_and(|left| left > MARGIN_BYTES));
+     }
+@@ -1646,14 +1767,15 @@ mod tests {
+     fn an_on_stack_thread_is_measured_while_system_reads_fail() {
+         let (shallow, deep) = on_stack(512 * 1024, || {
+             READ_FAILS.with(|fails| fails.set(true));
+-            (deeper(10, &is_low), deeper(100, &is_low))
++            (deeper(10, &check_margin), deeper(100, &check_margin))
+         })
+         .expect("spawn");
+-        assert!(
+-            !shallow,
+-            "40 KiB of frames on a 512 KiB stack leaves the margin"
++        assert_eq!(shallow, Ok(()), "40 KiB of frames leaves the margin");
++        assert_eq!(
++            deep,
++            Err(MarginRefusal::Exhausted),
++            "400 KiB eats the margin"
+         );
+-        assert!(deep, "400 KiB of frames on a 512 KiB stack eats the margin");
+     }
+ 
+     /// The typed refusal says what was asked for and what was left.
+diff --git docs/BRAND.md docs/BRAND.md
+index 81a1ec9e6..b709a0049 100644
+--- docs/BRAND.md
++++ docs/BRAND.md
+@@ -32,6 +32,11 @@ primitives, Turtle/TriG/N-Triples/N-Quads/RDF/XML/JSON-LD codecs, RDFC-1.0
+ canonicalization, SPARQL 1.1/1.2, SHACL Core validation, the GTS
+ append-only graph transport, and Python/WebAssembly/C bindings.
+ 
++### Short description
++
++PurRDF is a Rust toolkit for RDF 1.2 with first-party code available under
++`MIT OR Apache-2.0 OR MulanPSL-2.0`.
++
+ ## Family system
+ 
+ PurRDF shares the black-cat silhouette of the "g + cat-sound" family (see
+diff --git helpers-ledger.toml helpers-ledger.toml
+index 63bcc86e1..7941b3723 100644
+--- helpers-ledger.toml
++++ helpers-ledger.toml
+@@ -3429,7 +3429,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3445,7 +3445,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private interner hash stores only ordinals minted after LocalCapacity.required and TermId.from_index. Lookup reconstructs the stored ordinal and indexes the same live term vector."
+ 
+ [[job.capacity_proof]]
+@@ -3461,7 +3461,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3477,7 +3477,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Rollback enumerates only the appended suffix of the admitted interner before truncation. Both the usize-to-u32 conversion and niche reconstruction address that same retained vector."
+ 
+ [[job.capacity_proof]]
+@@ -3493,7 +3493,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Append enumerates the validated source builder term_count. The source interner bounds this count; the preceding u32 conversion already propagates refusal."
+ 
+ [[job.capacity_proof]]
+@@ -3510,7 +3510,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3527,7 +3527,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Carrier.term_ids uses native RdfDataset length or private Selection.ids length. Selection construction checks u32 length before publishing; Delta delegates its own iterator. Enumeration is strictly below the checked count."
+ 
+ [[job.capacity_proof]]
+@@ -3543,7 +3543,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Native frozen row tables have the original Quads bound, equal to the native permutation limit. This resident wrapper can still panic on physical allocation failure; reduced test limits use try_permutation and are not asserted here."
+ 
+ [[job.capacity_proof]]
+@@ -3559,7 +3559,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3575,7 +3575,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Frozen hash entries are transferred from the admitted interner. Both predicates reconstruct an existing index; from_parts callers and consumer source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3591,7 +3591,7 @@ authorities = [
+     "crates/rdf-core/src/ir/embedding/mod.rs=source:9781ad9eb21f4ed9",
+     "crates/purrdf/src/embedding/wire.rs=source:f6dd5849e4da1ed9",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "FileLayout.plan validates section descriptors including count<=65535. Private entries retain that count; header narrows the already validated directory length."
+ 
+ [[job.capacity_proof]]
+@@ -3608,7 +3608,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:f6dd5849e4da1ed9",
+     "crates/purrdf/src/embedding/writer.rs=source:fcd5578b9b87c1ac",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "This equality checks serialized byte shape, not a logical table limit. validate_row enforces stored_dimension; private MatrixScalar f32/f64 raw_bytes writes exactly WIDTH bytes per value. Row capacity was checked before allocation."
+ 
+ [[job.capacity_proof]]
+@@ -3625,7 +3625,7 @@ authorities = [
+     "crates/purrdf/src/embedding/wire.rs=source:f6dd5849e4da1ed9",
+     "crates/purrdf/src/embedding/writer.rs=source:fcd5578b9b87c1ac",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "This equality checks the encoded matrix byte count. checked_matrix_byte_length and VectorDtype.width agree with private MatrixScalar raw_bytes; each row is validated before append. Arithmetic and allocation refusal remain separate."
+ 
+ [[job.capacity_proof]]
+@@ -3642,7 +3642,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3659,7 +3659,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable.rs=source:ae63e2acf4c56f5f",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The blank visitor enumerates the concrete frozen base term table, whose constructor closure and original interner capacity are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3676,7 +3676,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3693,7 +3693,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.new enumerates its concrete frozen delta table before constructing the private delta ID mapping; both conversions reuse the native ordinal."
+ 
+ [[job.capacity_proof]]
+@@ -3710,7 +3710,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3727,7 +3727,7 @@ authorities = [
+     "crates/rdf-core/src/ir/mutable/delta_view.rs=source:f5a55ffaee2aa0cc",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "DeltaDatasetView.term_ids enumerates the concrete frozen base table, then chains already minted added IDs. It does not trust a foreign DatasetView count."
+ 
+ [[job.capacity_proof]]
+@@ -3744,7 +3744,7 @@ authorities = [
+     "crates/rdf-core/src/ir/frozen_terms.rs=source:56583fb60cbcb7ca",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The event emitter enumerates its concrete frozen RdfDataset term table; no new slot is allocated by this reconstruction."
+ 
+ [[job.capacity_proof]]
+@@ -3757,7 +3757,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "GlobalDictionary private hash entries are inserted only after its exact GlobalTerms capacity and checked ID mint. The owner module pins all constructors and mutation paths."
+ 
+ [[job.capacity_proof]]
+@@ -3770,7 +3770,7 @@ authorities = [
+     "crates/lex/src/allocation.rs=source:82416b50593ee271",
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The value index enumerates the resident nonzero-sized GlobalInternedTerm vector. On supported 32/64-bit pointers its addressable element count is below the reserved u64 terminal index; no remote logical count is used."
+ 
+ [[job.capacity_proof]]
+@@ -3787,7 +3787,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:e1cb21fc9bd13b2c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3804,7 +3804,7 @@ authorities = [
+     "crates/rdf-core/src/ir/ingest.rs=source:e1cb21fc9bd13b2c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Both ingest passes enumerate the same concrete frozen RdfDataset term table, first for blank scopes and then emission. The original admitted count bounds both ordinal reconstructions."
+ 
+ [[job.capacity_proof]]
+@@ -3821,7 +3821,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3838,7 +3838,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/provider.rs=source:7aa0b2bed0d1f840",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "logical_rdf_byte_len takes a concrete RdfDataset and enumerates its retained terms. The nested narrowing and niche conversion reconstruct native ordinals."
+ 
+ [[job.capacity_proof]]
+@@ -3856,7 +3856,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3874,7 +3874,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The query validates each local term in the private PageTranslation. Its sole builder copies a concrete frozen page length; remap preserves that length and clone copies it. The provider count is not the authority."
+ 
+ [[job.capacity_proof]]
+@@ -3888,7 +3888,7 @@ authorities = [
+     "crates/rdf-core/src/ir/global.rs=source:5228f8d490189559",
+     "crates/rdf-core/src/ir/paged/stack.rs=source:edcb6e9ea5596e7b",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "Current snapshots and checked historical prefixes enumerate retained GlobalDictionary resident term vectors. Prefix position is checked against the retained source list before selection; neither route uses a foreign logical interval. The private dictionary owner and consuming stack source are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3905,7 +3905,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3922,7 +3922,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.try_build copies exactly the concrete frozen page term_count. Both conversions reconstruct local IDs already admitted by that page owner."
+ 
+ [[job.capacity_proof]]
+@@ -3939,7 +3939,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3956,7 +3956,7 @@ authorities = [
+     "crates/rdf-core/src/ir/paged/translation.rs=source:c02578fc593f3f1e",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "PageTranslation.remap enumerates its private local_to_global table created by try_build; it changes global values while preserving local cardinality. All owning module source is pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3975,7 +3975,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f2f20a9f69cab08c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -3994,7 +3994,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f2f20a9f69cab08c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4013,7 +4013,7 @@ authorities = [
+     "crates/rdf-core/src/ir/segmented/mod.rs=source:f2f20a9f69cab08c",
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "SegmentedBuildLimits private fields are created with bounded terms and checked first+terms. All builder mint paths enforce that term budget. global/map_id translate only admitted local IDs; local first subtracts/checks against the stored builder count. The entire interval owner and all encoding callers are pinned."
+ 
+ [[job.capacity_proof]]
+@@ -4030,7 +4030,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4047,7 +4047,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/ir/validate.rs=source:8b8f24fc93b191ab",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The private triple validator is called with the actual builder term_count in the same pinned module. Both passes enumerate that bounded interner; callers cannot provide an arbitrary count to this private helper."
+ 
+ [[job.capacity_proof]]
+@@ -4064,7 +4064,7 @@ authorities = [
+     "crates/rdf-core/src/ir/term.rs=source:a1e3cdb617a36cf5",
+     "crates/rdf-core/src/turtle_render.rs=source:cfa1100ca72efa47",
+ ]
+-constructors = "source:439b55a411c7cde8"
++constructors = "source:f77cf8435cf072f5"
+ reason = "The Turtle renderer searches an explicitly borrowed RdfDataset. Enumeration reuses its original bounded term IDs; it is not a DatasetView count."
+ 
+ [[job]]

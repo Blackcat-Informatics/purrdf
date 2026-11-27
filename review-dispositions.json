@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABrohqcg": {
+    "resolution": "acknowledged",
+    "reason": "Updated automation capacity notice only. It makes no source finding; the corrected signed head has an independent review.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-27T18:13:42Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "8b8badb98a340c39989f448c8d81f0968836f444f7012c245715699ba5da9eb9"
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence",
+  "branch": "paudley/1258-purrdf-sparql-eval-a-governed-evidence",
+  "base_ref": "refs/remotes/origin/main",
+  "head": "608042f5466115bf0f4df907f9ea85b99763229a",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1258-purrdf-sparql-eval-a-governed-evidence/.stage/purrdf-sparql-eval-a-governed-evidence/sync/20261127T174728-9989169b8d284e37b1739e01e43d80b6",
+  "conflicts": [
+    "helpers-ledger.toml"
+  ],
+  "status": "completed",
+  "base": "2d96ab4f49bcc18948505546b7f2d6d144718848",
+  "merge_bases": [
+    "a1b641b51b899ae64afa24fb88a9486dfa22aff0"
+  ],
+  "merge_index": "5031493f00910c86f8a530576f7edce1b83368b25f043ed9461a23e0403f84ab",
+  "reused_paths": [],
+  "rerere_output": "Recorded preimage for 'helpers-ledger.toml'\n",
+  "candidate_tree": "33564a938132eb4de45177cd6406cf6d0acfe282",
+  "candidate_patch": "candidate-6332e157d7f743818d640cbffb9abc51.patch",
+  "stdout_log": "commit-6332e157d7f743818d640cbffb9abc51.stdout.log",
+  "stderr_log": "commit-6332e157d7f743818d640cbffb9abc51.stderr.log",
+  "validation_records": [],
+  "commit_duration_seconds": 30.964234443963505,
+  "commit": "1059633c73022d68674348395a79c53c5c704296",
+  "tree": "33564a938132eb4de45177cd6406cf6d0acfe282",
+  "exit_code": 0
+}
