@@ -19,9 +19,8 @@
 //! [`KNOWN_DIVERGENCES`] is the one escape hatch, and it is held to XPASS
 //! discipline: a listed vector must STILL disagree. An entry that starts
 //! agreeing fails this test, so a divergence can never be closed upstream and
-//! left stale here. Each entry carries a dedicated test elsewhere that pins
-//! both sides of the disagreement; this list only records that the corpus-wide
-//! equality is knowingly relaxed for it.
+//! left stale here. The sole entry must agree on every field except N-Quads
+//! spelling, and even there the two datasets must be isomorphic.
 //!
 //! The fold prints a `GTS-VECTORS:` scoreboard line, which is what
 //! `scripts/conformance-matrix.py` scrapes for the corpus's row in the umbrella
@@ -30,9 +29,12 @@
 
 use std::collections::BTreeSet;
 
+use purrdf_core::{CANON_CORPUS_POLICY, CanonicalizationControl};
+use purrdf_lex::json::Value;
 use purrdf_rdf::gts_dict_vectors::{
     DEFAULT_MODE, expected_fold_json_in_mode, render_expected_json,
 };
+use purrdf_rdf::{datasets_isomorphic, parse_dataset};
 
 #[path = "support/vectors.rs"]
 mod vectors;
@@ -43,10 +45,48 @@ const VECTOR_COUNT: usize = 39;
 
 /// Vectors whose committed expectation this engine knowingly contradicts.
 ///
-/// Empty: every carried vector folds byte-exactly into its expectation. An entry
-/// added here is a measured disagreement and is held to the same two-way
-/// discipline as the assertions below.
-const KNOWN_DIVERGENCES: [&str; 0] = [];
+/// The oracle spells anonymous entries as ordinary authored labels. The
+/// scoped projection keeps those entries distinct from all authored labels.
+const KNOWN_DIVERGENCES: [&str; 1] = ["15b-anon-bnode-union"];
+
+fn assert_blank_spelling_only(mut produced: Value, declared: &Value, frozen: &str) {
+    fn dataset(quads: &Value) -> std::sync::Arc<purrdf_rdf::ir::RdfDataset> {
+        let lines = quads.as_array().expect("oracle N-Quads array");
+        let mut document = String::new();
+        for line in lines {
+            document.push_str(line.as_str().expect("one N-Quads line"));
+            document.push('\n');
+        }
+        parse_dataset(document.as_bytes(), "application/n-quads", None)
+            .expect("valid oracle N-Quads")
+    }
+
+    let actual = dataset(&produced["nquads"]);
+    let expected = dataset(&declared["nquads"]);
+    assert_eq!(
+        produced["nquads"]
+            .as_array()
+            .expect("produced N-Quads")
+            .len(),
+        declared["nquads"].as_array().expect("frozen N-Quads").len(),
+        "the projection retains the number of lines",
+    );
+    assert!(
+        datasets_isomorphic(
+            &actual,
+            &expected,
+            &mut CanonicalizationControl::new(CANON_CORPUS_POLICY, None),
+        )
+        .expect("compare frozen and projected anonymous-node datasets"),
+        "the anonymous blank-node divergence is only a change of spelling",
+    );
+    *produced.get_mut("nquads").expect("produced N-Quads field") = declared["nquads"].clone();
+    assert_eq!(
+        render_expected_json(&produced),
+        frozen,
+        "all other frozen oracle bytes agree",
+    );
+}
 
 #[test]
 fn every_frozen_vector_matches_its_committed_expected_fold() {
@@ -70,6 +110,7 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
     );
 
     let mut diverging: BTreeSet<String> = BTreeSet::new();
+    let mut spelling_only = None;
     let mut mismatch: Option<(String, String, String)> = None;
     for stem in &stems {
         let pack = std::fs::read(vectors.join(format!("{stem}.gts")))
@@ -80,12 +121,15 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
             .unwrap_or_else(|error| panic!("parse {stem}.expected.json: {error}"));
         let mode = declared["mode"].as_str().unwrap_or(DEFAULT_MODE);
 
-        let produced = render_expected_json(&expected_fold_json_in_mode(&pack, mode));
+        let document = expected_fold_json_in_mode(&pack, mode);
+        let produced = render_expected_json(&document);
         if produced != expected {
             diverging.insert(stem.clone());
             // Keep the FIRST unexpected pair whole, so the failure below can
             // show the two documents rather than only their names.
-            if !KNOWN_DIVERGENCES.contains(&stem.as_str()) && mismatch.is_none() {
+            if KNOWN_DIVERGENCES.contains(&stem.as_str()) {
+                spelling_only = Some((document, declared, expected));
+            } else if mismatch.is_none() {
                 mismatch = Some((stem.clone(), produced, expected));
             }
         }
@@ -99,6 +143,10 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
         stems.len(),
         diverging.len(),
     );
+
+    if let Some((produced, declared, frozen)) = spelling_only {
+        assert_blank_spelling_only(produced, &declared, &frozen);
+    }
 
     if let Some((stem, produced, expected)) = mismatch {
         assert_eq!(
@@ -114,7 +162,6 @@ fn every_frozen_vector_matches_its_committed_expected_fold() {
         diverging, known,
         "the divergence ledger must name exactly the vectors that actually \
          disagree: an entry that started AGREEING closed upstream (drop it from \
-         KNOWN_DIVERGENCES and turn its dedicated test into a plain agreement \
-         check), and an unlisted disagreement is a regression in this reader",
+         KNOWN_DIVERGENCES), and an unlisted disagreement is a regression in this reader",
     );
 }

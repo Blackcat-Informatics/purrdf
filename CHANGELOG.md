@@ -6,6 +6,14 @@ breaking change bumps the major version, a minor bump is additive, and a patch
 bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 0.x.
 
+## [Unreleased]
+
+- **GTS version 1 preserves anonymous blank-node identity.** Each blank term
+  with no value or an empty value names a new node. Fold, streaming import and
+  export use scoped labels so an authored blank cannot collide with that node.
+  The change alters anonymous labels in projected output, not the GTS wire
+  format.
+
 ## [5.0.1] - 2026-11-23
 
 - **Security: Python validation authenticates exact native store classes before

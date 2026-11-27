@@ -123,6 +123,11 @@ Copied from `gmeow-gts`:
 - GTS specification and implementer docs under `docs`
 - SVG brand assets under `docs`
 
+GTS version 1 anonymous blank-node identity follows
+[section 7.1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/a7949a474a5670a25fdde8f0b76146b1fa0f458c/docs/GTS-SPEC.md#71-terms-terms-frame).
+An absent or empty blank label identifies a fresh node per term entry, not
+per label or reference.
+
 The GTS generation 2 wire grammar, segment openers, resync candidate tests, frame links and payload checks follow [P1](https://github.com/Blackcat-Informatics/gmeow-gts/blob/7233d0da06d31cf26e03db1af355b4067fd8dcb6/docs/v2/P1.md)
 and the [P2 registry](https://github.com/Blackcat-Informatics/gmeow-gts/blob/c646f9d98be7ff31ceb0cb96695ee5ccc75db04a/docs/v2/P2.md).
 The whole-blob writer,

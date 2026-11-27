@@ -164,8 +164,10 @@ use crate::BlankScope;
 /// blank node under it.
 pub const QUERY_BLANK_SCOPE: BlankScope = BlankScope(u32::MAX);
 
-/// The blank-node scope of every triple term that states no triple (GTS-SPEC 7.3).
-/// The projected node is fresh, so no document or query label may name it.
+/// The blank-node scope of synthetic GTS v1 projections: anonymous blank-node
+/// entries and triple terms that state no triple (GTS-SPEC 7.1 and 7.3).
+/// The kinds use distinct label prefixes. No document or query label names a
+/// node in this scope.
 ///
 /// Scope reservations. [`BlankScope::DEFAULT`] is a parsed or folded document's
 /// scope. Every allocator that numbers scopes (the import merge, the builder's merge

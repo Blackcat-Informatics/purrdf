@@ -102,8 +102,8 @@
       "note": "no ledgered gaps"
     },
     "GTS transport (frozen vectors)": {
-      "ledgered": 0,
-      "note": "39 frozen cross-language GTS vectors folded through the production reader and compared byte-for-byte with the committed <id>.expected.json each ships; 39 agree exactly. The ledger is empty and keeps its two-way discipline: crates/rdf/tests/gts_corpus_expected_fold.rs fails if a listed vector starts agreeing or an unlisted vector starts disagreeing"
+      "ledgered": 1,
+      "note": "Of 39 frozen cross-language GTS vectors, 38 agree exactly. The anonymous union vector has different blank-node spelling only. Its N-Quads must be RDF-isomorphic and all other oracle bytes must match. The harness rejects a stale ledger entry or an unlisted disagreement."
     },
     "rdflib LSP drop-in gate": {
       "ledgered": 7,

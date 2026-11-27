@@ -141,7 +141,7 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
     let index = CapacityError::slot(
         CapacitySpace::ImportBlankScopes,
         segment_index,
-        // The scopes above are reserved for unbound triple terms and queries.
+        // The scopes above are reserved for synthetic GTS projections and queries.
         u64::from(purrdf_core::blank_label::MAX_ALLOCATED_SCOPE),
     )
     .map_err(|error| {
@@ -195,6 +195,18 @@ impl ResolvedSink for SinkImporter<'_> {
         Ok(self.builder.intern_blank(label, scope)?)
     }
 
+    fn intern_anonymous_blank(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+    ) -> Result<TermId, RdfDiagnostic> {
+        use crate::gts_resolve::{SYNTHETIC_BLANK_SCOPE, anonymous_blank_label};
+
+        segment_scope(segment_index)?;
+        let label = anonymous_blank_label(Some(segment_index), gts_id).to_string();
+        Ok(self.builder.intern_blank(&label, SYNTHETIC_BLANK_SCOPE)?)
+    }
+
     /// A triple term that states no triple is a blank node of the one scope no
     /// segment owns (`segment_scope` stops short of it), so no document label
     /// denotes it.
@@ -208,7 +220,7 @@ impl ResolvedSink for SinkImporter<'_> {
             crate::gts_resolve::unbound_triple_label(Some(segment_index), gts_id).to_string();
         Ok(self
             .builder
-            .intern_blank(&label, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE)?)
+            .intern_blank(&label, crate::gts_resolve::SYNTHETIC_BLANK_SCOPE)?)
     }
 
     /// GTS *does* carry RDF 1.2 base direction (`purrdf-gts`'s `Term` has a
@@ -1705,7 +1717,7 @@ mod tests {
         match quad.o {
             TermRef::Blank { label, scope } => {
                 assert_eq!(label, "unbound_triple_0_2");
-                assert_eq!(scope, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE);
+                assert_eq!(scope, crate::gts_resolve::SYNTHETIC_BLANK_SCOPE);
             }
             other => panic!("expected the unbound triple blank node, got {other:?}"),
         }

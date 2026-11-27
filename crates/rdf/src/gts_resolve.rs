@@ -13,6 +13,7 @@
 //! production storage or import limit. The literal-direction parser below is
 //! shared by the production consuming and streaming importers.
 
+pub(crate) use purrdf_gts::model::anonymous_blank_label;
 use purrdf_gts::model::{Graph, TermKind};
 use purrdf_gts::resolution::SelfReaching;
 
@@ -20,19 +21,20 @@ use crate::{BlankScope, RdfDiagnostic, RdfTextDirection};
 #[cfg(test)]
 use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 
-/// The blank-node scope of every triple term that states no triple (GTS-SPEC §7.3).
+/// The blank-node scope of synthetic v1 projections: fresh anonymous blank nodes
+/// (§7.1) and triple terms that state no triple (§7.3), with disjoint prefixes.
 ///
 /// A document blank node lands in [`BlankScope::DEFAULT`] (a folded graph) or in the
 /// scope of its segment (`segment index + 1`, which the streaming importer keeps
 /// at most `u32::MAX - 2`), so no document label ever names a node of this scope: the
-/// projected node is fresh, as the specification requires, whatever labels the
+/// synthetic node is fresh, as the specification requires, whatever labels the
 /// document uses. A label is only ever read together with its scope, so the same
 /// label spelled by the document and by the projection is two nodes.
-pub(crate) const UNBOUND_TRIPLE_SCOPE: BlankScope =
+pub(crate) const SYNTHETIC_BLANK_SCOPE: BlankScope =
     purrdf_core::blank_label::UNBOUND_TRIPLE_BLANK_SCOPE;
 
 /// The label of the node a triple term that states no triple projects as, inside
-/// [`UNBOUND_TRIPLE_SCOPE`]. A folded graph numbers its terms file-wide, so the term
+/// [`SYNTHETIC_BLANK_SCOPE`]. A folded graph numbers its terms file-wide, so the term
 /// id alone names one; a streamed file numbers terms per segment, so it adds the
 /// segment.
 pub(crate) fn unbound_triple_label(segment: Option<u64>, term: usize) -> impl std::fmt::Display {
@@ -48,16 +50,14 @@ pub(crate) fn unbound_triple_label(segment: Option<u64>, term: usize) -> impl st
     Label(segment, term)
 }
 
-/// A blank-node token of one label space that holds document labels and the labels
-/// of unbound triple terms (the fold view's N-Quads tokens and the streaming text
-/// export): `(label, scope)` through [`encode_blank_label`], so the two kinds of node
-/// can never share a token.
+/// Render authored and synthetic blank labels in the same injective
+/// `(label, scope)` alphabet for fold view tokens and streaming text.
 ///
 /// Proof. `encode_blank_label` is injective over `(label, scope)` for a fixed
 /// alphabet. A document blank node is encoded at a scope other than
-/// [`UNBOUND_TRIPLE_SCOPE`] (the default scope, or a segment scope at most
-/// `u32::MAX - 2`), and a projected unbound triple term is encoded at
-/// [`UNBOUND_TRIPLE_SCOPE`]. Two nodes with distinct scopes are distinct pairs, so
+/// [`SYNTHETIC_BLANK_SCOPE`] (the default scope, or a segment scope at most
+/// `u32::MAX - 2`), and an anonymous blank or unbound triple term is encoded at
+/// [`SYNTHETIC_BLANK_SCOPE`]. Two nodes with distinct scopes are distinct pairs, so
 /// their tokens differ, whatever label the document spells.
 pub(crate) fn blank_token(label: &str, scope: BlankScope) -> std::borrow::Cow<'_, str> {
     purrdf_core::blank_label::encode_blank_label(

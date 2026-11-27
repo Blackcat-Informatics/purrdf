@@ -167,10 +167,17 @@ impl GraphInterner {
     }
 
     fn intern_blank(&mut self, gts_id: usize) -> Result<TermId, RdfDiagnostic> {
-        // MOVE the blank label out; all folded blanks share the flattened scope.
-        let label = std::mem::take(&mut self.terms[gts_id].value)
-            .unwrap_or_else(|| format!("gts_bnode_{gts_id}"));
-        Ok(self.builder.intern_blank(&label, FLATTENED_BLANK_SCOPE)?)
+        use crate::gts_resolve::{SYNTHETIC_BLANK_SCOPE, anonymous_blank_label};
+
+        let value = std::mem::take(&mut self.terms[gts_id].value);
+        let (label, scope) = match value.filter(|label| !label.is_empty()) {
+            Some(label) => (label, FLATTENED_BLANK_SCOPE),
+            None => (
+                anonymous_blank_label(None, gts_id).to_string(),
+                SYNTHETIC_BLANK_SCOPE,
+            ),
+        };
+        Ok(self.builder.intern_blank(&label, scope)?)
     }
 
     /// Whether `gts_id` is a triple term that states a triple: it does not reach
@@ -193,7 +200,7 @@ impl GraphInterner {
         let label = crate::gts_resolve::unbound_triple_label(None, gts_id).to_string();
         Ok(self
             .builder
-            .intern_blank(&label, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE)?)
+            .intern_blank(&label, crate::gts_resolve::SYNTHETIC_BLANK_SCOPE)?)
     }
 
     fn intern_literal(

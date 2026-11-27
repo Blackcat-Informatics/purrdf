@@ -169,6 +169,25 @@ pub struct Term {
     pub triple: Option<Triple3>,
 }
 
+/// A synthetic label for a v1 blank node's anonymous term entry (§7.1).
+///
+/// A stream numbers terms per segment, so its label includes the segment. A
+/// folded graph already has file-wide term IDs. This label is not an identity
+/// by itself: projections keep it separate from every authored label's scope.
+#[must_use]
+pub fn anonymous_blank_label(segment: Option<u64>, term: usize) -> impl std::fmt::Display {
+    struct Label(Option<u64>, usize);
+    impl std::fmt::Display for Label {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0 {
+                Some(segment) => write!(f, "gts_anon_{segment}_{}", self.1),
+                None => write!(f, "gts_anon_{}", self.1),
+            }
+        }
+    }
+    Label(segment, term)
+}
+
 impl Term {
     /// The exact IRI value, preserving the distinction from a literal whose
     /// lexical spelling resembles that IRI.
