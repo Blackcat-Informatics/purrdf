@@ -141,7 +141,9 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use combined::{CombinedMaterialization, materialize_combined, materialize_combined_until};
-pub use engine::rdfs::{RdfsConclusion, RdfsPause, RdfsProgress, RdfsSession, RdfsSessionError};
+pub use engine::rdfs::{
+    RdfsConclusion, RdfsNamedResult, RdfsPause, RdfsProgress, RdfsSession, RdfsSessionError,
+};
 pub use entails::imports::resolve as resolve_imports;
 pub use entails::{
     Binding, CertainAnswers, CompositeWarrant, ComprehensionWarrant, DataRangeWarrant,

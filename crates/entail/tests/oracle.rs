@@ -8436,29 +8436,146 @@ fn rdfs_continuation_preserves_proofs_and_the_complete_result() {
     assert_eq!(report.contract_hash(), oracle_report.contract_hash());
 }
 
+/// A selected scope joins default and named premises but cannot use another graph.
+/// A pause retains proof-backed union implications, not named graph placements.
+#[test]
+fn rdfs_continuation_resumes_one_selected_graph_union() {
+    let mut builder = RdfDatasetBuilder::new();
+    let sub = builder.intern_iri(RDFS_SUBCLASSOF).unwrap();
+    let g = builder.intern_iri(EX_G).unwrap();
+    let h = builder.intern_iri(EX_H).unwrap();
+    for (s, o, graph) in [
+        (EX_A, EX_B, None),
+        (EX_B, EX_C, Some(g)),
+        (EX_B, EX_D, Some(h)),
+        (EX_X, EX_Y, None),
+        (EX_Y, EX_Z, None),
+    ] {
+        let s = builder.intern_iri(s).unwrap();
+        let o = builder.intern_iri(o).unwrap();
+        builder.push_quad(s, sub, o, graph).unwrap();
+    }
+    let source = builder.freeze().unwrap();
+    let identity = source.content_identity().unwrap();
+    let selected = TermValue::iri(EX_G);
+    let policy = EvalOptions::default().with_max_join_steps(100_000);
+    let start =
+        || RdfsSession::start_named(Arc::clone(&source), identity, selected.clone(), &policy);
+    let signal = StopAfterOneRound(std::sync::atomic::AtomicBool::new(false));
+    let RdfsProgress::Paused(paused) = start().unwrap().advance(&policy, Some(&signal)).unwrap()
+    else {
+        panic!("the second round must observe the stop");
+    };
+    assert!(matches!(paused.reason(), ChaseError::Stopped { .. }));
+    assert_eq!(paused.source_identity(), identity);
+    assert_eq!(paused.selected_graph(), Some(&selected));
+    paused.verify().unwrap();
+    let a = TermValue::iri(EX_A);
+    let c = TermValue::iri(EX_C);
+    let d = TermValue::iri(EX_D);
+    let x = TermValue::iri(EX_X);
+    let z = TermValue::iri(EX_Z);
+    let sub = TermValue::iri(RDFS_SUBCLASSOF);
+    let cross = paused
+        .conclusions()
+        .find(|row| [row.subject, row.predicate, row.object] == [&a, &sub, &c])
+        .expect("one default premise and one selected premise derive this edge");
+    assert_eq!(cross.rule.as_str(), "rdfs11");
+    assert_eq!(cross.firing.premises().len(), 2);
+    assert!(
+        cross
+            .firing
+            .premises()
+            .iter()
+            .any(|fact| fact.subject == format!("<{EX_B}>") && fact.object == format!("<{EX_C}>"))
+    );
+
+    let RdfsProgress::CompleteNamed(resumed) =
+        paused.into_session().advance(&policy, None).unwrap()
+    else {
+        panic!("resuming admits a completed union, not a complete dataset");
+    };
+    let RdfsProgress::CompleteNamed(fresh) = start().unwrap().advance(&policy, None).unwrap()
+    else {
+        panic!("uninterrupted scoped run completes");
+    };
+    assert_eq!(resumed.source_identity(), identity);
+    assert_eq!(resumed.selected_graph(), &selected);
+    assert_eq!(resumed.budget(), fresh.budget());
+    assert!(resumed.conclusions().eq(fresh.conclusions()));
+    let has_edge = |s, o| {
+        resumed
+            .conclusions()
+            .any(|(triple, _)| triple == [s, &sub, o])
+    };
+    assert!(has_edge(&a, &c));
+    assert!(!has_edge(&a, &d));
+    assert!(has_edge(&x, &z));
+
+    let (whole, _) = materialize_with(&*source, Materialization::Rdfs, &policy, None).unwrap();
+    let placed = |s, o, graph: &str| {
+        let [s, p, o, g] =
+            [s, &sub, o, &TermValue::iri(graph)].map(|term| whole.term_id_by_value(term).unwrap());
+        whole
+            .quads()
+            .any(|quad| (quad.s, quad.p, quad.o, quad.g) == (s, p, o, Some(g)))
+    };
+    assert!(placed(&a, &c, EX_G));
+    assert!(placed(&a, &d, EX_H));
+    assert!(!placed(&x, &z, EX_G));
+}
+
 /// Equal quad counts do not let a different frozen snapshot stand in for the
 /// original source, and an empty graph declaration is still a named graph.
 #[test]
 fn rdfs_continuation_refuses_a_different_snapshot_or_empty_named_graph() {
     let options = EvalOptions::default();
-    let source = RdfDatasetBuilder::new().freeze().unwrap();
-    let mut builder = RdfDatasetBuilder::new();
-    let graph = builder.intern_iri("https://example.org/empty").unwrap();
-    builder.declare_named_graph(graph).unwrap();
-    let named = builder.freeze().unwrap();
+    let snapshot = |declare| {
+        let mut builder = RdfDatasetBuilder::new();
+        let graph = builder.intern_iri(EX_G).unwrap();
+        let sub = builder.intern_iri(RDFS_SUBCLASSOF).unwrap();
+        let class = builder.intern_iri(EX_A).unwrap();
+        builder.push_quad(graph, sub, class, None).unwrap();
+        if declare {
+            builder.declare_named_graph(graph).unwrap();
+        }
+        builder.freeze().unwrap()
+    };
+    let source = snapshot(false);
+    let named = snapshot(true);
+    let graph = TermValue::iri(EX_G);
     assert_eq!(source.quad_count(), named.quad_count());
     let expected = source.content_identity().unwrap();
     let actual = named.content_identity().unwrap();
-    assert!(RdfsSession::start(source, expected, &options).is_ok());
+    assert!(RdfsSession::start(Arc::clone(&source), expected, &options).is_ok());
+    assert!(matches!(
+        RdfsSession::start_named(source, expected, graph.clone(), &options),
+        Err(RdfsSessionError::UnknownNamedGraph { graph: missing }) if missing == graph
+    ));
     assert!(matches!(
         RdfsSession::start(Arc::clone(&named), expected, &options),
         Err(RdfsSessionError::SnapshotMismatch { expected: wanted, actual: found })
             if wanted == expected && found == actual
     ));
     assert!(matches!(
-        RdfsSession::start(named, actual, &options),
+        RdfsSession::start(Arc::clone(&named), actual, &options),
         Err(RdfsSessionError::NamedGraphs)
     ));
+    assert!(matches!(
+        RdfsSession::start_named(Arc::clone(&named), expected, graph.clone(), &options),
+        Err(RdfsSessionError::SnapshotMismatch { expected: wanted, actual: found })
+            if wanted == expected && found == actual
+    ));
+    let RdfsProgress::CompleteNamed(result) =
+        RdfsSession::start_named(named, actual, graph.clone(), &options)
+            .unwrap()
+            .advance(&options, None)
+            .unwrap()
+    else {
+        panic!("a declared empty named graph contributes no premises, but it is a scope");
+    };
+    assert_eq!(result.selected_graph(), &graph);
+    assert!(result.conclusions().next().is_some());
 }
 
 /// Two rules conclude the same triple; exactly one is credited, and the totals still add up.

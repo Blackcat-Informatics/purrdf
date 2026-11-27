@@ -40,6 +40,20 @@ external reasoner, no `tokio`, and no string round-trip.
 | `rules(regime)` / `implemented(regime)` | — | The rule table a regime is *defined by*, and the subset this crate fires. Their difference is the measurable gap. |
 | `calculus_program(regime)` | — | The regime's calculus as DL-clause data — the very program `materialize` evaluates, so its `purrdf-datalog` contract hash is recomputable by a consumer. |
 
+## Resumable RDFS
+
+`RdfsSession::start` accepts a frozen default-only dataset and its content
+identity. `RdfsSession::start_named` instead selects the union of the default
+graph and one occupied or explicitly declared named graph. Each session keeps
+its original scope and source when it pauses. The pause exposes committed
+conclusions and independently checks their firings against the original seed.
+Resume the retained session with cumulative limits and a fresh stop signal.
+
+The default-only session returns a closure and reasoning report on completion.
+The selected union returns `RdfsNamedResult`, which reports its source identity,
+selected graph, cumulative work and derived triples with their rule attribution.
+It does not assign triples to a graph or represent a whole-dataset closure.
+
 ## Positive assertion worlds
 
 `reasoner::PositiveWorld` retains a `FallibleDatasetView`, including an `Arc` or

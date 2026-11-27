@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Resumable native RDFS materialization over one frozen default graph.
+//! Resumable native RDFS over a frozen default graph or selected graph union.
 
 use std::fmt;
 use std::sync::{Arc, LazyLock};
@@ -18,7 +18,8 @@ use purrdf_hash::hex::Digest32;
 use purrdf_lex::allocation::{Memory, Resident};
 
 use super::{
-    ProjectedDerivation, Terms, emit_default_run, project_chase_run, project_derivation, seed,
+    Conclusion, ProjectedDerivation, Terms, emit_default_run, project_chase_run,
+    project_derivation, seed,
 };
 use crate::calculus::{ChaseRule, program_with_attribution};
 use crate::report::{ReasoningReport, RunStats};
@@ -29,12 +30,17 @@ use crate::{EntailError, Regime, RuleId};
 static RDFS: LazyLock<(Vec<DlClause>, Vec<ChaseRule>)> =
     LazyLock::new(|| program_with_attribution(Regime::Rdfs));
 
-/// Why a default-graph RDFS session could not start, complete, or check proof.
+/// Why an RDFS session could not start, complete, or check proof.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum RdfsSessionError {
     /// Named graphs, including empty declarations, are outside this surface.
     NamedGraphs,
+    /// The selected term does not name an occupied or declared graph.
+    UnknownNamedGraph {
+        /// The requested graph name.
+        graph: TermValue,
+    },
     /// The requested frozen snapshot differs from the source's identity.
     SnapshotMismatch {
         /// The caller's requested identity.
@@ -58,6 +64,9 @@ impl fmt::Display for RdfsSessionError {
             Self::NamedGraphs => {
                 f.write_str("resumable RDFS requires a default-graph-only dataset")
             }
+            Self::UnknownNamedGraph { graph } => {
+                write!(f, "RDFS graph {graph:?} is neither occupied nor declared")
+            }
             Self::SnapshotMismatch { expected, actual } => {
                 write!(
                     f,
@@ -76,6 +85,7 @@ purrdf_hash::error_sources!(RdfsSessionError, Engine, Proof);
 impl purrdf_hash::error::StructuredError for RdfsSessionError {
     purrdf_hash::error_visit! {
         NamedGraphs => "rdfs-session-named-graphs" {},
+        UnknownNamedGraph { graph } => "rdfs-session-unknown-named-graph" { "graph" => Term(graph) },
         SnapshotMismatch { expected, actual } => "rdfs-session-snapshot-mismatch" {
             "expected" => Bytes(expected.as_bytes()), "actual" => Bytes(actual.as_bytes())
         },
@@ -89,11 +99,16 @@ impl purrdf_hash::error::StructuredError for RdfsSessionError {
 pub struct RdfsSession {
     source: Arc<RdfDataset>,
     identity: Digest32,
+    graph: Option<TermValue>,
     terms: Terms,
     chase: ChaseSession<'static>,
 }
 
-purrdf_hash::debug_non_exhaustive!(RdfsSession { identity, chase });
+purrdf_hash::debug_non_exhaustive!(RdfsSession {
+    identity,
+    graph,
+    chase
+});
 
 /// A complete materialization or a resumable refusal with recorded evidence.
 #[derive(Debug)]
@@ -106,6 +121,8 @@ pub enum RdfsProgress {
         /// Complete reasoning evidence under the final policy.
         report: Box<ReasoningReport>,
     },
+    /// A completed evaluation scoped to the default graph and one named graph.
+    CompleteNamed(Box<RdfsNamedResult>),
     /// A caller stop or logical ceiling retained the original execution.
     Paused(Box<RdfsPause>),
 }
@@ -114,11 +131,11 @@ pub enum RdfsProgress {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct RdfsConclusion<'a> {
-    /// Subject of this default-graph conclusion.
+    /// Subject of this conclusion.
     pub subject: &'a TermValue,
-    /// Predicate of this default-graph conclusion.
+    /// Predicate of this conclusion.
     pub predicate: &'a TermValue,
-    /// Object of this default-graph conclusion.
+    /// Object of this conclusion.
     pub object: &'a TermValue,
     /// Authored RDFS rule identifier.
     pub rule: RuleId,
@@ -135,6 +152,52 @@ pub struct RdfsPause {
     session: RdfsSession,
 }
 
+/// Completed RDFS inference over the default graph and one selected graph.
+///
+/// The results are derived triples, not named graph placements or a complete
+/// materialization of the source dataset.
+#[derive(Debug)]
+pub struct RdfsNamedResult {
+    identity: Digest32,
+    graph: TermValue,
+    budget: BudgetReport,
+    conclusions: Vec<Conclusion>,
+}
+
+impl RdfsNamedResult {
+    /// The immutable dataset identity, including graph declarations.
+    pub fn source_identity(&self) -> Digest32 {
+        self.identity
+    }
+
+    /// The graph included alongside the default graph.
+    pub fn selected_graph(&self) -> &TermValue {
+        &self.graph
+    }
+
+    /// Cumulative work and limits for this graph union alone.
+    pub fn budget(&self) -> BudgetReport {
+        self.budget
+    }
+
+    /// The RDF-admissible derived triples in commit order, with rule attribution.
+    ///
+    /// Each triple contains subject, predicate and object. The result does not
+    /// subtract default-only derivations or assign graph placement.
+    pub fn conclusions(&self) -> impl Iterator<Item = ([&TermValue; 3], RuleId)> {
+        self.conclusions.iter().map(|conclusion| {
+            (
+                [
+                    &conclusion.subject,
+                    &conclusion.predicate,
+                    &conclusion.object,
+                ],
+                conclusion.rule.rule_id(false),
+            )
+        })
+    }
+}
+
 impl RdfsSession {
     /// Prepare a session without running a chase round.
     ///
@@ -146,6 +209,32 @@ impl RdfsSession {
         expected_identity: Digest32,
         options: &EvalOptions,
     ) -> Result<Self, RdfsSessionError> {
+        Self::start_in_scope(source, expected_identity, None, options)
+    }
+
+    /// Prepare one session over the default graph and the selected named graph.
+    ///
+    /// An explicitly declared empty graph is valid. Other named graphs are not
+    /// part of the seed, even when their terms occur in the selected scope.
+    ///
+    /// # Errors
+    /// Refuses a different source identity, an unknown graph, or a source,
+    /// storage or program admission failure with the original cause.
+    pub fn start_named(
+        source: Arc<RdfDataset>,
+        expected_identity: Digest32,
+        graph: TermValue,
+        options: &EvalOptions,
+    ) -> Result<Self, RdfsSessionError> {
+        Self::start_in_scope(source, expected_identity, Some(graph), options)
+    }
+
+    fn start_in_scope(
+        source: Arc<RdfDataset>,
+        expected_identity: Digest32,
+        graph: Option<TermValue>,
+        options: &EvalOptions,
+    ) -> Result<Self, RdfsSessionError> {
         let identity = source.content_identity().map_err(EntailError::Storage)?;
         if identity != expected_identity {
             return Err(RdfsSessionError::SnapshotMismatch {
@@ -153,11 +242,21 @@ impl RdfsSession {
                 actual: identity,
             });
         }
-        if source.named_graphs().next().is_some() {
-            return Err(RdfsSessionError::NamedGraphs);
-        }
+        let graph = match graph {
+            Some(graph)
+                if !source
+                    .term_id_by_value(&graph)
+                    .is_some_and(|id| source.has_named_graph(id)) =>
+            {
+                return Err(RdfsSessionError::UnknownNamedGraph { graph });
+            }
+            None if source.named_graphs().next().is_some() => {
+                return Err(RdfsSessionError::NamedGraphs);
+            }
+            scope => scope,
+        };
         let program = &RDFS.0;
-        let (edb, terms) = seed(source.as_ref(), Regime::Rdfs, program, None)?;
+        let (edb, terms) = seed(source.as_ref(), Regime::Rdfs, program, graph.as_ref())?;
         let limits = AnalysisLimits::default();
         let prepared = certify_with(program, Resident, limits, None)
             .and_then(|certificate| certificate.prepare(program, limits, None))
@@ -171,6 +270,7 @@ impl RdfsSession {
         Ok(Self {
             source,
             identity,
+            graph,
             terms,
             chase: chase.map_err(super::chase_error)?,
         })
@@ -188,6 +288,7 @@ impl RdfsSession {
         let Self {
             source,
             identity,
+            graph,
             terms,
             chase,
         } = self;
@@ -204,6 +305,7 @@ impl RdfsSession {
                     session: Self {
                         source,
                         identity,
+                        graph,
                         terms,
                         chase,
                     },
@@ -213,6 +315,18 @@ impl RdfsSession {
                 .map_err(Into::into),
             ChaseAdvance::Complete(outcome) => {
                 let run = project_chase_run(&outcome, &RDFS.1, &terms);
+                if let Some(graph) = graph {
+                    return Memory::new(&mut Resident)
+                        .boxed(RdfsNamedResult {
+                            identity,
+                            graph,
+                            budget: run.budget,
+                            conclusions: run.conclusions,
+                        })
+                        .map(RdfsProgress::CompleteNamed)
+                        .map_err(EntailError::Storage)
+                        .map_err(Into::into);
+                }
                 let mut stats = RunStats::none(*options);
                 let builder =
                     emit_default_run(source.as_ref(), Regime::Rdfs, run, &mut stats, |_| {})?;
@@ -237,6 +351,11 @@ impl RdfsPause {
     /// The identity of the immutable source retained for this continuation.
     pub fn source_identity(&self) -> Digest32 {
         self.session.identity
+    }
+
+    /// The named graph included alongside the default graph, if selected.
+    pub fn selected_graph(&self) -> Option<&TermValue> {
+        self.session.graph.as_ref()
     }
 
     /// Work from the original seed through this pause.
@@ -280,7 +399,12 @@ impl RdfsPause {
     /// # Errors
     /// Returns native source or proof verification failure.
     pub fn verify(&self) -> Result<(), RdfsSessionError> {
-        let (edb, _) = seed(self.session.source.as_ref(), Regime::Rdfs, &RDFS.0, None)?;
+        let (edb, _) = seed(
+            self.session.source.as_ref(),
+            Regime::Rdfs,
+            &RDFS.0,
+            self.selected_graph(),
+        )?;
         Ok(self.session.chase.verify_recorded_prefix(edb)?)
     }
 
