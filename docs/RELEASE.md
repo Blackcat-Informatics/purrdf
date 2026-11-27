@@ -281,19 +281,28 @@ fallback to the full history. The workflow makes no repository commits.
 
 The GitHub Release is titled `PurRDF <version>` and hosts the Linux x86_64 GNU C
 SDK tar, its license receipt, the Cargo archive license receipt, the text
-lexicon data tar and the two W3C SHACL EARL reports, `purrdf-shacl-earl.ttl`
-(SHACL 2017) and `purrdf-shacl12-earl.ttl` (SHACL 1.2). The workflow generates
-the reports with `make w3c-earl W3C_EARL_DIR=target/dist` on the tagged commit,
-before `SHA256SUMS` is written, and attests them with the C distribution. Its
-`SHA256SUMS` hashes the six other actual uploaded files, with one sorted
-`<SHA-256>  <basename>` line per file. GitHub also supplies source ZIP and tar.gz
-downloads of the tagged repository. These source archives are distinct from the
-compiled C SDK. Preserve the full `CHANGELOG.md` history and commit both notes
-sources **before** pushing the release tag.
+lexicon data tar, the tagged source archive and its license receipt, and the two
+W3C SHACL EARL reports, `purrdf-shacl-earl.ttl` (SHACL 2017) and
+`purrdf-shacl12-earl.ttl` (SHACL 1.2). The workflow generates the reports with
+`make w3c-earl W3C_EARL_DIR=target/dist` on the tagged commit before writing
+`SHA256SUMS`. The manifest hashes the eight other uploaded files, with one
+sorted `<SHA-256>  <basename>` line per file. Preserve the full `CHANGELOG.md`
+history and commit both notes sources **before** pushing the release tag.
+
+`purrdf-source-<version>.tar.gz` carries the exact tree named by the Rust release
+tag under one versioned directory. It uses the tagged commit's timestamps and
+omits gzip's filename and timestamp. Untracked build products, local working
+files and Git history are outside this archive. The source license receipt
+binds the archive digest and commit to the tagged licensing inventory and checks the
+first-party license texts, documentation grant, and licensing guidance against
+the archive bytes. Vendored material retains its own notices and grants in the
+tree. The workflow attests build provenance for both the archive and its
+license receipt. The GitHub-generated source ZIP and tar.gz are separate and
+are not covered by `SHA256SUMS`.
 
 GitHub release immutability locks every asset when the release is published.
 `scripts/publish-github-release.py` therefore creates or reuses a **draft**,
-attaches all seven files, downloads and verifies their sizes, GitHub SHA-256
+attaches all nine files, downloads and verifies their sizes, GitHub SHA-256
 digests and the retained checksum manifest against the audited local files,
 then publishes the draft. It checks that the remote tag resolves to the exact
 workflow commit before uploading and again before publication. Only a literal
@@ -304,7 +313,7 @@ tagged workflow to resume. See GitHub's
 
 An already published release is verified **read-only** against its retained
 checksum manifest and downloaded assets, rather than against a fresh rebuild.
-Its tag identity, reviewed notes and complete seven-file asset set must match.
+Its tag identity, reviewed notes and complete tagged asset set must match.
 Missing or corrupt assets fail the lane explicitly; the publisher never
 deletes a release, recreates it or moves a tag to work around immutability.
 
@@ -514,6 +523,30 @@ neither a version bump nor a new package release is required.
    [CONFORMANCE.md](./CONFORMANCE.md).
 
 ## Verification
+
+For a release with the checksummed source asset, use a local checkout that has
+the release tag. Download the attached assets into an empty directory and verify
+the manifest and the tagged workflow's attestations for the source and receipt:
+
+```sh
+VERSION=5.0.2
+TAG="rust-v$VERSION"
+REPO=Blackcat-Informatics/purrdf
+SOURCE_COMMIT=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
+mkdir "purrdf-release-$VERSION"
+cd "purrdf-release-$VERSION"
+gh release download "$TAG" --repo "$REPO" --pattern '*'
+sha256sum --strict --check SHA256SUMS
+for asset in "purrdf-source-$VERSION.tar.gz" "purrdf-source-$VERSION.license-receipt.json"; do
+  gh attestation verify "$asset" --repo "$REPO" \
+    --signer-workflow "$REPO/.github/workflows/release-cargo.yaml" \
+    --source-ref "refs/tags/$TAG" --source-digest "$SOURCE_COMMIT"
+done
+```
+
+The archive can also be rebuilt from the tagged checkout with
+`bash scripts/package-release-source.sh build "$SOURCE_COMMIT" "$VERSION" path/to/output-directory`.
+Use the same Git and gzip implementations when comparing compressed bytes.
 
 Download a published crate and verify its GitHub attestation:
 

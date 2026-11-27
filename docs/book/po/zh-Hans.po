@@ -27970,10 +27970,21 @@ msgstr ""
 "UTF-8 体积上限；发布说明不会被截断。"
 
 #: src/project/releases.md:165
+msgid ""
+"The GitHub Release attaches `purrdf-source-<version>.tar.gz` from the exact "
+"Rust release tag. The archive and its license receipt are both listed in "
+"`SHA256SUMS` and carry build provenance attestations. GitHub's automatically "
+"generated source downloads are separate and are not covered by that manifest."
+msgstr ""
+"GitHub 发布页附带从 Rust 发布标签所指提交生成的 "
+"`purrdf-source-<version>.tar.gz`。该归档及其许可证凭据均列在 `SHA256SUMS` "
+"中，并带有构建来源证明。GitHub 自动生成的源码下载项与此归档不同，不在该校验清单内。"
+
+#: src/project/releases.md:170
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:167
+#: src/project/releases.md:172
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
