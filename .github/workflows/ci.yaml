@@ -10,15 +10,6 @@ on:
   # Any branch can be run on demand, without opening a pull request for it.
   workflow_dispatch:
     inputs:
-      rolling_phase:
-        description: Select the isolated rolling cache measurement
-        type: choice
-        options: [seed, compare]
-        default: compare
-      rolling_seed_run:
-        description: Successful seed workflow run ID for the comparison
-        type: string
-        default: ""
       native_profile:
         description: Capture matched native compilation and C phase cold/warm arms
         type: boolean
@@ -1007,7 +998,7 @@ jobs:
   # An explicit dispatch generates a projection independently of ordinary parity
   # checks. Its output is reviewed and committed separately; it never commits or pushes.
   simd-asm-projection:
-    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name != 'trial/native-rolling-cache'
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref != 'refs/heads/trial/native-rolling-cache'
     runs-on: ubuntu-latest
     # Complete cold generation and checked replay of all seven configurations.
     timeout-minutes: 360
@@ -1084,18 +1075,18 @@ jobs:
             target/simd-asm/contexts/**/evidence/*.json
           if-no-files-found: error
 
-  native-rolling-cache-trial:
+  native-rolling-cache-successor:
     # This experiment is runnable only on the isolated trial branch.
-    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref_name == 'trial/native-rolling-cache'
+    if: github.event_name == 'workflow_dispatch' && inputs.simd_projection && github.ref == 'refs/heads/trial/native-rolling-cache'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     permissions:
       contents: read
       actions: read
     strategy:
       fail-fast: false
       matrix:
-        arm: ${{ fromJSON(inputs.rolling_phase == 'seed' && '["rolling"]' || '["stock","rolling"]') }}
+        first: [stock, rolling]
     env:
       CARGO_UNSTABLE_CHECKSUM_FRESHNESS: 'true'
       CARGO_BUILD_FINGERPRINT: content
@@ -1109,12 +1100,12 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
+          fetch-depth: 2
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly"
       - name: Restore the current stock native cache
         id: stock
-        if: matrix.arm == 'stock'
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           shared-key: workspace-test-checksums-v2
@@ -1172,102 +1163,93 @@ jobs:
           df -B1 "$PWD" > "$evidence/disk-before.txt"
           free -b > "$evidence/memory-before.txt"
       - name: Require a full stock cache hit
-        if: matrix.arm == 'stock'
         env:
           STOCK_HIT: ${{ steps.stock.outputs.cache-hit }}
         run: test "$STOCK_HIT" = true
-      - name: Verify the exact successful seed workflow before download
-        id: seed
-        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'compare'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SEED_RUN: ${{ inputs.rolling_seed_run }}
-        run: |
-          set -euo pipefail
-          [[ "$SEED_RUN" =~ ^[1-9][0-9]{0,19}$ ]]
-          evidence="$RUNNER_TEMP/native-rolling-evidence"
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SEED_RUN" > "$evidence/seed-run.json"
-          jq -e --arg sha "$GITHUB_SHA" --arg ref "$GITHUB_REF_NAME" '
-            .event == "workflow_dispatch" and .conclusion == "success"
-            and .workflow_id != null and .path == ".github/workflows/ci.yaml"
-            and .head_sha == $sha and .head_branch == $ref
-          ' "$evidence/seed-run.json"
-          attempt=$(jq -er '.run_attempt | select(type == "number" and . >= 1)' "$evidence/seed-run.json")
-          echo "artifact=rolling-native-seed-snapshot-$attempt" >> "$GITHUB_OUTPUT"
-      - name: Download only the selected seed artifact
-        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'compare'
+      - name: Download the exact predecessor snapshot
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
           github-token: ${{ github.token }}
-          run-id: ${{ inputs.rolling_seed_run }}
-          name: ${{ steps.seed.outputs.artifact }}
+          run-id: "46013552857"
+          name: rolling-native-seed-snapshot-1
           path: ${{ runner.temp }}/native-rolling-archive
-      - name: Admit the restored snapshot before using Cargo output
-        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'compare'
+      - name: Verify source succession and admit both starting targets
         run: |
           set -euo pipefail
-          test ! -e target
+          predecessor=f50c166e73a7ee0fce5c7122757a15a5b040ce4b
           archive="$RUNNER_TEMP/native-rolling-archive"
           evidence="$RUNNER_TEMP/native-rolling-evidence"
+          pair="$RUNNER_TEMP/native-rolling-pair"
+          mkdir "$pair"
+          test "$(git rev-parse HEAD^)" = "$predecessor"
+          git rev-parse "$predecessor" "$predecessor^{tree}" > "$evidence/predecessor.txt"
+          cmp "$archive/source.txt" "$evidence/predecessor.txt"
           cmp "$archive/context.txt" "$evidence/context.txt"
-          cmp "$archive/source.txt" "$evidence/source.txt"
           (cd "$archive"; sha256sum -c SHA256SUMS)
+          python3 - "$predecessor" <<'PY'
+          import pathlib
+          import subprocess
+          import sys
+          before = sys.argv[1]
+          leaf = "crates/mime/src/lib.rs"
+          paths = subprocess.check_output(["git", "diff", "--name-only", before, "HEAD"], text=True).splitlines()
+          assert paths == [".github/workflows/ci.yaml", leaf], paths
+          prior = subprocess.check_output(["git", "show", f"{before}:{leaf}"])
+          assert prior.count(b"single byte-cover law") == 1
+          assert pathlib.Path(leaf).read_bytes() == prior.replace(b"single byte-cover law", b"shared byte-cover law")
+          PY
+          test -d target/debug
+          mv target "$pair/stock-target"
           /usr/bin/time -v -o "$evidence/extract.time" tar -I zstd -xf "$archive/target.tar.zst"
           test -d target/debug
-      - name: Run the actual workspace integration shard
-        if: inputs.rolling_phase == 'compare'
+          mv target "$pair/rolling-target"
+      - name: Prepare an identical registry for both measured arms
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/native-rolling-evidence"
-          /usr/bin/time -v -o "$evidence/shard.time" env CARGO_TERM_VERBOSE=true \
-            make test-shard SHARD=integration-2 > "$evidence/cargo.log" 2>&1
-          du -sb "${CARGO_HOME:?}"/registry > "$evidence/registry-after.txt"
-          du -sb target > "$evidence/target-bytes.txt"
-          df -B1 "$PWD" > "$evidence/disk-after.txt"
-          free -b > "$evidence/memory-after.txt"
-          if test -r /sys/fs/cgroup/memory.peak; then
-            cat /sys/fs/cgroup/memory.peak > "$evidence/runner-memory-peak.txt"
-          fi
-      - name: Build shared test-profile libraries for the next run
-        if: inputs.rolling_phase == 'seed'
+          pair="$RUNNER_TEMP/native-rolling-pair"
+          /usr/bin/time -v -o "$evidence/fetch.time" cargo fetch --locked > "$evidence/fetch.log" 2>&1
+          cp -a "${CARGO_HOME:?}/registry" "$pair/base-registry"
+          df -B1 "$PWD" > "$evidence/disk-pair.txt"
+      - name: Run both actual integration shards in the same runner
+        env:
+          FIRST: ${{ matrix.first }}
+          CARGO_NET_OFFLINE: "true"
+          CARGO_TERM_COLOR: never
         run: |
           set -euo pipefail
           evidence="$RUNNER_TEMP/native-rolling-evidence"
-          test ! -e target
-          /usr/bin/time -v -o "$evidence/seed.time" env CARGO_TERM_VERBOSE=true \
-            cargo build --workspace --lib --profile test --locked > "$evidence/cargo.log" 2>&1
-          du -sb target > "$evidence/target-bytes.txt"
-          df -B1 "$PWD" > "$evidence/disk-after.txt"
-      - name: Package one measured rolling snapshot
-        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'seed'
-        run: |
-          set -euo pipefail
-          evidence="$RUNNER_TEMP/native-rolling-evidence"
-          archive="$RUNNER_TEMP/native-rolling-archive"
-          mkdir "$archive"
-          cp "$evidence/context.txt" "$evidence/source.txt" "$archive/"
-          /usr/bin/time -v -o "$evidence/package.time" tar -I 'zstd -T2 -3' -cf "$archive/target.tar.zst" target
-          du -b "$archive/target.tar.zst" > "$evidence/archive-bytes.txt"
-          bytes=$(stat -c %s "$archive/target.tar.zst")
-          if (( bytes > 1250000000 )); then
-            echo "::error::The experiment archive exceeds the 1.25 GB reservation"
-            exit 1
-          fi
-          (cd "$archive"; sha256sum context.txt source.txt target.tar.zst > SHA256SUMS)
-      - name: Upload the snapshot without evicting production caches
-        if: matrix.arm == 'rolling' && inputs.rolling_phase == 'seed'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: rolling-native-seed-snapshot-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/native-rolling-archive/
-          compression-level: 0
-          retention-days: 2
-          if-no-files-found: error
-      - name: Retain exact build and test evidence
+          pair="$RUNNER_TEMP/native-rolling-pair"
+          case "$FIRST" in stock) second=rolling ;; rolling) second=stock ;; *) exit 1 ;; esac
+          mv "${CARGO_HOME:?}/registry" "$pair/prepared-registry"
+          for arm in "$FIRST" "$second"; do
+            test ! -e target
+            test ! -e "$CARGO_HOME/registry"
+            arm_evidence="$evidence/$arm"
+            mkdir "$arm_evidence"
+            cp "$evidence"/{source.txt,context.txt,cpu.txt,cpu-count.txt,kernel.txt,memory-before.txt} "$arm_evidence/"
+            if [[ "$arm" == rolling ]]; then cp "$evidence/extract.time" "$arm_evidence/"; fi
+            mv "$pair/$arm-target" target
+            cp -a "$pair/base-registry" "$CARGO_HOME/registry"
+            du -sb "$CARGO_HOME/registry" > "$arm_evidence/registry-before.txt"
+            /usr/bin/time -v -o "$arm_evidence/shard.time" env CARGO_TERM_VERBOSE=true \
+              make test-shard SHARD=integration-2 > "$arm_evidence/cargo.log" 2>&1
+            du -sb "$CARGO_HOME/registry" > "$arm_evidence/registry-after.txt"
+            du -sb target > "$arm_evidence/target-bytes.txt"
+            df -B1 "$PWD" > "$arm_evidence/disk-after.txt"
+            mv target "$pair/$arm-complete"
+            mv "$CARGO_HOME/registry" "$pair/$arm-registry"
+          done
+          grep -E 'Running.*rustc.*--crate-name purrdf_mime .*crates/mime/src/lib.rs ' "$evidence/rolling/cargo.log" |
+            cut -c1-180 > "$evidence/rolling/mime-rebuild.txt"
+          test "$(wc -l < "$evidence/rolling/mime-rebuild.txt")" -eq 1
+          grep -E 'Dirty +purrdf-mime .*crates/mime/src/lib.rs.*checksum' "$evidence/rolling/cargo.log" \
+            > "$evidence/rolling/mime-invalidation.txt"
+      - name: Retain both matched arms and the predecessor identity
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: rolling-native-${{ inputs.rolling_phase }}-${{ matrix.arm }}-${{ github.run_attempt }}
+          name: native-successor-${{ matrix.first }}-first-${{ github.run_attempt }}
           path: ${{ runner.temp }}/native-rolling-evidence/
           if-no-files-found: error
 
