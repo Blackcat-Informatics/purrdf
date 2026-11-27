@@ -209,6 +209,40 @@ pub(crate) fn term_ordinal(current_count: usize) -> Result<u32, TextDeltaError> 
         })
 }
 
+/// Which source-row term exposed an ID that did not resolve to a well-formed term.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ForeignSourceTerm {
+    /// The candidate literal object.
+    Object,
+    /// The graph containing the literal.
+    Graph,
+    /// The subject of the literal statement.
+    Subject,
+}
+
+const FOREIGN_ID: purrdf_core::TermLookupError = purrdf_core::TermLookupError::ForeignId;
+
+impl core::fmt::Display for ForeignSourceTerm {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&FOREIGN_ID, f)
+    }
+}
+
+impl core::error::Error for ForeignSourceTerm {
+    fn source(&self) -> Option<&(dyn core::error::Error + 'static)> {
+        Some(&FOREIGN_ID)
+    }
+}
+
+impl purrdf_hash::error::StructuredError for ForeignSourceTerm {
+    purrdf_hash::error_visit! {
+        Object => "text-source-object-lookup" { "cause" => Cause(&FOREIGN_ID) },
+        Graph => "text-source-graph-lookup" { "cause" => Cause(&FOREIGN_ID) },
+        Subject => "text-source-subject-lookup" { "cause" => Cause(&FOREIGN_ID) },
+    }
+}
+
 /// A failure raised by the text index.
 ///
 /// [`purrdf_hash::error::StructuredError`] exposes every retained field without
@@ -238,9 +272,8 @@ pub enum TextError {
     /// Strict HTML character-reference parse errors with original source ranges.
     Html(purrdf_sparql_eval::RetainedNativeFailure),
 
-    /// The input data cannot be indexed or queried as given — a literal whose
-    /// datatype does not resolve to an IRI, a corpus larger than the `u32`
-    /// document-id space, or a query naming a
+    /// The input data cannot be indexed or queried as given — a corpus larger
+    /// than the `u32` document-id space, or a query naming a
     /// document the index does not hold. Distinct from [`TextError::Config`]: the
     /// caller asked a well-formed question of data that does not answer it.
     ///
@@ -251,6 +284,8 @@ pub enum TextError {
     /// the answer to a query rather than as a refusal to build. See
     /// [`TextIndex::from_dataset`](crate::TextIndex::from_dataset).
     Data(String),
+    /// The source row's object, graph or subject did not resolve to a well-formed term.
+    ForeignSourceTerm(ForeignSourceTerm),
     /// The input source refused a term or iterator read. No partial index is published.
     SourceRead(purrdf_sparql_eval::RetainedNativeFailure),
 
@@ -351,6 +386,7 @@ impl core::fmt::Display for TextError {
                 write!(f, "invalid text-index configuration: {}", failure.cause())
             }
             Self::Data(msg) => write!(f, "text-index input error: {msg}"),
+            Self::ForeignSourceTerm(cause) => write!(f, "text-index input error: {cause}"),
             Self::SourceRead(failure) => {
                 write!(f, "text-index source read error: {}", failure.cause())
             }
@@ -368,6 +404,7 @@ purrdf_hash::error_sources!(
     RetainedDiagnostic,
     Html,
     Config,
+    ForeignSourceTerm,
     SourceRead,
     Substring,
     Phonetic,
@@ -385,6 +422,7 @@ impl purrdf_hash::error::StructuredError for TextError {
         Config(cause) => "text-config" { "cause" => Cause(cause) },
         Html(cause) => "text-html" { "cause" => Cause(cause) },
         Data(message) => "text-data" { "message" => Text(message) },
+        ForeignSourceTerm(cause) => "text-foreign-source-term" { "cause" => Cause(cause) },
         SourceRead(cause) => "text-source-read" { "cause" => Cause(cause) },
         Overflow(cause) => "text-overflow" { "cause" => Cause(cause) },
         Domain(cause) => "text-domain" { "cause" => Cause(cause) },
@@ -405,7 +443,9 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
     ///   retains the native Config classification through evaluator conversion.
     /// * [`TextError::Data`] is the dataset failing to answer a well-formed
     ///   question, which is
-    ///   [`EvalError::Data`](purrdf_sparql_eval::EvalError::Data);
+    ///   [`EvalError::Data`](purrdf_sparql_eval::EvalError::Data).
+    /// * [`TextError::ForeignSourceTerm`] retains the native lookup failure
+    ///   with the evaluator's Data classification.
     /// * [`TextError::Overflow`] and [`TextError::Domain`] are both this
     ///   relation's own computation failing inside a property-function call,
     ///   and the evaluator classifies a callee that could not be invoked as
@@ -422,6 +462,13 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
             TextError::Html(failure) => Self::RetainedNativeFailure(failure),
             TextError::Config(failure) => Self::RetainedNativeFailure(failure),
             TextError::Data(msg) => Self::data(msg),
+            TextError::ForeignSourceTerm(cause) => {
+                purrdf_sparql_eval::RetainedNativeFailure::error(
+                    purrdf_sparql_eval::NativeDiagnosticKind::Data,
+                    cause,
+                    &purrdf_sparql_eval::WorkspaceCapability::resident(),
+                )
+            }
             TextError::SourceRead(failure) => Self::RetainedNativeFailure(failure),
             TextError::Overflow(failure)
             | TextError::Domain(failure)
