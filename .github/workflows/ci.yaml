@@ -465,7 +465,10 @@ jobs:
       - name: Report SPARQL conformance from the native build
         id: sparql-conformance
         if: matrix.shard == 'integration-4'
-        run: make conformance CONFORMANCE_ARGS="--shard sparql --emit-results target/conformance-results/sparql.json"
+        run: |
+          awk '/^MemAvailable:/ {print "Runner memory available before report:", $2, "KiB"}' /proc/meminfo
+          /usr/bin/time -f 'SPARQL report elapsed: %e s, maximum process RSS: %M KiB' \
+            make conformance CONFORMANCE_ARGS="--shard sparql --emit-results target/conformance-results/sparql.json"
 
       - name: Upload SPARQL conformance rows
         id: sparql-upload
