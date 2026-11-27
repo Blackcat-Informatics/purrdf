@@ -115,6 +115,9 @@ simply not narrated here:
 - `crates/sparql-eval/benches/graph_constant_membership.rs` — constant and
   per-row graph membership over 10,000 named graphs on frozen, delta,
   composite and pack carriers.
+- `crates/sparql-eval/benches/paged_cross_page_bgp.rs` — includes two exact
+  filters over one warm resident graph at 1,024 and 65,536 subject candidates.
+  Warm-up checks the full ordered intersection outside the timed window.
 - `crates/shapes/benches/graph_membership.rs` — per-row named-graph membership
   through the SHACL data view on native and mutation-snapshot carriers.
 - `crates/shapes/benches/pattern_validate.rs` — matched compatibility and dated

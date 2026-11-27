@@ -60,6 +60,8 @@ pub struct PageTranslation {
     /// `local_to_global[TermId::index()]` is the page-local term's shared
     /// [`GlobalTermId`]. Dense, indexed by the page's `0..term_count` term table.
     local_to_global: Box<[GlobalTermId]>,
+    /// Whether local ordinal order is also strictly increasing in global IDs.
+    order_preserving: bool,
     /// `(global, local)` pairs SORTED by `GlobalTermId`, binary-searched by
     /// [`to_local`](Self::to_local). A `GlobalTermId` absent here does not occur on
     /// this page.
@@ -109,6 +111,7 @@ impl PageTranslation {
         let term_count = page.term_count();
         let mut local_to_global: Vec<GlobalTermId> = Vec::with_capacity(term_count);
         let mut global_to_local: Vec<(GlobalTermId, TermId)> = Vec::with_capacity(term_count);
+        let mut order_preserving = true;
         for i in 0..term_count {
             let local = TermId::from_index(u32::try_from(i).expect("page term index fits u32"))
                 .expect("stored term index is representable");
@@ -123,12 +126,18 @@ impl PageTranslation {
             // `GlobalDictionary::try_reintern_validated` for why that entry point exists
             // and why a new caller must not use it.
             let global = dict.try_reintern_validated(&value)?;
+            order_preserving = order_preserving
+                && local_to_global
+                    .last()
+                    .is_none_or(|&previous| previous < global);
             local_to_global.push(global);
             global_to_local.push((global, local));
         }
         // Sort the reverse table by GlobalTermId for the binary search. A page's term
         // table has distinct terms, so the keys are unique.
-        global_to_local.sort_unstable_by_key(|&(g, _)| g);
+        if !order_preserving {
+            global_to_local.sort_unstable_by_key(|&(g, _)| g);
+        }
         // The page's exact per-term/per-graph row counts, in LOCAL id space — built
         // once here, the only place a summary is KEPT (the certification paths seal or
         // digest a page to compare against this one, then drop the result).
@@ -137,6 +146,7 @@ impl PageTranslation {
             identity: Arc::new(()),
             statistics_bundle: None,
             local_to_global: local_to_global.into_boxed_slice(),
+            order_preserving,
             global_to_local: global_to_local.into_boxed_slice(),
             summary: Arc::new(summary),
         })
@@ -178,6 +188,17 @@ impl PageTranslation {
         &self.local_to_global
     }
 
+    pub(super) const fn preserves_order(&self) -> bool {
+        self.order_preserving
+    }
+
+    /// Recover the existing local ID at a position in the certified ordered
+    /// `global_ids` slice. Both tables cover the same sealed term range.
+    pub(super) fn ordered_local_at(&self, index: usize) -> TermId {
+        debug_assert!(self.order_preserving);
+        self.global_to_local[index].1
+    }
+
     /// Rebuild this translation with every global id passed through `remap`. The
     /// page's LOCAL id space and its quad table are unchanged — only the global side
     /// moves — so the reverse `(global, local)` table is re-sorted for the fresh
@@ -200,11 +221,15 @@ impl PageTranslation {
             .collect();
         // Re-sort the reverse table by the NEW global ids for the binary search. The
         // remap is a bijection over live ids, so keys stay unique.
-        global_to_local.sort_unstable_by_key(|&(g, _)| g);
+        let order_preserving = local_to_global.windows(2).all(|pair| pair[0] < pair[1]);
+        if !order_preserving {
+            global_to_local.sort_unstable_by_key(|&(g, _)| g);
+        }
         Self {
             identity: Arc::new(()),
             statistics_bundle: None,
             local_to_global: local_to_global.into_boxed_slice(),
+            order_preserving,
             global_to_local: global_to_local.into_boxed_slice(),
             // The summary is keyed entirely in this page's LOCAL TermId space, which
             // compaction never touches — only the global side is renumbered above — so

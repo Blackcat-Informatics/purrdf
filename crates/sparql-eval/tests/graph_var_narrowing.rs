@@ -44,7 +44,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use purrdf_core::{
-    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageProvider,
+    CountingDemandProvider, DatasetView, GraphMatch, InMemoryPageProvider, PageId, PageProvider,
     PagedDataset, QuadIds, QuadProbePlan, RdfDataset, RdfDatasetBuilder, RdfStoreCapabilities,
     TermId, TermValue,
 };
@@ -122,6 +122,146 @@ fn build(fixture: &Fixture) -> Arc<RdfDataset> {
         b.push_annotation_in_graph(reifier, p, o, g).unwrap();
     }
     b.freeze().expect("fixture freeze")
+}
+
+#[test]
+fn warm_single_graph_page_preserves_the_indexed_subject_join() {
+    use purrdf_core::{StatisticsStream, SubjectOrderedScan};
+    use purrdf_sparql_eval::eval::CursorBufferReason;
+
+    let provider = Arc::new(CountingDemandProvider::new(vec![
+        Box::new(|| {
+            build(&Fixture {
+                quads: [
+                    ("b", "left"),
+                    ("a", "left"),
+                    ("b", "right"),
+                    ("a", "right"),
+                    ("tail", "left"),
+                ]
+                .map(|(s, p)| (iri(s), iri(p), iri("flag"), Some(iri("join"))))
+                .to_vec(),
+                ..Fixture::default()
+            })
+        }),
+        Box::new(|| {
+            build(&Fixture {
+                quads: vec![(iri("outside"), iri("left"), iri("flag"), Some(iri("other")))],
+                ..Fixture::default()
+            })
+        }),
+    ]));
+    let view =
+        PagedDataset::from_provider(provider.clone() as Arc<dyn PageProvider>).expect("seal pages");
+    let id = |local| view.term_id_by_value(&iri(local)).unwrap().unwrap();
+    let (left, right, flag) = (Some(id("left")), Some(id("right")), Some(id("flag")));
+    let graph = GraphMatch::Named(id("join"));
+    let hits = provider.hits();
+    assert!(!view.may_scan_in_subject_order(left, flag, graph));
+    assert_eq!(
+        provider.hits(),
+        hits,
+        "ordering eligibility cannot open the page"
+    );
+    let engine = NativeSparqlEngine::new();
+    let query = engine
+        .prepare_query(
+            "PREFIX ex: <http://example.org/> SELECT ?s WHERE { GRAPH ex:join { ?s ex:left ex:flag . ?s ex:right ex:flag } }",
+            None,
+        )
+        .unwrap();
+    let run = || {
+        solutions(
+            engine
+                .query_prepared_view(&view, &query, &[], &QueryOptions::EMPTY)
+                .unwrap(),
+        )
+    };
+    let indexed = run();
+    assert_eq!(first_column(&indexed.1), [iri("b"), iri("a")]);
+    assert_eq!(provider.hits(), hits + 1);
+    assert!(view.may_scan_in_subject_order(left, flag, graph));
+    assert!(view.may_scan_in_subject_order(right, flag, graph));
+    assert!(!view.may_scan_in_subject_order(left, None, graph));
+    assert_eq!(run(), indexed, "order and row multiplicity are observable");
+
+    let a = id("a");
+    let mut bounded = view
+        .ordered_subject_quads(StatisticsStream::Asserted, None, Some(a), left, flag, graph)
+        .expect("resident graph can borrow the exact run");
+    bounded.advance_to(a);
+    assert_eq!(bounded.next().map(|quad| quad.s), Some(a));
+    assert!(bounded.next().is_none(), "the upper bound is inclusive");
+    let mut beyond = view
+        .ordered_subject_quads(StatisticsStream::Asserted, None, None, left, flag, graph)
+        .expect("resident graph can borrow the exact run");
+    beyond.advance_to(id("outside"));
+    assert!(
+        beyond.next().is_none(),
+        "the global bound need not be in the page"
+    );
+
+    let mut cursor = engine
+        .open_select_cursor(&view, &query, &[], &QueryOptions::EMPTY)
+        .unwrap();
+    assert!(cursor.next_row().unwrap().is_some());
+    assert!(cursor.next_row().unwrap().is_some());
+    assert!(cursor.next_row().unwrap().is_none());
+    assert!(
+        !cursor
+            .buffering_report()
+            .contains(CursorBufferReason::IntermediateRelation)
+    );
+    assert_eq!(
+        provider.hits(),
+        hits + 1,
+        "borrowed seeks must not open any page"
+    );
+}
+
+#[test]
+fn paged_subject_order_declines_unproven_graph_runs() {
+    let page = |subject| Fixture {
+        quads: vec![(iri(subject), iri("p"), iri("o3"), Some(iri("joined")))],
+        ..Fixture::default()
+    };
+    let check = |view: &PagedDataset, expected| {
+        let id = |name| view.term_id_by_value(&iri(name)).unwrap().unwrap();
+        let predicate = Some(id("p"));
+        let object = Some(id("o3"));
+        let graph = GraphMatch::Named(id("joined"));
+        // Read the exact matching pages through the normal path first. A cold
+        // page is not the reason these otherwise valid runs decline.
+        assert_eq!(
+            view.quads_for_pattern(None, predicate, object, graph)
+                .count(),
+            expected
+        );
+        assert!(!view.may_scan_in_subject_order(predicate, object, graph));
+    };
+    let nonmonotone = paged(&[page_with_default_graph_only(), page("late")]);
+    let translation = nonmonotone.translation(PageId(1)).unwrap();
+    assert!(
+        translation
+            .global_ids()
+            .windows(2)
+            .any(|pair| pair[0] > pair[1])
+    );
+    check(&nonmonotone, 1);
+    check(&paged(&[page("a"), page("b")]), 2);
+
+    let side = paged(&[page_with_side_table_only_graph()]);
+    let graph = GraphMatch::Named(side.term_id_by_value(&iri("gside")).unwrap().unwrap());
+    let predicate = side.term_id_by_value(&iri("certainty")).unwrap();
+    let object = side
+        .term_id_by_value(&TermValue::simple_literal("high"))
+        .unwrap();
+    assert_eq!(
+        side.annotation_quads_for_pattern(predicate, object, graph)
+            .count(),
+        1
+    );
+    assert!(!side.may_scan_in_subject_order(predicate, object, graph));
 }
 
 /// Seal per-page fixtures into a `PagedDataset`.

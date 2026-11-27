@@ -77,15 +77,19 @@
 //! annotation views) is deterministic. Pages are quad-disjoint (G3, enforced at
 //! freeze), so no cross-page dedup is needed. A [`PagedQueryView`] additionally
 //! records first page requests in evaluation order and charges each admitted page
-//! exactly once. Cardinality estimation reads the same sealed counts on both
-//! surfaces and never consults page residency, so plan choice — and therefore the
-//! recorded request sequence — is a function of the snapshot and the pattern alone.
+//! exactly once. On that view, planning and the recorded request sequence do
+//! not depend on page residency. Both views estimate cardinality from the same
+//! sealed counts. A direct `PagedDataset` query may borrow a warm ordered run
+//! for an exact predicate and object in a graph carried by one asserted page
+//! and no statement-layer pages. Its page-local identity order must match the
+//! global order. Testing eligibility does not open a page or build an index.
 
 pub(crate) mod admission;
 pub(crate) mod graph_index;
 pub mod provider;
 pub mod query;
 pub mod stack;
+mod subject_order;
 pub(crate) mod summary;
 pub mod translation;
 
@@ -1388,6 +1392,43 @@ impl DatasetView for PagedDataset {
     where
         Self: 'a;
     type ProbePlan = ();
+
+    fn may_scan_in_subject_order(
+        &self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+    ) -> bool {
+        self.resident_subject_scope(predicate, object, graph)
+            .is_some()
+    }
+
+    fn ordered_subject_quads(
+        &self,
+        stream: crate::StatisticsStream,
+        first_subject: Option<GlobalTermId>,
+        last_subject: Option<GlobalTermId>,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+    ) -> Option<impl crate::SubjectOrderedScan<GlobalTermId> + '_> {
+        self.resident_subject_scope(predicate, object, graph)?.rows(
+            stream,
+            first_subject,
+            last_subject,
+        )
+    }
+
+    fn ordered_subject_upper_bound(
+        &self,
+        predicate: Option<GlobalTermId>,
+        object: Option<GlobalTermId>,
+        graph: GraphMatch<GlobalTermId>,
+    ) -> Result<Option<GlobalTermId>, Self::ReadError> {
+        Ok(self
+            .resident_subject_scope(predicate, object, graph)
+            .and_then(subject_order::Scope::upper_bound))
+    }
 
     fn reserve_owned_workspace(
         &self,
