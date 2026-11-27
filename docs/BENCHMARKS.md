@@ -576,6 +576,24 @@ working bytes were unchanged at 22,433 and 988,096. Both modes checked the
 entire typed answer. The observation covers the ungoverned, unbounded native
 path and is an instruction and allocation comparison, not elapsed time.
 
+Governed `same_term` workers retain the original row checkpoint and use
+linked term identity after the first two admitted evaluations in each worker.
+For the same prepared query on x86-64 Linux, ten fresh-process samples per
+configuration gave these median retired user instructions per query.
+
+| Governor | Workers | Before | After |
+| --- | ---: | ---: | ---: |
+| Stop signal | 1 | 24,439,613 | 14,384,271 |
+| Fuel and stop signal | 1 | 25,613,458 | 15,574,499 |
+| Stop signal | 4 | 24,726,520 | 14,673,768 |
+| Fuel and stop signal | 4 | 25,904,231 | 15,863,059 |
+
+Each pair kept identical typed answers and complete governor receipts.
+Allocation calls and requested, retained and peak working bytes were
+unchanged in all four pairs. The highest empty control in each configuration
+stayed below one percent of the lowest measured workload sample. These counts
+cover this resident query shape, not other predicates or elapsed time.
+
 Bounded row loops use at least 64 rows per block and approximately 64 blocks
 per worker when the input is large enough. Only finite fuel or scratch headroom
 selects those blocks; stop-only and bookkeeping-only loops use normal chunks.

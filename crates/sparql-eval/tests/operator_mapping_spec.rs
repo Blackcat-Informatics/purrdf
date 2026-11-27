@@ -20,9 +20,13 @@
 use std::sync::Arc;
 
 use purrdf_core::{
-    RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
+    RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlRequest, SparqlResult,
+    TermValue, TrippedGovernor,
 };
-use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+use purrdf_sparql_eval::{
+    EvalOptions, GovernedOutcome, NativeSparqlEngine, PartialAnswers, QueryGovernors, QueryOptions,
+    governor::ChargePoint,
+};
 
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const EX: &str = "http://example.org/";
@@ -257,8 +261,87 @@ fn same_term_constant_keeps_order_and_duplicates_across_batches() {
                     "SELECT ?id WHERE {{ VALUES (?id ?v) {{ {values} }} FILTER({comparison}) }}"
                 );
                 assert_eq!(rows(&query), expected, "{comparison}");
+                check_same_term_governed(&query, &expected);
             }
         });
+}
+
+fn check_same_term_governed(query: &str, expected: &[Vec<Option<TermValue>>]) {
+    let dataset = dataset_with(false);
+    let text = format!("PREFIX xsd: <{XSD}> {query}");
+    let request = || SparqlRequest {
+        query: &text,
+        base_iri: None,
+        substitutions: &[],
+    };
+    let ordered = NativeSparqlEngine::new().with_eval_options(EvalOptions {
+        force_sequential: true,
+        ..EvalOptions::default()
+    });
+    let worker = NativeSparqlEngine::new();
+    let run = |engine: &NativeSparqlEngine, governors: &QueryGovernors| {
+        engine
+            .query_governed(&dataset, request(), &QueryOptions::EMPTY, governors)
+            .unwrap()
+    };
+    let metered = ordered.explain_query(&dataset, &text, None).unwrap();
+    let full_fuel = metered.evidence().consumed_in(ResourceDimension::Fuel);
+    let ledger = metered.ledger();
+    let filter = ledger
+        .iter()
+        .position(|node| node.fuel_at(ChargePoint::RowExpressionEvaluation) != 0)
+        .expect("the row predicate must run");
+    // In this unary plan, the filter and its ancestors charge for committed
+    // output after the filter evaluates. Subtract that tail to cut the actual
+    // predicate loop, not projection after all predicates have run.
+    let last_evaluation = full_fuel
+        - ledger[..=filter]
+            .iter()
+            .map(|node| node.fuel_at(ChargePoint::CommittedOutputRow))
+            .sum::<u64>();
+    let row_fuel = ChargePoint::RowExpressionEvaluation.cost();
+    for (limit, withheld) in [
+        (last_evaluation - 2 * row_fuel, 2),
+        (last_evaluation - row_fuel, 1),
+        (full_fuel, 0),
+    ] {
+        let governors = QueryGovernors::UNBOUNDED.with_fuel(limit);
+        let oracle = run(&ordered, &governors);
+        let actual = run(&worker, &governors);
+        assert_eq!(actual.evidence(), oracle.evidence());
+        for outcome in [&actual, &oracle] {
+            let (result, expected) = match outcome {
+                GovernedOutcome::Complete { result, .. } => {
+                    assert_eq!(limit, full_fuel);
+                    (result, expected)
+                }
+                GovernedOutcome::BudgetExhausted(exhausted) => {
+                    assert!(limit < full_fuel);
+                    assert_eq!(
+                        exhausted.tripped,
+                        TrippedGovernor::Budget {
+                            dimension: ResourceDimension::Fuel,
+                            limit,
+                            consumed: limit + row_fuel,
+                        },
+                    );
+                    let PartialAnswers::Certain(partial) = &exhausted.partial else {
+                        panic!("expected certified solutions");
+                    };
+                    assert!(partial.is_positional_prefix());
+                    (partial.result(), &expected[..expected.len() - withheld])
+                }
+            };
+            let SparqlResult::Solutions {
+                variables, rows, ..
+            } = result
+            else {
+                panic!("expected solutions");
+            };
+            assert_eq!(variables, &["id"]);
+            assert_eq!(rows, expected);
+        }
+    }
 }
 
 #[test]
