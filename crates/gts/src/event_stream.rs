@@ -409,6 +409,7 @@ impl ResolvedSink for EventEmitter<'_> {
         &mut self,
         segment_index: u64,
         gts_id: usize,
+        _wire_label: Option<&str>,
     ) -> Result<Self::Id, Self::Error> {
         self.intern_projected_blank(
             segment_index,

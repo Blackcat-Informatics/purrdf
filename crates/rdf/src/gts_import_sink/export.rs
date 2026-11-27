@@ -475,6 +475,7 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
         &mut self,
         segment: u64,
         term: usize,
+        _wire_label: Option<&str>,
     ) -> Result<TermKey, RdfDiagnostic> {
         self.intern_blank(segment, term, "")
     }

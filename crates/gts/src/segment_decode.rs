@@ -183,14 +183,19 @@ pub trait ResolvedSink {
     /// Intern a fresh blank node for a v1 term whose label is absent or empty
     /// (§7.1). Override this to keep its identity outside authored scopes.
     ///
-    /// The compatibility default forwards the legacy synthetic label through
-    /// [`Self::intern_blank`]. It cannot guarantee freshness in a sink that
-    /// keys on the label alone.
+    /// The compatibility default passes an explicitly empty wire label to
+    /// [`Self::intern_blank`] unchanged and uses the legacy synthetic label only
+    /// when the wire label is absent. It cannot guarantee freshness in a sink
+    /// that keys on the label alone.
     fn intern_anonymous_blank(
         &mut self,
         segment_index: u64,
         gts_id: usize,
+        wire_label: Option<&str>,
     ) -> Result<Self::Id, Self::Error> {
+        if let Some(label) = wire_label {
+            return self.intern_blank(segment_index, gts_id, label);
+        }
         self.intern_blank(
             segment_index,
             gts_id,
@@ -1064,7 +1069,10 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
                 Some(label) if !label.is_empty() => {
                     self.sink.intern_blank(segment_index, gts_id, label)?
                 }
-                _ => self.sink.intern_anonymous_blank(segment_index, gts_id)?,
+                wire_label => {
+                    self.sink
+                        .intern_anonymous_blank(segment_index, gts_id, wire_label)?
+                }
             },
             TermKind::Literal => {
                 let datatype = match term.datatype {

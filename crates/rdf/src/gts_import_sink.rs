@@ -199,6 +199,7 @@ impl ResolvedSink for SinkImporter<'_> {
         &mut self,
         segment_index: u64,
         gts_id: usize,
+        _wire_label: Option<&str>,
     ) -> Result<TermId, RdfDiagnostic> {
         use crate::gts_resolve::{SYNTHETIC_BLANK_SCOPE, anonymous_blank_label};
 
@@ -1234,6 +1235,38 @@ mod tests {
             resolver.finish().is_err(),
             "a consumed failed term cannot disappear from finish"
         );
+    }
+
+    #[test]
+    fn default_blank_sink_preserves_explicit_empty_label() {
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        let mut absent = blank_term("");
+        absent.value = None;
+        resolver.term(0, 0, Arc::new(blank_term("")));
+        resolver.term(0, 1, Arc::new(absent));
+        resolver.term(0, 2, Arc::new(blank_term("gts_bnode_0_0")));
+        resolver.term(0, 3, Arc::new(blank_term("gts_bnode_0_1")));
+        resolver.finish().expect("resolve legacy blank labels");
+
+        let sink = resolver.sink();
+        let empty = sink.id(0, 0).expect("empty blank label");
+        let absent = sink.id(0, 1).expect("absent blank label");
+        let authored = sink
+            .id(0, 2)
+            .expect("authored label resembling a generated one");
+        let legacy_alias = sink
+            .id(0, 3)
+            .expect("authored label equal to the absent fallback");
+        assert_ne!(empty, authored);
+        assert_eq!(
+            blank_scope(&sink.inner.builder, empty),
+            (String::new(), BlankScope(1))
+        );
+        assert_eq!(
+            blank_scope(&sink.inner.builder, absent),
+            ("gts_bnode_0_1".to_owned(), BlankScope(1))
+        );
+        assert_eq!(absent, legacy_alias);
     }
 
     /// GATE 2 (a) — multi-segment blank-node scope isolation, driven DIRECTLY
