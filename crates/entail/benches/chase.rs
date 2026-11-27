@@ -23,6 +23,8 @@
 //!
 //! The simple entailment lane measures endpoint selection against a growing
 //! predicate bucket, with a broad enumeration over the same closure as a control.
+//! The refutation lane shrinks alternate supports and checks its warrant as
+//! unrelated source axioms grow.
 
 use std::sync::Arc;
 
@@ -30,9 +32,11 @@ use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use purrdf_entail::{
-    ImportMap, Materialization, QNode, QTriple, Regime, certain_answers, materialize,
+    EntailmentOutcome, EntailmentWarrant, ImportMap, Materialization, QNode, QTriple, Regime,
+    certain_answers, entails, materialize, verify,
 };
 
+use purrdf_iri::vocab::owl::{CLASS, COMPLEMENT_OF, DISJOINT_WITH};
 use purrdf_iri::vocab::rdf::TYPE;
 use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASSOF;
 
@@ -141,5 +145,83 @@ fn bench_certain_answers(c: &mut Bench) {
     group.finish();
 }
 
-bench_group!(benches, bench_chase, bench_dataset, bench_certain_answers);
+fn refutation_premise(unrelated: usize) -> Arc<RdfDataset> {
+    let mut builder = RdfDatasetBuilder::new();
+    let [boy, girl, member, alternate] = ["Boy", "Girl", "Stewie", "AlternateBoy"]
+        .map(|name| builder.intern_iri(&format!("{EX}{name}")).unwrap());
+    let [ty, class, disjoint, subclass] =
+        [TYPE, CLASS, DISJOINT_WITH, SUBCLASSOF].map(|iri| builder.intern_iri(iri).unwrap());
+    for [s, p, o] in [
+        [boy, ty, class],
+        [girl, ty, class],
+        [boy, disjoint, girl],
+        [member, ty, boy],
+        [member, ty, alternate],
+        [alternate, subclass, boy],
+    ] {
+        builder.push_quad(s, p, o, None).unwrap();
+    }
+    for index in 0..unrelated {
+        let iri = builder
+            .intern_iri(&format!("{EX}Unrelated/{index}"))
+            .unwrap();
+        builder.push_quad(iri, ty, class, None).unwrap();
+    }
+    builder.freeze().unwrap()
+}
+
+fn bench_refutation_shrink(c: &mut Bench) {
+    let mut builder = RdfDatasetBuilder::new();
+    let [member, girl, ty, class, complement] = [
+        "http://example.org/Stewie",
+        "http://example.org/Girl",
+        TYPE,
+        CLASS,
+        COMPLEMENT_OF,
+    ]
+    .map(|iri| builder.intern_iri(iri).unwrap());
+    let node = builder
+        .intern_blank("notGirl", purrdf_core::BlankScope::DEFAULT)
+        .unwrap();
+    for [s, p, o] in [
+        [girl, ty, class],
+        [node, ty, class],
+        [node, complement, girl],
+        [member, ty, node],
+    ] {
+        builder.push_quad(s, p, o, None).unwrap();
+    }
+    let conclusion = builder.freeze().unwrap();
+    let imports = ImportMap::default();
+    let mut group = c.benchmark_group("owl_rl_refutation_shrink");
+    for count in [16, 64] {
+        let premise = refutation_premise(count);
+        group.bench_with_input(
+            BenchmarkId::from_parameter(count),
+            &premise,
+            |bch, premise| {
+                bch.iter(|| {
+                    let EntailmentOutcome::Entailed(warrant @ EntailmentWarrant::Refutation(_)) =
+                        entails(premise, &conclusion, Regime::OwlRl, &imports)
+                            .unwrap()
+                            .into_parts()
+                            .0
+                    else {
+                        panic!("expected a refutation warrant");
+                    };
+                    assert!(verify(&warrant, premise, &conclusion));
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
+bench_group!(
+    benches,
+    bench_chase,
+    bench_dataset,
+    bench_certain_answers,
+    bench_refutation_shrink
+);
 bench_main!(benches);
