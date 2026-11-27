@@ -856,23 +856,10 @@ jobs:
       - name: Identify the x86-64-v4 Cargo cache context
         if: matrix.config == 'x86_64-v4'
         id: compiled-context
-        shell: bash
-        run: |
-          {
-            echo "CARGO_TARGET_DIR=$GITHUB_WORKSPACE/target"
-            echo "CARGO_BUILD_BUILD_DIR=$GITHUB_WORKSPACE/target"
-            echo "CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true"
-            echo "CARGO_BUILD_FINGERPRINT=content"
-          } >> "$GITHUB_ENV"
-          {
-            printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:?}" "${ImageVersion:?}"
-            cat target/asm-compiler.txt
-            cargo -Vv
-            cc --version
-            ld --version
-            ar --version
-          } > target/asm-cache-context.txt
-          echo "identity=$(sha256sum target/asm-cache-context.txt | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/simd-assembly
+        with:
+          config: ${{ matrix.config }}
+          phase: prepare
       - name: Look up the exact x86-64-v4 Cargo output key
         if: matrix.config == 'x86_64-v4'
         id: compiled-lookup
@@ -883,8 +870,8 @@ jobs:
             target/x86_64-unknown-linux-gnu/release
             target/simd-asm
           # Cargo verifies source content. The gate verifies receipts for fresh units.
-          # Only compatibility inputs, not the source commit, select this exact key.
-          key: simd-asm-compiled-v1-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiled-context.outputs.identity }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'Makefile', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', '.github/workflows/ci.yaml', 'scripts/check-simd-asm.py', 'scripts/simd_asm_runtime.py', 'scripts/simd-asm-manifest.toml') }}
+          # Key the exact assembly producer, not unrelated workflow jobs.
+          key: simd-asm-compiled-v2-${{ runner.os }}-${{ runner.arch }}-${{ matrix.config }}-${{ steps.compiled-context.outputs.identity }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock', 'Makefile', 'rust-toolchain.toml', '.cargo/config', '.cargo/config.toml', '.github/actions/simd-assembly/action.yml', 'scripts/check-simd-asm.py', 'scripts/simd_asm_runtime.py', 'scripts/simd-asm-manifest.toml') }}
           lookup-only: true
       - name: Restore exact x86-64-v4 Cargo outputs
         # The cache service can return a prefix match even without restore keys.
@@ -940,13 +927,11 @@ jobs:
             > target/asm-diagnostics/inputs.sha256
       - name: Measure and check this configuration
         id: measure
-        run: |
-          # Bound scalar WASM compilation through the existing Cargo job budget.
-          # Other configurations keep their current scheduling.
-          if [ "${{ matrix.config }}" = wasm32 ]; then
-            export CARGO_BUILD_JOBS=2
-          fi
-          make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
+        uses: ./.github/actions/simd-assembly
+        with:
+          config: ${{ matrix.config }}
+          phase: measure
+          cache-identity: ${{ steps.compiled-context.outputs.identity }}
       - name: Upload checked evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
