@@ -255,8 +255,8 @@ pub use governor::{
 // caller that reads two columns of a wide row does not pay for the other twenty.
 // Additive beside `SparqlResult`, never a replacement for it.
 pub use interned::{
-    InternedGoverned, InternedGraph, InternedOutcome, InternedRequest, InternedSolutions,
-    Prebinding,
+    EvidenceBudgetExhausted, GovernedEvidenceAnswer, GovernedEvidenceView, InternedGoverned,
+    InternedGraph, InternedOutcome, InternedRequest, InternedSolutions, Prebinding,
 };
 pub use plan_cache::{CacheLimits, CacheStats};
 pub use plan_memory::{PlanMemoryObserver, PlanMemoryStats};

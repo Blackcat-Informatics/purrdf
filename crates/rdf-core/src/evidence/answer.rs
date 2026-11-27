@@ -296,16 +296,33 @@ impl<S: Admission> AnswerAccumulator<S> {
     /// # Errors
     /// Refuses unfinished higher-tier enumeration or an unsound verdict stop.
     pub fn finish(&mut self, exhausted: bool) -> Result<(), AnswerError> {
+        self.require_unfinished()?;
+        if !exhausted && self.witness_stop().is_none() {
+            return Err(AnswerError::EnumerationRequired);
+        }
+        self.finished = Some(exhausted);
+        Ok(())
+    }
+
+    /// Finish an externally bounded prefix without claiming that the unread
+    /// suffix was enumerated. Counts and reasons describe the observed rows.
+    /// The status can report only a verdict that the prefix already settles.
+    ///
+    /// # Errors
+    /// Refuses an aborted or already finished answer.
+    pub fn finish_prefix(&mut self) -> Result<(), AnswerError> {
+        self.require_unfinished()?;
+        self.finished = Some(false);
+        Ok(())
+    }
+
+    fn require_unfinished(&self) -> Result<(), AnswerError> {
         if self.aborted {
             return Err(AnswerError::Aborted);
         }
         if self.finished.is_some() {
             return Err(AnswerError::AlreadyFinished);
         }
-        if !exhausted && self.witness_stop().is_none() {
-            return Err(AnswerError::EnumerationRequired);
-        }
-        self.finished = Some(exhausted);
         Ok(())
     }
 
@@ -454,6 +471,35 @@ mod tests {
             assert_eq!(status.reasons, []);
             assert_eq!(answer.live, 0);
         }
+    }
+
+    #[test]
+    fn bounded_prefix_reports_observed_rows_without_settling_an_unread_suffix() {
+        let supported = record(Information::Supported, SearchCompleteness::Complete, &[]);
+        let mut summary = AnswerAccumulator::with_admission(
+            request(AnswerTier::Summary, WitnessQuestion::Contradiction),
+            Resident,
+        );
+        summary
+            .observe(&supported, EvidencePartition::Established)
+            .unwrap();
+        assert_eq!(summary.finish(false), Err(AnswerError::EnumerationRequired));
+        summary.finish_prefix().unwrap();
+        let status = summary.status().unwrap();
+        assert_eq!((status.established, status.undecided), (1, 0));
+        assert_eq!(status.information, Information::Supported);
+        assert_eq!(status.completeness, SearchCompleteness::NotEvaluated);
+        assert_eq!(status.verdict, None);
+
+        let mut verdict = AnswerAccumulator::with_admission(
+            request(AnswerTier::Verdict, WitnessQuestion::Support),
+            Resident,
+        );
+        verdict
+            .observe(&supported, EvidencePartition::Established)
+            .unwrap();
+        verdict.finish_prefix().unwrap();
+        assert_eq!(verdict.status().unwrap().verdict, Some(WitnessVerdict::Yes));
     }
 
     #[test]
