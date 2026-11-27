@@ -97,17 +97,16 @@ self.addEventListener("install", (event) => {
       await cache.put(compilerURL, compiler);
       for (const [url, response] of notices) await cache.put(url, response);
       await cache.addAll(SHELL);
-      await self.skipWaiting();
     })(),
   );
 });
 
 self.addEventListener("activate", (event) => {
+  // Let existing pages finish under their own shell before retiring its cache.
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
       await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
-      await self.clients.claim();
     })(),
   );
 });
