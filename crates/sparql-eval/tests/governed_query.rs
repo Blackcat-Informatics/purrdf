@@ -262,6 +262,30 @@ fn disconnected_distinct_count_uses_only_the_operand_factor() {
             .find(|node| node.label == "Group")
             .unwrap_or_else(|| panic!("global GROUP is missing\n{}", explanation.render()));
         assert_eq!(explanation.output_upper_bound(group.ordinal), Some(1));
+        let trace = explanation.explanation();
+        let [first, second] = trace.join_orders() else {
+            panic!("expected both original BGP arms\n{}", explanation.render());
+        };
+        assert!(first.contains("?a") && first.contains("?x"));
+        assert!(second.contains("?b"));
+        if patterns.contains("?y") {
+            assert!(second.contains("?y"));
+        } else {
+            assert!(second.contains("http://example.org/s0"));
+        }
+        if patterns.contains("ex:missing") {
+            assert_eq!(trace.statistics(), &[] as &[String]);
+        } else {
+            let bgp = trace
+                .ledger()
+                .iter()
+                .find(|node| node.label == "Bgp")
+                .unwrap();
+            assert_eq!(trace.statistics().len(), 2);
+            for (index, record) in trace.statistics().iter().enumerate() {
+                assert!(record.starts_with(&format!("#{} pattern={index} ", bgp.ordinal)));
+            }
+        }
         let prepared = engine.prepare_query(&query, None).unwrap();
         let results = [
             engine.query_governed(&dataset, request(&query), &QueryOptions::EMPTY, &governors),

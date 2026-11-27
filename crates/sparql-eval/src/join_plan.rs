@@ -457,7 +457,7 @@ impl<'a> DisjointBgp<'a> {
         workspace: &crate::WorkspaceCapability,
         mut run: impl FnMut(&[TriplePattern], &[(usize, usize)]) -> Result<bool, crate::EvalError>,
     ) -> Result<(), crate::EvalError> {
-        for members in self.members.chunk_by(|left, right| left.0 == right.0) {
+        for members in self.factor_members() {
             let mut storage = LexicalFrame::new(workspace);
             let mut memory = Memory::new(&mut storage);
             let mut triples = Vec::new();
@@ -484,6 +484,11 @@ impl<'a> DisjointBgp<'a> {
             }
         }
         Ok(())
+    }
+
+    /// The original pattern ordinals grouped in factor visitation order.
+    pub(crate) fn factor_members(&self) -> impl Iterator<Item = &[(usize, usize)]> {
+        self.members.chunk_by(|left, right| left.0 == right.0)
     }
 
     /// Find the one component that binds every requested visible variable.

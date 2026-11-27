@@ -4335,32 +4335,73 @@ pub(crate) fn survey_pattern_plans_admitted<D: DatasetView>(
                 inputs.push((members[0].0, input))?;
                 Ok(true)
             })?;
+            let GraphPattern::Bgp { patterns } = factors.input else {
+                unreachable!("the factor plan retains its original BGP");
+            };
+            let mut order = if survey.record_statistics {
+                Some(AdmittedVec::with_capacity(patterns.len(), &workspace)?)
+            } else {
+                None
+            };
             // A custom view may read quads to estimate a cardinality. Resolve
             // every fixed term before requesting statistics for any factor.
-            for (component, input) in &inputs {
-                if impossible {
-                    break;
+            if impossible {
+                if let Some(order) = &mut order {
+                    for index in 0..patterns.len() {
+                        order.push_reserved(index);
+                    }
                 }
-                let BgpForecast { estimate, .. } = forecast_compiled_bgp(
-                    dataset,
-                    active_dataset,
-                    active_graph,
-                    input,
-                    &SeedEstimate::default(),
-                    None,
-                    account,
-                )?;
-                if *component == selected {
-                    selected_rows = estimate.rows;
-                }
-                if estimate.peak_cells() >= peak.peak_cells() {
-                    peak = estimate;
+                survey.record_output_bound(factors.input, Some(0));
+            } else {
+                let mut member_groups = factors.factor_members();
+                for (component, input) in &inputs {
+                    let BgpForecast {
+                        estimate,
+                        order: factor_order,
+                        ..
+                    } = forecast_compiled_bgp(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        input,
+                        &SeedEstimate::default(),
+                        None,
+                        account,
+                    )?;
+                    if *component == selected {
+                        selected_rows = estimate.rows;
+                    }
+                    if estimate.peak_cells() >= peak.peak_cells() {
+                        peak = estimate;
+                    }
+                    if let Some(order) = &mut order {
+                        // The prepass recorded exactly one input per group,
+                        // and each order visits its factor's original triples
+                        // once, including the existence-only arms.
+                        let members = member_groups.next().expect("precompiled factor");
+                        for &index in &factor_order {
+                            order.push_reserved(members[index].1);
+                        }
+                    }
                 }
             }
-            survey.record(
-                factors.input,
-                PlanEstimate::new(selected_rows, peak.peak_rows, peak.columns),
-            );
+            drop(inputs);
+            let estimate = PlanEstimate::new(selected_rows, peak.peak_rows, peak.columns);
+            if let Some(order) = order {
+                record_bgp_forecast(factors.input, patterns, estimate, &order, survey)?;
+                if !impossible {
+                    record_bgp_statistics(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        factors.input,
+                        survey,
+                        account,
+                    )?;
+                }
+            } else {
+                survey.record(factors.input, estimate);
+            }
             if root_count_group {
                 survey.record_output_bound(pattern, Some(1));
             }
