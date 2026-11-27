@@ -237,6 +237,29 @@ fn the_sink_scan_binds_as_the_cursor_scan_does() {
     }
 }
 
+#[test]
+fn a_structural_scan_binds_triple_children_and_rejects_a_non_triple() {
+    let mut builder = RdfDatasetBuilder::new();
+    let mut intern = |name| builder.intern_iri(&format!("{EX}{name}")).unwrap();
+    let (holder, other, contains) = (intern("holder"), intern("other"), intern("contains"));
+    let (subject, predicate, object) = (intern("s"), intern("p"), intern("o"));
+    let triple = builder.intern_triple(subject, predicate, object).unwrap();
+    builder.push_quad(holder, contains, triple, None).unwrap();
+    builder.push_quad(other, contains, object, None).unwrap();
+    let data = builder.freeze().unwrap();
+    // Both candidates reach the binder. The flat path would leave the
+    // triple's child slots unbound and accept the ordinary IRI as well.
+    let shape = "SELECT ?holder ?s ?o WHERE { ?holder ex:contains <<( ?s ex:p ?o )>> }";
+    let iri = |name| Some(TermValue::Iri(format!("{EX}{name}")));
+    let expected = (
+        vec!["holder".to_owned(), "s".to_owned(), "o".to_owned()],
+        vec![vec![iri("holder"), iri("s"), iri("o")]],
+    );
+    assert_eq!(unbounded(shape, &data), expected);
+    assert_eq!(unbounded_into_the_sink(shape, &data), expected);
+    assert_eq!(bounded(shape, &data, 32 * 1024), Some(expected));
+}
+
 /// Six quads over two predicates. For each way a variable can repeat inside one
 /// pattern exactly one quad agrees with itself: `n w n` (subject and object under
 /// `ex:w`), `m t m` (the same under `ex:t`), `w w n` (subject and predicate) and
