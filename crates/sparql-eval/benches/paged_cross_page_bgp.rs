@@ -725,12 +725,63 @@ fn bench_segmented_selective_bgp(c: &mut Bench) {
     group.finish();
 }
 
+/// Intersect two exact filters in one graph after the page and graph index
+/// have been read. The annotations and cross-page paths are measured separately.
+fn bench_warm_exact_graph_join(c: &mut Bench) {
+    let engine = NativeSparqlEngine::new();
+    let prepared = engine
+        .prepare_query(
+            "PREFIX ex: <http://example.org/> SELECT ?s WHERE { GRAPH ex:join { ?s ex:left ex:flag . ?s ex:right ex:flag } }",
+            None,
+        )
+        .expect("exact graph join prepares");
+    let mut group = c.benchmark_group("paged_warm_exact_graph_join");
+    for size in [1_024, 65_536] {
+        let mut triples = Vec::new();
+        let mut expected = Vec::new();
+        for index in 0..size {
+            let subject = iri(&format!("item-{index:05}"));
+            let left = index % 2 == 0;
+            let right = index % 3 != 0;
+            for (matches, predicate) in [(left, "left"), (right, "right")] {
+                if matches {
+                    triples.push((subject.clone(), iri(predicate), iri("flag")));
+                }
+            }
+            if left && right {
+                expected.push(vec![Some(subject)]);
+            }
+        }
+        let page = build_graph_page(&triples, &iri("join"));
+        let provider = Arc::new(InMemoryPageProvider::new(vec![page]));
+        let view = PagedDataset::from_provider(provider).expect("seal exact graph page");
+        let run = || {
+            engine
+                .query_prepared_view(
+                    std::hint::black_box(&view),
+                    std::hint::black_box(&prepared),
+                    &[],
+                    &QueryOptions::EMPTY,
+                )
+                .expect("execute exact graph join")
+        };
+        for _ in 0..3 {
+            assert_eq!(support::solutions(run()).1, expected);
+        }
+        group.bench_function(format!("{size} subject candidates"), |bencher| {
+            bencher.iter(run);
+        });
+    }
+    group.finish();
+}
+
 bench_group!(
     benches,
     bench_cross_page_bgp,
     bench_paged_full_scan,
     bench_graph_selective_bgp,
     bench_graph_var_bgp,
-    bench_segmented_selective_bgp
+    bench_segmented_selective_bgp,
+    bench_warm_exact_graph_join
 );
 bench_main!(benches);
