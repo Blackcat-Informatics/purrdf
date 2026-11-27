@@ -1217,40 +1217,39 @@ The report retains every available named backend, the default dispatcher,
 and the raw counter and witness receipts. It does not measure elapsed time.
 
 With the x86-64 ABI on an AMD Ryzen AI Max+ 395 and
-`rustc 1.102.0-nightly (5df8c02af)`, the
-default dispatcher gives the following median userspace retired instructions
-per message. The older single-input probe used the same processor, compiler,
-release optimization, fixed work count, and witness values. It did not sample
-the three rows marked with a dash. The grouped control shows the cost of
-hashing the same batch inputs individually on the current build.
+`rustc 1.102.0-nightly (5df8c02af)`, the default dispatcher gives the
+following median userspace retired instructions per message. Both builds
+use the same processor, compiler, release optimization, fixed work count,
+and matching digest witnesses. The grouped control shows the cost of hashing
+the same batch inputs individually on the current build.
 
 | Bytes | Prior single | Single | Prepared derive-key | Grouped singles | Batch |
 | ---: | ---: | ---: | ---: | ---: | ---: |
-| 16 | 993.02 | 393.03 | 393.03 | 390.63 | 237.88 |
-| 32 | 991.02 | 391.03 | 391.03 | 388.63 | 235.88 |
-| 63 | 991.03 | 391.04 | 391.03 | 388.63 | 235.88 |
-| 64 | 991.02 | 391.03 | 391.03 | 388.63 | 235.88 |
-| 65 | 2,015.03 | 821.03 | 821.03 | 818.63 | 295.88 |
-| 100 | 2,008.03 | 814.03 | 814.03 | 811.63 | 295.88 |
-| 128 | 2,008.03 | 814.03 | 814.03 | 811.63 | 295.88 |
-| 256 | 3,884.03 | 1,496.03 | 1,496.03 | 1,493.63 | 425.88 |
-| 512 | 7,636.03 | 2,860.03 | 2,860.03 | 2,857.63 | 673.89 |
-| 1024 | 15,140.03 | 5,588.03 | 5,588.03 | 5,585.63 | 1,200.88 |
-| 1025 | 17,032.07 | 16,451.03 | 16,451.03 | 16,448.44 | 1,428.07 |
-| 2048 | 16,767.08 | 16,186.04 | 16,186.04 | 16,183.72 | 2,386.15 |
-| 2049 | — | 17,233.04 | 17,233.04 | 17,230.72 | 2,613.23 |
-| 3072 | — | 16,968.04 | 16,968.04 | 16,965.72 | 3,571.79 |
-| 3073 | — | 16,426.04 | 16,426.04 | 16,423.72 | 3,794.29 |
-| 4096 | 6,837.03 | 6,256.05 | 6,256.04 | 6,253.72 | 4,750.97 |
+| 16 | 993.03 | 395.03 | 395.03 | 392.63 | 237.88 |
+| 32 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
+| 63 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
+| 64 | 991.03 | 393.03 | 393.03 | 390.63 | 235.88 |
+| 65 | 2,015.03 | 844.03 | 844.03 | 841.63 | 295.88 |
+| 100 | 2,008.03 | 837.03 | 837.03 | 834.63 | 295.88 |
+| 128 | 2,008.03 | 837.03 | 837.03 | 834.63 | 295.88 |
+| 256 | 3,884.03 | 1,519.03 | 1,519.03 | 1,516.63 | 425.88 |
+| 512 | 7,636.03 | 2,883.03 | 2,883.03 | 2,880.63 | 673.88 |
+| 1024 | 15,140.03 | 5,611.03 | 5,611.03 | 5,608.63 | 1,200.88 |
+| 1025 | 17,032.03 | 16,459.03 | 16,459.05 | 16,456.63 | 1,428.07 |
+| 2048 | 16,767.03 | 16,194.04 | 16,194.04 | 16,191.72 | 2,385.78 |
+| 2049 | 17,814.03 | 17,241.05 | 17,241.08 | 17,238.73 | 2,613.78 |
+| 3072 | 17,549.03 | 16,976.07 | 16,976.04 | 16,973.75 | 3,571.79 |
+| 3073 | 17,007.05 | 16,434.04 | 16,434.04 | 16,431.53 | 3,795.59 |
+| 4096 | 6,837.03 | 6,264.03 | 6,264.03 | 6,261.72 | 4,753.59 |
 
 Among the forced paths, AVX2 had the lowest single-message count for the
 sampled lengths through 1024 bytes. AVX-512 had the lowest count from 1025
 through 4096 bytes on this host. It also had the lowest sampled batch counts.
 The default single call and a forced call have different feature checks, so
 their total instruction counts need not match even for the same kernel. The
-default plain and reused derive-key medians differ by less than 0.01
+default plain and reused derive-key medians differ by less than 0.03
 instruction per message at every measured length. For example, the default
-16-byte single hash and reused derivation both retired about 393 instructions
+32-byte single hash and reused derivation both retired about 393 instructions
 per message.
 
 To measure the 32-bit ABI on the same hardware, add
