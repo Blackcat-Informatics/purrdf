@@ -519,6 +519,13 @@ impl ShapesError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ProcessorFailure {
+    /// The stack floor needed for a processing frame could not be measured.
+    UnknownStackFloor {
+        /// The processing operation whose next frame was refused.
+        construct: &'static str,
+        /// The original stack floor read error.
+        cause: purrdf_stack::FloorError,
+    },
     /// Evaluating a node expression would enter the physical stack margin.
     ExpressionStackMargin,
     /// Calling an original custom function would enter the physical stack margin.
@@ -617,8 +624,26 @@ impl purrdf_hash::error::StructuredError for IncompleteRelation {
     }
 }
 
+impl ProcessorFailure {
+    pub(crate) fn check_stack(
+        construct: &'static str,
+        exhausted: impl FnOnce() -> Self,
+    ) -> Result<(), ShapesError> {
+        purrdf_stack::check_margin().map_err(|refusal| {
+            refusal
+                .floor_error()
+                .map_or_else(exhausted, |cause| Self::UnknownStackFloor {
+                    construct,
+                    cause,
+                })
+                .into()
+        })
+    }
+}
+
 impl purrdf_hash::error::StructuredError for ProcessorFailure {
     purrdf_hash::error_visit! {
+        UnknownStackFloor { construct, cause } => "shapes-processor-stack-floor" { "construct" => Code(construct), "cause" => Cause(cause) },
         ExpressionStackMargin => "shapes-processor-expression-stack" {},
         CallStackMargin { iri } => "shapes-processor-call-stack" { "iri" => Iri(iri) },
         ReentryStackMargin { shape } => "shapes-processor-reentry-stack" { "shape" => Term(shape.as_ref()) },
@@ -650,6 +675,9 @@ impl purrdf_hash::error::StructuredError for ProcessorFailure {
 impl fmt::Display for ProcessorFailure {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::UnknownStackFloor { construct, cause } => {
+                write!(f, "{construct} could not measure its stack floor: {cause}")
+            }
             Self::ExpressionStackMargin => {
                 f.write_str("node expression evaluation exhausted its stack margin")
             }
@@ -721,6 +749,7 @@ impl fmt::Display for ProcessorFailure {
 impl std::error::Error for ProcessorFailure {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
+            Self::UnknownStackFloor { cause, .. } => Some(cause),
             Self::Admission { cause } => Some(cause.as_ref()),
             Self::Query { cause } => Some(cause.as_ref()),
             _ => None,
@@ -826,6 +855,13 @@ pub enum PreparationRefusal {
         /// Original construct the walk refused to enter.
         construct: &'static str,
     },
+    /// The native stack floor could not be measured before entering a frame.
+    UnknownStackFloor {
+        /// Original construct the walk refused to enter.
+        construct: &'static str,
+        /// The error returned by the original floor read.
+        cause: purrdf_stack::FloorError,
+    },
     /// Two catalog definitions declare the same identity.
     DuplicateDefinition(std::sync::Arc<crate::term::Term>),
     /// A definition owns a catalog instead of being a bare catalog member.
@@ -841,15 +877,23 @@ pub enum PreparationRefusal {
 }
 
 impl PreparationRefusal {
+    pub(crate) const fn stack_guard(
+        construct: &'static str,
+        refusal: purrdf_stack::MarginRefusal,
+    ) -> Self {
+        match refusal.floor_error() {
+            Some(cause) => Self::UnknownStackFloor { construct, cause },
+            None => Self::StackMargin { construct },
+        }
+    }
+
     /// Stop a model-inspection walk at its first refusal or physical stack bound.
     pub(crate) fn admit_walk(refusal: &mut Option<Self>) -> bool {
         if refusal.is_some() {
             return false;
         }
-        if purrdf_stack::is_low() {
-            *refusal = Some(Self::StackMargin {
-                construct: "SHACL model inspection",
-            });
+        if let Err(cause) = purrdf_stack::check_margin() {
+            *refusal = Some(Self::stack_guard("SHACL model inspection", cause));
             return false;
         }
         true
@@ -868,6 +912,7 @@ impl fmt::Display for PreparationRefusal {
             Self::ExpiredIndex => out.write_str("computed shape reference outlived its definition table; keep its exported owning root"),
             Self::ForeignIndex => out.write_str("computed shape reference names a different model's definition table"),
             Self::StackMargin { .. } => out.write_str("SHACL preparation exhausted its stack margin; flatten the model or prepare it on a larger stack"),
+            Self::UnknownStackFloor { construct, cause } => write!(out, "{construct} could not measure its stack floor: {cause}"),
             Self::DuplicateDefinition(id) => write!(out, "duplicate shape definition {id}; provide one definition per RDF identity"),
             Self::OwningDefinition(id) => write!(out, "catalog definition {id} already owns a catalog; provide bare definitions"),
             Self::UnboundReference => out.write_str("a shape identity reference has no catalog; obtain an owning root through ModelOwner::root"),
@@ -889,6 +934,7 @@ impl purrdf_hash::error::StructuredError for PreparationRefusal {
         ExpiredIndex => "shapes-preparation-expired-index" {},
         ForeignIndex => "shapes-preparation-foreign-index" {},
         StackMargin { construct } => "shapes-preparation-stack-margin" { "construct" => Text(construct) },
+        UnknownStackFloor { construct, cause } => "shapes-preparation-stack-floor" { "construct" => Text(construct), "cause" => Cause(cause) },
         DuplicateDefinition(term) => "shapes-preparation-duplicate-definition" { "term" => Term(term.as_ref()) },
         OwningDefinition(term) => "shapes-preparation-owning-definition" { "term" => Term(term.as_ref()) },
         UnboundReference => "shapes-preparation-unbound-reference" {},
@@ -898,7 +944,12 @@ impl purrdf_hash::error::StructuredError for PreparationRefusal {
     }
 }
 
-purrdf_hash::error_sources!(PreparationRefusal, Storage, UnqualifiedRecursion);
+purrdf_hash::error_sources!(
+    PreparationRefusal,
+    patterns Self::Storage(cause) => cause,
+    Self::UnqualifiedRecursion(cause) => cause,
+    Self::UnknownStackFloor { cause, .. } => cause,
+);
 
 purrdf_lex::variant_from!(ShapesError { Preparation(PreparationRefusal) });
 

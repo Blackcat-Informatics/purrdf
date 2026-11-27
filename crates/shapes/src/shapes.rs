@@ -2309,6 +2309,21 @@ impl<'s> Parser<'s> {
         message
     }
 
+    /// Fail immediately while retaining an unreadable floor across textual parser frames.
+    fn admit_parser_frame(
+        &self,
+        construct: &'static str,
+        exhausted: impl FnOnce() -> String,
+    ) -> Result<(), String> {
+        purrdf_stack::check_margin().map_err(|refusal| {
+            refusal.floor_error().map_or_else(exhausted, |cause| {
+                self.retain_native_refusal(
+                    crate::PreparationRefusal::UnknownStackFloor { construct, cause }.into(),
+                )
+            })
+        })
+    }
+
     /// The parse's error, typed: [`ShapesError::IllFormed`] or
     /// [`ShapesError::Prebinding`] when the error the parse returned IS the refusal the
     /// parse recorded, [`ShapesError::ShaclJs`] when it carries the recorded SHACL-JS
@@ -3159,9 +3174,9 @@ impl<'s> Parser<'s> {
         key: InFlight,
         parse: impl FnOnce(&mut Self) -> Result<T, String>,
     ) -> Result<T, String> {
-        if purrdf_stack::is_low() {
-            return Err("SHACL parsing exhausted its stack margin".to_owned());
-        }
+        self.admit_parser_frame("SHACL parsing", || {
+            "SHACL parsing exhausted its stack margin".to_owned()
+        })?;
         if !self.in_flight.insert(key.clone()) {
             return Err(match key {
                 InFlight::Shape(id) | InFlight::PropertyShape(id) => format!(
@@ -3819,11 +3834,9 @@ impl<'s> Parser<'s> {
         shape_id: &Term,
         in_flight: &mut FastSet<String>,
     ) -> Result<Path, String> {
-        if purrdf_stack::is_low() {
-            return Err(format!(
-                "SHACL path parsing exhausted its stack margin on {shape_id}"
-            ));
-        }
+        self.admit_parser_frame("SHACL path parsing", || {
+            format!("SHACL path parsing exhausted its stack margin on {shape_id}")
+        })?;
         match path_node {
             Term::NamedNode(nn) => Ok(Path::Predicate(nn.clone())),
             Term::BlankNode(label) => {

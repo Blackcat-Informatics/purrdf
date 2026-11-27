@@ -191,15 +191,25 @@ enum WalkState {
     /// carries on exactly as it would with no guard at all.
     Unscoped,
     /// A scope is open and nothing has refused yet.
-    Scoped,
+    Scoped(Option<FloorError>),
     /// A walk inside the open scope refused at `construct`; the floor it replaced with
     /// [`EXHAUSTED`] is `floor`.
     Refused {
         /// What refused.
-        construct: &'static str,
+        refusal: WalkRefusal,
         /// The floor to put back when the scope closes.
         floor: usize,
     },
+}
+
+impl WalkState {
+    const fn floor_error(self) -> Option<FloorError> {
+        match self {
+            Self::Unscoped => None,
+            Self::Scoped(inherited) => inherited,
+            Self::Refused { refusal, .. } => refusal.cause.floor_error(),
+        }
+    }
 }
 
 thread_local! {
@@ -299,6 +309,54 @@ impl core::fmt::Display for FloorError {
 
 impl std::error::Error for FloorError {}
 
+/// Why a frame could not enter before the stack margin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum MarginRefusal {
+    /// The known stack has less than the required margin left.
+    Exhausted,
+    /// No floor was available for the check.
+    UnknownFloor(FloorError),
+}
+
+impl MarginRefusal {
+    /// The failed floor read, if the refusal was not ordinary exhaustion.
+    #[must_use]
+    pub const fn floor_error(self) -> Option<FloorError> {
+        match self {
+            Self::Exhausted => None,
+            Self::UnknownFloor(cause) => Some(cause),
+        }
+    }
+}
+
+impl purrdf_hash::error::StructuredError for MarginRefusal {
+    purrdf_hash::error_visit! {
+        Exhausted => "stack-margin-exhausted" {},
+        UnknownFloor(cause) => "stack-margin-unknown-floor" { "cause" => Cause(cause) },
+    }
+}
+
+impl core::fmt::Display for MarginRefusal {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Exhausted => f.write_str("the stack margin is exhausted"),
+            Self::UnknownFloor(cause) => cause.fmt(f),
+        }
+    }
+}
+
+purrdf_hash::error_sources!(MarginRefusal, UnknownFloor);
+
+/// The first refusal latched by an infallible stack walk.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WalkRefusal {
+    /// The construct the walk could not enter.
+    pub construct: &'static str,
+    /// The outcome of the original margin check.
+    pub cause: MarginRefusal,
+}
+
 /// The bytes of stack left below the calling frame before the floor, or `0` when the
 /// frame is already below it, [`EXHAUSTED`] is installed, or the floor cannot be read
 /// (see [`try_remaining`] for the cause).
@@ -312,11 +370,16 @@ pub fn remaining() -> usize {
 /// # Errors
 ///
 /// [`FloorError`] when the operating system does not report this thread's stack bounds.
-/// Nothing is cached from the failure, so the next call reads again.
+/// A failed read is retried by the next call unless a walk scope has latched
+/// its refusal to prevent further descent.
 pub fn try_remaining() -> Result<usize, FloorError> {
-    let sp = stack_pointer();
+    remaining_at(stack_pointer())
+}
+
+#[inline]
+fn remaining_at(sp: usize) -> Result<usize, FloorError> {
     match FLOOR.with(Cell::get) {
-        EXHAUSTED => Ok(0),
+        EXHAUSTED => WALK.with(|state| state.get().floor_error().map_or(Ok(0), Err)),
         floor => sp.checked_sub(floor).map_or_else(|| refresh(sp), Ok),
     }
 }
@@ -578,9 +641,9 @@ impl Drop for Reserve {
             // EXHAUSTED in place of the raised floor and puts that floor back when it
             // closes, so that is the floor to lower.
             EXHAUSTED => WALK.with(|state| {
-                if let WalkState::Refused { construct, floor } = state.get() {
+                if let WalkState::Refused { refusal, floor } = state.get() {
                     state.set(WalkState::Refused {
-                        construct,
+                        refusal,
                         floor: floor.saturating_sub(bytes),
                     });
                 }
@@ -619,6 +682,15 @@ impl Drop for Reserve {
 ///
 /// The `construct` a level of the walk named when it refused.
 pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
+    walk_with_cause(body).map_err(|refusal| refusal.construct)
+}
+
+/// Run an infallible walk as in [`walk`], retaining the original margin check.
+///
+/// # Errors
+///
+/// The first construct and cause latched by [`walk_is_low`].
+pub fn walk_with_cause<T>(body: impl FnOnce() -> T) -> Result<T, WalkRefusal> {
     /// Closes the scope when the walk returns or unwinds: puts the real floor back if a
     /// level refused, then the enclosing scope's state.
     struct Close(WalkState);
@@ -636,13 +708,17 @@ pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
             }
         }
     }
-    let close = Close(WALK.with(|state| state.replace(WalkState::Scoped)));
+    let close = Close(WALK.with(|state| {
+        let old = state.get();
+        state.set(WalkState::Scoped(old.floor_error()));
+        old
+    }));
     let value = body();
     let outcome = WALK.with(Cell::get);
     drop(close);
     match outcome {
-        WalkState::Refused { construct, .. } => Err(construct),
-        WalkState::Unscoped | WalkState::Scoped => Ok(value),
+        WalkState::Refused { refusal, .. } => Err(refusal),
+        WalkState::Unscoped | WalkState::Scoped(_) => Ok(value),
     }
 }
 
@@ -655,21 +731,21 @@ pub fn walk<T>(body: impl FnOnce() -> T) -> Result<T, &'static str> {
 #[inline]
 #[must_use]
 pub fn walk_is_low(construct: &'static str) -> bool {
-    if !is_low() {
-        return false;
+    match check_margin() {
+        Ok(()) => false,
+        Err(cause) => walk_refuse(WalkRefusal { construct, cause }),
     }
-    walk_refuse(construct)
 }
 
 /// The cold half of [`walk_is_low`]: latch the refusal in the open scope, if any.
 #[cold]
 #[inline(never)]
-fn walk_refuse(construct: &'static str) -> bool {
+fn walk_refuse(refusal: WalkRefusal) -> bool {
     WALK.with(|state| match state.get() {
         WalkState::Unscoped => false,
-        WalkState::Scoped => {
+        WalkState::Scoped(_) => {
             let floor = replace_floor(EXHAUSTED);
-            state.set(WalkState::Refused { construct, floor });
+            state.set(WalkState::Refused { refusal, floor });
             true
         }
         WalkState::Refused { .. } => true,
@@ -683,25 +759,37 @@ fn walk_refuse(construct: &'static str) -> bool {
 #[inline]
 #[must_use]
 pub fn is_low() -> bool {
-    let sp = stack_pointer();
-    sp.checked_sub(FLOOR.with(Cell::get))
-        .is_none_or(|left| left < MARGIN_BYTES)
-        && is_low_cold(sp)
+    check_margin().is_err()
 }
 
-/// The cold half of [`is_low`]: the floor was never read on this thread, the frame is
+/// Verify that the current frame has [`MARGIN_BYTES`] of known stack left.
+///
+/// # Errors
+///
+/// Ordinary exhaustion or the original floor read error. The latter is not
+/// recovered by retrying the measurement after a refusal.
+#[inline]
+pub fn check_margin() -> Result<(), MarginRefusal> {
+    let sp = stack_pointer();
+    if sp
+        .checked_sub(FLOOR.with(Cell::get))
+        .is_some_and(|left| left >= MARGIN_BYTES)
+    {
+        return Ok(());
+    }
+    check_margin_cold(sp)
+}
+
+/// The cold half of [`check_margin`]: the floor was never read on this thread, the frame is
 /// below it, [`EXHAUSTED`] is installed, or the margin really is gone.
 #[cold]
 #[inline(never)]
-fn is_low_cold(sp: usize) -> bool {
-    let left = match FLOOR.with(Cell::get) {
-        EXHAUSTED => return true,
-        // An unreadable floor leaves nothing to measure against: nothing is left.
-        floor => sp
-            .checked_sub(floor)
-            .unwrap_or_else(|| refresh(sp).unwrap_or(0)),
-    };
-    left < MARGIN_BYTES
+fn check_margin_cold(sp: usize) -> Result<(), MarginRefusal> {
+    let left = remaining_at(sp).map_err(MarginRefusal::UnknownFloor)?;
+    if left < MARGIN_BYTES {
+        return Err(MarginRefusal::Exhausted);
+    }
+    Ok(())
 }
 
 /// Read the floor of the stack `sp` is on, cache it, and return the bytes left above it;
@@ -1608,31 +1696,64 @@ mod tests {
                     remaining(),
                     is_low(),
                     try_remaining(),
+                    check_margin(),
                     reserve(4096).bytes(),
                     widen(4096),
                     scoped(),
                 );
-                READ_FAILS.with(|fails| fails.set(false));
+                let walk = walk_with_cause(|| {
+                    assert!(walk_is_low("outer"));
+                    READ_FAILS.with(|fails| fails.set(false));
+                    let inner = walk_with_cause(|| {
+                        assert!(walk_is_low("inner"));
+                        assert_eq!(
+                            try_remaining(),
+                            Err(FloorError::Read {
+                                call: "injected",
+                                code: 12,
+                            })
+                        );
+                    });
+                    assert_eq!(
+                        inner,
+                        Err(WalkRefusal {
+                            construct: "inner",
+                            cause: MarginRefusal::UnknownFloor(FloorError::Read {
+                                call: "injected",
+                                code: 12,
+                            }),
+                        })
+                    );
+                });
                 let recovered = (is_low(), try_remaining());
-                (refused, recovered)
+                (refused, walk, recovered)
             })
             .expect("spawn")
             .join()
             .expect("the thread runs");
-        let (refused, recovered) = outcome;
+        let (refused, walk, recovered) = outcome;
+        let error = FloorError::Read {
+            call: "injected",
+            code: 12,
+        };
         assert_eq!(
             refused,
             (
                 0,
                 true,
-                Err(FloorError::Read {
-                    call: "injected",
-                    code: 12
-                }),
+                Err(error),
+                Err(MarginRefusal::UnknownFloor(error)),
                 0,
                 false,
                 false
             )
+        );
+        assert_eq!(
+            walk,
+            Err(WalkRefusal {
+                construct: "outer",
+                cause: MarginRefusal::UnknownFloor(error),
+            })
         );
         assert!(!recovered.0, "a thread whose floor reads is not low");
         assert!(recovered.1.is_ok_and(|left| left > MARGIN_BYTES));
@@ -1646,14 +1767,15 @@ mod tests {
     fn an_on_stack_thread_is_measured_while_system_reads_fail() {
         let (shallow, deep) = on_stack(512 * 1024, || {
             READ_FAILS.with(|fails| fails.set(true));
-            (deeper(10, &is_low), deeper(100, &is_low))
+            (deeper(10, &check_margin), deeper(100, &check_margin))
         })
         .expect("spawn");
-        assert!(
-            !shallow,
-            "40 KiB of frames on a 512 KiB stack leaves the margin"
+        assert_eq!(shallow, Ok(()), "40 KiB of frames leaves the margin");
+        assert_eq!(
+            deep,
+            Err(MarginRefusal::Exhausted),
+            "400 KiB eats the margin"
         );
-        assert!(deep, "400 KiB of frames on a 512 KiB stack eats the margin");
     }
 
     /// The typed refusal says what was asked for and what was left.

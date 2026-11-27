@@ -64,18 +64,14 @@ type LoweringResult<T> = Result<T, PreparationRefusal>;
 
 /// Admit every recursive lowering frame before entering its computation.
 fn admit_lowering() -> LoweringResult<()> {
-    if purrdf_stack::is_low() {
-        Err(PreparationRefusal::StackMargin {
-            construct: "SHACL plan lowering",
-        })
-    } else {
-        Ok(())
-    }
+    purrdf_stack::check_margin()
+        .map_err(|cause| PreparationRefusal::stack_guard("SHACL plan lowering", cause))
 }
 
 /// Infallible footprint callbacks latch refusal in the same native walk scope.
 fn scoped_lowering<T>(body: impl FnOnce() -> LoweringResult<T>) -> LoweringResult<T> {
-    purrdf_stack::walk(body).map_err(|construct| PreparationRefusal::StackMargin { construct })?
+    purrdf_stack::walk_with_cause(body)
+        .map_err(|refusal| PreparationRefusal::stack_guard(refusal.construct, refusal.cause))?
 }
 
 // ── Slots ───────────────────────────────────────────────────────────────────────

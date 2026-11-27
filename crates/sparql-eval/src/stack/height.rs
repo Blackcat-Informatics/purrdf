@@ -77,9 +77,9 @@ const LEVEL_WALK_BYTES: usize = if cfg!(target_arch = "wasm32") {
 
 /// Whether a walk `height` levels tall fits the stack left above
 /// [`purrdf_stack::MARGIN_BYTES`], at [`LEVEL_WALK_BYTES`] a level.
-fn walkable(height: usize) -> bool {
-    height.saturating_mul(LEVEL_WALK_BYTES)
-        <= purrdf_stack::remaining().saturating_sub(purrdf_stack::MARGIN_BYTES)
+fn walkable(height: usize) -> Result<bool, purrdf_stack::FloorError> {
+    Ok(height.saturating_mul(LEVEL_WALK_BYTES)
+        <= purrdf_stack::try_remaining()?.saturating_sub(purrdf_stack::MARGIN_BYTES))
 }
 
 /// How deep a node sits: in the node kinds the evaluator recurses over (`structural`,
@@ -120,7 +120,10 @@ impl Depth {
     /// node.
     fn admit(self, fits: &mut usize) -> Result<(), EvalError> {
         if self.structural > *fits {
-            if !walkable(self.structural) {
+            if !walkable(self.structural).map_err(|cause| EvalError::UnknownStackFloor {
+                construct: "query algebra",
+                cause,
+            })? {
                 return Err(EvalError::StackExhausted {
                     construct: "query algebra",
                 });

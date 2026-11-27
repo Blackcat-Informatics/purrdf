@@ -1721,10 +1721,18 @@ impl<'a> Renderer<'a> {
                         "{path} contains a cyclic compound slot reference to {key:?}"
                     )));
                 }
-                if purrdf_stack::is_low() {
-                    return Err(LinkmlError::new(format!(
-                        "{path} exhausted the stack margin resolving slot reference {key:?}"
-                    )));
+                if let Err(refusal) = purrdf_stack::check_margin() {
+                    return Err(match refusal.floor_error() {
+                        Some(cause) => LinkmlError::stack_floor(
+                            format_args!(
+                                "{path} could not measure its stack floor resolving slot reference {key:?}"
+                            ),
+                            cause,
+                        ),
+                        None => LinkmlError::new(format!(
+                            "{path} exhausted the stack margin resolving slot reference {key:?}"
+                        )),
+                    });
                 }
                 self.slot_references.push(definition);
                 let expanded = self.render_slot_expression(definition, &definition_path(key));

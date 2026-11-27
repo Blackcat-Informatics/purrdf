@@ -42,6 +42,13 @@ pub enum UnionError<L, R> {
         /// Zero-based source position refused before entering its wrapper.
         source: usize,
     },
+    /// The native stack floor could not be measured before opening a source scope.
+    UnknownStackFloor {
+        /// Zero-based source position refused before entering its wrapper.
+        source: usize,
+        /// The original stack floor read error.
+        cause: purrdf_stack::FloorError,
+    },
     /// Original checked layout/admission/allocation refusal.
     Storage(StorageError),
     /// A supplied source violated its term/reference contract.
@@ -66,6 +73,12 @@ impl<L: fmt::Display, R: fmt::Display> fmt::Display for UnionError<L, R> {
                 out,
                 "insufficient stack for union source {source} checked read"
             ),
+            Self::UnknownStackFloor { source, cause } => {
+                write!(
+                    out,
+                    "could not measure the stack floor for union source {source}: {cause}"
+                )
+            }
             Self::Storage(error) => error.fmt(out),
             Self::Invariant(reason) => write!(out, "invalid union source: {reason}"),
         }
@@ -79,6 +92,7 @@ impl<L: std::error::Error + 'static, R: std::error::Error + 'static> std::error:
             Self::Left(_, error) => Some(error),
             Self::Right(_, error) => Some(error),
             Self::Storage(error) => Some(error),
+            Self::UnknownStackFloor { cause, .. } => Some(cause),
             _ => None,
         }
     }
@@ -95,6 +109,7 @@ impl<L: purrdf_hash::error::StructuredError, R: purrdf_hash::error::StructuredEr
             "dimension" => Code(*dimension), "actual" => Unsigned(*actual as u128), "limit" => Unsigned(*limit as u128),
         },
         Stack { source } => "union-read-stack" { "source" => Unsigned(*source as u128) },
+        UnknownStackFloor { source, cause } => "union-read-stack-floor" { "source" => Unsigned(*source as u128), "cause" => Cause(cause) },
         Storage(cause) => "union-storage" { "cause" => Cause(cause) },
         Invariant(reason) => "union-source-invariant" { "reason" => Code(*reason) },
     }
@@ -183,8 +198,11 @@ fn checked_sources<A: DatasetView, B: DatasetView>(
     let Some(source) = sources.get(at) else {
         return read();
     };
-    if purrdf_stack::is_low() {
-        return Err(UnionError::Stack { source: at });
+    if let Err(refusal) = purrdf_stack::check_margin() {
+        return Err(match refusal.floor_error() {
+            Some(cause) => UnionError::UnknownStackFloor { source: at, cause },
+            None => UnionError::Stack { source: at },
+        });
     }
     let mut next = || checked_sources(sources, at + 1, read);
     match source {

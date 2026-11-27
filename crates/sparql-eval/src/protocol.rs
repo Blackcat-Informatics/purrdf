@@ -1304,6 +1304,7 @@ impl From<&EvalError> for FailureCode {
             EvalError::StackExhausted { .. } => Self::EvaluationStackExhausted,
             EvalError::HostStackExhausted { .. } => Self::HostStackExhausted,
             EvalError::SourceRead(_)
+            | EvalError::UnknownStackFloor { .. }
             | EvalError::NativeDiagnostic(_)
             | EvalError::RetainedNativeFailure(_)
             | EvalError::UnstableNativeDiagnostic
@@ -1369,6 +1370,7 @@ impl From<&RemoteError> for FailureCode {
     fn from(error: &RemoteError) -> Self {
         match error {
             RemoteError::SourceRead(_)
+            | RemoteError::UnknownStackFloor { .. }
             | RemoteError::WorkspaceStopped
             | RemoteError::ExchangeIdExhausted => Self::Evaluation,
             RemoteError::Transport(_)
