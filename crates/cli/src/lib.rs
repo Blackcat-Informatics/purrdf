@@ -98,6 +98,8 @@ mod error;
 mod fingerprint;
 mod format;
 mod glob;
+#[cfg(target_os = "linux")]
+mod glob_host;
 mod glob_rdf;
 pub use glob_rdf::Failure as GlobRdfFailure;
 mod document_expansion;
@@ -203,6 +205,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
         && matches!(
             &cli.cmd,
             Command::GlobRdf(_)
+                | Command::GlobFilesRdf(_)
                 | Command::DocumentExpand(DocumentExpandArgs { .. })
                 | Command::DocumentCompact(DocumentCompactArgs { .. })
                 | Command::DocumentFlatten(DocumentFlattenArgs { .. })
@@ -430,6 +433,16 @@ fn dispatch_with_request(
                 "glob-rdf accepts no JSON-LD options",
             )?;
             glob_rdf::run(args)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::GlobFilesRdf(args) => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob-files-rdf uses lossless Turtle or N-Triples and accepts no loss ledger",
+                "glob-files-rdf accepts no JSON-LD options",
+            )?;
+            glob_rdf::run_files(args)?;
             Ok(CliOutcome::Complete)
         }
         Command::GlobSet(GlobSetArgs {

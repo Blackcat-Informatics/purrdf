@@ -340,6 +340,249 @@ mod native_rdf_contract {
         "https://example.org/custom/work",
     ];
 
+    #[cfg(target_os = "linux")]
+    mod filesystem {
+        use super::*;
+        use crate::{run, stderr};
+        use purrdf::glob::filesystem::{Directory, Entry, EntryKind, Source};
+        use purrdf::glob::rdf::filesystem::Projection;
+        use purrdf_core::{DatasetView, GraphMatch};
+        use std::io;
+        use std::os::unix::fs::symlink;
+        use std::path::Path;
+
+        const PROJECTION: Projection<'static> = Projection {
+            evaluation: "https://example.org/id/files",
+            directory: "https://example.org/id/root",
+            directory_predicate: "https://example.org/custom/root",
+            file_predicate: "https://example.org/custom/file",
+        };
+        const ROOT: [Entry<'static>; 3] = [
+            Entry {
+                name: "sub",
+                kind: EntryKind::Directory,
+            },
+            Entry {
+                name: "notes",
+                kind: EntryKind::File,
+            },
+            Entry {
+                name: ".top.rs",
+                kind: EntryKind::File,
+            },
+        ];
+        const SUB: [Entry<'static>; 2] = [
+            Entry {
+                name: "twin.rs",
+                kind: EntryKind::File,
+            },
+            Entry {
+                name: "猫.rs",
+                kind: EntryKind::File,
+            },
+        ];
+
+        struct Tree;
+        struct Cursor(std::slice::Iter<'static, Entry<'static>>);
+
+        impl Source for Tree {
+            type Error = io::Error;
+            type Cursor<'a> = Cursor;
+
+            fn open_directory(&mut self, relative: &str) -> io::Result<Cursor> {
+                match relative {
+                    "" => Ok(Cursor(ROOT.iter())),
+                    "sub" => Ok(Cursor(SUB.iter())),
+                    _ => Err(io::ErrorKind::NotFound.into()),
+                }
+            }
+        }
+
+        impl Directory for Cursor {
+            type Error = io::Error;
+
+            fn next_entry(&mut self) -> io::Result<Option<Entry<'_>>> {
+                Ok(self.0.next().copied())
+            }
+        }
+
+        fn host(
+            plan: &Path,
+            directory: &Path,
+            syntax: &str,
+            allowance: &str,
+        ) -> std::process::Output {
+            let mut arguments = [
+                "glob-files-rdf",
+                plan.to_str().unwrap(),
+                directory.to_str().unwrap(),
+                "--root",
+                "https://example.org/id/plan",
+                "--evaluation",
+                PROJECTION.evaluation,
+                "--directory-iri",
+                PROJECTION.directory,
+                "--directory-predicate",
+                PROJECTION.directory_predicate,
+                "--file-predicate",
+                PROJECTION.file_predicate,
+                "--from",
+                "turtle",
+                "--to",
+                syntax,
+                "--max-work",
+                allowance,
+            ]
+            .map(str::to_owned)
+            .to_vec();
+            for (role, term) in ROLES.into_iter().zip(TERMS) {
+                arguments.extend(["--vocabulary".to_owned(), format!("{role}={term}")]);
+            }
+            run(&arguments.iter().map(String::as_str).collect::<Vec<_>>())
+        }
+
+        fn check_provenance(dataset: &RdfDataset) {
+            let root = dataset.term_id_by_iri(PROJECTION.directory).unwrap();
+            let evaluation = dataset.term_id_by_iri(PROJECTION.evaluation).unwrap();
+            let directory = dataset
+                .term_id_by_iri(PROJECTION.directory_predicate)
+                .unwrap();
+            let files = dataset.term_id_by_iri(PROJECTION.file_predicate).unwrap();
+            let paths = dataset.term_id_by_iri(TERMS[10]).unwrap();
+            let matches = dataset.term_id_by_iri(TERMS[11]).unwrap();
+            assert_eq!(object(dataset, evaluation, directory), root);
+            let mut count = 0;
+            for row in
+                dataset.quads_for_pattern(Some(evaluation), Some(files), None, GraphMatch::Default)
+            {
+                assert!(matches!(dataset.resolve(row.o), TermRef::Blank { .. }));
+                let TermRef::Literal { lexical, .. } =
+                    dataset.resolve(object(dataset, row.o, paths))
+                else {
+                    panic!("a file record carries the original path");
+                };
+                let mut cells = Vec::new();
+                for row in
+                    dataset.quads_for_pattern(Some(row.o), Some(matches), None, GraphMatch::Default)
+                {
+                    let TermRef::Triple { s, p, o } = dataset.resolve(row.o) else {
+                        panic!("each file match quotes the original membership");
+                    };
+                    assert_eq!(
+                        dataset.resolve(p),
+                        TermRef::Iri(purrdf::iri::vocab::rdf::FIRST)
+                    );
+                    assert_eq!(object(dataset, s, p), o);
+                    cells.push(s);
+                }
+                cells.sort_unstable();
+                let mut expected = match lexical {
+                    ".top.rs" => vec![id(dataset, "c0"), id(dataset, "c2")],
+                    "sub/twin.rs" | "sub/猫.rs" => {
+                        vec![id(dataset, "c0"), id(dataset, "c1"), id(dataset, "c2")]
+                    }
+                    _ => panic!("unexpected path {lexical}"),
+                };
+                expected.sort_unstable();
+                assert_eq!(cells, expected);
+                count += 1;
+            }
+            assert_eq!(count, 3);
+        }
+
+        #[test]
+        fn contained_linux_and_portable_expansions_publish_identical_provenance() {
+            let temp = purrdf_testkit::temp_dir!().unwrap();
+            let directory = temp.path().join("tree");
+            let plan = temp.path().join("plan.ttl");
+            std::fs::create_dir_all(directory.join("sub")).unwrap();
+            for name in ["notes", ".top.rs", "sub/猫.rs"] {
+                std::fs::write(directory.join(name), b"source bytes are irrelevant").unwrap();
+            }
+            std::fs::hard_link(directory.join("sub/猫.rs"), directory.join("sub/twin.rs")).unwrap();
+            let source = document("literal", "**/*.rs", "sub/*", "\"unused\"")
+                .replace("v:mode \"text\"", "v:mode \"path\"");
+            std::fs::write(&plan, &source).unwrap();
+            let portable = prepared(data(&source))
+                .execute_files(&mut Tree, u64::MAX, Resident)
+                .unwrap();
+            let required = portable.work();
+            let expected = portable.export(PROJECTION, Resident).unwrap();
+            for (name, format) in [
+                ("turtle", NativeRdfFormat::Turtle),
+                ("ntriples", NativeRdfFormat::NTriples),
+            ] {
+                let result = host(&plan, &directory, name, &required.to_string());
+                assert!(result.status.success(), "{}", stderr(&result));
+                let encoded = serialize_dataset_to_format(&*expected, format, None).unwrap();
+                assert_eq!(result.stdout, encoded.bytes);
+                let read = parse_dataset(&result.stdout, format.media_type(), None).unwrap();
+                check_provenance(&read);
+                let replay = prepared(read)
+                    .execute_files(&mut Tree, required, Resident)
+                    .unwrap();
+                assert_eq!(replay.files().count(), 3);
+            }
+            let short = host(&plan, &directory, "turtle", &(required - 1).to_string());
+            assert_eq!(short.status.code(), Some(1));
+            assert_eq!(short.stdout, [] as [u8; 0]);
+            assert!(stderr(&short).contains("glob work refused"));
+            let link = temp.path().join("root-link");
+            symlink(&directory, &link).unwrap();
+            let linked_root = host(&plan, &link, "turtle", "1000");
+            assert_eq!(linked_root.status.code(), Some(1));
+            assert_eq!(linked_root.stdout, [] as [u8; 0]);
+            assert!(stderr(&linked_root).contains("glob root openat2 failed"));
+            symlink(temp.path(), directory.join("zz-outside")).unwrap();
+            let escaped = host(&plan, &directory, "turtle", "1000");
+            assert_eq!(escaped.status.code(), Some(1));
+            assert_eq!(escaped.stdout, [] as [u8; 0]);
+            assert!(stderr(&escaped).contains("zz-outside"));
+            assert!(stderr(&escaped).contains("unsupported Link"));
+        }
+
+        #[test]
+        fn existing_result_fields_refuse_but_unrelated_evaluation_mentions_survive() {
+            let base = document("literal", "**/*.rs", "sub/*", "\"unused\"")
+                .replace("v:mode \"text\"", "v:mode \"path\"");
+            let stage = |predicate| {
+                let source = data(&format!(
+                    "{base} <{}> <{predicate}> <https://example.org/previous> .",
+                    PROJECTION.evaluation,
+                ));
+                prepared(source)
+                    .execute_files(&mut Tree, u64::MAX, Resident)
+                    .unwrap()
+            };
+            for field in [
+                PROJECTION.directory_predicate,
+                PROJECTION.file_predicate,
+                TERMS[9],
+                TERMS[12],
+            ] {
+                let refused = stage(field).export(PROJECTION, Resident).unwrap_err();
+                let captured = Capture::read(&refused);
+                assert!(matches!(
+                    captured.field("reason"),
+                    ErrorValue::Code("occupied-file-evaluation")
+                ));
+                assert!(matches!(
+                    captured.child("predicate").field("iri"),
+                    ErrorValue::Iri(value) if value == field
+                ));
+            }
+            let unrelated = "https://example.org/label";
+            let completed = stage(unrelated).export(PROJECTION, Resident).unwrap();
+            check_provenance(&completed);
+            let predicate = completed.term_id_by_iri(unrelated).unwrap();
+            let evaluation = completed.term_id_by_iri(PROJECTION.evaluation).unwrap();
+            assert_eq!(
+                completed.resolve(object(&completed, evaluation, predicate)),
+                TermRef::Iri("https://example.org/previous")
+            );
+        }
+    }
+
     fn vocabulary() -> Vocabulary<'static> {
         let entries: [(&str, &str); 13] = std::array::from_fn(|index| (ROLES[index], TERMS[index]));
         Vocabulary::new(&entries).unwrap()

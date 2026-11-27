@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! RDF codecs surround the public matcher; only a completed result reaches stdout.
-use crate::cli::{CliNativeRdfFormat, GlobRdfArgs};
+use crate::cli::{CliNativeRdfFormat, GlobFilesRdfArgs, GlobPlanOptions, GlobRdfArgs};
 use crate::error::CliError;
 use purrdf::glob::rdf::{self, PreparedPlan, Vocabulary};
 use purrdf_core::{DatasetHandle, DatasetView, GraphMatch, RdfDiagnostic, TermId};
@@ -22,6 +22,10 @@ pub enum Failure {
     Plan(rdf::Error),
     /// Export refused while retaining its original admission owner.
     Export(rdf::ExportError<Resident>),
+    /// Filesystem traversal refused without publishing a partial graph.
+    Filesystem(rdf::filesystem::FileError<std::io::Error>),
+    /// The Linux root descriptor could not be opened with containment.
+    FilesystemRoot(std::io::Error),
     /// An explicit vocabulary argument was refused.
     Vocabulary {
         /// Original closed reason from the native vocabulary boundary.
@@ -52,6 +56,8 @@ impl std::fmt::Display for Failure {
             Self::Io(error) => error.fmt(f),
             Self::Plan(error) => error.fmt(f),
             Self::Export(error) => error.fmt(f),
+            Self::Filesystem(error) => error.fmt(f),
+            Self::FilesystemRoot(error) => write!(f, "glob root openat2 failed: {error}"),
             Self::Vocabulary { reason, value } => {
                 write!(f, "glob RDF vocabulary {reason}: {value}")
             }
@@ -77,6 +83,8 @@ impl std::error::Error for Failure {
             Self::Io(error) => Some(error),
             Self::Plan(error) => Some(error),
             Self::Export(error) => Some(error),
+            Self::Filesystem(error) => Some(error),
+            Self::FilesystemRoot(error) => Some(error),
             Self::Vocabulary { .. } | Self::Selection { .. } => None,
         }
     }
@@ -131,20 +139,21 @@ fn selection(
     owned.map_or_else(CliError::GlobRdfStorage, refusal)
 }
 
-pub(crate) fn run(args: &GlobRdfArgs) -> Result<(), CliError> {
-    let from = format(args.from)?;
-    let to = format(args.to)?;
-    crate::argv_documents::refuse_shared_stdin(&[
-        ("plan".to_owned(), args.plan.as_str()),
-        ("input".to_owned(), args.input.as_str()),
-    ])?;
-    for value in [&args.root, &args.input_subject, &args.input_predicate] {
-        if purrdf_iri::absolute_verdict(value) != Some(true) {
-            return Err(CliError::Usage(format!(
-                "glob-rdf requires an absolute IRI: {value}"
-            )));
-        }
+fn require_absolute(value: &str) -> Result<(), CliError> {
+    if purrdf_iri::absolute_verdict(value) != Some(true) {
+        return Err(CliError::Usage(format!(
+            "glob RDF command requires an absolute IRI: {value}"
+        )));
     }
+    Ok(())
+}
+
+fn prepare<'a>(
+    path: &str,
+    from: purrdf_rdf::NativeRdfFormat,
+    args: &'a GlobPlanOptions,
+) -> Result<PreparedPlan<'a>, CliError> {
+    require_absolute(&args.root)?;
     let mut entries = Vec::new();
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
@@ -172,12 +181,25 @@ pub(crate) fn run(args: &GlobRdfArgs) -> Result<(), CliError> {
     memory
         .release_vec(entries)
         .map_err(CliError::GlobRdfStorage)?;
-    let source = load(&args.plan, from)?;
+    let source = load(path, from)?;
     let Some(root) = source.term_id_by_iri(&args.root) else {
         return Err(selection(source, "root", &args.root, None, 0));
     };
-    let plan = PreparedPlan::compile(source, root, &vocabulary, Resident)
-        .map_err(|error| refusal(Failure::Plan(error)))?;
+    PreparedPlan::compile(source, root, &vocabulary, Resident)
+        .map_err(|error| refusal(Failure::Plan(error)))
+}
+
+pub(crate) fn run(args: &GlobRdfArgs) -> Result<(), CliError> {
+    let from = format(args.options.from)?;
+    let to = format(args.options.to)?;
+    crate::argv_documents::refuse_shared_stdin(&[
+        ("plan".to_owned(), args.plan.as_str()),
+        ("input".to_owned(), args.input.as_str()),
+    ])?;
+    for value in [&args.input_subject, &args.input_predicate] {
+        require_absolute(value)?;
+    }
+    let plan = prepare(&args.plan, from, &args.options)?;
     let input = load(&args.input, from)?;
     let mut object: Option<TermId> = None;
     let mut count = 0;
@@ -205,14 +227,50 @@ pub(crate) fn run(args: &GlobRdfArgs) -> Result<(), CliError> {
         .execute(
             input,
             object.expect("one selected object"),
-            args.max_work,
+            args.options.max_work,
             Resident,
         )
         .map_err(|error| refusal(Failure::Plan(error)))?;
     let output = execution
-        .export(&args.evaluation, Resident)
+        .export(&args.options.evaluation, Resident)
         .map_err(|error| refusal(Failure::Export(error)))?;
-    let bytes = purrdf_rdf::serialize_dataset_to_format(&*output, to, None)
+    emit(&output, to)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn run_files(args: &GlobFilesRdfArgs) -> Result<(), CliError> {
+    use purrdf::glob::rdf::filesystem::Projection;
+
+    let from = format(args.options.from)?;
+    let to = format(args.options.to)?;
+    let plan = prepare(&args.plan, from, &args.options)?;
+    let mut root = crate::glob_host::Root::open(&args.directory)
+        .map_err(|error| refusal(Failure::FilesystemRoot(error)))?;
+    let output = plan
+        .execute_files(&mut root, args.options.max_work, Resident)
+        .map_err(|error| refusal(Failure::Filesystem(error)))?
+        .export(
+            Projection {
+                evaluation: &args.options.evaluation,
+                directory: &args.directory_iri,
+                directory_predicate: &args.directory_predicate,
+                file_predicate: &args.file_predicate,
+            },
+            Resident,
+        )
+        .map_err(|error| refusal(Failure::Export(error)))?;
+    emit(&output, to)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn run_files(_args: &GlobFilesRdfArgs) -> Result<(), CliError> {
+    Err(CliError::Usage(
+        "glob-files-rdf requires Linux with openat2 directory containment".to_owned(),
+    ))
+}
+
+fn emit(output: &DatasetHandle, to: purrdf_rdf::NativeRdfFormat) -> Result<(), CliError> {
+    let bytes = purrdf_rdf::serialize_dataset_to_format(&**output, to, None)
         .map_err(|error| refusal(Failure::Serialize(error)))?
         .bytes;
     let mut stdout = std::io::stdout().lock();

@@ -178,13 +178,21 @@ impl<S: Admission> CompiledGlobSet<S> {
         max_work: u64,
         workspace: &'a mut [usize],
     ) -> Result<SetMatchReport<'a>, SetMatchError> {
+        self.matches_metered(lexical, &mut execute::Meter::new(max_work), workspace)
+    }
+
+    pub(super) fn matches_metered<'a>(
+        &self,
+        lexical: Option<&str>,
+        meter: &mut execute::Meter,
+        workspace: &'a mut [usize],
+    ) -> Result<SetMatchReport<'a>, SetMatchError> {
         if workspace.len() < self.programs.len() {
             return Err(SetMatchError::Workspace {
                 required: self.programs.len(),
                 provided: workspace.len(),
             });
         }
-        let mut meter = execute::Meter::new(max_work);
         let mut start = 0;
         let mut matched = 0;
         let mut previous = execute::Prefix::default();
@@ -208,7 +216,7 @@ impl<S: Admission> CompiledGlobSet<S> {
                         self.mode,
                         text,
                         shared,
-                        &mut meter,
+                        meter,
                     )?;
                     previous = prefix;
                     Ok(matched)

@@ -8,6 +8,7 @@
 
 mod compile;
 mod execute;
+pub mod filesystem;
 pub mod rdf;
 mod set;
 

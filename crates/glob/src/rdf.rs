@@ -14,6 +14,8 @@ use purrdf_hash::error::{ErrorValue, ErrorVisitor, StructuredError};
 use purrdf_lex::allocation::Memory;
 use std::cell::Cell;
 
+pub mod filesystem;
+
 /// The portable RDF schema; it stores source, never executable bytecode.
 pub const DESCRIPTION_VERSION: &str = "purrdf-glob-rdf-v1";
 const SURFACES: [&str; 7] = [
@@ -147,6 +149,14 @@ enum Reason {
     Build(NativeBuildError),
     Input(TermId),
     Identity,
+    FileProjection {
+        role: &'static str,
+        code: &'static str,
+    },
+    OccupiedFileEvaluation {
+        node: TermId,
+        predicate: TermId,
+    },
 }
 impl Error {
     /// The original plan snapshot. Local IDs never escape without this owner.
@@ -189,6 +199,10 @@ impl std::fmt::Display for Error {
                 f.write_str("glob RDF input does not have the selected IRI/literal surface")
             }
             Reason::Identity => f.write_str("glob RDF evaluation identity must be an absolute IRI"),
+            Reason::FileProjection { role, code } => write!(f, "glob RDF {role}: {code}"),
+            Reason::OccupiedFileEvaluation { .. } => {
+                f.write_str("glob RDF evaluation already has a filesystem result field")
+            }
         }
     }
 }
@@ -266,6 +280,16 @@ impl StructuredError for Error {
                 Some("reason"),
                 ErrorValue::Code("invalid-evaluation-identity"),
             ),
+            Reason::FileProjection { role, code } => {
+                visitor.value(Some("role"), ErrorValue::Code(role));
+                visitor.value(Some("reason"), ErrorValue::Code(code));
+            }
+            Reason::OccupiedFileEvaluation { node, predicate } => {
+                visitor.value(Some("reason"), ErrorValue::Code("occupied-file-evaluation"));
+                self.source.inspect_term(*node, Some("node"), visitor);
+                self.source
+                    .inspect_term(*predicate, Some("predicate"), visitor);
+            }
         }
     }
 }
@@ -540,6 +564,25 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
     pub fn dataset(&self) -> &RdfDataset {
         &self.source
     }
+    fn validate_evaluation(&self, evaluation: &str) -> Result<(), Reason> {
+        if purrdf_iri::absolute_verdict(evaluation) != Some(true) {
+            return Err(Reason::Identity);
+        }
+        if let Some(node) = self.source.term_id_by_iri(evaluation).filter(|id| {
+            *id == self.schema.root
+                || walk(&self.source, self.schema).any(|member| member == Ok(*id))
+                || self.source.term_id_by_iri(TYPE).is_some_and(|ty| {
+                    objects(&self.source, *id, ty).any(|class| {
+                        [0, 1, 8].into_iter().any(|role| {
+                            Some(class) == self.source.term_id_by_iri(self.vocab.terms[role])
+                        })
+                    })
+                })
+        }) {
+            return Err(Reason::EvaluationCollision(node));
+        }
+        Ok(())
+    }
     /// Execute against an original RDF term. Result storage is admitted before
     /// matching; no input or result is formatted to cross this boundary.
     #[expect(
@@ -681,28 +724,9 @@ impl<'v, S: Admission, W: Admission> Execution<'v, S, W> {
         evaluation_iri: &str,
         storage: O,
     ) -> Result<DatasetHandle, ExportError<O>> {
-        let collision = self
-            .plan
-            .source
-            .term_id_by_iri(evaluation_iri)
-            .filter(|id| {
-                *id == self.plan.schema.root
-                    || walk(&self.plan.source, self.plan.schema).any(|member| member == Ok(*id))
-                    || self.plan.source.term_id_by_iri(TYPE).is_some_and(|ty| {
-                        objects(&self.plan.source, *id, ty).any(|class| {
-                            [0, 1, 8].into_iter().any(|role| {
-                                Some(class)
-                                    == self.plan.source.term_id_by_iri(self.plan.vocab.terms[role])
-                            })
-                        })
-                    })
-            });
-        let result = if purrdf_iri::absolute_verdict(evaluation_iri) != Some(true) {
-            Err((Reason::Identity, Some(Account(storage))))
-        } else if let Some(node) = collision {
-            Err((Reason::EvaluationCollision(node), Some(Account(storage))))
-        } else {
-            self.export_native(evaluation_iri, storage)
+        let result = match self.plan.validate_evaluation(evaluation_iri) {
+            Ok(()) => self.export_native(evaluation_iri, storage),
+            Err(reason) => Err((reason, Some(Account(storage)))),
         };
         result.map_err(|(reason, account)| ExportError {
             error: Error {
@@ -757,15 +781,7 @@ impl<'v, S: Admission, W: Admission> Execution<'v, S, W> {
                 let first = builder.intern_iri_with_memory(FIRST, &mut memory)?;
                 let current = Cell::new(self.plan.schema.head);
                 let schema = self.plan.schema;
-                let list = RdfListWalk::new(
-                    schema.head,
-                    schema.nil,
-                    |cell| {
-                        current.set(cell);
-                        sole(&self.plan.source, cell, schema.first)
-                    },
-                    |cell| sole(&self.plan.source, cell, schema.rest),
-                );
+                let list = membership_walk(&self.plan.source, schema, &current);
                 let mut wanted = self.indices.iter().copied().peekable();
                 for (index, member) in list.enumerate() {
                     let member = member.expect("validated immutable membership");
@@ -820,4 +836,20 @@ impl<'v, S: Admission, W: Admission> Execution<'v, S, W> {
             Err(reason) => Err((reason, Some(account))),
         }
     }
+}
+
+fn membership_walk<'a>(
+    source: &'a RdfDataset,
+    schema: Schema,
+    current: &'a Cell<TermId>,
+) -> impl Iterator<Item = Result<TermId, ListFault<TermId>>> + 'a {
+    RdfListWalk::new(
+        schema.head,
+        schema.nil,
+        move |cell| {
+            current.set(cell);
+            sole(source, cell, schema.first)
+        },
+        move |cell| sole(source, cell, schema.rest),
+    )
 }
