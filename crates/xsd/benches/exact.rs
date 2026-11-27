@@ -344,6 +344,9 @@ fn bench_growth(c: &mut Bench) {
                 )
             });
         });
+        group.bench_function(format!("parse_decimal/{digits}"), |bench| {
+            bench.iter(|| black_box(Decimal::from_str(black_box(&text)).expect("valid")));
+        });
         group.bench_function(format!("parse_canonical/{digits}"), |bench| {
             bench.iter(|| {
                 black_box(

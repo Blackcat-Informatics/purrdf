@@ -49,6 +49,24 @@ fn decimal_round_preserves_values_and_reports_allocations() {
 fn wide_decimal_power_preserves_two_destination_scratch_admission() {
     use purrdf_xsd::bigint::{BigInt, LimbScratch, LimbScratchError};
 
+    // One power chunk reads the original four limbs directly. The only
+    // destination must have room for the possible carry.
+    let coefficient = BigInt::one().shl(192);
+    let one_destination = LimbScratch::new(1, 5).unwrap();
+    assert_eq!(
+        coefficient.mul_pow5_in(1, &one_destination).unwrap(),
+        BigInt::from_u64(5).shl(192)
+    );
+    let short = LimbScratch::new(1, 4).unwrap();
+    assert!(matches!(
+        coefficient.mul_pow5_in(1, &short),
+        Err(LimbScratchError::Capacity {
+            required_limbs: 5,
+            admitted_limbs: 4,
+        })
+    ));
+    assert_eq!(coefficient.mul_pow5_in(0, &short).unwrap(), coefficient);
+
     for exponent in [127u32, 128, 129] {
         // These powers have seven limbs and need two simultaneous
         // destinations. The adjacent exponents exercise both constructions
