@@ -1,0 +1,108 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: SIMD assembly producer
+description: Prepare an exact compiled cache identity and measure one assembly configuration.
+inputs:
+  config:
+    description: Assembly configuration selected by the caller
+    required: true
+  phase:
+    description: Prepare the compiled cache identity or measure the configuration
+    required: true
+  cache-identity:
+    description: Identity returned by prepare, required for x86-64-v4 measurement
+    required: false
+outputs:
+  identity:
+    description: Compiler, host and producer environment identity
+    value: ${{ steps.produce.outputs.identity }}
+runs:
+  using: composite
+  steps:
+    - id: produce
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        ASSEMBLY_CONFIG: ${{ inputs.config }}
+        ASSEMBLY_PHASE: ${{ inputs.phase }}
+        ASSEMBLY_CACHE_IDENTITY: ${{ inputs.cache-identity }}
+      run: |
+        set -euo pipefail
+        shopt -s inherit_errexit
+        if [[ ! "$ASSEMBLY_CONFIG" =~ ^[a-z0-9_-]+$ ]]; then
+          echo '::error::Invalid SIMD assembly configuration'
+          exit 1
+        fi
+
+        cache_context() {
+          local config_digest names
+          if [ -n "${MAKEFILES:-}" ]; then
+            echo '::error::The compiled assembly cache requires the checked-out Makefile without inherited MAKEFILES' >&2
+            return 1
+          fi
+          printf '%s\n' "$GITHUB_WORKSPACE" "${ImageOS:?}" "${ImageVersion:?}"
+          rustc -vV
+          cargo -Vv
+          cc --version
+          ld --version
+          ar --version
+          make --version
+          # Cargo can print environment values in diagnostics. Keep only the digest.
+          if ! config_digest=$(cargo -Z unstable-options config get --format json 2>/dev/null | sha256sum); then
+            echo '::error::Cannot fingerprint the effective Cargo configuration for the assembly cache' >&2
+            return 1
+          fi
+          printf '%s\n' "$config_digest"
+          # Hash the inherited build environment without storing its values.
+          if ! names=$(compgen -e | LC_ALL=C sort -u); then
+            echo '::error::Cannot inventory the build environment for the assembly cache' >&2
+            return 1
+          fi
+          while IFS= read -r name; do
+            case "$name" in
+              CARGO_TOKEN|CARGO_REGISTRY_TOKEN|CARGO_REGISTRIES_*_TOKEN) ;;
+              CARGO_*|RUST*|MAKEFLAGS|MAKEOVERRIDES|MFLAGS|CC|CC_*|AR|AR_*|CFLAGS|CFLAGS_*|CXX|CXX_*|CXXFLAGS|CXXFLAGS_*)
+                printf '%s\0%s\0' "$name" "${!name}"
+                ;;
+            esac
+          done <<< "$names" | sha256sum
+        }
+
+        case "$ASSEMBLY_PHASE" in
+          prepare)
+            if [ "$ASSEMBLY_CONFIG" != x86_64-v4 ]; then
+              echo '::error::Compiled assembly cache preparation requires x86-64-v4'
+              exit 1
+            fi
+            export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/target"
+            export CARGO_BUILD_BUILD_DIR="$GITHUB_WORKSPACE/target"
+            export CARGO_UNSTABLE_CHECKSUM_FRESHNESS=true
+            export CARGO_BUILD_FINGERPRINT=content
+            {
+              printf '%s\n' "CARGO_TARGET_DIR=$CARGO_TARGET_DIR"
+              printf '%s\n' "CARGO_BUILD_BUILD_DIR=$CARGO_BUILD_BUILD_DIR"
+              printf '%s\n' "CARGO_UNSTABLE_CHECKSUM_FRESHNESS=$CARGO_UNSTABLE_CHECKSUM_FRESHNESS"
+              printf '%s\n' "CARGO_BUILD_FINGERPRINT=$CARGO_BUILD_FINGERPRINT"
+            } >> "$GITHUB_ENV"
+            identity=$(cache_context | sha256sum | cut -d ' ' -f 1)
+            echo "identity=$identity" >> "$GITHUB_OUTPUT"
+            ;;
+          measure)
+            if [ "$ASSEMBLY_CONFIG" = x86_64-v4 ]; then
+              identity=$(cache_context | sha256sum | cut -d ' ' -f 1)
+              if [ "$identity" != "$ASSEMBLY_CACHE_IDENTITY" ]; then
+                echo '::error::Assembly build environment changed after cache lookup'
+                exit 1
+              fi
+            fi
+            # Bound scalar WASM compilation through the existing Cargo job budget.
+            if [ "$ASSEMBLY_CONFIG" = wasm32 ]; then
+              export CARGO_BUILD_JOBS=2
+            fi
+            make simd-asm SIMD_ASM_ARGS="--config $ASSEMBLY_CONFIG --jobs 1 --report target/asm-reports/$ASSEMBLY_CONFIG.json"
+            ;;
+          *)
+            echo '::error::Unknown SIMD assembly producer phase'
+            exit 1
+            ;;
+        esac
