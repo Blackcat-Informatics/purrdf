@@ -150,46 +150,53 @@ impl Composites {
         is_composite: impl Fn(u64) -> bool,
         is_term_node: impl Fn(u64) -> bool,
     ) -> Result<Self, DocumentError> {
-        let mut spelled = BTreeMap::new();
-        let mut triples = BTreeMap::new();
+        let mut composites = Self::default();
         for line in lines {
-            let Some((&TAG_RECORD, rest)) = line.split_first() else {
-                continue;
-            };
-            let mut reader = Reader::new(rest, None);
-            let payload = reader.field()?;
-            let terms = reader.u64()?;
-            if terms == 0 || reader.tag()? != TAG_FIXED {
-                continue;
-            }
-            let node = reader.u64()?;
-            if is_term_node(node) && payload == NESTED_TERM_PAYLOAD && terms == 4 {
-                triples.insert(node, reader.bytes.into());
-                continue;
-            }
-            if !is_composite(node) {
-                continue;
-            }
-            let mut fields = Reader::new(payload, None);
-            let datatype = fields.text()?;
-            let mut lexical = String::from(fields.text()?);
-            for _ in 1..terms {
-                let tag = reader.tag()?;
-                if tag != TAG_FIXED {
-                    return Err(DocumentError::Tag(tag));
-                }
-                write_label(reader.u64()?, &mut lexical);
-                lexical.push_str(fields.text()?);
-            }
-            if !fields.bytes.is_empty() || !reader.bytes.is_empty() {
-                return Err(DocumentError::Truncated);
-            }
-            spelled.insert(node, (lexical, datatype.to_owned()));
+            composites.ingest(line, &is_composite, &is_term_node)?;
         }
-        Ok(Self {
-            literals: spelled,
-            triples,
-        })
+        Ok(composites)
+    }
+
+    /// Ingest one canonical line, in canonical order.
+    pub(super) fn ingest(
+        &mut self,
+        line: &[u8],
+        is_composite: impl Fn(u64) -> bool,
+        is_term_node: impl Fn(u64) -> bool,
+    ) -> Result<(), DocumentError> {
+        let Some((&TAG_RECORD, rest)) = line.split_first() else {
+            return Ok(());
+        };
+        let mut reader = Reader::new(rest, None);
+        let payload = reader.field()?;
+        let terms = reader.u64()?;
+        if terms == 0 || reader.tag()? != TAG_FIXED {
+            return Ok(());
+        }
+        let node = reader.u64()?;
+        if is_term_node(node) && payload == NESTED_TERM_PAYLOAD && terms == 4 {
+            self.triples.insert(node, reader.bytes.into());
+            return Ok(());
+        }
+        if !is_composite(node) {
+            return Ok(());
+        }
+        let mut fields = Reader::new(payload, None);
+        let datatype = fields.text()?;
+        let mut lexical = String::from(fields.text()?);
+        for _ in 1..terms {
+            let tag = reader.tag()?;
+            if tag != TAG_FIXED {
+                return Err(DocumentError::Tag(tag));
+            }
+            write_label(reader.u64()?, &mut lexical);
+            lexical.push_str(fields.text()?);
+        }
+        if !fields.bytes.is_empty() || !reader.bytes.is_empty() {
+            return Err(DocumentError::Truncated);
+        }
+        self.literals.insert(node, (lexical, datatype.to_owned()));
+        Ok(())
     }
 }
 

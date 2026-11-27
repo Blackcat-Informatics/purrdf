@@ -59,6 +59,7 @@ pub(crate) use document::write_line_with;
 pub use document::{DocumentError, write_document, write_line};
 pub use fold_input::{FoldLabelling, FoldLine, FoldRecord, FoldTerm, label_fold};
 pub use lines::{Direction, GraphTerm, InputReason, Kind, Line, LineSet, Quantity, Term};
+pub(crate) use view::compact_view_with_memory;
 pub use view::{
     Comparison, Labelling, LabellingCapacity, LoweringRefusal, Record, Scope, ViewError,
     compare_view, compare_view_with_memory, label_view, label_view_with_capacity,

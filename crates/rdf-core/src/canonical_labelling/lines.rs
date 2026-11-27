@@ -12,6 +12,8 @@
 //! tokens and of what each blank leaf is replaced by, so nothing is ever spelt
 //! as text and nothing is parsed back.
 
+use std::cmp::Ordering;
+
 use crate::FastMap;
 
 /// The tag of an IRI leaf.
@@ -306,6 +308,33 @@ impl LineSet {
         encode_tokens(&self.consts, &self.lines[line], leaf, out);
     }
 
+    /// Length of the fixed encoding, independent of every leaf's position.
+    pub(super) fn fixed_len(&self, line: usize) -> Option<usize> {
+        self.lines[line].iter().try_fold(0usize, |len, &token| {
+            len.checked_add(
+                encoded_token(&self.consts, token, &mut |_| Leaf::Fixed(0))
+                    .as_bytes()
+                    .len(),
+            )
+        })
+    }
+
+    /// Compare the complete fixed encodings without building either line.
+    pub(super) fn cmp_fixed(
+        &self,
+        left: usize,
+        right: usize,
+        position: impl Fn(usize) -> u64 + Copy,
+    ) -> Ordering {
+        let chunks = |line: usize| {
+            let mut leaf = |node| Leaf::Fixed(position(node));
+            self.lines[line]
+                .iter()
+                .map(move |&token| encoded_token(&self.consts, token, &mut leaf))
+        };
+        compare_chunks(chunks(left), chunks(right))
+    }
+
     /// The bytes the set holds on the heap: constants, source identifiers and
     /// tokens, `None` when the sum passes the word.
     pub(crate) fn footprint_bytes(&self) -> Option<usize> {
@@ -343,19 +372,103 @@ pub(crate) fn encode_tokens(
     mut leaf: impl FnMut(usize) -> Leaf,
     out: &mut Vec<u8>,
 ) {
-    for token in tokens {
-        match *token {
-            Tok::Tag(tag) => out.push(tag),
-            Tok::Count(n) | Tok::Len(n) => out.extend_from_slice(&n.to_be_bytes()),
-            Tok::Const(c) => out.extend_from_slice(&consts[c]),
-            Tok::Blank(b) => match leaf(b) {
-                Leaf::Free => out.push(TAG_FREE),
-                Leaf::Fixed(q) => {
-                    out.push(TAG_FIXED);
-                    out.extend_from_slice(&q.to_be_bytes());
-                }
-            },
+    for &token in tokens {
+        match encoded_token(consts, token, &mut leaf) {
+            EncodedToken::Byte(byte) => out.push(byte),
+            bytes => out.extend_from_slice(bytes.as_bytes()),
         }
+    }
+}
+
+/// The exact bytes of one token. Constant leaves borrow their admitted encoding.
+enum EncodedToken<'a> {
+    Byte(u8),
+    Word([u8; 8]),
+    Fixed([u8; 9]),
+    Borrowed(&'a [u8]),
+}
+
+impl EncodedToken<'_> {
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Byte(byte) => std::slice::from_ref(byte),
+            Self::Word(bytes) => bytes,
+            Self::Fixed(bytes) => bytes,
+            Self::Borrowed(bytes) => bytes,
+        }
+    }
+}
+
+/// Order the flattened byte sequences even when their chunk boundaries differ.
+fn compare_chunks<'a>(
+    mut left: impl Iterator<Item = EncodedToken<'a>>,
+    mut right: impl Iterator<Item = EncodedToken<'a>>,
+) -> Ordering {
+    let mut a = EncodedToken::Borrowed(&[]);
+    let mut b = EncodedToken::Borrowed(&[]);
+    let (mut i, mut j) = (0, 0);
+    loop {
+        while i == a.as_bytes().len() {
+            let Some(chunk) = left.next() else {
+                return if j < b.as_bytes().len() || right.any(|chunk| !chunk.as_bytes().is_empty())
+                {
+                    Ordering::Less
+                } else {
+                    Ordering::Equal
+                };
+            };
+            a = chunk;
+            i = 0;
+        }
+        while j == b.as_bytes().len() {
+            let Some(chunk) = right.next() else {
+                return Ordering::Greater;
+            };
+            b = chunk;
+            j = 0;
+        }
+        let a_bytes = &a.as_bytes()[i..];
+        let b_bytes = &b.as_bytes()[j..];
+        let len = a_bytes.len().min(b_bytes.len());
+        match a_bytes[..len].cmp(&b_bytes[..len]) {
+            Ordering::Equal => (i, j) = (i + len, j + len),
+            unequal => return unequal,
+        }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn fixed_order_compares_flattened_bytes_across_chunk_boundaries() {
+    let compare = |a: &[&[u8]], b: &[&[u8]]| {
+        let chunks = |bytes| EncodedToken::Borrowed(bytes);
+        compare_chunks(a.iter().copied().map(chunks), b.iter().copied().map(chunks))
+    };
+    assert_eq!(
+        compare(&[b"ab", b"c"], &[b"a", b"bc", b""]),
+        Ordering::Equal
+    );
+    assert_eq!(compare(&[b"ab", b"c"], &[b"a", b"bcd"]), Ordering::Less);
+    assert_eq!(compare(&[b"abd"], &[b"a", b"bc"]), Ordering::Greater);
+}
+
+fn encoded_token<'a>(
+    consts: &'a [Box<[u8]>],
+    token: Tok,
+    leaf: &mut impl FnMut(usize) -> Leaf,
+) -> EncodedToken<'a> {
+    match token {
+        Tok::Tag(tag) => EncodedToken::Byte(tag),
+        Tok::Count(n) | Tok::Len(n) => EncodedToken::Word(n.to_be_bytes()),
+        Tok::Const(index) => EncodedToken::Borrowed(&consts[index]),
+        Tok::Blank(index) => match leaf(index) {
+            Leaf::Free => EncodedToken::Byte(TAG_FREE),
+            Leaf::Fixed(position) => {
+                let mut bytes = [TAG_FIXED; 9];
+                bytes[1..].copy_from_slice(&position.to_be_bytes());
+                EncodedToken::Fixed(bytes)
+            }
+        },
     }
 }
 

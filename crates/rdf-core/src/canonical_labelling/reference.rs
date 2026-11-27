@@ -1768,6 +1768,7 @@ pub(crate) fn label_walked(
         force_search,
         tracing,
     )
+    .map(|(assembly, traces, walk)| (assembly.into_labelled(set), traces, walk))
 }
 
 /// One top component of an engine: its search-free run, then its step of the
@@ -1836,7 +1837,7 @@ pub(crate) fn failure_diagnostics(
 /// The refusal `limit`, with the walk's fields, when the walk carries its
 /// running total above `max(limit, A)`; `width` when a sum overflows;
 /// [`Halt::Stopped`] when the caller's signal is set.
-pub(crate) fn drive<R: ComponentRun>(
+pub(super) fn drive<R: ComponentRun>(
     set: &LineSet,
     comps: &[Comp],
     mut runs: Vec<R>,
@@ -1844,7 +1845,7 @@ pub(crate) fn drive<R: ComponentRun>(
     limit: u64,
     force_search: bool,
     tracing: bool,
-) -> Result<(Labelled, Vec<ComponentTrace>, Walk), Halt> {
+) -> Result<(Assembly, Vec<ComponentTrace>, Walk), Halt> {
     let (allowance, split_charge) = charges;
     if !force_search {
         for run in &mut runs {
@@ -1889,7 +1890,7 @@ pub(crate) fn drive<R: ComponentRun>(
     if force_search {
         failures = full_search_failures(set, comps, &labellings);
     }
-    let (labelled, traces) = assemble(
+    let (assembly, traces) = assemble(
         set,
         comps,
         &labellings,
@@ -1898,13 +1899,65 @@ pub(crate) fn drive<R: ComponentRun>(
         split_charge,
         tracing,
     )?;
-    Ok((labelled, traces, walk))
+    Ok((assembly, traces, walk))
 }
 
-/// The result over the labellings of every top component: components in their
-/// order, positions, identities, the structural record, the canonical line
-/// sequence and its digest. `failures` are the first failures, ascending.
-pub(crate) fn assemble(
+/// The structural result of the search, independent of how line output is owned.
+pub(super) struct Assembly {
+    placements: Vec<Placement>,
+    components: Vec<Component>,
+    record: StatisticsRecord,
+    diagnostic: Vec<FailureDiagnostic>,
+    explored: Units,
+    twin_units: u64,
+    comparison_units: u64,
+    stopped: (u64, u64),
+}
+
+impl Assembly {
+    /// Placements for callers that do not retain structural evidence.
+    pub(super) fn into_placements(self) -> Vec<Placement> {
+        self.placements
+    }
+
+    /// The public owning result retains every encoded line in canonical order.
+    pub(super) fn into_labelled(self, set: &LineSet) -> Labelled {
+        let mut lines: Vec<Box<[u8]>> = (0..set.lines.len())
+            .map(|line| {
+                let mut encoded = Vec::new();
+                set.encode(
+                    line,
+                    |blank| Leaf::Fixed(self.placements[blank].position),
+                    &mut encoded,
+                );
+                encoded.into_boxed_slice()
+            })
+            .collect();
+        lines.sort();
+        let mut digest = purrdf_hash::blake3::Hasher::new_derive_key(LINES_CONTEXT.as_str());
+        digest.update(&(lines.len() as u64).to_be_bytes());
+        for line in &lines {
+            digest.update(line);
+        }
+        Labelled {
+            placements: self.placements,
+            lines,
+            digest: *digest.finalize().as_bytes(),
+            components: self.components,
+            record: self.record,
+            diagnostic: self.diagnostic,
+            explored: self.explored,
+            twin_units: self.twin_units,
+            comparison_units: self.comparison_units,
+            stopped_on_s: self.stopped.0,
+            stopped_on_e: self.stopped.1,
+        }
+    }
+}
+
+/// Assemble components in their canonical order, placements, identities and
+/// the structural record. `failures` are the first failures, ascending.
+fn assemble(
     set: &LineSet,
     comps: &[Comp],
     labellings: &[Labelling],
@@ -1912,7 +1965,7 @@ pub(crate) fn assemble(
     allowance: u64,
     split_charge: u64,
     tracing: bool,
-) -> Result<(Labelled, Vec<ComponentTrace>), Halt> {
+) -> Result<(Assembly, Vec<ComponentTrace>), Halt> {
     let mut explored = Units {
         fix: split_charge,
         ..Units::default()
@@ -2042,34 +2095,17 @@ pub(crate) fn assemble(
     record.group_order = merge_factors(groups);
     record.broken_by = failures.iter().map(|f| f.record).collect();
     record.guaranteed = record.broken_by.is_empty();
-    // The canonical line sequence and its digest.
-    let mut lines: Vec<Box<[u8]>> = (0..set.lines.len())
-        .map(|l| {
-            let mut enc = Vec::new();
-            set.encode(l, |b| Leaf::Fixed(placements[b].position), &mut enc);
-            enc.into_boxed_slice()
-        })
-        .collect();
-    lines.sort();
-    let mut digest = purrdf_hash::blake3::Hasher::new_derive_key(LINES_CONTEXT.as_str());
-    digest.update(&(lines.len() as u64).to_be_bytes());
-    for line in &lines {
-        digest.update(line);
-    }
-    let labelled = Labelled {
+    let assembly = Assembly {
         placements,
-        lines,
-        digest: *digest.finalize().as_bytes(),
         components,
         record,
         diagnostic: failures,
         explored,
         twin_units,
         comparison_units,
-        stopped_on_s: stopped.0,
-        stopped_on_e: stopped.1,
+        stopped,
     };
-    Ok((labelled, traces))
+    Ok((assembly, traces))
 }
 
 /// The first failures read from the result path of a full search: branching
