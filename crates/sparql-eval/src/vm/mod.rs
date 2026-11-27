@@ -1914,6 +1914,11 @@ pub(crate) mod charge_trace {
         static TRACE: RefCell<Option<Vec<String>>> = const { RefCell::new(None) };
     }
 
+    /// Whether this thread observes logical charge calls.
+    pub(crate) fn is_recording() -> bool {
+        TRACE.with(|trace| trace.borrow().is_some())
+    }
+
     /// Record one charge call, when a trace is being taken on this thread.
     pub(crate) fn record(entry: impl FnOnce() -> String) {
         TRACE.with(|trace| {

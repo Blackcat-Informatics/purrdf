@@ -8400,18 +8400,16 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     let (Some(xa), Some(xb)) = (xsd_of_term(ctx, ta)?, xsd_of_term(ctx, tb)?) else {
         return Ok(None);
     };
-    let cost_op = match op {
-        ArithmeticOperator::Add | ArithmeticOperator::Subtract => CostOp::Add,
-        ArithmeticOperator::Multiply => CostOp::Mul,
-        ArithmeticOperator::Divide => CostOp::Div(ctx.division),
-    };
-    let cost = if op == ArithmeticOperator::Subtract {
-        temporal_subtract_cost(&xa, &xb)
-    } else {
-        numeric_cost(&xa, &xb, cost_op)
-    };
-    if !numeric_step_admitted(ctx, cost) {
-        return Ok(None);
+    if observes_numeric_cost(ctx) {
+        let cost = match op {
+            ArithmeticOperator::Add => numeric_cost(&xa, &xb, CostOp::Add),
+            ArithmeticOperator::Subtract => temporal_subtract_cost(&xa, &xb),
+            ArithmeticOperator::Multiply => numeric_cost(&xa, &xb, CostOp::Mul),
+            ArithmeticOperator::Divide => numeric_cost(&xa, &xb, CostOp::Div(ctx.division)),
+        };
+        if !numeric_step_admitted(ctx, cost) {
+            return Ok(None);
+        }
     }
     let operation = match op {
         ArithmeticOperator::Add => purrdf_xsd::numeric::NumericBinaryOperator::Add,
@@ -8432,6 +8430,18 @@ pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
             Ok(None)
         }
     }
+}
+
+/// Logical pricing is observable through a governor (including stop-only), an
+/// ordered worker journal, or a test charge trace. Actual allocations still
+/// go through their admitted workspace frame without a logical observer.
+#[inline]
+fn observes_numeric_cost<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> bool {
+    #[cfg(test)]
+    if crate::vm::charge_trace::is_recording() {
+        return true;
+    }
+    ctx.governor_state().is_some() || ctx.exact_deferral.is_some()
 }
 
 /// Charge `cost` for one exact-tower step of an expression before it runs; on a
@@ -8492,13 +8502,15 @@ fn governed_term<D: DatasetView + Sync>(
     datatype: &str,
     computed: bool,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let price = if computed {
-        computed_numeric_render_cost(value)
-    } else {
-        numeric_render_cost(value)
-    };
-    if !numeric_step_admitted(ctx, price) {
-        return Ok(None);
+    if observes_numeric_cost(ctx) {
+        let price = if computed {
+            computed_numeric_render_cost(value)
+        } else {
+            numeric_render_cost(value)
+        };
+        if !numeric_step_admitted(ctx, price) {
+            return Ok(None);
+        }
     }
     let value = render_xsd_workspace_value(value, &ctx.growth, datatype, computed)?;
     ctx.intern_workspace_term(value)?
