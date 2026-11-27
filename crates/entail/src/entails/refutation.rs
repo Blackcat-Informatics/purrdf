@@ -886,26 +886,26 @@ mod tests {
         let named = "http://example.org/named";
         let alternate = "http://example.org/roleAlternate";
         let named_only = "http://example.org/roleNamedOnly";
-        let direct = (STEWIE, HAS_FATHER, PETER);
-        let via_alternate = (STEWIE, alternate, PETER);
-        let subproperty = (alternate, SUB_PROPERTY_OF, HAS_FATHER);
+        let direct = [STEWIE, HAS_FATHER, PETER];
+        let via_alternate = [STEWIE, alternate, PETER];
+        let subproperty = [alternate, SUB_PROPERTY_OF, HAS_FATHER];
         let build = |include_default_supports| {
             let mut builder = RdfDatasetBuilder::new();
             let named = builder.intern_iri(named).unwrap();
-            let mut insert = |(s, p, o), graph| {
-                let [s, p, o] = [s, p, o].map(|iri| builder.intern_iri(iri).unwrap());
+            let mut insert = |triple: [&str; 3], graph| {
+                let [s, p, o] = triple.map(|iri| builder.intern_iri(iri).unwrap());
                 builder.push_quad(s, p, o, graph).unwrap();
             };
-            insert((HAS_FATHER, OWL_PROPERTYDISJOINTWITH, HAS_MOTHER), None);
-            insert((STEWIE, HAS_MOTHER, LOIS), None);
+            insert([HAS_FATHER, OWL_PROPERTYDISJOINTWITH, HAS_MOTHER], None);
+            insert([STEWIE, HAS_MOTHER, LOIS], None);
             if include_default_supports {
                 insert(direct, None);
                 insert(via_alternate, None);
                 insert(subproperty, None);
             }
             insert(direct, Some(named));
-            insert((STEWIE, named_only, PETER), Some(named));
-            insert((named_only, SUB_PROPERTY_OF, HAS_FATHER), Some(named));
+            insert([STEWIE, named_only, PETER], Some(named));
+            insert([named_only, SUB_PROPERTY_OF, HAS_FATHER], Some(named));
             builder.freeze().unwrap()
         };
         let premise = build(true);
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(answer.witness().rule(), RuleId::PrpPdw);
         check_recomputed_removals(&premise, answer);
         let kept = default_graph_triples(answer.premises());
-        let has = |(s, p, o)| kept.contains(&[s, p, o].map(TermValue::iri));
+        let has = |triple: [&str; 3]| kept.contains(&triple.map(TermValue::iri));
         assert_ne!(has(direct), has(via_alternate) && has(subproperty));
         assert!(matches!(
             decide(&build(false), &conclusion),
