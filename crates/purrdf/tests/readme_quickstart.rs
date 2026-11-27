@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Keeps the root `README.md` Rust quickstart honest: this test is the same
-//! code, verbatim. If it stops compiling or passing, fix the README too.
+//! Exercises the book's dataset builder round trip and the document-base
+//! contract. The separate published quickstart check runs the README programs.
 
 use purrdf::{
     NativeRdfFormat, RdfDatasetBuilder, RdfLiteral, SerializeGraph, parse_dataset,

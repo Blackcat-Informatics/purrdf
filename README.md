@@ -412,11 +412,12 @@ See the [licensing guide](./LICENSING.md) for details.
 ### Rust
 
 ```sh
-cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
+cargo add purrdf
 ```
 
-The Git dependency uses the current source. Use a released version from
-crates.io when you need a registry-pinned dependency.
+This example uses the published [PurRDF 5.0.1](https://crates.io/crates/purrdf/5.0.1).
+The install command may select a newer release. Cargo records the selected
+version in `Cargo.lock`.
 
 ```rust
 use purrdf::{parse_dataset, serialize_dataset, SerializeGraph};
@@ -439,6 +440,14 @@ Use the facade's `sparql`, `shapes`, `shex`, `datalog`, `entail`, `retrieval`,
 `geo`, `columnar`, `json`, `yaml`, `toml`, `mime` and `markdown` modules as your
 application grows.
 [More Rust examples](./docs/book/src/getting-started/rust.md).
+
+#### Track development
+
+To build against current repository source, add the Git dependency.
+
+```sh
+cargo add purrdf --git https://github.com/Blackcat-Informatics/purrdf.git
+```
 
 ### Python
 
