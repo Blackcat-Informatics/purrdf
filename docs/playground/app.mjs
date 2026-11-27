@@ -5,7 +5,10 @@
 // the aria-live error banner. The main thread NEVER touches the wasm engine —
 // it is a pure view/message client over the worker.
 
-import { VIGNETTES, findVignette, DEFAULT_STATE } from "./examples/gallery.mjs";
+import {
+  VIGNETTES, findVignette, DEFAULT_STATE, matchesBundledMuseumQuery, vignetteState,
+} from "./examples/gallery.mjs";
+import { decodeState, encodeState } from "./permalink.mjs";
 import { assertSarifVersion, describeSarif } from "./sarif.mjs";
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
@@ -71,7 +74,7 @@ function showStatus(message) {
 async function guard(fn) {
   clearError();
   try {
-    await fn();
+    return await fn();
   } catch (e) {
     showError(String(e?.message ?? e));
   }
@@ -214,73 +217,9 @@ function applyState(state) {
   if (s.activePane) selectPane(s.activePane);
 }
 
-const b64urlEncode = (bytes) => {
-  let bin = "";
-  for (const byte of bytes) bin += String.fromCharCode(byte);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const b64urlDecode = (s) => {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-};
-
-async function streamThrough(stream, bytes) {
-  const writer = stream.writable.getWriter();
-  writer.write(bytes);
-  writer.close();
-  const chunks = [];
-  const reader = stream.readable.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  let len = 0;
-  for (const c of chunks) len += c.length;
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-
-/** Encode state → (gzip when available) → base64url. All client-side, no network. */
-async function encodeState(state) {
-  const json = new TextEncoder().encode(JSON.stringify(state));
-  if (typeof CompressionStream === "function") {
-    const gz = await streamThrough(new CompressionStream("gzip"), json);
-    return `g${b64urlEncode(gz)}`;
-  }
-  // Documented capability fallback: plain base64url of the JSON.
-  return `j${b64urlEncode(json)}`;
-}
-
-async function decodeState(fragment) {
-  if (!fragment) return null;
-  const tag = fragment[0];
-  const body = fragment.slice(1);
-  const bytes = b64urlDecode(body);
-  let jsonBytes = bytes;
-  if (tag === "g") {
-    if (typeof DecompressionStream !== "function") {
-      throw new Error("this permalink is gzip-encoded but DecompressionStream is unavailable");
-    }
-    jsonBytes = await streamThrough(new DecompressionStream("gzip"), bytes);
-  } else if (tag !== "j") {
-    throw new Error("unrecognized permalink encoding");
-  }
-  return JSON.parse(new TextDecoder().decode(jsonBytes));
-}
-
-async function copyPermalink(state) {
+async function copyPermalink(getState) {
   await guard(async () => {
-    const fragment = await encodeState(state);
+    const fragment = await encodeState(await getState());
     const url = `${location.origin}${location.pathname}#${fragment}`;
     location.hash = fragment;
     await copyText(url);
@@ -320,14 +259,17 @@ function selectPane(pane) {
 // Pane: Input
 // ---------------------------------------------------------------------------
 
+let latestParse;
+
 async function doParse() {
-  await guard(async () => {
-    const text = $("input-text").value;
-    const format = $("input-format").value;
-    const res = await call("parse", { text, format });
-    $("input-summary").textContent = `Parsed ${res.size} quad(s) as ${format}.`;
+  const request = { text: $("input-text").value, format: $("input-format").value };
+  latestParse = request;
+  return guard(async () => {
+    const res = await call("parse", request);
+    $("input-summary").textContent = `Parsed ${res.size} quad(s) as ${request.format}.`;
     renderQuadTable(res.rows, res.size, null);
     showStatus(`Graph updated: ${res.size} quad(s).`);
+    return request;
   });
 }
 
@@ -475,7 +417,10 @@ async function doSerializeAll() {
 // Pane: SPARQL
 // ---------------------------------------------------------------------------
 
+let queryStarted = false;
+
 async function doQuery() {
+  queryStarted = true;
   await guard(async () => {
     const sparql = $("sparql-text").value;
     const res = await call("query", { sparql });
@@ -740,6 +685,9 @@ async function refreshQuads() {
 // Pane: Gallery
 // ---------------------------------------------------------------------------
 
+let latestGalleryLoad;
+let editorRevision = 0;
+
 function buildGallery() {
   const list = $("gallery-list");
   list.replaceChildren();
@@ -758,7 +706,7 @@ function buildGallery() {
       text: "Copy permalink",
       "data-permalink": v.id,
     });
-    permaBtn.addEventListener("click", () => copyPermalink(vignetteState(v)));
+    permaBtn.addEventListener("click", () => copyPermalink(() => vignetteState(v)));
 
     const item = el("li", { class: "gallery-item", id: `vignette-${v.id}` }, [
       el("h3", { text: v.title }),
@@ -769,37 +717,35 @@ function buildGallery() {
   }
 }
 
-function vignetteState(v) {
-  const s = { ...DEFAULT_STATE };
-  s.input = v.input;
-  s.inputFormat = v.inputFormat;
-  if (v.query != null) s.query = v.query;
-  if (v.shapes != null) s.shapes = v.shapes;
-  // Vignettes that exercise identity supply their own A/B graphs; others
-  // compare the loaded input against the supplied graph B.
-  s.graphA = v.input;
-  s.graphAFormat = v.inputFormat;
-  if (v.graphB != null) {
-    s.graphB = v.graphB;
-    s.graphBFormat = v.graphBFormat ?? "turtle";
-  }
-  s.activePane = v.activePane ?? "input";
-  return s;
-}
-
 async function loadVignette(id) {
   const v = findVignette(id);
   if (!v) {
     showError(`unknown vignette: ${id}`);
     return;
   }
-  applyState(vignetteState(v));
-  await runActiveForState(v);
+  const request = Symbol();
+  const revision = editorRevision;
+  latestGalleryLoad = request;
+  const isCurrent = () => latestGalleryLoad === request && editorRevision === revision;
+  await guard(async () => {
+    let state;
+    try {
+      state = await vignetteState(v);
+    } catch (error) {
+      // A slower, superseded fetch must not replace the current banner.
+      if (isCurrent()) throw error;
+      return;
+    }
+    if (!isCurrent()) return;
+    applyState(state);
+    await runActiveForState(v, isCurrent);
+  });
 }
 
 /** After loading a vignette, run the engine action its pane demonstrates. */
-async function runActiveForState(v) {
+async function runActiveForState(v, isCurrent) {
   await doParse();
+  if (!isCurrent()) return;
   switch (v.activePane) {
     case "roundtrip":
       await doSerializeAll();
@@ -809,7 +755,7 @@ async function runActiveForState(v) {
       break;
     case "shacl":
       await doValidate();
-      await doEntail();
+      if (isCurrent()) await doEntail();
       break;
     case "identity":
       await doCompare();
@@ -849,6 +795,18 @@ function wireTabs() {
 }
 
 function wireButtons() {
+  // A gallery load replaces these fields, so a later edit wins even if the
+  // bundled fixture is still being fetched. Keep the gallery selection token
+  // separately so an edit never re-enables permalink startup after a click.
+  const noteEdit = () => { editorRevision++; };
+  for (const id of [
+    "input-text", "canonical-search", "sparql-text", "shapes-text", "graph-a-text", "graph-b-text",
+  ]) {
+    $(id).addEventListener("input", noteEdit);
+  }
+  for (const id of ["input-format", "graph-a-format", "graph-b-format"]) {
+    $(id).addEventListener("change", noteEdit);
+  }
   $("btn-parse").addEventListener("click", doParse);
   $("btn-serialize-all").addEventListener("click", doSerializeAll);
   $("btn-run-query").addEventListener("click", doQuery);
@@ -862,14 +820,12 @@ function wireButtons() {
   $("btn-compare").addEventListener("click", doCompare);
   $("btn-refresh-quads").addEventListener("click", refreshQuads);
   $("btn-clear-filter").addEventListener("click", refreshQuads);
-  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState()));
+  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState));
 }
 
 async function initHeader() {
-  // The version handshake is the ONLY startup traffic; it goes over the worker
-  // message port, not the network. The console makes NO network request after
-  // its assets load — that provable property (no server-side evaluation) is
-  // worth more than a cosmetic wasm-size chip, so the size probe is gone.
+  // The version handshake goes over the worker message port, not the network.
+  // The gallery can fetch bundled assets, but evaluation runs entirely in the worker.
   await guard(async () => {
     const { version } = await call("version", {});
     $("app-version").textContent = `purrdf v${version}`;
@@ -878,11 +834,10 @@ async function initHeader() {
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  window.addEventListener("load", () => {
-    navigator.serviceWorker
-      .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
-      .catch((e) => showStatus(`offline cache unavailable: ${e.message ?? e}`));
-  });
+  // The first worker parse can finish after window.load has already fired.
+  navigator.serviceWorker
+    .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
+    .catch((e) => showStatus(`offline cache unavailable: ${e.message ?? e}`));
 }
 
 async function boot() {
@@ -891,13 +846,13 @@ async function boot() {
   buildGallery();
 
   // Restore permalink state if present; otherwise the default console.
-  let restored = false;
+  let restored;
   if (location.hash.length > 1) {
     try {
       const state = await decodeState(location.hash.slice(1));
       if (state) {
         applyState(state);
-        restored = true;
+        restored = state;
       }
     } catch (e) {
       showError(`could not restore permalink: ${e.message ?? e}`);
@@ -907,9 +862,30 @@ async function boot() {
 
   await initHeader();
   // Parse the initial input so every pane has a live graph to work with.
-  await doParse();
+  const parsed = await doParse();
 
   registerServiceWorker();
+
+  // The general query worker has no startup deadline or result bound. Auto-run
+  // only the known example, and leave the Run button in charge of other links.
+  if (!restored || !parsed || !stillAtRestoredQuery(restored, parsed)) return;
+  try {
+    if (await matchesBundledMuseumQuery(restored) && stillAtRestoredQuery(restored, parsed)) {
+      await doQuery();
+    }
+  } catch (error) {
+    if (stillAtRestoredQuery(restored, parsed)) {
+      showError(`could not verify bundled museum example: ${error.message ?? error}`);
+    }
+  }
+}
+
+function stillAtRestoredQuery(state, parsed) {
+  return !queryStarted && !latestGalleryLoad && latestParse === parsed &&
+    activePane === "sparql" && state.activePane === "sparql" &&
+    parsed.text === state.input && parsed.format === state.inputFormat &&
+    $("input-text").value === parsed.text && $("input-format").value === parsed.format &&
+    $("sparql-text").value === state.query;
 }
 
 boot();

@@ -41,6 +41,39 @@ count handed to the loss ledger (see
 reified statements — the SHACL 1.2 `sh:reifierShape` /
 `sh:reificationRequired` surface — is covered in [SHACL](../validation/shacl.md).
 
+### Worked example: competing museum attributions
+
+An original, fictional [museum collection](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/museum/collection.ttl)
+contains twelve objects with Chinese labels. Two records give different dates
+for the same lotus-pattern bowl (莲纹碗). Turtle's annotation block on each
+date creates a reifier carrying that date's source. The
+[SPARQL query](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/museum/attributions.rq)
+joins each date to its reifier via `rdf:reifies` and keeps the claims separate.
+Neither date overrides the other.
+
+| Object | Attributed date | Source |
+| --- | --- | --- |
+| 莲纹碗 | `1718-05-12` | 入藏登记簿 (acquisition register) |
+| 莲纹碗 | `1723-09-08` | 修复笔记 (conservation notebook) |
+
+In the [playground](https://blackcat-informatics.github.io/purrdf/playground/),
+open **Gallery**, then select **Load & run** for **Museum collection (Chinese
+labels)**. **Copy permalink** on the gallery entry creates a link that
+restores the original Turtle and query. Open that link to see the two rows
+automatically. Links with edited or different input or queries wait for
+**Run**. In the Input pane, replace `1723-09-08` with
+`1724-09-08`, parse the updated Turtle, and rerun the query. Only the
+conservation notebook's row changes.
+
+From the repository, the Rust example checks the same typed rows for both
+versions of the input:
+
+```sh
+cargo run --locked -p purrdf --example museum_attributions
+```
+
+The fictional collection is licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+
 ## Base-direction literals
 
 RDF 1.2 adds `rdf:dirLangString`: a language-tagged literal that also carries

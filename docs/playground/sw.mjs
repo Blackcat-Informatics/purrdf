@@ -4,7 +4,7 @@
 // package on install and serves cache-first, so the console runs fully offline
 // after the first load. There is no server-side evaluation to fall back to.
 
-const CACHE = "purrdf-console-v2";
+const CACHE = "purrdf-console-v4";
 
 const SHELL = [
   "./",
@@ -15,9 +15,13 @@ const SHELL = [
   "./style.css",
   "./manifest.webmanifest",
   "./examples/gallery.mjs",
+  "./examples/museum/collection.ttl",
+  "./examples/museum/attributions.rq",
+  "./permalink.mjs",
   "./purrdf/index.mjs",
   "./purrdf/package.json",
   "./purrdf/build-compiler.txt",
+  "./purrdf/pkg/purrdf_bytes.mjs",
   "./purrdf/pkg/purrdf_jspi.mjs",
   "./purrdf/pkg/purrdf_wasm.js",
   "./purrdf/pkg/purrdf_wasm_bg.wasm",
