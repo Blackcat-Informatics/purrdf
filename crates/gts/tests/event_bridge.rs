@@ -357,6 +357,61 @@ fn an_unbound_triple_term_is_a_blank_node_apart_from_the_document_labels() {
     );
 }
 
+/// Unlabelled entries each name a fresh node even if another entry spells the
+/// synthetic label literally. Repeated references to one entry share its node.
+#[cfg(not(target_arch = "wasm32"))]
+fn anonymous_blank_entries_have_scopes_apart_from_authored_labels() {
+    let mut absent = Term::blank("");
+    absent.value = None;
+    let mut writer = Writer::new("rdf12");
+    writer.add_terms(&[
+        Term::iri("https://example.org/o"),
+        Term::iri("https://example.org/p"),
+        absent,
+        Term::blank(""),
+        Term::blank("gts_anon_0_2"),
+    ]);
+    writer.add_quads(&[
+        (2, 1, 0, None),
+        (3, 1, 0, None),
+        (4, 1, 0, None),
+        (2, 1, 2, None),
+    ]);
+    let mut sink = CollectSink::default();
+    stream_events(
+        &writer.into_bytes(),
+        ReadOptions::new(true, None),
+        &mut sink,
+    )
+    .expect("stream the absent, empty, and authored blank nodes");
+    let subjects: Vec<_> = sink.quads.iter().map(|quad| &sink.terms[&quad.s]).collect();
+    assert_eq!(subjects.len(), 4);
+    assert_ne!(subjects[0], subjects[1]);
+    assert_ne!(subjects[0], subjects[2]);
+    assert_ne!(subjects[1], subjects[2]);
+    assert_eq!(subjects[0], subjects[3]);
+    assert_eq!(subjects[3], &sink.terms[&sink.quads[3].o]);
+    let [
+        OwnedTerm::Blank {
+            label: generated,
+            scope: fresh,
+        },
+        OwnedTerm::Blank { scope: empty, .. },
+        OwnedTerm::Blank {
+            label: authored,
+            scope: segment,
+        },
+        ..,
+    ] = subjects.as_slice()
+    else {
+        panic!("the three entries are blank nodes");
+    };
+    assert_eq!(generated, authored);
+    assert_ne!(fresh, segment);
+    assert_ne!(empty, segment);
+    assert_ne!(fresh, empty);
+}
+
 /// R7-exec2: the same blank label in two segments resolves to distinct scopes.
 fn per_segment_blank_scopes_are_distinct() {
     let mut a = Writer::new("generic");
@@ -1052,6 +1107,8 @@ purrdf_testkit::harness_main!(
     bridge_events_equal_offline_read,
     per_segment_blank_scopes_are_distinct,
     an_unbound_triple_term_is_a_blank_node_apart_from_the_document_labels,
+    #[cfg(not(target_arch = "wasm32"))]
+    anonymous_blank_entries_have_scopes_apart_from_authored_labels,
     claimid_offset_index_single_pass,
     bridge_calls_finish_once,
     bridge_break_cancels_drive,

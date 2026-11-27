@@ -707,6 +707,19 @@ exists; the engine raises it itself.
 
 ## Containers
 
+- **Anonymous GTS version 1 blanks.** A blank term with absent or empty `v`
+  always names a fresh node per source entry. Its projected blank label uses a
+  reserved scope, distinct from any authored label. This changes synthetic
+  names in native materialization, event streams and N-Quads. Multi-segment
+  folds keep the absent or empty lexical value instead of substituting a
+  segment-prefixed label. The fold view's public blank value now uses the same
+  spelling as its N-Quads token. An ordinary legal label such as `ordinary`
+  still projects as `_:ordinary` in a single-segment fold. Labels that start
+  with the reserved `purrdfesc` marker, including an authored copy of an
+  anonymous token, are escaped so they cannot name a synthetic node. The
+  raw lexical accessor still returns the stored label. Treat projected labels
+  as local identifiers, and compare RDF datasets up to blank-node renaming.
+
 - **Triple terms that reach themselves.** A `k:3` term that is reachable from its
   own components, through `tt` or through the first `reifies` row of its `rf`, states
   no triple. The reader keeps the `reifies` row

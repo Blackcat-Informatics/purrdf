@@ -1375,18 +1375,31 @@ impl<S: Admission + ?Sized> SerInterner<'_, '_, '_, '_, S> {
                 Ok(Nested::Leaf(builder.intern_iri_with_memory(iri, memory)?))
             }
             SerTermKind::Bnode => {
-                // The label is only ever read through `&label`: borrow the table's
-                // string and build a fresh one solely for the missing-value fallback.
-                let label: Cow<'_, str> = match term.value.as_deref() {
-                    Some(label) => Cow::Borrowed(label),
-                    None => Cow::Owned(
-                        memory.format_with_progress(&format_args!("gts_bnode_{gts_id}"))?,
+                use crate::gts_resolve::{SYNTHETIC_BLANK_SCOPE, anonymous_blank_label};
+
+                // Only GTS v1's opaque carrier treats absent or empty labels
+                // as anonymous term entries. Text already supplies its own
+                // lexical blank labels, decoded independently below.
+                let (label, opaque_scope) = match (self.blanks, term.value.as_deref()) {
+                    (BlankIngress::Opaque, None | Some("")) => (
+                        Cow::Owned(memory.format_with_progress(&format_args!(
+                            "{}",
+                            anonymous_blank_label(None, gts_id)
+                        ))?),
+                        SYNTHETIC_BLANK_SCOPE,
+                    ),
+                    (_, Some(label)) => (Cow::Borrowed(label), BlankScope::DEFAULT),
+                    (BlankIngress::TextDecoded(_), None) => (
+                        Cow::Owned(
+                            memory.format_with_progress(&format_args!("gts_bnode_{gts_id}"))?,
+                        ),
+                        BlankScope::DEFAULT,
                     ),
                 };
                 let result = (|| -> Result<TermId, StorageError> {
                     Ok(match self.blanks {
                         BlankIngress::Opaque => {
-                            builder.intern_blank_with_memory(&label, BlankScope::DEFAULT, memory)?
+                            builder.intern_blank_with_memory(&label, opaque_scope, memory)?
                         }
                         BlankIngress::TextDecoded(alphabet) => {
                             let (decoded, scope) =
@@ -1457,7 +1470,7 @@ impl<S: Admission + ?Sized> SerInterner<'_, '_, '_, '_, S> {
                     ))?;
                     let result = builder.intern_blank_with_memory(
                         &label,
-                        crate::gts_resolve::UNBOUND_TRIPLE_SCOPE,
+                        crate::gts_resolve::SYNTHETIC_BLANK_SCOPE,
                         memory,
                     );
                     let cleanup = memory.release_string(label);

@@ -180,6 +180,29 @@ pub trait ResolvedSink {
         label: &str,
     ) -> Result<Self::Id, Self::Error>;
 
+    /// Intern a fresh blank node for a v1 term whose label is absent or empty
+    /// (§7.1). Override this to keep its identity outside authored scopes.
+    ///
+    /// The compatibility default passes an explicitly empty wire label to
+    /// [`Self::intern_blank`] unchanged and uses the legacy synthetic label only
+    /// when the wire label is absent. It cannot guarantee freshness in a sink
+    /// that keys on the label alone.
+    fn intern_anonymous_blank(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+        wire_label: Option<&str>,
+    ) -> Result<Self::Id, Self::Error> {
+        if let Some(label) = wire_label {
+            return self.intern_blank(segment_index, gts_id, label);
+        }
+        self.intern_blank(
+            segment_index,
+            gts_id,
+            &format!("gts_bnode_{segment_index}_{gts_id}"),
+        )
+    }
+
     /// Intern the blank node a triple term that states no triple stands for
     /// (§7.3: no `tt`, no `rf` row, or a term that reaches itself), returning its
     /// target id.
@@ -193,7 +216,11 @@ pub trait ResolvedSink {
         segment_index: u64,
         gts_id: usize,
     ) -> Result<Self::Id, Self::Error> {
-        self.intern_blank(segment_index, gts_id, &format!("unbound_triple_{gts_id}"))
+        self.intern_blank(
+            segment_index,
+            gts_id,
+            &crate::model::unbound_triple_label(None, gts_id).to_string(),
+        )
     }
 
     /// Intern a resolved literal term, returning its target id. The datatype (if
@@ -1038,17 +1065,15 @@ impl<S: ResolvedSink, D: ResolutionStorage<S::Id>> SegmentResolver<S, D> {
             }
             // Per-segment scope isolation: the target scopes by `segment_index`
             // so the SAME blank label in different segments interns distinctly.
-            TermKind::Bnode => {
-                let generated;
-                let label = match term.value.as_deref() {
-                    Some(label) => label,
-                    None => {
-                        generated = format!("gts_bnode_{segment_index}_{gts_id}");
-                        &generated
-                    }
-                };
-                self.sink.intern_blank(segment_index, gts_id, label)?
-            }
+            TermKind::Bnode => match term.value.as_deref() {
+                Some(label) if !label.is_empty() => {
+                    self.sink.intern_blank(segment_index, gts_id, label)?
+                }
+                wire_label => {
+                    self.sink
+                        .intern_anonymous_blank(segment_index, gts_id, wire_label)?
+                }
+            },
             TermKind::Literal => {
                 let datatype = match term.datatype {
                     Some(dt_gts_id) => Some(self.resolved_dependency(

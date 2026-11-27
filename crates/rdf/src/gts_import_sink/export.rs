@@ -240,23 +240,24 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         Ok(reaches)
     }
 
-    /// Write the blank node a triple term that states no triple stands for.
+    /// Write an anonymous blank or a triple term that states no triple.
     ///
     /// The output is one N-Quads label space, so the label is the injective
     /// `(label, scope)` encoding every document blank node here goes through, at
     /// the scope no document blank node has: segment scopes stop short of
-    /// `UNBOUND_TRIPLE_SCOPE`. Distinct scopes make distinct pairs, so no label a
+    /// `SYNTHETIC_BLANK_SCOPE`. Distinct scopes make distinct pairs, so no label a
     /// document spells yields this token (proof at `gts_resolve::blank_token`).
-    fn write_unbound_triple(&mut self, key: TermKey) -> Result<(), RdfDiagnostic> {
+    fn write_synthetic_blank(
+        &mut self,
+        key: TermKey,
+        label: impl std::fmt::Display,
+    ) -> Result<(), RdfDiagnostic> {
         super::segment_scope(key.segment)?;
         let baseline = self.memory.admitted_bytes();
-        let label = self.memory.format_with_progress(&format_args!(
-            "{}",
-            crate::gts_resolve::unbound_triple_label(Some(key.segment), key.term)
-        ))?;
+        let label = self.memory.format_with_progress(&format_args!("{label}"))?;
         let encoded = purrdf_core::blank_label::encode_blank_label_with_memory(
             &label,
-            crate::gts_resolve::UNBOUND_TRIPLE_SCOPE,
+            crate::gts_resolve::SYNTHETIC_BLANK_SCOPE,
             purrdf_core::blank_label::LabelAlphabet::BlankNodeLabel,
             self.memory,
         )?;
@@ -267,6 +268,13 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
         self.memory
             .release_bytes(self.memory.admitted_bytes() - baseline)?;
         Ok(())
+    }
+
+    fn write_unbound_triple(&mut self, key: TermKey) -> Result<(), RdfDiagnostic> {
+        self.write_synthetic_blank(
+            key,
+            crate::gts_resolve::unbound_triple_label(Some(key.segment), key.term),
+        )
     }
 
     fn term(&mut self, key: TermKey) -> Result<TermLease, RdfDiagnostic> {
@@ -302,17 +310,18 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                         &mut self.output,
                     ),
                     TermKind::Bnode => {
-                        let baseline = self.memory.admitted_bytes();
-                        let mut generated = None;
-                        let label = match term.value.as_deref() {
-                            Some(label) => label,
-                            None => {
-                                generated = Some(self.memory.format_with_progress(
-                                    &format_args!("gts_bnode_{}_{}", key.segment, key.term),
-                                )?);
-                                generated.as_deref().unwrap_or_default()
-                            }
+                        let Some(label) = term.value.as_deref().filter(|label| !label.is_empty())
+                        else {
+                            self.write_synthetic_blank(
+                                key,
+                                crate::gts_resolve::anonymous_blank_label(
+                                    Some(key.segment),
+                                    key.term,
+                                ),
+                            )?;
+                            continue;
                         };
+                        let baseline = self.memory.admitted_bytes();
                         let encoded = purrdf_core::blank_label::encode_blank_label_with_memory(
                             label,
                             super::segment_scope(key.segment)?,
@@ -322,8 +331,6 @@ impl<T: TermStorage, A: Admission + ?Sized> Emitter<'_, '_, '_, T, A> {
                         self.output.push_str("_:");
                         self.output.push_str(&encoded);
                         drop(encoded);
-                        // Temporary label storage is destroyed before refund.
-                        drop(generated);
                         self.memory
                             .release_bytes(self.memory.admitted_bytes() - baseline)?;
                     }
@@ -462,6 +469,15 @@ impl<T: TermStorage, A: Admission + ?Sized> ResolvedSink for Emitter<'_, '_, '_,
     ) -> Result<TermKey, RdfDiagnostic> {
         super::segment_scope(segment)?;
         Ok(TermKey { segment, term })
+    }
+
+    fn intern_anonymous_blank(
+        &mut self,
+        segment: u64,
+        term: usize,
+        _wire_label: Option<&str>,
+    ) -> Result<TermKey, RdfDiagnostic> {
+        self.intern_blank(segment, term, "")
     }
     fn intern_literal(
         &mut self,

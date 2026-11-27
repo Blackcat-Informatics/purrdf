@@ -14,6 +14,11 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   A resource trip can visit a certified, incomplete evidence prefix.
   DISTINCT and REDUCED withhold prefix status because later rows can change
   the evidence attached to a delivered binding.
+- **GTS version 1 preserves anonymous blank-node identity.** Each blank term
+  with no value or an empty value names a new node. Fold, streaming import and
+  export use scoped labels so an authored blank cannot collide with that node.
+  The change alters anonymous labels in projected output, not the GTS wire
+  format.
 
 ## [5.0.1] - 2026-11-23
 

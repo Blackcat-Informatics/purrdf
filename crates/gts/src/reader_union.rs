@@ -121,6 +121,18 @@ impl MapFrame {
 }
 
 impl Unioner {
+    /// Authored labels keep their segment discriminator after the fold.
+    /// Anonymous terms retain absent or empty labels and keep the distinct
+    /// union IDs assigned by their entry keys.
+    fn mapped_value(term: &Term, segment: usize) -> Option<String> {
+        match (term.kind, term.value.as_deref()) {
+            (TermKind::Bnode, Some(label)) if !label.is_empty() => {
+                Some(format!("s{segment}.{label}"))
+            }
+            _ => term.value.clone(),
+        }
+    }
+
     /// The intern key of a segment term that is not a quoted triple with bound
     /// components — those key on their components' union ids instead.
     fn leaf_key(seg: &Graph, seg_idx: usize, tid: usize) -> InternKey {
@@ -303,26 +315,9 @@ impl Unioner {
                     // this term's output id is taken only now that they are done.
                     let new_id = self.out.terms.len();
                     let reifier = frame.reifier;
-                    // Blank nodes are relabelled with a segment prefix (§7.1 permits
-                    // isomorphism-preserving relabeling): within a segment,
-                    // byte-identical entries already intern to one union term (§7.8);
-                    // ACROSS segments the same label names DIFFERENT nodes, and
-                    // emitting the raw label from the union would merge them.
-                    // Label-less nodes (absent or empty "v") are distinct TERMS under
-                    // the intern key, so their serialized labels must stay distinct
-                    // too — the union id disambiguates them. Computed after dt/rf
-                    // mapping so out.terms.len() IS this term's id.
-                    let value = if t.kind == TermKind::Bnode {
-                        Some(match t.value.as_deref() {
-                            Some(label) if !label.is_empty() => format!("s{seg_idx}.{label}"),
-                            _ => format!("s{seg_idx}._anon{new_id}"),
-                        })
-                    } else {
-                        t.value.clone()
-                    };
                     self.out.terms.push(Term {
                         kind: t.kind,
-                        value,
+                        value: Self::mapped_value(t, seg_idx),
                         datatype: frame.datatype,
                         lang: t.lang.clone(),
                         direction: t.direction.clone(),
@@ -517,17 +512,9 @@ mod term_walk_tests {
             )
         });
         let new_id = union.out.terms.len();
-        let value = if t.kind == TermKind::Bnode {
-            Some(match t.value.as_deref() {
-                Some(label) if !label.is_empty() => format!("s{seg_idx}.{label}"),
-                _ => format!("s{seg_idx}._anon{new_id}"),
-            })
-        } else {
-            t.value.clone()
-        };
         union.out.terms.push(Term {
             kind: t.kind,
-            value,
+            value: Unioner::mapped_value(t, seg_idx),
             datatype,
             lang: t.lang.clone(),
             direction: t.direction.clone(),

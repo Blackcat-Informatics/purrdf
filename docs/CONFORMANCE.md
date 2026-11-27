@@ -73,7 +73,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | JSON Schema draft 2020-12 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2342 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft 2019-09 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2298 | 0 | 0 | 0 | GREEN |
 | JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
-| GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 39 | 0 | 0 | 0 | GREEN |
+| GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 79 | 7 | 7 | 0 | GREEN |
 | Python binding suite | first-party (incl. compat differential vs rdflib) | 1568 | 4 | 4 | 0 | GREEN |
 <!-- END GENERATED: conformance-matrix -->
@@ -151,7 +151,14 @@ number, never a silent skip (see [Ledger discipline](#ledger-discipline) and
 | RDFC-1.0 canonicalization | W3C fixtures, `crates/rdf/tests/fixtures/rdfc/` | **65** vectors (64 eval + 1 negative), green |
 | rdflib drop-in (LSP) gate | rdflib 7.6 own vendored tests | Required current-gate scoreboard: **79** pass · 7 strict-xfail (ledgered) |
 | Python binding suite | first-party, compat differential vs rdflib 7.6 included | **1568** pass · 4 strict-xfail (ledgered in the rdflib differential). Counts the first-party binding suite, including entailment, GTS, projections and shapes. The vendored suite reports its own row. |
-| GTS transport | frozen cross-language vectors, `vectors/` | **39 / 39** vectors fold byte-exactly into the `<id>.expected.json` the corpus ships · 0 ledgered divergences. The harness keeps its two-way discipline over an empty ledger: a vector listed as diverging must still disagree, and no unlisted vector may start disagreeing. The upstream corpus at `gmeow-gts` revision `cd123c2` holds 52 vectors and the engine agrees with 51. The one standing divergence is `13c-self-describing-triple-term`: two terms resolve to the same triple, specification sections 7.1 and 7.8 collapse identical value rows, and the vector keeps both quads. The engine follows the text, and the vector is not edited. `vectors/signed/` (`basic.json` and 68 `sigalg-*` vectors) is outside this statement: the `sigalg-*` vectors pin a protected-header grammar that version 1 of the specification does not contain, so they are not graded as conformance. `signed_corpus` still lists where the engine departs from them |
+| GTS transport | frozen cross-language vectors, `vectors/` | **38 / 39** folds match their committed `<id>.expected.json` byte-for-byte. The sole ledgered vector, `15b-anon-bnode-union`, differs only in anonymous blank-node spelling. Its N-Quads must be RDF-isomorphic and all other oracle fields must match exactly. The harness rejects any unlisted difference or stale ledger entry. This count excludes the signed corpus, whose differences the `signed_corpus` harness lists separately. |
+
+The carried GTS fold count does not include the upstream
+`13c-self-describing-triple-term` case. That oracle keeps two quads whose terms
+resolve to the same triple. The engine collapses identical value rows as
+specified by GTS version 1 sections 7.1 and 7.8. The `sigalg-*` fixtures in
+`vectors/signed/` pin a protected-header grammar outside version 1 and are
+not graded as conformance.
 
 ## Native YAML-LD Basic
 

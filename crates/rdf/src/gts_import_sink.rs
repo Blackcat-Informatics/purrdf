@@ -141,7 +141,7 @@ fn segment_scope(segment_index: u64) -> Result<BlankScope, RdfDiagnostic> {
     let index = CapacityError::slot(
         CapacitySpace::ImportBlankScopes,
         segment_index,
-        // The scopes above are reserved for unbound triple terms and queries.
+        // The scopes above are reserved for synthetic GTS projections and queries.
         u64::from(purrdf_core::blank_label::MAX_ALLOCATED_SCOPE),
     )
     .map_err(|error| {
@@ -195,6 +195,19 @@ impl ResolvedSink for SinkImporter<'_> {
         Ok(self.builder.intern_blank(label, scope)?)
     }
 
+    fn intern_anonymous_blank(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+        _wire_label: Option<&str>,
+    ) -> Result<TermId, RdfDiagnostic> {
+        use crate::gts_resolve::{SYNTHETIC_BLANK_SCOPE, anonymous_blank_label};
+
+        segment_scope(segment_index)?;
+        let label = anonymous_blank_label(Some(segment_index), gts_id).to_string();
+        Ok(self.builder.intern_blank(&label, SYNTHETIC_BLANK_SCOPE)?)
+    }
+
     /// A triple term that states no triple is a blank node of the one scope no
     /// segment owns (`segment_scope` stops short of it), so no document label
     /// denotes it.
@@ -208,7 +221,7 @@ impl ResolvedSink for SinkImporter<'_> {
             crate::gts_resolve::unbound_triple_label(Some(segment_index), gts_id).to_string();
         Ok(self
             .builder
-            .intern_blank(&label, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE)?)
+            .intern_blank(&label, crate::gts_resolve::SYNTHETIC_BLANK_SCOPE)?)
     }
 
     /// GTS *does* carry RDF 1.2 base direction (`purrdf-gts`'s `Term` has a
@@ -1224,6 +1237,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn default_blank_sink_preserves_explicit_empty_label() {
+        let mut resolver = SegmentResolver::new(RecordingSink::new());
+        let mut absent = blank_term("");
+        absent.value = None;
+        resolver.term(0, 0, Arc::new(blank_term("")));
+        resolver.term(0, 1, Arc::new(absent));
+        resolver.term(0, 2, Arc::new(blank_term("gts_bnode_0_0")));
+        resolver.term(0, 3, Arc::new(blank_term("gts_bnode_0_1")));
+        resolver.finish().expect("resolve legacy blank labels");
+
+        let sink = resolver.sink();
+        let empty = sink.id(0, 0).expect("empty blank label");
+        let absent = sink.id(0, 1).expect("absent blank label");
+        let authored = sink
+            .id(0, 2)
+            .expect("authored label resembling a generated one");
+        let legacy_alias = sink
+            .id(0, 3)
+            .expect("authored label equal to the absent fallback");
+        assert_ne!(empty, authored);
+        assert_eq!(
+            blank_scope(&sink.inner.builder, empty),
+            (String::new(), BlankScope(1))
+        );
+        assert_eq!(
+            blank_scope(&sink.inner.builder, absent),
+            ("gts_bnode_0_1".to_owned(), BlankScope(1))
+        );
+        assert_eq!(absent, legacy_alias);
+    }
+
     /// GATE 2 (a) — multi-segment blank-node scope isolation, driven DIRECTLY
     /// through the `StreamingSink` callbacks (no GTS bytes needed).
     ///
@@ -1705,7 +1750,7 @@ mod tests {
         match quad.o {
             TermRef::Blank { label, scope } => {
                 assert_eq!(label, "unbound_triple_0_2");
-                assert_eq!(scope, crate::gts_resolve::UNBOUND_TRIPLE_SCOPE);
+                assert_eq!(scope, crate::gts_resolve::SYNTHETIC_BLANK_SCOPE);
             }
             other => panic!("expected the unbound triple blank node, got {other:?}"),
         }

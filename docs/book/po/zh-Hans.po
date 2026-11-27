@@ -27265,9 +27265,9 @@ msgstr ""
 
 #: src/project/conformance.md:47
 msgid ""
-"frozen cross-language vectors — all 39 fold byte-exactly into their "
-"committed expectation"
-msgstr "冻结的跨语言向量——39 个全部按字节精确折叠为其已提交的预期结果"
+"frozen cross-language vectors — 38 exact folds and one anonymous blank-node "
+"spelling difference checked by RDF isomorphism"
+msgstr "冻结的跨语言向量——38 个精确折叠，另有一个匿名空白节点拼写差异通过 RDF 同构检查"
 
 #: src/project/conformance.md:48
 msgid "rdflib drop-in"

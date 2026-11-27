@@ -13,12 +13,10 @@
 //! the builder because a maintainer target exposes no importable surface — this
 //! module is that surface.)
 //!
-//! It also hosts the shared cross-engine expected-fold oracle
+//! It also renders the production fold in the format of the cross-engine oracle
 //! ([`expected_fold_json`], [`expected_fold_json_in_mode`],
-//! [`render_expected_json`]). The oracle is not dictionary-specific: it
-//! reproduces the `<id>.expected.json` of EVERY vector in the frozen corpus,
-//! which is what `tests/gts_corpus_expected_fold.rs` grades the whole corpus
-//! against.
+//! [`render_expected_json`]). The corpus harness compares that fold against
+//! each vector's independent, frozen `<id>.expected.json`.
 
 use std::collections::BTreeMap;
 

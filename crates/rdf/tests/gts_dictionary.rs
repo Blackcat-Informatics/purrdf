@@ -107,6 +107,227 @@ fn render(dataset: &purrdf_rdf::ir::RdfDataset) -> Vec<u8> {
     lines.join("\n").into_bytes()
 }
 
+fn anonymous_blank_segment(labels: &[Option<&str>], selected_blob: bool) -> Vec<u8> {
+    let mut writer = Writer::new("rdf12");
+    let mut terms = vec![
+        Term::iri("https://example.org/o"),
+        Term::iri("https://example.org/p"),
+    ];
+    terms.extend(labels.iter().map(|label| {
+        let mut term = Term::blank(label.unwrap_or_default());
+        term.value = label.map(str::to_owned);
+        term
+    }));
+    writer.add_terms(&terms);
+    let mut rows: Vec<_> = (2..terms.len()).map(|id| (id, 1, 0, None)).collect();
+    rows.push((2, 1, 2, None)); // A second use names the very same anonymous entry.
+    writer.add_quads(&rows);
+    if selected_blob {
+        writer.add_blob(b"selected bytes", None, Some("fixture"));
+    }
+    writer.into_bytes()
+}
+
+fn anonymous_identity_oracle(
+    subjects: usize,
+    splits: bool,
+) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
+    use std::fmt::Write as _;
+
+    let mut expected = String::new();
+    for subject in 0..subjects {
+        writeln!(
+            expected,
+            "_:node{subject} <https://example.org/p> <https://example.org/o> .",
+        )
+        .expect("write expected row");
+        if subject == 0 || (splits && subject == 8) {
+            writeln!(
+                expected,
+                "_:node{subject} <https://example.org/p> _:node{subject} .",
+            )
+            .expect("write expected self-edge");
+        }
+    }
+    parse_dataset(expected.as_bytes(), "application/n-quads", None)
+        .expect("independent blank-node identity oracle")
+}
+
+fn export_anonymous_fixture(
+    source: &[u8],
+    path: &std::path::Path,
+) -> std::sync::Arc<purrdf_rdf::RdfDataset> {
+    let mut raw = storage::Files::new(&path.join("raw-export"));
+    let replay = raw.replay();
+    let mut state = storage::Resolution::new(&path.join("export"));
+    let mut output = WriterDrain(Vec::new());
+    export_gts_rdf_nquads_with_dictionary(
+        source,
+        &mut raw,
+        &mut state,
+        replay,
+        &mut output,
+        &mut Memory::new(&mut Ceiling(128 * 1024)),
+    )
+    .expect("external dictionary export");
+    parse_dataset(&output.0, "application/n-quads", None).expect("reparse export")
+}
+
+fn assert_authored_blank_token(view: &purrdf_rdf::gts_view::GtsFoldView, copied: &str) {
+    use purrdf_core::blank_label::{LabelAlphabet, decode_blank_label};
+    use purrdf_rdf::{BlankScope, gts_view::PublicValue};
+
+    // The authored label is literally the anonymous token's body. The public
+    // value must escape it, but the raw lexical accessor still returns it.
+    assert_eq!(view.lex(8), copied);
+    let anonymous = view.nq_token(2);
+    assert_eq!(anonymous.strip_prefix("_:"), Some(copied));
+    let authored = view.nq_token(8);
+    assert_ne!(authored, anonymous);
+    let (decoded, scope) = decode_blank_label(
+        authored.strip_prefix("_:").expect("blank token"),
+        LabelAlphabet::BlankNodeLabel,
+    );
+    assert_eq!(decoded, copied);
+    assert_eq!(scope, BlankScope::DEFAULT);
+    assert_eq!(view.public_value(8), PublicValue::Blank(authored));
+}
+
+fn assert_anonymous_fold_view(
+    source: &[u8],
+    graph: &purrdf_gts::model::Graph,
+    splits: bool,
+    subjects: usize,
+    copied_token: &str,
+) {
+    use purrdf_rdf::gts_view::{GtsFoldView, PublicValue};
+
+    let view = GtsFoldView::new(purrdf_gts::reader::read(source, splits, None)).expect("fold view");
+    if !splits {
+        assert_eq!(view.term(2).value, None);
+        assert_eq!(view.term(3).value.as_deref(), Some(""));
+        assert_authored_blank_token(&view, copied_token);
+    }
+    let mut tokens = std::collections::BTreeSet::new();
+    for &(subject, _, _, _) in &graph.quads {
+        let token = view.nq_token(subject);
+        assert_eq!(
+            view.public_value(subject),
+            PublicValue::Blank(token.clone())
+        );
+        tokens.insert(token);
+    }
+    assert_eq!(tokens.len(), subjects);
+    assert!(tokens.contains(if splits {
+        "_:s0.ordinary"
+    } else {
+        "_:ordinary"
+    }));
+}
+
+#[test]
+fn anonymous_entries_stay_distinct_through_fold_import_and_export() {
+    use purrdf_core::blank_label::{LabelAlphabet, UNBOUND_TRIPLE_BLANK_SCOPE, encode_blank_label};
+    use purrdf_rdf::gts::{dataset_from_gts_graph, flattened_dataset_from_gts_graph};
+    use purrdf_rdf::{
+        GtsBlobLimits, GtsBlobSelector, import_gts_events_with_blobs, import_gts_graph,
+    };
+
+    let token = encode_blank_label(
+        "gts_anon_2",
+        UNBOUND_TRIPLE_BLANK_SCOPE,
+        LabelAlphabet::BlankNodeLabel,
+    );
+    let first = anonymous_blank_segment(
+        &[
+            None,
+            Some(""),
+            Some("b2"),
+            Some("gts_bnode_2"),
+            Some("gts_bnode_0_2"),
+            Some("gts_anon_2"),
+            Some(&token),
+            Some("ordinary"),
+        ],
+        true,
+    );
+    // Only these four new terms intern in the union. The second segment's
+    // first anonymous entry is union ID 10, formerly spelled s1._anon10.
+    let second =
+        anonymous_blank_segment(&[None, Some(""), Some("_anon10"), Some("ordinary")], false);
+    let multiple = [first.as_slice(), second.as_slice()].concat();
+    let root = purrdf_testkit::temp_dir!().expect("native blank-node storage");
+
+    for (name, source, splits, subjects) in [
+        ("single", first.as_slice(), false, 8),
+        ("multiple", multiple.as_slice(), true, 12),
+    ] {
+        let graph = purrdf_gts::reader::read(source, splits, None);
+        assert!(graph.diagnostics.is_empty(), "{:?}", graph.diagnostics);
+        assert_anonymous_fold_view(source, &graph, splits, subjects, &token);
+
+        let expected = anonymous_identity_oracle(subjects, splits);
+        let path = root.path().join(name);
+        let mut raw = storage::Files::new(&path.join("raw"));
+        let replay = raw.replay();
+        let mut state = storage::Resolution::new(&path.join("import"));
+        let external = import_gts_events_with_dictionary(source, &mut raw, &mut state, replay)
+            .expect("external dictionary import");
+        let exported = export_anonymous_fixture(source, &path);
+        let selected = import_gts_events_with_blobs(
+            source,
+            &[GtsBlobSelector::Representation("fixture")],
+            GtsBlobLimits::new(4096, 4096),
+        )
+        .expect("import with a selected blob");
+        let [blob] = selected.blobs.as_slice() else {
+            panic!("one selected blob")
+        };
+        assert_eq!(&*blob.bytes, b"selected bytes");
+        for (route, actual) in [
+            (
+                "fold",
+                dataset_from_gts_graph(&graph).expect("fold materialization"),
+            ),
+            (
+                "flat fold",
+                flattened_dataset_from_gts_graph(&graph).expect("flat materialization"),
+            ),
+            (
+                "graph",
+                import_gts_graph(graph).expect("graph import").dataset,
+            ),
+            (
+                "stream",
+                import_gts_events(source)
+                    .expect("resident streaming import")
+                    .dataset,
+            ),
+            ("external", external.dataset),
+            ("blob", selected.bundle.dataset),
+            ("export", exported),
+        ] {
+            assert_eq!(
+                actual.quad_count(),
+                expected.quad_count(),
+                "{name}: {route}"
+            );
+            assert!(
+                purrdf_rdf::datasets_isomorphic(
+                    &expected,
+                    &actual,
+                    &mut purrdf_core::CanonicalizationControl::new(
+                        purrdf_core::CANON_CORPUS_POLICY,
+                        None
+                    ),
+                )
+                .expect("isomorphism check"),
+                "{name}: {route}"
+            );
+        }
+    }
+}
+
 type IndexedIdentity = Box<
     dyn FnMut(
         &std::io::Cursor<Vec<u8>>,

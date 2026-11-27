@@ -277,6 +277,31 @@ impl<'s> EventEmitter<'s> {
         Ok(())
     }
 
+    /// Emit a synthetic blank separately from every authored segment scope.
+    fn intern_projected_blank(
+        &mut self,
+        segment: u64,
+        label: impl std::fmt::Display,
+    ) -> Result<EventTermId, EventError> {
+        self.ensure_scope(segment)?;
+        let id = mint_event_id(&mut self.next_id)?;
+        if self.cancelled {
+            return Ok(id);
+        }
+        let scope = self.sink.open_scope()?;
+        self.emit_term(
+            id,
+            EventTerm::Blank {
+                label: &label.to_string(),
+                scope,
+            },
+        )?;
+        if !self.cancelled && self.sink.close_scope(scope)? == ControlFlow::Break(()) {
+            self.cancelled = true;
+        }
+        Ok(id)
+    }
+
     /// Close the scope left open by the final segment, if any. Called once by
     /// [`stream_events`] before finalizing a non-cancelled drive.
     fn close_open_scope(&mut self) -> Result<(), EventError> {
@@ -380,31 +405,27 @@ impl ResolvedSink for EventEmitter<'_> {
         Ok(id)
     }
 
-    /// A triple term that states no triple is a blank node alone in a scope of
-    /// its own: no label a document spells in any segment scope denotes it.
+    fn intern_anonymous_blank(
+        &mut self,
+        segment_index: u64,
+        gts_id: usize,
+        _wire_label: Option<&str>,
+    ) -> Result<Self::Id, Self::Error> {
+        self.intern_projected_blank(
+            segment_index,
+            crate::model::anonymous_blank_label(Some(segment_index), gts_id),
+        )
+    }
+
     fn intern_unbound_triple(
         &mut self,
         segment_index: u64,
         gts_id: usize,
     ) -> Result<Self::Id, Self::Error> {
-        self.ensure_scope(segment_index)?;
-        let id = mint_event_id(&mut self.next_id)?;
-        if self.cancelled {
-            return Ok(id);
-        }
-        let scope = self.sink.open_scope()?;
-        let label = format!("unbound_triple_{segment_index}_{gts_id}");
-        self.emit_term(
-            id,
-            EventTerm::Blank {
-                label: &label,
-                scope,
-            },
-        )?;
-        if !self.cancelled && self.sink.close_scope(scope)? == ControlFlow::Break(()) {
-            self.cancelled = true;
-        }
-        Ok(id)
+        self.intern_projected_blank(
+            segment_index,
+            crate::model::unbound_triple_label(Some(segment_index), gts_id),
+        )
     }
 
     fn intern_literal(

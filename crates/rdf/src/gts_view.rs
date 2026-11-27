@@ -15,7 +15,6 @@
 //! when the caller supplies its prefix.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 
 use purrdf_core::collections::{SoleObject, walk_rdf_list};
 use purrdf_gts::model::{Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
@@ -31,7 +30,8 @@ use purrdf_lex::term_syntax;
 use purrdf_xsd::datatype::{XSD_NS as XSD, XSD_STRING};
 
 use crate::gts_resolve::{
-    UNBOUND_TRIPLE_SCOPE, blank_token, ensure_terms_terminate, unbound_triple_label,
+    SYNTHETIC_BLANK_SCOPE, anonymous_blank_label, blank_token, ensure_terms_terminate,
+    unbound_triple_label,
 };
 use crate::{BlankScope, RdfDiagnostic};
 use purrdf_gts::resolution::SelfReaching;
@@ -387,6 +387,8 @@ impl GtsFoldView {
     /// integer/float/boolean literals are parsed (falling back to
     /// [`PublicValue::String`] on an unparseable lexical form), IRIs are
     /// CURIE-compacted, and language-tagged literals keep their stored tag.
+    /// Blank values use the injective N-Quads spelling rather than the raw
+    /// lexical value returned by [`Self::lex`].
     pub fn public_value(&self, tid: usize) -> PublicValue {
         let term = self.term(tid);
         match term.kind {
@@ -422,7 +424,7 @@ impl GtsFoldView {
                 PublicValue::String(lex)
             }
             TermKind::Iri => PublicValue::Iri(self.curie(self.lex(tid))),
-            TermKind::Bnode => PublicValue::Blank(format!("_:{}", self.lex(tid))),
+            TermKind::Bnode => PublicValue::Blank(self.nq_token(tid)),
             TermKind::Triple => PublicValue::String(self.nq_token(tid)),
         }
     }
@@ -1030,13 +1032,17 @@ fn render_term(graph: &Graph, reaching: &SelfReaching, tid: usize) -> String {
         let term = &graph.terms[tid];
         match term.kind {
             TermKind::Iri => term_syntax::write_iri(term.value.as_deref().unwrap_or(""), &mut out),
-            TermKind::Bnode => match term.value.as_ref() {
-                Some(value) => {
+            TermKind::Bnode => match term.value.as_deref() {
+                Some(value) if !value.is_empty() => {
                     term_syntax::write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out);
                 }
-                None => {
-                    let _ = write!(out, "_:b{tid}");
-                }
+                _ => term_syntax::write_blank(
+                    &blank_token(
+                        &anonymous_blank_label(None, tid).to_string(),
+                        SYNTHETIC_BLANK_SCOPE,
+                    ),
+                    &mut out,
+                ),
             },
             // A tagged literal's datatype is implied by its tag and never written, so
             // only an untagged one resolves its datatype term (GTS-SPEC §7.1 defaults
@@ -1071,7 +1077,7 @@ fn render_term(graph: &Graph, reaching: &SelfReaching, tid: usize) -> String {
                 None => term_syntax::write_blank(
                     &blank_token(
                         &unbound_triple_label(None, tid).to_string(),
-                        UNBOUND_TRIPLE_SCOPE,
+                        SYNTHETIC_BLANK_SCOPE,
                     ),
                     &mut out,
                 ),
@@ -1538,7 +1544,9 @@ mod term_walk_tests {
     use purrdf_gts::model::{Graph, Term, TermKind};
 
     use crate::BlankScope;
-    use crate::gts_resolve::{UNBOUND_TRIPLE_SCOPE, blank_token, unbound_triple_label};
+    use crate::gts_resolve::{
+        SYNTHETIC_BLANK_SCOPE, anonymous_blank_label, blank_token, unbound_triple_label,
+    };
     use purrdf_lex::term_syntax::{write_blank, write_iri, write_literal};
     use purrdf_xsd::datatype::XSD_STRING;
 
@@ -1606,8 +1614,16 @@ mod term_walk_tests {
         match term.kind {
             TermKind::Iri => write_iri(term.value.as_deref().unwrap_or(""), &mut out),
             TermKind::Bnode => match term.value.as_deref() {
-                Some(value) => write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out),
-                None => out = format!("_:b{tid}"),
+                Some(value) if !value.is_empty() => {
+                    write_blank(&blank_token(value, BlankScope::DEFAULT), &mut out);
+                }
+                _ => write_blank(
+                    &blank_token(
+                        &anonymous_blank_label(None, tid).to_string(),
+                        SYNTHETIC_BLANK_SCOPE,
+                    ),
+                    &mut out,
+                ),
             },
             TermKind::Literal => write_literal(
                 term.value.as_deref().unwrap_or(""),
@@ -1625,7 +1641,7 @@ mod term_walk_tests {
                         write_blank(
                             &blank_token(
                                 &unbound_triple_label(None, tid).to_string(),
-                                UNBOUND_TRIPLE_SCOPE,
+                                SYNTHETIC_BLANK_SCOPE,
                             ),
                             &mut out,
                         );
