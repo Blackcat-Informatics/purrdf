@@ -48,6 +48,7 @@ const FIRST: &str = purrdf_iri::vocab::rdf::FIRST;
 const REST: &str = purrdf_iri::vocab::rdf::REST;
 const NIL: &str = purrdf_iri::vocab::rdf::NIL;
 
+pub mod description;
 /// Borrowed explicit vocabulary, with no namespace or identity fallback.
 #[derive(Debug, Clone, Copy)]
 pub struct Vocabulary<'a> {
@@ -157,6 +158,16 @@ enum Reason {
         node: TermId,
         predicate: TermId,
     },
+    Description {
+        field: &'static str,
+        code: &'static str,
+        node: Option<TermId>,
+    },
+    StaleDescription {
+        node: TermId,
+        declared: purrdf_hash::hex::Digest32,
+        expected: purrdf_hash::hex::Digest32,
+    },
 }
 impl Error {
     /// The original plan snapshot. Local IDs never escape without this owner.
@@ -202,6 +213,12 @@ impl std::fmt::Display for Error {
             Reason::FileProjection { role, code } => write!(f, "glob RDF {role}: {code}"),
             Reason::OccupiedFileEvaluation { .. } => {
                 f.write_str("glob RDF evaluation already has a filesystem result field")
+            }
+            Reason::Description { field, code, .. } => {
+                write!(f, "glob RDF compiled description {field}: {code}")
+            }
+            Reason::StaleDescription { .. } => {
+                f.write_str("glob RDF compiled description is stale for this source plan")
             }
         }
     }
@@ -289,6 +306,26 @@ impl StructuredError for Error {
                 self.source.inspect_term(*node, Some("node"), visitor);
                 self.source
                     .inspect_term(*predicate, Some("predicate"), visitor);
+            }
+            Reason::Description { field, code, node } => {
+                visitor.value(Some("field"), ErrorValue::Code(field));
+                visitor.value(Some("reason"), ErrorValue::Code(code));
+                if let Some(node) = node {
+                    self.source.inspect_term(*node, Some("node"), visitor);
+                }
+            }
+            Reason::StaleDescription {
+                node,
+                declared,
+                expected,
+            } => {
+                visitor.value(
+                    Some("reason"),
+                    ErrorValue::Code("stale-compiled-description"),
+                );
+                visitor.value(Some("declared"), ErrorValue::Record(declared));
+                visitor.value(Some("expected"), ErrorValue::Record(expected));
+                self.source.inspect_term(*node, Some("node"), visitor);
             }
         }
     }
@@ -485,6 +522,18 @@ fn schema(
     Ok((schema, mode, surface))
 }
 
+fn sources(data: &RdfDataset, schema: Schema) -> impl Clone + ExactSizeIterator<Item = &str> {
+    let mut members = walk(data, schema);
+    (0..schema.count).map(move |_| {
+        let member = members
+            .next()
+            .expect("validated collection length")
+            .expect("immutable validated collection");
+        let source = required(data, member, schema.source, 7).expect("validated source field");
+        text(data, source, 7).expect("validated source string")
+    })
+}
+
 /// A validated RDF description and its real compiled ordered programs.
 #[derive(Debug)]
 pub struct PreparedPlan<'v, S: Admission = Resident> {
@@ -506,6 +555,20 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
         vocab: &Vocabulary<'v>,
         storage: S,
     ) -> Result<Self, Error> {
+        Self::compile_checked(source, plan, vocab, storage, |_, _, _, _| Ok(()))
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "Refusal retains original RDF snapshots inline without allocating on the failure path"
+    )]
+    fn compile_checked(
+        source: DatasetHandle,
+        plan: TermId,
+        vocab: &Vocabulary<'v>,
+        storage: S,
+        check: impl FnOnce(&RdfDataset, Schema, Mode, usize) -> Result<(), Reason>,
+    ) -> Result<Self, Error> {
         let result = (|| {
             if plan.index() >= source.term_count() {
                 return Err(Reason::InvalidId {
@@ -516,27 +579,18 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
             }
             let (schema, mode, surface) = schema(&source, plan, *vocab)?;
             let data = &*source;
-            let mut members = walk(data, schema);
-            let sources = (0..schema.count).map(move |_| {
-                let member = members
-                    .next()
-                    .expect("validated collection length")
-                    .expect("immutable validated collection");
-                let source_id =
-                    required(data, member, schema.source, 7).expect("validated source field");
-                text(data, source_id, 7).expect("validated source string")
-            });
-            let compiled =
-                super::compile::compile_set_iter(sources, mode, storage).map_err(|cause| {
-                    let node = match cause {
-                        SetCompileError::Pattern { index, .. } => walk(data, schema)
-                            .nth(index)
-                            .expect("validated index")
-                            .expect("validated list"),
-                        SetCompileError::Storage(_) => schema.root,
-                    };
-                    Reason::Compile { cause, node }
-                })?;
+            check(data, schema, mode, surface)?;
+            let compiled = super::compile::compile_set_iter(sources(data, schema), mode, storage)
+                .map_err(|cause| {
+                let node = match cause {
+                    SetCompileError::Pattern { index, .. } => walk(data, schema)
+                        .nth(index)
+                        .expect("validated index")
+                        .expect("validated list"),
+                    SetCompileError::Storage(_) => schema.root,
+                };
+                Reason::Compile { cause, node }
+            })?;
             Ok((schema, surface, compiled))
         })();
         match result {

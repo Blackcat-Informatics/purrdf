@@ -206,6 +206,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             &cli.cmd,
             Command::GlobRdf(_)
                 | Command::GlobFilesRdf(_)
+                | Command::GlobDescriptionRdf(_)
                 | Command::DocumentExpand(DocumentExpandArgs { .. })
                 | Command::DocumentCompact(DocumentCompactArgs { .. })
                 | Command::DocumentFlatten(DocumentFlattenArgs { .. })
@@ -443,6 +444,16 @@ fn dispatch_with_request(
                 "glob-files-rdf accepts no JSON-LD options",
             )?;
             glob_rdf::run_files(args)?;
+            Ok(CliOutcome::Complete)
+        }
+        Command::GlobDescriptionRdf(args) => {
+            cli::refuse_document_flags(
+                &ledger_target,
+                jsonld_options.as_ref(),
+                "glob-description-rdf uses lossless Turtle or N-Triples and accepts no loss ledger",
+                "glob-description-rdf accepts no JSON-LD options",
+            )?;
+            glob_rdf::run_description(args)?;
             Ok(CliOutcome::Complete)
         }
         Command::GlobSet(GlobSetArgs {

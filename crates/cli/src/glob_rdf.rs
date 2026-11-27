@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! RDF codecs surround the public matcher; only a completed result reaches stdout.
-use crate::cli::{CliNativeRdfFormat, GlobFilesRdfArgs, GlobPlanOptions, GlobRdfArgs};
+use crate::cli::{
+    CliNativeRdfFormat, GlobDescriptionAction, GlobDescriptionLaw, GlobDescriptionRdfArgs,
+    GlobFilesRdfArgs, GlobPlanOptions, GlobRdfArgs,
+};
 use crate::error::CliError;
 use purrdf::glob::rdf::{self, PreparedPlan, Vocabulary};
-use purrdf_core::{DatasetHandle, DatasetView, GraphMatch, RdfDiagnostic, TermId};
+use purrdf_core::{DatasetHandle, DatasetView, GraphMatch, RdfDataset, RdfDiagnostic, TermId};
 use purrdf_lex::allocation::{Memory, Resident};
 use std::io::Write as _;
 
@@ -153,14 +156,25 @@ fn prepare<'a>(
     from: purrdf_rdf::NativeRdfFormat,
     args: &'a GlobPlanOptions,
 ) -> Result<PreparedPlan<'a>, CliError> {
-    require_absolute(&args.root)?;
+    let (source, root, vocabulary) = load_plan(path, from, &args.root, &args.vocabulary)?;
+    PreparedPlan::compile(source, root, &vocabulary, Resident)
+        .map_err(|error| refusal(Failure::Plan(error)))
+}
+
+fn load_plan<'a>(
+    path: &str,
+    from: purrdf_rdf::NativeRdfFormat,
+    root: &str,
+    mappings: &'a [String],
+) -> Result<(DatasetHandle, TermId, Vocabulary<'a>), CliError> {
+    require_absolute(root)?;
     let mut entries = Vec::new();
     let mut resident = Resident;
     let mut memory = Memory::new(&mut resident);
     memory
-        .reserve(&mut entries, args.vocabulary.len())
+        .reserve(&mut entries, mappings.len())
         .map_err(CliError::GlobRdfStorage)?;
-    for entry in &args.vocabulary {
+    for entry in mappings {
         entries.push(
             entry
                 .split_once('=')
@@ -182,11 +196,42 @@ fn prepare<'a>(
         .release_vec(entries)
         .map_err(CliError::GlobRdfStorage)?;
     let source = load(path, from)?;
-    let Some(root) = source.term_id_by_iri(&args.root) else {
-        return Err(selection(source, "root", &args.root, None, 0));
+    let Some(root_id) = source.term_id_by_iri(root) else {
+        return Err(selection(source, "root", root, None, 0));
     };
-    PreparedPlan::compile(source, root, &vocabulary, Resident)
-        .map_err(|error| refusal(Failure::Plan(error)))
+    Ok((source, root_id, vocabulary))
+}
+
+pub(crate) fn run_description(args: &GlobDescriptionRdfArgs) -> Result<(), CliError> {
+    use purrdf::glob::rdf::description::{Description, Law};
+
+    let from = format(args.from)?;
+    let to = format(args.to)?;
+    let description = Description {
+        identity: &args.description,
+        class: &args.description_class,
+        digest_predicate: &args.digest_predicate,
+        law: match args.law {
+            GlobDescriptionLaw::Blake3V1 => Law::Blake3V1,
+        },
+    };
+    let (source, root, vocabulary) = load_plan(&args.plan, from, &args.root, &args.vocabulary)?;
+    match args.action {
+        GlobDescriptionAction::Create => {
+            let prepared = PreparedPlan::compile(source, root, &vocabulary, Resident)
+                .map_err(|error| refusal(Failure::Plan(error)))?;
+            let output = prepared
+                .describe(description, Resident)
+                .map_err(|error| refusal(Failure::Export(error)))?;
+            emit(&output, to)
+        }
+        GlobDescriptionAction::Verify => {
+            let prepared =
+                PreparedPlan::compile_described(source, root, &vocabulary, description, Resident)
+                    .map_err(|error| refusal(Failure::Plan(error)))?;
+            emit(prepared.dataset(), to)
+        }
+    }
 }
 
 pub(crate) fn run(args: &GlobRdfArgs) -> Result<(), CliError> {
@@ -269,8 +314,8 @@ pub(crate) fn run_files(_args: &GlobFilesRdfArgs) -> Result<(), CliError> {
     ))
 }
 
-fn emit(output: &DatasetHandle, to: purrdf_rdf::NativeRdfFormat) -> Result<(), CliError> {
-    let bytes = purrdf_rdf::serialize_dataset_to_format(&**output, to, None)
+fn emit(output: &RdfDataset, to: purrdf_rdf::NativeRdfFormat) -> Result<(), CliError> {
+    let bytes = purrdf_rdf::serialize_dataset_to_format(output, to, None)
         .map_err(|error| refusal(Failure::Serialize(error)))?
         .bytes;
     let mut stdout = std::io::stdout().lock();

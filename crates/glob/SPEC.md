@@ -222,5 +222,45 @@ point-in-time snapshot or a promise that a path still exists. The command
 serializes a completed graph as Turtle 1.2 or N-Triples 1.2 before writing to
 stdout. Prepublication refusals emit no RDF.
 
-Brace alternatives, Rust import resolution and compiled identities are outside
-these capabilities. They are not silently approximated here.
+## Portable compiled descriptions
+
+`PreparedPlan::describe` adds a separate caller-identified resource to the
+original authored graph. The caller supplies its absolute IRI, class,
+checksum predicate and the exact law. The description uses one type, the
+existing `version` and `plan` predicates, and the supplied checksum
+predicate. The plan value links to the original authored root. Both roots
+must be absolute IRIs. The description's identity is new to the source
+and cannot alias a plan field or other configured role. Additional outgoing
+fields or native reifier and annotation rows on the description are refused.
+For portability through Turtle 1.2
+and N-Triples 1.2, the source cannot have named graphs.
+
+The `purrdf-glob-compiled-blake3-v1` law hashes the registered domain
+`purrdf-glob/compiled-description/v1`, then framed UTF-8 strings for the
+law, authored description version, language version, exact plan IRI, mode
+and surface in that order. Each frame is its byte length in eight
+little-endian bytes followed by its exact bytes. The remaining preimage is
+an eight-byte little-endian count followed by each framed pattern source
+in collection order. Repeated sources remain repeated. The checksum is
+64 lowercase hexadecimal digits carried as an `xsd:string`. This facility
+binds compile inputs and their source root, not an executable image, an
+authentication signature, or the identities of individual pattern resources
+with identical lexical content. The original graph still carries those
+identities and list memberships.
+
+`PreparedPlan::compile_described` checks the source schema, exact link,
+version and checksum before compiling from the authored graph. No runtime
+state is loaded from the description. An incompatible version or digest
+mismatch refuses before construction of any glob program. The caller can
+inspect the original terms and both digests on a stale-source refusal.
+
+`glob-description-rdf create` and `glob-description-rdf verify` use the
+same native entry points. Both take the source file and require `--root`,
+`--description`, `--description-class`, `--digest-predicate`, `--law`,
+`--vocabulary ROLE=IRI`, `--from`, and `--to`. Select `blake3-v1` for the
+current law. Create outputs the original graph and separate description.
+Verify outputs the graph only after successful validation and recompilation.
+Neither command emits a partial graph on refusal.
+
+Brace alternatives and Rust import resolution are outside these capabilities.
+They are not silently approximated here.
