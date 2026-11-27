@@ -3426,12 +3426,32 @@ where
     R: Send,
     H: Send,
 {
+    par_chunk_try_map_slice(
+        sequential,
+        items,
+        init,
+        |state, out, slice| slice.iter().try_for_each(|item| push(state, out, item)),
+        harvest,
+    )
+}
+
+/// Run one slice per worker using the same chunk geometry and ordered merge.
+pub(crate) fn par_chunk_try_map_slice<T, S, R, H, O: WorkerRows<R>>(
+    sequential: bool,
+    items: &[T],
+    init: impl Fn() -> Result<S, EvalError> + Sync,
+    push: impl Fn(&mut S, &mut Vec<R>, &[T]) -> Result<(), EvalError> + Sync,
+    harvest: impl Fn(&mut S) -> H + Sync,
+) -> Result<(O, purrdf_core::SmallVec<[H; 1]>), EvalError>
+where
+    T: Sync,
+    R: Send,
+    H: Send,
+{
     let run_sequentially = || {
         let mut state = init()?;
         let mut out = Vec::new();
-        for item in items {
-            push(&mut state, &mut out, item)?;
-        }
+        push(&mut state, &mut out, items)?;
         let harvested = harvest(&mut state);
         Ok((O::single(out), purrdf_core::smallvec![harvested]))
     };
@@ -3447,9 +3467,7 @@ where
         .map(|chunk| {
             let mut state = init()?;
             let mut acc = Vec::new();
-            for item in chunk {
-                push(&mut state, &mut acc, item)?;
-            }
+            push(&mut state, &mut acc, chunk)?;
             let harvested = harvest(&mut state);
             Ok((acc, harvested))
         })

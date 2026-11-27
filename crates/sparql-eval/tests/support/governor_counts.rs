@@ -18,7 +18,8 @@ use purrdf_testkit::bench::counter::{
 };
 
 use super::governor_workloads::{
-    AnswerGuard, GROUPED, LOOP_QUERIES, LOOP_ROWS, loop_dataset, loop_governors, numeric_dataset,
+    AnswerGuard, GROUPED, LOOP_QUERIES, LOOP_ROWS, SAME_TERM, loop_dataset, loop_governors,
+    numeric_dataset,
 };
 
 const SAMPLES: usize = 10;
@@ -86,12 +87,16 @@ impl Workload {
         let engine = NativeSparqlEngine::new();
         let (dataset, prepared, guard, text) = match case {
             "numeric" => (numeric_dataset(), None, AnswerGuard::grouped(), GROUPED),
-            "filter" | "bind" => {
-                let text = LOOP_QUERIES
-                    .iter()
-                    .find(|(shape, _, _)| *shape == case)
-                    .expect("row query")
-                    .1;
+            "filter" | "bind" | "same_term" => {
+                let text = if case == "same_term" {
+                    SAME_TERM
+                } else {
+                    LOOP_QUERIES
+                        .iter()
+                        .find(|(shape, _, _)| *shape == case)
+                        .expect("row query")
+                        .1
+                };
                 let prepared = engine
                     .prepare_query(text, None)
                     .expect("prepare original row workload");
@@ -401,7 +406,7 @@ fn context(case: &str, threads: usize, mode: CountMode, unit: CountUnit) -> Coun
             Workload::new(case, "ungoverned").fixture,
             "public-query-materialized",
         ),
-        "filter" | "bind" => (
+        "filter" | "bind" | "same_term" => (
             Workload::new(case, "ungoverned").fixture,
             "public-prepared-query-materialized",
         ),

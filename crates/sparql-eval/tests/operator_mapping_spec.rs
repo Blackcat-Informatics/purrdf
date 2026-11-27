@@ -227,6 +227,40 @@ fn nan_equals_nothing_not_even_itself_while_same_term_holds() {
     );
 }
 
+/// Term identity must keep source order and duplicate rows across batch boundaries.
+#[test]
+fn same_term_constant_keeps_order_and_duplicates_across_batches() {
+    use std::fmt::Write as _;
+
+    let mut values = String::new();
+    let mut expected = Vec::new();
+    for index in 0..1_220_i32 {
+        let id = (index / 2 * 37) % 610;
+        let term = match index % 8 {
+            0 | 1 => "UNDEF",
+            2 | 3 => {
+                expected.push(vec![Some(TermValue::integer(id))]);
+                "7"
+            }
+            4 | 5 => r#""07"^^xsd:integer"#,
+            _ => "9",
+        };
+        write!(values, "({id} {term}) ").unwrap();
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(2)
+        .build()
+        .unwrap()
+        .install(|| {
+            for comparison in ["sameTerm(?v, 7)", "sameTerm(7, ?v)"] {
+                let query = format!(
+                    "SELECT ?id WHERE {{ VALUES (?id ?v) {{ {values} }} FILTER({comparison}) }}"
+                );
+                assert_eq!(rows(&query), expected, "{comparison}");
+            }
+        });
+}
+
 #[test]
 fn nan_against_a_non_number_stays_a_type_error() {
     // No operator-mapping row pairs a numeric with a string, so the comparison is an

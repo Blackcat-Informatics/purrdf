@@ -526,10 +526,19 @@ done
 ```
 
 The numeric lanes are `ungoverned`, `fuel`, `scratch`, and `metered`. Row cases
-are `filter` and `bind`, with lanes `ungoverned`, `stop_signal`, and
+are `filter`, `bind`, and `same_term`, with lanes `ungoverned`, `stop_signal`, and
 `fuel_and_stop_signal`; use the same commands with those case/lane names and
 worker counts 1, 4, and 32. Run coverage once for each instruction executable
 and worker count before collecting its lanes.
+
+The `same_term` query selects 164 exact term matches from 16,384 input rows.
+On x86-64 Linux, with one worker and the fat-LTO benchmark profile, input-order
+selection masks retired a median 7,926,277 user instructions per prepared
+query versus 19,319,648 for the row interpreter. Allocations moved from 426
+to 422 and requested bytes from 1,392,790 to 1,390,118. Retained and peak
+working bytes were unchanged at 22,433 and 988,096. Both modes checked the
+entire typed answer. The observation covers the ungoverned, unbounded native
+path and is an instruction and allocation comparison, not elapsed time.
 
 Bounded row loops use at least 64 rows per block and approximately 64 blocks
 per worker when the input is large enough. Only finite fuel or scratch headroom

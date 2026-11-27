@@ -103,6 +103,10 @@ pub const LOOP_QUERIES: &[(&str, &str, usize)] = &[
     ),
 ];
 
+/// Exact term identity over the existing row-loop fixture.
+pub const SAME_TERM: &str =
+    "SELECT ?s WHERE { ?s <https://example.org/v> ?v FILTER(sameTerm(?v, 7)) }";
+
 /// Original row governors; each configured lane owns a never-cancelled signal.
 pub fn loop_governors() -> [(&'static str, Option<QueryGovernors>); 3] {
     let stop = || Arc::new(CancellationFlag::new()) as Arc<dyn purrdf_sparql_eval::StopSignal>;
@@ -188,12 +192,12 @@ impl AnswerGuard {
     /// Every original row subject and BIND value, including datatype and bag multiplicity.
     pub fn row_loop(shape: &str) -> Self {
         assert!(
-            matches!(shape, "filter" | "bind"),
+            matches!(shape, "filter" | "bind" | "same_term"),
             "unsupported count shape {shape}"
         );
         let mut rows = Vec::new();
         for n in 0..LOOP_ROWS {
-            if shape == "filter" && n % 100 < 10 {
+            if (shape == "filter" && n % 100 < 10) || (shape == "same_term" && n % 100 != 7) {
                 continue;
             }
             let mut row = vec![Some(TermValue::iri(format!("{EX}s{n}")))];
@@ -205,10 +209,10 @@ impl AnswerGuard {
             }
             rows.push(row);
         }
-        let variables = if shape == "filter" {
-            vec!["s".to_owned()]
-        } else {
+        let variables = if shape == "bind" {
             vec!["s".to_owned(), "x".to_owned()]
+        } else {
+            vec!["s".to_owned()]
         };
         Self::canonical(variables, rows)
     }
