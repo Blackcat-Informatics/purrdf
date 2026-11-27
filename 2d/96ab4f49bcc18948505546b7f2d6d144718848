@@ -1,0 +1,18 @@
+ghprsq structured squash audit metadata
+
+parent_hashes: 49f9d31974084f09795d86379710f9e2a008846e
+
+GhpRsq-Schema: 1
+GhpRsq-Merge-Style: structured-squash
+GhpRsq-GitHub-Repo: Blackcat-Informatics/purrdf
+GhpRsq-GitHub-Pull-Request: 1635
+GhpRsq-GitHub-PR-URL: https://github.com/Blackcat-Informatics/purrdf/pull/1635
+GhpRsq-Base-Ref: main
+GhpRsq-Base-OID: a151c69f5f5bb3f08d43c6b1421ba1a254ad2d3b
+GhpRsq-Head-Ref: paudley/1358-stack-guards-drop-the-typed-cause-when
+GhpRsq-Head-OID: 49f9d31974084f09795d86379710f9e2a008846e
+GhpRsq-Result-Tree: 19ee82ef06ab7bf1162c6c89884a98663c95d7ac
+GhpRsq-Result-Commit: 2d96ab4f49bcc18948505546b7f2d6d144718848
+GhpRsq-Parent-Hashes: 49f9d31974084f09795d86379710f9e2a008846e
+GhpRsq-Squash-Notes-SHA256: c2b70393692236ab7a2ed9d173c4275d1dc730be281c3e167a99f3a269c3eec2
+GhpRsq-Stage-Evidence: none
