@@ -2813,8 +2813,8 @@ mod tests {
 
     /// The streamed identity folds are byte-identical to hashing the built canonical
     /// document: the carrier fold (document, separator, sidecars) and the residue
-    /// leaf, over named graphs, blank nodes, reifiers, the empty dataset, with and
-    /// without a sidecar.
+    /// leaf, over named graphs, blank nodes, reifiers, nested terms, composite
+    /// literals and the empty dataset, with and without a sidecar.
     #[test]
     fn streamed_folds_equal_the_fold_over_the_built_document() {
         let control = || crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, None);
@@ -2831,6 +2831,16 @@ mod tests {
             .unwrap();
         blanks.push_quad(b1, p, b2, None).unwrap();
         blanks.push_quad(b2, p, b1, Some(g)).unwrap();
+        let list = blanks
+            .intern_literal(crate::RdfLiteral::typed(
+                "[_:a, [_:a, _:g]]",
+                purrdf_cdt::CDT_LIST,
+            ))
+            .unwrap();
+        let inner = blanks.intern_triple(b1, p, list).unwrap();
+        let outer = blanks.intern_triple(b2, p, inner).unwrap();
+        blanks.push_quad(b1, p, outer, None).unwrap();
+        blanks.push_quad(b1, p, list, None).unwrap();
         let datasets = [
             RdfDatasetBuilder::new().freeze().unwrap(),
             dataset_with_named_graph(),
@@ -2853,18 +2863,21 @@ mod tests {
                     Arc::new(ContentStore::new()),
                     DatasetProvenance::new(),
                 );
+                let mut owning = control();
                 let built =
-                    super::super::canon::labelled::try_canonicalize_view(&*dataset, &mut control())
+                    super::super::canon::labelled::try_canonicalize_view(&*dataset, &mut owning)
                         .unwrap();
                 let mut oracle = Sha256::new();
                 oracle.update(built.nquads().as_bytes());
                 oracle.update(&[SEP_SECTION]);
                 bundle.core.fold_sidecars(&mut oracle);
+                let mut streaming = control();
                 assert_eq!(
-                    bundle.digest(&mut control()).unwrap(),
+                    bundle.digest(&mut streaming).unwrap(),
                     finish(oracle),
                     "carrier fold, sidecar: {sidecar}"
                 );
+                assert_eq!(streaming.receipts()[0].work, owning.receipts()[0].work);
 
                 let residue = super::super::canon::labelled::try_canonicalize_view(
                     &ResidueView(&*dataset),
@@ -2878,6 +2891,46 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Stopping during output withholds the bundle digest and keeps the work
+    /// receipt for the already completed search.
+    #[test]
+    fn streamed_fold_withholds_the_digest_on_output_stop() {
+        #[derive(Debug)]
+        struct Polls {
+            seen: AtomicUsize,
+            stop_after: usize,
+        }
+        impl crate::StopSignal for Polls {
+            fn stopped(&self) -> bool {
+                self.seen.fetch_add(1, Ordering::Relaxed) >= self.stop_after
+            }
+        }
+        let bundle = bundle_over(shared_reifier_dataset(true));
+        let counting = Polls {
+            seen: 0.into(),
+            stop_after: usize::MAX,
+        };
+        let mut completed =
+            crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, Some(&counting));
+        bundle.digest(&mut completed).unwrap();
+        let stopping = Polls {
+            seen: 0.into(),
+            stop_after: counting.seen.load(Ordering::Relaxed) - 1,
+        };
+        let mut stopped =
+            crate::CanonicalizationControl::new(crate::CANON_CORPUS_POLICY, Some(&stopping));
+        assert!(matches!(
+            bundle.digest(&mut stopped),
+            Err(PipelineBundleError::Canonicalization { scope: CanonScopeName::Carrier, source })
+                if matches!(*source, CanonError::Stopped)
+        ));
+        let (before, after) = (&completed.receipts()[0], &stopped.receipts()[0]);
+        assert!(before.completed && !after.completed);
+        assert_eq!(after.phase, crate::CanonPhase::Output);
+        assert_eq!(after.observed_refusal, Some(crate::SearchRefusal::Stopped));
+        assert_eq!(after.work, before.work);
     }
 
     #[test]

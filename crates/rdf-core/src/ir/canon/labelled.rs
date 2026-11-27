@@ -22,9 +22,11 @@
 //! The RDFC-1.0 family, which this module replaces as the default, is
 //! [`crate::rdfc12`].
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, fmt};
 
 use purrdf_hash::hex::Digest32;
+use purrdf_hash::sha2::Sha256;
+use purrdf_lex::text_out::TextOut;
 
 use super::control::{SearchRequest, SearchRun};
 use super::result::ResultBuilder;
@@ -33,8 +35,8 @@ use super::{
     Canonicalized, RelabelMapping, SearchPolicy, rebuild_with_labels, rendering::ScratchGrant,
 };
 use crate::canonical_labelling::{
-    InputReason, Labelling, Limit, Refusal, Scope, ViewError, label_view_with_memory,
-    lines_of_view, write_line_with,
+    InputReason, Labelling, Limit, Refusal, Scope, ViewError, compact_view_with_memory,
+    label_view_with_memory, lines_of_view, write_line_with,
 };
 use crate::{
     DatasetView, FallibleDatasetView, RdfDataset, TermId, ViewCanonError, checkpointed_drain,
@@ -104,6 +106,14 @@ fn lift<E>(error: ViewError<E>) -> CanonError<E> {
     }
 }
 
+fn observe_labelling_error<E>(run: &SearchRun<'_>, error: ViewError<E>) -> CanonError<E> {
+    if let ViewError::Refused(Refusal::Limit { units, .. }) = &error {
+        run.record_units(*units);
+        run.observe_limit();
+    }
+    lift(error)
+}
+
 /// Label `view` within `scope` under the run's policy and stop signal, and
 /// read the result with `finish`. The labelling's working state is admitted
 /// once, before the engine starts, and released after `finish`.
@@ -118,13 +128,7 @@ fn labelled<D: DatasetView, T>(
     ScratchGrant::new(reservation).run(|memory| {
         let (labelling, bytes) =
             label_view_with_memory(view, &[], scope, limit_of(run.policy()), run.stop(), memory)
-                .map_err(|error| {
-                    if let ViewError::Refused(Refusal::Limit { units, .. }) = &error {
-                        run.record_units(*units);
-                        run.observe_limit();
-                    }
-                    lift(error)
-                })?;
+                .map_err(|error| observe_labelling_error(run, error))?;
         run.record_units(labelling.walked_units());
         run.phase(CanonPhase::Output);
         let out = finish(&labelling)?;
@@ -188,29 +192,24 @@ fn document<D: DatasetView>(
     builder.finish(run.stop())
 }
 
-/// Feed every line of the canonical document to `hasher` as it is spelled, in
-/// the document's order, through one reused line buffer. The document is never
-/// built: the bytes hashed are exactly the bytes [`document`] would append.
-fn stream_document<D: DatasetView>(
-    labelling: &Labelling<D::Id>,
-    run: &SearchRun<'_>,
-    hasher: &mut purrdf_hash::sha2::Sha256,
-) -> Result<(), CanonError<D::ReadError>> {
-    // INVARIANT: as in `document`, a spelling failure is unreachable.
-    let unreadable = |_| {
-        CanonError::Refused(Box::new(Refusal::Input {
-            reason: InputReason::Kind,
-        }))
-    };
-    let composites = labelling.composites().map_err(unreadable)?;
-    let mut text = String::new();
-    for line in &labelling.labelled().lines {
-        run.check_stop().map_err(|_| CanonError::Stopped)?;
-        text.clear();
-        write_line_with(line, &composites, &mut text).map_err(unreadable)?;
-        hasher.update(text.as_bytes());
+/// Feed the shared text emitter directly into the ongoing SHA-256 fold.
+struct HashText<'a>(&'a mut Sha256);
+
+impl fmt::Write for HashText<'_> {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.push_str(text);
+        Ok(())
     }
-    run.check_stop().map_err(|_| CanonError::Stopped)
+}
+
+impl TextOut for HashText<'_> {
+    fn push_str(&mut self, text: &str) {
+        self.0.update(text.as_bytes());
+    }
+
+    fn push(&mut self, ch: char) {
+        self.push_str(ch.encode_utf8(&mut [0; 4]));
+    }
 }
 
 /// Feed the canonical document of `view` to `hasher`, line by line, without
@@ -224,15 +223,26 @@ fn stream_document<D: DatasetView>(
 pub(crate) fn try_hash_document_view<D: DatasetView>(
     view: &D,
     control: &mut CanonicalizationControl<'_>,
-    hasher: &mut purrdf_hash::sha2::Sha256,
+    hasher: &mut Sha256,
 ) -> Result<(), CanonError<D::ReadError>> {
     control.run(
         SearchRequest::labelling(None, CanonOutput::Sha256Digest),
         CanonError::Storage,
         |run| {
             view.checked_read(|view| {
-                labelled(view, Scope::Dataset, run, |labelling| {
-                    stream_document::<D>(labelling, run, hasher)
+                run.check_stop().map_err(|_| CanonError::Stopped)?;
+                let reservation = view.reserve_workspace(0).map_err(CanonError::Read)?;
+                ScratchGrant::new(reservation).run(|memory| {
+                    let (lines, bytes) =
+                        compact_view_with_memory(view, limit_of(run.policy()), run.stop(), memory)
+                            .map_err(|error| observe_labelling_error(run, error))?;
+                    run.record_units(lines.walked);
+                    run.phase(CanonPhase::Output);
+                    lines
+                        .write(&mut HashText(hasher), run.stop())
+                        .map_err(lift)?;
+                    drop(lines);
+                    memory.release_bytes(bytes).map_err(CanonError::Storage)
                 })
             })
             .map_err(CanonError::Read)?

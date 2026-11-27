@@ -14,7 +14,8 @@ use purrdf_testkit::error_capture::CallerRefusal;
 use super::reference;
 use super::{
     InputReason, Labelled, Limit, Line, LineSet, Record, Refusal, Scope, Term, ViewError, admit,
-    compare_view, compare_view_with_memory, label, label_view, lines_of_view, write_label,
+    compare_view, compare_view_with_memory, label, label_view, label_view_with_memory,
+    lines_of_view, write_label,
 };
 use crate::{
     BlankScope, CanonicalizationControl, DatasetView, GraphMatch, QuadIds, RdfDataset,
@@ -498,6 +499,47 @@ fn the_working_state_is_admitted_once_and_a_refusal_labels_nothing() {
         refused.err(),
         Some(ViewError::Storage(StorageError::AdmissionFailed))
     );
+}
+
+/// Compact spelling reuses the owning search grant, including the exact cap
+/// and the typed refusal one byte below it.
+#[test]
+fn compact_spelling_reuses_the_owning_search_grant() {
+    use super::view::compact_view_with_memory;
+
+    let view = cycle();
+    let mut resident = Resident;
+    let (owning, bound) = label_view_with_memory(
+        view.as_ref(),
+        &[],
+        Scope::Dataset,
+        Limit::ENGINE,
+        None,
+        &mut Memory::new(&mut resident),
+    )
+    .unwrap();
+    let mut ceiling = Ceiling(bound);
+    let mut memory = Memory::new(&mut ceiling);
+    let (compact, granted) =
+        compact_view_with_memory(view.as_ref(), Limit::ENGINE, None, &mut memory).unwrap();
+    let mut document = String::new();
+    compact.write::<()>(&mut document, None).unwrap();
+    let mut oracle = String::new();
+    super::write_document(&owning.labelled().lines, &mut oracle).unwrap();
+    assert_eq!(document, oracle);
+    assert_eq!(compact.walked, owning.walked_units());
+    drop(compact);
+    memory.release_bytes(granted).unwrap();
+    assert_eq!(memory.admitted_bytes(), 0);
+
+    let mut ceiling = Ceiling(bound - 1);
+    let mut memory = Memory::new(&mut ceiling);
+    let refused = compact_view_with_memory(view.as_ref(), Limit::ENGINE, None, &mut memory);
+    assert_eq!(
+        refused.err(),
+        Some(ViewError::Storage(StorageError::AdmissionFailed))
+    );
+    assert_eq!(memory.admitted_bytes(), 0);
 }
 
 /// An error after the admission returns the grant before it returns the

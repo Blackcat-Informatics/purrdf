@@ -1356,6 +1356,17 @@ pub(crate) fn label_walked(
     force_search: bool,
     stop: Option<&dyn StopSignal>,
 ) -> Result<(Labelled, Walk), Halt> {
+    let (assembly, walk) = label_assembly(set, limit, force_search, stop)?;
+    Ok((assembly.into_labelled(set), walk))
+}
+
+/// Run the search without retaining a second owned encoding of the input.
+pub(super) fn label_assembly(
+    set: &LineSet,
+    limit: u64,
+    force_search: bool,
+    stop: Option<&dyn StopSignal>,
+) -> Result<(super::reference::Assembly, Walk), Halt> {
     if is_stopped(stop) {
         return Err(Halt::Stopped);
     }
@@ -1372,7 +1383,7 @@ pub(crate) fn label_walked(
         .zip(statics)
         .map(|((comp, index), stat)| Run::new(set, comp, index, stat, stop))
         .collect();
-    let (labelled, _, walk) = drive(
+    let (assembly, _, walk) = drive(
         set,
         &comps,
         runs,
@@ -1381,7 +1392,7 @@ pub(crate) fn label_walked(
         force_search,
         false,
     )?;
-    Ok((labelled, walk))
+    Ok((assembly, walk))
 }
 
 /// An upper bound, in bytes, of the arrays the engine builds for the top

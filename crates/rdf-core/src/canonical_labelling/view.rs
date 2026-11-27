@@ -88,20 +88,23 @@ use std::fmt;
 
 use super::document::{
     Composites, DocumentError, composite_payload, composite_source, is_composite_source,
+    write_line_with,
 };
 use super::lines::Interner;
 use super::lines::{
-    Admission, Admitter, Direction, Facts, GraphTokens, Kind, TAG_ABSENT, TAG_PRESENT, TAG_TRIPLE,
-    Tok, iri_encoding, literal_encoding, push_bytes,
+    Admission, Admitter, Direction, Facts, GraphTokens, Kind, Leaf, TAG_ABSENT, TAG_PRESENT,
+    TAG_TRIPLE, Tok, iri_encoding, literal_encoding, push_bytes,
 };
 use super::nested::{
     DigestRefusal, NESTED_TERM_PAYLOAD, NestedHash, NestedTerms, Part, is_term_node_source,
     leaf_source, nested_term_digest, parse_text_blank_source, term_node_source, text_blank_source,
 };
-use super::{GraphTerm, InputReason, Labelled, Limit, LineSet, Refusal, optimised};
+use super::{GraphTerm, InputReason, Labelled, Limit, LineSet, Placement, Refusal, optimised};
 use crate::cdt_blank::cdt_blank_segments;
 use crate::governor::is_stopped;
 use purrdf_lex::allocation::{Admission as StorageAdmission, Memory, StorageError};
+use purrdf_lex::text_out::TextOut;
+use purrdf_lex::walk::try_sort_unstable_by;
 
 use crate::rdfc12::{CanonHash, try_canonical_sha256_view};
 use crate::{
@@ -1302,10 +1305,14 @@ fn label_lines<E>(
 ) -> Result<(Labelled, u64), ViewError<E>> {
     optimised::label_walked(lines, limit.get(), false, stop)
         .map(|(labelled, walk)| (labelled, walk.totals().total()))
-        .map_err(|halt| match halt {
-            super::Halt::Refused(refusal) => ViewError::Refused(refusal),
-            super::Halt::Stopped => ViewError::Stopped,
-        })
+        .map_err(lift_halt)
+}
+
+fn lift_halt<E>(halt: super::Halt) -> ViewError<E> {
+    match halt {
+        super::Halt::Refused(refusal) => ViewError::Refused(refusal),
+        super::Halt::Stopped => ViewError::Stopped,
+    }
 }
 
 /// The admitted lines of `view` and `records`, each constant and blank node
@@ -1547,24 +1554,36 @@ impl<Id: Copy> Labelling<Id> {
     /// The literal each composite node and the triple term each term node of
     /// the canonical line sequence spells.
     pub(crate) fn composites(&self) -> Result<Composites, DocumentError> {
-        let positions = |select: fn(&[u8]) -> bool| -> BTreeSet<u64> {
-            (0..self.lines.blank_nodes())
-                .filter(|&node| select(self.lines.source(node)))
-                .map(|node| self.labelled.placements[node].position)
-                .collect()
-        };
-        let composites = positions(is_composite_source);
-        let term_nodes = if self.term_nodes {
-            positions(is_term_node_source)
-        } else {
-            BTreeSet::new()
-        };
+        let (composites, term_nodes) =
+            spelling_positions(&self.lines, &self.labelled.placements, self.term_nodes);
         Composites::of(
             &self.labelled.lines,
             |position| composites.contains(&position),
             |position| term_nodes.contains(&position),
         )
     }
+}
+
+fn spelling_positions(
+    lines: &LineSet,
+    placements: &[Placement],
+    has_term_nodes: bool,
+) -> (BTreeSet<u64>, BTreeSet<u64>) {
+    let positions = |select: fn(&[u8]) -> bool| {
+        placements
+            .iter()
+            .enumerate()
+            .filter(|(node, _)| select(lines.source(*node)))
+            .map(|(_, placement)| placement.position)
+            .collect()
+    };
+    let composites = positions(is_composite_source);
+    let terms = if has_term_nodes {
+        positions(is_term_node_source)
+    } else {
+        BTreeSet::new()
+    };
+    (composites, terms)
 }
 
 /// The blank node `(label, scope)` of the view that the source identifier
@@ -1579,6 +1598,30 @@ fn view_blank(source: &[u8], text_form: bool) -> Option<(&[u8], BlankScope)> {
             .split_first_chunk::<4>()
             .map(|(ordinal, label)| (label, BlankScope(u32::from_be_bytes(*ordinal))))
     }
+}
+
+fn visit_view_blanks<D: DatasetView>(
+    view: &D,
+    lines: &LineSet,
+    text_form: bool,
+    mut visit: impl FnMut(Option<D::Id>),
+) -> Result<(), ViewError<D::ReadError>> {
+    for node in 0..lines.blank_nodes() {
+        let id = match view_blank(lines.source(node), text_form) {
+            Some((label, scope)) => match std::str::from_utf8(label) {
+                Ok(label) => view
+                    .term_id_by_value(&TermValue::Blank {
+                        label: label.to_owned(),
+                        scope,
+                    })
+                    .map_err(ViewError::Read)?,
+                Err(_) => None,
+            },
+            None => None,
+        };
+        visit(id);
+    }
+    Ok(())
 }
 
 /// The labelling of admitted lines, with the view's identifier of each blank
@@ -1598,21 +1641,7 @@ fn labelling_of<D: DatasetView>(
     let (labelled, walked) = label_lines(&lines, limit, stop)?;
     let text_form = term_nodes > 0;
     let mut blanks = Vec::with_capacity(lines.blank_nodes());
-    for node in 0..lines.blank_nodes() {
-        let id = match view_blank(lines.source(node), text_form) {
-            Some((label, scope)) => match std::str::from_utf8(label) {
-                Ok(label) => view
-                    .term_id_by_value(&TermValue::Blank {
-                        label: label.to_owned(),
-                        scope,
-                    })
-                    .map_err(ViewError::Read)?,
-                Err(_) => None,
-            },
-            None => None,
-        };
-        blanks.push(id);
-    }
+    visit_view_blanks(view, &lines, text_form, |id| blanks.push(id))?;
     Ok(Labelling {
         lines,
         labelled,
@@ -1713,5 +1742,208 @@ pub fn label_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
             let _ = memory.release_bytes(bytes);
             Err(error)
         }
+    }
+}
+
+/// Search output sufficient to spell the canonical document. The encoding
+/// order is recovered from the lowered tokens, not a second copy of the lines.
+pub(crate) struct CompactLines {
+    lines: LineSet,
+    placements: Vec<Placement>,
+    term_nodes: bool,
+    pub(crate) walked: u64,
+}
+
+impl CompactLines {
+    fn ordering<E>(
+        &self,
+        check: impl Fn() -> Result<(), ViewError<E>>,
+    ) -> Result<(Vec<usize>, usize), ViewError<E>> {
+        check()?;
+        let mut order = Vec::new();
+        order
+            .try_reserve_exact(self.lines.len())
+            .map_err(|_| ViewError::Storage(StorageError::AllocationFailed))?;
+        let mut longest = 0;
+        for line in 0..self.lines.len() {
+            check()?;
+            longest = longest.max(
+                self.lines
+                    .fixed_len(line)
+                    .ok_or(ViewError::Storage(StorageError::SizeOverflow))?,
+            );
+            order.push(line);
+        }
+        let position = |node: usize| self.placements[node].position;
+        try_sort_unstable_by(&mut order, |&a, &b| {
+            check()?;
+            Ok(self.lines.cmp_fixed(a, b, position).then_with(|| a.cmp(&b)))
+        })?;
+        Ok((order, longest))
+    }
+
+    fn encode(&self, line: usize, encoding: &mut Vec<u8>) {
+        encoding.clear();
+        self.lines.encode(
+            line,
+            |node| Leaf::Fixed(self.placements[node].position),
+            encoding,
+        );
+    }
+
+    /// Spell in the same order as the owning document, keeping one line encoding.
+    pub(crate) fn write<E>(
+        &self,
+        out: &mut impl TextOut,
+        stop: Option<&dyn StopSignal>,
+    ) -> Result<(), ViewError<E>> {
+        let check = || {
+            if is_stopped(stop) {
+                Err(ViewError::Stopped)
+            } else {
+                Ok(())
+            }
+        };
+        // Reuse the working grant after search. Of its 32 words per vertex,
+        // a line needs one ordinal and a node retains one placement. The
+        // buffer is at most the total free encoding plus eight bytes per blank
+        // occurrence (fixed is nine bytes, free is one). The bound covers
+        // four times that free length and sixteen words per occurrence.
+        const {
+            assert!(size_of::<Placement>() <= 32 * size_of::<usize>());
+        }
+        let (order, longest) = self.ordering(check)?;
+
+        let mut encoding = Vec::new();
+        encoding
+            .try_reserve_exact(longest)
+            .map_err(|_| ViewError::Storage(StorageError::AllocationFailed))?;
+        let (composite_nodes, term_nodes) =
+            spelling_positions(&self.lines, &self.placements, self.term_nodes);
+        let unreadable = |_| {
+            ViewError::Refused(Refusal::Input {
+                reason: InputReason::Kind,
+            })
+        };
+        let mut composites = Composites::default();
+        // The record tag sorts after all other kinds. Only records contribute
+        // composite definitions, and none emit a statement.
+        let record_start = order.partition_point(|&line| {
+            self.lines.lines[line].first() != Some(&Tok::Tag(Kind::Record as u8))
+        });
+        let (statements, records) = order.split_at(record_start);
+        for &line in records {
+            check()?;
+            self.encode(line, &mut encoding);
+            composites
+                .ingest(
+                    &encoding,
+                    |pos| composite_nodes.contains(&pos),
+                    |pos| term_nodes.contains(&pos),
+                )
+                .map_err(unreadable)?;
+        }
+        for &line in statements {
+            check()?;
+            self.encode(line, &mut encoding);
+            write_line_with(&encoding, &composites, out).map_err(unreadable)?;
+        }
+        check()
+    }
+}
+
+/// Label the dataset for streamed spelling under the same working grant as
+/// the owning result. The caller holds the grant through output.
+pub(crate) fn compact_view_with_memory<D: DatasetView, S: StorageAdmission + ?Sized>(
+    view: &D,
+    limit: Limit,
+    stop: Option<&dyn StopSignal>,
+    memory: &mut Memory<'_, S>,
+) -> Result<(CompactLines, usize), ViewError<D::ReadError>> {
+    let (admitted, charged) = lowered_in(view, Scope::Dataset, &[], stop, memory)?;
+    let (lines, bytes) = grant(admitted.lines, charged, memory)?;
+    let term_nodes = admitted.term_nodes > 0;
+    let result = (|| {
+        let (assembly, walk) =
+            optimised::label_assembly(&lines, limit.get(), false, stop).map_err(lift_halt)?;
+        let placements = assembly.into_placements();
+        // Keep the same fallible inverse reads as the owning document, but
+        // the text fold does not need the returned identifiers.
+        visit_view_blanks(view, &lines, term_nodes, |_| {})?;
+        Ok((
+            CompactLines {
+                lines,
+                placements,
+                term_nodes,
+                walked: walk.totals().total(),
+            },
+            bytes,
+        ))
+    })();
+    if result.is_err() {
+        let _ = memory.release_bytes(bytes);
+    }
+    result
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+    use crate::canonical_labelling::{LINES_CONTEXT, Line, Term, admit};
+
+    /// The SHA spelling omits graphs and records, so check the full ordered
+    /// binary sequence independently of the text identity. An annotation also
+    /// contributes its encoded count, not a repeated text row.
+    #[test]
+    fn compact_binary_order_keeps_non_emitting_lines_and_multiplicity() {
+        let iri = |suffix: &str| Term::iri(format!("http://example.org/{suffix}").as_bytes());
+        let blank = || Term::blank(b"source");
+        let lines = admit(&[
+            Line::Record {
+                payload: b"z".as_slice().into(),
+                terms: vec![blank()],
+            },
+            Line::Record {
+                payload: b"m".as_slice().into(),
+                terms: vec![blank(), blank()],
+            },
+            Line::EmptyGraph(iri("graph")),
+            Line::Annotation {
+                count: 3,
+                reifier: blank(),
+                predicate: iri("p"),
+                object: iri("o"),
+                graph: None,
+            },
+            Line::Quad {
+                subject: blank(),
+                predicate: iri("p"),
+                object: iri("o"),
+                graph: None,
+            },
+        ])
+        .unwrap();
+        let (owning, _) =
+            optimised::label_walked(&lines, Limit::ENGINE.get(), false, None).unwrap();
+        let (assembly, _) =
+            optimised::label_assembly(&lines, Limit::ENGINE.get(), false, None).unwrap();
+        let compact = CompactLines {
+            lines,
+            placements: assembly.into_placements(),
+            term_nodes: false,
+            walked: 0,
+        };
+        assert_eq!(compact.placements, owning.placements);
+        let (order, longest) = compact.ordering::<()>(|| Ok(())).unwrap();
+        assert_eq!(order.len(), 5);
+        let mut bytes = Vec::with_capacity(longest);
+        let mut digest = purrdf_hash::blake3::Hasher::new_derive_key(LINES_CONTEXT.as_str());
+        digest.update(&(order.len() as u64).to_be_bytes());
+        for (line, expected) in order.into_iter().zip(&owning.lines) {
+            compact.encode(line, &mut bytes);
+            assert_eq!(bytes.as_slice(), expected.as_ref());
+            digest.update(&bytes);
+        }
+        assert_eq!(digest.finalize().as_bytes(), &owning.digest);
     }
 }
