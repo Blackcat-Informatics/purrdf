@@ -4,8 +4,8 @@
 //! Native grammar, denotation, work and physical ownership of compiled globs.
 
 use purrdf_glob::{
-    Admission, CompileError, CompiledGlob, IriComponent, MatchError, Mode, StorageError,
-    SyntaxReason,
+    Admission, CompileError, CompiledGlob, CompiledGlobSet, IriComponent, MatchError, Mode,
+    Resident, StorageError, SyntaxReason,
 };
 use std::cell::Cell;
 use std::rc::Rc;
@@ -699,6 +699,237 @@ fn set_admission_refunds_and_measured_growth_keep_matching_allocation_free() {
     }
 }
 
+type FixtureDirectory<'a> = (&'a str, &'a [purrdf_glob::filesystem::Entry<'a>]);
+
+struct EntryTree<'a>(&'a [FixtureDirectory<'a>]);
+
+impl purrdf_glob::filesystem::Source for EntryTree<'_> {
+    type Error = std::io::Error;
+    type Cursor<'a>
+        = Entries<'a>
+    where
+        Self: 'a;
+
+    fn open_directory(&mut self, relative: &str) -> Result<Self::Cursor<'_>, Self::Error> {
+        self.0
+            .iter()
+            .find(|(path, _)| *path == relative)
+            .map(|(_, entries)| Entries(entries.iter()))
+            .ok_or_else(|| std::io::ErrorKind::NotFound.into())
+    }
+}
+
+struct Entries<'a>(std::slice::Iter<'a, purrdf_glob::filesystem::Entry<'a>>);
+
+impl purrdf_glob::filesystem::Directory for Entries<'_> {
+    type Error = std::io::Error;
+
+    fn next_entry(&mut self) -> Result<Option<purrdf_glob::filesystem::Entry<'_>>, Self::Error> {
+        Ok(self.0.next().copied())
+    }
+}
+
+fn expansion_orders_paths_and_preserves_occurrences_under_one_budget() {
+    use purrdf_glob::filesystem::{
+        Entry,
+        EntryKind::{Directory, File},
+        Failure, FileMatch,
+    };
+    let root = [
+        Entry {
+            name: "notes.txt",
+            kind: File,
+        },
+        Entry {
+            name: "src",
+            kind: Directory,
+        },
+        Entry {
+            name: ".dot.rs",
+            kind: File,
+        },
+        Entry {
+            name: "src",
+            kind: Directory,
+        },
+    ];
+    let src = [
+        Entry {
+            name: "b.rs",
+            kind: File,
+        },
+        Entry {
+            name: "a.rs",
+            kind: File,
+        },
+        Entry {
+            name: "a.rs",
+            kind: File,
+        },
+    ];
+    let directories = [("", root.as_slice()), ("src", src.as_slice())];
+    let patterns = CompiledGlobSet::compile(&["**/*.rs", "src/*", "**/*.rs"], Mode::Path).unwrap();
+    let state = Rc::new(Cell::new((0, 0)));
+    let result = patterns
+        .expand_files(
+            &mut EntryTree(&directories),
+            u64::MAX,
+            Budget {
+                limit: usize::MAX,
+                state: state.clone(),
+            },
+        )
+        .unwrap();
+    let expected = [
+        FileMatch {
+            path: ".dot.rs",
+            indices: &[0, 2],
+        },
+        FileMatch {
+            path: "src/a.rs",
+            indices: &[0, 1, 2],
+        },
+        FileMatch {
+            path: "src/b.rs",
+            indices: &[0, 1, 2],
+        },
+    ];
+    assert!(result.files().eq(expected));
+    let total = result.work();
+    let (live, peak) = state.get();
+    assert!(peak > live && live > 0);
+    drop(result);
+    assert_eq!(state.get().0, 0);
+    let admitted = patterns
+        .expand_files(
+            &mut EntryTree(&directories),
+            total,
+            Budget {
+                limit: peak,
+                state: state.clone(),
+            },
+        )
+        .unwrap();
+    assert!(admitted.files().eq(expected));
+    drop(admitted);
+    let short = patterns
+        .expand_files(&mut EntryTree(&directories), total - 1, Resident)
+        .unwrap_err();
+    assert_eq!(short.path(), "src/b.rs");
+    assert!(matches!(short.failure(), Failure::Match(_)));
+    let short = patterns
+        .expand_files(
+            &mut EntryTree(&directories),
+            total,
+            Budget {
+                limit: peak - 1,
+                state: state.clone(),
+            },
+        )
+        .unwrap_err();
+    assert!(matches!(
+        short.failure(),
+        Failure::Storage(StorageError::AdmissionFailed)
+    ));
+    drop(short);
+    assert_eq!(state.get().0, 0);
+}
+
+fn expansion_refuses_a_late_source_fault_without_consuming_its_cause() {
+    use purrdf_glob::filesystem::{
+        Entry,
+        EntryKind::{Directory, File},
+        Failure,
+    };
+    let root = [
+        Entry {
+            name: "a.rs",
+            kind: File,
+        },
+        Entry {
+            name: "later",
+            kind: Directory,
+        },
+    ];
+    let directories = [("", root.as_slice())];
+    let patterns = CompiledGlobSet::compile(&["**"], Mode::Path).unwrap();
+    let state = Rc::new(Cell::new((0, 0)));
+    let error = patterns
+        .expand_files(
+            &mut EntryTree(&directories),
+            u64::MAX,
+            Budget {
+                limit: usize::MAX,
+                state: state.clone(),
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.path(), "later");
+    assert!(matches!(error.failure(), Failure::Source(cause)
+        if cause.kind() == std::io::ErrorKind::NotFound));
+    assert_eq!(state.get().0, "later".len());
+    drop(error);
+    assert_eq!(state.get().0, 0);
+    let complete = [("", root.as_slice()), ("later", &[] as &[Entry<'_>])];
+    let result = patterns
+        .expand_files(&mut EntryTree(&complete), u64::MAX, Resident)
+        .unwrap();
+    assert_eq!(result.files().len(), 1);
+}
+
+fn expansion_refuses_invalid_observations_but_not_neighbors() {
+    use purrdf_glob::filesystem::{Entry, EntryKind, Failure, FileMatch};
+    let set = CompiledGlobSet::compile(&["**"], Mode::Path).unwrap();
+    let ordinary = Entry {
+        name: "file",
+        kind: EntryKind::File,
+    };
+    let valid = [ordinary, ordinary];
+    let directories = [("", valid.as_slice())];
+    let complete = set
+        .expand_files(&mut EntryTree(&directories), u64::MAX, Resident)
+        .unwrap();
+    assert!(complete.files().eq([FileMatch {
+        path: "file",
+        indices: &[0],
+    }]));
+
+    let text = CompiledGlobSet::compile(&["**"], Mode::Text).unwrap();
+    let refused = text
+        .expand_files(&mut EntryTree(&directories), u64::MAX, Resident)
+        .unwrap_err();
+    assert!(matches!(refused.failure(), Failure::TextMode));
+
+    for name in ["", ".", "..", "a/b", "a\0b"] {
+        let children = [ordinary, Entry { name, ..ordinary }];
+        let refused = set
+            .expand_files(&mut EntryTree(&[("", &children)]), u64::MAX, Resident)
+            .unwrap_err();
+        assert!(matches!(refused.failure(), Failure::Component));
+        assert_eq!(refused.path(), "");
+    }
+    for kind in [EntryKind::Link, EntryKind::Other] {
+        let children = [ordinary, Entry { name: "last", kind }];
+        let refused = set
+            .expand_files(&mut EntryTree(&[("", &children)]), u64::MAX, Resident)
+            .unwrap_err();
+        assert!(matches!(refused.failure(), Failure::Unsupported(actual) if *actual == kind));
+        assert_eq!(refused.path(), "last");
+    }
+    let conflict = [
+        ordinary,
+        Entry {
+            kind: EntryKind::Directory,
+            ..ordinary
+        },
+    ];
+    let refused = set
+        .expand_files(&mut EntryTree(&[("", &conflict)]), u64::MAX, Resident)
+        .unwrap_err();
+    assert!(matches!(refused.failure(), Failure::ConflictingKind));
+    assert_eq!(refused.path(), "file");
+}
+
 purrdf_testkit::harness_main!(
     grammar_and_path_boundaries,
     explicit_iri_surfaces_and_zero_execution_allocations,
@@ -707,5 +938,8 @@ purrdf_testkit::harness_main!(
     greedy_checkpoints_agree_with_finite_denotation,
     ordered_sets_agree_with_individual_patterns_and_iri_surfaces,
     set_refusals_preserve_pattern_index_original_cause_and_exact_limits,
-    set_admission_refunds_and_measured_growth_keep_matching_allocation_free
+    set_admission_refunds_and_measured_growth_keep_matching_allocation_free,
+    expansion_orders_paths_and_preserves_occurrences_under_one_budget,
+    expansion_refuses_a_late_source_fault_without_consuming_its_cause,
+    expansion_refuses_invalid_observations_but_not_neighbors
 );

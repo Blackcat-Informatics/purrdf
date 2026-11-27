@@ -417,8 +417,8 @@ metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false
 
 [packages.libc]
 category = "runtime"
-reason = "Native pthread stack bounds for purrdf-stack and mmap/memfd_create/fcntl for the CLI immutable input authority; platform declarations only, absent from wasm; also reached through getrandom"
-distinct = "platform declarations for thread stack bounds and the CLI's mmap and memfd seals; bindings to the C library, not a job PurRDF implements"
+reason = "Native pthread stack bounds for purrdf-stack, mmap/memfd_create/fcntl for CLI immutable inputs, and openat2 and directory cursors for CLI filesystem glob containment; absent from wasm; also reached through getrandom"
+distinct = "platform declarations for thread stack bounds, immutable input descriptors and rooted directory enumeration; host bindings, not jobs PurRDF implements"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.memchr]

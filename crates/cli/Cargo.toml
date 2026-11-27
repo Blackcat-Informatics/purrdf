@@ -80,7 +80,8 @@ clap = { workspace = true }
 # The immutable-input authority's kernel path (`src/mmap.rs`): a read-only
 # `mmap` of a sealed descriptor, and `memfd_create` + `fcntl` add/get-seals, so
 # a disk pack maps memory-safely even under a hostile concurrent pathname
-# writer. Other targets take the owned-buffer tier and need neither.
+# writer. Filesystem glob traversal uses root-relative openat2 and directory
+# enumeration. Other targets take the owned-buffer input tier.
 libc = { workspace = true }
 
 [dev-dependencies]

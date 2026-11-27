@@ -170,5 +170,57 @@ object selected by the supplied subject and predicate IRIs. Both documents use
 the explicit input syntax. The complete result is serialized before stdout is
 touched; a parse, schema, work, storage or serialization refusal emits no RDF.
 
-Brace alternatives, filesystem traversal, Rust import resolution and compiled
-identities are outside these capabilities. They are not silently approximated here.
+## Contained filesystem expansion
+
+`CompiledGlobSet::expand_files` accepts a path-mode set and an explicit
+directory source. The source opens the root with an empty relative path and
+pulls one direct child at a time. Every name must be exact UTF-8, nonempty, and
+contain neither slash nor a null character. The components `.` and `..` are
+not children. The source must classify the entry itself without following links
+and distinguish completed enumeration from a source failure.
+
+Visit directories depth first and order siblings by their original UTF-8
+bytes. Only regular files are eligible to match. Their exact root-relative
+paths use one slash between components, including in the presence of dotfiles
+or Unicode names. Identical observations of a path and kind collapse after
+reading them, and disagreement about a path's kind refuses the expansion.
+Distinct paths stay distinct even if they name the same hard-linked file.
+Links and other kinds refuse, even if a pattern would not match their names.
+No file contents are read.
+
+Charge one work unit before each directory open and each cursor read, including
+the final read that returns no child. One meter covers all these operations and
+the ordered matcher, with the same pattern charges as a standalone match.
+Work units count these logical operations, not byte comparisons during sorting,
+host kernel calls, or later RDF construction. Core traversal scratch, path
+text, and results use a dedicated admission account. A source owns its own
+cursor and any host resources. Work, storage, source, and invalid-entry refusals
+return no completed result.
+
+`PreparedPlan::execute_files` requires the literal surface in path mode.
+It retains the compiled plan with the completed expansion. Export imports the
+source once and links the evaluation to the caller's logical directory IRI
+and to one blank file record per matching path, using caller-supplied predicates.
+Each record carries the exact path under `input` and the original
+`<<(cell rdf:first pattern)>>` terms under `matched`. The evaluation retains
+its `rdf:type`, `plan`, and `work` fields. Output storage is admitted before
+publication. The filesystem predicates must be distinct absolute IRIs and must
+not alias any plan role or reserved RDF predicate.
+The source may mention the evaluation IRI elsewhere, but must not already
+attach one of its result fields in the default graph.
+
+`glob-files-rdf PLAN DIRECTORY` opens a Linux directory using `openat2`.
+In addition to `--root`, `--evaluation`, the `--vocabulary ROLE=IRI` mappings,
+`--from`, `--to`, and `--max-work`, pass `--directory-iri`,
+`--directory-predicate`, and `--file-predicate`. Every directory lookup is
+anchored at the originally opened root. Root lookup refuses symlinks in the
+supplied path. Traversal refuses symlinks and does not cross descendant mount
+points when opening directories. An unavailable containment primitive refuses
+the request. An opened cursor continues to read its directory if renamed.
+The result reflects the observations during traversal rather than a
+point-in-time snapshot or a promise that a path still exists. The command
+serializes a completed graph as Turtle 1.2 or N-Triples 1.2 before writing to
+stdout. Prepublication refusals emit no RDF.
+
+Brace alternatives, Rust import resolution and compiled identities are outside
+these capabilities. They are not silently approximated here.

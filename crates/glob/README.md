@@ -66,6 +66,14 @@ their distinct collection cells. The facade and `glob-rdf` CLI command use the
 existing Turtle and N-Triples codecs. [SPEC.md](SPEC.md) defines the schema, required
 CLI arguments, admission and refusal behavior. No namespace or identity is invented.
 
+Use `CompiledGlobSet::expand_files` for a caller-supplied directory source. It
+returns exact root-relative file names and all matching pattern occurrences.
+`PreparedPlan::execute_files` projects the same traversal into RDF 1.2 with
+the original collection membership for each match. The Linux
+`glob-files-rdf` command opens a root without traversing links. See
+[filesystem expansion](SPEC.md#contained-filesystem-expansion) for the
+ordering, work and containment contracts.
+
 ## License
 
 Licensed under any one of the following, at your option:

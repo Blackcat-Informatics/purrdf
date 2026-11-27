@@ -371,22 +371,48 @@ pub(crate) struct GlobRdfArgs {
     pub plan: String,
     /// RDF input document containing the selected object.
     pub input: String,
-    /// Absolute IRI identifying the plan resource.
-    #[arg(long)]
-    pub root: String,
-    /// Caller-owned absolute IRI for this evaluation.
-    #[arg(long)]
-    pub evaluation: String,
+    #[command(flatten)]
+    pub options: GlobPlanOptions,
     /// Absolute IRI of the subject selecting the original input object.
     #[arg(long)]
     pub input_subject: String,
     /// Absolute IRI of the predicate selecting the original input object.
     #[arg(long)]
     pub input_predicate: String,
+}
+
+/// Execute a path-mode RDF plan against a contained directory tree.
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobFilesRdfArgs {
+    /// Source-backed RDF plan document.
+    pub plan: String,
+    /// Directory to enumerate without following symbolic links.
+    pub directory: PathBuf,
+    #[command(flatten)]
+    pub options: GlobPlanOptions,
+    /// Caller-owned absolute IRI identifying the directory.
+    #[arg(long)]
+    pub directory_iri: String,
+    /// Caller-owned predicate linking the evaluation to its directory IRI.
+    #[arg(long)]
+    pub directory_predicate: String,
+    /// Caller-owned predicate linking the evaluation to each file result.
+    #[arg(long)]
+    pub file_predicate: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub(crate) struct GlobPlanOptions {
+    /// Absolute IRI identifying the plan resource.
+    #[arg(long)]
+    pub root: String,
+    /// Caller-owned absolute IRI for this evaluation.
+    #[arg(long)]
+    pub evaluation: String,
     /// Explicit role=IRI vocabulary mapping; every role is required.
     #[arg(long = "vocabulary", required = true)]
     pub vocabulary: Vec<String>,
-    /// Both input documents' syntax: turtle or ntriples.
+    /// Input document syntax: turtle or ntriples.
     #[arg(long, value_enum)]
     pub from: CliNativeRdfFormat,
     /// Output syntax: turtle or ntriples.
@@ -423,6 +449,8 @@ pub(crate) enum Command {
     Fingerprint(FingerprintArgs),
     /// Execute an RDF-authored plan and emit its description and membership provenance.
     GlobRdf(GlobRdfArgs),
+    /// Expand an RDF-authored path plan within a Linux directory and emit provenance.
+    GlobFilesRdf(GlobFilesRdfArgs),
     /// Return every matching index from an ordered compiled pattern set.
     GlobSet(GlobSetArgs),
     /// Match one complete literal or explicitly selected IRI surface.
@@ -3564,6 +3592,10 @@ impl Cli {
             Command::GlobRdf(args) => {
                 paths.push(PathBuf::from(&args.plan));
                 paths.push(PathBuf::from(&args.input));
+            }
+            Command::GlobFilesRdf(args) => {
+                paths.push(PathBuf::from(&args.plan));
+                paths.push(args.directory.clone());
             }
             Command::GlobSet(GlobSetArgs { .. }) | Command::Fingerprint(FingerprintArgs { .. }) => {
             }
