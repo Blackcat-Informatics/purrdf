@@ -8,18 +8,22 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
+import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
+
+const playgroundOut = process.env.PLAYGROUND_OUT;
+assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
+const {
   ready,
   Dataset,
   DataFactory,
   shaclValidateToSarif,
   shaclEntail,
   version,
-} from "../../../crates/rdf-wasm/js/index.mjs";
-import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
+} = await import(pathToFileURL(join(playgroundOut, "purrdf/index.mjs")).href);
 
 // The exact preloaded document the Input pane ships with: an RDF-1.2 graph in the
 // example.org namespace carrying a quoted triple in object position plus base-
@@ -81,8 +85,6 @@ globalThis.self = {
     workerMessages.push(message);
   },
 };
-const playgroundOut = process.env.PLAYGROUND_OUT;
-assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
 await import(pathToFileURL(join(playgroundOut, "engine.worker.mjs")).href);
 assert.equal(typeof workerMessageHandler, "function");
 
@@ -186,6 +188,48 @@ test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
   assert.ok(Object.hasOwn(srj, "head"), "SELECT result must be SRJ (has .head)");
   assert.deepEqual(srj.head.vars, ["s", "p", "o"]);
   assert.ok(srj.results.bindings.length > 0, "expected bindings");
+});
+
+test("the museum gallery permalink preserves both dated attributions", async () => {
+  const { findVignette, vignetteState } =
+    await import(pathToFileURL(join(playgroundOut, "examples/gallery.mjs")).href);
+  const { encodeState, decodeState } =
+    await import(pathToFileURL(join(playgroundOut, "permalink.mjs")).href);
+  const vignette = findVignette("museum-attributions");
+  assert.ok(vignette, "the museum sample must be discoverable in the assembled gallery");
+
+  // Load the assembled assets through the gallery's real URL resolver. Node
+  // cannot fetch file URLs, so the transport reads the actual packaged files.
+  const state = await vignetteState(vignette, async (url) => new Response(await readFile(url)));
+  const canonical = new URL("../../../crates/purrdf/examples/museum/", import.meta.url);
+  assert.equal(state.input, await readFile(new URL("collection.ttl", canonical), "utf8"));
+  assert.equal(state.query, await readFile(new URL("attributions.rq", canonical), "utf8"));
+  assert.equal(state.activePane, "sparql");
+  const restored = await decodeState(await encodeState(state));
+  assert.deepEqual(restored, state, "the actual permalink codec must preserve the UTF-8 state");
+
+  const expected = JSON.parse(await readFile(new URL("expected.srj", canonical), "utf8"));
+  const query = async (input) => {
+    await workerCall("parse", { text: input, format: restored.inputFormat });
+    const result = await workerCall("query", { sparql: restored.query });
+    assert.equal(result.kind, "srj");
+    return result.srj;
+  };
+  assert.deepEqual(await query(restored.input), expected);
+  const edited = restored.input.replace("1723-09-08", "1724-09-08");
+  assert.notEqual(edited, restored.input);
+  const editedExpected = structuredClone(expected);
+  editedExpected.results.bindings[1].date.value = "1724-09-08";
+  assert.deepEqual(await query(edited), editedExpected);
+
+  await assert.rejects(
+    vignetteState(vignette, async (url) =>
+      url.pathname.endsWith("attributions.rq")
+        ? new Response(null, { status: 404 })
+        : new Response(await readFile(url)),
+    ),
+    /could not load gallery fixture .*attributions\.rq \(HTTP 404\)/u,
+  );
 });
 
 test("ASK query returns an SRJ boolean", () => {

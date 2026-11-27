@@ -5,7 +5,8 @@
 // the aria-live error banner. The main thread NEVER touches the wasm engine —
 // it is a pure view/message client over the worker.
 
-import { VIGNETTES, findVignette, DEFAULT_STATE } from "./examples/gallery.mjs";
+import { VIGNETTES, findVignette, DEFAULT_STATE, vignetteState } from "./examples/gallery.mjs";
+import { decodeState, encodeState } from "./permalink.mjs";
 import { assertSarifVersion, describeSarif } from "./sarif.mjs";
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
@@ -214,73 +215,9 @@ function applyState(state) {
   if (s.activePane) selectPane(s.activePane);
 }
 
-const b64urlEncode = (bytes) => {
-  let bin = "";
-  for (const byte of bytes) bin += String.fromCharCode(byte);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const b64urlDecode = (s) => {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-};
-
-async function streamThrough(stream, bytes) {
-  const writer = stream.writable.getWriter();
-  writer.write(bytes);
-  writer.close();
-  const chunks = [];
-  const reader = stream.readable.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  let len = 0;
-  for (const c of chunks) len += c.length;
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-
-/** Encode state → (gzip when available) → base64url. All client-side, no network. */
-async function encodeState(state) {
-  const json = new TextEncoder().encode(JSON.stringify(state));
-  if (typeof CompressionStream === "function") {
-    const gz = await streamThrough(new CompressionStream("gzip"), json);
-    return `g${b64urlEncode(gz)}`;
-  }
-  // Documented capability fallback: plain base64url of the JSON.
-  return `j${b64urlEncode(json)}`;
-}
-
-async function decodeState(fragment) {
-  if (!fragment) return null;
-  const tag = fragment[0];
-  const body = fragment.slice(1);
-  const bytes = b64urlDecode(body);
-  let jsonBytes = bytes;
-  if (tag === "g") {
-    if (typeof DecompressionStream !== "function") {
-      throw new Error("this permalink is gzip-encoded but DecompressionStream is unavailable");
-    }
-    jsonBytes = await streamThrough(new DecompressionStream("gzip"), bytes);
-  } else if (tag !== "j") {
-    throw new Error("unrecognized permalink encoding");
-  }
-  return JSON.parse(new TextDecoder().decode(jsonBytes));
-}
-
-async function copyPermalink(state) {
+async function copyPermalink(getState) {
   await guard(async () => {
-    const fragment = await encodeState(state);
+    const fragment = await encodeState(await getState());
     const url = `${location.origin}${location.pathname}#${fragment}`;
     location.hash = fragment;
     await copyText(url);
@@ -758,7 +695,7 @@ function buildGallery() {
       text: "Copy permalink",
       "data-permalink": v.id,
     });
-    permaBtn.addEventListener("click", () => copyPermalink(vignetteState(v)));
+    permaBtn.addEventListener("click", () => copyPermalink(() => vignetteState(v)));
 
     const item = el("li", { class: "gallery-item", id: `vignette-${v.id}` }, [
       el("h3", { text: v.title }),
@@ -769,32 +706,16 @@ function buildGallery() {
   }
 }
 
-function vignetteState(v) {
-  const s = { ...DEFAULT_STATE };
-  s.input = v.input;
-  s.inputFormat = v.inputFormat;
-  if (v.query != null) s.query = v.query;
-  if (v.shapes != null) s.shapes = v.shapes;
-  // Vignettes that exercise identity supply their own A/B graphs; others
-  // compare the loaded input against the supplied graph B.
-  s.graphA = v.input;
-  s.graphAFormat = v.inputFormat;
-  if (v.graphB != null) {
-    s.graphB = v.graphB;
-    s.graphBFormat = v.graphBFormat ?? "turtle";
-  }
-  s.activePane = v.activePane ?? "input";
-  return s;
-}
-
 async function loadVignette(id) {
   const v = findVignette(id);
   if (!v) {
     showError(`unknown vignette: ${id}`);
     return;
   }
-  applyState(vignetteState(v));
-  await runActiveForState(v);
+  await guard(async () => {
+    applyState(await vignetteState(v));
+    await runActiveForState(v);
+  });
 }
 
 /** After loading a vignette, run the engine action its pane demonstrates. */
@@ -862,14 +783,12 @@ function wireButtons() {
   $("btn-compare").addEventListener("click", doCompare);
   $("btn-refresh-quads").addEventListener("click", refreshQuads);
   $("btn-clear-filter").addEventListener("click", refreshQuads);
-  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState()));
+  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState));
 }
 
 async function initHeader() {
-  // The version handshake is the ONLY startup traffic; it goes over the worker
-  // message port, not the network. The console makes NO network request after
-  // its assets load — that provable property (no server-side evaluation) is
-  // worth more than a cosmetic wasm-size chip, so the size probe is gone.
+  // The version handshake goes over the worker message port, not the network.
+  // The gallery can fetch bundled assets, but evaluation runs entirely in the worker.
   await guard(async () => {
     const { version } = await call("version", {});
     $("app-version").textContent = `purrdf v${version}`;
@@ -878,11 +797,10 @@ async function initHeader() {
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  window.addEventListener("load", () => {
-    navigator.serviceWorker
-      .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
-      .catch((e) => showStatus(`offline cache unavailable: ${e.message ?? e}`));
-  });
+  // The first worker parse can finish after window.load has already fired.
+  navigator.serviceWorker
+    .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
+    .catch((e) => showStatus(`offline cache unavailable: ${e.message ?? e}`));
 }
 
 async function boot() {

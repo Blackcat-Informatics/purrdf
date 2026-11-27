@@ -118,6 +118,10 @@ harness = false
 name = "host_import_probe"
 crate-type = ["cdylib"]
 
+[[example]]
+name = "museum_attributions"
+test = true
+
 [[bench]]
 name = "multimodal_on_demand_read"
 harness = false

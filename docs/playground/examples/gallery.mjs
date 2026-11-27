@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 //
-// Curated RDF-1.2 vignettes for the PurRDF console. Every fixture uses
-// http://example.org/ IRIs and only standard rdf:/sh:/xsd: vocabulary — PurRDF
-// mints no vocabulary of its own. Each vignette is a complete console state:
+// Curated RDF-1.2 vignettes for the PurRDF console. Fixtures use example.org
+// identifiers and provide their own vocabulary alongside standard terms.
+// Each vignette is a complete console state:
 // selecting one loads the Input/SPARQL/SHACL/graph-B panes and runs it.
 
 /** @typedef {{
  *   id: string,
  *   title: string,
  *   blurb: string,
- *   input: string,
+ *   input?: string,
  *   inputFormat: string,
  *   query?: string,
+ *   files?: { input: string, query: string },
  *   shapes?: string,
  *   graphB?: string,
  *   graphBFormat?: string,
@@ -22,6 +23,16 @@ const RDF = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 
 /** @type {Vignette[]} */
 export const VIGNETTES = [
+  {
+    id: "museum-attributions",
+    title: "Museum collection (Chinese labels)",
+    blurb:
+      "Two sources disagree on the date of a lotus-pattern bowl. " +
+      "RDF 1.2 annotations keep each date paired with its source.",
+    inputFormat: "turtle",
+    files: { input: "./museum/collection.ttl", query: "./museum/attributions.rq" },
+    activePane: "sparql",
+  },
   {
     id: "quoted-triple",
     title: "Quoted-triple reification",
@@ -138,6 +149,33 @@ SELECT ?remote WHERE {
 /** Look up a vignette by id. */
 export function findVignette(id) {
   return VIGNETTES.find((v) => v.id === id);
+}
+
+async function fixtureText(path, fetchAsset) {
+  const response = await fetchAsset(new URL(path, import.meta.url));
+  if (!response.ok) throw new Error(`could not load gallery fixture ${path} (HTTP ${response.status})`);
+  return response.text();
+}
+
+/** Build the same complete state for Load & run and Copy permalink. */
+export async function vignetteState(v, fetchAsset = (url) => fetch(url)) {
+  const [input, query] = v.files
+    ? await Promise.all([fixtureText(v.files.input, fetchAsset), fixtureText(v.files.query, fetchAsset)])
+    : [v.input, v.query];
+  const s = { ...DEFAULT_STATE };
+  s.input = input;
+  s.inputFormat = v.inputFormat;
+  if (query != null) s.query = query;
+  if (v.shapes != null) s.shapes = v.shapes;
+  // Identity vignettes can supply a distinct comparison graph.
+  s.graphA = input;
+  s.graphAFormat = v.inputFormat;
+  if (v.graphB != null) {
+    s.graphB = v.graphB;
+    s.graphBFormat = v.graphBFormat ?? "turtle";
+  }
+  s.activePane = v.activePane ?? "input";
+  return s;
 }
 
 /** The default console state used on a cold load (no permalink). */

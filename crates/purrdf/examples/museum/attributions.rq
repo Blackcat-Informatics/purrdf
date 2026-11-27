@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+PREFIX ex: <https://example.org/museum/>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?object ?label ?date ?source ?sourceLabel WHERE {
+  ?object a ex:Object ;
+    rdfs:label ?label ;
+    ex:attributedDate ?date .
+  ?attribution rdf:reifies <<( ?object ex:attributedDate ?date )>> ;
+    ex:source ?source .
+  ?source rdfs:label ?sourceLabel .
+}
+ORDER BY ?object ?date ?source
