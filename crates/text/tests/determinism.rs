@@ -418,6 +418,58 @@ fn summary_delta_refuses_different_rows_with_matching_accounting() {
 }
 
 #[test]
+fn summary_delta_preserves_the_original_literal_population_underflow() {
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_hash::multiset::MultisetError;
+    use purrdf_testkit::error_capture::Capture;
+    use purrdf_text::TextDeltaError;
+
+    let before = dataset_of(&[("edited", "before")]);
+    let next = dataset_of(&[("edited", "after")]);
+    let nonliteral = walk_dataset(&[purrdf_core::QuadValues {
+        s: TermValue::iri("http://example.org/edited"),
+        p: TermValue::iri(NOTE),
+        o: TermValue::iri("http://example.org/object"),
+        g: None,
+    }]);
+    let index = TextIndex::from_dataset(&*before, &config()).unwrap();
+    let mut source = UnobservedSource {
+        inner: &next,
+        summary: None,
+        failure: 3,
+        failed: std::sync::atomic::AtomicBool::new(false),
+    };
+    let updated = index.clone().with_delta(&source, &*next, &*before).unwrap();
+    let fresh = TextIndex::from_dataset(&*next, &config()).unwrap();
+    assert_eq!(updated.fingerprint(), fresh.fingerprint());
+
+    // Subject probes still find the added literal, but the independent
+    // metadata now claims the sole statement has a nonliteral object.
+    source.summary = Some(&nonliteral);
+    let error = index.with_delta(&source, &*next, &*before).unwrap_err();
+    let original = MultisetError::Underflow {
+        before: 0,
+        removed: 1,
+    };
+    assert_eq!(error, TextDeltaError::SourceAccounting(original));
+    assert_eq!(
+        std::error::Error::source(&error)
+            .unwrap()
+            .downcast_ref::<MultisetError>(),
+        Some(&original)
+    );
+    let fields = Capture::read(&error);
+    assert_eq!(fields.code, "text-delta-source-accounting");
+    let ErrorValue::Cause(cause) = fields.field("cause") else {
+        panic!("the original accounting refusal remains a borrowed cause");
+    };
+    let fields = Capture::read(cause);
+    assert_eq!(fields.code, "hash-multiset-underflow");
+    assert!(matches!(fields.field("before"), ErrorValue::Unsigned(0)));
+    assert!(matches!(fields.field("removed"), ErrorValue::Unsigned(1)));
+}
+
+#[test]
 fn invalid_corpus_shape_refuses_before_capturing_source_observation() {
     let dataset = dataset_of(&CORPUS);
     let source = UnobservedSource {

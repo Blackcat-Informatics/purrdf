@@ -41,6 +41,8 @@ pub enum TextDeltaError {
         /// Check value reconstructed from the supplied source and delta.
         actual: [u8; 32],
     },
+    /// The selected literal population could not be reconciled with the source.
+    SourceAccounting(purrdf_hash::multiset::MultisetError),
     /// Statement populations implied by the delta disagree with the source,
     /// including nonliteral rows that do not participate in the text digest.
     CoverageMismatch {
@@ -104,6 +106,7 @@ impl core::fmt::Display for TextDeltaError {
                 purrdf_hash::hex::Lower(expected),
                 purrdf_hash::hex::Lower(actual)
             ),
+            Self::SourceAccounting(cause) => write!(f, "text-index input error: {cause}"),
             Self::CoverageMismatch {
                 predicate,
                 before,
@@ -144,6 +147,7 @@ impl std::error::Error for TextDeltaError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Indexing(cause) => Some(cause),
+            Self::SourceAccounting(cause) => Some(cause),
             Self::TermCapacity { cause, .. } => Some(cause),
             Self::AnalyzerMismatch { .. }
             | Self::SourceObservationUnavailable
@@ -165,6 +169,7 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
         SourceMismatch { expected, actual } => "text-delta-source-mismatch" {
             "expected" => Bytes(expected), "actual" => Bytes(actual),
         },
+        SourceAccounting(cause) => "text-delta-source-accounting" { "cause" => Cause(cause) },
         CoverageMismatch { predicate, before, added, removed, observed } => "text-delta-coverage-mismatch" {
             "predicate" => Term(&**predicate),
             "before" => Unsigned(*before), "added" => Unsigned(*added),
@@ -189,6 +194,7 @@ impl purrdf_hash::error::StructuredError for TextDeltaError {
 
 purrdf_lex::variant_from!(TextDeltaError {
     Indexing(TextError),
+    SourceAccounting(purrdf_hash::multiset::MultisetError),
 });
 
 /// Admit a dictionary population, widening before adding even at usize::MAX.
