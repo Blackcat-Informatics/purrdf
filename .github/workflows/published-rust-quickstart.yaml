@@ -100,12 +100,6 @@ jobs:
           ref: ${{ github.workflow_sha }}
           path: checker
           persist-credentials: false
-      - name: Check out both published README files
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          ref: ${{ steps.source.outputs.sha }}
-          path: release-source
-          persist-credentials: false
       - name: Verify the registry crate and its build provenance
         id: registry
         env:
@@ -141,10 +135,41 @@ jobs:
             --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_SHA" \
             --format json > "$evidence/crate-provenance.json"
           printf 'checksum=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
+      - name: Retrieve only the verified release README blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY/git"
+          tree=$(gh api "$api/commits/$RELEASE_SHA" | jq -er --arg sha "$RELEASE_SHA" '
+            select(.sha == $sha) | .tree.sha | select(test("^[0-9a-f]{40}$"))
+          ')
+          manifest=$(gh api "$api/trees/$tree" | jq -ce --arg tree "$tree" '
+            select(.sha == $tree and .truncated == false) | .tree
+          ')
+          source="$RUNNER_TEMP/rust-quickstart-readmes"
+          mkdir "$source"
+          receipt="$RUNNER_TEMP/rust-quickstart-evidence/readme-blobs.txt"
+          printf 'commit %s\ntree %s\n' "$RELEASE_SHA" "$tree" > "$receipt"
+          for readme in README.md README_zh.md; do
+            blob=$(jq -er --arg path "$readme" '
+              map(select(.path == $path)) | select(length == 1) | .[0]
+              | select(.type == "blob" and (.mode == "100644" or .mode == "100755"))
+              | .sha | select(test("^[0-9a-f]{40}$"))
+            ' <<< "$manifest")
+            gh api "$api/blobs/$blob" | jq -er --arg sha "$blob" '
+              select(.sha == $sha and .encoding == "base64") | .content | select(type == "string")
+            ' | base64 --decode > "$source/$readme"
+            if [[ "$(git hash-object --no-filters "$source/$readme")" != "$blob" ]]; then
+              echo "::error::The downloaded bytes for $readme do not match the verified release tree."
+              exit 1
+            fi
+            printf '%s %s\n' "$blob" "$readme" >> "$receipt"
+          done
       - name: Run both README examples on stable
         env:
           RELEASE_TAG: ${{ steps.source.outputs.tag }}
-          RELEASE_SHA: ${{ steps.source.outputs.sha }}
           RUSTUP_TOOLCHAIN: ${{ steps.source.outputs.toolchain }}
           CHECKSUM: ${{ steps.registry.outputs.checksum }}
         run: |
@@ -159,11 +184,10 @@ jobs:
           [[ "$compiler" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$RUSTUP_TOOLCHAIN" == stable || "$compiler" == "$RUSTUP_TOOLCHAIN" ]]
           rustup run "$RUSTUP_TOOLCHAIN" cargo -Vv > "$evidence/cargo.txt"
-          test "$(git -C "$GITHUB_WORKSPACE/release-source" rev-parse HEAD)" = "$RELEASE_SHA"
           extractor="$RUNNER_TEMP/extract-rust-quickstarts"
           rustup run "$RUSTUP_TOOLCHAIN" rustc --edition 2024 -D warnings \
             "$GITHUB_WORKSPACE/checker/.github/extract-rust-quickstarts.rs" -o "$extractor"
-          "$extractor" "$GITHUB_WORKSPACE/release-source" "$consumer" "$RELEASE_TAG"
+          "$extractor" "$RUNNER_TEMP/rust-quickstart-readmes" "$consumer" "$RELEASE_TAG"
           cp "$consumer/Cargo.toml" "$consumer"/src/*.rs "$evidence/"
           export CARGO_HOME="$RUNNER_TEMP/rust-quickstart-cargo"
           export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse

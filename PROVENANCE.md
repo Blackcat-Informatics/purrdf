@@ -387,10 +387,12 @@ filename and timestamp fields. [Git archive documentation](https://git-scm.com/d
 ## Published Rust quickstart
 
 The postpublication check uses the caller's workflow revision for the verifier
-and the release tag's commit for the README programs. It matches the published
-crate's attestation to the release workflow, tag and commit before checking the
-standalone Cargo lockfile.
+and reads only the two README blobs from the release tag's verified commit.
+It checks their Git object hashes before extracting the programs. The
+published crate's attestation binds the release workflow, tag and commit.
+The standalone Cargo lockfile binds the same registry crate checksum.
 [Reusable workflow context](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context) ·
+[GitHub Git database API](https://docs.github.com/en/rest/git) ·
 [GitHub attestation verification](https://cli.github.com/manual/gh_attestation_verify) ·
 [Cargo lockfile guide](https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html)
 
