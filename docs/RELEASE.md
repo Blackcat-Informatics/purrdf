@@ -40,7 +40,7 @@ is a single coherent flow from `main`, using the version-coherence gate and the
 # 1. Bump all three version sources in lockstep (fails unless they end up equal).
 make bump VERSION=0.2.2
 
-# 2. Re-key the version-keyed WatDiv and LUBM pins in scripts/benchmark-acquire.py
+# 2. Re-key the version-keyed WatDiv pins in scripts/benchmark-acquire.py
 # (every `.purrdf-<version>` suffix in WORKLOAD_PINS) to the bumped version. The
 # self-test refuses a mismatch with Cargo.toml, so the lanes never report "no pin"
 # for the binary they built. Re-measure the answer counts under the new binary
@@ -543,7 +543,7 @@ the release tag. Download the attached assets into an empty directory and verify
 the manifest and the tagged workflow's attestations for the source and receipt:
 
 ```sh
-VERSION=5.0.2
+VERSION=5.1.0
 TAG="rust-v$VERSION"
 REPO=Blackcat-Informatics/purrdf
 SOURCE_COMMIT=$(git rev-parse --verify "refs/tags/$TAG^{commit}")

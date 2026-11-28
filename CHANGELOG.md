@@ -8,17 +8,81 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
+## [5.1.0]
+
+### GTS and native interfaces
+
+- Read and write complete GTS version 2 RDF datasets from Rust, Python,
+  JavaScript and C. The Rust container APIs resolve dictionary and resource
+  references, verify canonical files, and can recover complete segments
+  after an interrupted write. Indexed Rust reads verify the fetched frames,
+  not the whole file. Rust callers can also write blobs from bounded sources.
+  Host dataset loaders still require a complete RDF input.
+- The C ABI moves from 0.20 to 0.21 with additive GTS version 2 and SHACL
+  entry points. Use the matching `purrdf.h` and library for the new APIs.
+  Existing GTS function signatures and ownership are unchanged.
+- Preserve anonymous blank-node identity in GTS version 1. Each blank term
+  with no value or an empty value names a new node. Fold, streaming import
+  and export use scoped labels so an authored blank cannot collide with
+  that node. Projected labels change, but the GTS wire format does not.
+- Bound the GTS-to-N-Quads exporter through stored and compressed input, and
+  keep caller-imposed native stack floors authoritative through guarded
+  operations.
+
+### Query, validation and retrieval
+
+- Expose fixed-point SHACL validation through the command line, C and
+  WebAssembly, including prepared C and WebAssembly SHACL products. The
+  recursive conformance cases distinguish the fixed-point interpretations.
 - Rust callers can govern fallible SELECT and ASK evidence answers with
   `NativeSparqlEngine::query_evidence_answer_governed_fallible_view`.
   Cancellation and deadlines return a typed trip without visiting an answer.
   A resource trip can visit a certified, incomplete evidence prefix.
   DISTINCT and REDUCED withhold prefix status because later rows can change
-  the evidence attached to a delivered binding.
-- **GTS version 1 preserves anonymous blank-node identity.** Each blank term
-  with no value or an empty value names a new node. Fold, streaming import and
-  export use scoped labels so an authored blank cannot collide with that node.
-  The change alters anonymous labels in projected output, not the GTS wire
-  format.
+  the evidence attached to a delivered binding. Paged and segmented evidence
+  expose structured inspection, and SPARQL LOAD retains its native cause.
+- Python `RetrievalSession` retains an immutable dataset and retrieval
+  producer indexes for repeated queries. Retrieval keeps native causes when
+  a cell cannot be materialized or an exact kNN space cannot be opened.
+- Native rule and entailment changes preserve typed time and digest literal
+  comparison, resume prepared Datalog chases after a caller stop, and resume
+  selected RDFS graph unions with certified partial conclusions.
+- On Linux, the command line expands compiled RDF glob plans within
+  contained directories. The native reader also admits blank graph
+  continuation labels.
+
+### Correctness and performance
+
+- Use native SHA-256, SHA-384 and SHA-512 implementations in the shared hash
+  crate, including for Ed25519. The lockfile no longer contains the external
+  `sha2`, `digest` or `const-oid` packages. Native SIMD BLAKE3 batches retain
+  independent message semantics, with qualification for hosted native and
+  WebAssembly widths.
+- Check Deflate hash window bounds before selecting any scalar or SIMD
+  kernel. Native decimal operations fill admitted limb destinations directly
+  and meter integral rounding. The Testkit rational parser refuses an exact
+  decimal exponent it cannot represent instead of overflowing it.
+- Improve segmented dataset sealing and dictionary storage, subject-ordered
+  graph scans and joins, and disconnected SPARQL COUNT and DISTINCT. Exact
+  arithmetic, RDF canonicalization and repeated Markdown scanning use
+  narrower checked work or storage paths.
+
+### Distribution and documentation
+
+- The GitHub release includes the audited tagged source tarball and its
+  license receipt alongside the C SDK. `SHA256SUMS` covers both archives and
+  their receipts. Native Python distributions are qualified against their
+  target interpreters before trusted publication.
+- The bilingual book shows Chinese token positions and ranked full-text
+  results. The playground adds Simplified Chinese controls and a museum
+  attribution example.
+- The PurRDF 5.1.0 binary ran all 20 WatDiv 10M seed 0 queries on the
+  pinned corpus of 10,916,457 triples and returned 434,748 rows. The
+  results match the recorded per-query counts.
+  WatDiv citation: G. Aluç, O. Hartig, M. T. Özsu and K. Daudjee,
+  *Diversified Stress Testing of RDF Data Management Systems*, ISWC 2014,
+  pages 197–212.
+
 
 ## [5.0.1] - 2026-11-23
 

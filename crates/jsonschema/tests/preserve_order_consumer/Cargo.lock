@@ -40,11 +40,11 @@ dependencies = [
 
 [[package]]
 name = "purrdf-hash"
-version = "5.0.1"
+version = "5.1.0"
 
 [[package]]
 name = "purrdf-iri"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
@@ -52,7 +52,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-jsonschema"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
@@ -72,14 +72,14 @@ dependencies = [
 
 [[package]]
 name = "purrdf-lex"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
 ]
 
 [[package]]
 name = "purrdf-testkit"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "regex-syntax",
@@ -88,7 +88,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-xsd"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
