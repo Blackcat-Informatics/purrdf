@@ -11,22 +11,27 @@ use purrdf_hash::blake3::{self, Backend, DeriveKeyContext, Hash};
 pub(super) fn independent_batches_match_portable_through_two_chunks() {
     let data = super::corpus();
     let context = DeriveKeyContext::new(OFFICIAL_CONTEXT);
+    let inputs = mixed_two_chunk_inputs(&data);
+    compare_modes(&inputs, &context, Backend::all_available());
+    compare_exact_widths::<16>(inputs, Backend::all_available());
+}
+
+fn mixed_two_chunk_inputs(data: &[u8]) -> Vec<&[u8]> {
     // The permutation mixes lengths within each SIMD group while visiting
     // every length exactly once. Shift each start to exercise unaligned loads.
-    let inputs: Vec<_> = (0..2049)
+    (0..2049)
         .map(|i| {
             let len = i * 787 % 2049;
             let start = i % 31;
             &data[start..start + len]
         })
-        .collect();
-    compare_modes(&inputs, &context, Backend::all_available());
-    compare_exact_widths(inputs);
+        .collect()
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn compare_exact_widths(mut inputs: Vec<&[u8]>) {
-    const MAX_WIDTH: usize = 16;
+fn compare_exact_widths<const MAX_WIDTH: usize>(
+    mut inputs: Vec<&[u8]>,
+    paths: impl IntoIterator<Item = Backend>,
+) {
     let count = inputs.len();
     // Wrap the final group so each message length runs at the exact width.
     inputs.extend_from_within(..MAX_WIDTH - 1);
@@ -40,7 +45,7 @@ fn compare_exact_widths(mut inputs: Vec<&[u8]>) {
         .collect();
     let mut output = [Hash::ZERO; MAX_WIDTH];
     // Partial SIMD groups take the live-lane blend even on the first block.
-    for backend in Backend::all_available() {
+    for backend in paths {
         for width in 1..=MAX_WIDTH {
             let slots = &mut output[..width];
             for start in (0..count).step_by(width) {
@@ -184,10 +189,12 @@ pub(super) fn refusal_leaves_every_batch_slot_intact() {
 
 #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
 pub(super) fn mixed_message_batch_simd_dispatch() {
+    const SIMD_WIDTH: usize = 4;
     assert_eq!(Backend::selected(), Backend::Wasm128);
     let data = super::corpus();
     let context = DeriveKeyContext::new(OFFICIAL_CONTEXT);
-    replay_official_batches(&data, &context, &[Backend::Wasm128], 4);
+    replay_official_batches(&data, &context, &[Backend::Wasm128], SIMD_WIDTH);
+    compare_exact_widths::<SIMD_WIDTH>(mixed_two_chunk_inputs(&data), [Backend::Wasm128]);
     let lengths = [4096, 0, 3073, 1025, 65];
     compare_modes(
         &lengths.map(|len| &data[1..1 + len]),
