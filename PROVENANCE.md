@@ -384,6 +384,18 @@ commit record. The release script fixes the tar permission mask and refuses
 export attributes that would remove or substitute paths. GNU gzip omits its
 filename and timestamp fields. [Git archive documentation](https://git-scm.com/docs/git-archive) · [GNU gzip options](https://www.gnu.org/software/gzip/manual/gzip.html#Invoking-gzip)
 
+## Published Rust quickstart
+
+The postpublication check uses the caller's workflow revision for the verifier
+and reads only the two README blobs from the release tag's verified commit.
+It checks their Git object hashes before extracting the programs. The
+published crate's attestation binds the release workflow, tag and commit.
+The standalone Cargo lockfile binds the same registry crate checksum.
+[Reusable workflow context](https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations#github-context) ·
+[GitHub Git database API](https://docs.github.com/en/rest/git) ·
+[GitHub attestation verification](https://cli.github.com/manual/gh_attestation_verify) ·
+[Cargo lockfile guide](https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html)
+
 ## C ABI verification tool
 
 The Ubuntu C ABI job uses the upstream cargo-c 0.10.23 Linux x86-64

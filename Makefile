@@ -302,7 +302,7 @@ test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|
 		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
 		doc) set -x; cargo test --workspace --locked --doc \
 			&& cargo build --workspace --locked --examples --profile test \
-			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance ;; \
+			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture --example text_relevance --example museum_attributions ;; \
 		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
 		integration-2) set -x; cargo test --workspace --locked --test '[e-j]*' ;; \
 		integration-3) set -x; cargo test --workspace --locked --test '[pq]*' ;; \
@@ -889,6 +889,7 @@ wasm-test: ## Execute WASM dispatch, SIMD kernels, shadow-stack, host-interface 
 				official_modes_and_extended_output \
 				xof_large_output_and_seek_boundaries \
 				derived_context_trees_match_across_backends \
+				mixed_message_batch_simd_dispatch \
 				random_inputs_cover_irregular_trees_and_alignment \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
@@ -1009,10 +1010,13 @@ playground: ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/
 	python3 scripts/fetch-locked-deps.py
 	python3 scripts/package-licenses.py --profile npm --check
 	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
-		docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
+		docs/playground/locale.mjs docs/playground/permalink.mjs docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
 		docs/playground/manifest.webmanifest \
 		"$(PLAYGROUND_OUT)/"
 	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"
+	@mkdir -p "$(PLAYGROUND_OUT)/examples/museum"
+	@cp crates/purrdf/examples/museum/collection.ttl crates/purrdf/examples/museum/attributions.rq \
+		"$(PLAYGROUND_OUT)/examples/museum/"
 	@cp crates/rdf-wasm/js/index.mjs crates/rdf-wasm/js/package.json "$(PLAYGROUND_OUT)/purrdf/"
 	@cp -R crates/rdf-wasm/js/pkg "$(PLAYGROUND_OUT)/purrdf/pkg"
 	@cp -R crates/rdf-wasm/js/licenses "$(PLAYGROUND_OUT)/purrdf/licenses"

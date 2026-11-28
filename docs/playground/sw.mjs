@@ -4,20 +4,25 @@
 // package on install and serves cache-first, so the console runs fully offline
 // after the first load. There is no server-side evaluation to fall back to.
 
-const CACHE = "purrdf-console-v2";
+const CACHE = "purrdf-console-v5";
 
 const SHELL = [
   "./",
   "./index.html",
   "./app.mjs",
+  "./locale.mjs",
   "./engine.worker.mjs",
   "./sarif.mjs",
   "./style.css",
   "./manifest.webmanifest",
   "./examples/gallery.mjs",
+  "./examples/museum/collection.ttl",
+  "./examples/museum/attributions.rq",
+  "./permalink.mjs",
   "./purrdf/index.mjs",
   "./purrdf/package.json",
   "./purrdf/build-compiler.txt",
+  "./purrdf/pkg/purrdf_bytes.mjs",
   "./purrdf/pkg/purrdf_jspi.mjs",
   "./purrdf/pkg/purrdf_wasm.js",
   "./purrdf/pkg/purrdf_wasm_bg.wasm",
@@ -92,17 +97,16 @@ self.addEventListener("install", (event) => {
       await cache.put(compilerURL, compiler);
       for (const [url, response] of notices) await cache.put(url, response);
       await cache.addAll(SHELL);
-      await self.skipWaiting();
     })(),
   );
 });
 
 self.addEventListener("activate", (event) => {
+  // Let existing pages finish under their own shell before retiring its cache.
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
       await Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)));
-      await self.clients.claim();
     })(),
   );
 });

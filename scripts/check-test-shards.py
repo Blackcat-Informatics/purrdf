@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 SPEC = importlib.util.spec_from_file_location("test_shards", ROOT / "scripts/test-shards.py")
 SHARDS = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(SHARDS)
-TEST_EXAMPLES = ("graphql_oracle_fixture", "typescript_oracle_fixture", "text_relevance")
+TEST_EXAMPLES = ("graphql_oracle_fixture", "typescript_oracle_fixture", "text_relevance", "museum_attributions")
 
 
 def wiring_problems(make: str, workflow: str) -> list[str]:

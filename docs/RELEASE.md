@@ -23,6 +23,13 @@ The release lane follows the `gmeow-gts` cargo release pattern:
 - crates.io publication uses Trusted Publishing through GitHub Actions OIDC,
   not a long-lived repository secret.
 
+After the Cargo publisher succeeds, a read-only quickstart job checks the
+facade crate's registry checksum and build provenance, then runs the Rust
+programs from both tagged READMEs against that exact published version on
+stable Rust. The run artifact retains the sources, lockfile and both results.
+To check an older immutable release without publishing again, run
+**Check the published Rust quickstart** from `main` with its `rust-v` tag.
+
 ## Cutting a release
 
 The suite ships **one** version to crates.io, PyPI, and npm. Cutting a release
@@ -413,6 +420,13 @@ digests.
 The backfill installs the already published shadow wheel in every platform
 lane after verifying its pinned digest. Rehearsals have a separate concurrency
 group from publication.
+
+For an already qualified 5.0.1 backfill, enable `recover` to use the retained
+artifacts instead of rebuilding. With `publish` off, the workflow verifies the
+original aggregate and checks both live PyPI inventories without publishing
+credentials. With both inputs enabled, it publishes only missing native wheels
+after the same checks and leaves the shadow files unchanged. An unavailable
+artifact or a mismatched digest stops recovery without a rebuild.
 
 Configure a matching publisher separately for **each** PyPI project; use a
 pending publisher if the project does not yet exist. The main project’s publisher

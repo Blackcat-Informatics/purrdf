@@ -8,6 +8,10 @@ use purrdf_hash::dispatch::{assert_required_available, host_advertises};
 use purrdf_hash::hex::Lower;
 use purrdf_testkit::vectors::VectorFile;
 
+#[cfg(any(not(target_arch = "wasm32"), target_feature = "simd128"))]
+#[path = "support/blake3_batch.rs"]
+mod batch;
+
 const VECTORS: &str = include_str!("vectors/blake3_differential_vectors.txt");
 
 fn required_backends_are_available() {
@@ -469,6 +473,14 @@ fn xof_large_output_and_seek_boundaries() {
 }
 
 purrdf_testkit::harness_main!(
+    #[cfg(not(target_arch = "wasm32"))]
+    independent_batches_match_portable_through_two_chunks,
+    #[cfg(not(target_arch = "wasm32"))]
+    independent_batches_replay_all_admitted_official_vectors,
+    #[cfg(not(target_arch = "wasm32"))]
+    refusal_leaves_every_batch_slot_intact,
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    mixed_message_batch_simd_dispatch,
     derived_context_trees_match_across_backends,
     official_modes_and_extended_output,
     xof_large_output_and_seek_boundaries,
@@ -480,3 +492,12 @@ purrdf_testkit::harness_main!(
     streaming_answers_match,
     snapshots_and_reset_preserve_message_boundaries,
 );
+
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+use batch::mixed_message_batch_simd_dispatch;
+#[cfg(not(target_arch = "wasm32"))]
+use batch::{
+    independent_batches_match_portable_through_two_chunks,
+    independent_batches_replay_all_admitted_official_vectors,
+    refusal_leaves_every_batch_slot_intact,
+};

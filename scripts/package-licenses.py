@@ -39,6 +39,14 @@ FIRST_PARTY = "MIT OR Apache-2.0 OR MulanPSL-2.0"
 FIRST_TEXTS = ("LICENSE-MIT", "LICENSE-APACHE", "LICENSE-MULAN")
 LEGAL_PREFIXES = ("LICENSE", "LICENCE", "COPYING", "NOTICE", "COPYRIGHT", "AUTHORS")
 IGNORED_PARTS = {"tests", "examples", "benches", "testdata", ".github"}
+PLAYGROUND_SHELL = {
+    **{name: "docs/playground/" + name for name in (
+        "index.html", "app.mjs", "engine.worker.mjs", "permalink.mjs", "sarif.mjs",
+        "style.css", "sw.mjs", "locale.mjs", "manifest.webmanifest", "examples/gallery.mjs",
+    )},
+    **{"examples/museum/" + name: "crates/purrdf/examples/museum/" + name
+       for name in ("collection.ttl", "attributions.rq")},
+}
 COMPILER_ENV = (
     "RUSTC",
     "RUSTC_WRAPPER",
@@ -728,6 +736,7 @@ def audit_directory(
     code = ["package.json", "index.mjs"] + [
         "pkg/" + name
         for name in (
+            "purrdf_bytes.mjs",
             "purrdf_jspi.mjs",
             "purrdf_wasm.js",
             "purrdf_wasm.d.ts",
@@ -744,19 +753,9 @@ def audit_directory(
             )
         payload_hashes[name] = digest(source)
     shell_root = relative.parent
-    shell = ROOT / "docs/playground"
-    for name in (
-        "index.html",
-        "app.mjs",
-        "engine.worker.mjs",
-        "sarif.mjs",
-        "style.css",
-        "sw.mjs",
-        "manifest.webmanifest",
-        "examples/gallery.mjs",
-    ):
+    for name, source_path in PLAYGROUND_SHELL.items():
         member = (shell_root / name).as_posix()
-        source = (shell / name).read_bytes()
+        source = (ROOT / source_path).read_bytes()
         if contents.get(member) != source:
             raise ValueError(f"{path}: missing/stale assembled shell input {member}")
         payload_hashes[member] = digest(source)
@@ -1113,6 +1112,7 @@ def directory_self_test() -> None:
         code = {
             "package.json": b'{"name":"@blackcatinformatics/purrdf","version":"3.0.0","license":"MIT OR Apache-2.0 OR MulanPSL-2.0"}',
             "index.mjs": b"fixture sdk",
+            "pkg/purrdf_bytes.mjs": b"fixture byte owner",
             "pkg/purrdf_jspi.mjs": b"fixture jspi",
             "pkg/purrdf_wasm.js": b"fixture glue",
             "pkg/purrdf_wasm.d.ts": b"fixture types",
@@ -1124,19 +1124,8 @@ def directory_self_test() -> None:
             destination = npm / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(value)
-        shell = source / "docs/playground"
-        shell.mkdir(parents=True)
-        for name in (
-            "index.html",
-            "app.mjs",
-            "engine.worker.mjs",
-            "sarif.mjs",
-            "style.css",
-            "sw.mjs",
-            "manifest.webmanifest",
-            "examples/gallery.mjs",
-        ):
-            destination = shell / name
+        for name, source_path in PLAYGROUND_SHELL.items():
+            destination = source / source_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(b"shell fixture " + name.encode())
             payload[name] = destination.read_bytes()
@@ -1191,6 +1180,7 @@ def directory_self_test() -> None:
                     ("purrdf/build-compiler.txt", b"other compiler"),
                     ("purrdf/pkg/purrdf_wasm_bg.wasm", b"stale wasm"),
                     ("app.mjs", b"stale shell"),
+                    ("examples/museum/collection.ttl", None),
                     (".stage/private.txt", b"private"),
                 )
             ):

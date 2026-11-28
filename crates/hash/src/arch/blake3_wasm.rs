@@ -110,6 +110,7 @@ fn load_block(bytes: &[u8; 4096], block: usize) -> [V; 16] {
     out
 }
 super::blake3_lanes::blake3_lanes!("simd128", 4);
+super::blake3_lanes::blake3_messages!("simd128", 4, lane_compress);
 
 impl V {
     #[inline]

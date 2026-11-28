@@ -116,5 +116,6 @@ fn load_block(bytes: &[u8; 8192], block: usize) -> [V; 16] {
     out
 }
 super::blake3_lanes::blake3_lanes!("avx2", 8);
+super::blake3_lanes::blake3_messages!("avx2", 8, lane_compress);
 
 use core::arch::x86_64::{_mm256_setr_epi8, _mm256_shuffle_epi8};

@@ -1,0 +1,28 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: CC-BY-4.0
+# An original, fictional museum collection.
+
+@prefix ex: <https://example.org/museum/> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+ex:lotus-bowl a ex:Object ;
+  rdfs:label "莲纹碗"@zh ;
+  ex:attributedDate
+    "1718-05-12"^^xsd:date {| ex:source ex:acquisition-register |} ,
+    "1723-09-08"^^xsd:date {| ex:source ex:conservation-notebook |} .
+
+ex:brush-rest a ex:Object ; rdfs:label "山形笔架"@zh .
+ex:bronze-mirror a ex:Object ; rdfs:label "花纹铜镜"@zh .
+ex:tea-caddy a ex:Object ; rdfs:label "竹纹茶罐"@zh .
+ex:water-dropper a ex:Object ; rdfs:label "蕉叶水滴"@zh .
+ex:inkstone a ex:Object ; rdfs:label "云纹砚"@zh .
+ex:silk-fan a ex:Object ; rdfs:label "团花绢扇"@zh .
+ex:incense-box a ex:Object ; rdfs:label "雕漆香盒"@zh .
+ex:porcelain-cup a ex:Object ; rdfs:label "白瓷杯"@zh .
+ex:wooden-tray a ex:Object ; rdfs:label "木托盘"@zh .
+ex:stone-seal a ex:Object ; rdfs:label "石印"@zh .
+ex:jade-pendant a ex:Object ; rdfs:label "鱼形玉坠"@zh .
+
+ex:acquisition-register rdfs:label "入藏登记簿"@zh .
+ex:conservation-notebook rdfs:label "修复笔记"@zh .

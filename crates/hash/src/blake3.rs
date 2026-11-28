@@ -162,22 +162,21 @@ impl Mode {
             key: IV,
             flags: DERIVE_KEY_CONTEXT,
         };
-        // Default contexts use the complete ordinary dispatcher, including
-        // SIMD chunk batches for long contexts and scalar short roots on x86.
-        // Explicit backend streams keep their named kernel for every block.
+        // Default contexts use the ordinary one-shot dispatcher. Explicit
+        // backend streams keep their named kernel for every context block.
         let context_key = match forced_backend {
             Some(backend) => hash_on(context.as_bytes(), backend, context_mode),
-            None => hash_mode(context.as_bytes(), context_mode),
+            None => hash_mode(context.as_bytes(), &context_mode),
         };
         Self::keyed(context_key.as_bytes(), DERIVE_KEY_MATERIAL)
     }
 }
 
-const START: u32 = 1;
-const END: u32 = 2;
-const PARENT: u32 = 4;
-const ROOT: u32 = 8;
-const CHUNK: usize = 1024;
+pub(crate) const START: u32 = 1;
+pub(crate) const END: u32 = 2;
+pub(crate) const PARENT: u32 = 4;
+pub(crate) const ROOT: u32 = 8;
+pub(crate) const CHUNK: usize = 1024;
 const KEYED_HASH: u32 = 16;
 const DERIVE_KEY_CONTEXT: u32 = 32;
 const DERIVE_KEY_MATERIAL: u32 = 64;
@@ -300,11 +299,7 @@ impl Output {
     fn root(self, backend: Backend) -> Hash {
         let cv: [u32; 8] =
             backend.compress(self.cv, &self.words, 0, self.length, self.flags | ROOT);
-        let mut bytes = [0; 32];
-        for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
-            dest.copy_from_slice(&word.to_le_bytes());
-        }
-        Hash(bytes)
+        Hash::from_cv(cv)
     }
 }
 #[inline]
@@ -416,6 +411,18 @@ impl std::io::Read for OutputReader {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct Hash([u8; 32]);
 impl Hash {
+    /// Zero bytes for initializing caller-owned batch output, not the empty-message hash.
+    pub const ZERO: Self = Self([0; 32]);
+
+    #[inline]
+    pub(crate) fn from_cv(cv: [u32; 8]) -> Self {
+        let mut bytes = [0; 32];
+        for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
+            dest.copy_from_slice(&word.to_le_bytes());
+        }
+        Self(bytes)
+    }
+
     /// The digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
@@ -496,10 +503,8 @@ impl<const BUFFER: usize> Streaming<BUFFER> {
     #[must_use]
     pub fn new() -> Self {
         let mut stream = Self::on(Backend::selected());
-        // Scalar quarter rounds expose four independent dependency chains to
-        // x86's scheduler. Within-block SIMD serializes them into one vector
-        // chain; measured short roots are faster with scalar ARX. Explicitly
-        // forced streams keep the requested kernel for differential coverage.
+        // Preserve the stream's existing tail policy. One-shot selection is
+        // measured separately, and forced streams retain the requested kernel.
         stream.short_backend = short_backend(stream.backend);
         stream
     }
@@ -774,7 +779,7 @@ impl<const BUFFER: usize> crate::Digest for Streaming<BUFFER> {
 #[must_use]
 #[inline]
 pub fn hash(data: &[u8]) -> Hash {
-    hash_mode(data, Mode::HASH)
+    hash_mode(data, &Mode::HASH)
 }
 
 fn short_backend(backend: Backend) -> Backend {
@@ -785,18 +790,30 @@ fn short_backend(backend: Backend) -> Backend {
     }
 }
 
-fn hash_mode(data: &[u8], mode: Mode) -> Hash {
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if data.len() <= CHUNK {
-        return hash_on(data, Backend::Portable, mode);
-    }
+fn hash_mode(data: &[u8], mode: &Mode) -> Hash {
     let backend = Backend::selected();
-    let short = short_backend(backend);
-    if data.len() <= CHUNK {
-        hash_on(data, short, mode)
+    let one_shot = one_shot_backend(backend, data.len());
+    if data.len() <= MAX_BATCH_MESSAGE {
+        hash_on(data, one_shot, *mode)
     } else {
-        tree_output(data, 0, backend, mode).root(short)
+        tree_output(data, 0, one_shot, *mode).root(short_backend(backend))
     }
+}
+
+/// x86-64 instruction counts favor the AVX2 block kernel for one chunk and
+/// the AVX-512 complete tree for two through four. With AVX2 but no AVX-512,
+/// the four-lane chunk path avoids padding to eight for those small trees.
+/// Other architectures keep the detected backend for one-shot hashing.
+fn one_shot_backend(backend: Backend, len: usize) -> Backend {
+    if cfg!(target_arch = "x86_64") {
+        if len <= CHUNK && backend == Backend::Avx512 && Backend::Avx2.is_available() {
+            return Backend::Avx2;
+        }
+        if len > CHUNK && len <= MAX_BATCH_MESSAGE && backend == Backend::Avx2 {
+            return Backend::Sse2;
+        }
+    }
+    backend
 }
 
 #[inline]
@@ -809,11 +826,15 @@ fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
             data.len() as u32,
             mode.flags | START | END | ROOT,
         );
-        let mut bytes = [0; 32];
-        for (dest, word) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(cv) {
-            dest.copy_from_slice(&word.to_le_bytes());
-        }
-        return Hash(bytes);
+        return Hash::from_cv(cv);
+    }
+    #[cfg(target_arch = "x86")]
+    if backend == Backend::Sse2 && (CHUNK + 1..=2 * CHUNK).contains(&data.len()) {
+        // Two real chunks cost less than padding them to four parallel lanes.
+        let (left, right) = data.split_at(CHUNK);
+        let left = chunk(left, 0, backend, mode).chaining(backend);
+        let right = chunk(right, 1, backend, mode).chaining(backend);
+        return parent(left, right, mode).root(backend);
     }
     tree_output(data, 0, backend, mode).root(backend)
 }
@@ -821,14 +842,18 @@ fn hash_on(data: &[u8], backend: Backend, mode: Mode) -> Hash {
 /// Authenticate bytes with a 256-bit BLAKE3 key.
 #[must_use]
 pub fn keyed_hash(key: &[u8; 32], data: &[u8]) -> Hash {
-    hash_mode(data, Mode::keyed(key, KEYED_HASH))
+    hash_mode(data, &Mode::keyed(key, KEYED_HASH))
 }
 
 /// Derive 32 key bytes using an application-specific context and key material.
+/// This hashes the context on each call. Use [`DeriveKeyContext`] for reuse.
 #[must_use]
 pub fn derive_key(context: &str, key_material: &[u8]) -> [u8; 32] {
-    *hash_mode(key_material, Mode::derive(context, None)).as_bytes()
+    DeriveKeyContext::new(context).derive(key_material)
 }
+
+mod batch;
+pub use batch::{BatchError, DeriveKeyContext, MAX_BATCH_MESSAGE, hash_batch, keyed_hash_batch};
 
 /// Fill caller storage with the unkeyed BLAKE3 output prefix.
 pub fn hash_xof(data: &[u8], out: &mut [u8]) {

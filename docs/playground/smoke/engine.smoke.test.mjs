@@ -8,18 +8,22 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import {
+import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
+
+const playgroundOut = process.env.PLAYGROUND_OUT;
+assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
+const {
   ready,
   Dataset,
   DataFactory,
   shaclValidateToSarif,
   shaclEntail,
   version,
-} from "../../../crates/rdf-wasm/js/index.mjs";
-import { canonicalValue } from "../../../crates/rdf-wasm/js/tests/fixtures/poisoned-surface.mjs";
+} = await import(pathToFileURL(join(playgroundOut, "purrdf/index.mjs")).href);
 
 // The exact preloaded document the Input pane ships with: an RDF-1.2 graph in the
 // example.org namespace carrying a quoted triple in object position plus base-
@@ -81,8 +85,6 @@ globalThis.self = {
     workerMessages.push(message);
   },
 };
-const playgroundOut = process.env.PLAYGROUND_OUT;
-assert.ok(playgroundOut, "PLAYGROUND_OUT must point at the assembled console");
 await import(pathToFileURL(join(playgroundOut, "engine.worker.mjs")).href);
 assert.equal(typeof workerMessageHandler, "function");
 
@@ -99,6 +101,43 @@ async function workerCall(op, args = {}) {
 test("version() returns a SemVer string", () => {
   const v = version();
   assert.match(v, /^\d+\.\d+\.\d+/, `expected SemVer, got ${v}`);
+});
+
+test("the assembled interface switches its language and visible text", async () => {
+  const { interfaceFailure, localize, setLocale } =
+    await import(pathToFileURL(join(playgroundOut, "locale.mjs")).href);
+  const html = await readFile(join(playgroundOut, "index.html"), "utf8");
+  assert.match(html, /<select id="interface-language"[^>]*>[\s\S]*?<option value="zh-Hans"/u);
+  const parse = html.match(/<button id="btn-parse"[^>]*data-zh-text="([^"]+)"[^>]*>([^<]+)<\/button>/u);
+  assert.ok(parse, "the packaged Parse button has interface copy in both languages");
+  const button = { textContent: parse[2], getAttribute: () => parse[1] };
+  const language = { value: "en" };
+  const status = { setAttribute() {} };
+  const document = {
+    documentElement: { lang: "en" },
+    getElementById: (id) => id === "interface-language" ? language : null,
+    querySelectorAll: (selector) => selector === "[data-zh-text]" ? [button]
+      : selector === "[data-localized]" ? [status] : [],
+  };
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const raw = "Network failure < & 404.";
+    const nested = interfaceFailure("could not fetch fixture", "无法加载示例文件", new Error(raw));
+    const banner = interfaceFailure("could not verify museum", "无法验证博物馆示例", nested);
+    localize(status, banner.message, banner.chinese);
+    setLocale("zh-Hans");
+    assert.deepEqual([document.documentElement.lang, language.value, button.textContent],
+      ["zh-Hans", "zh-Hans", "解析"]);
+    assert.equal(status.textContent, `无法验证博物馆示例：无法加载示例文件：${raw}`);
+    setLocale("en");
+    assert.deepEqual([document.documentElement.lang, language.value, button.textContent],
+      ["en", "en", "Parse"]);
+    assert.equal(status.textContent, `could not verify museum: could not fetch fixture: ${raw}`);
+  } finally {
+    if (previous === undefined) delete globalThis.document;
+    else globalThis.document = previous;
+  }
 });
 
 test("parse the preloaded doc (Input pane)", () => {
@@ -186,6 +225,67 @@ test("SELECT query returns SRJ with bindings (SPARQL pane)", () => {
   assert.ok(Object.hasOwn(srj, "head"), "SELECT result must be SRJ (has .head)");
   assert.deepEqual(srj.head.vars, ["s", "p", "o"]);
   assert.ok(srj.results.bindings.length > 0, "expected bindings");
+});
+
+test("the museum gallery permalink preserves both dated attributions", async () => {
+  const { findVignette, matchesBundledMuseumQuery, vignetteState } =
+    await import(pathToFileURL(join(playgroundOut, "examples/gallery.mjs")).href);
+  const { encodeState, decodeState } =
+    await import(pathToFileURL(join(playgroundOut, "permalink.mjs")).href);
+  const { normalizeLocale, withLocale } =
+    await import(pathToFileURL(join(playgroundOut, "locale.mjs")).href);
+  const vignette = findVignette("museum-attributions");
+  assert.ok(vignette, "the museum sample must be discoverable in the assembled gallery");
+
+  // Load the assembled assets through the gallery's real URL resolver. Node
+  // cannot fetch file URLs, so the transport reads the actual packaged files.
+  const state = await vignetteState(vignette, async (url) => new Response(await readFile(url)));
+  const canonical = new URL("../../../crates/purrdf/examples/museum/", import.meta.url);
+  assert.equal(state.input, await readFile(new URL("collection.ttl", canonical), "utf8"));
+  assert.equal(state.query, await readFile(new URL("attributions.rq", canonical), "utf8"));
+  assert.equal(state.activePane, "sparql");
+  assert.match(vignette.zhTitle, /博物馆藏品/u);
+  const legacy = await decodeState(await encodeState(state));
+  assert.equal(normalizeLocale(legacy.locale), "en");
+  const restored = await decodeState(await encodeState(withLocale(state, "zh-Hans")));
+  assert.equal(normalizeLocale(restored.locale), "zh-Hans");
+  const { locale, ...engineState } = restored;
+  assert.deepEqual(engineState, legacy);
+  assert.deepEqual(engineState, state, "the actual permalink codec must preserve the UTF-8 state");
+  const asset = async (url) => new Response(await readFile(url));
+  assert.equal(await matchesBundledMuseumQuery(restored, asset), true);
+  assert.equal(await matchesBundledMuseumQuery(legacy, asset), true);
+  for (const changed of [
+    { input: restored.input.replace("1723-09-08", "1724-09-08") },
+    { query: "ASK { }" },
+    { inputFormat: "ntriples" },
+    { activePane: "input" },
+  ]) {
+    assert.equal(await matchesBundledMuseumQuery({ ...restored, ...changed }, asset), false);
+  }
+
+  const expected = JSON.parse(await readFile(new URL("expected.srj", canonical), "utf8"));
+  const query = async (input) => {
+    await workerCall("parse", { text: input, format: restored.inputFormat });
+    const result = await workerCall("query", { sparql: restored.query });
+    assert.equal(result.kind, "srj");
+    return result.srj;
+  };
+  assert.deepEqual(await query(restored.input), expected);
+  const edited = restored.input.replace("1723-09-08", "1724-09-08");
+  assert.notEqual(edited, restored.input);
+  const editedExpected = structuredClone(expected);
+  editedExpected.results.bindings[1].date.value = "1724-09-08";
+  assert.deepEqual(await query(edited), editedExpected);
+
+  await assert.rejects(
+    vignetteState(vignette, async (url) =>
+      url.pathname.endsWith("attributions.rq")
+        ? new Response(null, { status: 404 })
+        : new Response(await readFile(url)),
+    ),
+    /could not load gallery fixture .*attributions\.rq \(HTTP 404\)/u,
+  );
 });
 
 test("ASK query returns an SRJ boolean", () => {

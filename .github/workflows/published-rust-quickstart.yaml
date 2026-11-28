@@ -1,0 +1,216 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+name: Check the published Rust quickstart
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      release_sha:
+        required: true
+        type: string
+      toolchain:
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable Rust release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  attestations: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Start the run receipt
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/rust-quickstart-evidence"
+          printf '%s\n' "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_WORKFLOW_REF" \
+            > "$RUNNER_TEMP/rust-quickstart-evidence/run.txt"
+      - name: Resolve and verify the published source
+        id: source
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EXPECTED_SHA: ${{ inputs.release_sha }}
+          EXPECTED_TOOLCHAIN: ${{ inputs.toolchain }}
+          CALLER_WORKFLOW: ${{ github.workflow_ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^rust-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Expected a stable Rust release tag."
+            exit 1
+          fi
+          case "$CALLER_WORKFLOW" in
+            "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml@"*)
+              if [[ ! "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ||
+                    ! "$EXPECTED_TOOLCHAIN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "::error::The release check requires the verified commit and exact stable compiler."
+                exit 1
+              fi
+              toolchain=$EXPECTED_TOOLCHAIN
+              ;;
+            "$GITHUB_REPOSITORY/.github/workflows/published-rust-quickstart.yaml@refs/heads/main")
+              if [[ "$GITHUB_EVENT_NAME" != workflow_dispatch || -n "$EXPECTED_SHA" ||
+                    -n "$EXPECTED_TOOLCHAIN" ]]; then
+                echo "::error::A historical quickstart check must be dispatched from main."
+                exit 1
+              fi
+              toolchain=stable
+              ;;
+            *)
+              echo "::error::The published quickstart check requires a Cargo release or a manual dispatch from main."
+              exit 1
+              ;;
+          esac
+          evidence="$RUNNER_TEMP/rust-quickstart-evidence"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > "$evidence/github-release.json"
+          if ! jq -e --arg tag "$RELEASE_TAG" '.tag_name == $tag and .draft == false and
+            .prerelease == false and .immutable == true' "$evidence/github-release.json"; then
+            echo "::error::The tag does not have a published immutable release."
+            exit 1
+          fi
+          ref="refs/tags/$RELEASE_TAG"
+          refs=$(git ls-remote "https://github.com/$GITHUB_REPOSITORY.git" "$ref" "$ref^{}")
+          release_sha=$(awk -v ref="$ref" '$2 == ref {direct=$1} $2 == ref "^{}" {peeled=$1}
+            END {print peeled ? peeled : direct}' <<< "$refs")
+          if [[ ! "$release_sha" =~ ^[a-f0-9]{40}$ ||
+                ( -n "$EXPECTED_SHA" && "$release_sha" != "$EXPECTED_SHA" ) ]]; then
+            echo "::error::The tag does not resolve to the verified release commit."
+            exit 1
+          fi
+          printf '%s\n' "$RELEASE_TAG" "$release_sha" "$toolchain" > "$evidence/release.txt"
+          {
+            echo "sha=$release_sha"
+            echo "tag=$RELEASE_TAG"
+            echo "toolchain=$toolchain"
+          } >> "$GITHUB_OUTPUT"
+      - name: Check out the verification code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: checker
+          persist-credentials: false
+      - name: Verify the registry crate and its build provenance
+        id: registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          RELEASE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/rust-quickstart-evidence"
+          version=${RELEASE_TAG#rust-v}
+          # shellcheck source=/dev/null
+          source "$GITHUB_WORKSPACE/checker/scripts/crates-io-api.sh"
+          trap 'rm -f -- "$CRATES_IO_BODY"' EXIT
+          agent=$(crates_io_user_agent "$version")
+          state=$(crates_io_version_state purrdf "$version" "$agent")
+          if [[ "$state" != present ]]; then
+            printf 'Published purrdf %s is not available in the registry API: %s\n' "$version" "$state" >&2
+            exit 1
+          fi
+          checksum=$(crates_io_version_checksum purrdf "$version")
+          state=$(crates_io_index_state purrdf "$version" "$checksum" "$agent")
+          if [[ "$state" != present ]]; then
+            printf 'Sparse index could not confirm purrdf %s: %s\n' "$version" "$state" >&2
+            exit 1
+          fi
+          archive="$RUNNER_TEMP/purrdf-$version.crate"
+          curl --fail --silent --show-error --location --retry 3 --max-time 120 \
+            --user-agent "$agent" --output "$archive" "https://crates.io/api/v1/crates/purrdf/$version/download"
+          printf '%s  %s\n' "$checksum" "$archive" | sha256sum --strict --check -
+          printf '%s\n' "$checksum" > "$evidence/crate-sha256.txt"
+          gh attestation verify "$archive" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release-cargo.yaml" \
+            --source-ref "refs/tags/$RELEASE_TAG" --source-digest "$RELEASE_SHA" \
+            --format json > "$evidence/crate-provenance.json"
+          printf 'checksum=%s\n' "$checksum" >> "$GITHUB_OUTPUT"
+      - name: Retrieve only the verified release README blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          api="repos/$GITHUB_REPOSITORY/git"
+          tree=$(gh api "$api/commits/$RELEASE_SHA" | jq -er --arg sha "$RELEASE_SHA" '
+            select(.sha == $sha) | .tree.sha | select(test("^[0-9a-f]{40}$"))
+          ')
+          manifest=$(gh api "$api/trees/$tree" | jq -ce --arg tree "$tree" '
+            select(.sha == $tree and .truncated == false) | .tree
+          ')
+          source="$RUNNER_TEMP/rust-quickstart-readmes"
+          mkdir "$source"
+          receipt="$RUNNER_TEMP/rust-quickstart-evidence/readme-blobs.txt"
+          printf 'commit %s\ntree %s\n' "$RELEASE_SHA" "$tree" > "$receipt"
+          for readme in README.md README_zh.md; do
+            blob=$(jq -er --arg path "$readme" '
+              map(select(.path == $path)) | select(length == 1) | .[0]
+              | select(.type == "blob" and (.mode == "100644" or .mode == "100755"))
+              | .sha | select(test("^[0-9a-f]{40}$"))
+            ' <<< "$manifest")
+            gh api "$api/blobs/$blob" | jq -er --arg sha "$blob" '
+              select(.sha == $sha and .encoding == "base64") | .content | select(type == "string")
+            ' | base64 --decode > "$source/$readme"
+            if [[ "$(git hash-object --no-filters "$source/$readme")" != "$blob" ]]; then
+              echo "::error::The downloaded bytes for $readme do not match the verified release tree."
+              exit 1
+            fi
+            printf '%s %s\n' "$blob" "$readme" >> "$receipt"
+          done
+      - name: Run both README examples on stable
+        env:
+          RELEASE_TAG: ${{ steps.source.outputs.tag }}
+          RUSTUP_TOOLCHAIN: ${{ steps.source.outputs.toolchain }}
+          CHECKSUM: ${{ steps.registry.outputs.checksum }}
+        run: |
+          set -euo pipefail
+          shopt -s inherit_errexit
+          evidence="$RUNNER_TEMP/rust-quickstart-evidence"
+          consumer="$RUNNER_TEMP/rust-quickstart"
+          cd "$RUNNER_TEMP"
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          rustup run "$RUSTUP_TOOLCHAIN" rustc -Vv > "$evidence/compiler.txt"
+          compiler=$(awk '$1 == "release:" {print $2}' "$evidence/compiler.txt")
+          [[ "$compiler" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RUSTUP_TOOLCHAIN" == stable || "$compiler" == "$RUSTUP_TOOLCHAIN" ]]
+          rustup run "$RUSTUP_TOOLCHAIN" cargo -Vv > "$evidence/cargo.txt"
+          extractor="$RUNNER_TEMP/extract-rust-quickstarts"
+          rustup run "$RUSTUP_TOOLCHAIN" rustc --edition 2024 -D warnings \
+            "$GITHUB_WORKSPACE/checker/.github/extract-rust-quickstarts.rs" -o "$extractor"
+          "$extractor" "$RUNNER_TEMP/rust-quickstart-readmes" "$consumer" "$RELEASE_TAG"
+          cp "$consumer/Cargo.toml" "$consumer"/src/*.rs "$evidence/"
+          export CARGO_HOME="$RUNNER_TEMP/rust-quickstart-cargo"
+          export CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
+          mkdir "$CARGO_HOME"
+          cd "$consumer"
+          rustup run "$RUSTUP_TOOLCHAIN" cargo generate-lockfile > "$evidence/resolve.log" 2>&1
+          cp Cargo.lock "$evidence/"
+          "$extractor" --verify-lock Cargo.lock "$RELEASE_TAG" "$CHECKSUM"
+          result=0
+          for example in readme-en readme-zh; do
+            status=0
+            rustup run "$RUSTUP_TOOLCHAIN" cargo run --locked --bin "$example" \
+              > "$evidence/$example.log" 2>&1 || status=$?
+            printf '%s\n' "$status" > "$evidence/$example.exit"
+            if ((status != 0)); then
+              result=1
+            fi
+          done
+          exit "$result"
+      - name: Retain the exact run record
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: published-rust-quickstart-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rust-quickstart-evidence/
+          if-no-files-found: error

@@ -5,8 +5,15 @@
 // the aria-live error banner. The main thread NEVER touches the wasm engine —
 // it is a pure view/message client over the worker.
 
-import { VIGNETTES, findVignette, DEFAULT_STATE } from "./examples/gallery.mjs";
-import { assertSarifVersion, describeSarif } from "./sarif.mjs";
+import {
+  VIGNETTES, findVignette, DEFAULT_STATE, matchesBundledMuseumQuery, vignetteState,
+} from "./examples/gallery.mjs";
+import {
+  InterfaceError, interfaceFailure, localize, roundTripNote, sarifWarningLabels,
+  selectedLocale, setLocale, withLocale,
+} from "./locale.mjs";
+import { decodeState, encodeState } from "./permalink.mjs";
+import { EXPECTED_SARIF_VERSION, assertSarifVersion, describeSarif } from "./sarif.mjs";
 
 const XSD_STRING = "http://www.w3.org/2001/XMLSchema#string";
 
@@ -31,7 +38,7 @@ worker.addEventListener("message", (event) => {
 });
 
 worker.addEventListener("error", (event) => {
-  showError(`worker crashed: ${event.message ?? event}`);
+  showError(interfaceFailure("worker crashed", "工作线程异常终止", event));
 });
 
 /** Send an op to the worker; resolves with its result or rejects on engine error. */
@@ -49,9 +56,15 @@ function call(op, args) {
 
 const $ = (id) => document.getElementById(id);
 
-function showError(message) {
+function showError(error) {
   const banner = $("error-banner");
-  banner.textContent = message;
+  const message = String(error?.message ?? error);
+  const detail = el("span", { id: "error-message", text: message });
+  if (error instanceof InterfaceError) localize(detail, message, error.chinese);
+  banner.replaceChildren(detail);
+  if (typeof error?.code === "string") {
+    banner.append(" ", el("code", { id: "error-code", text: error.code }));
+  }
   banner.hidden = false;
 }
 
@@ -61,9 +74,9 @@ function clearError() {
   banner.hidden = true;
 }
 
-function showStatus(message) {
+function showStatus(message, chinese = message) {
   const banner = $("status-banner");
-  banner.textContent = message;
+  localize(banner, message, chinese);
   banner.hidden = false;
 }
 
@@ -71,9 +84,9 @@ function showStatus(message) {
 async function guard(fn) {
   clearError();
   try {
-    await fn();
+    return await fn();
   } catch (e) {
-    showError(String(e?.message ?? e));
+    showError(e);
   }
 }
 
@@ -82,6 +95,8 @@ function el(tag, props = {}, children = []) {
   for (const [k, v] of Object.entries(props)) {
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
+    else if (k === "localeText") localize(node, ...v);
+    else if (k === "localeTitle") localize(node, ...v, "title");
     else if (k === "html") node.innerHTML = v;
     else if (k.startsWith("data-")) node.setAttribute(k, v);
     else if (k === "hidden") node.hidden = v;
@@ -158,15 +173,26 @@ function srjTermToDescriptor(b) {
 
 async function copyText(text) {
   if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (error) {
+      throw interfaceFailure("could not copy to clipboard", "无法复制到剪贴板", error);
+    }
     return;
   }
   // Capability fallback — a hidden textarea + execCommand (documented, not a swallow).
   const ta = el("textarea", { value: text, style: "position:fixed;opacity:0" });
   document.body.append(ta);
-  ta.select();
-  document.execCommand("copy");
-  ta.remove();
+  try {
+    ta.select();
+    if (!document.execCommand("copy")) {
+      throw new InterfaceError("the browser refused the copy command", "浏览器拒绝执行复制命令");
+    }
+  } catch (error) {
+    throw interfaceFailure("could not copy to clipboard", "无法复制到剪贴板", error);
+  } finally {
+    ta.remove();
+  }
 }
 
 function downloadText(filename, text, mime = "text/plain") {
@@ -214,77 +240,14 @@ function applyState(state) {
   if (s.activePane) selectPane(s.activePane);
 }
 
-const b64urlEncode = (bytes) => {
-  let bin = "";
-  for (const byte of bytes) bin += String.fromCharCode(byte);
-  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-};
-
-const b64urlDecode = (s) => {
-  const pad = s.length % 4 === 0 ? "" : "=".repeat(4 - (s.length % 4));
-  const bin = atob(s.replace(/-/g, "+").replace(/_/g, "/") + pad);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-};
-
-async function streamThrough(stream, bytes) {
-  const writer = stream.writable.getWriter();
-  writer.write(bytes);
-  writer.close();
-  const chunks = [];
-  const reader = stream.readable.getReader();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-  }
-  let len = 0;
-  for (const c of chunks) len += c.length;
-  const out = new Uint8Array(len);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-
-/** Encode state → (gzip when available) → base64url. All client-side, no network. */
-async function encodeState(state) {
-  const json = new TextEncoder().encode(JSON.stringify(state));
-  if (typeof CompressionStream === "function") {
-    const gz = await streamThrough(new CompressionStream("gzip"), json);
-    return `g${b64urlEncode(gz)}`;
-  }
-  // Documented capability fallback: plain base64url of the JSON.
-  return `j${b64urlEncode(json)}`;
-}
-
-async function decodeState(fragment) {
-  if (!fragment) return null;
-  const tag = fragment[0];
-  const body = fragment.slice(1);
-  const bytes = b64urlDecode(body);
-  let jsonBytes = bytes;
-  if (tag === "g") {
-    if (typeof DecompressionStream !== "function") {
-      throw new Error("this permalink is gzip-encoded but DecompressionStream is unavailable");
-    }
-    jsonBytes = await streamThrough(new DecompressionStream("gzip"), bytes);
-  } else if (tag !== "j") {
-    throw new Error("unrecognized permalink encoding");
-  }
-  return JSON.parse(new TextDecoder().decode(jsonBytes));
-}
-
-async function copyPermalink(state) {
+async function copyPermalink(getState) {
   await guard(async () => {
-    const fragment = await encodeState(state);
+    const locale = selectedLocale();
+    const fragment = await encodeState(withLocale(await getState(), locale));
     const url = `${location.origin}${location.pathname}#${fragment}`;
     location.hash = fragment;
     await copyText(url);
-    showStatus("Permalink copied to clipboard.");
+    showStatus("Permalink copied to clipboard.", "已将永久链接复制到剪贴板。");
   });
 }
 
@@ -320,14 +283,18 @@ function selectPane(pane) {
 // Pane: Input
 // ---------------------------------------------------------------------------
 
+let latestParse;
+
 async function doParse() {
-  await guard(async () => {
-    const text = $("input-text").value;
-    const format = $("input-format").value;
-    const res = await call("parse", { text, format });
-    $("input-summary").textContent = `Parsed ${res.size} quad(s) as ${format}.`;
+  const request = { text: $("input-text").value, format: $("input-format").value };
+  latestParse = request;
+  return guard(async () => {
+    const res = await call("parse", request);
+    localize($("input-summary"), `Parsed ${res.size} quad(s) as ${request.format}.`,
+      `已按 ${request.format} 格式解析出 ${res.size} 个四元组。`);
     renderQuadTable(res.rows, res.size, null);
-    showStatus(`Graph updated: ${res.size} quad(s).`);
+    showStatus(`Graph updated: ${res.size} quad(s).`, `图已更新，共 ${res.size} 个四元组。`);
+    return request;
   });
 }
 
@@ -376,39 +343,37 @@ async function doSerializeAll() {
       const pre = el("pre", {
         id: `ser-${f}`,
         class: failed ? "code-out ser-error" : "code-out",
-        text: failed
-          ? `⚠ cannot serialize this graph to ${f}:\n${entry.error}`
-          : entry.text,
+        text: failed ? entry.error : entry.text,
         "data-format": f,
         "data-failed": String(failed),
       });
       let badge;
       if (failed) {
-        badge = el("span", { class: "badge badge-warn", text: "unsupported" });
+        badge = el("span", { class: "badge badge-warn", localeText: ["unsupported", "不支持"] });
       } else if (entry.roundtripError) {
-        badge = el("span", { class: "badge badge-warn", text: "comparison refused", title: entry.roundtripError.error });
+        badge = el("span", { class: "badge badge-warn", localeText: ["comparison refused", "无法比较"], title: entry.roundtripError.error });
       } else if (entry.roundtrips) {
-        badge = el("span", { class: "badge badge-ok", text: "round-trips" });
+        badge = el("span", { class: "badge badge-ok", localeText: ["round-trips", "可无损往返"] });
       } else {
-        badge = el("span", { class: "badge badge-warn", text: "degrades" });
+        badge = el("span", { class: "badge badge-warn", localeText: ["degrades", "往返有损"] });
       }
       const copyBtn = el("button", {
         type: "button",
         class: "btn-mini",
-        text: "Copy",
+        localeText: ["Copy", "复制"],
         "data-copy": f,
         disabled: failed,
       });
       copyBtn.addEventListener("click", () =>
         guard(async () => {
           await copyText(entry.text);
-          showStatus(`Copied ${f}.`);
+          showStatus(`Copied ${f}.`, `已复制 ${f}。`);
         }),
       );
       const dlBtn = el("button", {
         type: "button",
         class: "btn-mini",
-        text: "Download",
+        localeText: ["Download", "下载"],
         "data-download": f,
         disabled: failed,
       });
@@ -422,13 +387,25 @@ async function doSerializeAll() {
         copyBtn,
         dlBtn,
       ]);
-      grid.append(el("div", { class: "ser-card" }, [header, pre]));
+      const code = failed ? entry.errorCode : entry.roundtripError?.code;
+      const diagnosticCode = typeof code === "string"
+        ? el("code", { class: "mono", text: code })
+        : null;
+      const refusal = failed
+        ? el("p", { class: "muted", localeText: [
+          `⚠ cannot serialize this graph to ${f}:`, `⚠ 无法将此图序列化为 ${f}：`,
+        ] })
+        : null;
+      const comparison = entry.roundtripError
+        ? el("pre", { class: "code-out ser-error", text: entry.roundtripError.error })
+        : null;
+      grid.append(el("div", { class: "ser-card" }, [header, refusal, pre, comparison, diagnosticCode]));
     }
     // Canonical form (the canonical line sequence) — the graph's deterministic identity.
     const canonCard = el("div", { class: "ser-card" }, [
       el("div", { class: "ser-head" }, [
-        el("h4", { text: "canonical (line-sequence N-Quads)", class: "ser-title" }),
-        el("span", { class: "badge badge-ok", text: "identity" }),
+        el("h4", { localeText: ["canonical (line-sequence N-Quads)", "规范形式（逐行 N-Quads）"], class: "ser-title" }),
+        el("span", { class: "badge badge-ok", localeText: ["identity", "标识"] }),
       ]),
       el("pre", { id: "ser-canonical", class: "code-out", text: res.canonical }),
     ]);
@@ -442,31 +419,21 @@ async function doSerializeAll() {
       const degraders = SER_ORDER.filter(
         (f) => res.formats[f].text != null && !res.formats[f].roundtrips,
       );
-      note.textContent =
-        "This graph carries a quoted triple in object position. " +
-        (failedFormats.length
-          ? `These formats cannot even encode it (hard-fail): ${failedFormats.join(", ")}. `
-          : "") +
-        (degraders.length
-          ? `These text formats round-trip lossily: ${degraders.join(", ")}. `
-          : "") +
-        `N-Quads and the canonical line-sequence form are the reliable identity reference; ` +
-        `round-tripping formats here: ${survivors.join(", ")}.`;
-      note.hidden = false;
+      localize(note, ...roundTripNote(true, failedFormats, degraders, survivors));
     } else {
-      note.textContent =
-        "No object-position quoted triple in this graph. N-Quads and the canonical " +
-        "line-sequence form remain the deterministic identity reference." +
-        (failedFormats.length ? ` Formats that hard-failed: ${failedFormats.join(", ")}.` : "");
-      note.hidden = false;
+      localize(note, ...roundTripNote(false, failedFormats));
     }
+    note.hidden = false;
     if (failedFormats.length) {
       // HARD FAIL surfaced in the aria-live banner — never swallowed.
       showError(
-        `Some serializers cannot encode this graph: ${failedFormats.join(", ")}. See each format card for the engine error.`,
+        new InterfaceError(
+          `Some serializers cannot encode this graph: ${failedFormats.join(", ")}. See each format card for the engine error.`,
+          `部分序列化格式无法编码此图：${failedFormats.join(", ")}。各格式卡片显示引擎错误。`,
+        ),
       );
     } else {
-      showStatus("Serialized to all formats.");
+      showStatus("Serialized to all formats.", "已序列化为所有格式。");
     }
   });
 }
@@ -475,7 +442,10 @@ async function doSerializeAll() {
 // Pane: SPARQL
 // ---------------------------------------------------------------------------
 
+let queryStarted = false;
+
 async function doQuery() {
+  queryStarted = true;
   await guard(async () => {
     const sparql = $("sparql-text").value;
     const res = await call("query", { sparql });
@@ -488,7 +458,7 @@ async function doQuery() {
         el("pre", { id: "sparql-turtle", class: "code-out", text: res.turtle }),
       );
     }
-    showStatus("Query complete.");
+    showStatus("Query complete.", "查询完成。");
   });
 }
 
@@ -529,7 +499,7 @@ function renderSrj(srj, container) {
   }
   table.append(thead, tbody);
   container.append(
-    el("p", { class: "muted", text: `${rows.length} row(s).` }),
+    el("p", { class: "muted", localeText: [`${rows.length} row(s).`, `共 ${rows.length} 行。`] }),
     table,
   );
 }
@@ -548,7 +518,7 @@ async function doValidate() {
     renderSarif(res.sarif);
     $("btn-download-sarif").disabled = false;
     const count = res.sarif.runs?.[0]?.results?.length ?? 0;
-    showStatus(`SHACL validation produced ${count} result(s).`);
+    showStatus(`SHACL validation produced ${count} result(s).`, `SHACL 验证得到 ${count} 条结果。`);
   });
 }
 
@@ -560,20 +530,21 @@ function renderSarif(sarif) {
   // error banner + an inline warning row), never silently echoed.
   const versionWarning = assertSarifVersion(sarif.version);
   if (versionWarning) {
-    showError(versionWarning);
+    const labels = sarifWarningLabels(versionWarning, sarif.version, EXPECTED_SARIF_VERSION);
+    showError(new InterfaceError(...labels));
     container.append(
-      el("p", { id: "sarif-version-warning", class: "ask-result", text: versionWarning }),
+      el("p", { id: "sarif-version-warning", class: "ask-result", localeText: labels }),
     );
   }
   container.append(
     el("p", {
       class: "muted",
-      text: describeSarif(sarif),
+      localeText: [describeSarif(sarif), `SARIF ${sarif?.version ?? "（无）"} · 共 ${results.length} 条结果。`],
     }),
   );
   if (results.length === 0) {
     container.append(
-      el("p", { id: "sarif-conforms", class: "ask-result", text: "Conforms: no violations." }),
+      el("p", { id: "sarif-conforms", class: "ask-result", localeText: ["Conforms: no violations.", "符合形状，无违规。"] }),
     );
     return;
   }
@@ -581,9 +552,9 @@ function renderSarif(sarif) {
   table.append(
     el("thead", {}, [
       el("tr", {}, [
-        el("th", { scope: "col", text: "level" }),
-        el("th", { scope: "col", text: "ruleId" }),
-        el("th", { scope: "col", text: "message" }),
+        el("th", { scope: "col", localeText: ["level", "级别"] }),
+        el("th", { scope: "col", localeText: ["ruleId", "规则标识"] }),
+        el("th", { scope: "col", localeText: ["message", "消息"] }),
       ]),
     ]),
   );
@@ -615,6 +586,9 @@ async function doEntail() {
       res.diagnostics.length === 0
         ? "Materialized SHACL-AF entailments."
         : `Materialized SHACL-AF entailments; shapes graph diagnostics: ${res.diagnostics.join("; ")}.`,
+      res.diagnostics.length === 0
+        ? "已物化 SHACL-AF 蕴涵。"
+        : `已物化 SHACL-AF 蕴涵。形状图诊断：${res.diagnostics.join("; ")}`,
     );
   });
 }
@@ -632,12 +606,14 @@ async function doCompare() {
       bFormat: $("graph-b-format").value,
       canonicalSearch: $("canonical-search").value,
     });
-    $("identity-result").textContent = `isomorphic: ${res.isomorphic ? "yes" : "no"}`;
+    localize($("identity-result"), `isomorphic: ${res.isomorphic ? "yes" : "no"}`,
+      res.isomorphic ? "同构" : "不同构");
     $("identity-result").className = `identity-verdict ${res.isomorphic ? "verdict-yes" : "verdict-no"}`;
     $("canon-a").textContent = res.canonicalA;
     $("canon-b").textContent = res.canonicalB;
     renderDiff(res.canonicalA, res.canonicalB);
-    showStatus(`Compared graphs — isomorphic: ${res.isomorphic ? "yes" : "no"}.`);
+    showStatus(`Compared graphs — isomorphic: ${res.isomorphic ? "yes" : "no"}.`,
+      res.isomorphic ? "图比较完成：同构。" : "图比较完成：不同构。");
   });
 }
 
@@ -651,7 +627,7 @@ function renderDiff(a, b) {
   const onlyB = b.split("\n").filter((l) => l && !setA.has(l));
   if (onlyA.length === 0 && onlyB.length === 0) {
     container.append(
-      el("p", { class: "ask-result", text: "Canonical forms are byte-identical." }),
+      el("p", { class: "ask-result", localeText: ["Canonical forms are byte-identical.", "规范形式逐字节相同。"] }),
     );
     return;
   }
@@ -667,22 +643,29 @@ function renderDiff(a, b) {
 // Pane: Quad table (with click-to-filter via match())
 // ---------------------------------------------------------------------------
 
+const TERM_POSITIONS_ZH = { subject: "主语", predicate: "谓语", object: "宾语", graph: "图" };
+
 function renderQuadTable(rows, size, filterInfo) {
   const container = $("quad-table");
   container.replaceChildren();
-  $("filter-info").textContent = filterInfo
-    ? `Filtered on ${filterInfo} — ${size} quad(s). `
-    : `${size} quad(s).`;
+  localize($("filter-info"),
+    filterInfo
+      ? `Filtered on ${filterInfo.position} = ${filterInfo.label} — ${size} quad(s). `
+      : `${size} quad(s).`,
+    filterInfo
+      ? `筛选条件：${TERM_POSITIONS_ZH[filterInfo.position]} = ${filterInfo.label}，共 ${size} 个四元组。`
+      : `共 ${size} 个四元组。`,
+  );
   $("btn-clear-filter").hidden = !filterInfo;
 
   const table = el("table", { class: "data-table" });
   table.append(
     el("thead", {}, [
       el("tr", {}, [
-        el("th", { scope: "col", text: "subject" }),
-        el("th", { scope: "col", text: "predicate" }),
-        el("th", { scope: "col", text: "object" }),
-        el("th", { scope: "col", text: "graph" }),
+        el("th", { scope: "col", localeText: ["subject", "主语"] }),
+        el("th", { scope: "col", localeText: ["predicate", "谓语"] }),
+        el("th", { scope: "col", localeText: ["object", "宾语"] }),
+        el("th", { scope: "col", localeText: ["graph", "图"] }),
       ]),
     ]),
   );
@@ -709,12 +692,13 @@ function makeTermCell(term, position) {
       type: "button",
       class: "term-link",
       text: label,
-      title: `Filter where ${position} = ${label}`,
+      localeTitle: [`Filter where ${position} = ${label}`, `筛选 ${TERM_POSITIONS_ZH[position]} = ${label}`],
     });
     btn.addEventListener("click", () => filterByTerm(position, term));
     td.append(btn);
   } else {
-    td.textContent = label;
+    if (term?.termType === "DefaultGraph") localize(td, label, "（默认图）");
+    else td.textContent = label;
   }
   return td;
 }
@@ -724,7 +708,7 @@ async function filterByTerm(position, term) {
     const args = { subject: null, predicate: null, object: null, graph: null };
     args[position] = term;
     const res = await call("match", args);
-    renderQuadTable(res.rows, res.size, `${position} = ${termLabel(term)}`);
+    renderQuadTable(res.rows, res.size, { position, label: termLabel(term) });
     selectPane("quads");
   });
 }
@@ -740,6 +724,9 @@ async function refreshQuads() {
 // Pane: Gallery
 // ---------------------------------------------------------------------------
 
+let latestGalleryLoad;
+let editorRevision = 0;
+
 function buildGallery() {
   const list = $("gallery-list");
   list.replaceChildren();
@@ -747,7 +734,7 @@ function buildGallery() {
     const loadBtn = el("button", {
       type: "button",
       class: "btn",
-      text: "Load & run",
+      localeText: ["Load & run", "加载并运行"],
       "data-load": v.id,
     });
     loadBtn.addEventListener("click", () => loadVignette(v.id));
@@ -755,51 +742,49 @@ function buildGallery() {
     const permaBtn = el("button", {
       type: "button",
       class: "btn-mini",
-      text: "Copy permalink",
+      localeText: ["Copy permalink", "复制永久链接"],
       "data-permalink": v.id,
     });
-    permaBtn.addEventListener("click", () => copyPermalink(vignetteState(v)));
+    permaBtn.addEventListener("click", () => copyPermalink(() => vignetteState(v)));
 
     const item = el("li", { class: "gallery-item", id: `vignette-${v.id}` }, [
-      el("h3", { text: v.title }),
-      el("p", { class: "muted", text: v.blurb }),
+      el("h3", { localeText: [v.title, v.zhTitle] }),
+      el("p", { class: "muted", localeText: [v.blurb, v.zhBlurb] }),
       el("div", { class: "gallery-actions" }, [loadBtn, permaBtn]),
     ]);
     list.append(item);
   }
 }
 
-function vignetteState(v) {
-  const s = { ...DEFAULT_STATE };
-  s.input = v.input;
-  s.inputFormat = v.inputFormat;
-  if (v.query != null) s.query = v.query;
-  if (v.shapes != null) s.shapes = v.shapes;
-  // Vignettes that exercise identity supply their own A/B graphs; others
-  // compare the loaded input against the supplied graph B.
-  s.graphA = v.input;
-  s.graphAFormat = v.inputFormat;
-  if (v.graphB != null) {
-    s.graphB = v.graphB;
-    s.graphBFormat = v.graphBFormat ?? "turtle";
-  }
-  s.activePane = v.activePane ?? "input";
-  return s;
-}
-
 async function loadVignette(id) {
   const v = findVignette(id);
   if (!v) {
-    showError(`unknown vignette: ${id}`);
+    showError(new InterfaceError(`unknown vignette: ${id}`, `未知示例：${id}`));
     return;
   }
-  applyState(vignetteState(v));
-  await runActiveForState(v);
+  const request = Symbol();
+  const revision = editorRevision;
+  latestGalleryLoad = request;
+  const isCurrent = () => latestGalleryLoad === request && editorRevision === revision;
+  await guard(async () => {
+    let state;
+    try {
+      state = await vignetteState(v);
+    } catch (error) {
+      // A slower, superseded fetch must not replace the current banner.
+      if (isCurrent()) throw error;
+      return;
+    }
+    if (!isCurrent()) return;
+    applyState(state);
+    await runActiveForState(v, isCurrent);
+  });
 }
 
 /** After loading a vignette, run the engine action its pane demonstrates. */
-async function runActiveForState(v) {
+async function runActiveForState(v, isCurrent) {
   await doParse();
+  if (!isCurrent()) return;
   switch (v.activePane) {
     case "roundtrip":
       await doSerializeAll();
@@ -809,7 +794,7 @@ async function runActiveForState(v) {
       break;
     case "shacl":
       await doValidate();
-      await doEntail();
+      if (isCurrent()) await doEntail();
       break;
     case "identity":
       await doCompare();
@@ -849,6 +834,19 @@ function wireTabs() {
 }
 
 function wireButtons() {
+  $("interface-language").addEventListener("change", (event) => setLocale(event.target.value));
+  // A gallery load replaces these fields, so a later edit wins even if the
+  // bundled fixture is still being fetched. Keep the gallery selection token
+  // separately so an edit never re-enables permalink startup after a click.
+  const noteEdit = () => { editorRevision++; };
+  for (const id of [
+    "input-text", "canonical-search", "sparql-text", "shapes-text", "graph-a-text", "graph-b-text",
+  ]) {
+    $(id).addEventListener("input", noteEdit);
+  }
+  for (const id of ["input-format", "graph-a-format", "graph-b-format"]) {
+    $(id).addEventListener("change", noteEdit);
+  }
   $("btn-parse").addEventListener("click", doParse);
   $("btn-serialize-all").addEventListener("click", doSerializeAll);
   $("btn-run-query").addEventListener("click", doQuery);
@@ -862,14 +860,12 @@ function wireButtons() {
   $("btn-compare").addEventListener("click", doCompare);
   $("btn-refresh-quads").addEventListener("click", refreshQuads);
   $("btn-clear-filter").addEventListener("click", refreshQuads);
-  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState()));
+  $("btn-permalink").addEventListener("click", () => copyPermalink(collectState));
 }
 
 async function initHeader() {
-  // The version handshake is the ONLY startup traffic; it goes over the worker
-  // message port, not the network. The console makes NO network request after
-  // its assets load — that provable property (no server-side evaluation) is
-  // worth more than a cosmetic wasm-size chip, so the size probe is gone.
+  // The version handshake goes over the worker message port, not the network.
+  // The gallery can fetch bundled assets, but evaluation runs entirely in the worker.
   await guard(async () => {
     const { version } = await call("version", {});
     $("app-version").textContent = `purrdf v${version}`;
@@ -878,11 +874,13 @@ async function initHeader() {
 
 function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
-  window.addEventListener("load", () => {
-    navigator.serviceWorker
-      .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
-      .catch((e) => showStatus(`offline cache unavailable: ${e.message ?? e}`));
-  });
+  // The first worker parse can finish after window.load has already fired.
+  navigator.serviceWorker
+    .register(new URL("./sw.mjs", import.meta.url), { type: "module" })
+    .catch((e) => {
+      const detail = e.message ?? e;
+      showStatus(`offline cache unavailable: ${detail}`, `离线缓存不可用：${detail}`);
+    });
 }
 
 async function boot() {
@@ -891,25 +889,52 @@ async function boot() {
   buildGallery();
 
   // Restore permalink state if present; otherwise the default console.
-  let restored = false;
+  let restored;
+  let restoreError;
   if (location.hash.length > 1) {
     try {
       const state = await decodeState(location.hash.slice(1));
       if (state) {
+        setLocale(state.locale);
         applyState(state);
-        restored = true;
+        restored = state;
       }
     } catch (e) {
-      showError(`could not restore permalink: ${e.message ?? e}`);
+      restoreError = interfaceFailure("could not restore permalink", "无法恢复永久链接", e);
     }
   }
-  if (!restored) applyState(DEFAULT_STATE);
+  if (!restored) {
+    setLocale("en");
+    applyState(DEFAULT_STATE);
+  }
 
   await initHeader();
   // Parse the initial input so every pane has a live graph to work with.
-  await doParse();
+  const parsed = await doParse();
+  if (restoreError && $("error-banner").hidden) showError(restoreError);
 
   registerServiceWorker();
+
+  // The general query worker has no startup deadline or result bound. Auto-run
+  // only the known example, and leave the Run button in charge of other links.
+  if (!restored || !parsed || !stillAtRestoredQuery(restored, parsed)) return;
+  try {
+    if (await matchesBundledMuseumQuery(restored) && stillAtRestoredQuery(restored, parsed)) {
+      await doQuery();
+    }
+  } catch (error) {
+    if (stillAtRestoredQuery(restored, parsed)) {
+      showError(interfaceFailure("could not verify bundled museum example", "无法验证内置博物馆示例", error));
+    }
+  }
+}
+
+function stillAtRestoredQuery(state, parsed) {
+  return !queryStarted && !latestGalleryLoad && latestParse === parsed &&
+    activePane === "sparql" && state.activePane === "sparql" &&
+    parsed.text === state.input && parsed.format === state.inputFormat &&
+    $("input-text").value === parsed.text && $("input-format").value === parsed.format &&
+    $("sparql-text").value === state.query;
 }
 
 boot();

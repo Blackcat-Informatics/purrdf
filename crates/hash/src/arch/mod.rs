@@ -330,6 +330,57 @@ pub(crate) fn blake3_compress_on<const OUTPUT: usize>(
     }
 }
 
+pub(crate) fn blake3_messages_on(
+    backend: crate::blake3::Backend,
+    inputs: &[&[u8]],
+    mode: crate::blake3::Mode,
+    out: &mut [crate::blake3::Hash],
+) -> Option<()> {
+    use crate::dispatch::Backend as _;
+    if !backend.is_available() {
+        return None;
+    }
+    match backend {
+        #[cfg(target_arch = "x86_64")]
+        crate::blake3::Backend::Avx512 => {
+            // SAFETY: the checked backend requires AVX-512F and VL.
+            unsafe { blake3_x86::messages(inputs, mode, out) };
+            Some(())
+        }
+        #[cfg(target_arch = "x86_64")]
+        crate::blake3::Backend::Avx2 => {
+            // SAFETY: the checked backend requires AVX2.
+            unsafe { blake3_avx2::messages(inputs, mode, out) };
+            Some(())
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        crate::blake3::Backend::Sse2 | crate::blake3::Backend::Ssse3 => {
+            // SAFETY: SSE2 was checked, or is implied by detected SSSE3.
+            unsafe { blake3_sse2::messages(inputs, mode, out) };
+            Some(())
+        }
+        #[cfg(all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        ))]
+        crate::blake3::Backend::Neon => {
+            // SAFETY: the target enables little-endian NEON.
+            unsafe { blake3_neon::messages(inputs, mode, out) };
+            Some(())
+        }
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        crate::blake3::Backend::Wasm128 => {
+            blake3_wasm::messages(inputs, mode, out);
+            Some(())
+        }
+        _ => {
+            let _ = (inputs, mode, out);
+            None
+        }
+    }
+}
+
 pub(crate) fn blake3_parents4(
     children: &[[u32; 8]; 8],
     mode: crate::blake3::Mode,

@@ -19,6 +19,8 @@ on:
       - "scripts/fetch-locked-deps.py"
       - "bindings/python/purrdf_build_backend.py"
       - "crates/rdf-wasm/**"
+      - "crates/purrdf/examples/museum/**"
+      - "crates/purrdf/examples/museum_attributions.rs"
       # The zh-Hans gate renders the book and runs these over the rendering.
       - "crates/sparql-algebra/**"
       - "crates/helper-census/**"
