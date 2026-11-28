@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABr0DKWA": {
+    "resolution": "acknowledged",
+    "reason": "The exact head review summary reports no actionable finding. The translation catalog and both book renders were verified separately.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T06:22:47Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "d169af28ec0074ce67b1a772dd9fbfda2f94cc0852409cf559cf2317409630e1"
+    }
+  }
+}

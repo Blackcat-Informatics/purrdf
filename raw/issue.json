@@ -1,0 +1,32 @@
+{
+  "assignees": [],
+  "author": {
+    "id": "MDQ6VXNlcjUyNzU1NQ==",
+    "is_bot": false,
+    "login": "paudley",
+    "name": "Patrick Audley"
+  },
+  "body": "## Problem\n\nThe only worked search in the full-text chapter is English (`\"quick brown\"`,\n`docs/book/src/sparql/full-text.md:104`), and the Rust wiring selects the grapheme fallback with\n`Analyzer::empty_lexicon()` (`:82`). Chinese segmentation is exercised only in tests\n(`crates/text/tests/segmentation.rs:203`), and no example prints tokens or positions. A reader\ncannot see how the fallback and a supplied lexicon differ.\n\n## Acceptance\n\n- [ ] A Rust example indexes Chinese text including `\u5357\u4eac\u5e02\u957f\u6c5f\u5927\u6865` and runs a search under the\n      grapheme fallback and under a small caller-supplied lexicon.\n- [ ] It prints tokens, positions and ranked rows, and asserts the expected output.\n- [ ] The book chapter and its Simplified Chinese edition show the same worked search.\n- [ ] The example states that the index is a Rust-host facility (`full-text.md:118`).\n- [ ] The lexicon in the example is original and its terms are listed.\n\n## Out of scope\n\nEvaluation corpora, ranking-quality measurement and segmentation fixes (open issue on Chinese\nanalysis and retrieval qualification).\n",
+  "closedAt": null,
+  "comments": [],
+  "createdAt": "2026-11-27T11:39:16Z",
+  "labels": [
+    {
+      "id": "LA_kwDOTKq-Ms8AAAACpuNw8A",
+      "name": "documentation",
+      "description": "Improvements or additions to documentation",
+      "color": "0075ca"
+    }
+  ],
+  "milestone": {
+    "number": 9,
+    "title": "v5.0.2",
+    "description": "",
+    "dueOn": "2026-11-27T00:00:00Z"
+  },
+  "number": 1628,
+  "state": "OPEN",
+  "title": "Full-text chapter: a Chinese worked search showing tokens, positions and ranked rows",
+  "updatedAt": "2026-11-27T15:48:51Z",
+  "url": "https://github.com/Blackcat-Informatics/purrdf/issues/1628"
+}
