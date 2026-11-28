@@ -193,6 +193,12 @@ Cutover staging:
   prerequisites (including the `purrdf-datalog` crates.io bootstrap), and the
   per-layer port order with its seams.
 
+## SHACL Node Expressions
+
+The [W3C SPARQL function vocabulary for SHACL Node Expressions](https://github.com/w3c/data-shapes/blob/0ed3f9b4273c2debba0125a7ed5c9dc3cd4b741c/shacl12-vocabularies/shnex-sparql.ttl)
+defines `sparql:encode-for-uri`. PurRDF accepts it alongside `sparql:encode`
+and `sparql:encodeForUri`. All three use SPARQL `ENCODE_FOR_URI`.
+
 ## Rust CI cache
 
 The native test, Python test, and conformance jobs share a cache using
