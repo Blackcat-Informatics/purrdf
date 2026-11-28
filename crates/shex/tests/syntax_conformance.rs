@@ -26,10 +26,6 @@
 //! is why the two syntaxes reach identical ASTs from one base rather than needing
 //! the ground truth patched up after the fact.
 
-#[expect(
-    dead_code,
-    reason = "this suite reads a subset of the shared ShEx conformance corpus"
-)]
 #[path = "support/corpus.rs"]
 mod corpus;
 

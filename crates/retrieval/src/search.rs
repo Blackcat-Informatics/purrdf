@@ -527,10 +527,7 @@ impl From<FusionError> for SearchError {
 // the `Send` bound this lint wants to express would buy nothing and would force a
 // `Sync` statistics provider and environment into every caller. The
 // `RankedStream` trait carries the same reasoning for its own futures.
-#[expect(
-    clippy::future_not_send,
-    reason = "single-task search accepts statistics and producers without thread-transfer bounds"
-)]
+#[allow(clippy::future_not_send)]
 pub async fn search<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,
@@ -566,10 +563,7 @@ where
 /// Returns original planning/execution failures and typed missing-key, policy,
 /// evidence or certification refusals. A failed weighted source is refused
 /// before a keyed leading-order answer can omit its unknown domain.
-#[expect(
-    clippy::future_not_send,
-    reason = "ordered search keeps caller state and producers in the same task"
-)]
+#[allow(clippy::future_not_send)]
 pub async fn search_ordered<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,
@@ -620,14 +614,7 @@ fn ordered_request(
 /// Run the original scoped pipeline with caller ordering and its key snapshot.
 /// # Errors
 /// Preserves original scope, read, admission and ordering refusals.
-#[expect(
-    clippy::future_not_send,
-    reason = "scope evidence and producers can be borrowed from a single-threaded caller"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "preserve the public search signature with independent scope and ordering inputs"
-)]
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn search_scoped_ordered<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,
@@ -666,14 +653,7 @@ where
 /// Run caller-ordered scoped search over an operationally fallible source.
 /// # Errors
 /// Preserves the original source refusal and receipt ahead of any partial answer.
-#[expect(
-    clippy::future_not_send,
-    reason = "the fallible read and its scope evidence remain with the caller's task"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "preserve the public search signature with independent scope and ordering inputs"
-)]
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn search_scoped_fallible_ordered<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,
@@ -730,14 +710,7 @@ where
 /// Preserves the original planning, admission, execution and fusion failures.
 // The two original scope inputs accompany the existing six composition inputs;
 // no independently configured second search pipeline is introduced.
-#[expect(
-    clippy::future_not_send,
-    reason = "scope evidence and producers can be borrowed from a single-threaded caller"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "preserve the public search signature with explicit scope bindings and evidence"
-)]
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn search_scoped<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,
@@ -808,14 +781,7 @@ impl<E: std::error::Error + 'static, V: std::fmt::Debug + 'static> std::error::E
 ///
 /// # Errors
 /// Preserves original search failures and typed operational errors with receipts.
-#[expect(
-    clippy::future_not_send,
-    reason = "the fallible read and its scope evidence remain with the caller's task"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "preserve the public search signature with explicit scope bindings and evidence"
-)]
+#[allow(clippy::future_not_send, clippy::too_many_arguments)]
 pub async fn search_scoped_fallible<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,
@@ -863,11 +829,8 @@ where
 
 // The optional borrowed input selects the original native execution door; all
 // planning, admission, fusion and answer publication below remain one body.
-#[expect(
-    clippy::future_not_send,
-    reason = "the operation factory and ranked producers need only support the caller's task"
-)]
-#[expect(
+#[allow(clippy::future_not_send)]
+#[allow(
     clippy::too_many_arguments,
     reason = "the existing search inputs carry the operation factory so resident admission stays after compilation"
 )]
@@ -956,10 +919,9 @@ where
 ///
 /// Stages three to six of the composition, as one value: the answer the read
 /// produced, with the identities read back off it.
-#[expect(
-    clippy::future_not_send,
-    reason = "fusion awaits local producer streams without transferring them between threads"
-)]
+// The composition is awaited in one task and never crosses a thread boundary; see
+// the same allowance on `search`.
+#[allow(clippy::future_not_send)]
 async fn read_and_fuse<D>(
     compiled: &CompiledRetrieval,
     registry: &PropertyFunctionRegistry<'static>,
@@ -1197,10 +1159,8 @@ where
 /// [`ProtocolError::AttestationMoved`] when the witness is not one attestation, or is
 /// not the one `announced`; [`ProtocolError::ReadFailed`] when the producer beat its
 /// declared row bound.
-#[expect(
-    clippy::future_not_send,
-    reason = "attestation is checked while polling the producer in its own task"
-)]
+// Awaited in the one task `search` runs in; see the same allowance there.
+#[allow(clippy::future_not_send)]
 async fn read_to_its_end(
     mut stream: RankedStreamImpl<'_>,
     stratum: &Iri,

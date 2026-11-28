@@ -39,7 +39,7 @@ pub(crate) fn entropy_seed() -> Result<u64, HostSourceMissing> {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[expect(
+#[allow(
     clippy::unnecessary_wraps,
     reason = "the read has one shape on every target, and the wasm32 one refuses"
 )]
@@ -70,7 +70,7 @@ fn unix_seconds(time: std::time::SystemTime) -> i64 {
 
 /// A fresh 64-bit entropy seed from the OS CSPRNG.
 #[cfg(not(target_arch = "wasm32"))]
-#[expect(
+#[allow(
     clippy::unnecessary_wraps,
     reason = "the read has one shape on every target, and the wasm32 one refuses"
 )]
@@ -87,10 +87,7 @@ const fn os_entropy_seed() -> Result<u64, HostSourceMissing> {
 
 // Floor establishes whole seconds; the cast preserves the existing saturating
 // i64 range law for the host's floating-point millisecond representation.
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "floor establishes whole seconds and the cast preserves the saturating host clock range"
-)]
+#[allow(clippy::cast_possible_truncation)]
 fn unix_seconds_from_millis(milliseconds: f64) -> i64 {
     (milliseconds / 1000.0).floor() as i64
 }

@@ -10,6 +10,7 @@
 //!
 //! Report-only, `cargo bench -p purrdf-shapes --bench graph_membership` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
+#![allow(missing_docs)]
 
 use std::sync::Arc;
 

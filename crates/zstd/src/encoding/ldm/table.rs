@@ -273,10 +273,17 @@ impl LdmHashTable {
         self.bucket_mask
     }
 
+    /// Absolute stream position that corresponds to the +1
+    /// relative-offset bias — i.e. an entry with `offset == 1`
+    /// refers to absolute byte `position_base`.
+    pub(crate) const fn position_base(&self) -> usize {
+        self.position_base
+    }
+
     /// Translate an entry's stored `offset` (relative + 1-biased)
     /// back to an absolute stream position. Returns `None` for
     /// the empty-slot sentinel (`offset == 0`).
-    pub(crate) fn resolve(&self, entry: LdmEntry) -> Option<usize> {
+    pub(crate) fn resolve(&self, entry: &LdmEntry) -> Option<usize> {
         match entry.offset {
             0 => None,
             rel => Some(self.position_base + (rel as usize) - 1),

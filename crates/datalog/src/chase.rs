@@ -2171,10 +2171,7 @@ mod tests {
             // `try_update`, the non-deprecated name a newer toolchain prefers for this
             // API, postdates this workspace's MSRV floor, so the original `fetch_update`
             // name is kept and its deprecation suppressed at this single call site.
-            #[expect(
-                deprecated,
-                reason = "the replacement atomic method postdates the workspace minimum Rust version"
-            )]
+            #[allow(deprecated)]
             let previous = self
                 .0
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |left| {

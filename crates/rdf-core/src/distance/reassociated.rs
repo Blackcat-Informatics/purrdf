@@ -296,7 +296,7 @@ mod body {
     use super::{Algebraic, BLOCK, Binary64, Bound, Bounded, Scalar, finite};
 
     /// `sum(a[i] · b[i])` over one block, under the reassociation licence.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the body must be inlined into every compilation so each compiles it \
                   under its own target features"
@@ -311,7 +311,7 @@ mod body {
     }
 
     /// `sum((a[i] - b[i])²)` over one block, under the reassociation licence.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the body must be inlined into every compilation so each compiles it \
                   under its own target features"
@@ -327,7 +327,7 @@ mod body {
     }
 
     /// The reassociated dot product over the operands' common prefix.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the body must be inlined into every compilation so each compiles it \
                   under its own target features"
@@ -351,7 +351,7 @@ mod body {
 
     /// The reassociated squared Euclidean distance, abandoned once a block checkpoint
     /// meets `bound`. Non-finiteness is tested before the bound at every checkpoint.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the body must be inlined into every compilation so each compiles it \
                   under its own target features"

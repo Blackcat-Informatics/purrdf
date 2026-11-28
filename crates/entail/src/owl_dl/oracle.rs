@@ -1779,10 +1779,7 @@ enum Bound {
 // count, the seed tag, the oracle direction's floor, the round and step ceilings, the work
 // ceiling, and the axiom strategy — and bundling them into a struct would hide which ones a
 // given `#[test]` chose to override.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the differential property keeps the corpus, seed, oracle bounds, and budgets explicit"
-)]
+#[allow(clippy::too_many_arguments)]
 fn run_property(
     name: &str,
     sig: Signature,

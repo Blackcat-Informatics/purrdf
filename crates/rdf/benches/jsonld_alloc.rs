@@ -18,10 +18,6 @@ use purrdf_rdf::native_codecs::jsonld::{
     serialize_dataset_to_jsonld_with_options,
 };
 
-#[expect(
-    dead_code,
-    reason = "the allocation benchmark uses a subset of the shared JSON-LD fixtures"
-)]
 #[path = "support/jsonld.rs"]
 mod fixture;
 

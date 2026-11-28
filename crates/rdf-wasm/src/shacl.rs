@@ -374,10 +374,8 @@ pub(crate) fn validate_to_sarif_impl(
 /// `profile` is the dated XPath law the request selected, or `None` for the
 /// compatibility regular expressions. `shacl_profile` is the exact dated SHACL law, or
 /// `None` for the compatibility law.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one argument per request input, as the JS signature"
-)]
+#[allow(clippy::too_many_arguments)] // one argument per request input, as the JS signature
+#[allow(clippy::fn_params_excessive_bools)] // one argument per request input
 pub(crate) fn validate_to_sarif_with_options_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -505,7 +503,7 @@ impl ShaclChangeValidation {
 ///
 /// `profile` is the dated XPath law the request selected, or `None` for the
 /// compatibility regular expressions.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input at the wasm boundary"
 )]
@@ -548,10 +546,7 @@ pub(crate) fn validate_changes_to_sarif_impl(
 ///
 /// `profile` is the dated XPath law the request selected, or `None` for the
 /// compatibility regular expressions.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one argument per request input, and the law"
-)]
+#[allow(clippy::too_many_arguments)] // one argument per request input, and the law
 pub(crate) fn entail_to_ntriples_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -830,10 +825,7 @@ pub(crate) fn check_rules_impl(
 /// table does not supply or an entry its closure never names, an ill-formed rule, a rule
 /// set that cannot be stratified. Call `.free()` on the result.
 #[wasm_bindgen(js_name = shaclCheckRules)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_check_rules(
     srl: &str,
     srl_base: Option<String>,
@@ -881,7 +873,7 @@ impl<'a> ExprInputs<'a> {
 ///
 /// `profile` is the dated XPath law the request selected, or `None` for the
 /// compatibility regular expressions.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct, independently-named input at the wasm boundary"
 )]
@@ -1086,10 +1078,7 @@ pub(crate) fn lint_shapes_impl(
 /// findings, not an exception. `shapesGraph` configures the loader as `purrdf shapes lint
 /// --shapes-graph` does (see [`shacl_validate_to_sarif`]). Call `.free()` on the result.
 #[wasm_bindgen(js_name = shaclLintShapes)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_lint_shapes(
     shapes_ttl: &str,
     shapes_base: Option<String>,
@@ -1311,10 +1300,7 @@ fn pack_product_request(
 /// when the shapes graph's `owl:imports` closure is not in hand, and with a
 /// [`ShaclProductRefusal`] otherwise; call `.free()` on either when done.
 #[wasm_bindgen(js_name = shaclPackProduct)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_pack_product(
     shapes_ttl: &str,
     shapes_base: Option<String>,
@@ -1338,11 +1324,8 @@ pub fn shacl_pack_product(
 
 /// Pack a prepared product with an explicit SHACL fixed-point request.
 #[wasm_bindgen(js_name = shaclPackProductWithRecursion)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
-#[expect(clippy::too_many_arguments, reason = "one argument per request input")]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
 pub fn shacl_pack_product_with_recursion(
     shapes_ttl: &str,
     shapes_base: Option<String>,
@@ -1373,10 +1356,7 @@ pub fn shacl_pack_product_with_recursion(
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "shared boundary for both packing exports"
-)]
+#[allow(clippy::too_many_arguments)] // shared boundary for both packing exports
 fn pack_product_entry(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -1829,11 +1809,8 @@ macro_rules! shacl_default_recursion {
 
 /// Validate the whole graph with an explicit SHACL fixed-point request.
 #[wasm_bindgen(js_name = shaclValidateToSarifWithRecursion)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
-#[expect(clippy::too_many_arguments, reason = "one argument per request input")]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
 pub fn shacl_validate_to_sarif_with_recursion(
     shapes_ttl: String,
     data_nt: String,
@@ -1871,11 +1848,8 @@ pub fn shacl_validate_to_sarif_with_recursion(
 
 /// Validate a graph change with an explicit SHACL fixed-point request.
 #[wasm_bindgen(js_name = shaclValidateChangesToSarifWithRecursion)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
-#[expect(clippy::too_many_arguments, reason = "one argument per request input")]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
 pub fn shacl_validate_changes_to_sarif_with_recursion(
     shapes_ttl: String,
     data_nt: String,
@@ -1911,11 +1885,8 @@ pub fn shacl_validate_changes_to_sarif_with_recursion(
 
 /// Validate with an admitted or rebuilt prepared product and a fixed-point request.
 #[wasm_bindgen(js_name = shaclProductValidateToSarifWithRecursion)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
-#[expect(clippy::too_many_arguments, reason = "one argument per request input")]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // one argument per request input
 pub fn shacl_product_validate_to_sarif_with_recursion(
     product: &[u8],
     data_nt: &str,
@@ -1949,7 +1920,6 @@ macro_rules! shacl_entries {
             $(coordinates($now:ident, $seed:ident) as $coordinates:ident)?
             $(canonical($policy:ident, $control:ident, $cancel:ident))?
             $(recursion($recursion:ident))?
-            $(explain_arity($arity:literal))?
             -> Result<$out:ty, $err:ty>
             => $variant:ident, $ctor_js:ident / $ctor:ident
             $body:block
@@ -1958,12 +1928,13 @@ macro_rules! shacl_entries {
         /// asynchronous job both run, named for the request's [`ShaclJobRequest`]
         /// constructor.
         pub(crate) mod requests {
-
+            #[allow(clippy::wildcard_imports)] // a body names what its entry names
             use super::*;
 
             $(
                 #[doc = concat!("`", stringify!($js), "`'s body.")]
-                $(#[expect(clippy::too_many_arguments, reason = $arity)])?
+                #[allow(clippy::too_many_arguments)] // one argument per request input
+                #[allow(clippy::needless_pass_by_value)] // the request owns its arguments
                 pub(crate) fn $ctor(
                     $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
                     $(, $coordinates: purrdf_validate::query::CoordinateInputs)?
@@ -2065,7 +2036,8 @@ macro_rules! shacl_entries {
         $(
             $(#[$meta])*
             #[wasm_bindgen(js_name = $js)]
-            $(#[expect(clippy::too_many_arguments, reason = $arity)])?
+            #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+            #[allow(clippy::too_many_arguments)] // one argument per request input
             pub fn $sync(
                 $($param: $ty,)* $selection: Option<String> $(, $law: Option<String>)?
                 $(, $now: Option<JsValue>, $seed: Option<JsValue>)?
@@ -2102,8 +2074,7 @@ macro_rules! shacl_entries {
                      arguments."
                 )]
                 #[wasm_bindgen(js_name = $ctor_js)]
-
-                $(#[expect(clippy::too_many_arguments, reason = $arity)])?
+                #[allow(clippy::too_many_arguments)] // one argument per request input
                 #[must_use]
                 pub fn $ctor($($param: $ty,)* $($policy: String)?) -> Self {
                     Self {
@@ -2183,7 +2154,6 @@ shacl_entries! {
         subclass_of_in_shapes_graph: Option<bool>,
     ) selecting xpath_regex law shacl_profile
       recursion(recursion)
-      explain_arity("the existing JS validation entry takes separate graph, import, and law inputs")
       -> Result<String, XPathValidationError> => ValidateToSarif, validateToSarif / validate_to_sarif
     {
         let xpath_profile = shapes_profile(xpath_regex.as_deref())?;
@@ -2248,7 +2218,6 @@ shacl_entries! {
         shapes_graph: Option<String>,
     ) selecting xpath_regex
       recursion(recursion)
-      explain_arity("the existing JS change-validation entry takes separate graphs, deltas, and law inputs")
       -> Result<ShaclChangeValidation, XPathValidationError> => ValidateChangesToSarif, validateChangesToSarif / validate_changes_to_sarif
     {
         let (sarif, scope) = validate_changes_to_sarif_impl(
@@ -2317,8 +2286,7 @@ shacl_entries! {
         max_join_steps: Option<u64>,
     ) selecting xpath_regex coordinates(now, entropy_seed) as coordinates
         canonical(canonical_search, control, cancel)
-        explain_arity("the existing JS entailment entry takes separate graph, law, and execution controls")
-      -> Result<ShaclEntailment, XPathValidationError> => Entail, entail / entail
+        -> Result<ShaclEntailment, XPathValidationError> => Entail, entail / entail
     {
         entail_to_ntriples_impl(
             &shapes_ttl,
@@ -2396,8 +2364,7 @@ shacl_entries! {
         max_stored_facts: Option<u64>,
         max_join_steps: Option<u64>,
     ) selecting xpath_regex coordinates(now, entropy_seed) as coordinates
-        explain_arity("the existing JS inference entry takes separate graph, rule, law, and execution inputs")
-      -> Result<ShaclRulesInference, XPathValidationError> => ApplyRules, applyRules / apply_rules
+        -> Result<ShaclRulesInference, XPathValidationError> => ApplyRules, applyRules / apply_rules
     {
         let profile = shapes_profile(xpath_regex.as_deref())?;
         let imports = shapes_import_pairs(
@@ -2457,9 +2424,7 @@ shacl_entries! {
         expr_at: Option<String>,
         expr_via: Option<Vec<String>>,
         expr_turtle: Option<String>,
-    ) selecting xpath_regex
-      explain_arity("the existing JS node-expression entry takes separate forms, bindings, and graph inputs")
-      -> Result<ShaclNodeExprOutcome, XPathValidationError> => EvalNodeExpr, evalNodeExpr / eval_node_expr
+    ) selecting xpath_regex -> Result<ShaclNodeExprOutcome, XPathValidationError> => EvalNodeExpr, evalNodeExpr / eval_node_expr
     {
         eval_node_expr_impl(
             &shapes_ttl,

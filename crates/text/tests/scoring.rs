@@ -17,7 +17,6 @@ use purrdf_text::{
     TextError, TextIndex, TextIndexConfig, explain, rank_partition, select, select_scoped,
 };
 
-#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/index.rs"]
 mod index_fixture;
 

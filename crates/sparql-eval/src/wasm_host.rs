@@ -39,10 +39,7 @@ pub fn date_now() -> f64 {
 #[must_use]
 pub fn math_random() -> f64 {
     // The top 53 bits are exactly representable, so the quotient is in `[0, 1)`.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "the shift leaves only fifty-three bits, all representable in binary64"
-    )]
+    #[allow(clippy::cast_precision_loss)]
     let draw = (source(HostInput::Entropy).entropy_seed() >> 11) as f64;
     draw / 9_007_199_254_740_992.0
 }

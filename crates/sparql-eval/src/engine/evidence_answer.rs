@@ -69,7 +69,7 @@ impl NativeSparqlEngine {
     /// Refuses other query forms and propagates the original operational and
     /// evaluation failures. Visitor output is publishable only after this call
     /// returns `Ok` with its final view and governor receipt.
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         clippy::too_many_arguments,
         reason = "the scoped evidence ingress carries the same caller inputs and typed receipts as its sibling entries"
@@ -150,7 +150,7 @@ impl NativeSparqlEngine {
         })
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the original governor, evidence policy, reporting coordinate and execution owner cross one admission boundary"
     )]

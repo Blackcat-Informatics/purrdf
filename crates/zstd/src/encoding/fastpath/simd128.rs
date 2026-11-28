@@ -14,10 +14,13 @@
 //! is the vectorized `common_prefix_len` match-length scan.
 
 #![cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+#![allow(dead_code)]
 
 use core::arch::wasm32::{i8x16_bitmask, u8x16_eq, v128, v128_load};
 
 use super::scalar;
+
+pub(crate) const KERNEL_TAG: &str = "simd128";
 
 /// wasm has no CRC unit; route the single-lane mix through the portable scalar
 /// mixer so it stays bit-identical with every other tier's `hash_mix_u64`.
@@ -67,5 +70,34 @@ pub(crate) unsafe fn common_prefix_len_ptr(lhs: *const u8, rhs: *const u8, max: 
         scalar::common_prefix_len_with(lhs, rhs, max, |lhs, rhs, max| {
             prefix_len_simd(lhs, rhs, max)
         })
+    }
+}
+
+/// `simd128` variant of `count_match_from_indices` — the BT-walk match-length
+/// probe entry point. Same invariants as the scalar variant, under the
+/// `simd128` umbrella.
+///
+/// # Safety
+/// BT walk invariants: `candidate_idx + tail_limit <= concat.len()` and
+/// `current_idx + tail_limit <= concat.len()`.
+#[target_feature(enable = "simd128")]
+#[inline]
+pub(crate) unsafe fn count_match_from_indices(
+    concat: &[u8],
+    current_idx: usize,
+    candidate_idx: usize,
+    tail_limit: usize,
+    seed_len: usize,
+) -> usize {
+    // SAFETY: this entry retains its ISA contract and the original index bounds.
+    unsafe {
+        scalar::count_match_with(
+            concat,
+            current_idx,
+            candidate_idx,
+            tail_limit,
+            seed_len,
+            |lhs, rhs, remaining| common_prefix_len_ptr(lhs, rhs, remaining),
+        )
     }
 }

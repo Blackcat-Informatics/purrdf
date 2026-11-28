@@ -3,8 +3,7 @@
 
 //! Real full-ID conversion, raw framing, inspection and ordered batch refusal.
 mod support;
-use purrdf_testkit::text::stdout_utf8;
-use support::{run_with_input, stderr};
+use support::{run_with_input, stderr, stdout_utf8};
 
 #[test]
 fn explicit_full_formats_and_batch_records_preserve_original_digests() {

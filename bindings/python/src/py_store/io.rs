@@ -34,11 +34,8 @@ use crate::{
 /// spelling (`RdfFormat.TURTLE`).
 #[pyclass(name = "RdfFormat", eq, eq_int)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    non_camel_case_types,
-    reason = "the Rust variants preserve the Python-visible enum member names"
-)]
-#[expect(
+#[allow(non_camel_case_types)]
+#[allow(
     clippy::upper_case_acronyms,
     reason = "the SCREAMING_SNAKE variant spellings ARE the Python-visible enum members (`RdfFormat.TURTLE`), so they must not be renamed"
 )]

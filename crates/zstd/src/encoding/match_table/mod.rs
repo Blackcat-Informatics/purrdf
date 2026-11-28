@@ -21,5 +21,7 @@
 //! those helpers along. Storage abstractions are still scoped for the
 //! Phase 2 arena allocator work.
 
+#![allow(dead_code)]
+
 pub(crate) mod helpers;
 pub(crate) mod storage;

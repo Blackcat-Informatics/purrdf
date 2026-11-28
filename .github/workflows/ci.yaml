@@ -54,14 +54,14 @@ jobs:
       - name: Format the preserve-order consumer
         run: cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
 
+      - name: Clippy the preserve-order consumer (deny warnings)
+        run: cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
+
       - name: Check workspace
         run: cargo check --workspace --lib --tests --locked
 
-      - name: Strict production Clippy
-        run: make clippy
-
-      - name: Clippy all targets (deny warnings)
-        run: make clippy-all
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   # The helper census and metadata generators share built dependencies.
   # Keep them on one runner and run them alongside the compiler checks.

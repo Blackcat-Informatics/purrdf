@@ -13,6 +13,7 @@
 //! `δazi·∫|m| ds <= δazi·s12·a`. Nominal disagreements are still reported. Any
 //! conditioned excess, distance mismatch, refusal or a wrong input digest
 //! fails the run.
+#![allow(missing_docs)]
 
 use purrdf_geo_kernel::{
     ExecutionLimits, ExecutionPolicy, GeographicReference, LonLat, Metres, MetricContext,

@@ -16,19 +16,36 @@
 //! `impl HcMatchGenerator` block over the same matcher, so the HC chain matcher
 //! and the optimal parser live in separate files.
 
+// The DP body macros reference many opt-parser types / cost-model constants
+// UNqualified inside their `macro_rules!` bodies; rustc's `unused_imports` lint
+// does not count macro-body references, so it false-positives on every such
+// import (gating or removing any one breaks the lib build — the expansions
+// need them). This module is macro-dense enough that per-import suppression is
+// noise, so the lint is disabled module-wide here.
+#![allow(unused_imports)]
+
 use super::generator::HcMatchGenerator;
 use crate::encoding::Sequence;
 use crate::encoding::blocks::encode_offset_with_history;
 use crate::encoding::hc::MAX_HC_SEARCH_DEPTH;
 use alloc::vec::Vec;
 
+// The DP body macros reference these opt-parser types and cost-model constants
+// UNqualified inside their `macro_rules!` bodies. rustc's `unused_imports` lint
+// does not count macro-body references, so it reports every one of these as
+// "unused" even though each macro expansion requires them (gating or removing
+// any one breaks the lib build). Suppress the false positive on the group.
+#[allow(unused_imports)]
 use crate::encoding::{
     bt::BtMatcher,
     cost_model::{
         HC_BITCOST_MULTIPLIER, HC_OPT_NODE_LEN, HC_OPT_NUM, HC_OPT_PRICE_ARENA_LEN,
-        HC_OPT_PRICE_STRIDE, HcOptState, HcOptimalCostProfile,
+        HC_OPT_PRICE_STRIDE, HC_PREDEF_THRESHOLD, HcOptState, HcOptimalCostProfile,
     },
-    match_generator::HC_OPT_MIN_MATCH_LEN,
+    hc::HC_MIN_MATCH_LEN,
+    levels::config::HcConfig,
+    match_generator::{HC_OPT_MIN_MATCH_LEN, HC_SEARCH_DEPTH, HC_TARGET_LEN, HcBackend},
+    match_table::storage::HC3_HASH_LOG,
     opt::ldm::{HcOptLdmState, HcRawSeqStore},
     opt::types::{
         HcCandidateQuery, HcOptimalNode, HcOptimalPlanBuffers, HcOptimalPlanState,
@@ -643,57 +660,59 @@ macro_rules! build_optimal_plan_impl_body {
                     *slot = prev_node;
                     slot.litlen = lit_len as u32;
                     node_prices[pos] = lit_cost;
+                    #[allow(clippy::collapsible_if)]
                     if opt_level
                         && prev_match.mlen > 0
                         && prev_match.litlen == 0
                         && pos < $current_len
-                        && ll1_price < ll0_price
                     {
-                        let next_lit_price = {
-                            let bt = $self.backend.bt_mut();
-                            BtMatcher::cached_literal_price(
+                        if ll1_price < ll0_price {
+                            let next_lit_price = {
+                                let bt = $self.backend.bt_mut();
+                                BtMatcher::cached_literal_price(
+                                    profile,
+                                    $stats,
+                                    $current[pos],
+                                    &mut bt.opt_lit_price_scratch,
+                                    &mut bt.opt_lit_price_generation,
+                                    lit_price_stamp,
+                                )
+                            };
+                            let with1literal = BtMatcher::add_price_delta(
+                                node_pos_price,
+                                next_lit_price,
+                                ll1_price as i32 - ll0_price as i32,
+                            );
+                            let ll_delta_next = BtMatcher::cached_lit_length_delta_price(
                                 profile,
                                 $stats,
-                                $current[pos],
-                                &mut bt.opt_lit_price_scratch,
-                                &mut bt.opt_lit_price_generation,
-                                lit_price_stamp,
-                            )
-                        };
-                        let with1literal = BtMatcher::add_price_delta(
-                            node_pos_price,
-                            next_lit_price,
-                            ll1_price as i32 - ll0_price as i32,
-                        );
-                        let ll_delta_next = BtMatcher::cached_lit_length_delta_price(
-                            profile,
-                            $stats,
-                            lit_len + 1,
-                            &mut ll_cache,
-                            ll_price_stamp,
-                        );
-                        let with_more_literals =
-                            BtMatcher::add_price_delta(lit_cost, next_lit_price, ll_delta_next);
-                        let next = pos + 1;
-                        let next_price = unsafe { *node_prices.get_unchecked(next) };
-                        if with1literal < with_more_literals && with1literal < next_price {
-                            // Upstream zstd parity (zstd_opt.c:1232): `cur >= prevMatch.mlen`.
-                            debug_assert!(pos >= prev_match.mlen as usize);
-                            let prev_pos = pos - prev_match.mlen as usize;
-                            {
-                                let prev_state = unsafe { *nodes.get_unchecked(prev_pos) };
-                                let (_, reps_after_match) = BtMatcher::encode_offset_with_reps(
-                                    prev_match.off,
-                                    prev_state.litlen as usize,
-                                    prev_state.reps,
-                                );
-                                let slot = unsafe { nodes.get_unchecked_mut(next) };
-                                *slot = prev_match;
-                                slot.reps = reps_after_match;
-                                slot.litlen = 1;
-                                node_prices[next] = with1literal;
-                                if next > last_pos {
-                                    last_pos = next;
+                                lit_len + 1,
+                                &mut ll_cache,
+                                ll_price_stamp,
+                            );
+                            let with_more_literals =
+                                BtMatcher::add_price_delta(lit_cost, next_lit_price, ll_delta_next);
+                            let next = pos + 1;
+                            let next_price = unsafe { *node_prices.get_unchecked(next) };
+                            if with1literal < with_more_literals && with1literal < next_price {
+                                // Upstream zstd parity (zstd_opt.c:1232): `cur >= prevMatch.mlen`.
+                                debug_assert!(pos >= prev_match.mlen as usize);
+                                let prev_pos = pos - prev_match.mlen as usize;
+                                {
+                                    let prev_state = unsafe { *nodes.get_unchecked(prev_pos) };
+                                    let (_, reps_after_match) = BtMatcher::encode_offset_with_reps(
+                                        prev_match.off,
+                                        prev_state.litlen as usize,
+                                        prev_state.reps,
+                                    );
+                                    let slot = unsafe { nodes.get_unchecked_mut(next) };
+                                    *slot = prev_match;
+                                    slot.reps = reps_after_match;
+                                    slot.litlen = 1;
+                                    node_prices[next] = with1literal;
+                                    if next > last_pos {
+                                        last_pos = next;
+                                    }
                                 }
                             }
                         }
@@ -902,6 +921,7 @@ macro_rules! build_optimal_plan_impl_body {
                     // tier's fn: AVX2 SoA-vector compare for the avx2 wrapper,
                     // inline scalar otherwise) — it folds into this wrapper's
                     // monomorphisation, so no call ABI / runtime feature check.
+                    #[allow(unused_unsafe)]
                     {
                         last_pos = last_pos.max(unsafe {
                             $priceset(
@@ -1298,10 +1318,7 @@ impl HcMatchGenerator {
     // as `collect_optimal_candidates_initialized_scalar` (absent on
     // aarch64-little, where NEON is the baseline tier).
     #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
-    #[expect(
-        unused_unsafe,
-        reason = "the shared candidate macro also invokes target-specific helpers outside the scalar path"
-    )]
+    #[allow(unused_unsafe)]
     pub(crate) fn start_matching_btlazy2_scalar(
         &mut self,
         mut handle_sequence: impl for<'a> FnMut(Sequence<'a>),
@@ -1314,6 +1331,9 @@ impl HcMatchGenerator {
         )
     }
 
+    // The scalar arm of `run_main_loop!` wraps a safe `*_scalar` call in
+    // `unsafe` (the SIMD arms need it); allow the redundant block here.
+    #[allow(unused_unsafe)]
     pub(crate) fn start_matching_optimal<S: crate::encoding::strategy::Strategy>(
         &mut self,
         mut handle_sequence: impl for<'a> FnMut(Sequence<'a>),
@@ -1414,78 +1434,94 @@ impl HcMatchGenerator {
                     };
                     let (_, end_reps, end_litlen, consumed_len) =
                         match (S::ACCURATE_PRICE, S::FAVOR_SMALL_OFFSETS, has_ldm) {
-                            (true, false, false) => self.$impl_wrapper::<S, true, false, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (true, false, true) => self.$impl_wrapper::<S, true, false, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (true, true, false) => self.$impl_wrapper::<S, true, true, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (true, true, true) => self.$impl_wrapper::<S, true, true, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (false, false, false) => self.$impl_wrapper::<S, false, false, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (false, false, true) => self.$impl_wrapper::<S, false, false, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (false, true, false) => self.$impl_wrapper::<S, false, true, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
-                            (false, true, true) => self.$impl_wrapper::<S, false, true, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut best_plan,
-                                &mut plan_buffers,
-                            ),
+                            (true, false, false) => unsafe {
+                                self.$impl_wrapper::<S, true, false, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (true, false, true) => unsafe {
+                                self.$impl_wrapper::<S, true, false, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (true, true, false) => unsafe {
+                                self.$impl_wrapper::<S, true, true, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (true, true, true) => unsafe {
+                                self.$impl_wrapper::<S, true, true, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (false, false, false) => unsafe {
+                                self.$impl_wrapper::<S, false, false, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (false, false, true) => unsafe {
+                                self.$impl_wrapper::<S, false, false, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (false, true, false) => unsafe {
+                                self.$impl_wrapper::<S, false, true, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
+                            (false, true, true) => unsafe {
+                                self.$impl_wrapper::<S, false, true, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut best_plan,
+                                    &mut plan_buffers,
+                                )
+                            },
                         };
                     // On a no-match segment (the per-literal case that dominates
                     // near-random input) nothing was emitted, so the stats
@@ -1516,10 +1552,8 @@ impl HcMatchGenerator {
         {
             use crate::encoding::fastpath::FastpathKernel;
             match self.table.kernel {
-                FastpathKernel::Avx2Bmi2 => unsafe {
-                    run_main_loop!(build_optimal_plan_impl_avx2_bmi2)
-                },
-                FastpathKernel::Sse42 => unsafe { run_main_loop!(build_optimal_plan_impl_sse42) },
+                FastpathKernel::Avx2Bmi2 => run_main_loop!(build_optimal_plan_impl_avx2_bmi2),
+                FastpathKernel::Sse42 => run_main_loop!(build_optimal_plan_impl_sse42),
                 FastpathKernel::Scalar => run_main_loop!(build_optimal_plan_impl_scalar),
             }
         }
@@ -1548,6 +1582,8 @@ impl HcMatchGenerator {
         self.backend.bt_mut().opt_state = opt_state;
     }
 
+    // The scalar arm of `run_seed_loop!` wraps a safe call in `unsafe`.
+    #[allow(unused_unsafe)]
     fn run_btultra2_seed_pass(
         &mut self,
         current: &[u8],
@@ -1594,78 +1630,94 @@ impl HcMatchGenerator {
                     };
                     let (_, end_reps, end_litlen, consumed_len) =
                         match (S::ACCURATE_PRICE, S::FAVOR_SMALL_OFFSETS, has_ldm) {
-                            (true, false, false) => self.$impl_wrapper::<S, true, false, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (true, false, true) => self.$impl_wrapper::<S, true, false, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (true, true, false) => self.$impl_wrapper::<S, true, true, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (true, true, true) => self.$impl_wrapper::<S, true, true, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (false, false, false) => self.$impl_wrapper::<S, false, false, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (false, false, true) => self.$impl_wrapper::<S, false, false, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (false, true, false) => self.$impl_wrapper::<S, false, true, false>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
-                            (false, true, true) => self.$impl_wrapper::<S, false, true, true>(
-                                &current[cursor..],
-                                segment_abs_start,
-                                remaining_len,
-                                state,
-                                &opt_state,
-                                &mut seed_plan,
-                                &mut *plan_buffers,
-                            ),
+                            (true, false, false) => unsafe {
+                                self.$impl_wrapper::<S, true, false, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (true, false, true) => unsafe {
+                                self.$impl_wrapper::<S, true, false, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (true, true, false) => unsafe {
+                                self.$impl_wrapper::<S, true, true, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (true, true, true) => unsafe {
+                                self.$impl_wrapper::<S, true, true, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (false, false, false) => unsafe {
+                                self.$impl_wrapper::<S, false, false, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (false, false, true) => unsafe {
+                                self.$impl_wrapper::<S, false, false, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (false, true, false) => unsafe {
+                                self.$impl_wrapper::<S, false, true, false>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
+                            (false, true, true) => unsafe {
+                                self.$impl_wrapper::<S, false, true, true>(
+                                    &current[cursor..],
+                                    segment_abs_start,
+                                    remaining_len,
+                                    state,
+                                    &opt_state,
+                                    &mut seed_plan,
+                                    &mut *plan_buffers,
+                                )
+                            },
                         };
                     // No-match segment: stats update no-ops on the empty slice
                     // and the truncate has nothing to drop; skip both.
@@ -1695,10 +1747,8 @@ impl HcMatchGenerator {
         {
             use crate::encoding::fastpath::FastpathKernel;
             match self.table.kernel {
-                FastpathKernel::Avx2Bmi2 => unsafe {
-                    run_seed_loop!(build_optimal_plan_impl_avx2_bmi2)
-                },
-                FastpathKernel::Sse42 => unsafe { run_seed_loop!(build_optimal_plan_impl_sse42) },
+                FastpathKernel::Avx2Bmi2 => run_seed_loop!(build_optimal_plan_impl_avx2_bmi2),
+                FastpathKernel::Sse42 => run_seed_loop!(build_optimal_plan_impl_sse42),
                 FastpathKernel::Scalar => run_seed_loop!(build_optimal_plan_impl_scalar),
             }
         }
@@ -1775,10 +1825,7 @@ impl HcMatchGenerator {
     /// per-position pipeline) directly into the DP loop.
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     #[target_feature(enable = "neon")]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all optimizer kernels use the same separate history, price, and match state"
-    )]
+    #[allow(clippy::too_many_arguments)]
     unsafe fn build_optimal_plan_impl_neon<
         S: crate::encoding::strategy::Strategy,
         const ACCURATE_PRICE: bool,
@@ -1811,10 +1858,7 @@ impl HcMatchGenerator {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "sse4.2")]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all optimizer kernels use the same separate history, price, and match state"
-    )]
+    #[allow(clippy::too_many_arguments)]
     unsafe fn build_optimal_plan_impl_sse42<
         S: crate::encoding::strategy::Strategy,
         const ACCURATE_PRICE: bool,
@@ -1847,10 +1891,7 @@ impl HcMatchGenerator {
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     #[target_feature(enable = "avx2,bmi2")]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all optimizer kernels use the same separate history, price, and match state"
-    )]
+    #[allow(clippy::too_many_arguments)]
     unsafe fn build_optimal_plan_impl_avx2_bmi2<
         S: crate::encoding::strategy::Strategy,
         const ACCURATE_PRICE: bool,
@@ -1881,18 +1922,19 @@ impl HcMatchGenerator {
         )
     }
 
-    #[cfg(not(any(
-        all(target_arch = "aarch64", target_endian = "little"),
-        all(target_arch = "wasm32", target_feature = "simd128")
-    )))]
-    #[expect(
-        unused_unsafe,
-        reason = "the shared optimization body also invokes helpers that need an ISA boundary on other targets"
+    #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+    // Body macros wrap callees in `unsafe { }` for the NEON/AVX/SSE
+    // variants where callees are `unsafe fn`. The scalar wrappers route
+    // through safe fns, so those blocks are redundant on this path.
+    #[allow(unused_unsafe)]
+    // The dispatch reaches this only on non-SIMD x86 (Scalar tier) and the
+    // portable fallback; on wasm+simd128 the simd128 wrapper is selected, so
+    // this is cfg-dead there.
+    #[cfg_attr(
+        all(target_arch = "wasm32", target_feature = "simd128"),
+        allow(dead_code)
     )]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all optimizer kernels use the same separate history, price, and match state"
-    )]
+    #[allow(clippy::too_many_arguments)]
     fn build_optimal_plan_impl_scalar<
         S: crate::encoding::strategy::Strategy,
         const ACCURATE_PRICE: bool,
@@ -1930,14 +1972,8 @@ impl HcMatchGenerator {
     // With `+simd128` in the wasm baseline the shared body macro's `unsafe`
     // blocks (needed by the safe scalar wrapper) are redundant inside this
     // target_feature fn.
-    #[expect(
-        unused_unsafe,
-        reason = "the shared optimization body also invokes helpers that need an ISA boundary on other targets"
-    )]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "all optimizer kernels use the same separate history, price, and match state"
-    )]
+    #[allow(unused_unsafe)]
+    #[allow(clippy::too_many_arguments)]
     unsafe fn build_optimal_plan_impl_simd128<
         S: crate::encoding::strategy::Strategy,
         const ACCURATE_PRICE: bool,
@@ -1968,8 +2004,87 @@ impl HcMatchGenerator {
         )
     }
 
-    /// NEON-umbrella variant. Its binary-tree walk, repcode and hash3 probes
-    /// share the NEON prefix-length kernel.
+    /// Cross-platform entry. Picks the kernel-specific variant so the per-
+    /// position pipeline (BT-tree fill, rep probing, hash3 probing, BT
+    /// collect / HC chain walk) runs inside a single `target_feature`
+    /// umbrella — all inner SIMD probes inline without ABI barriers.
+    ///
+    /// The on-encode hot path bypasses this dispatcher: `build_optimal_plan_impl_<kernel>`
+    /// calls the matching `_<kernel>` variant directly. This entry is kept
+    /// for the cfg(test)-only `collect_optimal_candidates` shim and any
+    /// future caller that isn't already inside a kernel umbrella.
+    #[allow(dead_code)]
+    #[inline(always)]
+    pub(crate) fn collect_optimal_candidates_initialized<S: crate::encoding::strategy::Strategy>(
+        &mut self,
+        abs_pos: usize,
+        current_abs_end: usize,
+        profile: HcOptimalCostProfile,
+        query: HcCandidateQuery,
+        out: &mut Vec<MatchCandidate>,
+    ) {
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        unsafe {
+            self.collect_optimal_candidates_initialized_neon::<S>(
+                abs_pos,
+                current_abs_end,
+                profile,
+                query,
+                out,
+            )
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            use crate::encoding::fastpath::FastpathKernel;
+            match self.table.kernel {
+                FastpathKernel::Avx2Bmi2 => unsafe {
+                    self.collect_optimal_candidates_initialized_avx2_bmi2::<S>(
+                        abs_pos,
+                        current_abs_end,
+                        profile,
+                        query,
+                        out,
+                    )
+                },
+                FastpathKernel::Sse42 => unsafe {
+                    self.collect_optimal_candidates_initialized_sse42::<S>(
+                        abs_pos,
+                        current_abs_end,
+                        profile,
+                        query,
+                        out,
+                    )
+                },
+                FastpathKernel::Scalar => self.collect_optimal_candidates_initialized_scalar::<S>(
+                    abs_pos,
+                    current_abs_end,
+                    profile,
+                    query,
+                    out,
+                ),
+            }
+        }
+        #[cfg(not(any(
+            all(target_arch = "aarch64", target_endian = "little"),
+            target_arch = "x86",
+            target_arch = "x86_64"
+        )))]
+        {
+            self.collect_optimal_candidates_initialized_scalar::<S>(
+                abs_pos,
+                current_abs_end,
+                profile,
+                query,
+                out,
+            )
+        }
+    }
+
+    /// NEON-umbrella variant. Every inner helper (`bt_update_tree_until_neon`,
+    /// `for_each_repcode_candidate_with_reps_neon`, `hash3_candidate_neon`,
+    /// `bt_insert_and_collect_matches_neon`, `fastpath::neon::
+    /// common_prefix_len_ptr`) shares the NEON umbrella so the per-position
+    /// pipeline executes as a single straight-line inline sequence.
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     #[target_feature(enable = "neon")]
     unsafe fn collect_optimal_candidates_initialized_neon<
@@ -2051,10 +2166,7 @@ impl HcMatchGenerator {
     #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
     // Macro emits `unsafe { }` wrappers for NEON/AVX/SSE variants; scalar
     // callees are safe so the blocks are redundant here only.
-    #[expect(
-        unused_unsafe,
-        reason = "the shared candidate macro also invokes target-specific helpers outside the scalar path"
-    )]
+    #[allow(unused_unsafe)]
     pub(crate) fn collect_optimal_candidates_initialized_scalar<
         S: crate::encoding::strategy::Strategy,
     >(

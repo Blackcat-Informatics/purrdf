@@ -54,6 +54,8 @@
 //! the FNV-1a digest ([`purrdf_hash::fnv`]) of the canonical payload image, which proves each scale built a real,
 //! non-empty graph rather than timing an allocation.
 
+#![allow(missing_docs)]
+
 use std::hint::black_box;
 use std::time::Instant;
 

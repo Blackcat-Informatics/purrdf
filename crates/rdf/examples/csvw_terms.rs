@@ -16,10 +16,6 @@ use purrdf_rdf::{
     parse_dataset, project_csvw_terms,
 };
 
-#[expect(
-    dead_code,
-    reason = "this target uses a subset of the shared projection configuration fixtures"
-)]
 #[path = "../tests/support/projection_configs.rs"]
 mod projection_configs;
 use projection_configs::csvw_datatype;

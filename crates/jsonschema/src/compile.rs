@@ -454,6 +454,7 @@ impl Compiler<'_> {
         Ok(Kind::RecursiveRef(target))
     }
 
+    #[allow(clippy::too_many_lines)]
     fn keywords(&mut self, context: &Context<'_>, map: &Object) -> Result<Body, SchemaError> {
         let dialect = context.dialect;
         let vocabularies = context.vocabularies;

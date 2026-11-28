@@ -20,18 +20,18 @@ use alloc::vec::Vec;
 use core::arch::x86::_bzhi_u32;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::_bzhi_u64;
+#[cfg(target_arch = "aarch64")]
+use std::arch::is_aarch64_feature_detected;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use std::arch::is_x86_feature_detected;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use std::sync::OnceLock;
 
 /// The Zstandard specification limits the maximum length of a code to 11 bits.
 pub(crate) const MAX_MAX_NUM_BITS: u8 = 11;
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum HuffmanDecodeKernel {
+pub(crate) enum HuffmanDecodeKernel {
     Scalar,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     X86Bmi2,
@@ -39,6 +39,10 @@ enum HuffmanDecodeKernel {
     X86Avx2,
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     X86Vbmi2,
+    #[cfg(target_arch = "aarch64")]
+    Aarch64Neon,
+    #[cfg(target_arch = "aarch64")]
+    Aarch64Sve,
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -63,19 +67,34 @@ const fn select_x86_huffman_decode_kernel(
     HuffmanDecodeKernel::Scalar
 }
 
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
-fn detect_huffman_decode_kernel() -> HuffmanDecodeKernel {
+pub(crate) fn detect_huffman_decode_kernel() -> HuffmanDecodeKernel {
     static KERNEL: OnceLock<HuffmanDecodeKernel> = OnceLock::new();
     *KERNEL.get_or_init(|| {
-        select_x86_huffman_decode_kernel(
-            is_x86_feature_detected!("avx512vbmi2"),
-            is_x86_feature_detected!("avx512f"),
-            is_x86_feature_detected!("avx512vl"),
-            is_x86_feature_detected!("avx512bw"),
-            is_x86_feature_detected!("bmi2"),
-            is_x86_feature_detected!("avx2"),
-        )
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            let kernel = select_x86_huffman_decode_kernel(
+                is_x86_feature_detected!("avx512vbmi2"),
+                is_x86_feature_detected!("avx512f"),
+                is_x86_feature_detected!("avx512vl"),
+                is_x86_feature_detected!("avx512bw"),
+                is_x86_feature_detected!("bmi2"),
+                is_x86_feature_detected!("avx2"),
+            );
+            if kernel != HuffmanDecodeKernel::Scalar {
+                return kernel;
+            }
+        }
+        #[cfg(target_arch = "aarch64")]
+        {
+            if is_aarch64_feature_detected!("sve") {
+                return HuffmanDecodeKernel::Aarch64Sve;
+            }
+            if is_aarch64_feature_detected!("neon") {
+                return HuffmanDecodeKernel::Aarch64Neon;
+            }
+        }
+        HuffmanDecodeKernel::Scalar
     })
 }
 
@@ -88,7 +107,10 @@ pub(crate) struct HuffmanDecoder<'table> {
     /// 4-stream SIMD-fallback path that previously consumed this
     /// field now dispatches via the [`HufKernel`] trait at
     /// `decompress_literals` entry instead.
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[cfg_attr(
+        not(any(target_arch = "x86", target_arch = "x86_64")),
+        allow(dead_code)
+    )]
     kernel: HuffmanDecodeKernel,
     /// State is used to index into the table.
     pub state: u64,
@@ -99,7 +121,6 @@ impl<'t> HuffmanDecoder<'t> {
     pub(crate) fn new(table: &'t HuffmanTable) -> HuffmanDecoder<'t> {
         HuffmanDecoder {
             table,
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             kernel: detect_huffman_decode_kernel(),
             state: 0,
         }
@@ -134,6 +155,12 @@ impl<'t> HuffmanDecoder<'t> {
         // both NEON and SVE arms previously aliased the scalar body
         // verbatim — the match was paying a 3-arm dispatch cost for
         // zero benefit. Collapsed to a direct scalar call there.
+        // The enum's Aarch64Neon / Aarch64Sve variants are themselves
+        // cfg-gated to target_arch = "aarch64", so under the outer
+        // x86 cfg below they don't exist — the match here is
+        // exhaustive on Scalar + X86Bmi2/Avx2/Vbmi2 alone, and an
+        // inner `cfg(target_arch = "aarch64")` arm would be dead
+        // (outer x86 cfg already false on aarch64).
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             match self.kernel {
@@ -305,6 +332,21 @@ impl HuffmanTable {
             last_weight: 0,
             fse_table: FSETable::new(255),
         }
+    }
+
+    /// Completely empty the table then repopulate as a replica
+    /// of `other`.
+    pub fn reinit_from(&mut self, other: &Self) {
+        self.reset();
+        // Copy ONLY the decode-time state. `weights` / `bits` /
+        // `rank scratch and the weight-decoding `fse_table` are build-time
+        // scratch (repopulated when a block carries a new HUF table); the
+        // literal-decode hot path reads only `packed_decode` + `max_num_bits`
+        // + `state_mask`. Skipping the rest mirrors the upstream zstd copying just the
+        // HUF decode table per frame, not the full build workspace.
+        self.packed_decode.extend_from_slice(&other.packed_decode);
+        self.max_num_bits = other.max_num_bits;
+        self.state_mask = other.state_mask;
     }
 
     /// Completely empty the table of all data.

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Report-only integer grid assignment and caller-buffer allocation evidence.
+#![allow(missing_docs)]
 
 use purrdf_geo_kernel::{
     GeographicReference, LonLat, Metres, Rat,

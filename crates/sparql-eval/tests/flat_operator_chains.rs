@@ -254,7 +254,7 @@ fn left_fold(terms: &[&str]) -> f64 {
         if let Some(acc) = double.as_mut() {
             *acc += term.parse::<f64>().expect("a double term");
         } else if term.contains('E') {
-            #[expect(
+            #[allow(
                 clippy::cast_precision_loss,
                 reason = "the quarter count is far below 2^53, so it converts exactly"
             )]

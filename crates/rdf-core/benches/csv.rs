@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+#![allow(missing_docs, reason = "a bench target is not library API")]
+
 //! `purrdf_core::csv` read and write throughput over 1 MiB inputs.
 //!
 //! Two shapes: an SSSOM-shaped TSV body (CURIE columns, a label, a

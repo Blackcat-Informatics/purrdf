@@ -271,23 +271,30 @@ impl FseTables {
         }
     }
 
-    /// Borrow the LL table from either the atomic cache's shared reference or
-    /// the owned table on targets without pointer-width atomics.
+    /// Borrow the LL default table as `&FSETable`. Abstracts the cfg
+    /// split in [`crate::fse::fse_encoder::FseDefaultTable`] —
+    /// `&'static FSETable` (atomic / `critical-section`) auto-derefs
+    /// directly; `Box<FSETable>` (cache-less no-atomic) derefs
+    /// through `Box`. Both arms yield `&FSETable` uniformly so
+    /// downstream consumers can stay cfg-agnostic.
     #[inline]
+    #[allow(clippy::borrow_deref_ref)]
     pub(crate) fn ll_default_ref(&self) -> &FSETable {
-        core::borrow::Borrow::borrow(&self.ll_default)
+        &*self.ll_default
     }
 
     /// Borrow the ML default table as `&FSETable`. See [`Self::ll_default_ref`].
     #[inline]
+    #[allow(clippy::borrow_deref_ref)]
     pub(crate) fn ml_default_ref(&self) -> &FSETable {
-        core::borrow::Borrow::borrow(&self.ml_default)
+        &*self.ml_default
     }
 
     /// Borrow the OF default table as `&FSETable`. See [`Self::ll_default_ref`].
     #[inline]
+    #[allow(clippy::borrow_deref_ref)]
     pub(crate) fn of_default_ref(&self) -> &FSETable {
-        core::borrow::Borrow::borrow(&self.of_default)
+        &*self.of_default
     }
 }
 
@@ -1493,7 +1500,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
             &mut all_blocks,
         );
         self.uncompressed_data = Some(source);
-        self.finish_frame(&all_blocks, total_uncompressed, &prep);
+        self.finish_frame(all_blocks, total_uncompressed, &prep);
     }
 
     fn prepare_frame(&mut self) -> FramePrep {
@@ -1947,7 +1954,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
     /// `frame_emit_info` (lsm). Header and blocks are written separately to
     /// avoid shifting `all_blocks` to prepend the header. Used by
     /// `compress` and `compress_oneshot_borrowed`.
-    fn finish_frame(&mut self, all_blocks: &[u8], total_uncompressed: u64, prep: &FramePrep) {
+    fn finish_frame(&mut self, all_blocks: Vec<u8>, total_uncompressed: u64, prep: &FramePrep) {
         let mut header_buf: Vec<u8> = Vec::with_capacity(18);
         self.append_frame_header(total_uncompressed, prep, &mut header_buf);
         // Snapshot the checksum before borrowing the drain field so the
@@ -1959,7 +1966,7 @@ impl<R: Read, W: Write, M: Matcher> FrameCompressor<R, W, M> {
             .then(|| (self.hasher.finish() as u32).to_le_bytes());
         let drain = self.compressed_data.as_mut().unwrap();
         drain.write_all(&header_buf).unwrap();
-        drain.write_all(all_blocks).unwrap();
+        drain.write_all(&all_blocks).unwrap();
         // With the content checksum enabled, the header
         // set `Content_Checksum_flag` and the 32-bit digest is written at the
         // end of the frame. Disabled => no trailing bytes, flag stays 0.

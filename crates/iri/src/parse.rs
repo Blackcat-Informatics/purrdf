@@ -1013,7 +1013,7 @@ const fn class_members(mask: u8) -> [u8; 256] {
 
 /// The one byte a single-byte class holds, found in [`CLASS`] so the class
 /// table stays the only place the class is spelled.
-#[expect(
+#[allow(
     clippy::cast_possible_truncation,
     reason = "the index is below CLASS.len() == 128; u8::try_from is not const-callable"
 )]
@@ -1055,12 +1055,12 @@ const QUESTION_BYTE: u8 = sole_member(QUESTION);
 /// trailing ones over 8 are the clean prefix. Independent byte lanes with no
 /// cross-lane dependence are the shape the compiler lowers to packed byte
 /// compares where the target has them.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the precheck must be inlined into the component loop so its lane compares \
               vectorize there rather than behind a call per eight bytes"
 )]
-#[expect(
+#[allow(
     clippy::needless_bitwise_bool,
     reason = "every lane is evaluated without a branch; a lazy `||` would reintroduce \
               the per-byte branch the precheck exists to remove"

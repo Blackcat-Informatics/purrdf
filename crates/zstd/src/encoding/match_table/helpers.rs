@@ -11,6 +11,17 @@
 //! / Dfast / Row / Hc). Matchers use their own modules without
 //! duplicating these primitives.
 //!
+//! Phase 1c additionally hosts `common_prefix_len` and the shared
+//! match-finder constants (`MIN_MATCH_LEN`, `FAST_HASH_FILL_STEP`,
+//! `INCOMPRESSIBLE_SKIP_STEP`) here so the per-matcher modules
+//! (`simple`, `dfast`, `row`) depend on this shared infra rather than on
+//! each other — breaking the `match_generator` ↔ `simple` reverse
+//! dependency the original Phase 1c split introduced.
+//!
+//! Mechanical move — names, signatures, and bodies are byte-for-byte
+//! identical to the pre-extraction monolith; the only intentional API
+//! change is `pub(crate)` visibility on the moved items.
+
 use super::super::opt::types::MatchCandidate;
 use crate::encoding::fastpath::FastpathKernel;
 
@@ -19,6 +30,10 @@ use crate::encoding::fastpath::FastpathKernel;
 /// `match_generator` driver can reference the shared minimum without
 /// importing one matcher module from another.
 pub(crate) const MIN_MATCH_LEN: usize = 5;
+/// Hash-fill stride used by the Simple / level-1 fast pass when
+/// backfilling the suffix store. Upstream zstd parity: matches
+/// `ZSTD_FAST_HASH_FILL_STEP` in `zstd_fast.c`.
+pub(crate) const FAST_HASH_FILL_STEP: usize = 3;
 /// Sparse step used when a block was determined to be incompressible —
 /// every matcher inserts hash entries with this stride instead of the
 /// per-byte dense pattern so the rest of the block costs less CPU.
@@ -126,7 +141,7 @@ pub(crate) fn extend_backwards_shared(
 /// invoked once per encoded byte on lazy / Dfast / Row matchers
 /// (~10% exclusive on the default-level profile).
 #[inline(always)]
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "The advertised offset window and resident history base are distinct bounds"
 )]

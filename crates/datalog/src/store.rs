@@ -928,7 +928,7 @@ impl<I: TermIdentity> Tail<I> {
     /// Both scans are bounded by [`TAIL_SEAL_THRESHOLD`].
     /// Handle checks may be disabled only when existing live counts prove that
     /// every physical tail cell is occupied.
-    #[expect(
+    #[allow(
         clippy::needless_bitwise_bool,
         reason = "the non-short-circuit `&` is the point: a lazy `&&` puts a branch in the \
                   lane loop, and the compares of both key columns must be evaluated every row"

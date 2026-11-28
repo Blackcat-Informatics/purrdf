@@ -1,12 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "CompactRefusedError retains original dictionary causes, statistics buffers and name inline; returning those owners must not allocate a failure-only box."
-    )
+#![expect(
+    clippy::result_large_err,
+    reason = "CompactRefusedError retains original dictionary causes, statistics buffers and name inline; returning those owners must not allocate a failure-only box."
 )]
 
 //! Streamable compaction (GTS-SPEC §10.1): re-author the ordering, only the

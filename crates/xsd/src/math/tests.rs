@@ -1013,6 +1013,11 @@ fn sign_selected_interval_products_enclose_every_endpoint_product() {
 }
 
 #[test]
+#[allow(
+    clippy::drop_non_drop,
+    reason = "the chunk restores the x87 control word on drop and must end before the \
+              fixed-point oracle"
+)]
 fn mean_value_arctangent_encloses_every_sampled_point_of_its_interval() {
     let mut state = 0x6a09_e667_f3bc_c908_u64;
     for case in 0..400_u32 {
@@ -1026,10 +1031,9 @@ fn mean_value_arctangent_encloses_every_sampled_point_of_its_interval() {
         let delta = purrdf_xsd_test_mul(centre.abs(), width);
         let (lower, upper) = (centre - delta, centre + delta);
         let interval = FloatInterval::from_bounds(lower, upper).unwrap();
-        let enclosure = {
-            let chunk = math.enter_chunk().unwrap();
-            interval.atan(&mut math, &chunk).unwrap()
-        };
+        let chunk = math.enter_chunk().unwrap();
+        let enclosure = interval.atan(&mut math, &chunk).unwrap();
+        drop(chunk);
         for sample in [lower, centre, upper] {
             let exact = FixedInterval::from_binary64(sample, &mut math)
                 .unwrap()
@@ -1050,9 +1054,11 @@ fn purrdf_xsd_test_mul(a: f64, b: f64) -> f64 {
 }
 
 #[test]
-#[expect(
+#[allow(
+    clippy::drop_non_drop,
     clippy::suboptimal_flops,
-    reason = "independent sample construction deliberately avoids fused multiply-add"
+    reason = "the chunk restores the x87 control word on drop and must end before the \
+              fixed-point oracle; oracle arithmetic deliberately avoids fused multiply-add"
 )]
 fn binary64_series_enclose_independent_fixed_point_values_over_narrow_intervals() {
     let mut state = 0xbb67_ae85_84ca_a73b_u64;
@@ -1071,14 +1077,11 @@ fn binary64_series_enclose_independent_fixed_point_values_over_narrow_intervals(
             unit * 5.9 + 0.1 + spread * 0.01,
         )
         .unwrap();
-        let ((sine, cosine), exponential, logarithm) = {
-            let chunk = math.enter_chunk().unwrap();
-            (
-                interval.sin_cos(&mut math, &chunk).unwrap(),
-                positive.exp(&mut math, &chunk).unwrap(),
-                positive.log(&mut math, &chunk).unwrap(),
-            )
-        };
+        let chunk = math.enter_chunk().unwrap();
+        let (sine, cosine) = interval.sin_cos(&mut math, &chunk).unwrap();
+        let exponential = positive.exp(&mut math, &chunk).unwrap();
+        let logarithm = positive.log(&mut math, &chunk).unwrap();
+        drop(chunk);
         for sample in [interval.lower(), centre, interval.upper()] {
             let (s, c) = FixedInterval::from_binary64(sample, &mut math)
                 .unwrap()
@@ -1120,9 +1123,11 @@ fn binary64_series_enclose_independent_fixed_point_values_over_narrow_intervals(
 }
 
 #[test]
-#[expect(
+#[allow(
+    clippy::drop_non_drop,
     clippy::suboptimal_flops,
-    reason = "independent sample construction deliberately avoids fused multiply-add"
+    reason = "the chunk restores the x87 control word on drop and must end before the \
+              fixed-point oracle; oracle arithmetic deliberately avoids fused multiply-add"
 )]
 fn double_word_intervals_enclose_fixed_references_to_about_one_hundred_bits() {
     use super::{Word, WordInterval};
@@ -1183,13 +1188,6 @@ fn double_word_intervals_enclose_fixed_references_to_about_one_hundred_bits() {
         };
         let x = word(a, a_tail);
         let y = word(b, b_tail);
-        #[cfg_attr(
-            not(all(target_arch = "x86", not(target_feature = "sse2"))),
-            expect(
-                clippy::drop_non_drop,
-                reason = "on x87 this restores the control word before the oracle"
-            )
-        )]
         drop(chunk);
         let fx = {
             let l = fixed_word(*x.lower(), &mut math);
@@ -1209,13 +1207,6 @@ fn double_word_intervals_enclose_fixed_references_to_about_one_hundred_bits() {
         let root = (a > 0.0).then(|| x.sqrt(ops).unwrap());
         let (sine, cosine) = x.sin_cos(ops).unwrap();
         let angle = WordInterval::atan2(y, x, ops);
-        #[cfg_attr(
-            not(all(target_arch = "x86", not(target_feature = "sse2"))),
-            expect(
-                clippy::drop_non_drop,
-                reason = "on x87 this restores the control word before the oracle"
-            )
-        )]
         drop(chunk);
         assert!(
             contains(sum, &fx.add(&fy, &mut math).unwrap(), &mut math),

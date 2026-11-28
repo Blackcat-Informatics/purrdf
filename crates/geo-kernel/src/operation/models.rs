@@ -969,12 +969,9 @@ impl BilinearGrid {
         }
         Ok(())
     }
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "The original exact normalized coordinate stays inline until its caller admits the retained diagnostic; boxing the trial refusal would allocate outside that admission"
-        )
+    #[allow(
+        clippy::result_large_err,
+        reason = "The original exact normalized coordinate stays inline until its caller admits the retained diagnostic; boxing the trial refusal would allocate outside that admission"
     )]
     pub(super) fn cell(&self, x: &Rat, y: &Rat) -> Result<(u32, u32), GridLocationFailure> {
         let coordinate =
@@ -1165,12 +1162,9 @@ impl BilinearGrid {
 
     // The domain is the closed union of complete patches. A missing node does
     // not remove the boundary of an adjacent complete patch.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "The original exact normalized coordinate stays inline until its caller admits the retained diagnostic; boxing the trial refusal would allocate outside that admission"
-        )
+    #[allow(
+        clippy::result_large_err,
+        reason = "The original exact normalized coordinate stays inline until its caller admits the retained diagnostic; boxing the trial refusal would allocate outside that admission"
     )]
     pub(super) fn complete_patch(
         &self,

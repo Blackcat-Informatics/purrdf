@@ -127,6 +127,10 @@ const ASCII_LIMIT: u32 = 0x80;
 /// `u32::from` is the right spelling and is not callable in a `const fn` on
 /// stable Rust, so the cast is isolated here rather than repeated at each
 /// byte-shaped predicate.
+#[allow(
+    clippy::cast_lossless,
+    reason = "u32::from is not const-callable on stable; this is the one widening site"
+)]
 #[inline]
 pub(crate) const fn widen(b: u8) -> u32 {
     b as u32
@@ -141,6 +145,10 @@ pub(crate) const TABLE_LIMIT: u32 = 0x100;
 /// The cast is lossless for every value the callers pass (each is below
 /// `0x100`), and `usize::try_from` is not const-callable on stable, so the one
 /// narrowing site is isolated here.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "every caller passes a scalar below TABLE_LIMIT; try_from is not const-callable"
+)]
 #[inline]
 pub(crate) const fn table_index(cp: u32) -> usize {
     cp as usize

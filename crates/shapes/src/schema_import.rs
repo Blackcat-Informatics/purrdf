@@ -66,7 +66,7 @@ impl SchemaDatatypeMap {
     ///
     /// Returns [`SchemaImportError`] when any supplied value is not an absolute
     /// IRI. Empty or relative datatype names never receive a built-in fallback.
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the eight mandatory scalar roles make missing vocabulary configuration unrepresentable"
     )]

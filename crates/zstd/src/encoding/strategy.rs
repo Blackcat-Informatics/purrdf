@@ -36,6 +36,8 @@
 //! `lib/compress/zstd_compress_internal.h` and the per-level table in
 //! `lib/compress/clevels.h`.
 
+#![allow(dead_code)]
+
 /// Upstream zstd `ZSTD_compressionParameters.strategy` equivalent — names the
 /// concrete match-finder backend a [`Strategy`] runs on top of. The
 /// runtime [`StrategyTag`] dispatcher and the [`Strategy::BACKEND`]
@@ -71,6 +73,17 @@ pub(crate) enum ParseMode {
 }
 
 impl ParseMode {
+    /// Lazy lookahead depth for the greedy/lazy band (0/1/2). `Optimal`
+    /// has no lazy depth and returns 0.
+    pub(crate) const fn lazy_depth(self) -> u8 {
+        match self {
+            Self::Greedy => 0,
+            Self::Lazy => 1,
+            Self::Lazy2 => 2,
+            Self::Optimal => 0,
+        }
+    }
+
     /// Derive the greedy/lazy parse from a lazy-lookahead depth. Depth >= 2
     /// saturates to `Lazy2`. Used to read the existing `LevelParams.lazy_depth`
     /// into the decoupled parse axis.
@@ -124,6 +137,15 @@ pub(crate) trait Strategy: Copy + 'static {
     /// Match-finder backend this strategy runs on.
     const BACKEND: BackendTag;
 
+    /// Nominal minimum match length for this strategy, mirroring the
+    /// upstream `clevels.h` `searchLength` column (3 for btultra/btultra2,
+    /// where the mls=3 hash3 probe is active). Descriptive: the optimal
+    /// parser's actual acceptance floor is the crate-wide
+    /// `HC_OPT_MIN_MATCH_LEN` (= 3) and the row matcher uses
+    /// `ROW_MIN_MATCH_LEN`; this const documents the strategy's intent and
+    /// is not read on the hot path.
+    const MIN_MATCH: usize;
+
     /// `accurate` flag for [`crate::encoding::cost_model::HcOptimalCostProfile`]
     /// — enables refined statistics weighting (upstream zstd `ZSTD_btultra` and
     /// above).
@@ -164,6 +186,95 @@ pub(crate) trait Strategy: Copy + 'static {
     const SUFFICIENT_MATCH_LEN: usize;
 }
 
+/// Level 1 — upstream zstd `ZSTD_fast`. Single-table Simple matcher.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Fast;
+
+impl Strategy for Fast {
+    const BACKEND: BackendTag = BackendTag::Simple;
+    const MIN_MATCH: usize = 4;
+    const ACCURATE_PRICE: bool = false;
+    const FAVOR_SMALL_OFFSETS: bool = true;
+    const USE_HASH3: bool = false;
+    const USE_BT: bool = false;
+    const OPT_LEVEL: u8 = 0;
+    // `MAX_CHAIN_DEPTH` / `SUFFICIENT_MATCH_LEN` are placeholder
+    // values for non-BT strategies — the trait associated consts
+    // must be total, but only the optimal parser reads them and
+    // it runs exclusively under `S::USE_BT == true`. The
+    // `debug_assert!(<S>::USE_BT, …)` guard in
+    // `HcOptimalCostProfile::const_for_strategy` plus the
+    // `debug_assert!(<S>::USE_BT, …)` at the top of
+    // `build_optimal_plan_impl_body!` make this unreachable in
+    // debug builds. Future refactors that introduce a non-BT
+    // reader must add a fresh guard or replace these placeholders
+    // with real Fast values.
+    const MAX_CHAIN_DEPTH: usize = 8;
+    const SUFFICIENT_MATCH_LEN: usize = 32;
+}
+
+/// Levels 2-3 — upstream zstd `ZSTD_dfast`. Two parallel hash chains.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Dfast;
+
+impl Strategy for Dfast {
+    const BACKEND: BackendTag = BackendTag::Dfast;
+    const MIN_MATCH: usize = 4;
+    const ACCURATE_PRICE: bool = false;
+    const FAVOR_SMALL_OFFSETS: bool = true;
+    const USE_HASH3: bool = false;
+    const USE_BT: bool = false;
+    const OPT_LEVEL: u8 = 0;
+    // Placeholder optimal-parser consts; see `Fast` for the
+    // unreachable-by-design contract.
+    const MAX_CHAIN_DEPTH: usize = 8;
+    const SUFFICIENT_MATCH_LEN: usize = 32;
+}
+
+/// Level 4 — upstream zstd `ZSTD_greedy` with row hashing.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Greedy;
+
+impl Strategy for Greedy {
+    const BACKEND: BackendTag = BackendTag::Row;
+    const MIN_MATCH: usize = 4;
+    const ACCURATE_PRICE: bool = false;
+    const FAVOR_SMALL_OFFSETS: bool = true;
+    const USE_HASH3: bool = false;
+    const USE_BT: bool = false;
+    const OPT_LEVEL: u8 = 0;
+    // Placeholder optimal-parser consts; see `Fast` for the
+    // unreachable-by-design contract.
+    const MAX_CHAIN_DEPTH: usize = 8;
+    const SUFFICIENT_MATCH_LEN: usize = 32;
+}
+
+/// Levels 6-12 — upstream zstd `ZSTD_lazy`/`ZSTD_lazy2` on the row finder
+/// (upstream zstd row mode is the greedy..lazy2 default). Levels inside the
+/// band differ only by runtime `RowConfig` fields (`search_depth`,
+/// `hash_bits`, `row_log`, `target_len`, `lazy_depth`), not by
+/// compile-time `Strategy` consts, so they share a single type.
+#[derive(Copy, Clone, Debug, Default)]
+pub(crate) struct Lazy;
+
+impl Strategy for Lazy {
+    const BACKEND: BackendTag = BackendTag::Row;
+    const MIN_MATCH: usize = 4;
+    const ACCURATE_PRICE: bool = false;
+    const FAVOR_SMALL_OFFSETS: bool = true;
+    const USE_HASH3: bool = false;
+    const USE_BT: bool = false;
+    const OPT_LEVEL: u8 = 0;
+    // Lazy runs on the Row backend with `USE_BT == false`, so the
+    // optimal parser entry point is unreachable for this strategy.
+    // These values mirror the upstream zstd `lazy2` cost profile (would be
+    // the right defaults if a future caller did build a profile for
+    // the lazy path), but with no current reader the same
+    // unreachable-by-design contract from `Fast` applies.
+    const MAX_CHAIN_DEPTH: usize = 8;
+    const SUFFICIENT_MATCH_LEN: usize = 32;
+}
+
 /// Levels 13-15 — upstream zstd `ZSTD_btlazy2`. Binary-tree match finder driving
 /// a greedy/lazy parse (NOT the optimal DP). Reuses the BT candidate
 /// collector to surface the longest match per position, then commits it
@@ -177,6 +288,7 @@ pub(crate) struct Btlazy2;
 
 impl Strategy for Btlazy2 {
     const BACKEND: BackendTag = BackendTag::HashChain;
+    const MIN_MATCH: usize = 5;
     const ACCURATE_PRICE: bool = false;
     const FAVOR_SMALL_OFFSETS: bool = true;
     const USE_HASH3: bool = false;
@@ -197,6 +309,7 @@ pub(crate) struct BtOpt;
 
 impl Strategy for BtOpt {
     const BACKEND: BackendTag = BackendTag::HashChain;
+    const MIN_MATCH: usize = 4;
     const ACCURATE_PRICE: bool = false;
     const FAVOR_SMALL_OFFSETS: bool = true;
     const USE_HASH3: bool = false;
@@ -214,6 +327,7 @@ pub(crate) struct BtUltra;
 
 impl Strategy for BtUltra {
     const BACKEND: BackendTag = BackendTag::HashChain;
+    const MIN_MATCH: usize = 3;
     const ACCURATE_PRICE: bool = true;
     const FAVOR_SMALL_OFFSETS: bool = false;
     // clevels.h level 18 minMatch = 3 → the hash3 short-match probe is
@@ -236,6 +350,7 @@ pub(crate) struct BtUltra2;
 
 impl Strategy for BtUltra2 {
     const BACKEND: BackendTag = BackendTag::HashChain;
+    const MIN_MATCH: usize = 3;
     const ACCURATE_PRICE: bool = true;
     const FAVOR_SMALL_OFFSETS: bool = false;
     const USE_HASH3: bool = true;
@@ -330,6 +445,20 @@ impl StrategyTag {
         }
     }
 
+    /// Bridge to [`BackendTag`] for the dispatcher entry point.
+    /// Greedy AND lazy run on the Row finder (upstream zstd
+    /// `ZSTD_resolveRowMatchFinderMode`: row mode is the default for
+    /// greedy..lazy2); the BT strategies keep the HashChain storage
+    /// (their tree scratch lives inside it).
+    pub(crate) const fn backend(self) -> BackendTag {
+        match self {
+            Self::Fast => BackendTag::Simple,
+            Self::Dfast => BackendTag::Dfast,
+            Self::Greedy | Self::Lazy => BackendTag::Row,
+            Self::Btlazy2 | Self::BtOpt | Self::BtUltra | Self::BtUltra2 => BackendTag::HashChain,
+        }
+    }
+
     /// Default search method this tag historically ran on. Used to seed
     /// the decoupled [`SearchMethod`] axis from the legacy tag during
     /// migration; once `LEVEL_TABLE` carries explicit configs this is the
@@ -342,6 +471,20 @@ impl StrategyTag {
             Self::Btlazy2 | Self::BtOpt | Self::BtUltra | Self::BtUltra2 => {
                 SearchMethod::BinaryTree
             }
+        }
+    }
+
+    /// Default parse mode for this tag, ignoring per-level lazy depth (the
+    /// lazy band's real depth comes from `LevelParams.lazy_depth` via
+    /// [`ParseMode::from_lazy_depth`]). The opt tags map to `Optimal`.
+    pub(crate) const fn parse_mode(self) -> ParseMode {
+        match self {
+            Self::Fast | Self::Dfast | Self::Greedy => ParseMode::Greedy,
+            Self::Lazy => ParseMode::Lazy,
+            // Upstream zstd btlazy2 = BinaryTree finder + depth-2 lazy parse
+            // (`Strategy::lazy_depth()` reports 2 for it as well).
+            Self::Btlazy2 => ParseMode::Lazy2,
+            Self::BtOpt | Self::BtUltra | Self::BtUltra2 => ParseMode::Optimal,
         }
     }
 }

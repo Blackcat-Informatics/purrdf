@@ -6,18 +6,7 @@
 //! The only unsafe operations are ISA dispatch after availability checks and
 //! unaligned loads/stores within fixed-size arrays. The admitted floating chunk
 //! establishes nearest-even arithmetic and gradual underflow for every path.
-#![cfg_attr(
-    any(
-        target_arch = "x86",
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        all(target_arch = "wasm32", target_feature = "simd128")
-    ),
-    expect(
-        unsafe_code,
-        reason = "packed kernels use checked ISA dispatch and fixed-width memory"
-    )
-)]
+#![allow(unsafe_code)]
 
 #[cfg(any(
     target_arch = "x86",

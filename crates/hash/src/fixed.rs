@@ -413,6 +413,7 @@ macro_rules! hasher {
 
             // Keep the trait boundary transparent: an outlined wrapper made
             // string-keyed maps spill the SIMD accumulator around every write.
+            #[allow(clippy::inline_always)] // Confirmed in the paired map benchmark assembly.
             #[inline(always)]
             fn write(&mut self, bytes: &[u8]) {
                 self.0.bytes(bytes);

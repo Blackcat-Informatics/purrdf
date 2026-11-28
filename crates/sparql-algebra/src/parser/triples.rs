@@ -118,12 +118,9 @@ fn predicate_path<'a>(
 }
 
 /// One step of the certified predicate path's relational translation.
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::large_enum_variant,
-        reason = "path endpoints stay inline in the native worklist, whose full PathTranslation layout is admitted before spill growth; boxing would add a second owner"
-    )
+#[expect(
+    clippy::large_enum_variant,
+    reason = "path endpoints stay inline in the native worklist, whose full PathTranslation layout is admitted before spill growth; boxing would add a second owner"
 )]
 enum PathTranslation<'a> {
     Path(&'a PropertyPathExpression, bool, TermPattern, TermPattern),
@@ -140,12 +137,9 @@ pub(super) struct PolState {
 
 /// A triples construct waiting for the node, or the predicate-object list, it handed
 /// over to.
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::large_enum_variant,
-        reason = "triples frames stay inline in the native stack, whose exact TFrame array layout is admitted before growth; annotation boxes would add separate allocation owners"
-    )
+#[expect(
+    clippy::large_enum_variant,
+    reason = "triples frames stay inline in the native stack, whose exact TFrame array layout is admitted before growth; annotation boxes would add separate allocation owners"
 )]
 pub(super) enum TFrame {
     /// A predicate-object list, waiting for the object of its current verb.

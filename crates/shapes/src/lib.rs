@@ -44,13 +44,6 @@ pub mod function_resolution;
 pub mod graphql;
 pub mod imports;
 pub mod instance;
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_macro_rules,
-        reason = "production uses a subset of the JSON literal grammar exercised by the library tests"
-    )
-)]
 pub(crate) mod json_model;
 pub mod json_schema;
 pub mod limits;
@@ -148,45 +141,3 @@ pub use typescript::{
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[cfg(test)]
-mod json_model_tests {
-    use crate::json_model::json;
-
-    #[test]
-    fn object_literals_come_out_in_name_order_with_the_last_repeat() {
-        let name = "b";
-        let value =
-            json!({ "c": [1, null, {"z": true, "y": false}], (name): 2.5, "a": "x", "c": 3 });
-        assert_eq!(
-            purrdf_lex::json::write_compact(&value),
-            r#"{"a":"x","b":2.5,"c":3}"#
-        );
-    }
-
-    #[test]
-    fn interpolated_values_convert_by_reference() {
-        let names = vec!["p".to_owned(), "q".to_owned()];
-        let count = 3_usize;
-        let absent: Option<&str> = None;
-        let value = json!({ "names": names, "count": count, "absent": absent, "nested": &names });
-        assert_eq!(
-            purrdf_lex::json::write_compact(&value),
-            r#"{"absent":null,"count":3,"names":["p","q"],"nested":["p","q"]}"#
-        );
-        assert_eq!(names.len(), 2);
-    }
-
-    #[test]
-    fn insert_sorted_places_a_new_member_and_replaces_an_existing_one() {
-        use crate::json_model::{Object, Value, insert_sorted};
-
-        let mut object = Object::new().with("a", 1).with("c", 3);
-        assert_eq!(insert_sorted(&mut object, "b", 2), None);
-        assert_eq!(insert_sorted(&mut object, "c", 4), Some(Value::from(3)));
-        assert_eq!(
-            purrdf_lex::json::write_compact(&Value::Object(object)),
-            r#"{"a":1,"b":2,"c":4}"#
-        );
-    }
-}

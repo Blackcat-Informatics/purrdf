@@ -493,7 +493,7 @@ fn materialize_interned<
 ///
 /// A `ValueError` if the environment cannot be derived, or if the query does not
 /// parse or admit under it.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "every configuration axis `Store.prepare` accepts is named explicitly"
 )]

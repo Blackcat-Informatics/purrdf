@@ -24,10 +24,7 @@ use super::group::{BITMASK_ITER_MASK, BITMASK_STRIDE, BitMaskWord, NonZeroBitMas
 #[derive(Copy, Clone)]
 pub(crate) struct BitMask(pub(crate) BitMaskWord);
 
-#[expect(
-    clippy::use_self,
-    reason = "the explicit tuple constructor names the mask represented by the bitwise result"
-)]
+#[expect(clippy::use_self)]
 impl BitMask {
     /// Returns a new `BitMask` with the lowest bit removed.
     #[inline]

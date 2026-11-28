@@ -477,10 +477,7 @@ fn parse_cell(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "scalar conversion uses the cell's datatype and language, plus its diagnostic location"
-)]
+#[allow(clippy::too_many_arguments)]
 fn parse_component(
     source: String,
     datatype: &CsvwDatatype,

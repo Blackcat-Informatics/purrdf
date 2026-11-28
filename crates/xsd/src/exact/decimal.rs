@@ -123,7 +123,7 @@ impl PreparedDecimalText {
         self.digits.heap_bytes()
     }
 
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured canonical rendering must retain prepared widths through the destination writer"
     )]
@@ -1106,7 +1106,7 @@ impl Decimal {
     /// [`ExactError::NonTerminating`] under [`DivisionPolicy::Exact`] for a
     /// quotient with no finite expansion; [`ExactError::ScaleOverflow`] for a
     /// quotient scale past `u32::MAX`.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured caller policy specialization must eliminate the public result boundary"
     )]
@@ -1203,7 +1203,7 @@ impl Decimal {
         }
     }
 
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured constant division policies must specialize before arithmetic dispatch"
     )]
@@ -1301,7 +1301,7 @@ impl Decimal {
     /// The quotient rounded to `scale` digits: with the operands
     /// `a·10^-sa` and `b·10^-sb`, the coefficient is
     /// `round(a · 10^(scale + sb − sa) / b)`.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured explicit rounding must stay constant across this storage delegate"
     )]
@@ -1316,7 +1316,7 @@ impl Decimal {
         self.div_rounded_admitted_using(rhs, scale, rounding, storage, &mut |_| Ok(()))
     }
 
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured rounding must reach the small quotient without dynamic forwarding"
     )]
@@ -1790,7 +1790,7 @@ fn mul_parts_admitted_using(
     Ok(Decimal::new_using(product, scale, storage)?)
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "measured small quotient specialization must avoid the general integer storage frame"
 )]
@@ -2591,6 +2591,7 @@ super::error::lexical_entry! {
     /// Distinguishes borrowed lexical/scale refusal from physical allocation.
     }
     from_str {
+    #[allow(clippy::inline_always, reason = "measured parse/render callers must retain the coefficient representation across this adapter")]
     #[inline(always)]
     /// Parse the `xsd:decimal` lexical space (XSD 1.1 Part 2 §3.3.3.1) of any
     /// length: an optional sign, then digits with at most one `.` and at least one

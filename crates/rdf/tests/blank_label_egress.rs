@@ -34,10 +34,6 @@ use purrdf_rdf::{
     datasets_isomorphic, parse_dataset, serialize_dataset,
 };
 
-#[expect(
-    dead_code,
-    reason = "this test uses one of the two shared blank identity fixtures"
-)]
 #[path = "support/blank_identity.rs"]
 mod blank_identity;
 use blank_identity::blank_nodes;

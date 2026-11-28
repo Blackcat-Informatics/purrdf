@@ -759,7 +759,7 @@ mod tests {
 
     /// A type-for-type twin of the geometry tree with the compiler's own `Debug`, so
     /// the derive itself is the oracle for what the iterative `Debug` must write.
-    #[expect(
+    #[allow(
         dead_code,
         reason = "the twin's fields exist to be printed by its derived `Debug`, which dead-code \
                   analysis does not count as a read"
@@ -773,7 +773,7 @@ mod tests {
             pub(super) body: GeometryBody,
         }
 
-        #[expect(
+        #[allow(
             clippy::large_enum_variant,
             reason = "the twin mirrors the model's own variants, whose Point variant is a \
                       Coord's size for the reason `geom::GeometryBody` gives"

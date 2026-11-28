@@ -1339,10 +1339,7 @@ impl<'a> Hyper<'a> {
 
     /// Nothing to count outside the tests.
     #[cfg(not(test))]
-    #[expect(
-        clippy::unused_self,
-        reason = "the production no-op shares the call with the test counter on the same receiver"
-    )]
+    #[allow(clippy::unused_self)]
     const fn step_footprint(&self, _nodes: usize) {}
 
     fn tick(&mut self) -> Result<(), Exhausted> {
@@ -2988,10 +2985,7 @@ impl<'a> Hyper<'a> {
 
     /// Extend `frame` with every strictly-increasing `remaining`-element selection from
     /// `pool[from..]`, continuing the body walk once the selection is complete.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the subset recursion carries the clause, selection cursors, and continuation independently"
-    )]
+    #[allow(clippy::too_many_arguments)]
     fn walk_subsets(
         g: &Graph<'a>,
         st: &State,
@@ -3524,10 +3518,7 @@ fn region(
 ///
 /// A node already reached through this pattern was reached by an earlier walk — in this layer
 /// or a shallower one, at no greater depth — which went on past it, so this walk stops there.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "graph and clause state are distinct from the traversal buffer and depth"
-)]
+#[allow(clippy::too_many_arguments)]
 fn reach_back(
     scratch: &mut RegionScratch,
     g: &Graph<'_>,

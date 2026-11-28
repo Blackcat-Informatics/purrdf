@@ -10,18 +10,9 @@ mod inner {
     use core::ptr::NonNull;
     use std::alloc::{Layout, alloc, dealloc};
 
-    /// Allocates and releases storage for the table bucket layout.
-    ///
-    /// # Safety
-    /// Implementations must return storage aligned for the requested layout and
-    /// accept its original pointer and layout for deallocation.
+    #[expect(clippy::missing_safety_doc)] // not exposed outside of this crate
     pub unsafe trait Allocator {
         fn allocate(&self, layout: Layout) -> Result<NonNull<[u8]>, ()>;
-        /// Releases storage allocated by this allocator.
-        ///
-        /// # Safety
-        /// The pointer must name a live allocation from this allocator and
-        /// the layout must match the layout used to allocate it.
         unsafe fn deallocate(&self, ptr: NonNull<u8>, layout: Layout);
     }
 

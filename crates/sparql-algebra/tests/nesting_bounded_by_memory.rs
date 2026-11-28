@@ -81,7 +81,7 @@ impl Family {
 }
 
 /// Every construct that nests, in queries and updates.
-#[expect(
+#[allow(
     clippy::too_many_lines,
     reason = "one entry per construct; splitting the table would scatter it"
 )]

@@ -689,7 +689,7 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the JSON-LD term-definition algorithm keeps its recursive state explicit"
     )]
@@ -777,7 +777,7 @@ impl Compiler<'_> {
         Ok(())
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the JSON-LD term-definition algorithm keeps its inputs explicit"
     )]
@@ -1083,7 +1083,7 @@ impl Compiler<'_> {
         })
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "derived term mapping shares the compiler's bounded recursive state"
     )]
@@ -1151,7 +1151,7 @@ impl Compiler<'_> {
         )))
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "IRI expansion keeps every JSON-LD algorithm flag and recursion input explicit"
     )]
@@ -1251,7 +1251,7 @@ impl Compiler<'_> {
         Err(no_vocab_expansion(value))
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "type mapping compilation shares the compiler's bounded recursive state"
     )]

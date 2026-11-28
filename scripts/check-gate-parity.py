@@ -349,9 +349,11 @@ def make_targets(text: str) -> set[str]:
 
 def invocations(text: str) -> set[str]:
     """Every in-repo program invocation in a blob of Makefile or YAML text."""
+    # INLINE COMMENTS TOO, as `make_targets` already does. `_uncomment` removed only
+    # whole-line comments, so a trailing `# ... python3 scripts/check-x.py` was read as a
+    # running gate.
     prepared = _drop_prose(_join_continuations(strip_yaml_comments(_uncomment(text, ("#",)))))
-    commands = {command for command in CONSUMER_COMMANDS if command in " ".join(prepared.split())}
-    return commands | {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(prepared)} | {
+    return {_normalise(m.group(1), m.group(2)) for m in INVOCATION.finditer(prepared)} | {
         _normalise("helper-census", m.group(1) + m.group(2))
         for m in HELPER_POLICY_INVOCATION.finditer(prepared)
     }
@@ -394,7 +396,7 @@ def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] |
     seen.add(target)
     body = check_recipe(makefile_text, target, missing_is_fatal=False)
     found = invocations(body)
-    for _flags, nested in MAKE_RECURSION.findall(strip_yaml_comments(_uncomment(body, ("#",)))):
+    for _flags, nested in MAKE_RECURSION.findall(body):
         found |= invocations_with_recursion(makefile_text, nested, seen)
     return found
 
@@ -732,11 +734,9 @@ def self_test() -> int:
         print("SELF-TEST FAIL: excluded consumer gates do not agree in the real tree")
         ok = False
     for command in CONSUMER_COMMANDS:
-        ci_command = "make clippy-all" if command.startswith("cargo clippy ") else command
-        absent_ci = {name: text.replace(ci_command, "true") for name, text in real_workflows.items()}
-        prose_ci = {name: text.replace(ci_command, f'echo "{command}"') for name, text in real_workflows.items()}
-        absent_local = (real_makefile.replace("\t$(MAKE) clippy-all", "\t# $(MAKE) clippy-all")
-                        if ci_command != command else real_makefile.replace(command, "true"))
+        absent_ci = {name: text.replace(command, "true") for name, text in real_workflows.items()}
+        prose_ci = {name: text.replace(command, f'echo "{command}"') for name, text in real_workflows.items()}
+        absent_local = real_makefile.replace(command, "true")
         if (not consumer_gate_problems(real_makefile, absent_ci)
                 or not consumer_gate_problems(real_makefile, prose_ci)
                 or not consumer_gate_problems(absent_local, real_workflows)):
@@ -760,9 +760,13 @@ CONSUMER_COMMANDS = (
 
 def consumer_gate_problems(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
     """Require each excluded-consumer gate locally and in a PR workflow."""
-    local = invocations_with_recursion(makefile_text, "check")
-    ci = set().union(*(workflow_invocations(text, makefile_text)
-                       for text in merge_blocking(workflow_texts).values()))
+    def live(text: str) -> str:
+        return " ".join(_drop_prose(strip_yaml_comments(_uncomment(
+            _join_continuations(text), ("#",)
+        ))).split())
+
+    local = live(" ".join(check_recipe(makefile_text, t) for t in ["check", *(n for _f, n in MAKE_RECURSION.findall(check_recipe(makefile_text, "check")))]))
+    ci = " ".join(live(text) for text in merge_blocking(workflow_texts).values())
     return [
         f"excluded preserve-order consumer gate `{command}` is absent from {where}"
         for command in CONSUMER_COMMANDS

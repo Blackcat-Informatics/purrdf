@@ -402,7 +402,12 @@ impl<'a> Scanner<'a> {
     /// comment of [`super::xflag::strip_x_flag_whitespace`] explains why), so
     /// the `[` of `\ [` opens nothing here while the grammar still reads it as
     /// a [`Token::ClassOpen`]. Both states are owned by this one cursor.
-    #[cfg(test)]
+    #[allow(
+        dead_code,
+        reason = "exercised by the scanner's unit tests and kept for later consumers that \
+                  need only a token-boundary answer; the x stripper requires the per-character \
+                  `source_chars` because one token can span a depth change"
+    )]
     pub(super) fn in_class(&self) -> bool {
         debug_assert!(
             self.x_inside.is_some(),

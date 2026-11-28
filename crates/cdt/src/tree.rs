@@ -546,7 +546,7 @@ mod tests {
 
     /// A type-for-type twin of the value tree with the compiler's own `Debug`, so the
     /// derive itself is the oracle for what the iterative `Debug` must write.
-    #[expect(
+    #[allow(
         dead_code,
         reason = "the twin's fields exist to be printed by its derived `Debug`, which dead-code \
                   analysis does not count as a read"

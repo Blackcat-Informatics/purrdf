@@ -24,7 +24,7 @@ pub use by_reference::{ByReferenceForm, ByReferenceTerm};
 /// Findings from the first failed condition of each definition in a terms frame.
 #[derive(Debug, Default)]
 #[non_exhaustive]
-#[expect(
+#[allow(
     clippy::struct_excessive_bools,
     reason = "Independent findings can coexist across definitions in one frame"
 )]

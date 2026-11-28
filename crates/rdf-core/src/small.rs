@@ -118,7 +118,7 @@ pub struct SmallVec<A: Array> {
 // SAFETY: a `SmallVec` owns its elements exactly as a `Vec` does (inline or
 // through a uniquely owned heap buffer) and shares no state, so sending it or
 // sharing a reference to it is sound exactly when the same is true of `T`.
-#[expect(
+#[allow(
     clippy::non_send_fields_in_send_ty,
     reason = "the raw heap pointer in `data` is uniquely owned storage for `A::Item`s, which the bound covers"
 )]
@@ -1083,10 +1083,7 @@ impl<A: Array> DerefMut for SmallVec<A> {
 impl<A: Array> Extend<A::Item> for SmallVec<A> {
     // The reserved-slot bulk loop belongs in its caller: a separate per-row
     // frame must not replace its SSA fill and single final length publication.
-    #[expect(
-        clippy::inline_always,
-        reason = "the caller inlines the reserved-slot fill and publishes the resulting length once"
-    )]
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn extend<I: IntoIterator<Item = A::Item>>(&mut self, iterable: I) {
         let mut iter = iterable.into_iter();

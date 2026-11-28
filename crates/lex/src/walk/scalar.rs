@@ -125,7 +125,7 @@ enum Mode {
 /// hexadecimal `Debug` mode, so [`Mode::of`] compares this word with the words
 /// standard format syntax itself produces for that mode; it never interprets a
 /// fixed bit position.
-#[expect(
+#[allow(
     deprecated,
     reason = "the hexadecimal Debug mode has no other stable getter; its bits are calibrated against format syntax"
 )]

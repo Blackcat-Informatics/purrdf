@@ -34,8 +34,8 @@
 
 pub(crate) use purrdf_xsd::ieee::Binary64;
 use purrdf_xsd::ieee::Binary64Scope;
-#[cfg(all(test, target_arch = "x86", not(target_feature = "sse2")))]
-pub(super) use purrdf_xsd::ieee::x87;
+#[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
+pub(crate) use purrdf_xsd::ieee::x87;
 
 /// The binary64 operations under the reassociation licence, on the [`Binary64`] token.
 ///
@@ -70,6 +70,11 @@ macro_rules! algebraic {
     };
 }
 
+#[allow(
+    clippy::inline_always,
+    reason = "each method is one arithmetic instruction inside a kernel's inner loop, and \
+              must compile into every dispatch wrapper under that wrapper's features"
+)]
 impl Algebraic for Binary64<'_> {
     algebraic!(algebraic_add => add);
     algebraic!(algebraic_sub => sub);
@@ -90,7 +95,7 @@ pub(crate) struct Precision {
 impl Precision {
     /// Enter the scope: on the x87, set the precision-control field to 53 bits.
     #[inline(always)]
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "entered around every kernel call, including per-pair ones; on every \
                   target but the x87 it must vanish entirely"
@@ -110,7 +115,7 @@ impl Precision {
 
     /// The operations this scope makes correct.
     #[inline(always)]
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "a zero-sized token; it must never be a call"
     )]

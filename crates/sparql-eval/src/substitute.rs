@@ -4080,12 +4080,9 @@ fn resume_substitution_with_memory(
     let beneath = scope.beneath();
     let core = SeedColumns::at_core(scope, expr_subs.entries().len());
     /// What a node does once an operand is back.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::large_enum_variant,
-            reason = "the next substitution step moves the original admitted tree inline; boxing it would add a separate allocation to the native rewrite"
-        )
+    #[expect(
+        clippy::large_enum_variant,
+        reason = "the next substitution step moves the original admitted tree inline; boxing it would add a separate allocation to the native rewrite"
     )]
     enum Then {
         /// Enter another operand.
@@ -4472,12 +4469,9 @@ impl std::fmt::Debug for AdmittedGroundTerm {
 
 impl AdmittedGroundTerm {
     /// A resident caller may take a term only when no external child lease exists.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "refused extraction returns the intact original term and its child-box grant; no allocation may be introduced after refusal"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "refused extraction returns the intact original term and its child-box grant; no allocation may be introduced after refusal"
     )]
     fn try_into_resident(self) -> Result<GroundTerm, Self> {
         if self

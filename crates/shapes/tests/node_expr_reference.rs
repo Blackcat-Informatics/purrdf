@@ -686,6 +686,7 @@ impl Reference {
     }
 
     /// `evalExpr(expr, focusGraph, focusNode, {})`.
+    #[allow(clippy::too_many_lines)]
     fn eval(&self, expr: &Expr, focus: &Term) -> Output {
         match expr {
             // §3.1.1-§3.1.3: "evalExpr(expr, focusGraph, focusNode, scope) -> [expr]".

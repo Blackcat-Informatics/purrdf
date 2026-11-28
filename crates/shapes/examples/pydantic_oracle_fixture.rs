@@ -8,12 +8,11 @@ use std::error::Error;
 
 #[path = "support/holder.rs"]
 mod holder;
-#[expect(
+#[allow(
     dead_code,
     unused_imports,
     unused_macros,
-    unused_macro_rules,
-    reason = "this standalone target uses only part of the crate's shared JSON model"
+    reason = "each target uses part of the crate's shared JSON model"
 )]
 #[path = "../src/json_model.rs"]
 mod json_model;
@@ -21,7 +20,6 @@ mod json_model;
 mod json_text;
 #[path = "support/metaschemas.rs"]
 mod metaschemas;
-#[expect(dead_code, reason = "this oracle uses a subset of the shared fixture")]
 #[path = "support/oracle.rs"]
 mod oracle;
 #[path = "support/shacl_lists.rs"]

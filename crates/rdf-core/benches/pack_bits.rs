@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
 //! Report-only latency harness for the succinct `pack` primitives
 //! (`crate::ir::pack::bits`): [`IntVector::get`], and [`RankSelect`]'s
 //! `rank1`/`select1`, each at a few sizes. No timing/speedup assertion —

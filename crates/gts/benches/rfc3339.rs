@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
 //! RFC 3339 `modified` stamps: parse and format.
 //!
 //! Report-only, `cargo bench -p purrdf-gts --bench rfc3339` (the `make bench`
@@ -13,10 +17,7 @@ use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main, black_b
 // `cargo clippy --all-targets` builds bench targets with `cfg(test)`, which
 // pulls the module's own unit tests in here as well; they run from the library,
 // so here they are unused by construction.
-#[expect(
-    unused_imports,
-    reason = "the benchmark uses the production parser and omits unmeasured helpers and test imports"
-)]
+#[allow(dead_code, unused_imports)]
 #[path = "../src/rfc3339.rs"]
 mod rfc3339;
 

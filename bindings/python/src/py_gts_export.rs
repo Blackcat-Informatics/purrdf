@@ -250,7 +250,7 @@ fn columnar_error(error: purrdf::GtsColumnarError) -> PyErr {
 /// `read_limits=None` preserves v4 behavior; hostile input supplies limits.
 #[pyfunction]
 #[pyo3(signature = (data, *, blob_limits, read_limits = None))]
-#[expect(
+#[allow(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts optional Python borrows by value"
 )]
@@ -284,7 +284,7 @@ fn gts_columnar_rows_from_bytes<'py>(
 /// `read_limits=None` preserves v4 behavior; hostile input supplies limits.
 #[pyfunction]
 #[pyo3(signature = (data, *, blob_limits, read_limits = None))]
-#[expect(
+#[allow(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts optional Python borrows by value"
 )]

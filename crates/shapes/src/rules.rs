@@ -90,6 +90,12 @@ const SHAPES_BLANK_SCOPE: ::purrdf_rdf::BlankScope = ::purrdf_rdf::BlankScope(1)
 
 /// What a SHACL rule executes.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the model mirrors the SHACL rules vocabulary: a TripleRule head is three \
+              inline node expressions, a SPARQLRule head one query string; boxing either \
+              would obscure the 1:1 mapping with sh:subject/predicate/object vs sh:construct"
+)]
 pub enum RuleBody {
     /// A `sh:TripleRule`. SHACL 1.2 Inference Rules: "Let S, P and O be the sets of
     /// nodes produced by evaluating the node expressions that are the values of

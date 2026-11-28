@@ -142,7 +142,7 @@ impl GovernedOutcome {
     /// # Errors
     ///
     /// The [`BudgetExhausted`] outcome, when a governor stopped this execution.
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "the Err side is a typed OUTCOME carrying the execution's receipt — two \
                   ResourceVectors of ceilings and consumption — not a failure path; boxing \

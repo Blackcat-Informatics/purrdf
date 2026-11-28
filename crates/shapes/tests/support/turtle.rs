@@ -10,10 +10,7 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![expect(
-    dead_code,
-    reason = "each test or benchmark includes a different subset of this shared fixture"
-)]
+#![allow(dead_code, unreachable_pub)]
 
 use std::sync::Arc;
 
@@ -25,19 +22,19 @@ use purrdf_shapes::shapes::{Constraint, PropertyShape, Shape, Shapes};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 /// The shapes graph `prefixes` + `shapes_ttl` reads as, or the load error's text.
-pub(crate) fn load(prefixes: &str, shapes_ttl: &str) -> Result<Shapes, String> {
+pub fn load(prefixes: &str, shapes_ttl: &str) -> Result<Shapes, String> {
     parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).map_err(|error| error.to_string())
 }
 
 /// The shapes graph `prefixes` + `shapes_ttl` reads as; a load error fails the test.
 #[track_caller]
-pub(crate) fn loads(prefixes: &str, shapes_ttl: &str) -> Shapes {
+pub fn loads(prefixes: &str, shapes_ttl: &str) -> Shapes {
     load(prefixes, shapes_ttl).unwrap_or_else(|error| panic!("the shapes graph must load: {error}"))
 }
 
 /// Inspect the original property bodies of a fixture, including identity edges.
 /// This asserts the parser's representation without exporting copied definitions.
-pub(crate) fn properties<'a>(
+pub fn properties<'a>(
     shapes: &'a Shapes,
     shape: &'a Shape,
 ) -> impl Iterator<Item = &'a PropertyShape> {
@@ -66,7 +63,7 @@ pub(crate) fn properties<'a>(
 /// [`loads`] for the valid neighbour of a refused shapes graph: the loading
 /// counterpart a refusal test pairs with each [`refused`].
 #[track_caller]
-pub(crate) fn loads_neighbour(prefixes: &str, shapes_ttl: &str) -> Shapes {
+pub fn loads_neighbour(prefixes: &str, shapes_ttl: &str) -> Shapes {
     load(prefixes, shapes_ttl)
         .unwrap_or_else(|error| panic!("the valid neighbour must load: {error}"))
 }
@@ -74,7 +71,7 @@ pub(crate) fn loads_neighbour(prefixes: &str, shapes_ttl: &str) -> Shapes {
 /// Require the shapes graph `prefixes` + `shapes_ttl` to be refused at load with
 /// an error that mentions `needle`.
 #[track_caller]
-pub(crate) fn refused(prefixes: &str, shapes_ttl: &str, needle: &str) {
+pub fn refused(prefixes: &str, shapes_ttl: &str, needle: &str) {
     let error = load(prefixes, shapes_ttl).expect_err("the shapes graph must be refused at load");
     assert!(
         error.contains(needle),
@@ -85,7 +82,7 @@ pub(crate) fn refused(prefixes: &str, shapes_ttl: &str, needle: &str) {
 /// The load error's text for the shapes graph `prefixes` + `shapes_ttl`, which
 /// must be refused; a graph that loads fails the test showing its source.
 #[track_caller]
-pub(crate) fn refusal_text(prefixes: &str, shapes_ttl: &str) -> String {
+pub fn refusal_text(prefixes: &str, shapes_ttl: &str) -> String {
     match load(prefixes, shapes_ttl) {
         Ok(_) => panic!("the shapes graph must be refused:\n{prefixes}{shapes_ttl}"),
         Err(error) => error,
@@ -93,14 +90,14 @@ pub(crate) fn refusal_text(prefixes: &str, shapes_ttl: &str) -> String {
 }
 
 /// The data graph `prefixes` + `data_ttl` reads as.
-pub(crate) fn data(prefixes: &str, data_ttl: &str) -> Arc<RdfDataset> {
+pub fn data(prefixes: &str, data_ttl: &str) -> Arc<RdfDataset> {
     parse_turtle_to_dataset(&format!("{prefixes}{data_ttl}"), None).expect("data parses")
 }
 
 /// Validate the data graph `data_ttl` against the shapes graph `shapes_ttl`, both
 /// read under `prefixes`.
 #[track_caller]
-pub(crate) fn validate(prefixes: &str, shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
+pub fn validate(prefixes: &str, shapes_ttl: &str, data_ttl: &str) -> ValidationReport {
     validate_dataset_with_shapes_graph(
         &data(prefixes, data_ttl),
         &loads(prefixes, shapes_ttl),
@@ -111,7 +108,7 @@ pub(crate) fn validate(prefixes: &str, shapes_ttl: &str, data_ttl: &str) -> Vali
 
 /// The one `sh:expression` the shapes graph `prefixes` + `shapes_ttl` declares;
 /// a fixture that declares none or several fails the test.
-pub(crate) fn expression_of(prefixes: &str, shapes_ttl: &str) -> NodeExpr {
+pub fn expression_of(prefixes: &str, shapes_ttl: &str) -> NodeExpr {
     let shapes = parse_shapes(&format!("{prefixes}{shapes_ttl}"), None).expect("shapes parse");
     let mut found: Vec<NodeExpr> = shapes
         .node_shapes
@@ -141,7 +138,7 @@ pub(crate) fn expression_of(prefixes: &str, shapes_ttl: &str) -> NodeExpr {
 
 /// The rendered error the shapes graph `prefixes` + `shapes_ttl` is refused
 /// with at shapes-load; a graph that loads fails the test.
-pub(crate) fn load_error(prefixes: &str, shapes_ttl: &str) -> String {
+pub fn load_error(prefixes: &str, shapes_ttl: &str) -> String {
     parse_shapes(&format!("{prefixes}{shapes_ttl}"), None)
         .expect_err("the fixture must be refused at shapes-load")
         .to_string()
@@ -149,7 +146,7 @@ pub(crate) fn load_error(prefixes: &str, shapes_ttl: &str) -> String {
 
 /// The shapes-graph lint report of the Turtle document `prefixes` + `shapes_ttl`,
 /// read with its document prefix map and no imports.
-pub(crate) fn lint_of(prefixes: &str, shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
+pub fn lint_of(prefixes: &str, shapes_ttl: &str) -> purrdf_shapes::lint::LintReport {
     let document =
         purrdf_shapes::text_ingest::parse_turtle_document(&format!("{prefixes}{shapes_ttl}"), None)
             .expect("parses");

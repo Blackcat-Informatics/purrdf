@@ -126,7 +126,13 @@ pub(crate) fn update_portable(mut register: u32, data: &[u8]) -> u32 {
 // degree below 128 — which is then XORed into the data it was folded over.
 
 /// `x^n mod P`, bit d = x^d.
-#[cfg(any(test, target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg_attr(
+    not(any(target_arch = "x86_64", target_arch = "aarch64")),
+    allow(
+        dead_code,
+        reason = "only the x86-64 and AArch64 folding kernels read these"
+    )
+)]
 const fn x_pow_mod(n: u32) -> u64 {
     let mut remainder: u64 = 1;
     let mut i = 0;
@@ -141,7 +147,13 @@ const fn x_pow_mod(n: u32) -> u64 {
 }
 
 /// `floor(x^64 / P)` by long division, bit d = x^d (degree 32).
-#[cfg(any(test, target_arch = "x86_64"))]
+#[cfg_attr(
+    not(any(target_arch = "x86_64", target_arch = "aarch64")),
+    allow(
+        dead_code,
+        reason = "only the x86-64 and AArch64 folding kernels read these"
+    )
+)]
 const fn barrett_quotient() -> u64 {
     let mut remainder: u128 = 1 << 64;
     let mut quotient: u64 = 0;
@@ -156,13 +168,32 @@ const fn barrett_quotient() -> u64 {
     quotient
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg_attr(
+    not(any(target_arch = "x86_64", target_arch = "aarch64")),
+    allow(
+        dead_code,
+        reason = "only the x86-64 and AArch64 folding kernels read these"
+    )
+)]
 const fn frame64(polynomial: u64) -> u64 {
     polynomial.reverse_bits()
 }
 
 /// The folding constants, each as a reflected 64-bit operand.
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg_attr(
+    not(any(target_arch = "x86_64", target_arch = "aarch64")),
+    allow(
+        dead_code,
+        reason = "only the x86-64 and AArch64 folding kernels read these"
+    )
+)]
+#[cfg_attr(
+    target_arch = "aarch64",
+    allow(
+        dead_code,
+        reason = "the AArch64 kernel reduces with crc32x, not Barrett"
+    )
+)]
 #[derive(Clone, Copy)]
 pub(crate) struct FoldConstants {
     /// Fold four accumulators forward 512 bits: `[for H, for L]`.
@@ -170,30 +201,28 @@ pub(crate) struct FoldConstants {
     /// Fold one accumulator forward 128 bits: `[for H, for L]`.
     pub(crate) by_128: [u64; 2],
     /// Reduce the 128-bit accumulator times x^32 to 96 bits: `x^95 mod P`.
-    #[cfg(target_arch = "x86_64")]
     pub(crate) to_96: u64,
     /// Reduce 96 bits to 64: `x^63 mod P`.
-    #[cfg(target_arch = "x86_64")]
     pub(crate) to_64: u64,
     /// Barrett's `floor(x^64 / P)`.
-    #[cfg(target_arch = "x86_64")]
     pub(crate) mu: u64,
     /// `P` itself, with its x^32 term.
-    #[cfg(target_arch = "x86_64")]
     pub(crate) polynomial: u64,
 }
 
-#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[cfg_attr(
+    not(any(target_arch = "x86_64", target_arch = "aarch64")),
+    allow(
+        dead_code,
+        reason = "only the x86-64 and AArch64 folding kernels read these"
+    )
+)]
 pub(crate) const FOLD: FoldConstants = FoldConstants {
     by_512: [frame64(x_pow_mod(512 + 63)), frame64(x_pow_mod(512 - 1))],
     by_128: [frame64(x_pow_mod(128 + 63)), frame64(x_pow_mod(128 - 1))],
-    #[cfg(target_arch = "x86_64")]
     to_96: frame64(x_pow_mod(95)),
-    #[cfg(target_arch = "x86_64")]
     to_64: frame64(x_pow_mod(63)),
-    #[cfg(target_arch = "x86_64")]
     mu: frame64(barrett_quotient()),
-    #[cfg(target_arch = "x86_64")]
     polynomial: frame64(POLYNOMIAL),
 };
 

@@ -3,21 +3,25 @@
 
 //! Where the vendored shexTest suite lives, and its ShExC schemas in a directory.
 
+// The module is included into more than one integration-test binary, and no single binary
+// uses every helper; an unused-here helper is used there.
+#![allow(dead_code, unreachable_pub)]
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The vendored shexTest v2.1.0 suite, `vectors/shexTest`.
-pub(crate) fn shex_test() -> PathBuf {
+pub fn shex_test() -> PathBuf {
     purrdf_testkit::paths::workspace_root!().join("vectors/shexTest")
 }
 
 /// The suite's schema directory, `vectors/shexTest/schemas`.
-pub(crate) fn schemas() -> PathBuf {
+pub fn schemas() -> PathBuf {
     shex_test().join("schemas")
 }
 
 /// Every `.shex` file directly under `dir`, sorted.
-pub(crate) fn shex_files(dir: &Path) -> Vec<PathBuf> {
+pub fn shex_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .unwrap_or_else(|e| panic!("read {}: {e}", dir.display()))
         .filter_map(|entry| {

@@ -57,6 +57,8 @@
 //!
 //! Fixture IRIs are under `example.org`: PurRDF mints no vocabulary IRIs.
 
+#![allow(clippy::too_many_lines)]
+
 use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;

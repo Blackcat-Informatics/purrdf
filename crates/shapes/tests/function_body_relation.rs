@@ -40,7 +40,6 @@
 //! triple" — so it is tested in all three of its states: declared-and-unregistered
 //! (refused, by name), undeclared (ordinary data), declared-and-registered (resolves).
 
-#[expect(dead_code, reason = "this test uses one of the two shared fixtures")]
 #[path = "support/relation.rs"]
 mod relation;
 

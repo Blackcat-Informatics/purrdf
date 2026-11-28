@@ -1604,10 +1604,8 @@ pub struct SumChain {
 
 impl SumChain {
     /// Add one operand shape and return this addition's incremental cost.
-    #[expect(
-        clippy::inline_always,
-        reason = "keep the recurrence in its caller without moving state across each operand call"
-    )]
+    // Keep the extracted recurrence in its caller, without per-operand state/ABI traffic.
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub fn push(&mut self, value: Shape) -> Cost {
         self.count = self.count.saturating_add(1);

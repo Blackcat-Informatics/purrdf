@@ -2733,6 +2733,11 @@ impl<'q> ShapeWalk<'q> {
     /// order; a node's own state (the context and frame a sub-`SELECT` opens, the
     /// `GRAPH` around an operand, the atoms a `LATERAL`'s left operand adds) is set
     /// when the node is entered and put back when its operands are done.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one arm per algebra node, each the node's own rule; split, the rules \
+                  would be read in two places"
+    )]
     fn walk(
         &mut self,
         pattern: &'q GraphPattern,

@@ -623,10 +623,7 @@ pub struct EvidenceBudgetExhausted<R> {
 /// of which index generation answered and whether it was whole — so it is the
 /// wider of the two. Boxing either receipt to please the ratio would put a heap
 /// allocation on the hot arm to save stack width on a cold one.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the outcome moves the engine result and carries its refusal receipt without allocating a wrapper"
-)]
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum InternedGoverned<R> {
     /// The execution completed within budget; `value` is the visitor's return.

@@ -64,10 +64,7 @@ impl<T> SizedTypeProperties for T {}
 
 /// Primary hash function, used to select the initial bucket to probe from.
 #[inline]
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "a 32-bit bucket index deliberately uses the low hash word"
-)]
+#[expect(clippy::cast_possible_truncation)]
 fn h1(hash: u64) -> usize {
     // On 32-bit platforms we simply ignore the higher hash bits.
     hash as usize
@@ -775,10 +772,7 @@ impl<T, A: Allocator> RawTable<T, A> {
     }
 
     /// Erases an element from the table, dropping it in place.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "erasing invalidates the bucket, so the caller surrenders its handle"
-    )]
+    #[expect(clippy::needless_pass_by_value)]
     pub(crate) unsafe fn erase(&mut self, item: Bucket<T>) {
         unsafe {
             // Erase the element from the table first since drop might panic.
@@ -790,10 +784,7 @@ impl<T, A: Allocator> RawTable<T, A> {
     /// Removes an element from the table, returning it.
     ///
     /// This also returns an index to the newly free bucket.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "removal invalidates the input handle and returns the newly free index"
-    )]
+    #[expect(clippy::needless_pass_by_value)]
     pub(crate) unsafe fn remove(&mut self, item: Bucket<T>) -> (T, usize) {
         unsafe {
             self.erase_no_drop(&item);
@@ -805,10 +796,7 @@ impl<T, A: Allocator> RawTable<T, A> {
     ///
     /// This also returns an index to the newly free bucket
     /// and the former `Tag` for that bucket.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "removal invalidates the input handle and returns the former tag separately"
-    )]
+    #[expect(clippy::needless_pass_by_value)]
     pub(crate) unsafe fn remove_tagged(&mut self, item: Bucket<T>) -> (T, usize, Tag) {
         unsafe {
             let index = self.bucket_index(&item);
@@ -2884,10 +2872,7 @@ impl RawTableInner {
     /// * The [`RawTableInner`] must have properly initialized control bytes.
     ///
     /// [`undefined behavior`]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    #[expect(
-        clippy::inline_always,
-        reason = "reservation folds into the insertion caller before taking the rehash path"
-    )]
+    #[expect(clippy::inline_always)]
     #[inline(always)]
     unsafe fn reserve_rehash_inner<A>(
         &mut self,
@@ -3045,10 +3030,7 @@ impl RawTableInner {
     /// more information.
     ///
     /// [`undefined behavior`]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    #[expect(
-        clippy::inline_always,
-        reason = "the caller owns the allocation and rehash checks and inlines the resize orchestration"
-    )]
+    #[expect(clippy::inline_always)]
     #[inline(always)]
     unsafe fn resize_inner<A: Allocator>(
         &mut self,
@@ -3823,10 +3805,7 @@ impl<T> RawIterRange<T> {
     ///   in the table.
     ///
     /// [`Undefined Behavior`]: https://doc.rust-lang.org/reference/behavior-considered-undefined.html
-    #[expect(
-        clippy::while_let_on_iterator,
-        reason = "the next group replaces the cursor after this loop consumes its live buckets"
-    )]
+    #[expect(clippy::while_let_on_iterator)]
     unsafe fn fold_impl<F, B>(mut self, mut n: usize, mut acc: B, mut f: F) -> B
     where
         F: FnMut(B, Bucket<T>) -> B,

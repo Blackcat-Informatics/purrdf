@@ -270,9 +270,12 @@ impl RingBuffer {
             .checked_add(1)
             .expect("ringbuffer capacity overflow");
 
-        // Check the addressing bound on hosts with narrow pointers.
-        #[cfg(any(target_pointer_width = "16", target_pointer_width = "32"))]
-        debug_assert!(new_cap < isize::MAX as usize);
+        // Check that the capacity isn't bigger than isize::MAX, which is the max allowed by LLVM, or that
+        // we are on a >= 64 bit system which will never allow that much memory to be allocated
+        #[allow(clippy::assertions_on_constants)]
+        {
+            debug_assert!(usize::BITS >= 64 || new_cap < isize::MAX as usize);
+        }
 
         // Physical allocation includes WILDCOPY_OVERLENGTH bytes of trailing
         // slack — see the const's doc comment for rationale. `new_cap` itself
@@ -321,6 +324,29 @@ impl RingBuffer {
         self.cap = new_cap;
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn push_back(&mut self, byte: u8) {
+        self.reserve(1);
+
+        // SAFETY: Upholds invariant 2 by writing initialized memory
+        unsafe { self.buf.as_ptr().add(self.tail).write(byte) };
+        // SAFETY: Upholds invariant 3 by wrapping `tail` around
+        self.tail = self.wrap(self.tail + 1);
+    }
+
+    /// Fetch the byte stored at the selected index from the buffer, returning it, or
+    /// `None` if the index is out of bounds.
+    #[allow(dead_code)]
+    pub(crate) fn get(&self, idx: usize) -> Option<u8> {
+        if idx < self.len() {
+            // SAFETY: Establishes invariants on memory being initialized and the range being in-bounds
+            // (Invariants 2 & 3)
+            let idx = self.wrap(self.head + idx);
+            Some(unsafe { self.buf.as_ptr().add(idx).read() })
+        } else {
+            None
+        }
+    }
     /// Append the provided data to the end of `self`.
     ///
     /// `#[inline]` so the flat fast path below folds into the hot
@@ -530,6 +556,26 @@ impl RingBuffer {
         )
     }
 
+    /// Copies elements from the provided range to the end of the buffer.
+    #[allow(dead_code)]
+    pub(crate) fn extend_from_within(&mut self, start: usize, len: usize) {
+        if start + len > self.len() {
+            panic!(
+                "Calls to this functions must respect start ({}) + len ({}) <= self.len() ({})!",
+                start,
+                len,
+                self.len()
+            );
+        }
+
+        self.reserve(len);
+
+        // SAFETY: Requirements checked:
+        // 1. explicitly checked above, resulting in a panic if it does not hold
+        // 2. explicitly reserved enough memory
+        unsafe { self.extend_from_within_unchecked(start, len) }
+    }
+
     /// Copies data from the provided range to the end of the buffer, without
     /// first verifying that the unoccupied capacity is available.
     ///
@@ -630,86 +676,14 @@ impl RingBuffer {
                 // and source/destination regions do not overlap.
                 unsafe { simd_copy::copy_bytes_overshooting(src, dst, len - after_tail) }
             }
-        } else if self.head + start >= self.cap {
-            // Continuous read section and destination section:
-            //
-            //                  T           H
-            // Read:  XXSSSSXXXX____________XX
-            // Write: __________DDDD__________
-            //
-            // H: Head position (first readable byte)
-            // T: Tail position (first writable byte)
-            // X: Uninvolved bytes in the readable section
-            // S: Source bytes, to be copied to D bytes
-            // D: Destination bytes, going to be copied from S bytes
-            // _: Uninvolved bytes in the writable section
-
-            let start = self.wrap(self.head + start);
-
-            let src = (
-                // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
-                unsafe { self.buf.as_ptr().add(start) }.cast_const(),
-                // Src ends at `tail`; extending by WILDCOPY_OVERLENGTH reads at
-                // most into the trailing slack region of the allocation.
-                (self.tail - start) + WILDCOPY_OVERLENGTH,
-            );
-
-            let dst = (
-                // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
-                unsafe { self.buf.as_ptr().add(self.tail) },
-                // Dst length is bounded by `head` — wildcopy overshoot past `head`
-                // would clobber readable data, so the slack does not apply here.
-                self.head - self.tail,
-            );
-
-            // SAFETY: `src` points at initialized data, `dst` points to writable memory,
-            // and the `(ptr, len)` capacities are sized for any rounded-up wildcopy amount
-            // (`copy_len.next_multiple_of(active_chunk)`) selected by `copy_bytes_overshooting`,
-            // and source/destination regions do not overlap.
-            unsafe { simd_copy::copy_bytes_overshooting(src, dst, len) }
         } else {
-            // Possibly non continuous read section and continuous destination section:
-            //
-            //            T           H
-            // Read:  XXXX____________XXSSSSXX
-            // Write: ____DDDD________________
-            //
-            // H: Head position (first readable byte)
-            // T: Tail position (first writable byte)
-            // X: Uninvolved bytes in the readable section
-            // S: Source bytes, to be copied to D bytes
-            // D: Destination bytes, going to be copied from S bytes
-            // _: Uninvolved bytes in the writable section
-
-            let after_start = usize::min(len, self.cap - self.head - start);
-
-            let src = (
-                // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
-                unsafe { self.buf.as_ptr().add(self.head + start) }.cast_const(),
-                // Src ends at `cap`; the WILDCOPY_OVERLENGTH slack region is
-                // physically reachable from this read.
-                (self.cap - self.head - start) + WILDCOPY_OVERLENGTH,
-            );
-
-            let dst = (
-                // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
-                unsafe { self.buf.as_ptr().add(self.tail) },
-                // Dst length is bounded by `head` — no slack room to inflate.
-                self.head - self.tail,
-            );
-
-            // SAFETY: `src` points at initialized data, `dst` points to writable memory,
-            // and the `(ptr, len)` capacities are sized for any rounded-up wildcopy amount
-            // (`copy_len.next_multiple_of(active_chunk)`) selected by `copy_bytes_overshooting`,
-            // and source/destination regions do not overlap.
-            unsafe { simd_copy::copy_bytes_overshooting(src, dst, after_start) }
-
-            if after_start < len {
-                // The read section was not continuous:
+            #[allow(clippy::collapsible_else_if)]
+            if self.head + start >= self.cap {
+                // Continuous read section and destination section:
                 //
-                //                T           H
-                // Read:  SSXXXXXX____________XXSS
-                // Write: ________DDDD____________
+                //                  T           H
+                // Read:  XXSSSSXXXX____________XX
+                // Write: __________DDDD__________
                 //
                 // H: Head position (first readable byte)
                 // T: Tail position (first writable byte)
@@ -718,26 +692,101 @@ impl RingBuffer {
                 // D: Destination bytes, going to be copied from S bytes
                 // _: Uninvolved bytes in the writable section
 
+                let start = self.wrap(self.head + start);
+
                 let src = (
-                    self.buf.as_ptr().cast_const(),
-                    // Src ends at `tail`; inflate by WILDCOPY_OVERLENGTH to let
-                    // the SIMD fast paths fire on small `len - after_start`.
-                    self.tail + WILDCOPY_OVERLENGTH,
+                    // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
+                    unsafe { self.buf.as_ptr().add(start) }.cast_const(),
+                    // Src ends at `tail`; extending by WILDCOPY_OVERLENGTH reads at
+                    // most into the trailing slack region of the allocation.
+                    (self.tail - start) + WILDCOPY_OVERLENGTH,
                 );
 
                 let dst = (
-                    // SAFETY: we are still within the memory range of `buf`
-                    unsafe { dst.0.add(after_start) },
-                    // Dst length bounded by `head` — overshoot past `head`
-                    // would clobber readable data, so cannot inflate.
-                    dst.1 - after_start,
+                    // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
+                    unsafe { self.buf.as_ptr().add(self.tail) },
+                    // Dst length is bounded by `head` — wildcopy overshoot past `head`
+                    // would clobber readable data, so the slack does not apply here.
+                    self.head - self.tail,
                 );
 
                 // SAFETY: `src` points at initialized data, `dst` points to writable memory,
                 // and the `(ptr, len)` capacities are sized for any rounded-up wildcopy amount
                 // (`copy_len.next_multiple_of(active_chunk)`) selected by `copy_bytes_overshooting`,
                 // and source/destination regions do not overlap.
-                unsafe { simd_copy::copy_bytes_overshooting(src, dst, len - after_start) }
+                unsafe { simd_copy::copy_bytes_overshooting(src, dst, len) }
+            } else {
+                // Possibly non continuous read section and continuous destination section:
+                //
+                //            T           H
+                // Read:  XXXX____________XXSSSSXX
+                // Write: ____DDDD________________
+                //
+                // H: Head position (first readable byte)
+                // T: Tail position (first writable byte)
+                // X: Uninvolved bytes in the readable section
+                // S: Source bytes, to be copied to D bytes
+                // D: Destination bytes, going to be copied from S bytes
+                // _: Uninvolved bytes in the writable section
+
+                let after_start = usize::min(len, self.cap - self.head - start);
+
+                let src = (
+                    // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
+                    unsafe { self.buf.as_ptr().add(self.head + start) }.cast_const(),
+                    // Src ends at `cap`; the WILDCOPY_OVERLENGTH slack region is
+                    // physically reachable from this read.
+                    (self.cap - self.head - start) + WILDCOPY_OVERLENGTH,
+                );
+
+                let dst = (
+                    // SAFETY: `len <= isize::MAX` and fits the memory range of `buf`
+                    unsafe { self.buf.as_ptr().add(self.tail) },
+                    // Dst length is bounded by `head` — no slack room to inflate.
+                    self.head - self.tail,
+                );
+
+                // SAFETY: `src` points at initialized data, `dst` points to writable memory,
+                // and the `(ptr, len)` capacities are sized for any rounded-up wildcopy amount
+                // (`copy_len.next_multiple_of(active_chunk)`) selected by `copy_bytes_overshooting`,
+                // and source/destination regions do not overlap.
+                unsafe { simd_copy::copy_bytes_overshooting(src, dst, after_start) }
+
+                if after_start < len {
+                    // The read section was not continuous:
+                    //
+                    //                T           H
+                    // Read:  SSXXXXXX____________XXSS
+                    // Write: ________DDDD____________
+                    //
+                    // H: Head position (first readable byte)
+                    // T: Tail position (first writable byte)
+                    // X: Uninvolved bytes in the readable section
+                    // S: Source bytes, to be copied to D bytes
+                    // D: Destination bytes, going to be copied from S bytes
+                    // _: Uninvolved bytes in the writable section
+
+                    let src = (
+                        self.buf.as_ptr().cast_const(),
+                        // Src ends at `tail`; inflate by WILDCOPY_OVERLENGTH to let
+                        // the SIMD fast paths fire on small `len - after_start`.
+                        self.tail + WILDCOPY_OVERLENGTH,
+                    );
+
+                    let dst = (
+                        // SAFETY: we are still within the memory range of `buf`
+                        unsafe { dst.0.add(after_start) },
+                        // Dst length bounded by `head` — overshoot past `head`
+                        // would clobber readable data, so cannot inflate.
+                        dst.1 - after_start,
+                    );
+
+                    // SAFETY: `src` points at initialized data, `dst` points to writable memory,
+                    // and the `(ptr, len)` capacities are sized for any rounded-up wildcopy amount
+                    // (`copy_len.next_multiple_of(active_chunk)`) selected by `copy_bytes_overshooting`,
+                    // and source/destination regions do not overlap.
+                    unsafe { simd_copy::copy_bytes_overshooting(src, dst, len - after_start) }
+                }
             }
         }
 
@@ -795,6 +844,7 @@ impl RingBuffer {
         Ok(())
     }
 
+    #[allow(dead_code)]
     /// This function is functionally the same as [RingBuffer::extend_from_within_unchecked],
     /// but it does not contain any branching operations.
     ///
@@ -1082,6 +1132,65 @@ impl super::buffer_backend::BufferBackend for RingBuffer {
         Ok(())
     }
 
+    /// AVX2-tier override — 32-byte ymm match-copy for `offset >= 32`. Same
+    /// contiguity contract; mirrors `FlatBuf::exec_sequence_inline_avx2`.
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn exec_sequence_inline_avx2(
+        &mut self,
+        lit_src: *const u8,
+        lit_length: usize,
+        offset: usize,
+        match_length: usize,
+    ) -> Result<(), super::errors::ExecuteSequencesError> {
+        use super::buffer_backend::sequence_output_fits;
+        use super::exec_sequence_inline::x86::{
+            copy16, overlap_copy8, wildcopy_no_overlap, wildcopy_no_overlap_avx2,
+            wildcopy_overlap_8byte_stride,
+        };
+        const MAX_WILDCOPY_OVERSHOOT: usize = 31;
+        let cap = self.cap;
+        let tail = self.tail;
+        let total =
+            sequence_output_fits(lit_length, match_length, tail, cap, MAX_WILDCOPY_OVERSHOOT)?;
+        debug_assert!(offset >= 1);
+        debug_assert!(match_length >= 1);
+        // See the non-avx2 arm: gate admits the unwrapped run and the
+        // contiguous wrapped subset; assert the match-source bound that applies.
+        debug_assert!(
+            if self.head <= tail {
+                (tail - self.head) + lit_length >= offset
+            } else {
+                offset <= tail + lit_length
+            },
+            "RingBuffer::exec_sequence_inline_avx2: match source outside contiguous live region",
+        );
+
+        unsafe {
+            let base_mut = self.buf.as_ptr();
+            let op_lit = base_mut.add(tail);
+            copy16(op_lit, lit_src);
+            if lit_length > 16 {
+                wildcopy_no_overlap(op_lit.add(16), lit_src.add(16), lit_length - 16);
+            }
+            let op_match = base_mut.add(tail + lit_length);
+            let match_src = base_mut.cast_const().add(tail + lit_length - offset);
+            if offset >= 32 {
+                wildcopy_no_overlap_avx2(op_match, match_src, match_length);
+            } else if offset >= 16 {
+                wildcopy_no_overlap(op_match, match_src, match_length);
+            } else {
+                let (op2, ip2) = overlap_copy8(op_match, match_src, offset);
+                if match_length > 8 {
+                    wildcopy_overlap_8byte_stride(op2, ip2, match_length - 8);
+                }
+            }
+            self.inline_exec_commit(tail + total);
+        }
+        Ok(())
+    }
+
     #[inline]
     fn new() -> Self {
         Self::new()
@@ -1174,12 +1283,106 @@ impl Drop for RingBuffer {
     }
 }
 
+#[allow(dead_code)]
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn copy_without_checks(
+    m1_ptr: *const u8,
+    m2_ptr: *const u8,
+    f1_ptr: *mut u8,
+    f2_ptr: *mut u8,
+    m1_in_f1: usize,
+    m2_in_f1: usize,
+    m1_in_f2: usize,
+    m2_in_f2: usize,
+) {
+    unsafe {
+        f1_ptr.copy_from_nonoverlapping(m1_ptr, m1_in_f1);
+        f1_ptr
+            .add(m1_in_f1)
+            .copy_from_nonoverlapping(m2_ptr, m2_in_f1);
+
+        f2_ptr.copy_from_nonoverlapping(m1_ptr.add(m1_in_f1), m1_in_f2);
+        f2_ptr
+            .add(m1_in_f2)
+            .copy_from_nonoverlapping(m2_ptr.add(m2_in_f1), m2_in_f2);
+    }
+}
+
+/// Reference implementation used only by the `copy_with_nobranch_check`
+/// equivalence test (`copy_with_nobranch_check_matches_checked_for_all_valid_case_masks`).
+/// Production code never calls this — `extend_from_within_unchecked_branchless`
+/// dispatches to `copy_with_nobranch_check` directly on x86.
+///
+/// Like its branchless sibling, this helper does **not** inflate the
+/// `src.1` / `dst.1` capacities passed to `simd_copy::copy_bytes_overshooting`
+/// by `WILDCOPY_OVERLENGTH`. The exact-fit lengths mean `simd_copy`'s
+/// `min_buffer_size >= 16` SIMD fast paths cannot trigger here — short
+/// copies always fall through to the inline byte / overlapping-u64 tail
+/// instead of `single_op_copy_16`. This is intentional for parity with the
+/// production branchless path (which has the same property for the same
+/// per-pointer head/tail reason documented on
+/// `extend_from_within_unchecked_branchless`).
+#[allow(dead_code)]
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn copy_with_checks(
+    m1_ptr: *const u8,
+    m2_ptr: *const u8,
+    f1_ptr: *mut u8,
+    f2_ptr: *mut u8,
+    m1_in_f1: usize,
+    m2_in_f1: usize,
+    m1_in_f2: usize,
+    m2_in_f2: usize,
+) {
+    unsafe {
+        let m1_src_cap = m1_in_f1 + m1_in_f2;
+        let m2_src_cap = m2_in_f1 + m2_in_f2;
+        let f1_dst_cap = m1_in_f1 + m2_in_f1;
+        let f2_dst_cap = m1_in_f2 + m2_in_f2;
+
+        if m1_in_f1 != 0 {
+            simd_copy::copy_bytes_overshooting(
+                (m1_ptr, m1_src_cap),
+                (f1_ptr, f1_dst_cap),
+                m1_in_f1,
+            );
+        }
+        if m2_in_f1 != 0 {
+            simd_copy::copy_bytes_overshooting(
+                (m2_ptr, m2_src_cap),
+                (f1_ptr.add(m1_in_f1), m2_in_f1),
+                m2_in_f1,
+            );
+        }
+
+        if m1_in_f2 != 0 {
+            simd_copy::copy_bytes_overshooting(
+                (m1_ptr.add(m1_in_f1), m1_in_f2),
+                (f2_ptr, f2_dst_cap),
+                m1_in_f2,
+            );
+        }
+        if m2_in_f2 != 0 {
+            simd_copy::copy_bytes_overshooting(
+                (m2_ptr.add(m2_in_f1), m2_in_f2),
+                (f2_ptr.add(m1_in_f2), m2_in_f2),
+                m2_in_f2,
+            );
+        }
+    }
+}
+
 /// 16-way case dispatch over the four `(m1|m2)_in_f(1|2)` non-empty
 /// combinations, used by `extend_from_within_unchecked_branchless` on x86
 /// to avoid the branch-misprediction pattern of the unconditional
-/// `extend_from_within_unchecked` path.
+/// `extend_from_within_unchecked` path. `#[allow(dead_code)]` because the
+/// only caller is gated to x86 by `decode_buffer::use_branchless_wildcopy`
+/// — on aarch64 / wasm / etc. rustc sees this as unreachable.
 ///
-/// The `(ptr, len)` tuples passed to `simd_copy::copy_bytes_overshooting`
+/// **WILDCOPY_OVERLENGTH note:** like `copy_with_checks` above, the
+/// `(ptr, len)` tuples passed to `simd_copy::copy_bytes_overshooting`
 /// below are exact-fit. The caller (the branchless path) does not thread
 /// per-pointer head/tail context through to here, so we cannot safely
 /// inflate by `WILDCOPY_OVERLENGTH` the way `extend_from_within_unchecked`
@@ -1189,11 +1392,9 @@ impl Drop for RingBuffer {
 /// decode (the WILDCOPY profiling target) uses the unconditional path,
 /// which does inflate, so the slack contract is exercised end-to-end
 /// there.
+#[allow(dead_code)]
 #[inline(always)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the four source and destination intersections use independent lengths"
-)]
+#[allow(clippy::too_many_arguments)]
 unsafe fn copy_with_nobranch_check(
     m1_ptr: *const u8,
     m2_ptr: *const u8,

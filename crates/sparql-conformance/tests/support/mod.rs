@@ -6,23 +6,20 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![expect(
-    dead_code,
-    reason = "each test or benchmark includes a different subset of this shared fixture"
-)]
+#![allow(dead_code, unreachable_pub)]
 
 use std::path::{Path, PathBuf};
 
 use purrdf_core::{RdfDatasetBuilder, SparqlResult};
 
 /// The vendored conformance suites' root, `suite/` under this package.
-pub(crate) fn suite_root() -> PathBuf {
+pub fn suite_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("suite")
 }
 
 /// Every group manifest under [`suite_root`], in path order: the set the
 /// `sparql_conformance` target runs (an index is never run through its members).
-pub(crate) fn suite_manifests() -> Vec<PathBuf> {
+pub fn suite_manifests() -> Vec<PathBuf> {
     purrdf_sparql_conformance::discover(&suite_root())
         .unwrap_or_else(|error| panic!("discover the suite manifests: {error}"))
         .groups
@@ -34,7 +31,7 @@ pub(crate) fn suite_manifests() -> Vec<PathBuf> {
 /// Wrap decoded `SELECT` solutions as the model-level [`SparqlResult`] the writers take
 /// and the comparator compares. The `aux` dataset is always empty: SRJ/SRX carry no
 /// auxiliary graph.
-pub(crate) fn as_solutions(parsed: purrdf_sparql_results::ParsedSolutions) -> SparqlResult {
+pub fn as_solutions(parsed: purrdf_sparql_results::ParsedSolutions) -> SparqlResult {
     SparqlResult::Solutions {
         variables: parsed.variables,
         rows: parsed.rows,

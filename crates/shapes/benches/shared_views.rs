@@ -25,6 +25,7 @@
 //!
 //! The pair still sums to the end-to-end cost, so nothing is hidden by the split;
 //! what the split adds is the column each half lands in.
+#![allow(missing_docs)]
 
 use purrdf_rdf::ir::{CompositeDatasetView, CompositeSource, GraphPlacement, ViewLimits};
 use purrdf_rdf::{

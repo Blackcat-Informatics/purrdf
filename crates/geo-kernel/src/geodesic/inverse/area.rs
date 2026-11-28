@@ -38,10 +38,7 @@ pub(crate) fn authalic_radius_squared(
         .mul(&a.square(math)?, math)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one auxiliary arc and its exact ellipsoid parameters"
-)]
+#[allow(clippy::too_many_arguments)] // One auxiliary arc and its exact ellipsoid parameters.
 pub(crate) fn quadrilateral(
     alpha1: &F,
     alpha2: &F,
@@ -190,6 +187,7 @@ pub(crate) fn prepare(
     }))
 }
 
+#[allow(clippy::too_many_arguments)] // One arc panel and an optional equivalent prepared proof table.
 fn i4(
     sigma1: &F,
     sigma2: &F,
@@ -323,10 +321,7 @@ fn area_target(math: &mut CoordinateMath) -> Result<F, MathError> {
     F::power_of_two(-exponent, math)
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one certified series panel and its admitted coefficient table"
-)]
+#[allow(clippy::too_many_arguments)] // One certified series panel and its admitted coefficient table.
 fn evaluate_series(
     sigma1: &F,
     sigma2: &F,

@@ -235,7 +235,7 @@ pub(crate) fn import_refusal<E: std::fmt::Display>(error: EntailError<E>) -> Cli
 /// reasoner**: a pack source is seeded into the reasoner directly from its zero-copy
 /// `PackView`, and a text source parses to an `RdfDataset`. The shared entry point for
 /// `reason` and `convert --entailment`.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "each parameter is a distinct input the two callers already hold separately"
 )]

@@ -17,7 +17,7 @@ use crate::hex::{ALPHABET, UPPER_ALPHABET, encode_portable};
 fn load(bytes: &[u8; 16]) -> v128 {
     // SAFETY: `bytes` is sixteen readable bytes, and `v128_load` performs a
     // 1-aligned load.
-    #[expect(
+    #[allow(
         clippy::cast_ptr_alignment,
         reason = "`v128_load` performs a 1-aligned load; the pointer type is its signature's"
     )]
@@ -31,7 +31,7 @@ fn load(bytes: &[u8; 16]) -> v128 {
 fn store(bytes: &mut [u8; 16], vector: v128) {
     // SAFETY: `bytes` is sixteen writable bytes, and `v128_store` performs a
     // 1-aligned store.
-    #[expect(
+    #[allow(
         clippy::cast_ptr_alignment,
         reason = "`v128_store` performs a 1-aligned store; the pointer type is its signature's"
     )]
@@ -41,7 +41,10 @@ fn store(bytes: &mut [u8; 16], vector: v128) {
 }
 
 /// The `simd128` base16 encoder; always present in a `simd128` build.
-/// Every backend accessor returns `Option` to report availability.
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "every accessor answers `Option`; the other targets' can be `None`"
+)]
 pub(crate) const fn hex_wasm32_simd128() -> Option<HexEncode> {
     Some(hex_encode as HexEncode)
 }

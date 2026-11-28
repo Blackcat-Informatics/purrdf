@@ -60,10 +60,7 @@ impl DataCiteControlledValues {
     /// or relation values that cannot be decoded unambiguously.
     // DataCite exposes one selected value per controlled slot. Keeping every
     // slot explicit prevents an omitted argument from becoming library policy.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "preserve the public constructor's independent vocabulary roles"
-    )]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         identifier_type: impl Into<String>,
         resource_type_general: impl Into<String>,

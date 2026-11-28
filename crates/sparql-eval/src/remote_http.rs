@@ -814,12 +814,9 @@ impl AdmittedHttpBody {
     /// Move a resident body out while refusing to detach any bounded grant.
     /// # Errors
     /// Returns the intact original carrier when its producer is bounded.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "bounded refusal returns the original bytes and their original grant inline, with no allocation after the extraction was refused"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "bounded refusal returns the original bytes and their original grant inline, with no allocation after the extraction was refused"
     )]
     pub fn try_into_resident(self) -> Result<Vec<u8>, Self> {
         let bounded = match &self.storage {

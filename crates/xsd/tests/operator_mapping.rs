@@ -17,9 +17,8 @@ const GT: Option<Ordering> = Some(Ordering::Greater);
 const NC: Option<Ordering> = None; // incomparable / type error
 
 /// (lhs_lexical, lhs_dt, rhs_lexical, rhs_dt, expected `value_cmp`).
-type OperatorCase = (&'static str, D, &'static str, D, Option<Ordering>);
-
-const TABLE: &[OperatorCase] = &[
+#[allow(clippy::type_complexity)]
+const TABLE: &[(&str, D, &str, D, Option<Ordering>)] = &[
     // ── numeric tower: promotion across types ──
     ("1", D::Integer, "1", D::Integer, EQ),
     ("1", D::Integer, "2", D::Integer, LT),
@@ -158,7 +157,8 @@ fn duration_cross_subtype_operator_rows() {
 // ── Gregorian operator-mapping rows ──────────────────────────────────────────────
 
 /// Additional Gregorian rows for the operator-mapping table.
-const GREGORIAN_TABLE: &[OperatorCase] = &[
+#[allow(clippy::type_complexity)]
+const GREGORIAN_TABLE: &[(&str, D, &str, D, Option<Ordering>)] = &[
     // same-type ordering
     ("2023", D::GYear, "2024", D::GYear, LT),
     ("--03", D::GMonth, "--11", D::GMonth, LT),

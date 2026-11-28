@@ -30,8 +30,7 @@
 
 #[path = "support/hnsw/fixture.rs"]
 mod fixture;
-use fixture::seeded_matrix;
-use purrdf_hnsw::fixture::params;
+use fixture::{params, seeded_matrix};
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;

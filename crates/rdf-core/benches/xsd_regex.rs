@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
 //! COLD cost of the shared XSD/XPath `regExp` translator,
 //! [`purrdf_core::xsd_regex::compile`] — translation **plus** the underlying
 //! `regex` build, with no cache in front of it.

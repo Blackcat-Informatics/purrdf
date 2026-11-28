@@ -9,12 +9,11 @@ use std::error::Error;
 
 #[path = "support/holder.rs"]
 mod holder;
-#[expect(
+#[allow(
     dead_code,
     unused_imports,
     unused_macros,
-    unused_macro_rules,
-    reason = "this standalone target uses only part of the crate's shared JSON model"
+    reason = "each target uses part of the crate's shared JSON model"
 )]
 #[path = "../src/json_model.rs"]
 mod json_model;
@@ -350,10 +349,7 @@ fn validates_in(
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the oracle compares independent source, projection, and lost-constraint evidence"
-)]
+#[allow(clippy::too_many_arguments)]
 fn probe(
     schema: &Value,
     package: &GraphqlPackage,

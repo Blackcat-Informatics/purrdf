@@ -718,6 +718,7 @@ impl WordInterval {
         let sine = sine.widened(tail, ops)?;
         let cosine = cosine.widened(tail, ops)?;
         // |turns| <= 2^21 here, so the conversion and residue are exact.
+        #[allow(clippy::cast_possible_truncation)]
         let quadrant = (turns as i64).rem_euclid(4);
         let (sine, cosine) = match quadrant {
             0 => (sine, cosine),

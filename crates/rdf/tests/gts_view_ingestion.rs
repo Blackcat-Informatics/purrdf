@@ -72,10 +72,6 @@ use purrdf_rdf::{
     TermRef, TermValue, ViewLimits, import_gts_events, parse_dataset, serialize_dataset,
 };
 
-#[expect(
-    dead_code,
-    reason = "this test uses one of the two shared blank identity fixtures"
-)]
 #[path = "support/blank_identity.rs"]
 mod blank_identity;
 use blank_identity::composite_over;

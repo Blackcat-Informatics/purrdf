@@ -20,5 +20,7 @@
 //! `HcMatchGenerator` for now — they migrate when the per-strategy split
 //! lands.
 
+#![allow(dead_code)]
+
 pub(crate) mod ldm;
 pub(crate) mod types;

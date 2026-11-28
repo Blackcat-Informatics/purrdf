@@ -11,6 +11,13 @@
 //! whole hot loop stays inside one `#[target_feature]` umbrella and SIMD/BMI2
 //! intrinsics inline natively (no ABI barrier).
 //!
+//! All kernel functions are `unsafe fn`; the explicit inner `unsafe { }` blocks
+//! around intrinsic calls are kept for safety documentation (this matches the
+//! Rust 2024 recommended style enforced by `unsafe_op_in_unsafe_fn`). The
+//! `unused_unsafe` lint sees them as redundant inside an `unsafe fn` body, so
+//! we silence it at the module level rather than removing the documentation.
+#![allow(unused_unsafe)]
+//!
 //! # Background
 //!
 //! In Rust, `#[target_feature(enable = "...")]` creates an ABI boundary: a
@@ -48,6 +55,24 @@
 //! The single indirect call is amortized over the entire compression call,
 //! and once inside the variant module the call graph is straight-line inlined.
 //!
+//! # Roadmap inside this module
+//!
+//! Week 1 (this commit): module scaffold + dispatcher skeleton.
+//! Week 2a: match-length / common-prefix-len + `count_match_from_indices`.
+//! Week 3a: BT walk (`bt_insert_step_no_rebase`,
+//!   `bt_insert_and_collect_matches`) + HC chain walk.
+//! Week 3b: optimal parser DP (`build_optimal_plan_impl` + price helpers).
+//! Week 4: entropy encoders (FSE `encode_interleaved`, Huff0 `encode_stream`).
+//! Week 5-6: bench vs `perf/pre-intrinsics-refactor-baseline` tag, profile,
+//!   finalize.
+//!
+
+// Scaffold-stage: the dispatcher and variant tags are wired up before any
+// caller adopts them, so the dead-code lint would fire on every commit until
+// Week 2a lands. Allow at module level and drop the allow as consumers come
+// online.
+#![allow(dead_code)]
+
 pub(crate) mod scalar;
 
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
@@ -153,9 +178,74 @@ fn detect_kernel_uncached() -> FastpathKernel {
     FastpathKernel::Scalar
 }
 
+/// Public entry point for match-length probes — used during migration as the
+/// shim that callers in `match_generator` adopt without yet being themselves
+/// inside the `#[target_feature]` umbrella. Once the BT walk methods are
+/// lifted into the umbrella (Week 3a) they will call the per-kernel symbol
+/// directly so the entire inner loop inlines.
+#[inline]
+pub(crate) fn dispatch_count_match_from_indices(
+    concat: &[u8],
+    current_idx: usize,
+    candidate_idx: usize,
+    tail_limit: usize,
+    seed_len: usize,
+) -> usize {
+    match select_kernel() {
+        FastpathKernel::Scalar => unsafe {
+            scalar::count_match_from_indices(
+                concat,
+                current_idx,
+                candidate_idx,
+                tail_limit,
+                seed_len,
+            )
+        },
+        #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+        FastpathKernel::Neon => unsafe {
+            neon::count_match_from_indices(concat, current_idx, candidate_idx, tail_limit, seed_len)
+        },
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        FastpathKernel::Sse42 => unsafe {
+            sse42::count_match_from_indices(
+                concat,
+                current_idx,
+                candidate_idx,
+                tail_limit,
+                seed_len,
+            )
+        },
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        FastpathKernel::Avx2Bmi2 => unsafe {
+            avx2_bmi2::count_match_from_indices(
+                concat,
+                current_idx,
+                candidate_idx,
+                tail_limit,
+                seed_len,
+            )
+        },
+        #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+        FastpathKernel::Simd128 => unsafe {
+            simd128::count_match_from_indices(
+                concat,
+                current_idx,
+                candidate_idx,
+                tail_limit,
+                seed_len,
+            )
+        },
+    }
+}
+
 /// Hash-mix dispatch that takes the resolved [`FastpathKernel`] by value, so
 /// the caller can cache it once per matcher / encoder lifetime instead of
 /// hitting the `OnceLock` atomic on every call.
+///
+/// Critical for the default-level Dfast hot path: `hash_index` runs once per
+/// input byte. The previous per-call `dispatch_hash_mix_u64` shape was a
+/// measurable regression versus storing the kernel on the matcher (the old
+/// pre-refactor pattern).
 #[inline(always)]
 pub(crate) fn hash_mix_u64_with_kernel(kernel: FastpathKernel, value: u64) -> u64 {
     match kernel {
@@ -171,8 +261,18 @@ pub(crate) fn hash_mix_u64_with_kernel(kernel: FastpathKernel, value: u64) -> u6
     }
 }
 
+/// Hash-mix dispatch that resolves the kernel via [`select_kernel`] on every
+/// call. Suitable for cold paths or callers that only mix a handful of values
+/// per encoder lifetime. Hot loops should call [`hash_mix_u64_with_kernel`]
+/// with a cached kernel instead.
+#[inline]
+pub(crate) fn dispatch_hash_mix_u64(value: u64) -> u64 {
+    hash_mix_u64_with_kernel(select_kernel(), value)
+}
+
 /// Public entry point for raw-pointer prefix-length scans (BT byte compare,
-/// repcode extend, etc.) when the caller has no cached kernel.
+/// repcode extend, etc.). Same migration shim semantics as
+/// [`dispatch_count_match_from_indices`].
 ///
 /// # Safety
 /// `lhs` / `rhs` must each point to at least `max` initialized bytes.

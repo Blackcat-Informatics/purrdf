@@ -1238,7 +1238,7 @@ impl<'a> ByteChunks<'a> {
     }
 }
 
-#[expect(
+#[allow(
     clippy::copy_iterator,
     reason = "A borrowed cursor is intentionally copied to hash and replay the same admitted bytes without retaining payloads"
 )]

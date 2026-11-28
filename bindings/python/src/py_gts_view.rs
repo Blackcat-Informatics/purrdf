@@ -46,7 +46,7 @@ pub struct PyGtsReadLimits {
 impl PyGtsReadLimits {
     #[new]
     #[pyo3(signature = (*, encoded_input_bytes=None, items=None, encoded_frame_bytes=None, decoded_frame_bytes=None, decoded_blob_bytes=None, total_decoded_bytes=None, terms=None, rows=None, metadata_entries=None, diagnostics=None, work=None))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the binding mirrors the one native read-limit record"
     )]
@@ -141,10 +141,7 @@ pub struct PyGtsFoldView {
 }
 
 #[pymethods]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 impl PyGtsFoldView {
     /// `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
     /// highest priority first; the view builds in only the W3C namespaces.
@@ -423,7 +420,7 @@ impl PyGtsFoldView {
 
 #[pyfunction]
 #[pyo3(signature = (data, *, read_limits = None))]
-#[expect(
+#[allow(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts optional Python borrows by value"
 )]

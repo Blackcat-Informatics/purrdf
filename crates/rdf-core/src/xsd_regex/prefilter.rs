@@ -733,7 +733,7 @@ impl Needle {
     }
 
     /// The first offset at or after `from` where `haystack` holds the needle.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the search of a short haystack is a few word compares; inlined, it has no \
                   call frame around them"
@@ -780,7 +780,7 @@ impl Needle {
     /// in `haystack`: exactly `regex.is_match(haystack)`. A haystack dense with
     /// candidates that are not the needle gives way to the engine where the
     /// search stopped, as the general window does.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the search of a short haystack is a few word compares; inlined, it has no \
                   call frame around them"
@@ -873,7 +873,7 @@ impl Plan {
 /// words, the last one overlapping the one before it, inline rather than a
 /// call into the C library's `memcmp` for the few bytes a window or an
 /// anchored end holds.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "a verification of a few bytes: inlined, it has no call frame around the compare"
 )]

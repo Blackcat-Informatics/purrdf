@@ -16,10 +16,6 @@
 //! the resolved absolute IRIs, so the reparse leg would need no base at all —
 //! it is given the same one so the two legs differ in nothing but the bytes.
 
-#[expect(
-    dead_code,
-    reason = "this suite reads a subset of the shared ShEx conformance corpus"
-)]
 #[path = "support/corpus.rs"]
 mod corpus;
 

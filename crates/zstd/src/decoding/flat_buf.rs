@@ -224,6 +224,85 @@ impl BufferBackend for FlatBuf {
         Ok(())
     }
 
+    /// AVX2-tier override — same shape as [`Self::exec_sequence_inline`]
+    /// but the no-overlap match-copy uses 32-byte ymm wildcopy via
+    /// `wildcopy_no_overlap_avx2` when `offset >= 32`. Mid-offset range
+    /// (16..=31) keeps the SSE2 16-byte stride for correctness (32-byte
+    /// load at offset 16..31 would read uninitialised destination
+    /// bytes; same bound as the `UserSliceBackend::exec_sequence_inline_avx2`
+    /// override).
+    #[cfg(target_arch = "x86_64")]
+    #[target_feature(enable = "avx2")]
+    #[inline]
+    unsafe fn exec_sequence_inline_avx2(
+        &mut self,
+        lit_src: *const u8,
+        lit_length: usize,
+        offset: usize,
+        match_length: usize,
+    ) -> Result<(), super::errors::ExecuteSequencesError> {
+        use super::buffer_backend::sequence_output_fits;
+        use super::exec_sequence_inline::x86::{
+            copy16, overlap_copy8, wildcopy_no_overlap, wildcopy_no_overlap_avx2,
+            wildcopy_overlap_8byte_stride,
+        };
+        // Fallible capacity check. AVX2 32-byte stride overshoots up
+        // to 31 bytes past `tail + total`; the
+        // `WILDCOPY_OVERLENGTH = 32` slack `reserve` adds covers
+        // well-formed frames, but malformed inputs that exceed the
+        // reserved headroom surface as `OutputBufferOverflow` instead
+        // of UB.
+        const MAX_WILDCOPY_OVERSHOOT: usize = 31;
+        let cap = self.buf.capacity();
+        let buf_len = self.buf.len();
+        // `buf.len() <= buf.capacity()` (a `Vec` invariant) satisfies the
+        // `tail <= cap` precondition; see `sequence_output_fits`.
+        let total = sequence_output_fits(
+            lit_length,
+            match_length,
+            buf_len,
+            cap,
+            MAX_WILDCOPY_OVERSHOOT,
+        )?;
+        debug_assert!(offset >= 1);
+        debug_assert!(match_length >= 1);
+        let live_len = buf_len - self.head;
+        debug_assert!(
+            live_len + lit_length >= offset,
+            "FlatBuf::exec_sequence_inline_avx2: offset {offset} exceeds live window",
+        );
+
+        unsafe {
+            let base_mut = self.buf.as_mut_ptr();
+
+            // Literal copy stays on SSE2 16-byte — caller-side
+            // inline-path slack gate is 16-byte literal bound.
+            let op_lit = base_mut.add(buf_len);
+            copy16(op_lit, lit_src);
+            if lit_length > 16 {
+                wildcopy_no_overlap(op_lit.add(16), lit_src.add(16), lit_length - 16);
+            }
+
+            // Match copy — divergent on no-overlap fast path.
+            let op_match = base_mut.add(buf_len + lit_length);
+            let match_src = base_mut.cast_const().add(buf_len + lit_length - offset);
+
+            if offset >= 32 {
+                wildcopy_no_overlap_avx2(op_match, match_src, match_length);
+            } else if offset >= 16 {
+                wildcopy_no_overlap(op_match, match_src, match_length);
+            } else {
+                let (op2, ip2) = overlap_copy8(op_match, match_src, offset);
+                if match_length > 8 {
+                    wildcopy_overlap_8byte_stride(op2, ip2, match_length - 8);
+                }
+            }
+
+            self.buf.set_len(buf_len + total);
+        }
+        Ok(())
+    }
+
     #[cfg(target_arch = "x86_64")]
     #[inline(always)]
     unsafe fn inline_exec_base_ptr(&mut self) -> *mut u8 {

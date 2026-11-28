@@ -208,10 +208,7 @@ pub struct FileBlobRange<'a> {
 
 /// Safety policy for materializing files-profile archives.
 // Deliberate flag set: each bool is an independent opt-in safety toggle, not a state machine.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the public fields are independent archive safety choices"
-)]
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct UnpackOptions {
     /// Extract blobs hidden by suppression frames.

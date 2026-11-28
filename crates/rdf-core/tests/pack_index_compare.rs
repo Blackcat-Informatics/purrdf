@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Compare the index alternatives on identical packed rows and query shapes.
+#![allow(dead_code, missing_docs)]
 
 #[path = "../benches/support/pack_index.rs"]
 mod pack_index;

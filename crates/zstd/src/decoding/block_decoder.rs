@@ -33,6 +33,8 @@ pub(crate) struct BlockDecoder {
 enum DecoderState {
     ReadyToDecodeNextHeader,
     ReadyToDecodeNextBody,
+    #[allow(dead_code)]
+    Failed, //TODO put "self.internal_state = DecoderState::Failed;" everywhere an unresolvable error occurs
 }
 
 /// Create a new [BlockDecoder].
@@ -67,6 +69,7 @@ impl BlockDecoder {
         use DecoderState as State;
         match self.internal_state {
             State::ReadyToDecodeNextBody => { /* ok */ }
+            State::Failed => return Err(DecodeBlockContentError::DecoderStateIsFailed),
             State::ReadyToDecodeNextHeader => {
                 return Err(DecodeBlockContentError::ExpectedHeaderOfPreviousBlock);
             }
@@ -158,6 +161,7 @@ impl BlockDecoder {
     ) -> Result<u64, DecodeBlockContentError> {
         match self.internal_state {
             DecoderState::ReadyToDecodeNextBody => { /* Happy :) */ }
+            DecoderState::Failed => return Err(DecodeBlockContentError::DecoderStateIsFailed),
             DecoderState::ReadyToDecodeNextHeader => {
                 return Err(DecodeBlockContentError::ExpectedHeaderOfPreviousBlock);
             }
@@ -300,10 +304,7 @@ impl BlockDecoder {
     /// other scratch fields). All `unsafe` from the previous
     /// lifetime-widening trick is gone — disjoint-field borrows
     /// type-check naturally.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the streaming input may borrow a different scratch field from the mutable decoder fields"
-    )]
+    #[allow(clippy::too_many_arguments)]
     fn decompress_block_inplace_with_parts<'d, B: super::buffer_backend::BufferBackend>(
         &mut self,
         header: &BlockHeader,
@@ -328,7 +329,7 @@ impl BlockDecoder {
         let upper_limit_for_literals = match section.compressed_size {
             Some(x) => x as usize,
             None => match section.ls_type {
-                LiteralsSectionType::Rle => 1,
+                LiteralsSectionType::RLE => 1,
                 LiteralsSectionType::Raw => section.regenerated_size as usize,
                 _ => panic!("Bug in this library"),
             },
@@ -426,6 +427,12 @@ impl BlockDecoder {
         &mut self,
         mut r: impl Read,
     ) -> Result<(BlockHeader, u8), BlockHeaderReadError> {
+        //match self.internal_state {
+        //    DecoderState::ReadyToDecodeNextHeader => {/* Happy :) */},
+        //    DecoderState::Failed => return Err(format!("Cant decode next block if failed along the way. Results will be nonsense")),
+        //    DecoderState::ReadyToDecodeNextBody => return Err(format!("Cant decode next block header, while expecting to decode the body of the previous block. Results will be nonsense")),
+        //}
+
         r.read_exact(&mut self.header_buffer[0..3])?;
 
         let btype = self.block_type()?;

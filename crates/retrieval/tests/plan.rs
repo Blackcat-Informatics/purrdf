@@ -621,6 +621,9 @@ fn canonical_bytes_are_stable_across_map_order() {
 }
 
 #[test]
+// Each mutation starts from a fresh clone of the baseline on purpose; the final
+// clone is flagged only because it happens to be the last use of `base`.
+#[allow(clippy::redundant_clone)]
 // Every *content* field. `origin` is provenance rather than content and is
 // deliberately outside the digest; `origin_is_provenance_and_moves_neither_bytes_nor_identity`
 // pins that exclusion from the other side.
@@ -712,7 +715,7 @@ fn digest_is_sensitive_to_every_field() {
     changed.registry_instance_id = RegistryId::from_raw(8);
     assert_ne!(changed.id(), base_id, "registry instance id");
 
-    let mut changed = base;
+    let mut changed = base.clone();
     changed.registry_content_fingerprint = "other-fingerprint".to_owned();
     assert_ne!(changed.id(), base_id, "registry content fingerprint");
 }

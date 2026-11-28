@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Report-only offline transformation, context and caller-buffer allocation costs.
+#![allow(missing_docs)]
 
 use std::time::Duration;
 

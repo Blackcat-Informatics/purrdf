@@ -19,10 +19,10 @@ mod purremb;
 
 #[path = "support/hnsw/fixture.rs"]
 mod fixture;
+use fixture::params;
 use purrdf_core::distance::Exact;
 use purrdf_core::distance::{Arithmetic, BuildIdentity, BuildShape, Path, Reassociated};
 use purrdf_core::{EmbeddingView, IndexUseRole, verify_embedding};
-use purrdf_hnsw::fixture::params;
 use purrdf_hnsw::{HnswError, HnswIndex, Params, guard, profile, relation::HnswSpace};
 use purrdf_sparql_eval::{Completeness, KnnGuard, OrderFidelity, PropertyFunction};
 

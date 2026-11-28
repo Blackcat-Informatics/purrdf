@@ -149,10 +149,7 @@ pub fn section_iri(
 // here: the identity formulas in
 // [`Profile::emission_bytes`](crate::Profile::emission_bytes) spell out
 // these same fields in these same positions.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "citation identity hashes distinct caller-supplied coordinates, kind, and qualifiers"
-)]
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn citation_iri(
     vocabulary: &Vocabulary,
