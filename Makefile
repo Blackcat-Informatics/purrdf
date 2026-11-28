@@ -54,6 +54,7 @@ endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 override CARGO_DENY_VERSION := 0.20.2
 override CARGO_POLICY_CONSUMER := crates/jsonschema/tests/preserve_order_consumer
+override CARGO_POLICY_FUZZ := crates/gts/fuzz
 # The integration branch the non-Rust ratchet compares against: its BASE is the
 # merge-base of this ref with HEAD. The pre-commit hook reads the same variable.
 PURRDF_RATCHET_BASE ?= origin/main
@@ -111,7 +112,19 @@ fmt: ## Auto-format the workspace.
 hooks: ## Install the pre-commit and pre-merge-commit hooks: the quick subset of `make check`, run on the staged snapshot.
 	git config core.hooksPath .githooks
 
-check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
+.PHONY: check-hook-installed
+check-hook-installed: ## Refuse a missing or different repository commit hook.
+	@set -eu; \
+	for name in pre-commit pre-merge-commit; do \
+		expected=".githooks/$$name"; \
+		if ! active=$$(git rev-parse --path-format=absolute --git-path "hooks/$$name") \
+			|| ! test -f "$$active" || ! test -x "$$active" || ! test "$$active" -ef "$$expected"; then \
+			printf 'ERROR: Git does not resolve %s to the executable repository hook. Run make hooks.\n' "$$name" >&2; \
+			exit 1; \
+		fi; \
+	done
+
+check: check-hook-installed node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
 	$(MAKE) workspace-gate
 	cargo test --workspace --locked --no-fail-fast
 	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
@@ -560,7 +573,8 @@ cargo-source-policy: ## Check locked dependency versions and admitted sources.
 	require_file Cargo.toml; \
 	require_file Cargo.lock; \
 	check_config .; \
-	dir=.; remaining="$(CARGO_POLICY_CONSUMER)"; \
+	for policy_path in "$(CARGO_POLICY_CONSUMER)" "$(CARGO_POLICY_FUZZ)"; do \
+	dir=.; remaining="$$policy_path"; \
 	while test -n "$$remaining"; do \
 		dir="$$dir/$${remaining%%/*}"; \
 		if test -L "$$dir" || test ! -d "$$dir"; then \
@@ -576,8 +590,9 @@ cargo-source-policy: ## Check locked dependency versions and admitted sources.
 		case "$$remaining" in */*) remaining=$${remaining#*/} ;; *) remaining= ;; esac; \
 	done; \
 	require_file "$$dir/Cargo.toml"; \
-	require_file "$$dir/Cargo.lock"
-	@# Populate both locked graphs before Cargo Deny reads the private index.
+	require_file "$$dir/Cargo.lock"; \
+	done
+	@# Populate the locked graphs before Cargo Deny reads the private index.
 	@# Deny finishes its own locked fetch before gathering crates, but can log errors and exit zero.
 	@set -eu; \
 	helper="$(CARGO_POLICY_HELPER)"; \
@@ -593,6 +608,7 @@ cargo-source-policy: ## Check locked dependency versions and admitted sources.
 	fi; \
 	case "$$helper" in /*) ;; *) helper="$$PWD/$$helper" ;; esac; \
 	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_CONSUMER)"; \
+	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_FUZZ)"; \
 	umask 077; \
 	common_dir=$$(git rev-parse --path-format=absolute --git-common-dir); \
 	scratch=$$(dirname "$$common_dir")/.stage; \
@@ -608,12 +624,17 @@ cargo-source-policy: ## Check locked dependency versions and admitted sources.
 	}; \
 	root_manifest="$$PWD/Cargo.toml"; \
 	consumer_manifest="$$PWD/$(CARGO_POLICY_CONSUMER)/Cargo.toml"; \
+	fuzz_manifest="$$PWD/$(CARGO_POLICY_FUZZ)/Cargo.toml"; \
 	cargo fetch --locked --manifest-path "$$root_manifest"; \
 	cargo fetch --locked --manifest-path "$$consumer_manifest"; \
+	cargo fetch --locked --manifest-path "$$fuzz_manifest"; \
 	cargo metadata --locked --format-version 1 --manifest-path "$$root_manifest" >"$$private_home/root.json"; \
 	cargo metadata --locked --format-version 1 --manifest-path "$$consumer_manifest" >"$$private_home/consumer.json"; \
+	cargo metadata --locked --all-features --format-version 1 --manifest-path "$$fuzz_manifest" >"$$private_home/fuzz.json"; \
 	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_CONSUMER)" \
 		"$$private_home" "$$private_home/root.json" "$$private_home/consumer.json"; \
+	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_FUZZ)" \
+		"$$private_home" "$$private_home/root.json" "$$private_home/fuzz.json"; \
 	run_deny() { \
 		status=0; report=0; \
 		cargo deny --locked --color never --manifest-path "$$1" --metadata-path "$$2" check bans sources \
@@ -624,7 +645,8 @@ cargo-source-policy: ## Check locked dependency versions and admitted sources.
 		return "$$report"; \
 	}; \
 	run_deny "$$root_manifest" "$$private_home/root.json"; \
-	run_deny "$$consumer_manifest" "$$private_home/consumer.json"
+	run_deny "$$consumer_manifest" "$$private_home/consumer.json"; \
+	run_deny "$$fuzz_manifest" "$$private_home/fuzz.json"
 
 
 layer-hygiene: ## Prove every first-party crate edge is one layers.toml allows, and the table is exact.
