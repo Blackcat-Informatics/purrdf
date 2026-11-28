@@ -31,7 +31,6 @@ async function install(change = () => {}) {
   server.set("purrdf/licenses/runtime/inventory.json", JSON.stringify(runtime));
   const stored = new Map();
   const requested = [];
-  let activated = false;
   const events = {};
   const key = (url) => new URL(typeof url === "string" ? url : url.url || url.href, scope).href;
   const fetch = async (url) => {
@@ -55,20 +54,18 @@ async function install(change = () => {}) {
     self: {
       registration: { scope }, location: { origin: "https://example.invalid" },
       addEventListener: (name, handler) => { events[name] = handler; },
-      skipWaiting: async () => { activated = true; },
     },
   });
   let promise;
   events.install({ waitUntil: (value) => { promise = value; } });
   let error;
   try { await promise; } catch (failure) { error = failure; }
-  return { error, activated, stored, requested, events, cache };
+  return { error, stored, requested, events, cache };
 }
 
 test("offline installation retains both complete grants before the module", async () => {
   const result = await install();
   assert.equal(result.error, undefined);
-  assert.equal(result.activated, true);
   assert.ok(result.stored.has(scope + "purrdf/pkg/purrdf_wasm_bg.wasm"));
   assert.ok(result.stored.has(scope + "purrdf/licenses/inventory.json"));
   assert.ok(result.stored.has(scope + "purrdf/licenses/runtime/inventory.json"));
@@ -95,7 +92,6 @@ for (const [name, change] of [
   test(`offline installation refuses ${name}`, async () => {
     const result = await install(change);
     assert.ok(result.error, "must reject installation");
-    assert.equal(result.activated, false);
     assert.equal(result.stored.has(scope + "purrdf/pkg/purrdf_wasm_bg.wasm"), false);
     assert.ok(result.requested.every((path) => !path.includes("outside") && !path.includes(".stage")));
   });

@@ -999,7 +999,7 @@ playground: ## Assemble the standalone RDF-1.2 console into $(CARGO_TARGET_DIR)/
 	python3 scripts/fetch-locked-deps.py
 	python3 scripts/package-licenses.py --profile npm --check
 	@cp docs/playground/index.html docs/playground/app.mjs docs/playground/engine.worker.mjs \
-		docs/playground/permalink.mjs docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
+		docs/playground/locale.mjs docs/playground/permalink.mjs docs/playground/sarif.mjs docs/playground/style.css docs/playground/sw.mjs \
 		docs/playground/manifest.webmanifest \
 		"$(PLAYGROUND_OUT)/"
 	@cp -R docs/playground/examples "$(PLAYGROUND_OUT)/examples"

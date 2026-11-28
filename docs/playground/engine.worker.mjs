@@ -179,6 +179,7 @@ const HANDLERS = {
             : ds.serialize(f);
       } catch (e) {
         entry.error = String(e?.message ?? e);
+        if (typeof e?.code === "string") entry.errorCode = e.code;
       }
       entry.text = text;
       if (text != null) {

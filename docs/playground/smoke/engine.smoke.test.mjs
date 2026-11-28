@@ -103,6 +103,43 @@ test("version() returns a SemVer string", () => {
   assert.match(v, /^\d+\.\d+\.\d+/, `expected SemVer, got ${v}`);
 });
 
+test("the assembled interface switches its language and visible text", async () => {
+  const { interfaceFailure, localize, setLocale } =
+    await import(pathToFileURL(join(playgroundOut, "locale.mjs")).href);
+  const html = await readFile(join(playgroundOut, "index.html"), "utf8");
+  assert.match(html, /<select id="interface-language"[^>]*>[\s\S]*?<option value="zh-Hans"/u);
+  const parse = html.match(/<button id="btn-parse"[^>]*data-zh-text="([^"]+)"[^>]*>([^<]+)<\/button>/u);
+  assert.ok(parse, "the packaged Parse button has interface copy in both languages");
+  const button = { textContent: parse[2], getAttribute: () => parse[1] };
+  const language = { value: "en" };
+  const status = { setAttribute() {} };
+  const document = {
+    documentElement: { lang: "en" },
+    getElementById: (id) => id === "interface-language" ? language : null,
+    querySelectorAll: (selector) => selector === "[data-zh-text]" ? [button]
+      : selector === "[data-localized]" ? [status] : [],
+  };
+  const previous = globalThis.document;
+  globalThis.document = document;
+  try {
+    const raw = "Network failure < & 404.";
+    const nested = interfaceFailure("could not fetch fixture", "无法加载示例文件", new Error(raw));
+    const banner = interfaceFailure("could not verify museum", "无法验证博物馆示例", nested);
+    localize(status, banner.message, banner.chinese);
+    setLocale("zh-Hans");
+    assert.deepEqual([document.documentElement.lang, language.value, button.textContent],
+      ["zh-Hans", "zh-Hans", "解析"]);
+    assert.equal(status.textContent, `无法验证博物馆示例：无法加载示例文件：${raw}`);
+    setLocale("en");
+    assert.deepEqual([document.documentElement.lang, language.value, button.textContent],
+      ["en", "en", "Parse"]);
+    assert.equal(status.textContent, `could not verify museum: could not fetch fixture: ${raw}`);
+  } finally {
+    if (previous === undefined) delete globalThis.document;
+    else globalThis.document = previous;
+  }
+});
+
 test("parse the preloaded doc (Input pane)", () => {
   const ds = Dataset.parse(PRELOADED, "turtle");
   assert.equal(ds.size, 5);
@@ -195,6 +232,8 @@ test("the museum gallery permalink preserves both dated attributions", async () 
     await import(pathToFileURL(join(playgroundOut, "examples/gallery.mjs")).href);
   const { encodeState, decodeState } =
     await import(pathToFileURL(join(playgroundOut, "permalink.mjs")).href);
+  const { normalizeLocale, withLocale } =
+    await import(pathToFileURL(join(playgroundOut, "locale.mjs")).href);
   const vignette = findVignette("museum-attributions");
   assert.ok(vignette, "the museum sample must be discoverable in the assembled gallery");
 
@@ -205,11 +244,17 @@ test("the museum gallery permalink preserves both dated attributions", async () 
   assert.equal(state.input, await readFile(new URL("collection.ttl", canonical), "utf8"));
   assert.equal(state.query, await readFile(new URL("attributions.rq", canonical), "utf8"));
   assert.equal(state.activePane, "sparql");
-  const restored = await decodeState(await encodeState(state));
-  assert.deepEqual(restored, state, "the actual permalink codec must preserve the UTF-8 state");
+  assert.match(vignette.zhTitle, /博物馆藏品/u);
+  const legacy = await decodeState(await encodeState(state));
+  assert.equal(normalizeLocale(legacy.locale), "en");
+  const restored = await decodeState(await encodeState(withLocale(state, "zh-Hans")));
+  assert.equal(normalizeLocale(restored.locale), "zh-Hans");
+  const { locale, ...engineState } = restored;
+  assert.deepEqual(engineState, legacy);
+  assert.deepEqual(engineState, state, "the actual permalink codec must preserve the UTF-8 state");
   const asset = async (url) => new Response(await readFile(url));
   assert.equal(await matchesBundledMuseumQuery(restored, asset), true);
-  assert.equal(await matchesBundledMuseumQuery({ ...restored, locale: "zh-Hans" }, asset), true);
+  assert.equal(await matchesBundledMuseumQuery(legacy, asset), true);
   for (const changed of [
     { input: restored.input.replace("1723-09-08", "1724-09-08") },
     { query: "ASK { }" },
