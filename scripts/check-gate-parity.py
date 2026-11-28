@@ -179,11 +179,12 @@ def _normalise(program: str, rest: str) -> str:
     return " ".join((program + " " + rest).split())
 
 
-def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
+def check_recipe(text: str, target: str, missing_is_fatal: bool = True, literal: bool = False) -> str:
     """Read tab-indented recipes, retaining entries after blank or comment lines."""
     lines = text.splitlines()
+    rule = consumer_rule_index(lines, target) if literal else None
     for index, line in enumerate(lines):
-        if line.startswith(f"{target}:"):
+        if index == rule or (not literal and line.startswith(f"{target}:")):
             body: list[str] = []
             for following in lines[index + 1 :]:
                 if following.startswith("\t"):
@@ -201,25 +202,7 @@ def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
     return ""
 
 
-# `make <target>` inside a workflow step, including inside a `run: |` block. A workflow
-# that reaches a gate this way was INVISIBLE to the comparison, and one does: `docs.yaml`
-# runs `make check-i18n` on every pull request, which reaches
-# `check-i18n-render.py --self-test` -- a gate absent from `make check` and from ci.yaml,
-# so a contributor could not reproduce that red locally. That is direction 2's own stated
-# motivation, still live after this gate was written for it.
-# A `make` STEP, IN COMMAND POSITION, WITH EVERY TARGET IT NAMES.
-#
-# The first version was `(?:^|\s)make\s+([\w-]+)` over raw text, which is bypassable by an
-# English sentence. `.github/workflows/ci.yaml:299` reads "step above alone does not make
-# cargo use 1.98 inside this repo" and yielded the target `cargo` -- benign only because no
-# `cargo:` target exists. A workflow containing "run make check before opening a PR" in a
-# comment resolves the WHOLE `check` target, so every gate is reported as reached in CI and
-# direction 1 is defeated by a sentence. Demonstrated on a fixture: two gates in no workflow
-# at all report clean once that comment is present.
-#
-# It also took the FIRST word after `make`, so `make -C dir tgt` resolved `-C`, and the
-# second target of `make a b` was dropped -- live at `docs.yaml:99`, where `playground` was
-# never resolved.
+# Match literal Make commands in a workflow, then resolve every named target.
 WORKFLOW_MAKE = re.compile(r"(?:^|(?<=run:\s)|(?<=[;&|(]\s)|(?<=[;&|(]))\s*make\s+([^\n;&|]+)")
 # A word that is a flag or a variable assignment rather than a target.
 NOT_A_TARGET = re.compile(r"^(?:-|[A-Za-z_][\w]*=)")
@@ -281,7 +264,7 @@ def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] |
     if target in seen:
         return set() if read is invocations else sys.exit(f"FAIL: recursive Make recipe `{target}`")
     seen.add(target)
-    body = check_recipe(makefile_text, target, missing_is_fatal=read is not invocations)
+    body = check_recipe(makefile_text, target, missing_is_fatal=read is not invocations, literal=read is not invocations)
     found = read(body)
     if read is invocations and target == "cargo-source-policy" and _uncomment(body, ("#",)).strip():
         found.add("make cargo-source-policy")
@@ -654,6 +637,35 @@ CONSUMER_COMMANDS = (
     f"cargo clippy --manifest-path {CONSUMER_MANIFEST} --all-targets --locked -- -D warnings",
     f"cargo test --manifest-path {CONSUMER_MANIFEST} --locked",
 )
+
+
+def consumer_rule_index(lines: list[str], target: str) -> int | None:
+    """Locate one unconditional literal rule, without evaluating Make directives."""
+    index = None
+    conditional = define = 0
+    for i, line in enumerate(lines):
+        if line.startswith("\t") or not line.strip() or line.lstrip().startswith("#"):
+            continue
+        word = line.lstrip().split(maxsplit=1)[0]
+        if re.match(r"^ *(?:(?:override|export|private)[ \t]+)*define(?:[ \t]|$)", line):
+            define += 1
+        elif word == "endef":
+            define -= 1
+        elif not define:
+            if word in ("ifeq", "ifneq", "ifdef", "ifndef"):
+                conditional += 1
+            elif word == "endif":
+                conditional -= 1
+            elif word in ("include", "-include", "sinclude"):
+                sys.exit("FAIL: unsupported include in consumer Makefile")
+        rule = re.match(r"^ *([^:#=&]+?) *(::?|&:)(?!=)", line)
+        if rule and target in rule[1].split():
+            if index is not None or conditional or define or rule[1].strip() != target or rule[2] != ":":
+                sys.exit(f"FAIL: ambiguous consumer Make rule `{target}`")
+            if ";" in line.split("#", 1)[0]:
+                sys.exit(f"FAIL: unsupported inline recipe for consumer Make rule `{target}`")
+            index = i
+    return index
 
 
 def consumer_edges(text: str) -> list[tuple[str, str]]:
