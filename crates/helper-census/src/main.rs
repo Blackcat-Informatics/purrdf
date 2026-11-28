@@ -257,7 +257,10 @@ fn main() -> ExitCode {
         .first()
         .is_some_and(|arg| arg == "--cargo-fuzz-edge-policy")
     {
-        Some(("cargo-fuzz-edge-policy", cargo_fuzz_policy::run(&args)))
+        Some((
+            "cargo-fuzz-edge-policy",
+            cargo_fuzz_policy::run(&args).map_err(|error| error.to_string()),
+        ))
     } else if args.iter().any(|arg| arg == "--wasm-package-hosts") {
         Some(("wasm-package", wasm_package::run(&args)))
     } else if args.iter().any(|arg| arg == "--wasm-imports") {

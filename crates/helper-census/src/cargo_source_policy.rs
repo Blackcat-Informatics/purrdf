@@ -9,6 +9,7 @@ use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use purrdf_hash::error::StructuredError;
 use purrdf_lex::json::{self, Value};
 use purrdf_toml::{Kind, Node, Profile, Scalar, SourceDocument};
 
@@ -20,7 +21,7 @@ pub(crate) enum Error {
     Toml(PathBuf, purrdf_toml::TomlError),
     Json(PathBuf, json::Error),
     Invalid(PathBuf, &'static str),
-    FuzzGraph(PathBuf, String),
+    FuzzGraph(PathBuf, crate::cargo_fuzz_policy::Error),
     Outside {
         kind: &'static str,
         path: PathBuf,
@@ -40,7 +41,7 @@ impl fmt::Display for Error {
             Self::Toml(path, cause) => write!(output, "Cargo config {}: {cause}", path.display()),
             Self::Json(path, cause) => write!(output, "Cargo metadata {}: {cause}", path.display()),
             Self::Invalid(path, reason) => write!(output, "{}: {reason}", path.display()),
-            Self::FuzzGraph(path, reason) => write!(output, "{}: {reason}", path.display()),
+            Self::FuzzGraph(path, cause) => write!(output, "{}: {cause}", path.display()),
             Self::Outside {
                 kind,
                 path,
@@ -61,8 +62,41 @@ impl std::error::Error for Error {
             Self::Read(_, cause) => Some(cause),
             Self::Profile(cause) | Self::Toml(_, cause) => Some(cause),
             Self::Json(_, cause) => Some(cause),
+            Self::FuzzGraph(_, cause) => Some(cause),
             _ => None,
         }
+    }
+}
+
+impl StructuredError for Error {
+    purrdf_hash::error_visit! {
+        Usage => "cargo-source-usage" {},
+        Read(path, cause) => "cargo-source-read" {
+            "path" => Bytes(path.as_os_str().as_encoded_bytes()),
+            "cause" => Cause(cause),
+        },
+        Profile(cause) => "cargo-source-config-profile" { "cause" => Cause(cause) },
+        Toml(path, cause) => "cargo-source-config" {
+            "path" => Bytes(path.as_os_str().as_encoded_bytes()),
+            "cause" => Cause(cause),
+        },
+        Json(path, cause) => "cargo-source-metadata" {
+            "path" => Bytes(path.as_os_str().as_encoded_bytes()),
+            "cause" => Cause(cause),
+        },
+        Invalid(path, reason) => "cargo-source-invalid" {
+            "path" => Bytes(path.as_os_str().as_encoded_bytes()),
+            "reason" => Text(reason),
+        },
+        FuzzGraph(path, cause) => "cargo-source-fuzz-graph" {
+            "path" => Bytes(path.as_os_str().as_encoded_bytes()),
+            "cause" => Cause(cause),
+        },
+        Outside { kind, path, resolved } => "cargo-source-outside-root" {
+            "kind" => Text(kind),
+            "path" => Bytes(path.as_os_str().as_encoded_bytes()),
+            "resolved" => Bytes(resolved.as_os_str().as_encoded_bytes()),
+        },
     }
 }
 
@@ -284,7 +318,7 @@ fn check_graph(root: &Path, expected: &Path, cargo_home: &Path, metadata: &Path)
         .and_then(Value::as_array)
         .ok_or_else(invalid)?;
     crate::cargo_fuzz_policy::validate(&graph, root, expected)
-        .map_err(|reason| Error::FuzzGraph(metadata.to_owned(), reason))?;
+        .map_err(|cause| Error::FuzzGraph(metadata.to_owned(), cause))?;
     let registry = cargo_home.join("registry/src");
     let git = cargo_home.join("git/checkouts");
     for package in packages {
@@ -354,5 +388,46 @@ fn graph_path(root: &Path, path: &str, kind: &'static str, directory: bool) -> R
             path.to_owned(),
             "Cargo metadata path has the wrong file type",
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_graph, fs, json};
+    use purrdf_hash::error::ErrorValue;
+    use purrdf_lex::json::{Object, Value};
+    use purrdf_testkit::error_capture::Capture;
+    use std::error::Error as _;
+
+    #[test]
+    fn source_policy_preserves_the_missing_graph_field() {
+        let directory = purrdf_testkit::TempDir::for_unit_test().expect("allocate graph fixture");
+        let root = directory
+            .path()
+            .canonicalize()
+            .expect("canonical fixture root");
+        let path = root.join("metadata.json");
+        let graph = Value::from(
+            Object::new()
+                .with("workspace_root", root.to_str().expect("UTF-8 fixture root"))
+                .with("resolve", Object::new())
+                .with("packages", vec![Value::from(Object::new())]),
+        );
+        fs::write(&path, json::write_compact(&graph)).expect("write graph fixture");
+        let refusal = check_graph(&root, &root, &root, &path).expect_err("missing package ID");
+        assert_eq!(
+            refusal.to_string(),
+            format!("{}: Cargo metadata is missing id", path.display())
+        );
+        assert!(
+            refusal
+                .source()
+                .is_some_and(|cause| cause.is::<crate::cargo_fuzz_policy::Error>())
+        );
+        let captured = Capture::read(&refusal);
+        assert_eq!(captured.code, "cargo-source-fuzz-graph");
+        let cause = captured.child("cause");
+        assert_eq!(cause.code, "cargo-fuzz-missing-field");
+        assert!(matches!(cause.field("field"), ErrorValue::Code("id")));
     }
 }
