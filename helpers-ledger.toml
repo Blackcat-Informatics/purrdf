@@ -4184,7 +4184,6 @@ kind = "body"
 members = [
     "purrdf_zstd::encoding::fastpath::avx2_bmi2::count_match_from_indices",
     "purrdf_zstd::encoding::fastpath::neon::count_match_from_indices",
-    "purrdf_zstd::encoding::fastpath::simd128::count_match_from_indices",
     "purrdf_zstd::encoding::fastpath::sse42::count_match_from_indices",
 ]
 criterion = "b"

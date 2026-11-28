@@ -83,15 +83,14 @@ pub(crate) unsafe fn common_prefix_len_ptr(lhs: *const u8, rhs: *const u8, max: 
     unsafe { common_prefix_len_scalar_ptr(lhs, rhs, 0, max) }
 }
 
-/// `count_match_from_indices` mirror for the scalar variant — kept here so
-/// the variant module is a complete unit and BT-walk callers (Week 3a) can
-/// pick the per-kernel implementation by symbol resolution rather than by a
-/// branching dispatcher inside the hot loop.
+/// Count a match from the scalar binary-tree walker. Little-endian `aarch64`
+/// uses the NEON walker instead.
 ///
 /// # Safety
 /// Caller-side BT-walk invariants ensure
 /// `candidate_idx + tail_limit ≤ concat.len()` and
 /// `current_idx + tail_limit ≤ concat.len()`.
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 #[inline(always)]
 pub(crate) unsafe fn count_match_from_indices(
     concat: &[u8],
