@@ -126,11 +126,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 }
 
 
-# HOW MANY EXEMPTIONS THERE ARE, pinned. The register's comment says it "may only
-# SHRINK", and `stale_exemptions` only caught entries that stopped diverging -- nothing
-# refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
-# both the changelog and the PR body is the proof that nothing noticed. Growth is now a
-# deliberate, visible edit to this number.
+# The pinned count makes exemption growth an explicit change.
 ONE_SIDED_COUNT = 5
 
 
@@ -158,16 +154,7 @@ def merge_blocking(workflow_texts: dict[str, str]) -> dict[str, str]:
             blocking[name] = text
     return blocking
 
-# `python3 scripts/x.py --flag`, `bash scripts/x.sh --flag`. The interpreter is
-# part of the match but not of the identity: what matters is which program runs
-# with which arguments, and the Makefile and the workflow must agree on that.
-# The argument run stops at a shell separator. `([^\n]*)` was greedy to end of line, so
-# `python3 scripts/a.py && python3 scripts/b.py` produced the single identity
-# `scripts/a.py && python3 scripts/b.py` -- the second program never seen, and one list
-# spelling a pair on one line while the other spells it on two reported divergence in BOTH
-# directions over an equivalent spelling. No such line today; the regex is the hazard.
-# An interpreter or executable prefix establishes an actual script invocation;
-# quoted strings, YAML metadata and comments are removed before either scan.
+# Literal interpreter and executable prefixes establish command identity.
 INVOCATION = re.compile(  # noqa: E501
     r"(?:\b(?:python3?|bash|sh)\s+(?:-\w+\s+)*|(?<![\w/])\./)"
     r"((?:scripts|crates)/[^\s]+)([^\n;&|#]*)",
@@ -184,12 +171,7 @@ _YAML_PROSE_KEY = re.compile(r"^\s*(?:-\s*)?(?:name|if|id|description|summary):"
 
 
 def _drop_prose(text: str) -> str:
-    """The text with quoted spans and YAML metadata values blanked.
-
-    A quoted string is data — `echo "run scripts/check-x.py"` documents a gate, it does not
-    run one — and a step's `name:` is a label. Blanking rather than deleting keeps line
-    numbers and surrounding structure intact for everything else on the line.
-    """
+    """Blank quoted spans and YAML metadata without losing line structure."""
     kept = []
     for line in text.splitlines():
         if _YAML_PROSE_KEY.match(line):
@@ -204,14 +186,7 @@ def _drop_prose(text: str) -> str:
 
 
 def _uncomment(text: str, comment_prefixes: tuple[str, ...]) -> str:
-    """The text with comment lines removed.
-
-    A COMMENTED-OUT GATE IS NOT A RUNNING GATE, and both lists were scanned as raw text.
-    A cleanly commented-out CI step and a recipe line commented as `@# python3 ...` each
-    satisfied the comparison while running nothing -- and "comment it out for now" is how
-    a gate actually dies. Whole-line only: an inline `#` inside a quoted scalar is not
-    worth the false positives, and a gate invocation is never mid-line prose.
-    """
+    """Remove whole-line comments, including Make recipe comments."""
     kept = []
     for line in text.splitlines():
         stripped = line.strip().lstrip("@").lstrip()
@@ -222,16 +197,7 @@ def _uncomment(text: str, comment_prefixes: tuple[str, ...]) -> str:
 
 
 def _join_continuations(text: str) -> str:
-    """Backslash-continued lines joined, so one invocation is one identity.
-
-    The idiomatic tab-indented `python3 scripts/x.py \\` / `--self-test` yielded the
-    identity `scripts/x.py \\` and was refused in BOTH directions against the semantically
-    identical single-line `run:` -- the precise failure the argument-run comment above says
-    it fixed for `&&`.
-    """
-    # HORIZONTAL whitespace only. `\s` includes `\n`, so a stray trailing backslash joined
-    # across a blank line: two real gates vanished from the set AND a phantom identity
-    # appeared -- the same defect this joiner was added to fix for `&&`, one round later.
+    """Join backslash continuations using horizontal indentation only."""
     return re.sub(r"\\\n[ \t]*", " ", text)
 
 
@@ -259,13 +225,7 @@ def _normalise(program: str, rest: str) -> str:
 
 
 def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
-    """The recipe body of one `make` target, tab-indented lines only.
-
-    Split on a blank line would end the recipe early at the first blank line
-    inside it, and split on the next `\\n<name>:` would swallow a `$(MAKE)` line
-    containing a colon. Recipes are exactly the tab-prefixed lines that follow,
-    so that is what is taken.
-    """
+    """Read tab-indented recipes, retaining entries after blank or comment lines."""
     lines = text.splitlines()
     for index, line in enumerate(lines):
         if line.startswith(f"{target}:"):
@@ -274,11 +234,6 @@ def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
                 if following.startswith("\t"):
                     body.append(following)
                 elif following.strip() == "" or following.lstrip().startswith("#"):
-                    # A COLUMN-0 COMMENT INSIDE A RECIPE IS LEGAL MAKE, and it ended the
-                    # recipe -- so one comment took `local` from 40 gates to 1 and emitted
-                    # 39 messages saying gates do not run in `make check` that demonstrably
-                    # do. The docstring reasoned about what ends a recipe, got blank lines
-                    # right, and got comments wrong.
                     continue
                 else:
                     break
@@ -353,43 +308,31 @@ def invocations(text: str) -> set[str]:
 
 
 def workflow_invocations(text: str, makefile_text: str) -> set[str]:
-    """Every invocation a workflow reaches, following its `make <target>` steps.
-
-    A workflow's gates are not only the ones it spells out. Resolving its `make` steps
-    through the Makefile is what makes "runs in CI" mean what the comparison assumes.
-    """
+    """Resolve a workflow's direct gates and those reached through its Make steps."""
     found = invocations(text)
     for target in make_targets(text):
         found |= invocations_with_recursion(makefile_text, target)
     return found
 
 
-# `$(MAKE) <target>` inside a recipe. `make check` recurses into `rdf-core-hygiene` and
-# `wasm`, so a gate added to one of those was invisible to this comparison. The original
-# scope note called `$(MAKE)` recursions "deliberately out of scope" and justified it with
-# the reason that applies to cargo and node steps -- CI spells those differently across
-# jobs -- which does not apply to an in-repo make target at all. That was an annotated gap
-# wearing the word "scope", and `check_recipe` already existed to close it.
-# Match `$(MAKE) [flags] <target>` without treating a flag as a target.
+# Follow literal `$(MAKE)` edges because nested hygiene recipes share this Makefile.
 MAKE_RECURSION = re.compile(r"\$\(MAKE\)((?:\s+-{1,2}[\w-]+)*)\s+([\w-]+)")
 
 
-def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] | None = None) -> set[str]:
-    """Every invocation reachable from `target`, following `$(MAKE)` into this Makefile.
-
-    `seen` guards against a recipe cycle: a target that recurses into itself, directly or
-    through another, would otherwise recurse forever rather than report.
-    """
-    seen = set() if seen is None else seen
+def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] | None = None, read=invocations, edges=MAKE_RECURSION.findall) -> set[str]:
+    """Collect reachable invocations. Dedicated readers reject missing recipes
+    and real cycles, but permit shared targets."""
+    seen = set() if seen is None else (seen.copy() if read is not invocations else seen)
     if target in seen:
-        return set()
+        return set() if read is invocations else sys.exit(f"FAIL: recursive Make recipe `{target}`")
     seen.add(target)
-    body = check_recipe(makefile_text, target, missing_is_fatal=False)
-    found = invocations(body)
-    if target == "cargo-source-policy" and _uncomment(body, ("#",)).strip():
+    body = check_recipe(makefile_text, target, missing_is_fatal=read is not invocations)
+    found = read(body)
+    if read is invocations and target == "cargo-source-policy" and _uncomment(body, ("#",)).strip():
         found.add("make cargo-source-policy")
-    for _flags, nested in MAKE_RECURSION.findall(_drop_prose(strip_yaml_comments(_uncomment(body, ("#",))))):
-        found |= invocations_with_recursion(makefile_text, nested, seen)
+    recipe = strip_yaml_comments(_uncomment(body, ("#",)))
+    for _flags, nested in edges(_drop_prose(recipe) if read is invocations else recipe):
+        found |= invocations_with_recursion(makefile_text, nested, seen, read, edges)
     return found
 
 
@@ -748,8 +691,8 @@ def self_test() -> int:
     return 0 if ok else 1
 
 
-# This excluded downstream consumer proves serde_json feature unification cannot
-# change uniqueItems semantics. Workspace Cargo commands never select it.
+# Workspace Cargo excludes this consumer so serde_json feature unification cannot change its uniqueItems semantics.
+CONSUMER_RECIPE = re.compile(r'(?m)^\t[@+]*[ \t]*\$\(MAKE\)((?:[ \t]+(?:-s|--silent|--quiet|--no-print-directory))*)[ \t]+([\w-]+)(?:[ \t]+CARGO_POLICY_HELPER="")?[ \t]*$')
 CONSUMER_MANIFEST = "crates/jsonschema/tests/preserve_order_consumer/Cargo.toml"
 CONSUMER_COMMANDS = (
     f"cargo fmt --manifest-path {CONSUMER_MANIFEST} --check",
@@ -758,15 +701,68 @@ CONSUMER_COMMANDS = (
 )
 
 
+def consumer_edges(text: str) -> list[tuple[str, str]]:
+    commands = _drop_prose(text)
+    edges = CONSUMER_RECIPE.findall(commands)
+    # A literal Make word, even after a shell wrapper, must not disappear as a route.
+    make_word = r"""(?:[^\s"';|&()]+/)?g?make"""
+    boundary = r"(?<![^\s;|&(@+-])"
+    end = r"(?=[\s;|&)]|$)"
+    quoted = rf"""(?P<quote>["'])(?:{make_word}|\$\(MAKE\))(?P=quote)"""
+    shell = rf"""\b(?:ba|da)?sh[ \t]+-[\w]*c[\w]*[ \t]+["'][ \t]*(?:{make_word}|\$\(MAKE\)){end}"""
+    if (len(edges) != commands.count("$(MAKE)") or re.search(boundary + make_word + end, commands)
+            or re.search(rf"(?:{boundary}{quoted}{end}|{shell})", text)):
+        sys.exit("FAIL: unsupported recursive Make invocation in consumer gate")
+    return edges
+
+
+def workflow_blocks(text: str, sequence: bool = False):
+    """Yield direct entries with their opaque indented bodies."""
+    lines = text.splitlines()
+    depth = min((len(line) - len(line.lstrip(" ")) for line in lines if line.strip()), default=0)
+    starts = [i for i, line in enumerate(lines) if line.strip() and line[depth] != " "
+              and line[depth:].startswith("- ") == sequence]
+    for start, end in zip(starts, starts[1:] + [len(lines)]):
+        yield lines[start], "\n".join(lines[start + 1:end])
+
+
+def workflow_fields(text: str) -> dict[str, tuple[str, str]]:
+    fields = {}
+    for head, body in workflow_blocks(text):
+        key, colon, value = head.strip().partition(":")
+        if colon:
+            fields[key] = value.strip(), body
+    return fields
+
+
+def workflow_runs(text: str):
+    """Read literal run scalars only under jobs, job, steps and a live step."""
+    empty = ("", "")
+    disabled = r"(?i)(?:false|\$\{\{\s*false\s*\}\})"
+    value, jobs = workflow_fields(strip_yaml_comments(_uncomment(text, ("#",)))).get("jobs", empty)
+    for job_value, body in workflow_fields(jobs if not value else "").values():
+        job = workflow_fields(body if not job_value else "")
+        value, steps = job.get("steps", empty)
+        if value or re.fullmatch(disabled, job.get("if", empty)[0]):
+            continue
+        for head, body in workflow_blocks(steps, sequence=True):
+            step = workflow_fields(head.replace("- ", "  ", 1) + "\n" + body)
+            value, block = step.get("run", empty)
+            if not re.fullmatch(disabled, step.get("if", empty)[0]):
+                yield block if re.fullmatch(r"\|[-+]?\d?[-+]?", value) else value
+
+
+def consumer_commands(text: str, workflow: bool = False) -> set[str]:
+    prepared = _join_continuations(strip_yaml_comments(_uncomment(text, ("#",))))
+    prefix = r"[ \t]*" if workflow else r"\t[@+]*[ \t]*"
+    return {" ".join(command.split()) for command in re.findall(rf"(?m)^{prefix}(cargo[ \t]+[^\n]+)$", _drop_prose(prepared))}
+
+
 def consumer_gate_problems(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
     """Require each excluded-consumer gate locally and in a PR workflow."""
-    def live(text: str) -> str:
-        return " ".join(_drop_prose(strip_yaml_comments(_uncomment(
-            _join_continuations(text), ("#",)
-        ))).split())
-
-    local = live(" ".join(check_recipe(makefile_text, t) for t in ["check", *(n for _f, n in MAKE_RECURSION.findall(check_recipe(makefile_text, "check")))]))
-    ci = " ".join(live(text) for text in merge_blocking(workflow_texts).values())
+    local = invocations_with_recursion(makefile_text, "check", read=consumer_commands, edges=consumer_edges)
+    ci = {command for text in merge_blocking(workflow_texts).values()
+          for run in workflow_runs(text) for command in consumer_commands(run, workflow=True)}
     return [
         f"excluded preserve-order consumer gate `{command}` is absent from {where}"
         for command in CONSUMER_COMMANDS
