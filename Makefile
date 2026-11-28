@@ -613,7 +613,7 @@ cargo-source-policy: ## Check locked dependency versions and admitted sources.
 	cargo metadata --locked --format-version 1 --manifest-path "$$root_manifest" >"$$private_home/root.json"; \
 	cargo metadata --locked --format-version 1 --manifest-path "$$consumer_manifest" >"$$private_home/consumer.json"; \
 	"$$helper" --cargo-source-policy "$$PWD" "$(CARGO_POLICY_CONSUMER)" \
-		"$$private_home/root.json" "$$private_home/consumer.json"; \
+		"$$private_home" "$$private_home/root.json" "$$private_home/consumer.json"; \
 	run_deny() { \
 		status=0; report=0; \
 		cargo deny --locked --color never --manifest-path "$$1" --metadata-path "$$2" check bans sources \

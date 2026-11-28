@@ -49,7 +49,7 @@ Usage: helper-census [--root DIR] [--ledger FILE] <mode>
        helper-census --glossary-gate [--root DIR] [--po FILE]
                      [--glossary FILE] [--self-test] [--inventory FILE]
        helper-census --wasm-package-hosts
-       helper-census --cargo-source-policy ROOT CONSUMER [ROOT_JSON CONSUMER_JSON]
+       helper-census --cargo-source-policy ROOT CONSUMER [CARGO_HOME ROOT_JSON CONSUMER_JSON]
        helper-census --wasm-imports FILE
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)

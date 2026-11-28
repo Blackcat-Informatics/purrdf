@@ -1504,11 +1504,11 @@ def main() -> int:
                 common = Path(subprocess.check_output(command, cwd=ROOT, text=True).strip())
             scratch = common.parent / ".stage"
             scratch.mkdir(exist_ok=True)
-            private = cleanup.enter_context(
-                tempfile.TemporaryDirectory(prefix="license-vendor-", dir=scratch))
-            vendor = Path(private).resolve() / "sources"
+            vendor = Path(cleanup.enter_context(
+                tempfile.TemporaryDirectory(prefix="license-vendor-", dir=scratch))).resolve() / "sources"
             command = ["cargo", "vendor", "--locked", "--versioned-dirs", str(vendor)]
-            subprocess.run(command, cwd=ROOT, stdout=subprocess.DEVNULL, check=True)
+            environment = os.environ | dict.fromkeys(("CARGO_HOME", "STAGE_CARGO_HOME"), str(vendor.parent))
+            subprocess.run(command, cwd=ROOT, stdout=subprocess.DEVNULL, check=True, env=environment)
         expected = {name: bundle(name, details, meta, inherited, vendor)
                     for name, details in selected.items()}
     if args.audit_directory:

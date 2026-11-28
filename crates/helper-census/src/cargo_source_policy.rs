@@ -32,7 +32,7 @@ impl fmt::Display for Error {
         match self {
             Self::Usage => write!(
                 output,
-                "expected --cargo-source-policy ROOT CONSUMER [ROOT_JSON CONSUMER_JSON]"
+                "expected --cargo-source-policy ROOT CONSUMER [CARGO_HOME ROOT_JSON CONSUMER_JSON]"
             ),
             Self::Read(path, cause) => write!(output, "{}: {cause}", path.display()),
             Self::Profile(cause) => write!(output, "Cargo TOML parser profile: {cause}"),
@@ -85,9 +85,10 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let consumer = root.join(relative);
     match graphs {
         [] => check_configs(&root, &consumer),
-        [root_graph, consumer_graph] => {
-            check_graph(&root, &root, Path::new(root_graph))?;
-            check_graph(&root, &consumer, Path::new(consumer_graph))
+        [cargo_home, root_graph, consumer_graph] => {
+            let cargo_home = canonical(Path::new(cargo_home))?;
+            check_graph(&root, &root, &cargo_home, Path::new(root_graph))?;
+            check_graph(&root, &consumer, &cargo_home, Path::new(consumer_graph))
         }
         _ => Err(Error::Usage),
     }
@@ -209,7 +210,7 @@ fn read_includes(
         return Ok(());
     };
     let invalid = || Error::Invalid(path.to_owned(), "invalid Cargo config include");
-    if !matches!(include.kind, Kind::Array) {
+    if !matches!(include.kind, Kind::Array | Kind::ArrayOfTables) {
         return Err(invalid());
     }
     let parent = path.parent().ok_or_else(invalid)?;
@@ -248,7 +249,7 @@ fn child<'a>(nodes: &'a [Node], parent: &Node, key: &str) -> Option<&'a Node> {
         .find(|node| node.key.as_ref().is_some_and(|name| name.decoded == key))
 }
 
-fn check_graph(root: &Path, expected: &Path, metadata: &Path) -> Result<()> {
+fn check_graph(root: &Path, expected: &Path, cargo_home: &Path, metadata: &Path) -> Result<()> {
     let bytes = fs::read(metadata).map_err(|cause| Error::Read(metadata.to_owned(), cause))?;
     let graph = json::read_slice(
         &bytes,
@@ -280,22 +281,41 @@ fn check_graph(root: &Path, expected: &Path, metadata: &Path) -> Result<()> {
         .get("packages")
         .and_then(Value::as_array)
         .ok_or_else(invalid)?;
+    let registry = cargo_home.join("registry/src");
+    let git = cargo_home.join("git/checkouts");
     for package in packages {
         let source = package.get("source").ok_or_else(invalid)?;
-        if !source.is_null() {
-            source.as_str().ok_or_else(invalid)?;
-            continue;
-        }
+        let (package_root, manifest_kind, dependency_kind) = if source.is_null() {
+            (
+                root,
+                "Cargo metadata local package manifest",
+                "Cargo metadata local dependency path",
+            )
+        } else {
+            match source.as_str().ok_or_else(invalid)? {
+                source if source.starts_with("registry+") || source.starts_with("sparse+") => (
+                    registry.as_path(),
+                    "Cargo metadata registry package manifest",
+                    "Cargo metadata registry dependency path",
+                ),
+                source if source.starts_with("git+") => (
+                    git.as_path(),
+                    "Cargo metadata Git package manifest",
+                    "Cargo metadata Git dependency path",
+                ),
+                _ => {
+                    return Err(Error::Invalid(
+                        metadata.to_owned(),
+                        "unexpected Cargo metadata package source",
+                    ));
+                }
+            }
+        };
         let manifest = package
             .get("manifest_path")
             .and_then(Value::as_str)
             .ok_or_else(invalid)?;
-        graph_path(
-            root,
-            manifest,
-            "Cargo metadata local package manifest",
-            false,
-        )?;
+        graph_path(package_root, manifest, manifest_kind, false)?;
         let dependencies = package
             .get("dependencies")
             .and_then(Value::as_array)
@@ -303,7 +323,7 @@ fn check_graph(root: &Path, expected: &Path, metadata: &Path) -> Result<()> {
         for dependency in dependencies {
             if let Some(value) = dependency.get("path").filter(|value| !value.is_null()) {
                 let path = value.as_str().ok_or_else(invalid)?;
-                graph_path(root, path, "Cargo metadata local dependency path", true)?;
+                graph_path(package_root, path, dependency_kind, true)?;
             }
         }
     }
