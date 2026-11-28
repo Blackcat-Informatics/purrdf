@@ -1,0 +1,72 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABr1dPUg": {
+    "resolution": "acknowledged",
+    "reason": "The latest capacity notice contains no additional technical finding. The earlier summary describes the preceding revision.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T09:05:54Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "3c17f316a38c6fb539d15ba54658e79ceda458c58820343111e29f5527833f9e"
+    }
+  },
+  "github:review:PRR_kwDOTKq-Ms8AAAABa2YcYA": {
+    "resolution": "addressed",
+    "reason": "All three inline findings have locally verified fixes in the signed successor.",
+    "commit": "c931d08cb08bf7330524778320856c1cb9d041ae",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T08:47:20Z",
+      "state": "COMMENTED",
+      "commit": "12402fd85f2fc106543abee7de3e5156e1a2cf5f",
+      "path": null,
+      "line": null,
+      "body_sha256": "be28944e83f5b960984fcf6ac64614e974ad373cf78ae2be6d4c2af06d5b09e8"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABGbUAJg": {
+    "resolution": "addressed",
+    "reason": "The config reader accepts both supported include representations and validates each target; accepted and refused neighbors passed.",
+    "commit": "c931d08cb08bf7330524778320856c1cb9d041ae",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T09:05:57Z",
+      "state": null,
+      "commit": "12402fd85f2fc106543abee7de3e5156e1a2cf5f",
+      "path": "crates/helper-census/src/cargo_source_policy.rs",
+      "line": null,
+      "body_sha256": "581b4cbdd0f19a24f06d1f2f8b1c527a2b780633d4d93a096d7f43560460b544"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABGbUAKg": {
+    "resolution": "addressed",
+    "reason": "Cargo graph admission now requires physical private registry and Git source roots. Real directory replacements inside and outside the workspace were refused before Deny.",
+    "commit": "c931d08cb08bf7330524778320856c1cb9d041ae",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T09:07:24Z",
+      "state": null,
+      "commit": "12402fd85f2fc106543abee7de3e5156e1a2cf5f",
+      "path": "crates/helper-census/src/cargo_source_policy.rs",
+      "line": null,
+      "body_sha256": "184c4d986ce28fc1c736137571b334337df3c1ef5646010f988c675f7b639ff7"
+    }
+  },
+  "github:inline:PRRC_kwDOTKq-Ms8AAAABGbUALw": {
+    "resolution": "addressed",
+    "reason": "Vendor export starts with an empty invocation-private Cargo home. All 44 checked profiles match after fresh verified downloads.",
+    "commit": "c931d08cb08bf7330524778320856c1cb9d041ae",
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T09:05:59Z",
+      "state": null,
+      "commit": "c931d08cb08bf7330524778320856c1cb9d041ae",
+      "path": "scripts/package-licenses.py",
+      "line": 327,
+      "body_sha256": "ffb727028eeb9e639f8012cd324acf59233c95c87ec765ee8debe0a8d6d33cb0"
+    }
+  }
+}

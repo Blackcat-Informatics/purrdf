@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook",
+  "branch": "paudley/1474-meet-the-shared-build-standard-hook",
+  "base_ref": "origin/main",
+  "head": "e3332b6b18249d2a5342314d0150432e76222fdc",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1474-meet-the-shared-build-standard-hook/.stage/cargo-source-policy/sync/20261128T082628-6bf62067f26d48de918d42c6af3a5195",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "6306cbd4928295edbe23a487756c6ffa2ad5f8cd",
+  "merge_bases": [
+    "e3332b6b18249d2a5342314d0150432e76222fdc"
+  ],
+  "commit": "6306cbd4928295edbe23a487756c6ffa2ad5f8cd"
+}
