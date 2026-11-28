@@ -2,43 +2,16 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-"""Refuse a hygiene gate that runs locally but not in CI, or in CI but not locally.
+"""Compare repository hygiene gates reachable from make check and pull-request workflows.
 
-``make check`` and ``.github/workflows/ci.yaml`` are two hand-maintained lists of
-the same rule set. Nothing has ever compared them, so a gate added to one and
-forgotten in the other is invisible: each list stays internally consistent and
-each run stays green. The failure is one-directional and quiet in both
-directions, and both directions had already happened when this was written:
-
-* ``check-terminal-predicates.py`` and its ``--self-test`` ran in ``make check``
-  and in **no** workflow, so nothing about terminal predicates blocked a merge;
-* ``check-toolchain-pin.py --self-test`` ran in CI and **not** in ``make check``,
-  so a contributor could not reproduce a red merge locally;
-* and the five gates added for the benchmark lanes — the tracked-path gate among
-  them, written *because* a flag-shaped artifact escaped thirty hygiene scripts —
-  were in ``make check`` alone, unable to block the merge that would re-commit one.
-
-CI does not run ``make check``; it enumerates each gate as a named step so a
-failure names itself in the job list. That is a reasonable choice, and it is
-exactly what creates the second list. So this gate's subject is the AGREEMENT
-between the lists rather than either list's contents.
-
-Scope: invocations of a ``scripts/`` (or in-repo ``crates/.../*.py``) program and
-helper-census policy/self-test modes are compared. Other ``cargo`` and ``node``
-oracles are out of scope — CI distributes those across jobs (``wasm``, ``pytest``,
-``capi``) and spells several differently on purpose, so requiring textual equality
-there would refuse a correct workflow. The explicit preserve-order consumer is a
-bounded exception: its three Cargo gates must remain in both lists because an
-excluded consumer does not run through any workspace command.
-
-``$(MAKE)`` recursions ARE followed, within this Makefile. They were listed above
-as "deliberately out of scope" under the reason that applies to cargo and node —
-which does not apply to an in-repo make target. ``make check`` recurses into
-``rdf-core-hygiene``, so a hygiene gate added to the hygiene target was invisible
-to this comparison. That was an annotated gap wearing the word "scope".
+Compare in-repository script invocations and helper-census policy modes. Follow
+literal recursive Make targets in this Makefile. The excluded preserve-order
+consumer requires three explicit Cargo commands. General Cargo and Node lanes
+are outside this comparison.
 """
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
@@ -48,25 +21,7 @@ MAKEFILE = REPO_ROOT / "Makefile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 CI_WORKFLOW = WORKFLOWS / "ci.yaml"
 
-# WHICH WORKFLOWS GATE A PULL REQUEST IS READ, NOT LISTED. This was
-# `frozenset({"ci.yaml"})`, which is narrower than the sentence above it: `docs.yaml`
-# also triggers on `pull_request` and runs real gates through `make check-i18n`, so a
-# hardcoded set both under-counted the blocking surface and would go stale the first
-# time a workflow was added. Same defect shape as the two hand-maintained lists this
-# whole gate exists to compare.
-# THE `on:` BLOCK IS BOUNDED AND THEN TOKEN-MATCHED. The first version was
-# `^on:\s*$.*?^\s{2}pull_request:` with DOTALL, which recognised ONE of six legal
-# spellings and failed in both directions at once:
-#
-#   on:\n  pull_request:   -> True      on: [pull_request]   -> False
-#   on: pull_request        -> False     on:\n  - pull_request  -> False
-#   "on":\n  pull_request:  -> False     on:  # c\n  pull_request: -> False
-#
-# `"on":` is what YAML 1.1 parsers require, because bare `on` is a boolean. Reformatting
-# `ci.yaml` to `on: [pull_request, push]` -- a pure style edit -- would have turned all
-# forty gates red with a message that is a factual lie, AND blinded direction 2 to every
-# CI-only gate. DOTALL gave the inverse too: a cron-only workflow with any two-space
-# `pull_request:` key anywhere below `on:` was promoted to merge-blocking.
+# Bound the top-level event block before looking for a pull-request trigger.
 ON_BLOCK = re.compile(r'^["\']?on["\']?:(.*?)(?=^\S|\Z)', re.MULTILINE | re.DOTALL)
 PULL_REQUEST_TOKEN = re.compile(r"(?<![\w-])pull_request(?![\w-])")
 
@@ -702,6 +657,8 @@ CONSUMER_COMMANDS = (
 
 
 def consumer_edges(text: str) -> list[tuple[str, str]]:
+    if "<<" in text:
+        sys.exit("FAIL: unsupported shell input redirection in consumer Make recipe")
     commands = _drop_prose(text)
     edges = CONSUMER_RECIPE.findall(commands)
     # A literal Make word, even after a shell wrapper, must not disappear as a route.
@@ -726,11 +683,26 @@ def workflow_blocks(text: str, sequence: bool = False):
         yield lines[start], "\n".join(lines[start + 1:end])
 
 
+def yaml_literal(value: str) -> str | None:
+    """Decode one inline YAML scalar, refusing unsupported quoting."""
+    if value.startswith("'"):
+        return value[1:-1].replace("''", "'") if re.fullmatch(r"'(?:[^']|'')*'", value) else None
+    if value.startswith('"'):
+        def yaml_hex(match: re.Match[str]) -> str:
+            written = match[0]
+            return written if written == r"\\" else json.dumps(chr(int(written[2:], 16)))[1:-1]
+        try:
+            return json.loads(re.sub(r"\\\\|\\(?:x[0-9a-fA-F]{2}|U[0-9a-fA-F]{8})", yaml_hex, value))
+        except ValueError:
+            return None
+    return value
+
+
 def workflow_fields(text: str) -> dict[str, tuple[str, str]]:
     fields = {}
     for head, body in workflow_blocks(text):
         key, colon, value = head.strip().partition(":")
-        if colon:
+        if colon and (key := yaml_literal(key.rstrip())) is not None:
             fields[key] = value.strip(), body
     return fields
 
@@ -739,27 +711,38 @@ def workflow_runs(text: str):
     """Read literal run scalars only under jobs, job, steps and a live step."""
     empty = ("", "")
     disabled = r"(?i)(?:false|\$\{\{\s*false\s*\}\})"
-    value, jobs = workflow_fields(strip_yaml_comments(_uncomment(text, ("#",)))).get("jobs", empty)
+    def live(fields: dict[str, tuple[str, str]]) -> bool:
+        raw, body = fields.get("if", empty)
+        value = yaml_literal(raw)
+        return (value is not None and not body.strip() and not raw.startswith(("*", "&", "!", ">", "|", "[", "{"))
+                and not re.fullmatch(disabled, value.strip()))
+    value, jobs = workflow_fields(strip_yaml_comments(text)).get("jobs", empty)
     for job_value, body in workflow_fields(jobs if not value else "").values():
         job = workflow_fields(body if not job_value else "")
         value, steps = job.get("steps", empty)
-        if value or re.fullmatch(disabled, job.get("if", empty)[0]):
+        if value or not live(job):
             continue
         for head, body in workflow_blocks(steps, sequence=True):
             step = workflow_fields(head.replace("- ", "  ", 1) + "\n" + body)
             value, block = step.get("run", empty)
-            if not re.fullmatch(disabled, step.get("if", empty)[0]):
-                yield block if re.fullmatch(r"\|[-+]?\d?[-+]?", value) else value
+            if live(step):
+                yield block if re.fullmatch(r"\|[-+]?\d?[-+]?", value) else yaml_literal(value) or ""
 
 
 def consumer_commands(text: str, workflow: bool = False) -> set[str]:
-    prepared = _join_continuations(strip_yaml_comments(_uncomment(text, ("#",))))
+    prepared = _join_continuations(strip_yaml_comments(text))
     prefix = r"[ \t]*" if workflow else r"\t[@+]*[ \t]*"
-    return {" ".join(command.split()) for command in re.findall(rf"(?m)^{prefix}(cargo[ \t]+[^\n]+)$", _drop_prose(prepared))}
+    lines = {" ".join(line.split()) for line in re.findall(rf"(?m)^{prefix}([^\n]+)$", prepared)}
+    if workflow and lines.difference(("", ":", "true", *CONSUMER_COMMANDS)):
+        # Complex shell blocks cannot prove which lines execute, including here-doc data.
+        return set()
+    return lines.intersection(CONSUMER_COMMANDS)
 
 
 def consumer_gate_problems(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
     """Require each excluded-consumer gate locally and in a PR workflow."""
+    if re.search(r"(?m)^ *\.ONESHELL[ \t]*:", makefile_text):
+        sys.exit("FAIL: unsupported shared shell in consumer Make recipes")
     local = invocations_with_recursion(makefile_text, "check", read=consumer_commands, edges=consumer_edges)
     ci = {command for text in merge_blocking(workflow_texts).values()
           for run in workflow_runs(text) for command in consumer_commands(run, workflow=True)}
