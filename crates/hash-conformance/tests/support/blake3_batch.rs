@@ -21,6 +21,44 @@ pub(super) fn independent_batches_match_portable_through_two_chunks() {
         })
         .collect();
     compare_modes(&inputs, &context, Backend::all_available());
+    compare_exact_widths(inputs);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn compare_exact_widths(mut inputs: Vec<&[u8]>) {
+    const MAX_WIDTH: usize = 16;
+    let count = inputs.len();
+    // Wrap the final group so each message length runs at the exact width.
+    inputs.extend_from_within(..MAX_WIDTH - 1);
+    let expected: Vec<_> = inputs
+        .iter()
+        .map(|input| {
+            Backend::Portable
+                .hash(input)
+                .expect("portable is available")
+        })
+        .collect();
+    let mut output = [Hash::ZERO; MAX_WIDTH];
+    // Partial SIMD groups take the live-lane blend even on the first block.
+    for backend in Backend::all_available() {
+        for width in 1..=MAX_WIDTH {
+            let slots = &mut output[..width];
+            for start in (0..count).step_by(width) {
+                let end = start + width;
+                let batch = &inputs[start..end];
+                slots.fill(Hash::ZERO);
+                backend
+                    .hash_batch(batch, slots)
+                    .expect("available backend")
+                    .expect("message lengths fit and each has an output slot");
+                assert_eq!(
+                    &*slots,
+                    &expected[start..end],
+                    "backend={backend:?}, width={width}, first message index={start}"
+                );
+            }
+        }
+    }
 }
 
 fn modes(inputs: &[&[u8]], context: &DeriveKeyContext, backend: Option<Backend>) -> [Vec<Hash>; 3] {
