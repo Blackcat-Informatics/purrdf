@@ -878,11 +878,10 @@ impl SparqlCallForm {
 /// through [`purrdf_sparql_algebra::builtin_function_keyword`], so this
 /// implementation cannot claim a function the query parser would then reject,
 /// and a name the parser gains is callable here the same day. The explicit table
-/// below covers only the names SPARQL does NOT spell as a function call — the
-/// operators, the functional forms, and the one name whose keyword is not its
-/// own uppercasing (`encodeForUri` → `ENCODE_FOR_URI`). The two alias spellings
-/// the W3C `shnex-sparql.ttl` vocabulary declares (`plus`, `encode`) come from
-/// the spec symbol table ([`crate::spec`]), which records their source.
+/// below covers operators, functional forms and vocabulary names whose call
+/// keyword is not their uppercase spelling. The `plus` and `encode` aliases
+/// declared by the frozen W3C `shnex-sparql.ttl` come from the spec symbol table
+/// ([`crate::spec`]), which records their source.
 ///
 /// # Errors
 ///
@@ -892,8 +891,7 @@ impl SparqlCallForm {
 /// rather than argument values; and anything the vocabulary does not define. A
 /// refusal, never a silent empty result.
 pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, SparqlCallError> {
-    /// The SPARQL 1.2 names that are not spelled as a function call, each with
-    /// the surface form it is spelled as instead.
+    /// Vocabulary names that do not map directly to a SPARQL keyword call.
     static NON_CALL_FORMS: &[(&str, SparqlCallForm)] = &[
         // Operators (SPARQL 1.2 Query §17.4.1 / the operator mapping table).
         ("add", SparqlCallForm::Infix("+")),
@@ -930,7 +928,8 @@ pub fn sparql_ns_lowering(local: &str) -> Result<SparqlCallForm, SparqlCallError
         ("if", SparqlCallForm::Call("IF")),
         ("coalesce", SparqlCallForm::Call("COALESCE")),
         ("sameTerm", SparqlCallForm::Call("sameTerm")),
-        // The one function-call name whose keyword is not its own uppercasing.
+        // The current Node Expressions spelling and the SPARQL vocabulary spelling.
+        ("encode-for-uri", SparqlCallForm::Call("ENCODE_FOR_URI")),
         ("encodeForUri", SparqlCallForm::Call("ENCODE_FOR_URI")),
     ];
 

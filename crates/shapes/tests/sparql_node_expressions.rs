@@ -427,17 +427,20 @@ fn sparql_is_triple_recognises_a_constructed_triple_term() {
     );
 }
 
-/// `sparql:encodeForUri` is the one function-call name whose SPARQL keyword is not
-/// its own uppercasing (`ENCODE_FOR_URI`), so it exercises the explicit half of
-/// the dispatch table.
+/// The current W3C Node Expressions spelling and both earlier spellings
+/// evaluate through the same SPARQL URI encoder.
 #[test]
 fn sparql_ns_call_resolves_encode_for_uri() {
-    let out = outputs(
-        "",
-        r#"ex:S a sh:NodeShape ; sh:expression [ sparql:encodeForUri ( "a b" ) ] ."#,
-        "a",
-    );
-    assert_eq!(out, vec!["\"a%20b\"".to_owned()]);
+    for local in ["encode-for-uri", "encode", "encodeForUri"] {
+        let shape = format!(
+            r#"ex:S a sh:NodeShape ; sh:expression [ sparql:{local} ( "hello world" ) ] ."#
+        );
+        assert_eq!(
+            outputs("", &shape, "a"),
+            vec!["\"hello%20world\"".to_owned()],
+            "{local}"
+        );
+    }
 }
 
 /// An argument is itself a node expression, so a `sparql:` call composes with the
@@ -853,20 +856,7 @@ fn sparql_plus_is_the_add_operator() {
     assert_eq!(plus, add);
 }
 
-/// `shnex-sparql.ttl` spells `ENCODE_FOR_URI` `sparql:encode`; `sparql-ns.ttl`
-/// spells it `sparql:encodeForUri`.
-#[test]
-fn sparql_encode_is_encode_for_uri() {
-    let out = outputs(
-        "",
-        r#"ex:S a sh:NodeShape ; sh:expression [ sparql:encode ( "a b" ) ] ."#,
-        "a",
-    );
-    assert_eq!(out, vec!["\"a%20b\"".to_owned()]);
-}
-
-/// The aliases are two NAMES, not a namespace wildcard: a name neither vocabulary
-/// defines is still refused.
+/// Accepting alternate spellings does not make unknown names callable.
 #[test]
 fn the_spelling_aliases_do_not_admit_unknown_names() {
     let err = turtle::load_error(
