@@ -27,18 +27,18 @@ fn local_cargo_graph_paths_cannot_resolve_outside_the_checkout() {
     let directory = purrdf_testkit::temp_dir!().expect("allocate graph fixture");
     let root = directory.path().join("snapshot");
     let consumer = root.join("consumer");
-    fs::create_dir_all(&consumer).expect("create consumer");
-    for workspace in [&root, &consumer] {
-        fs::write(workspace.join("Cargo.toml"), "").expect("create local manifest");
-    }
+    let shared = root.join("shared");
     let outside = directory.path().join("outside");
-    fs::create_dir(&outside).expect("create out-of-root fixture dependency");
+    for package in [&root, &consumer, &shared, &outside] {
+        fs::create_dir_all(package).expect("create fixture package directory");
+        fs::write(package.join("Cargo.toml"), "").expect("create local manifest");
+    }
     let cargo_home = directory.path().join("cargo-home");
     fs::create_dir(&cargo_home).expect("create private home");
     let root_graph = directory.path().join("root.json");
     let consumer_graph = directory.path().join("consumer.json");
-    graph(&root_graph, &root, &root);
-    graph(&consumer_graph, &consumer, &root);
+    graph(&root_graph, &root, &shared);
+    graph(&consumer_graph, &consumer, &shared);
     let mut command = checker(&root);
     command.args([&cargo_home, &root_graph, &consumer_graph]);
     let inside = execute(&mut command);
@@ -56,29 +56,92 @@ fn local_cargo_graph_paths_cannot_resolve_outside_the_checkout() {
     );
 }
 
-fn graph(output: &Path, workspace: &Path, dependency: &Path) {
-    let manifest = workspace.join("Cargo.toml");
-    let package = Object::new()
+fn local_package(path: &Path, name: &str) -> Object {
+    let path = path.to_str().expect("UTF-8 test path");
+    Object::new()
+        .with("id", format!("path+file://{path}#{name}@1.0.0"))
+        .with("name", name)
+        .with("version", "1.0.0")
         .with("source", Value::Null)
-        .with("manifest_path", manifest.to_str().expect("UTF-8 test path"))
+        .with("manifest_path", format!("{path}/Cargo.toml"))
+}
+
+fn graph(output: &Path, workspace: &Path, dependency: &Path) {
+    write_graph(
+        output,
+        workspace,
+        local_package(dependency, "fixture-dependency"),
+        Value::from(dependency.to_str().expect("UTF-8 test path")),
+    );
+}
+
+fn write_graph(output: &Path, workspace: &Path, dependency: Object, path: Value) {
+    let dependency_id = dependency.get("id").expect("dependency identity").clone();
+    let dependency_name = dependency.get("name").expect("dependency name").clone();
+    let source = dependency.get("source").expect("dependency source").clone();
+    let member = local_package(workspace, "policy-fixture")
+        .with("publish", Vec::<Value>::new())
         .with(
             "dependencies",
             vec![Value::from(
-                Object::new().with("path", dependency.to_str().expect("UTF-8 test path")),
+                Object::new()
+                    .with("name", dependency_name.clone())
+                    .with("source", source)
+                    .with("kind", Value::Null)
+                    .with("path", path),
             )],
         );
-    write_graph(output, workspace, package);
-}
-
-fn write_graph(output: &Path, workspace: &Path, package: Object) {
+    let member_id = member
+        .get("id")
+        .expect("workspace package identity")
+        .clone();
+    let edge_name = dependency_name
+        .as_str()
+        .expect("Cargo package name")
+        .replace('-', "_");
+    let edge = Object::new()
+        .with("name", edge_name)
+        .with("pkg", dependency_id.clone())
+        .with(
+            "dep_kinds",
+            vec![Value::from(
+                Object::new()
+                    .with("kind", Value::Null)
+                    .with("target", Value::Null),
+            )],
+        );
+    let nodes = vec![
+        Value::from(
+            Object::new()
+                .with("id", member_id.clone())
+                .with("dependencies", vec![dependency_id.clone()])
+                .with("deps", vec![Value::from(edge)]),
+        ),
+        Value::from(
+            Object::new()
+                .with("id", dependency_id)
+                .with("dependencies", Vec::<Value>::new())
+                .with("deps", Vec::<Value>::new()),
+        ),
+    ];
     let value = Value::from(
         Object::new()
             .with(
                 "workspace_root",
                 workspace.to_str().expect("UTF-8 test path"),
             )
-            .with("resolve", Object::new().with("nodes", Vec::<Value>::new()))
-            .with("packages", vec![Value::from(package)]),
+            .with("workspace_members", vec![member_id.clone()])
+            .with(
+                "resolve",
+                Object::new().with("root", member_id).with("nodes", nodes),
+            )
+            .with(
+                "packages",
+                vec![
+                    Value::from(member),
+                    Value::from(dependency.with("dependencies", Vec::<Value>::new())),
+                ],
+            ),
     );
     fs::write(output, json::write_compact(&value)).expect("write synthetic locked metadata");
 }
@@ -92,7 +155,7 @@ fn registry_manifests_must_come_from_the_private_registry() {
     let package = cargo_home.join("registry/src/index/example-1.0.0");
     let replacement = root.join("vendor/example-1.0.0");
     let external = directory.path().join("vendor/example-1.0.0");
-    for path in [&consumer, &package, &replacement, &external] {
+    for path in [&root, &consumer, &package, &replacement, &external] {
         fs::create_dir_all(path).expect("create fixture directory");
         fs::write(path.join("Cargo.toml"), "").expect("create fixture manifest");
     }
@@ -104,6 +167,12 @@ fn registry_manifests_must_come_from_the_private_registry() {
         let graph_package = || {
             Object::new()
                 .with(
+                    "id",
+                    "registry+https://github.com/rust-lang/crates.io-index#example@1.0.0",
+                )
+                .with("name", "example")
+                .with("version", "1.0.0")
+                .with(
                     "source",
                     "registry+https://github.com/rust-lang/crates.io-index",
                 )
@@ -114,10 +183,9 @@ fn registry_manifests_must_come_from_the_private_registry() {
                         .to_str()
                         .expect("UTF-8 test path"),
                 )
-                .with("dependencies", Vec::<Value>::new())
         };
-        write_graph(&root_graph, &root, graph_package());
-        write_graph(&consumer_graph, &consumer, graph_package());
+        write_graph(&root_graph, &root, graph_package(), Value::Null);
+        write_graph(&consumer_graph, &consumer, graph_package(), Value::Null);
         let output = execute(checker(&root).args([&cargo_home, &root_graph, &consumer_graph]));
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert_eq!(output.status.success(), admitted, "{diagnostic}");

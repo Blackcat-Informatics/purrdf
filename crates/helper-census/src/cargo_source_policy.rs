@@ -20,6 +20,7 @@ pub(crate) enum Error {
     Toml(PathBuf, purrdf_toml::TomlError),
     Json(PathBuf, json::Error),
     Invalid(PathBuf, &'static str),
+    FuzzGraph(PathBuf, String),
     Outside {
         kind: &'static str,
         path: PathBuf,
@@ -39,6 +40,7 @@ impl fmt::Display for Error {
             Self::Toml(path, cause) => write!(output, "Cargo config {}: {cause}", path.display()),
             Self::Json(path, cause) => write!(output, "Cargo metadata {}: {cause}", path.display()),
             Self::Invalid(path, reason) => write!(output, "{}: {reason}", path.display()),
+            Self::FuzzGraph(path, reason) => write!(output, "{}: {reason}", path.display()),
             Self::Outside {
                 kind,
                 path,
@@ -281,6 +283,8 @@ fn check_graph(root: &Path, expected: &Path, cargo_home: &Path, metadata: &Path)
         .get("packages")
         .and_then(Value::as_array)
         .ok_or_else(invalid)?;
+    crate::cargo_fuzz_policy::validate(&graph, root, expected)
+        .map_err(|reason| Error::FuzzGraph(metadata.to_owned(), reason))?;
     let registry = cargo_home.join("registry/src");
     let git = cargo_home.join("git/checkouts");
     for package in packages {

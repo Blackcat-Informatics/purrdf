@@ -20,6 +20,7 @@
 
 mod asm_reports;
 mod capacity;
+mod cargo_fuzz_policy;
 mod cargo_source_policy;
 mod census;
 mod glossary;
@@ -50,6 +51,7 @@ Usage: helper-census [--root DIR] [--ledger FILE] <mode>
                      [--glossary FILE] [--self-test] [--inventory FILE]
        helper-census --wasm-package-hosts
        helper-census --cargo-source-policy ROOT CONSUMER [CARGO_HOME ROOT_JSON CONSUMER_JSON]
+       helper-census --cargo-fuzz-edge-policy ROOT < FUZZ_JSON
        helper-census --wasm-imports FILE
        helper-census [--root DIR] --non-rust-ratchet
                      (--base REV | --merge-base-with REF)
@@ -251,6 +253,11 @@ fn main() -> ExitCode {
             "cargo-source-policy",
             cargo_source_policy::run(&args).map_err(|error| error.to_string()),
         ))
+    } else if args
+        .first()
+        .is_some_and(|arg| arg == "--cargo-fuzz-edge-policy")
+    {
+        Some(("cargo-fuzz-edge-policy", cargo_fuzz_policy::run(&args)))
     } else if args.iter().any(|arg| arg == "--wasm-package-hosts") {
         Some(("wasm-package", wasm_package::run(&args)))
     } else if args.iter().any(|arg| arg == "--wasm-imports") {
