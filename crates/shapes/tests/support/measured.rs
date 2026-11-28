@@ -58,7 +58,7 @@ pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
 /// cannot. Any `k >= 2` satisfying `k * pushes_per_validation < 63` would do; the
 /// third execution is margin, not calibration, and no value of it can hide a
 /// per-focus-node term, because a term that is present is present in all three.
-pub(crate) const REPETITIONS: usize = 3;
+const REPETITIONS: usize = 3;
 
 /// At least two executions, or the property the constant is chosen for — that one
 /// of them must miss the block boundary — is not available at all.
