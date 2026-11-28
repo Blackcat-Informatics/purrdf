@@ -89,6 +89,25 @@ jobs:
       - name: Enforce no Cargo features
         run: cargo run -q --locked -p helper-census -- --no-features
 
+      - name: Install the Cargo source policy checker
+        run: |
+          version=$(sed -n 's/^override CARGO_DENY_VERSION := //p' Makefile)
+          archive="cargo-deny-$version-x86_64-unknown-linux-musl"
+          cd "$RUNNER_TEMP"
+          curl --fail --show-error --silent --location \
+            "https://github.com/EmbarkStudios/cargo-deny/releases/download/$version/$archive.tar.gz" \
+            --output "$archive.tar.gz"
+          printf '%s  %s\n' '9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f' "$archive.tar.gz" \
+            | sha256sum --check
+          tar -xzf "$archive.tar.gz" "$archive/cargo-deny"
+          printf '%s  %s\n' 'b329e25933d01c36dd7c47d84ea5716694f9b7caf53a5003d45674703a8ed54a' "$archive/cargo-deny" \
+            | sha256sum --check
+          install -D -m 0755 "$archive/cargo-deny" "$RUNNER_TEMP/purrdf-tools/cargo-deny"
+          printf '%s\n' "$RUNNER_TEMP/purrdf-tools" >> "$GITHUB_PATH"
+
+      - name: Check locked dependency versions and sources
+        run: make cargo-source-policy CARGO_POLICY_HELPER="$PWD/target/debug/helper-census"
+
       - name: Record the built assembly report validator
         id: helper
         shell: bash

@@ -28,6 +28,7 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
+from contextlib import ExitStack
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -176,14 +177,8 @@ def add_runtime(path: Path, profile: str) -> None:
 
 
 def metadata() -> dict:
-    result = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return json.loads(result.stdout)
+    command = ["cargo", "metadata", "--locked", "--format-version", "1"]
+    return json.loads(subprocess.check_output(command, cwd=ROOT))
 
 
 def inventory() -> list[dict]:
@@ -199,15 +194,7 @@ def inventory() -> list[dict]:
             for path in entry.get("paths", [])
         ):
             raise ValueError(f"{entry['id']}: separate lexicon scope covers other material")
-        for key in (
-            "id",
-            "license",
-            "source",
-            "scope",
-            "paths",
-            "notices",
-            "provenance",
-        ):
+        for key in ("id", "license", "source", "scope", "paths", "notices", "provenance"):
             if not entry.get(key):
                 raise ValueError(f"{entry.get('id')}: missing {key}")
         for path in [*entry["notices"], *entry["provenance"]]:
@@ -268,10 +255,8 @@ def profiles(meta: dict) -> dict[str, tuple[Path, set[str], bool]]:
 
 
 def bundle(
-    profile: str,
-    details: tuple[Path, set[str], bool],
-    meta: dict,
-    inherited: list[dict],
+    profile: str, details: tuple[Path, set[str], bool],
+    meta: dict, inherited: list[dict], vendor: Path | None,
 ) -> dict[str, bytes]:
     _directory, identifiers, linked = details
     packages = {package["id"]: package for package in meta["packages"]}
@@ -311,6 +296,8 @@ def bundle(
             component["notices"].append(target)
         components.append(component)
     if linked:
+        if vendor is None:
+            raise ValueError(f"{profile}: linked notices require a Cargo vendor snapshot")
         locked = tomllib.loads((ROOT / "Cargo.lock").read_text())["package"]
         for identifier in sorted(identifiers):
             package = packages[identifier]
@@ -318,13 +305,15 @@ def bundle(
                 continue
             if not package.get("license"):
                 raise ValueError(f"{profile}: no declared license for {identifier}")
-            path = Path(package["manifest_path"]).parent
+            name = f"{package['name']}-{package['version']}"
+            path = vendor / name
+            checksum_file = path / ".cargo-checksum.json"
+            if checksum_file.resolve() != checksum_file:
+                raise ValueError(f"{identifier}: package checksum path escapes the vendor snapshot")
+            snapshot = json.loads(checksum_file.read_bytes())
             notices = legal_files(path)
             if not notices:
-                raise ValueError(
-                    f"{profile}: no license/notice text in resolved input {identifier}"
-                )
-            name = f"{package['name']}-{package['version']}"
+                raise ValueError(f"{profile}: no license/notice text in resolved input {identifier}")
             component = {
                 "id": name,
                 "license": package["license"],
@@ -333,21 +322,20 @@ def bundle(
                 "scope": "resolved normal/build input, including target-specific alternatives",
                 "notices": [],
             }
-            records = [
-                item
-                for item in locked
-                if item["name"] == package["name"]
-                and item["version"] == package["version"]
-                and item.get("source") == package["source"]
-            ]
-            if len(records) != 1 or not records[0].get("checksum"):
-                raise ValueError(
-                    f"{profile}: missing locked source checksum for {identifier}"
-                )
-            component["source_checksum"] = records[0]["checksum"]
+            checksums = [item.get("checksum") for item in locked
+                         if all(item.get(key) == package[key] for key in ("name", "version", "source"))]
+            if len(checksums) != 1 or not checksums[0] or snapshot.get("package") != checksums[0]:
+                raise ValueError(f"{profile}: vendor checksum differs from the lock for {identifier}")
+            component["source_checksum"] = checksums[0]
             for notice in notices:
-                target = f"dependencies/{name}/{notice.relative_to(path).as_posix()}"
-                files[target] = notice.read_bytes()
+                relative = notice.relative_to(path).as_posix()
+                if not notice.resolve().is_relative_to(path):
+                    raise ValueError(f"{identifier}: vendor notice escapes its package: {relative}")
+                content = notice.read_bytes()
+                if snapshot.get("files", {}).get(relative) != digest(content):
+                    raise ValueError(f"{identifier}: vendor notice checksum mismatch: {relative}")
+                target = f"dependencies/{name}/{relative}"
+                files[target] = content
                 component["notices"].append(target)
             components.append(component)
     components.sort(key=lambda item: item["id"])
@@ -1507,10 +1495,22 @@ def main() -> int:
     if args.profile and args.profile not in targets:
         parser.error(f"unknown profile {args.profile!r}")
     selected = {args.profile: targets[args.profile]} if args.profile else targets
-    expected = {
-        name: bundle(name, details, meta, inherited)
-        for name, details in selected.items()
-    }
+    with ExitStack() as cleanup:
+        vendor = None
+        if any(details[2] for details in selected.values()):
+            common = ROOT / ".git"
+            if common.is_file():
+                command = ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"]
+                common = Path(subprocess.check_output(command, cwd=ROOT, text=True).strip())
+            scratch = common.parent / ".stage"
+            scratch.mkdir(exist_ok=True)
+            vendor = Path(cleanup.enter_context(
+                tempfile.TemporaryDirectory(prefix="license-vendor-", dir=scratch))).resolve() / "sources"
+            command = ["cargo", "vendor", "--locked", "--versioned-dirs", str(vendor)]
+            environment = os.environ | dict.fromkeys(("CARGO_HOME", "STAGE_CARGO_HOME"), str(vendor.parent))
+            subprocess.run(command, cwd=ROOT, stdout=subprocess.DEVNULL, check=True, env=environment)
+        expected = {name: bundle(name, details, meta, inherited, vendor)
+                    for name, details in selected.items()}
     if args.audit_directory:
         if args.profile != "npm" or not args.recipient_root or args.require_cargo_set:
             parser.error("directory audit requires --profile npm and --recipient-root")

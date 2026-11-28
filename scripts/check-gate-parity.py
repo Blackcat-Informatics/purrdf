@@ -237,8 +237,7 @@ def _join_continuations(text: str) -> str:
 
 # TWO WAYS AN INVOCATION IS A GATE, stated separately because they are different rules.
 #
-# By NAME: a `check-*` program, the conformance matrix, the workload acquirer, a query
-# instantiator, or an in-repo `crates/**` reference oracle.
+# By NAME: repository check programs, reference oracles, and the shared source policy target.
 GATE_BY_NAME = re.compile(
     r"^(?:scripts/(?:check-|conformance-matrix|benchmark-acquire|[\w-]+-queries)|crates/|helper-census )"
 )
@@ -246,10 +245,6 @@ GATE_BY_NAME = re.compile(
 # is called. `publish-release-crates.sh` and `bootstrap-crates-io.sh` PUBLISH when invoked
 # bare and are gates only in this form, which is exactly why the two rules cannot be one.
 #
-# The original single pattern had a `.*-self-test` arm that matched the argument while the
-# comment said it matched the name. That was right in effect and wrong in description --
-# and narrowing it to the name alone silently dropped those two gates, taking the agreed
-# count from 40 to 38.
 GATE_BY_ARGUMENT = re.compile(r"\s--(?:offline-)?self-test\b")
 
 
@@ -318,9 +313,7 @@ def check_recipe(text: str, target: str, missing_is_fatal: bool = True) -> str:
 WORKFLOW_MAKE = re.compile(r"(?:^|(?<=run:\s)|(?<=[;&|(]\s)|(?<=[;&|(]))\s*make\s+([^\n;&|]+)")
 # A word that is a flag or a variable assignment rather than a target.
 NOT_A_TARGET = re.compile(r"^(?:-|[A-Za-z_][\w]*=)")
-# Flags whose VALUE is the next word, so that word is not a target either. `make -C sub
-# tgt` yielded `sub` as well as `tgt` -- harmless while no `sub:` recipe exists, and a
-# collision waiting for one.
+# Flags whose following value is not a target name.
 FLAGS_TAKING_A_VALUE = frozenset(
     {"-C", "-f", "-I", "-l", "-o", "-W", "--directory", "--file", "--include-dir",
      "--load-average", "--old-file", "--what-if", "--makefile", "--assume-old"}
@@ -377,10 +370,7 @@ def workflow_invocations(text: str, makefile_text: str) -> set[str]:
 # the reason that applies to cargo and node steps -- CI spells those differently across
 # jobs -- which does not apply to an in-repo make target at all. That was an annotated gap
 # wearing the word "scope", and `check_recipe` already existed to close it.
-# `$(MAKE) [flags] <target>`. `[\w-]+` matched `--no-print-directory`, which this
-# Makefile uses at line 170, and the recursion then hard-failed with "no
-# `--no-print-directory:` target" -- refusing a legitimate Makefile and blaming a target
-# that does not exist.
+# Match `$(MAKE) [flags] <target>` without treating a flag as a target.
 MAKE_RECURSION = re.compile(r"\$\(MAKE\)((?:\s+-{1,2}[\w-]+)*)\s+([\w-]+)")
 
 
@@ -396,7 +386,9 @@ def invocations_with_recursion(makefile_text: str, target: str, seen: set[str] |
     seen.add(target)
     body = check_recipe(makefile_text, target, missing_is_fatal=False)
     found = invocations(body)
-    for _flags, nested in MAKE_RECURSION.findall(body):
+    if target == "cargo-source-policy" and _uncomment(body, ("#",)).strip():
+        found.add("make cargo-source-policy")
+    for _flags, nested in MAKE_RECURSION.findall(_drop_prose(strip_yaml_comments(_uncomment(body, ("#",))))):
         found |= invocations_with_recursion(makefile_text, nested, seen)
     return found
 
@@ -406,7 +398,7 @@ def gates_only(found: set[str]) -> set[str]:
     return {
         call
         for call in found
-        if GATE_BY_NAME.match(call) or GATE_BY_ARGUMENT.search(call)
+        if call == "make cargo-source-policy" or GATE_BY_NAME.match(call) or GATE_BY_ARGUMENT.search(call)
     }
 
 
@@ -744,6 +736,14 @@ def self_test() -> int:
             ok = False
     print("OK: self-test — excluded consumer omissions and quoted prose are refused")
 
+    policy = "make cargo-source-policy"
+    absent_ci = {name: text.replace(f"run: {policy}", f'run: echo "{policy}"') for name, text in real_workflows.items()}
+    absent_local = real_makefile.replace("$(MAKE) cargo-source-policy", '@echo "$(MAKE) cargo-source-policy"')
+    if (any(policy in problem for problem in divergence(real_makefile, real_workflows))
+            or not all(any(policy in problem for problem in divergence(makefile, workflows))
+                       for makefile, workflows in ((absent_local, real_workflows), (real_makefile, absent_ci)))):
+        print("SELF-TEST FAIL: source policy route parity failed")
+        ok = False
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
 
