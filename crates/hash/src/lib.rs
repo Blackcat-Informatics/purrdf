@@ -100,7 +100,10 @@ mod digest;
 
 // The only module allowed `unsafe`: the processor-specific kernels, their
 // feature detection, their vector loads and the table hasher's AES block. Everything outside it is safe code.
-#[allow(unsafe_code)]
+#[expect(
+    unsafe_code,
+    reason = "this module owns the kernels, feature dispatch and validated byte conversions"
+)]
 mod arch;
 
 #[doc(hidden)]

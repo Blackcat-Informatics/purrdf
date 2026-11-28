@@ -421,7 +421,7 @@ fn encode_slice<'o, const UPPER: bool>(
 /// 64-digit read with its lanes spilled through memory between them, and the
 /// compares are then no longer in the decoder the assembly gate measures
 /// (`hash.hex-decode`).
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "the byte-compare lanes must be in the decoder that runs them; an out-of-line \
               instance spills every lane through memory"
