@@ -183,7 +183,7 @@ fn batch_on(
         }
     } else {
         // Availability is established before taking any of the named paths.
-        crate::arch::blake3_messages_on(backend, inputs, mode, out)
+        crate::arch::blake3_messages_on(backend, inputs, out, mode)
             .expect("selected or explicitly checked BLAKE3 backend is available");
     }
     Ok(())
