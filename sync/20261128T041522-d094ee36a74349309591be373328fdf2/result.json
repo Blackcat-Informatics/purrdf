@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "worktree": "/home/paudley/Active/purrdf/.worktrees/1346-blake3-vector-kernels-for-short",
+  "branch": "paudley/1346-blake3-vector-kernels-for-short",
+  "base_ref": "origin/main",
+  "head": "2622d9c3faab7d9e4af3f1d42cdd0efc49d41267",
+  "attempt": "/home/paudley/Active/purrdf/.worktrees/1346-blake3-vector-kernels-for-short/.stage/native-width-coverage/sync/20261128T041522-d094ee36a74349309591be373328fdf2",
+  "conflicts": [],
+  "status": "fast_forward",
+  "base": "50a16c3a53ce38182e4041aa28f4c53c7a5ce732",
+  "merge_bases": [
+    "2622d9c3faab7d9e4af3f1d42cdd0efc49d41267"
+  ],
+  "commit": "50a16c3a53ce38182e4041aa28f4c53c7a5ce732"
+}
