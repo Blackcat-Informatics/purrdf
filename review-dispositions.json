@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABr0MgUw": {
+    "resolution": "acknowledged",
+    "reason": "The capacity notice contains no technical finding. The exact staged production diff was independently reviewed.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T06:34:12Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "522b8331c8c389993ba93e78dfa9c7a67c487dd771438aab9e6e0e78b60982d3"
+    }
+  }
+}
