@@ -120,6 +120,35 @@ they do not cross the Python, WebAssembly or C boundary — only the data-shaped
 property functions (frozen tables, graph-backed tables and path witnesses) do.
 See [Reaching extensions from other hosts](querying.md#reaching-extensions-from-other-hosts).
 
+## Compare two segmentation choices for Chinese text
+
+The [Chinese search example](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/chinese_full_text.rs)
+indexes three language-tagged notes and searches for **南京市长江大桥**.
+It keeps the notes and query fixed and builds two indexes. The first uses
+grapheme fallback. The second uses an original caller-supplied lexicon
+containing `南京市`, `长江大桥`, `附近`, `长江` and `北岸`.
+
+```sh
+cargo run --locked -p purrdf --example chinese_full_text
+```
+
+The example prints and checks zero-based token positions. Grapheme fallback
+produces `0 南 · 1 京 · 2 市 · 3 长 · 4 江 · 5 大 · 6 桥`.
+The lexicon produces `0 南京市 · 1 长江大桥`. Positions count tokens in
+each analyzer's own stream. They are neither byte offsets nor positions in
+the other analyzer's stream.
+
+| Rank | Document | Matched terms with grapheme fallback | Matched terms with the lexicon |
+| --- | --- | ---: | ---: |
+| 1 | `ex:bridge` | 7 | 2 |
+| 2 | `ex:nearby` | 7 | 2 |
+| 3 | `ex:north-bank` | 5 | 1 |
+
+The example checks the returned document IRIs, ranks and match counts. Both
+analyzers rank these three notes in the same order. A match count describes
+the selected tokenization and does not measure ranking quality. The index
+and its relations are Rust-host facilities.
+
 ## Every score is exact, and identical on every target
 
 Scores use a base-10 fixed-point integer representation (`i128`, twelve

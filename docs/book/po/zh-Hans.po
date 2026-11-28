@@ -31364,3 +31364,35 @@ msgstr ""
 #~ "cargo 将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 "
 #~ "crate 的带版本依赖，而 `cargo publish` 的验证步骤也会解析 dev-"
 #~ "dependencies。"
+
+#: src/sparql/full-text.md:123
+msgid "Compare two segmentation choices for Chinese text"
+msgstr "比较中文文本的两种分词方式"
+
+#: src/sparql/full-text.md:125
+msgid "The [Chinese search example](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/chinese_full_text.rs) indexes three language-tagged notes and searches for **南京市长江大桥**. It keeps the notes and query fixed and builds two indexes. The first uses grapheme fallback. The second uses an original caller-supplied lexicon containing `南京市`, `长江大桥`, `附近`, `长江` and `北岸`."
+msgstr "[中文检索示例](https://github.com/Blackcat-Informatics/purrdf/blob/main/crates/purrdf/examples/chinese_full_text.rs) 为三条带语言标签的备注建立索引，并检索 **南京市长江大桥**。 示例保持备注和查询不变，建立两个索引。第一个按字素分词，第二个使用调用方提供的原创词典， 其中包含 `南京市`、`长江大桥`、`附近`、`长江` 和 `北岸`。"
+
+#: src/sparql/full-text.md:135
+msgid "The example prints and checks zero-based token positions. Grapheme fallback produces `0 南 · 1 京 · 2 市 · 3 长 · 4 江 · 5 大 · 6 桥`. The lexicon produces `0 南京市 · 1 长江大桥`. Positions count tokens in each analyzer's own stream. They are neither byte offsets nor positions in the other analyzer's stream."
+msgstr "示例打印并检查从零开始的词元位置。按字素分词得到 `0 南 · 1 京 · 2 市 · 3 长 · 4 江 · 5 大 · 6 桥`。 使用词典得到 `0 南京市 · 1 长江大桥`。 位置按各自分析器的词元序列计数，既不是字节偏移量，也不是另一种分析器序列中的位置。"
+
+#: src/sparql/full-text.md:141
+msgid "Rank"
+msgstr "排名"
+
+#: src/sparql/full-text.md:141
+msgid "Document"
+msgstr "文档"
+
+#: src/sparql/full-text.md:141
+msgid "Matched terms with grapheme fallback"
+msgstr "按字素分词的匹配词元数"
+
+#: src/sparql/full-text.md:141
+msgid "Matched terms with the lexicon"
+msgstr "使用词典的匹配词元数"
+
+#: src/sparql/full-text.md:147
+msgid "The example checks the returned document IRIs, ranks and match counts. Both analyzers rank these three notes in the same order. A match count describes the selected tokenization and does not measure ranking quality. The index and its relations are Rust-host facilities."
+msgstr "示例检查返回的文档 IRI、排名和匹配词元数。两种分析器对这三条备注的排名相同。 匹配词元数反映所选的分词方式，不用于衡量排名质量。索引及其关系均由 Rust 宿主提供。"
