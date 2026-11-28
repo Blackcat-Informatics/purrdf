@@ -1216,6 +1216,10 @@ message individually and the batch calls the independent-message API.
 The report retains every available named backend, the default dispatcher,
 and the raw counter and witness receipts. It does not measure elapsed time.
 
+The `derived` row calls `DeriveKeyContext::derive` once per message. The
+`batch` row calls `hash_batch` in plain mode. The `default` label calls the
+public dispatcher and does not identify the selected kernel.
+
 With the x86-64 ABI on an AMD Ryzen AI Max+ 395 and
 `rustc 1.102.0-nightly (5df8c02af)`, the default dispatcher gives the
 following median userspace retired instructions per message. Both builds
@@ -1245,6 +1249,13 @@ the same batch inputs individually on the current build.
 Among the forced paths, AVX2 had the lowest single-message count for the
 sampled lengths through 1024 bytes. AVX-512 had the lowest count from 1025
 through 4096 bytes on this host. It also had the lowest sampled batch counts.
+
+When the x86-64 dispatcher detects both AVX-512 and AVX2, one-shot hashing
+uses AVX2 through 1024 bytes and retains AVX-512 from 1025 through 4096
+bytes. If AVX2 is selected without AVX-512, one-shot hashing uses the
+four-lane SSE2 path from 1025 through 4096 bytes to avoid padding to eight
+lanes. Batching uses the detected backend without these length overrides.
+
 The default single call and a forced call have different feature checks, so
 their total instruction counts need not match even for the same kernel. The
 default plain and reused derive-key medians differ by less than 0.03
