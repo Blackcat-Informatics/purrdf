@@ -11,13 +11,11 @@
 //! Natively there is no host seal. Only the case that checks the seal hands
 //! back its computation's value is registered there.
 
+#![forbid(unsafe_code)]
+
 use purrdf_testkit::harness::without_host_clock_or_entropy;
 
 #[cfg(target_arch = "wasm32")]
-#[expect(
-    unsafe_code,
-    reason = "the clock and entropy imports expand to foreign calls"
-)]
 mod host {
     use wasm_bindgen::prelude::wasm_bindgen;
 
