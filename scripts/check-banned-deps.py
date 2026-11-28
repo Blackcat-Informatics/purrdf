@@ -14,59 +14,17 @@ The independent manifest scan reads every git-tracked Cargo.toml and every
 manifest declared by the root workspace, including new members not yet added
 to git. It checks dependency aliases by their ``package`` name as well as
 ordinary keys, across normal, build, dev/test, target and workspace tables.
-This catches a forbidden direct declaration even before an excluded workspace
-has a lockfile. A committed first-party manifest is not necessarily a member
-of the root workspace: ``crates/gts/fuzz`` is excluded.
+This also covers excluded workspaces before they have a lockfile.
 
-The manifest set is the union of the git-tracked set and the root workspace's
-declared member/excluded-root set. Subsumed native table source records its
-original grants and provenance in license-inventory.toml and adds no upstream
-manifest. Every tracked manifest remains in the declaration scan.
+Overrides and alternate sources never inherit the approved fuzz-lock exception.
 
-**Substitution.** A ``[patch]``/``[replace]`` override that redirects a
-banned name to a different source is scanned for too: ``[[patch.unused]]``
-blocks and ``replace = "name:version"`` lines in ``Cargo.lock`` are matched
-against ``BANNED_ANY_EDGE`` the same as a normally resolved package.
-
-What this CANNOT see: a fork published under a DIFFERENT package name (for
-example a ``[patch]`` table remapping ``package = "my-petgraph-fork"``).
-Cargo.lock would then record that fork under its own name, indistinguishable
-from any other unrelated crate to a name-based scan. Catching that requires a
-source-URL allowlist or a checksum/provenance check, neither of which this
-gate performs; a rename or an under-a-different-name fork is a real gap, not
-one this script claims to close.
-
-Each ban list entry names the replacement so the failure message teaches the
-fix. A dependency joins a list in the change that removes it, so this gate
-never lies about the present.
-
-**The allowed half** (``dependency-ledger.toml``, ``[packages]``): the ban
-lists say what may not come back; the ledger says what may stay. Every
-external (non-workspace) package in every committed ``Cargo.lock`` has an
-entry with a category — ``spec-codec``, ``crypto``, ``runtime``, ``oracle``,
-``bench`` or ``binding`` for a direct dependency of a workspace member,
-``transitive:<direct>`` for a package only reached through that direct
-dependency — a one-line ``reason``, and a ``metrics`` table computed from
-``cargo metadata --locked``:
-
-* ``direct`` — a workspace member names it directly, on any edge kind;
-* ``exclusive_closure`` — for a direct dependency, how many external packages
-  leave the graph if every workspace edge to it is cut (itself included); 0
-  for a transitive one;
-* ``release`` — reached over normal and build edges from a crate whose
-  ``publish`` is not false;
-* ``wasm`` — the same, in the ``--filter-platform wasm32-unknown-unknown``
-  resolution;
-* ``build_script`` / ``proc_macro`` — the package has a build script / is a
-  procedural macro.
-
-The gate fails on an unlisted package, on a listed package no lock resolves,
-on a name resolved at two versions without a ``duplicate_reason``, on an
-uncategorized skeleton, on a ``transitive:<direct>`` category whose direct
-dependency does not reach the package, and on metrics drift.
-``--update-metrics`` rewrites the ``[packages]`` section deterministically
-(adding flagged skeletons for new packages and reporting, never dropping,
-entries whose package vanished); ``--report`` prints the graph counts.
+**The allowed half** (dependency-ledger.toml). Every external locked package
+needs a category, reason and current metrics derived from locked Cargo metadata.
+Metrics identify direct edges, exclusive closure, published and WebAssembly
+reachability, build scripts and procedural macros. Unlisted or stale rows,
+unexplained duplicate versions, invalid holders and metric drift fail the gate.
+``--update-metrics`` regenerates metrics without dropping stale entries.
+``--report`` prints the graph counts.
 
 **The census verdict.** Every ``[packages]`` row also says whether PurRDF
 already does, or is to do, the package's job natively:
@@ -83,16 +41,8 @@ already does, or is to do, the package's job natively:
   directly, refused on a row one does: the direct dependency whose closure keeps
   the package in the graph.
 
-A home resolves by module path, not by a census: the first segment is a
-workspace library's crate name (``purrdf_lex``), each further segment is a
-``mod`` its parent declares (``scan`` in ``src/scan.rs`` or
-``src/scan/mod.rs``), and the last may instead be an item the module defines,
-re-exports or generates through an item-position macro (``find_byte``), a
-``#[macro_export]`` macro at the crate root, or an associated item of such a
-type (``Iri::resolve``). Every home and entry point in ``helpers-ledger.toml``
-must resolve this way, which the self-test checks. ``--ledger-complete``
-checks only that every resolved external package has a row carrying a valid
-verdict.
+Native homes must resolve to first-party library modules or their items.
+``--ledger-complete`` checks resolved package presence and census verdicts.
 """
 
 from __future__ import annotations
@@ -354,6 +304,9 @@ BANNED_DIRECT_ONLY: dict[str, str] = {
     "memchr": "purrdf_lex::scan::find_byte / find_byte2 (and a purrdf_lex::scan::ByteClass for a fixed class)",
 }
 
+FUZZ_LOCK = "crates/gts/fuzz/Cargo.lock"
+FUZZ_BANS = frozenset({"cc", "find-msvc-tools", "shlex"})
+FUZZ_ONLY = {"arbitrary", "jobserver", "libfuzzer-sys"}
 DEP_TABLE_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")
 
 PACKAGE_NAME_RE = re.compile(r'^name = "([^"]+)"$', re.MULTILINE)
@@ -426,16 +379,29 @@ def committed_lockfiles(root: Path) -> list[Path]:
     return [root / path for path in lockfile_paths_from_ls_files(tracked_listing(root))]
 
 
-def lock_failures(display_path: str, lock_text: str) -> list[str]:
+def lock_failures(display_path: str, lock_text: str, fuzz_receipt: bytes | None = None) -> list[str]:
     """Tier-1 failure messages for one lockfile, each naming ``display_path``.
 
     ``display_path`` is repository-relative so the message points at the file
     to fix — which lock a banned name came back through is the whole question
     once more than one is scanned.
     """
-    any_edge = set(any_edge_offenders(lock_text))
-    substitution = set(substitution_offenders(lock_text))
+    lock = tomllib.loads(lock_text)
+    packages = lock.get("package", [])
+    locked_names = {p["name"] for p in packages}
+    any_edge = set(any_edge_offenders(lock_text)) | (locked_names & FUZZ_BANS)
+    substituted = {p["name"] for p in lock.get("patch", {}).get("unused", [])}
+    substituted.update(p["replace"].split(":", 1)[0] for p in packages if "replace" in p)
+    substitution = set(substitution_offenders(lock_text)) | (substituted & FUZZ_BANS)
     failures: list[str] = []
+    if display_path == FUZZ_LOCK and fuzz_receipt is not None:
+        if lock_text.encode("utf-8") == fuzz_receipt:
+            any_edge -= FUZZ_BANS
+        else:
+            failures.append(f"FAIL: {FUZZ_LOCK} changed after locked graph validation")
+    elif display_path != FUZZ_LOCK:
+        for name in sorted(locked_names & FUZZ_ONLY):
+            failures.append(f"FAIL: fuzz-only package `{name}` is outside {FUZZ_LOCK}: {display_path}")
     for name in sorted(any_edge | substitution):
         replacement = BANNED_ANY_EDGE[name]
         if name in any_edge:
@@ -824,6 +790,7 @@ class LedgerFacts:
     # workspace library crate name -> its `src/lib.rs` paths (two members may
     # share a library name, so each name may have several roots).
     lib_roots: dict[str, set[Path]] = field(default_factory=dict)
+    fuzz_lock_bytes: bytes | None = None
 
     @property
     def reachable(self) -> int:
@@ -916,7 +883,7 @@ def merge_facts(
                     previous[key] = previous[key] or computed[key]
 
 
-def cargo_metadata(manifest: Path, platform: str | None = None) -> dict:
+def cargo_metadata(manifest: Path, platform: str | None = None, *, all_features: bool = False) -> dict:
     """``cargo metadata --locked`` for one workspace root."""
     command = [
         "cargo",
@@ -927,6 +894,8 @@ def cargo_metadata(manifest: Path, platform: str | None = None) -> dict:
         "--manifest-path",
         str(manifest),
     ]
+    if all_features:
+        command.append("--all-features")
     if platform is not None:
         command += ["--filter-platform", platform]
     try:
@@ -959,15 +928,37 @@ def lib_roots_from_metadata(meta: dict) -> dict[str, set[Path]]:
     return roots
 
 
-def collect_facts(root: Path) -> LedgerFacts:
+def fuzz_coordinates(packages: list[dict]) -> list[tuple[str, str, str]]:
+    return sorted((p["name"], p["version"], p.get("source") or "")
+                  for p in packages if p["name"] in FUZZ_BANS | FUZZ_ONLY)
+
+
+def collect_facts(root: Path, lockfiles: list[Path] | None = None) -> LedgerFacts:
     """Facts for every committed lockfile under ``root``."""
     facts = LedgerFacts()
-    for lockfile in committed_lockfiles(root):
+    for lockfile in committed_lockfiles(root) if lockfiles is None else lockfiles:
         manifest = lockfile.parent / "Cargo.toml"
-        meta = cargo_metadata(manifest)
+        isolated = lockfile.relative_to(root).as_posix() == FUZZ_LOCK
+        raw = lockfile.read_bytes()
+        options = {"all_features": True} if isolated else {}
+        meta = cargo_metadata(manifest, **options)
+        if isolated:
+            command = ["cargo", "run", "--locked", "-q", "-p", "helper-census", "--",
+                       "--cargo-fuzz-edge-policy", str(root)]
+            checked = subprocess.run(command, input=json.dumps(meta), text=True, cwd=root,
+                                     capture_output=True)
+            if checked.returncode:
+                raise MetadataError(f"{FUZZ_LOCK}: {checked.stderr.strip()}")
+            locked = tomllib.loads(raw.decode("utf-8"))["package"]
+            if fuzz_coordinates(locked) != fuzz_coordinates(meta["packages"]):
+                raise MetadataError(f"{FUZZ_LOCK}: protected records differ from the validated package IDs")
         full = graph_from_metadata(meta)
-        wasm = graph_from_metadata(cargo_metadata(manifest, WASM_TARGET))
-        merge_facts(facts, lockfile.read_text(encoding="utf-8"), full, wasm)
+        wasm = graph_from_metadata(cargo_metadata(manifest, WASM_TARGET, **options))
+        if isolated:
+            if lockfile.read_bytes() != raw:
+                raise MetadataError(f"{FUZZ_LOCK} changed during locked graph validation")
+            facts.fuzz_lock_bytes = raw
+        merge_facts(facts, raw.decode("utf-8"), full, wasm)
         for name, paths in lib_roots_from_metadata(meta).items():
             facts.lib_roots.setdefault(name, set()).update(paths)
     return facts
@@ -2165,10 +2156,16 @@ def main() -> int:
         )
         return 1
 
+    try:
+        facts = collect_facts(REPO_ROOT, lockfiles)
+        _, packages = load_ledger(LEDGER_PATH)
+    except (MetadataError, OSError, tomllib.TOMLDecodeError) as exc:
+        print(f"FAIL: {exc}")
+        return 1
     for lockfile in lockfiles:
         display_path = lockfile.relative_to(REPO_ROOT).as_posix()
         failures.extend(
-            lock_failures(display_path, lockfile.read_text(encoding="utf-8"))
+            lock_failures(display_path, lockfile.read_bytes().decode("utf-8"), facts.fuzz_lock_bytes)
         )
 
     direct = direct_edge_offenders(REPO_ROOT)
@@ -2181,12 +2178,6 @@ def main() -> int:
             "first-party edge"
         )
 
-    try:
-        facts = collect_facts(REPO_ROOT)
-        _, packages = load_ledger(LEDGER_PATH)
-    except (MetadataError, OSError, tomllib.TOMLDecodeError) as exc:
-        print(f"FAIL: {exc}")
-        return 1
     failures.extend(ledger_failures(packages, facts))
 
     if failures:

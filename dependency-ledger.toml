@@ -235,6 +235,13 @@ distinct = "internal to clap's terminal output; PurRDF has no command-line parse
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
+[packages.arbitrary]
+category = "transitive:libfuzzer-sys"
+reason = "typed fuzz input generation in libfuzzer-sys"
+distinct = "fuzz input conversion is part of the external instrumented harness"
+holder = "libfuzzer-sys"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+
 [packages.block-buffer]
 category = "transitive:aes-gcm"
 reason = "block buffering inside the cipher traits used by AES-GCM"
@@ -248,6 +255,13 @@ reason = "bump allocator for the wasm-bindgen macro backend"
 distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
 holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+
+[packages.cc]
+category = "transitive:libfuzzer-sys"
+reason = "compiles the fuzz runtime at host build time only"
+distinct = "the instrumented fuzz runtime uses a host C++ build; no shipped code uses the compiler helper"
+holder = "libfuzzer-sys"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.cfg-if]
 category = "transitive:wasm-bindgen"
@@ -367,6 +381,13 @@ distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of
 holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
+[packages.find-msvc-tools]
+category = "transitive:libfuzzer-sys"
+reason = "locates the Windows toolchain for the isolated fuzz build"
+distinct = "compiler discovery is a host build operation of the fuzz C++ runtime"
+holder = "libfuzzer-sys"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+
 [packages.getrandom]
 category = "runtime"
 reason = "native OS entropy for SPARQL RAND()/UUID() seeds and GTS test keys"
@@ -408,6 +429,13 @@ distinct = "internal to clap's terminal output; PurRDF has no command-line parse
 holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
+[packages.jobserver]
+category = "transitive:libfuzzer-sys"
+reason = "coordinates parallel host compilation for the fuzz build"
+distinct = "jobserver coordination is internal to the host compiler helper"
+holder = "libfuzzer-sys"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+
 [packages.leb128fmt]
 category = "transitive:wasm-encoder"
 reason = "LEB128 field emission for the private WASM post-link tool"
@@ -420,6 +448,12 @@ category = "runtime"
 reason = "Native pthread stack bounds for purrdf-stack, mmap/memfd_create/fcntl for CLI immutable inputs, and openat2 and directory cursors for CLI filesystem glob containment; absent from wasm; also reached through getrandom"
 distinct = "platform declarations for thread stack bounds, immutable input descriptors and rooted directory enumeration; host bindings, not jobs PurRDF implements"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
+
+[packages.libfuzzer-sys]
+category = "oracle"
+reason = "fuzz runtime for the excluded and unpublished GTS fuzz workspace"
+distinct = "the instrumented fuzz runtime is external development tooling, not shipped container code"
+metrics = { direct = true, exclusive_closure = 9, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.memchr]
 category = "transitive:regex"
@@ -548,6 +582,13 @@ reason = "rustc version conditionals for wasm-bindgen"
 distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
 holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = true }
+
+[packages.shlex]
+category = "transitive:libfuzzer-sys"
+reason = "parses compiler invocation arguments for the isolated fuzz build"
+distinct = "host compiler command parsing is internal to the fuzz build helper"
+holder = "libfuzzer-sys"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.strsim]
 category = "transitive:clap"
