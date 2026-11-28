@@ -154,7 +154,7 @@ def workspace_metadata(root: Path) -> dict:
     which the internal-pin gate needs. Deterministic and offline.
     """
     out = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version=1"],
+        ["cargo", "metadata", "--no-deps", "--locked", "--format-version=1"],
         check=True,
         capture_output=True,
         text=True,

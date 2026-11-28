@@ -245,23 +245,32 @@ fn source_findings(
     Ok((findings, sources.len()))
 }
 
-/// Check workspace members' Cargo feature maps against their exact allowed
-/// declarations. External packages are outside this first-party policy.
-fn feature_maps(metadata: &Value) -> Result<Vec<String>, String> {
+/// Traverse the packages belonging to metadata's declared workspace.
+pub(crate) fn workspace_packages(
+    metadata: &Value,
+) -> Result<impl Iterator<Item = Result<&Value, String>>, String> {
     let members = metadata["workspace_members"]
         .as_array()
         .ok_or("metadata has no workspace_members array")?;
     let packages = metadata["packages"]
         .as_array()
         .ok_or("metadata has no packages array")?;
-    let mut findings = Vec::new();
-    let mut saw_capi = false;
-    for member in members {
+    Ok(members.iter().map(move |member| {
         let id = member.as_str().ok_or("workspace member is not an id")?;
-        let package = packages
+        packages
             .iter()
             .find(|package| package["id"].as_str() == Some(id))
-            .ok_or_else(|| format!("workspace member {id} has no package"))?;
+            .ok_or_else(|| format!("workspace member {id} has no package"))
+    }))
+}
+
+/// Check workspace members' Cargo feature maps against their exact allowed
+/// declarations. External packages are outside this first-party policy.
+fn feature_maps(metadata: &Value) -> Result<Vec<String>, String> {
+    let mut findings = Vec::new();
+    let mut saw_capi = false;
+    for package in workspace_packages(metadata)? {
+        let package = package?;
         let name = package["name"].as_str().ok_or("package has no name")?;
         let features = package["features"]
             .as_object()
@@ -306,9 +315,8 @@ fn feature_maps(metadata: &Value) -> Result<Vec<String>, String> {
     Ok(findings)
 }
 
-/// Verify Cargo's locked workspace metadata and every governed Rust source:
-/// only the empty cargo-c marker may be declared, and it gates no code.
-pub(crate) fn no_features(root: &Path) -> Result<ExitCode, String> {
+/// Read first-party package declarations through locked Cargo metadata.
+pub(crate) fn workspace_metadata(root: &Path) -> Result<Value, String> {
     let output = Command::new("cargo")
         .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
         .current_dir(root)
@@ -323,8 +331,13 @@ pub(crate) fn no_features(root: &Path) -> Result<ExitCode, String> {
     }
     let text = std::str::from_utf8(&output.stdout)
         .map_err(|error| format!("cargo metadata UTF-8: {error}"))?;
-    let metadata = json::read(text).map_err(|error| format!("cargo metadata JSON: {error}"))?;
-    let mut findings = feature_maps(&metadata)?;
+    json::read(text).map_err(|error| format!("cargo metadata JSON: {error}"))
+}
+
+/// Verify Cargo's locked workspace metadata and every governed Rust source:
+/// only the empty cargo-c marker may be declared, and it gates no code.
+pub(crate) fn no_features(root: &Path) -> Result<ExitCode, String> {
+    let mut findings = feature_maps(&workspace_metadata(root)?)?;
     findings.extend(source_findings(root, root, true)?.0);
     Ok(report(
         &findings,

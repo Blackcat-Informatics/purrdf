@@ -126,7 +126,7 @@ def main() -> int:
         private_build = Path(temporary) / "build"
         built = subprocess.run(
             [
-                "cargo", "capi", "build", "-p", "purrdf-capi",
+                "cargo", "capi", "build", "-p", "purrdf-capi", "--locked",
                 "--target-dir", str(private_build), "--message-format=json",
             ],
             cwd=root,

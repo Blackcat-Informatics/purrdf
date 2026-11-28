@@ -175,7 +175,7 @@ INVOCATION = re.compile(  # noqa: E501
 )
 HELPER_POLICY_INVOCATION = re.compile(
     r"\bcargo\s+run\b[^\n;&|#]*?\s(?:-p|--package)\s+helper-census\s+--\s+"
-    r"(--(?:no-features|python-binding-tests|glossary-gate|self-test))([^\n;&|#]*)",
+    r"(--(?:no-features|python-binding-tests|glossary-gate|self-test|check-job-homes))([^\n;&|#]*)",
     re.MULTILINE,
 )
 

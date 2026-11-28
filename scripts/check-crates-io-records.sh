@@ -155,7 +155,7 @@ self_test() {
   }
 
   local VERSION
-  VERSION="$(cd "${repo}" && cargo metadata --no-deps --format-version 1 \
+  VERSION="$(cd "${repo}" && cargo metadata --no-deps --locked --format-version 1 \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
   echo "check-crates-io-records.sh self-test (release set: ${#set[@]} crates; version ${VERSION})"
   local first="${set[0]}" last="${set[-1]}"
