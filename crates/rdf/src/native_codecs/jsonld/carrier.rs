@@ -481,10 +481,6 @@ fn plan_graph_index_containers(
     Ok(plans)
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "graph-index planning keeps scope, carrier, context, and destination explicit"
-)]
 fn plan_graph_index_scope(
     scope: Option<&str>,
     nodes: &[Node],

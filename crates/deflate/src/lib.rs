@@ -46,9 +46,6 @@ mod huffman;
 mod kernels;
 mod tables;
 
-// The only module allowed `unsafe`: the processor-specific kernels and their
-// feature detection. Everything outside it is safe code.
-#[allow(unsafe_code)]
 mod arch;
 
 #[doc(hidden)]

@@ -209,7 +209,7 @@ impl Read for PayloadReader {
 /// Stream native files through host callbacks; payload staging stays provisional.
 #[pyfunction(name = "_gts_columnar_stream_to")]
 #[pyo3(signature = (data, *, blob_limits, staging, emit, read_limits = None))]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts optional Python borrows by value"
 )]
@@ -266,7 +266,7 @@ type StagedRows<'py> = (
 /// Canonical RDF rows and replayable blob handles, without resident payload rows.
 #[pyfunction(name = "_gts_columnar_staged_from_bytes")]
 #[pyo3(signature = (data, *, blob_limits, staging, read_limits = None))]
-#[allow(
+#[expect(
     clippy::needless_pass_by_value,
     reason = "PyO3 extracts optional Python borrows by value"
 )]

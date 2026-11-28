@@ -370,7 +370,7 @@ impl<'a> Reader<'a> {
     /// a pretty-printer's indentation. A shorter run is all tail to the chunked
     /// scan, answered a byte at a time there too, so crossing it here saves
     /// only the call.
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "crossed before every token: the zero- and one-byte runs must cost a compare \
                   in the caller, not a call"
@@ -445,7 +445,7 @@ impl<'a> Reader<'a> {
     /// [`Reader::next_event`], inlined into the loops of this module that
     /// build or check a value, so the event it returns never passes through
     /// memory.
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "the tree and check loops are one event loop each; the step must be inlined \
                   into them so the event stays in registers"
@@ -531,7 +531,7 @@ impl<'a> Reader<'a> {
     }
 
     /// The value at the cursor: a scalar whole, or a container opened.
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "one arm of the event step, inlined into it with the step"
     )]
@@ -601,7 +601,7 @@ impl<'a> Reader<'a> {
     }
 
     /// A member name and the `:` after it.
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "one arm of the event step, inlined into it with the step"
     )]

@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API, so the workspace `missing_docs` lint is
-// not asked of their items.
-#![allow(missing_docs)]
-
 //! Layout / IR benchmark for the value-interned `RdfDataset` (C1, Task 7).
 //!
 //! The RFC removes "columnar" and "zero-copy" as *asserted* commitments and

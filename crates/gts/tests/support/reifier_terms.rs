@@ -7,10 +7,6 @@
 use purrdf_gts::model::{Term, TermKind};
 
 /// A self-describing triple term (wire `"tt"`) naming `(s, p, o)` directly.
-#[allow(
-    dead_code,
-    reason = "each test file includes this module and uses its own subset"
-)]
 pub(super) const fn triple_term(s: usize, p: usize, o: usize) -> Term {
     Term {
         kind: TermKind::Triple,
@@ -24,10 +20,6 @@ pub(super) const fn triple_term(s: usize, p: usize, o: usize) -> Term {
 }
 
 /// A triple term carried only by its reifier reference (wire `"rf"`).
-#[allow(
-    dead_code,
-    reason = "each test file includes this module and uses its own subset"
-)]
 pub(super) const fn indirect_triple_term(reifier: usize) -> Term {
     Term {
         kind: TermKind::Triple,

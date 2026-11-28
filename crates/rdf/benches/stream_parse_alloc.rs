@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// This bench is a plain `main`, but the workspace `missing_docs` lint applies to its
-// items just the same; the reporting helpers below are internal probes, not API.
-#![allow(missing_docs)]
-
 //! Peak-allocation evidence for `parse_dataset_from_reader` against `parse_dataset`.
 //!
 //! Run with `cargo bench -p purrdf-rdf --bench stream_parse_alloc`. It is a plain
@@ -264,7 +260,10 @@ fn main() {
         println!("    peak_allocated_bytes   = {}", arm.peak);
         println!("    retained_dataset_bytes = {}", arm.retained);
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "the report shows an approximate ratio while the byte counts remain exact"
+    )]
     let ratio = |a: i64| a as f64 / source_bytes as f64;
     println!(
         "  peak removed vs sequential-buffered = {} bytes ({:.2}x the source)",

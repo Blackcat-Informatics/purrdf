@@ -9,7 +9,10 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
 use purrdf_retrieval::fixture::PRECISION_12;
 use std::sync::{Arc, Mutex};
@@ -27,32 +30,32 @@ use purrdf_sparql_eval::{
 };
 
 /// How many rows each producer ranks.
-pub const ROWS: u64 = 400;
+pub(crate) const ROWS: u64 = 400;
 
 /// The answer size every search here asks for.
-pub const TOP_K: TopK = TopK::new(5);
+pub(crate) const TOP_K: TopK = TopK::new(5);
 
 /// The two request terms, one per stratum.
-pub const PREDICATES: [&str; 2] = ["title", "body"];
+pub(crate) const PREDICATES: [&str; 2] = ["title", "body"];
 
 /// Each stratum's candidates are minted under its own prefix, so no candidate is
 /// held by both: every lookup of the other stratum's candidate is an exclusion.
-pub const PREFIXES: [&str; 2] = ["left/", "right/"];
+pub(crate) const PREFIXES: [&str; 2] = ["left/", "right/"];
 
-pub fn ex(suffix: &str) -> String {
+pub(crate) fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
 }
 
 /// The fixture block domain `http://example.org/{suffix}`.
-pub fn domain_tag(suffix: &str) -> DomainTag {
+pub(crate) fn domain_tag(suffix: &str) -> DomainTag {
     DomainTag::parse(&ex(suffix)).expect("fixture domain tags are valid IRIs")
 }
 
-pub fn producer_iri(predicate: &str) -> String {
+pub(crate) fn producer_iri(predicate: &str) -> String {
     ex(&format!("pf/{predicate}"))
 }
 
-pub fn strata() -> [Iri; 2] {
+pub(crate) fn strata() -> [Iri; 2] {
     profile()
         .weights()
         .keys()
@@ -64,14 +67,14 @@ pub fn strata() -> [Iri; 2] {
 
 /// Both strata at weight one, under reciprocal-rank decay with the library's
 /// smoothing constant, decoded from its canonical configured law.
-pub fn profile() -> FusionProfile {
+pub(crate) fn profile() -> FusionProfile {
     FusionProfile::from_canonical_bytes(include_bytes!("../fixtures/lookup_profile.bin"))
         .expect("the fixture profile is valid")
 }
 
 /// A stopped live stream's ceiling under the fixture's weight-one rank law.
 #[must_use]
-pub fn ceiling_at(rank: u64) -> ProducerStatus {
+pub(crate) fn ceiling_at(rank: u64) -> ProducerStatus {
     ProducerStatus::CeilingReached {
         bound: contribution_under(
             DecayRule::ReciprocalRank { k: RECIP_K as u32 },
@@ -87,11 +90,11 @@ pub fn ceiling_at(rank: u64) -> ProducerStatus {
 ///
 /// Every invocation's mode is recorded, so a test reads exactly how many lookups
 /// the search asked and in which mode, from the producer's side.
-pub struct Producer {
-    pub arity: PfArity,
-    pub modes: Vec<BindingPattern>,
-    pub prefix: &'static str,
-    pub asked: Arc<Mutex<Vec<String>>>,
+pub(crate) struct Producer {
+    pub(crate) arity: PfArity,
+    pub(crate) modes: Vec<BindingPattern>,
+    pub(crate) prefix: &'static str,
+    pub(crate) asked: Arc<Mutex<Vec<String>>>,
 }
 
 impl PropertyFunction for Producer {
@@ -163,7 +166,7 @@ impl PropertyFunction for Producer {
     }
 }
 
-pub struct Rows(pub std::vec::IntoIter<PfRow>);
+pub(crate) struct Rows(pub std::vec::IntoIter<PfRow>);
 
 impl PfCursor for Rows {
     fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
@@ -179,7 +182,7 @@ impl PfCursor for Rows {
     }
 }
 
-pub fn request() -> RetrievalRequest {
+pub(crate) fn request() -> RetrievalRequest {
     RetrievalRequest::bounded(
         PREDICATES
             .into_iter()
@@ -193,7 +196,7 @@ pub fn request() -> RetrievalRequest {
     )
 }
 
-pub fn asked(pairs: &[(&str, usize)]) -> Vec<(String, usize)> {
+pub(crate) fn asked(pairs: &[(&str, usize)]) -> Vec<(String, usize)> {
     pairs
         .iter()
         .map(|(code, count)| ((*code).to_owned(), *count))
@@ -202,7 +205,7 @@ pub fn asked(pairs: &[(&str, usize)]) -> Vec<(String, usize)> {
 
 /// The five entities every search here answers, as the fusion spells a term:
 /// both strata's first three, fused under equal weights, cut to five.
-pub fn expected_entities() -> Vec<String> {
+pub(crate) fn expected_entities() -> Vec<String> {
     [
         "left/entity000000",
         "right/entity000000",
@@ -216,7 +219,7 @@ pub fn expected_entities() -> Vec<String> {
 }
 
 /// A fused answer as `(entity, score)` pairs, in rank order.
-pub fn scored(rows: &[FusedRow]) -> Vec<(String, Score)> {
+pub(crate) fn scored(rows: &[FusedRow]) -> Vec<(String, Score)> {
     rows.iter()
         .map(|row| (row.entity.as_str().to_owned(), row.score))
         .collect()

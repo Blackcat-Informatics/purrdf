@@ -1,8 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![allow(missing_docs)]
-
 //! Large exact-range property-path regression benchmark.
 //!
 //! The start node fans into cycles of pairwise-coprime lengths. Their combined frontier

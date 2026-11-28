@@ -113,7 +113,13 @@ pub(crate) fn class_concept_ids(class: u32, thing: u32, nothing: u32) -> Concept
 /// A shipped build holds encoding and key-application flags; the other switches are `cfg(test)`
 /// mutations the differential corpus runs, each an independent switch, so the bool count is
 /// the honest shape rather than a state machine in disguise.
-#[cfg_attr(test, allow(clippy::struct_excessive_bools))]
+#[cfg_attr(
+    test,
+    expect(
+        clippy::struct_excessive_bools,
+        reason = "test-only mutations of the knowledge base select independent differential checks"
+    )
+)]
 pub(crate) struct Kb {
     /// Property uses frozen at source ingestion, never augmented by queries.
     pub(crate) property_kinds: property_kinds::PropertyKinds,

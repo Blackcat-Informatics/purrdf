@@ -12,7 +12,10 @@
 use super::{ChunkObserver, IntegralCoefficients, SolveError, SpherePair};
 use purrdf_xsd::math::{CertifiedInterval, IntervalContext, MathError};
 
-#[allow(clippy::too_many_arguments)] // The original ellipsoid integral supplies the conjugate astroid scale.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the original ellipsoid integral supplies the conjugate astroid scale"
+)]
 pub(super) fn seed<I: CertifiedInterval>(
     sphere: &SpherePair<I>,
     longitude: &I,

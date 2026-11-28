@@ -216,7 +216,10 @@ pub use agg_fn::{
     ScalarvalKind, ScalarvalSpec,
 };
 // Re-exported for compatibility; deprecated at its definition.
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "the re-export preserves the deprecated import path for existing consumers"
+)]
 pub use engine::ShaclPrebinding;
 pub use engine::{
     FallibleGraphBuildResult, GraphBuildError, GraphBuildStats, NativeSparqlEngine, PlanCache,

@@ -39,10 +39,7 @@ const QUERY: &str = "SELECT ?s (NOW() AS ?time) (RAND() AS ?random) WHERE { ?s ?
 
 /// One bit per step that answered: the parse, the supplied read, the default read,
 /// the installation, the read through the source, and a wall deadline.
-#[allow(
-    unsafe_code,
-    reason = "an unmangled export is what keeps the code in the linked module"
-)]
+// SAFETY: This standalone probe owns the export name in its linked module.
 #[unsafe(no_mangle)]
 pub extern "C" fn purrdf_host_import_probe() -> u32 {
     let Ok(dataset) = purrdf::parse_dataset(DOCUMENT, "text/turtle", None) else {

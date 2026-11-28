@@ -1645,7 +1645,7 @@ fn certificate_map(canon: Option<Value>) -> Vec<u8> {
 /// canonicalization; each known name, and the absent field, is read.
 #[test]
 fn an_unknown_refold_canon_is_refused_and_each_known_one_is_read() {
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "a test closure returns the library's own error type unchanged"
     )]

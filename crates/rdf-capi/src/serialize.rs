@@ -115,10 +115,6 @@ pub unsafe extern "C" fn purrdf_jsonld_context_free(context: *mut PurrdfJsonLdCo
 /// `options_json` is null, `options_len` must be zero and `context` must be live.
 /// `base_iri` must be null or a NUL-terminated C string. Output pointers must be writable.
 #[unsafe(no_mangle)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the C ABI names each pointer, length, configuration, and output explicitly"
-)]
 pub unsafe extern "C" fn purrdf_serialize_jsonld_configured(
     dataset: *const PurrdfDataset,
     media_type: *const c_char,
@@ -257,10 +253,6 @@ fn decode_options(json: &[u8]) -> Result<JsonLdSerializeOptions, PurrdfError> {
 /// `dataset` must be a live handle; the `c_char` pointers must be null or
 /// NUL-terminated; the out-params must be null or writable.
 #[unsafe(no_mangle)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the C ABI names each input and each independently-nullable loss count explicitly"
-)]
 pub unsafe extern "C" fn purrdf_serialize(
     dataset: *const PurrdfDataset,
     media_type: *const c_char,
@@ -425,10 +417,6 @@ impl std::io::Write for CallbackWriter {
 /// NUL-terminated; `on_chunk` must be callable with `user_data` for the duration of
 /// the call; the out-params must be null or writable.
 #[unsafe(no_mangle)]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the C ABI names each input and each independently-nullable loss count explicitly"
-)]
 pub unsafe extern "C" fn purrdf_serialize_to_callback(
     dataset: *const PurrdfDataset,
     media_type: *const c_char,

@@ -345,7 +345,10 @@ pub(super) struct Vm<'a> {
 
 // One machine lives on the stack for one execution; boxing the backtracking
 // machine's inline work lists would add an allocation to every match.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the inline work lists avoid an allocation for every XPath match"
+)]
 enum Machine<'a> {
     Backtrack {
         machine: Backtrack<'a>,

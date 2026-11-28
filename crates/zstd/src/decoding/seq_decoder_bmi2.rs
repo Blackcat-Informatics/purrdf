@@ -181,7 +181,6 @@ macro_rules! execute_one_body {
 /// # Safety
 /// Caller must have verified BMI2 availability.
 #[target_feature(enable = "bmi2")]
-#[allow(clippy::too_many_lines)]
 pub(crate) unsafe fn decode_and_execute_sequences_bmi2<'fse, B: BufferBackend>(
     section: &SequencesHeader,
     source: &[u8],

@@ -391,7 +391,6 @@ impl TransverseMercator {
         Ok((image, derivative.expect("requested projection derivative")))
     }
 
-    #[allow(clippy::too_many_arguments)] // One value/derivative recurrence shares its admitted operands.
     fn evaluate_with_derivative(
         &self,
         point: &OperationPoint,
@@ -474,7 +473,10 @@ impl TransverseMercator {
         )
     }
 
-    #[allow(clippy::too_many_arguments)] // Original ODE operands and admitted scratch remain explicit.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "original ODE operands and admitted scratch remain explicit"
+    )]
     fn series(
         &self,
         _point: &OperationPoint,

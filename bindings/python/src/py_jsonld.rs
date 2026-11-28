@@ -136,10 +136,6 @@ impl PyCompiledJsonLdContext {
 /// Format-selecting configured JSON-LD/YAML-LD serializer.
 #[pyfunction]
 #[pyo3(signature = (data, *, format, output_format, options_json=None, context=None, yaml_schema_url=None))]
-#[allow(
-    clippy::too_many_arguments,
-    reason = "the Python API names each explicit serialization input"
-)]
 fn serialize_jsonld(
     py: Python<'_>,
     data: &Bound<'_, PyBytes>,

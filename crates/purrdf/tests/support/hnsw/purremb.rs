@@ -10,10 +10,6 @@
 //! exposes the bytes plus the row-ordered matrix and terms. Tests therefore exercise the
 //! real serialized sections, not a mock format.
 
-// The module is included into more than one integration-test binary, and no single binary
-// uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
-
 use purrdf::{
     AppliedStage, ArtifactIdentity, CanonicalMetadataInput, CertifiedEmbeddingSource, DerivedIndex,
     DimensionalityPolicy, DistanceMetric, EffectivePrefix, EmbeddingBuilder, EmbeddingFamily,
@@ -41,41 +37,41 @@ struct Context {
 
 /// A built fixture: the artifact with the HNSW index, the row-ordered data, and the
 /// identity of the index it carries.
-pub struct Fixture {
+pub(crate) struct Fixture {
     context: Context,
     /// The artifact carrying exactly one HNSW derived index.
-    pub bytes: Vec<u8>,
+    pub(crate) bytes: Vec<u8>,
     /// The same artifact with no derived index at all.
-    pub without_index: Vec<u8>,
+    pub(crate) without_index: Vec<u8>,
     /// The row-ordered vectors, in ascending `TargetId` order.
-    pub matrix: VectorMatrix,
+    pub(crate) matrix: VectorMatrix,
     /// The parameters the committed index was built under.
-    pub params: Params,
+    pub(crate) params: Params,
     /// The exact coordinates the committed index is bound to.
-    pub coordinates: IndexCoordinates,
+    pub(crate) coordinates: IndexCoordinates,
     /// The committed derived index, so a test can rebuild with it plus a second one.
-    pub derived: DerivedIndex,
+    pub(crate) derived: DerivedIndex,
     /// The canonical payload image of the committed index.
-    pub image: Vec<u8>,
+    pub(crate) image: Vec<u8>,
     /// The target set the index covers.
-    pub target_set: TargetSetId,
+    pub(crate) target_set: TargetSetId,
     /// The vector space the index accelerates.
-    pub vector_space: VectorSpaceId,
+    pub(crate) vector_space: VectorSpaceId,
     /// The RDF term of each row, in row order.
-    pub terms: Vec<TermValue>,
+    pub(crate) terms: Vec<TermValue>,
     /// The target id of each row, in row order.
-    pub row_targets: Vec<TargetId>,
+    pub(crate) row_targets: Vec<TargetId>,
     /// The PURREMB role this artifact's projection puts the index in.
-    pub use_role: purrdf_core::IndexUseRole,
+    pub(crate) use_role: purrdf_core::IndexUseRole,
     /// The guard contract the committed index was folded under.
-    pub guard_contract: IndexGuardContract,
+    pub(crate) guard_contract: IndexGuardContract,
 }
 
 impl Fixture {
     /// Build the complete two-pass fixture: artifact without an index, read the effective
     /// matrix, build HNSW over it, recommit the artifact with the guard.
     #[must_use]
-    pub fn new(rows: usize, dims: usize, params: Params) -> Self {
+    pub(crate) fn new(rows: usize, dims: usize, params: Params) -> Self {
         Self::with_prefix(rows, dims, dims, params)
     }
 
@@ -86,14 +82,14 @@ impl Fixture {
     /// coarse-prefix-retrieval role: the graph decided its answer on a truncation of the
     /// vectors the artifact stores. Equal values are the ordinary full-width case.
     #[must_use]
-    pub fn with_prefix(rows: usize, dims: usize, prefix: usize, params: Params) -> Self {
+    pub(crate) fn with_prefix(rows: usize, dims: usize, prefix: usize, params: Params) -> Self {
         Self::assemble(rows, dims, prefix, params, HnswIndex::build, guard::load)
     }
 
     /// The fixture whose committed index is built under the reassociated arithmetic, so its
     /// guard names the reassociated implementation and the dispatch path of this process.
     #[must_use]
-    pub fn new_reassociated(rows: usize, dims: usize, params: Params) -> Self {
+    pub(crate) fn new_reassociated(rows: usize, dims: usize, params: Params) -> Self {
         Self::assemble(
             rows,
             dims,
@@ -173,7 +169,7 @@ impl Fixture {
     /// Rebuild the artifact with the committed index plus a second HNSW index under
     /// `params`, for the ambiguity test.
     #[must_use]
-    pub fn with_second_index(&self, params: Params) -> Vec<u8> {
+    pub(crate) fn with_second_index(&self, params: Params) -> Vec<u8> {
         let index = HnswIndex::build(
             self.matrix.clone(),
             &DistanceMetric::SquaredEuclidean,
@@ -188,7 +184,7 @@ impl Fixture {
     /// The artifact with one payload byte flipped, resealed so the framing still verifies
     /// structurally — a substituted payload the adapter's commitment check must refuse.
     #[must_use]
-    pub fn tampered_payload(&self) -> Vec<u8> {
+    pub(crate) fn tampered_payload(&self) -> Vec<u8> {
         let mut bytes = self.bytes.clone();
         let (offset, _length) = section_span(&bytes, SECTION_INDEX_PAYLOAD, 1);
         bytes[offset] ^= 0x01;
@@ -202,7 +198,7 @@ impl Fixture {
     /// use role and payload are all the profile's own, so the revision bytes are the single
     /// thing a test over this artifact is exercising.
     #[must_use]
-    pub fn foreign_evidence_revision(&self) -> Vec<u8> {
+    pub(crate) fn foreign_evidence_revision(&self) -> Vec<u8> {
         self.with_guard_contract(|contract| {
             contract.implementation.revision =
                 Some(b"approximate: recall is exact at every scale and absence is proven".to_vec());
@@ -212,7 +208,7 @@ impl Fixture {
     /// The artifact whose HNSW guard carries `identity` as its implementation, every other
     /// field -- parameters, loss contract, role, payload -- the fixture's own.
     #[must_use]
-    pub fn with_implementation(&self, identity: ArtifactIdentity) -> Vec<u8> {
+    pub(crate) fn with_implementation(&self, identity: ArtifactIdentity) -> Vec<u8> {
         self.with_guard_contract(|contract| contract.implementation = identity)
     }
 
@@ -222,7 +218,7 @@ impl Fixture {
     /// -- the artifact is well-formed at the container boundary and false only about this
     /// profile, which stores no vectors and therefore cannot transform any.
     #[must_use]
-    pub fn transforming_loss_contract(&self) -> Vec<u8> {
+    pub(crate) fn transforming_loss_contract(&self) -> Vec<u8> {
         self.with_guard_contract(|contract| {
             contract.loss = IndexLossContract {
                 transforms_vectors: true,
@@ -237,7 +233,7 @@ impl Fixture {
     /// SHA-256, so the payload commitment holds and whatever refuses the artifact is a
     /// check on the image itself.
     #[must_use]
-    pub fn with_payload(&self, image: Vec<u8>) -> Vec<u8> {
+    pub(crate) fn with_payload(&self, image: Vec<u8>) -> Vec<u8> {
         let derived = DerivedIndex::new(
             self.coordinates,
             IndexPayloadStorage::Inline(image),
@@ -280,7 +276,7 @@ impl Fixture {
 
     /// Bind every row target to its row term, in row order.
     #[must_use]
-    pub fn bindings(&self) -> Vec<(TargetId, TermValue)> {
+    pub(crate) fn bindings(&self) -> Vec<(TargetId, TermValue)> {
         self.row_targets
             .iter()
             .copied()

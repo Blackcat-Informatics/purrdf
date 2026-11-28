@@ -310,11 +310,6 @@ impl Ranked {
     /// equidistant candidates would depend on which sign of zero their arithmetic happened
     /// to land on rather than on the row tie-break. Folding once, here, makes the order
     /// agree with numeric equality everywhere it is defined.
-    #[allow(
-        clippy::float_cmp,
-        reason = "an exact comparison against zero is the intent: this asks which of two \
-                  bit patterns the value is, not whether it is near zero"
-    )]
     fn key(self) -> f64 {
         if self.distance == 0.0 {
             0.0

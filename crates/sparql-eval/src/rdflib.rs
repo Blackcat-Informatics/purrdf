@@ -69,7 +69,10 @@ type Mapping = BTreeMap<Variable, Variable>;
 #[cfg(test)]
 // Apply's policy slot is boxed; this fixture home constructs that complete slot
 // once rather than making every independent visitor fixture repack the policy.
-#[allow(clippy::unnecessary_box_returns)]
+#[expect(
+    clippy::unnecessary_box_returns,
+    reason = "the fixture builds the policy in the boxed slot the public plan expects"
+)]
 pub(crate) fn test_application_policy(
     inputs: Vec<(Variable, Variable)>,
     optional: bool,

@@ -246,7 +246,6 @@ pub(crate) type FSETable = FSETableImpl<Entry, 64>;
 // `1 << 9 = 512` entries. OF uses only the first 256 — the extra capacity
 // is harmless and keeps a single alias for all three seq tables so the
 // contiguous block in `FSEScratch` copies in one memcpy.
-#[allow(dead_code)]
 pub(crate) type SeqFSETable = FSETableImpl<SeqSymbol, 512>;
 
 impl<E: FseEntry, const CAP: usize> FSETableImpl<E, CAP> {

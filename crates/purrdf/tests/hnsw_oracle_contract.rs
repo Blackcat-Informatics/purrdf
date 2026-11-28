@@ -18,6 +18,10 @@
 //! that examined a million candidates to return five must report the million, or the
 //! engine's budget bounds the answer set rather than the execution.
 
+#[expect(
+    dead_code,
+    reason = "this test uses a subset of the shared stored-index fixtures"
+)]
 #[path = "support/hnsw/purremb.rs"]
 mod purremb;
 

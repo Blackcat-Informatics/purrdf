@@ -7,27 +7,30 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// `<http://example.org/ns#{local}>`, the `ex:` namespace of the Turtle fixtures.
-pub fn ex_ns(local: &str) -> Term {
+pub(crate) fn ex_ns(local: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(format!(
         "http://example.org/ns#{local}"
     )))
 }
 
 /// `<http://example.org/{local}>`.
-pub fn example_org(local: &str) -> Term {
+pub(crate) fn example_org(local: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(format!(
         "http://example.org/{local}"
     )))
 }
 
 /// `value` as an `xsd:integer` literal.
-pub fn integer(value: i64) -> Term {
+pub(crate) fn integer(value: i64) -> Term {
     Term::Literal(Literal::new_typed_literal(
         value.to_string(),
         NamedNode::from(XSD_INTEGER),

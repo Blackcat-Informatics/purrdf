@@ -1,9 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![expect(
-    clippy::result_large_err,
-    reason = "Certificate errors retain the original compaction refusal inline; propagating that owner must not allocate a failure-only box."
+#![cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "Certificate errors retain the original compaction refusal inline; propagating that owner must not allocate a failure-only box."
+    )
 )]
 
 //! GTS streamable-compaction certificates (GTS-SPEC §10.1/§10.2).
@@ -397,7 +400,10 @@ pub fn effective_digest_with(
 // Six independent §10.1 preservation facets, each a genuinely independent
 // pass/fail axis a caller inspects individually (not a state machine — every
 // combination is meaningful, e.g. content-equivalent but seam-broken).
-#[allow(clippy::struct_excessive_bools)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each public certification check is independent of the others"
+)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CompactionReport {
     /// The pre- and post-compaction content projections canonicalize to the

@@ -10,7 +10,10 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -27,11 +30,11 @@ use purrdf_sparql_eval::{
     RankedDeclaration, RequestFacet, TermKind, TermPattern, TermPlacement, Volatility,
 };
 
-pub fn ex(suffix: &str) -> String {
+pub(crate) fn ex(suffix: &str) -> String {
     format!("http://example.org/{suffix}")
 }
 
-pub fn kernel_iri(text: &str) -> purrdf_core::Iri {
+pub(crate) fn kernel_iri(text: &str) -> purrdf_core::Iri {
     purrdf_core::parse_iri(text).expect("fixture IRIs are valid")
 }
 
@@ -43,7 +46,7 @@ pub fn kernel_iri(text: &str) -> purrdf_core::Iri {
 /// placement at all, so it is matched by every request term and receives none of
 /// them. Its argument stays free, and the plan reports every term that reached
 /// only this producer — matching a shape is not the same as receiving it.
-pub fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
+pub(crate) fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
     patterns
         .into_iter()
         .map(|pattern| {
@@ -67,7 +70,11 @@ pub fn accepted(patterns: Vec<TermPattern>) -> Vec<AcceptedTerm> {
 /// A ranked declaration, supplied where a producer is registered. `mandatory`
 /// is declared by the host rather than inferred: it states, explicitly, what an
 /// unconstrained `TermKind::Any` pattern used to imply.
-pub fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> RankedDeclaration {
+pub(crate) fn ranked(
+    stratum: &str,
+    patterns: Vec<TermPattern>,
+    mandatory: bool,
+) -> RankedDeclaration {
     RankedDeclaration {
         stratum: kernel_iri(stratum),
         accepted_terms: accepted(patterns),
@@ -84,7 +91,7 @@ pub fn ranked(stratum: &str, patterns: Vec<TermPattern>, mandatory: bool) -> Ran
     }
 }
 
-pub fn lexical_term() -> RequestTerm {
+pub(crate) fn lexical_term() -> RequestTerm {
     RequestTerm::Lexical {
         text: "quick brown fox".to_owned(),
         language: Some("en".to_owned()),
@@ -92,7 +99,7 @@ pub fn lexical_term() -> RequestTerm {
     }
 }
 
-pub fn vector_term() -> RequestTerm {
+pub(crate) fn vector_term() -> RequestTerm {
     RequestTerm::Vector {
         embedding: vec![0.25, -1.5, 3.0],
         metric: Metric::Cosine,
@@ -100,32 +107,32 @@ pub fn vector_term() -> RequestTerm {
     }
 }
 
-pub fn seed_term() -> RequestTerm {
+pub(crate) fn seed_term() -> RequestTerm {
     RequestTerm::EntitySeed {
         entity: Term::new(format!("<{}>", ex("seed"))),
     }
 }
 
-pub fn mixed_request() -> RetrievalRequest {
+pub(crate) fn mixed_request() -> RetrievalRequest {
     RetrievalRequest::complete(vec![lexical_term(), vector_term(), seed_term()])
 }
 
 /// A lexical term beside an entity seed: the multimodal request a coverage-floor
 /// host asks for, and the one the wider quantifier refused.
-pub fn lexical_and_seed_request() -> RetrievalRequest {
+pub(crate) fn lexical_and_seed_request() -> RetrievalRequest {
     RetrievalRequest::complete(vec![lexical_term(), seed_term()])
 }
 
-pub fn lexical_request() -> RetrievalRequest {
+pub(crate) fn lexical_request() -> RetrievalRequest {
     RetrievalRequest::complete(vec![lexical_term()])
 }
 
 /// A mock ranked producer that declares `rows` and emits `emitted`.
-pub struct MockProducer {
-    pub arity: PfArity,
-    pub mode: BindingPattern,
-    pub rows: u64,
-    pub emitted: Vec<Vec<TermValue>>,
+pub(crate) struct MockProducer {
+    pub(crate) arity: PfArity,
+    pub(crate) mode: BindingPattern,
+    pub(crate) rows: u64,
+    pub(crate) emitted: Vec<Vec<TermValue>>,
 }
 
 impl PropertyFunction for MockProducer {
@@ -178,8 +185,8 @@ impl PropertyFunction for MockProducer {
     }
 }
 
-pub struct RowCursor {
-    pub rows: std::vec::IntoIter<Vec<TermValue>>,
+pub(crate) struct RowCursor {
+    pub(crate) rows: std::vec::IntoIter<Vec<TermValue>>,
 }
 
 impl PfCursor for RowCursor {
@@ -188,7 +195,7 @@ impl PfCursor for RowCursor {
     }
 }
 
-pub fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
+pub(crate) fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFunction> {
     let arity = PfArity::new(1, 1);
     let emitted = (0..count)
         .map(|index| {
@@ -208,7 +215,7 @@ pub fn producer(rows: u64, prefix: &str, count: usize) -> Arc<dyn PropertyFuncti
 
 /// The fixture registry: a catch-all producer the host declares mandatory, a
 /// literal producer, an IRI-seed producer, and one unranked producer.
-pub fn fixture_registry() -> PropertyFunctionRegistry<'static> {
+pub(crate) fn fixture_registry() -> PropertyFunctionRegistry<'static> {
     let mut registry = PropertyFunctionRegistry::new();
     let literal_pattern = TermPattern {
         kind: TermKind::Literal,
@@ -245,10 +252,10 @@ pub fn fixture_registry() -> PropertyFunctionRegistry<'static> {
     registry
 }
 
-pub struct MockStatistics {
-    pub source: String,
-    pub revision: String,
-    pub cardinalities: BTreeMap<Iri, u64>,
+pub(crate) struct MockStatistics {
+    pub(crate) source: String,
+    pub(crate) revision: String,
+    pub(crate) cardinalities: BTreeMap<Iri, u64>,
 }
 
 impl Statistics for MockStatistics {
@@ -269,7 +276,7 @@ impl Statistics for MockStatistics {
     }
 }
 
-pub fn statistics(revision: &str) -> MockStatistics {
+pub(crate) fn statistics(revision: &str) -> MockStatistics {
     let mut cardinalities = BTreeMap::new();
     cardinalities.insert(iri(&ex("stratum/universal")), 1000);
     cardinalities.insert(iri(&ex("stratum/text")), 100);
@@ -284,7 +291,7 @@ pub fn statistics(revision: &str) -> MockStatistics {
 
 /// Read an executed stream the way a caller that stopped at `execute` reads it:
 /// one row at a time through the ranked-stream protocol, to exhaustion.
-pub fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
+pub(crate) fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
     let mut rows = Vec::new();
     // The block each row names is not what these assertions are about — every
     // producer here declares `Unrestricted` and so names none — so it is dropped
@@ -298,7 +305,7 @@ pub fn drain(mut stream: RankedStreamImpl<'_>) -> Vec<(u64, Term)> {
 }
 
 /// One `Value` placement at `position`, untyped.
-pub fn value_at(position: usize) -> Vec<TermPlacement> {
+pub(crate) fn value_at(position: usize) -> Vec<TermPlacement> {
     vec![TermPlacement {
         facet: RequestFacet::ScopedLexicalValue,
         position,
@@ -307,7 +314,7 @@ pub fn value_at(position: usize) -> Vec<TermPlacement> {
 }
 
 /// The `LIMIT` a unit's outer `SELECT` carries.
-pub fn emitted_limit(sparql: &str) -> u32 {
+pub(crate) fn emitted_limit(sparql: &str) -> u32 {
     sparql
         .rsplit("LIMIT ")
         .next()
@@ -318,7 +325,7 @@ pub fn emitted_limit(sparql: &str) -> u32 {
 }
 
 /// The rejection reason a plan recorded for `producer`, if it rejected it.
-pub fn rejection(planned: &Plan, producer: &str) -> Option<RejectionReason> {
+pub(crate) fn rejection(planned: &Plan, producer: &str) -> Option<RejectionReason> {
     planned
         .producer_decisions
         .iter()
@@ -332,7 +339,7 @@ pub fn rejection(planned: &Plan, producer: &str) -> Option<RejectionReason> {
 }
 
 /// The entities `result` returned, in order.
-pub fn entities(result: &SearchResult) -> Vec<String> {
+pub(crate) fn entities(result: &SearchResult) -> Vec<String> {
     result
         .rows
         .iter()

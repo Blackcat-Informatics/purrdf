@@ -359,18 +359,6 @@ impl HuffmanScratch {
     pub(crate) fn mark_table_local(&mut self) {
         self.table_source = TableSource::Local;
     }
-
-    /// Snapshot the live (COW-resolved) Huffman table into `self` as an
-    /// owned `Local` copy (LSM resume snapshot/restore): materialises a
-    /// `Dict`-sourced table so the result is self-contained.
-    pub(crate) fn reinit_resolved_from(
-        &mut self,
-        other: &HuffmanScratch,
-        dict: Option<&Dictionary>,
-    ) {
-        self.table.reinit_from(other.huf_table(dict));
-        self.detach_dict();
-    }
 }
 
 purrdf_hash::default_from_new!(HuffmanScratch);

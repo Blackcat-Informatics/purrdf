@@ -178,9 +178,9 @@ pub(crate) fn find_best_match(
     table: &LdmHashTable,
     hash_id: u32,
     checksum: u32,
-    inputs: FindBestMatchInputs<'_>,
+    inputs: &FindBestMatchInputs<'_>,
 ) -> Option<LdmMatch> {
-    let FindBestMatchInputs {
+    let &FindBestMatchInputs {
         live_history,
         history_abs_start,
         split_abs,
@@ -218,7 +218,7 @@ pub(crate) fn find_best_match(
         if entry.checksum != checksum {
             continue;
         }
-        let Some(match_abs) = table.resolve(entry) else {
+        let Some(match_abs) = table.resolve(*entry) else {
             continue;
         };
         // Inclusive lower bound (see `FindBestMatchInputs::

@@ -62,10 +62,7 @@
 //! the home of the root's suites; `purrdf-sparql-conformance`, whose manifest
 //! reader resolves the workspace root; and `helper-census`, which scans it.
 
-// The wasm32 host's imports are `#[wasm_bindgen]` declarations, whose
-// expansion is `unsafe`; `host` is the one module allowed it, and only there.
-#![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
-#![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
+#![forbid(unsafe_code)]
 
 pub mod bench;
 pub mod error_capture;
@@ -73,7 +70,6 @@ pub mod exact;
 pub mod golden;
 pub mod harness;
 #[cfg(target_arch = "wasm32")]
-#[allow(unsafe_code, reason = "the expansion of `#[wasm_bindgen]` imports")]
 mod host;
 pub mod jsonschema_metaschemas;
 pub mod paths;
@@ -142,19 +138,18 @@ macro_rules! harness_main {
     };
     (@entry $entry:ident; $( $(#[$meta:meta])* $case:ident ),+ $(,)?) => {
         fn main() -> ::std::process::ExitCode {
-            // `mut` is unused when every registration is configured away.
-            #[allow(unused_mut, clippy::vec_init_then_push)]
-            let mut trials: ::std::vec::Vec<$crate::harness::Trial> = ::std::vec::Vec::new();
-            $(
-                $(#[$meta])*
-                trials.push($crate::harness::Trial::test(
-                    ::core::stringify!($case),
-                    || {
-                        $case();
-                        ::core::result::Result::Ok(())
-                    },
-                ));
-            )+
+            let trials: ::std::vec::Vec<$crate::harness::Trial> = [
+                $(
+                    $(#[$meta])*
+                    $crate::harness::Trial::test(
+                        ::core::stringify!($case),
+                        || {
+                            $case();
+                            ::core::result::Result::Ok(())
+                        },
+                    ),
+                )+
+            ].into();
             $crate::harness::$entry(trials)
         }
     };

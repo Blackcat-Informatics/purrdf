@@ -276,7 +276,7 @@ impl VerifyingKey {
             .ok_or(Failure::EquationFailed)
     }
 
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "keep the curve equation in both verification entry points so the measured verifier includes the field operations"
     )]

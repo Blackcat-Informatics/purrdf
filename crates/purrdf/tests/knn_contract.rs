@@ -1645,7 +1645,7 @@ fn prefixed_fixture(
                     // this narrowing is exact and the f32 and f64 artifacts hold the same
                     // real numbers — which is what makes comparing their ANSWERS a test of
                     // the reader rather than of the cast.
-                    #[allow(
+                    #[expect(
                         clippy::cast_possible_truncation,
                         reason = "the fixture values are exactly representable in binary32"
                     )]

@@ -1058,7 +1058,7 @@ impl PlanCache {
     /// [`Self::prepare_with_relations`] derives its own, without the two lanes
     /// growing separate copies of the key construction, the probe, the admission,
     /// or the eviction accounting.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "every parameter is a distinct component of the cache key or of \
                   admission; bundling them into a struct would reintroduce the \
@@ -1130,7 +1130,7 @@ impl PlanCache {
         )
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the existing cache identity and registry inputs remain separate borrowed components"
     )]
@@ -1169,7 +1169,7 @@ impl PlanCache {
         result
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the existing cache identity and registry inputs remain separate borrowed components"
     )]
@@ -2474,7 +2474,7 @@ impl NativeSparqlEngine {
     }
 
     /// One governed measuring/evaluation body after its ingress admits workspace.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the shared governed body receives its caller-owned state and admitted workspace"
     )]
@@ -2744,7 +2744,7 @@ impl NativeSparqlEngine {
     /// [`FallibleSparqlError::Query`] when the view remained ready and parsing or
     /// evaluation failed, and [`FallibleSparqlError::BudgetExhausted`] when the view
     /// remained ready and a governor stopped the execution.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the Err side carries the two receipts a governed caller reads (the \
                   view's evidence and this execution's ResourceVectors) plus the certified \
@@ -2824,7 +2824,7 @@ impl NativeSparqlEngine {
     /// Returns the same typed outcomes as [`Self::query_governed_fallible_view`]. A
     /// federation failure while the view remains ready is a query diagnostic; a local
     /// view failure remains [`FallibleSparqlError::Operational`].
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the Err side carries both operation receipts and certified partial answers"
     )]
@@ -3712,7 +3712,7 @@ impl NativeSparqlEngine {
     /// Preserves typed operational refusal ahead of query diagnostics or stops.
     /// No explanation is published after an operationally failed read or a failed
     /// final checkpoint. Allocation and control refusals retain their native forms.
-    #[allow(
+    #[expect(
         clippy::result_large_err,
         reason = "the failure carries the original operational and governor receipts"
     )]
@@ -4704,7 +4704,7 @@ impl NativeSparqlEngine {
     /// The one body behind [`Self::execute`] and [`Self::execute_witnessed`]:
     /// `witnessing` is whether the caller's return type has a slot for the witness,
     /// and the witness returned is empty exactly when it does not.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "one execution waist carries the original evidence source beside its existing witness and sequencing policies"
     )]
@@ -4740,7 +4740,7 @@ impl NativeSparqlEngine {
     }
 
     /// The scoped visit and retained scratch share the ingress's admitted guard.
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the shared execution body preserves its visitor and witness policy beside the admitted guard"
     )]
@@ -5417,7 +5417,7 @@ impl NativeSparqlEngine {
         )
     }
 
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "the shared query body carries its original admitted owner beside the source and answer policy"
     )]
@@ -5756,7 +5756,6 @@ impl ReadOperation<std::convert::Infallible> {
 ///
 /// # Errors
 /// Returns the original source refusal and receipt, or native admission failure.
-#[allow(clippy::future_not_send)]
 pub async fn with_fallible_read<D, F, Fut, R>(
     dataset: &D,
     operation: F,
@@ -6166,7 +6165,7 @@ fn retain_partial_answers<D: FallibleDatasetView + Sync>(
 /// still outranks everything derived after data became unavailable — including a governor
 /// trip, because a budget that ran out while the data was already gone says nothing about
 /// the budget.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "reports the same typed outcome its caller returns; see \
               `NativeSparqlEngine::query_governed_fallible_view`"
@@ -6318,7 +6317,7 @@ type GovernedReadFailure<D> = FallibleSparqlError<
 >;
 
 /// Construct the original governed owner while preserving its first typed refusal.
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "the failure carries the original operational and governor receipts"
 )]
@@ -6343,7 +6342,7 @@ fn admit_governor_state<D: FallibleDatasetView + Sync>(
     })
 }
 
-#[allow(
+#[expect(
     clippy::result_large_err,
     reason = "the typed refusal retains the same operational and governor receipts as the public governed entry"
 )]
@@ -6481,10 +6480,9 @@ fn evaluate_governed_with_substitutions<D: DatasetView + Sync>(
 /// Extensions, Appendix A) — so both values evaluate identically: a prepared
 /// execution's parameters, a request's substitutions, SHACL-SPARQL and every other
 /// caller share one meaning, one admission and one answer.
-#[allow(
-    unknown_lints,
+#[expect(
     clippy::deprecated_attributes_without_since,
-    reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
+    reason = "the deprecation has not been published in a versioned release"
 )]
 #[deprecated(
     note = "every lane applies the SHACL pre-binding rewrite; both values evaluate identically"
@@ -6557,8 +6555,6 @@ pub enum ShaclPrebinding {
 /// assert!(options.load.is_none());
 /// ```
 // The deprecated `prebinding` field stays for compatibility.
-#[allow(deprecated)]
-#[derive(Clone, Copy)]
 #[non_exhaustive]
 pub struct QueryOptions<'a, 'providers> {
     /// A caller-selected `NOW()` value. Missing input samples the host clock.
@@ -6584,6 +6580,10 @@ pub struct QueryOptions<'a, 'providers> {
     pub graph_existence: purrdf_core::GraphExistenceMode,
     /// The pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
+    #[expect(
+        deprecated,
+        reason = "the existing public prebinding field retains its type"
+    )]
     pub prebinding: ShaclPrebinding,
     /// The SHACL-AF function registry in scope.
     /// [`UserFunctionRegistry::EMPTY`](crate::user_fn::UserFunctionRegistry::EMPTY) —
@@ -6720,6 +6720,19 @@ pub struct QueryOptions<'a, 'providers> {
 
 // The trait-object fields are not `Debug`, so derive cannot apply; they are reported by
 // presence, the way `NativeSparqlEngine` reports its `LOAD` resolver.
+// Copy the value without naming the deprecated prebinding type in generated code.
+impl Copy for QueryOptions<'_, '_> {}
+
+#[expect(
+    clippy::expl_impl_clone_on_copy,
+    reason = "the derived implementation names the deprecated prebinding type outside its field"
+)]
+impl Clone for QueryOptions<'_, '_> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
 impl std::fmt::Debug for QueryOptions<'_, '_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("QueryOptions")
@@ -6776,7 +6789,10 @@ impl<'a, 'providers> QueryOptions<'a, 'providers> {
 }
 
 // `EMPTY` sets the deprecated `prebinding` field it still carries.
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "the default still initializes the deprecated prebinding field for compatibility"
+)]
 impl QueryOptions<'_, '_> {
     /// Configure nothing: no declared pre-bound names, every registry the
     /// canonical empty value, unprefixed blank mints, no focus graph, top-level call
@@ -6905,11 +6921,10 @@ impl<'a, 'providers> QueryOptions<'a, 'providers> {
     /// Set the pre-binding lane the request names (see [`ShaclPrebinding`]); every lane
     /// takes the same rewrite.
     #[deprecated(note = "every lane applies the SHACL pre-binding rewrite; the lane has no effect")]
-    #[allow(
+    #[expect(
         deprecated,
-        unknown_lints,
         clippy::deprecated_attributes_without_since,
-        reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
+        reason = "the deprecation has not been published in a versioned release"
     )]
     #[must_use]
     pub const fn with_prebinding(mut self, prebinding: ShaclPrebinding) -> Self {
@@ -8067,7 +8082,10 @@ fn resolve_governed_with_prefix<D: DatasetView + Sync, R>(
 
 #[cfg(test)]
 // The compatibility tests still name both `ShaclPrebinding` values.
-#[allow(deprecated)]
+#[expect(
+    deprecated,
+    reason = "tests exercise the compatibility prebinding API before and after deprecation"
+)]
 mod tests {
     #[test]
     fn only_explain_survey_retains_statistical_evidence() {
@@ -11881,26 +11899,14 @@ mod tests {
         )
     }
 
-    /// A `ServiceResolver` that is never actually called: [`QueryOptions::with_remote`]
-    /// only needs a valid trait-object reference to prove the field was set to it.
-    struct NeverCalledRemote;
-    impl crate::remote::ServiceResolver for NeverCalledRemote {
+    /// A source that refuses all federation requests.
+    struct DisabledRemote;
+    impl crate::remote::ServiceResolver for DisabledRemote {
         fn resolve(
             &self,
             _request: crate::remote::ServiceRequest<'_>,
         ) -> Result<crate::remote::ResolvedBindings, crate::remote::RemoteError> {
-            unimplemented!("this stub only proves `with_remote` set the field")
-        }
-    }
-
-    /// [`QueryOptions::with_load`]'s twin of [`NeverCalledRemote`].
-    struct NeverCalledLoad;
-    impl GraphResolver for NeverCalledLoad {
-        fn resolve(
-            &self,
-            _request: crate::update::GraphResolveRequest<'_>,
-        ) -> Result<Arc<RdfDataset>, crate::update::LoadError> {
-            unimplemented!("this stub only proves `with_load` set the field")
+            Err(crate::remote::RemoteError::Disabled)
         }
     }
 
@@ -11982,7 +11988,7 @@ mod tests {
 
         // `with_remote`
         {
-            let remote = NeverCalledRemote;
+            let remote = DisabledRemote;
             let owned = base.with_remote(Some(&remote));
             let expected_ptr = std::ptr::from_ref(&remote).cast::<()>();
             assert_eq!(
@@ -11996,7 +12002,7 @@ mod tests {
 
         // `with_load`
         {
-            let load = NeverCalledLoad;
+            let load = TestResolver { ds: loadable() };
             let owned = base.with_load(Some(&load));
             let expected_ptr = std::ptr::from_ref(&load).cast::<()>();
             assert_eq!(

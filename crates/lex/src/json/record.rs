@@ -1027,11 +1027,9 @@ macro_rules! json_string_enum {
     ($type:ty { $($variant:ident => $spelling:literal),+ $(,)? }) => {
         impl $type {
             /// Every JSON spelling, in declaration order.
-            #[allow(dead_code)]
             pub(crate) const JSON_VARIANTS: &'static [&'static str] = &[$($spelling),+];
 
             /// The variant's JSON spelling.
-            #[allow(dead_code)]
             pub(crate) const fn json_str(self) -> &'static str {
                 match self {
                     $(Self::$variant => $spelling,)+
@@ -1322,7 +1320,7 @@ impl FromJson for f32 {
         let number = value
             .as_number()
             .ok_or_else(|| DecodeError::invalid_type(value, "f32"))?;
-        #[allow(
+        #[expect(
             clippy::cast_possible_truncation,
             reason = "the binary64 to binary32 rounding is the conversion this reads"
         )]
@@ -1472,19 +1470,18 @@ impl<K: JsonKey, V: ToJson> ToJson for BTreeMap<K, V> {
 }
 
 macro_rules! json_tuple {
-    ($(($($name:ident),+)),+ $(,)?) => {$(
-        impl<$($name: ToJson),+> ToJson for ($($name,)+) {
+    ($(($($binding:ident: $typ:ident),+)),+ $(,)?) => {$(
+        impl<$($typ: ToJson),+> ToJson for ($($typ,)+) {
             /// A tuple is an array of its parts, in order.
-            #[allow(non_snake_case)]
             fn to_json(&self) -> Value {
-                let ($($name,)+) = self;
-                Value::Array(vec![$($name.to_json()),+])
+                let ($($binding,)+) = self;
+                Value::Array(vec![$($binding.to_json()),+])
             }
         }
     )+};
 }
 
-json_tuple!((A, B), (A, B, C), (A, B, C, D));
+json_tuple!((a: A, b: B), (a: A, b: B, c: C), (a: A, b: B, c: C, d: D));
 
 #[cfg(test)]
 mod tests;

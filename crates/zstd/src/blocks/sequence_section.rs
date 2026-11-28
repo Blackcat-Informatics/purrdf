@@ -60,8 +60,7 @@ pub(crate) enum ModeType {
     /// will be present.
     Predefined,
     /// The table consists of a single byte, which contains the symbol's value.
-    #[allow(clippy::upper_case_acronyms)]
-    RLE,
+    Rle,
     /// Standard FSE compression, a distribution table will be present. This
     /// mode should not be used when only one symbol is present.
     FSECompressed,
@@ -76,7 +75,7 @@ impl CompressionModes {
     pub(crate) fn decode_mode(m: u8) -> ModeType {
         match m {
             0 => ModeType::Predefined,
-            1 => ModeType::RLE,
+            1 => ModeType::Rle,
             2 => ModeType::FSECompressed,
             3 => ModeType::Repeat,
             _ => panic!("This can never happen"),

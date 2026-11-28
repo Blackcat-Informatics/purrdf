@@ -502,7 +502,7 @@ fn square_roots_that_round_twice_through_64_bits_round_once_here() {
 // ---- the x87 -------------------------------------------------------------------------------
 
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
-#[allow(
+#[expect(
     unsafe_code,
     reason = "the tests load a caller's control word, as a caller that changed it would"
 )]

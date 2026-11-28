@@ -475,7 +475,10 @@ pub(crate) fn render_message_templates(
 /// Each value node is substituted as `$value` / `?value` alongside `$this` and the
 /// parameter bindings. A result of `true` means conforming; `false` emits one
 /// [`ValidationResult`].
-#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the function receives the independent SHACL-SPARQL validator inputs"
+)]
 pub(crate) fn eval_ask_validator<
     D: DatasetView<ReadError = std::convert::Infallible> + Sync + crate::sparql::FocusGraphSource,
 >(
@@ -660,7 +663,10 @@ pub(crate) fn eval_ask_validator<
 /// columns override the default focus node, path, and value when present and
 /// bound. Row bindings take precedence over parameter bindings for message
 /// template substitution.
-#[allow(clippy::too_many_arguments)] // Signature mirrors the SHACL-SPARQL parameter set.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the function receives the independent SHACL-SPARQL validator inputs"
+)]
 pub(crate) fn eval_select_validator<
     D: DatasetView<ReadError = std::convert::Infallible> + Sync + crate::sparql::FocusGraphSource,
 >(

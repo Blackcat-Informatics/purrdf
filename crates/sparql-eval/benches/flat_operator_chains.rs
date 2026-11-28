@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API, so the workspace `missing_docs` lint is
-// not asked of their items.
-#![allow(missing_docs)]
-
 //! Parsing and evaluating a flat operator chain: `?v = 0 || ?v = 1 || …`,
 //! `?v + 1 + 2.5 + …`, `{ … } UNION { … } UNION …`, and the property paths
 //! `<next>/<next>/…` and `<q1>|<q2>|…|<next>`, each read into one n-ary algebra node,

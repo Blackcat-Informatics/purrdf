@@ -1667,7 +1667,10 @@ impl MediumPlan {
 /// stays alive until the call returns and can be reused after a refusal; a caller
 /// that owns a builder it is done with should use [`emit_gts_owned`], which
 /// releases the tables before the transform runs.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the public borrowing emission signature and its caller-supplied policies"
+)]
 pub fn emit_gts(
     builder: &SnapshotBuilder,
     profile: &str,
@@ -1703,7 +1706,10 @@ pub fn emit_gts(
 /// payload is encoded, before the transform runs, so compression does not run on
 /// top of them. The cost is the retry: the builder is gone after a refusal, and a
 /// caller that wants to try again ingests again.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "preserve the public consuming emission signature and its caller-supplied policies"
+)]
 pub fn emit_gts_owned(
     builder: SnapshotBuilder,
     profile: &str,
@@ -1749,7 +1755,10 @@ impl Held<'_> {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the emission body shares the same independent policies across both ownership modes"
+)]
 fn emit_held(
     held: Held<'_>,
     profile: &str,

@@ -294,7 +294,7 @@ impl DlCertificate {
     /// from the producer, and holding a proof's receipt against it is a check that the two
     /// halves of one answer AGREE, not a check that either is true on its own.
     #[must_use]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "a certificate is eleven independent readings, and taking them as one struct would need a second public type that exists only to be unpacked here"
     )]

@@ -5,10 +5,6 @@
 //! caller-supplied vocabularies over test-fixture IRIs (PurRDF mints none), each
 //! namespaced under the caller's own `ex` base.
 
-// The module is included into more than one target, and no single target uses every
-// helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
-
 use std::collections::BTreeMap;
 
 use purrdf_rdf::{
@@ -24,13 +20,13 @@ const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 const OBO: &str = "http://www.geneontology.org/formats/oboInOwl#";
 
 /// The projection limits every configuration here carries.
-pub fn limits() -> ProjectionLimits {
+pub(crate) fn limits() -> ProjectionLimits {
     ProjectionLimits::new(64, 16_000_000, 64_000_000, 72_000_000, 16).expect("limits")
 }
 
 /// An exact-mode CSVW configuration whose metadata, context and group IRIs sit
 /// under `ex`, admitting up to `max_rows` rows.
-pub fn csvw_config(ex: &str, max_rows: usize) -> CsvwConfig {
+pub(crate) fn csvw_config(ex: &str, max_rows: usize) -> CsvwConfig {
     CsvwConfig::new(
         format!("{ex}csvw-metadata"),
         CsvwContext::new(format!("{ex}csvw-context"), BTreeMap::default()).expect("context"),
@@ -44,7 +40,7 @@ pub fn csvw_config(ex: &str, max_rows: usize) -> CsvwConfig {
 }
 
 /// A CSVW datatype of `base` with no facet.
-pub fn csvw_datatype(base: impl Into<String>) -> CsvwDatatype {
+pub(crate) fn csvw_datatype(base: impl Into<String>) -> CsvwDatatype {
     CsvwDatatype {
         id: None,
         base: base.into(),
@@ -62,7 +58,7 @@ pub fn csvw_datatype(base: impl Into<String>) -> CsvwDatatype {
 }
 
 /// An OBO Graphs configuration whose ontology and definition IRIs sit under `ex`.
-pub fn obo_config(ex: &str) -> OboGraphsConfig {
+pub(crate) fn obo_config(ex: &str) -> OboGraphsConfig {
     let rdf = OboRdfRoles::new(
         format!("{RDF}type"),
         format!("{RDF}reifies"),
@@ -118,7 +114,7 @@ pub fn obo_config(ex: &str) -> OboGraphsConfig {
 }
 
 /// The SKOS label roles under the namespace `prefix`.
-pub fn skos_label_roles(prefix: &str) -> SkosLabelRoles {
+pub(crate) fn skos_label_roles(prefix: &str) -> SkosLabelRoles {
     SkosLabelRoles::new(
         format!("{prefix}prefLabel"),
         format!("{prefix}altLabel"),
@@ -129,7 +125,7 @@ pub fn skos_label_roles(prefix: &str) -> SkosLabelRoles {
 }
 
 /// The SKOS documentation roles under the namespace `prefix`.
-pub fn skos_documentation_roles(prefix: &str) -> SkosDocumentationRoles {
+pub(crate) fn skos_documentation_roles(prefix: &str) -> SkosDocumentationRoles {
     SkosDocumentationRoles::new(
         format!("{prefix}note"),
         format!("{prefix}changeNote"),
@@ -143,7 +139,7 @@ pub fn skos_documentation_roles(prefix: &str) -> SkosDocumentationRoles {
 }
 
 /// The SKOS relation roles under the namespace `prefix`.
-pub fn skos_relation_roles(prefix: &str) -> SkosRelationRoles {
+pub(crate) fn skos_relation_roles(prefix: &str) -> SkosRelationRoles {
     SkosRelationRoles::new(
         format!("{prefix}broader"),
         format!("{prefix}narrower"),

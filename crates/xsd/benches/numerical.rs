@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Report-only numerical context, arithmetic and prepared/batch latency.
-#![allow(missing_docs)]
 
 use purrdf_hash::Backend as _;
 use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main};

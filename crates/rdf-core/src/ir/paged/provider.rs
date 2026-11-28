@@ -380,7 +380,10 @@ impl PageProvider for SubsetPageProvider {
 /// A reference provider that observes demand by rebuilding each requested page and
 /// incrementing an atomic hit counter.
 pub struct CountingDemandProvider {
-    #[allow(clippy::type_complexity)]
+    #[expect(
+        clippy::type_complexity,
+        reason = "the admitted thunks are independently owned and callable from shared readers"
+    )]
     thunks: Box<[Box<dyn Fn() -> Arc<RdfDataset> + Send + Sync>]>,
     generation: PageGeneration,
     hits: AtomicUsize,

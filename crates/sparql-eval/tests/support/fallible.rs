@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ScriptedFault {
+pub(crate) enum ScriptedFault {
     Provider,
     Cancelled,
     Deadline,
@@ -20,7 +20,7 @@ pub enum ScriptedFault {
     CorruptByteCharge,
 }
 
-pub struct FaultingProvider {
+pub(crate) struct FaultingProvider {
     pages: Box<[Arc<RdfDataset>]>,
     byte_lengths: Box<[u64]>,
     generation: PageGeneration,
@@ -30,7 +30,7 @@ pub struct FaultingProvider {
 }
 
 impl FaultingProvider {
-    pub fn new(
+    pub(crate) fn new(
         pages: Vec<Arc<RdfDataset>>,
         byte_lengths: Vec<u64>,
         fail_page: PageId,
@@ -94,7 +94,7 @@ impl PageProvider for FaultingProvider {
     }
 }
 
-pub fn two_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
+pub(crate) fn two_page_faulting_dataset(fault: ScriptedFault) -> PagedDataset {
     let pages = vec![
         local_dataset([("a", "p", "b")]),
         local_dataset([("b", "q", "c")]),

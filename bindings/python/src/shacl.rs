@@ -143,9 +143,14 @@ use crate::py_store::{PyStore, validation_snapshot};
 /// [module documentation](self).
 #[pyfunction]
 #[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, conformance_disallows=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, xpath_regex=None, shacl_profile=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-#[allow(clippy::too_many_arguments)] // one keyword per validation-request option
-#[allow(clippy::fn_params_excessive_bools)] // one keyword per validation-request option
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one keyword per validation-request option"
+)]
 fn validate(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -459,8 +464,14 @@ fn messages_list<'py>(
     canonical_search,
     cancel=None,
 ))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-#[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the Python keyword surface one-to-one"
+)]
 fn entail(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -581,8 +592,14 @@ fn entail(
     xpath_regex=None,
     now=None, entropy_seed=None,
 ))]
-#[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the Python keyword surface one-to-one"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn apply_rules(
     py: Python<'_>,
     data_nt: &str,
@@ -660,7 +677,10 @@ fn apply_rules(
 /// and every host's rules run call.
 #[pyfunction]
 #[pyo3(signature = (srl, *, srl_base=None, imports=Vec::new(), level=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn check_rules(
     py: Python<'_>,
     srl: &str,
@@ -724,8 +744,14 @@ fn check_rules(
 /// evaluates, runs under — see the [module documentation](self).
 #[pyfunction]
 #[pyo3(signature = (shapes_ttl, data_nt, expr, focus, *, expr_at=None, expr_via=Vec::new(), expr_turtle=None, scope=None, shapes_base=None, imports=Vec::new(), xpath_regex=None))]
-#[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors the Python keyword surface one-to-one"
+)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn eval_node_expr(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -822,7 +848,10 @@ fn eval_node_expr(
 /// lint --shapes-graph` configures it (see the [module documentation](self)).
 #[pyfunction]
 #[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
 fn lint_shapes(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -1000,8 +1029,14 @@ impl PyShapes {
     /// `None` is the compatibility law.
     #[new]
     #[pyo3(signature = (shapes_ttl, *, base=None, imports=Vec::new(), shapes_graph=None, subclass_of_in_shapes_graph=false, shacl_profile=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None))]
-    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-    #[allow(clippy::too_many_arguments)] // one keyword per validation-request option
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "binding ABI receives owned values"
+    )]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one keyword per validation-request option"
+    )]
     fn new(
         py: Python<'_>,
         shapes_ttl: &str,
@@ -1945,7 +1980,6 @@ impl PyShapesProduct {
     }
 }
 
-#[allow(clippy::too_many_arguments)] // existing restore controls plus the complete recursion request
 fn restore_product_request(
     py: Python<'_>,
     bytes: &[u8],
@@ -2005,8 +2039,14 @@ fn restore_product_request(
 /// `purrdf shacl pack --shapes-graph`; a relative one resolves against `shapes_base`.
 #[pyfunction]
 #[pyo3(signature = (shapes_ttl, *, shapes_base=None, imports=Vec::new(), shapes_graph=None, recursion=None, recursion_max_pairs=None, recursion_max_iterations=None, canonical_search, cancel=None))]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-#[allow(clippy::too_many_arguments)] // one keyword per validation-request option
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "binding ABI receives owned values"
+)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one keyword per validation-request option"
+)]
 fn pack_product(
     py: Python<'_>,
     shapes_ttl: &str,

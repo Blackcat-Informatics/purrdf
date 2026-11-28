@@ -1170,10 +1170,6 @@ where
     /// assert_eq!(map.get(&2), None);
     /// ```
     #[inline]
-    #[allow(
-        clippy::manual_map,
-        reason = "deliberate match: Option::map bloats LLVM IR on this hot path; scoped to the function because the match is its tail expression"
-    )]
     pub fn get<Q>(&self, k: &Q) -> Option<&V>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -1207,10 +1203,6 @@ where
     /// assert_eq!(map.get_key_value(&2), None);
     /// ```
     #[inline]
-    #[allow(
-        clippy::manual_map,
-        reason = "deliberate match: Option::map bloats LLVM IR on this hot path; scoped to the function because the match is its tail expression"
-    )]
     pub fn get_key_value<Q>(&self, k: &Q) -> Option<(&K, &V)>
     where
         Q: Hash + Equivalent<K> + ?Sized,
@@ -3168,11 +3160,6 @@ impl<K, V> Default for Keys<'_, K, V> {
 }
 impl<'a, K, V> Iterator for Keys<'a, K, V> {
     type Item = &'a K;
-
-    #[allow(
-        clippy::manual_map,
-        reason = "deliberate match: Option::map bloats LLVM IR on this hot path; scoped to the function because the match is its tail expression"
-    )]
     fn next(&mut self) -> Option<&'a K> {
         // Avoid `Option::map` because it bloats LLVM IR.
         match self.inner.next() {
@@ -4808,7 +4795,10 @@ where
     }
 }
 
-#[expect(dead_code)]
+#[expect(
+    dead_code,
+    reason = "the compiler checks map covariance from the return types without calling these functions"
+)]
 fn assert_covariance() {
     fn map_key<'new>(v: HashMap<&'static str, u8>) -> HashMap<&'new str, u8> {
         v

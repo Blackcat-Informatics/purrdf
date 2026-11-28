@@ -347,6 +347,28 @@ fn native_transport_framing_and_decoder_fields_survive() {
         decode_transport(&block, TransportEncoding::Zstd).unwrap(),
         b"x"
     );
+    let mut decoder = purrdf_zstd::decoding::FrameDecoder::new();
+    decoder.init(block.as_slice()).unwrap();
+    let mut output = [0];
+    assert_eq!(decoder.decode_all(&block, &mut output).unwrap(), 1);
+    assert_eq!(&output, b"x");
+
+    // Change only the reserved descriptor bit. The stream and slice decoders
+    // must preserve the same typed cause and the original descriptor byte.
+    let mut reserved = block.clone();
+    reserved[4] |= 0x08;
+    for error in [
+        decoder.init(reserved.as_slice()).unwrap_err(),
+        decoder.decode_all(&reserved, &mut output).unwrap_err(),
+    ] {
+        let fields = Capture::read(&error).child("cause").child("cause");
+        assert_eq!(fields.code, "zstd-frame-descriptor-reserved-bit-set");
+        assert!(matches!(
+            fields.field("descriptor"),
+            ErrorValue::Unsigned(0x28)
+        ));
+    }
+
     block[6] = 7;
     for (bytes, code) in [
         (window, "zstd-frame-decoder-window-size-too-big"),

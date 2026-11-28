@@ -1089,7 +1089,6 @@ impl<'s> Evaluator<'s> {
 
     /// Resume the frame's pending keyword with the outcome of the subschema
     /// it applied last (`None` when it starts), and say what it does next.
-    #[allow(clippy::too_many_lines)] // one arm per applicator keyword
     fn resume<'v>(
         &mut self,
         frame: &mut Frame<'s, 'v>,

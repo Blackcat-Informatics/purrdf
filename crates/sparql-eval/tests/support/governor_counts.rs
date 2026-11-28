@@ -28,7 +28,7 @@ const WORKER_ITERATIONS: usize = 1_000_000;
 
 /// Executable-level allocator boundary; these modes live in separate binaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CountMode {
+pub(crate) enum CountMode {
     /// Normal-allocator retired user-mode instructions.
     Instructions,
     /// Separate whole-process allocation windows.
@@ -37,7 +37,10 @@ pub enum CountMode {
 
 // Retain the actual production return carriers. Boxing the governed outcome
 // would introduce an allocation into the query window solely for this tool.
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "boxing the governed outcome would add a fixture allocation inside the measured query window"
+)]
 enum Product {
     Plain(SparqlResult),
     Governed(GovernedOutcome),
@@ -710,7 +713,7 @@ fn allocation_coverage(threads: usize) {
 }
 
 /// Fixed-work CLI. `--test` executes full guards without claiming any counts.
-pub fn entry(mode: CountMode) {
+pub(crate) fn entry(mode: CountMode) {
     let args: Vec<String> = std::env::args()
         .skip(1)
         .filter(|arg| arg != "--bench")

@@ -3,7 +3,8 @@
 
 //! The real binary consumes the public compiled matcher through the facade.
 mod support;
-use support::{run, stderr, stdout_utf8};
+use purrdf_testkit::text::stdout_utf8;
+use support::{run, stderr};
 
 #[test]
 fn explicit_surfaces_decide_and_refusals_publish_no_answer() {

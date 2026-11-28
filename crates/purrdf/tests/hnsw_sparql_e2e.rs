@@ -20,13 +20,17 @@
 //! `https://example.org/pf#nearest` is a **fixture** IRI supplied by this test in its role
 //! as the host. It is not a default, and this crate contains no namespace of its own.
 
+#[expect(
+    dead_code,
+    reason = "this test uses a subset of the shared stored-index fixtures"
+)]
 #[path = "support/hnsw/purremb.rs"]
 mod purremb;
 
 #[path = "support/hnsw/fixture.rs"]
 mod fixture;
-use fixture::params;
 use purrdf_core::term_fixture::empty_dataset as dataset;
+use purrdf_hnsw::fixture::params;
 use std::sync::Arc;
 
 use purrdf_core::{SparqlRequest, SparqlResult, TermValue};

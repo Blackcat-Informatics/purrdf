@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API, so the workspace `missing_docs` lint is
-// not asked of their items.
-#![allow(missing_docs)]
-
 //! Retired user-mode instructions of class-targeted SHACL validation.
 //!
 //! Linux only (needs `perf`). Each sample is a fresh child process run under
@@ -16,7 +12,7 @@
 //! default). Output lines are `count <subjects> samples=<n,...>`.
 
 #[cfg(target_os = "linux")]
-#[allow(dead_code, reason = "each target uses part of the shared workload")]
+#[expect(dead_code, reason = "each target uses part of the shared workload")]
 #[path = "support/class_targets.rs"]
 mod fixture;
 

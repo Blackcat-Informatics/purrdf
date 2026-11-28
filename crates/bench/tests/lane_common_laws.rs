@@ -18,6 +18,10 @@
 //! unless the valid neighbour is executed too — and two defects in this file's own
 //! subject matter were caught exactly that way rather than by reading.
 
+#[expect(
+    dead_code,
+    reason = "this test uses a subset of the shared lane fixture"
+)]
 mod support;
 
 use std::os::unix::fs::PermissionsExt;

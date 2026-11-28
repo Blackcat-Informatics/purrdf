@@ -1,7 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 // The pre-binding lane is deprecated and inert; these tests still name it.
-#![allow(deprecated)]
+#![expect(
+    deprecated,
+    reason = "these tests exercise the retained compatibility prebinding API"
+)]
 
 //! A prepared execution's declared parameters are counted as bound when its property
 //! -function calls are admitted, and the refusal to run one unbound is what makes that

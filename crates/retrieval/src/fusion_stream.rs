@@ -5888,8 +5888,10 @@ mod tests {
         }
     }
 
-    // The trait's methods are `async`; this fixture's body is synchronous.
-    #[allow(clippy::unused_async_trait_impl)]
+    #[expect(
+        clippy::unused_async_trait_impl,
+        reason = "the in-memory producer exercises the async protocol without unrelated suspension"
+    )]
     impl RankedStream for Listed {
         type Item = Term;
 

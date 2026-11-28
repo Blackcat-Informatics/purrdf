@@ -107,7 +107,11 @@ impl purrdf_sparql_eval::host_source::HostSource for JsHostSource {
 
     fn entropy_seed(&self) -> u64 {
         // Compose 64 bits from two host Math.random() draws in [0,1).
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the host promises a nonnegative unit-interval value and each draw truncates to an integer"
+        )]
         let draw = || (math_random_import() * f64::from(u32::MAX)) as u64;
         (draw() << 32) | draw()
     }

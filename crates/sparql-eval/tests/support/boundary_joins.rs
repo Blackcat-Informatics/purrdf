@@ -12,10 +12,10 @@ use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DOUBLE, XSD_INTEGER};
 use super::EX;
 
 /// The intermediate-cell allowance shared by every equivalent query form.
-pub const CELLS: u64 = 8_388_608;
+pub(crate) const CELLS: u64 = 8_388_608;
 
 /// Three boundary-sensitive queries paired with equivalent selective forms.
-pub const QUERIES: [(&str, &str, &str, usize); 3] = [
+pub(crate) const QUERIES: [(&str, &str, &str, usize); 3] = [
     (
         "after_optional",
         "SELECT ?item WHERE { ?item a ex:Item . ?p1 ex:of ?item . ?p2 ex:of ?item . \
@@ -48,13 +48,13 @@ pub const QUERIES: [(&str, &str, &str, usize); 3] = [
 ];
 
 /// A query under the common example namespace.
-pub fn query(body: &str) -> String {
+pub(crate) fn query(body: &str) -> String {
     format!("PREFIX ex: <{EX}> {body}")
 }
 
 /// 4,000 items with two numbered parts and a third for every fourth item,
 /// plus 1,000 nodes with 100 members each and ten selective anchors.
-pub fn dataset() -> Arc<RdfDataset> {
+pub(crate) fn dataset() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let rdf_type = builder.intern_iri(TYPE).unwrap();
     let item_type = builder.intern_iri(&format!("{EX}Item")).unwrap();

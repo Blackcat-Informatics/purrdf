@@ -49,7 +49,7 @@ const BLOCK: usize = 4 * CHUNK;
 pub type ByteRun = (u8, u8);
 
 /// Narrow a table index to its byte. Every caller passes an index below 256.
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "every caller passes an index below 256; u8::try_from is not const-callable"
 )]
@@ -107,7 +107,7 @@ pub const fn byte_runs<const N: usize>(table: &[u8; 256]) -> [ByteRun; N] {
 /// `lo <= b && b <= hi`: a byte below `lo` wraps to a value above `hi - lo`.
 /// The OR over runs has no early exit, so a caller evaluating it over a whole
 /// chunk evaluates it lane by lane with no branch.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each scanner is one monomorphic kernel: the shared body must be inlined into it \
               so the class's runs fold in as constants and the lane loop vectorizes"
@@ -132,7 +132,7 @@ pub fn in_runs(b: u8, runs: &[ByteRun]) -> bool {
 /// (`mask |= u16::from(hit) << i`) was tried first and measured: it vectorized
 /// for some classes and not others, and on some targets not at all, because
 /// the pack has to be recognized as a whole before any of it pays.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each scanner is one monomorphic kernel: the shared body must be inlined into it \
               so the class's runs fold in as constants and the lane loop vectorizes"
@@ -156,7 +156,7 @@ fn chunk_lanes(chunk: &[u8; CHUNK], runs: &[ByteRun], flip: u8) -> [u8; CHUNK] {
 /// clean-chunk test (a horizontal OR, lowered to a mask extraction). Only a
 /// chunk holding a hit reads the lanes as one little-endian `u128` lane mask,
 /// whose trailing-zero count over 8 is the first hit's lane.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each scanner is one monomorphic kernel: the shared body must be inlined into it \
               so the class's runs fold in as constants and the lane loop vectorizes"
@@ -308,7 +308,7 @@ impl<const RUNS: usize> ByteClass<RUNS> {
     /// the offset, the form that vectorizes for a single comparison (see
     /// `find_first_in_one_run`). Inlined into its caller, so the caller's
     /// function is the one kernel for its class.
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "a class's kernel is its caller: the scan must be inlined so the class's runs \
                   fold in as constants and the lane loop vectorizes"
@@ -341,7 +341,7 @@ impl<const RUNS: usize> ByteClass<RUNS> {
 /// spill them and scalarize the clean-chunk test on both x86_64 and aarch64. A
 /// class of more than one run keeps the OR-fold, which is what the named
 /// scanners were measured with.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "a class's kernel is its caller: the scan must be inlined so the class's run \
               folds in as constants and the lane loop vectorizes"
@@ -380,7 +380,7 @@ fn find_first_in_one_run(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256]) -> O
 /// chunk's lanes widened, so the vectorizer emits four packed compares on a
 /// 128-bit target and two on a 256-bit one; the block that holds a hit and the
 /// bytes after the last whole block take the sixteen-byte path.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
               into it so the needle count folds in and the lane loop vectorizes"
@@ -407,7 +407,7 @@ fn find_needles<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize>
 
 /// The lanes of one chunk against run-time needles: lane `i` is `0xFF` when
 /// `chunk[i]` equals one of `needles`, `0x00` otherwise.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
               into it so the needle count folds in and the lane loop vectorizes"
@@ -427,7 +427,7 @@ fn needle_lanes<const N: usize>(chunk: &[u8; CHUNK], needles: [u8; N]) -> [u8; C
 
 /// The lane-wise OR of a block's four chunks of lanes: non-zero somewhere
 /// exactly when one of them is.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
               into it so the lane loop vectorizes"
@@ -450,7 +450,7 @@ fn merge_lanes(parts: [[u8; CHUNK]; BLOCK / CHUNK]) -> [u8; CHUNK] {
 /// extract-and-shuffle reduction per block; the word test is a register-width
 /// OR and a test on every target, about half the instructions of the
 /// maximum's block loop on x86-64 at the baseline, `v3` and `v4` levels.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
               into it so the lane loop vectorizes"
@@ -462,7 +462,7 @@ fn any_lane(lanes: &[u8; CHUNK]) -> bool {
 
 /// The sixteen-byte walk behind [`find_needles`]: the chunk formulation of
 /// [`find_first_in_one_run`] over run-time needles.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public search is one monomorphic kernel: the shared body must be inlined \
               into it so the needle count folds in and the lane loop vectorizes"
@@ -648,7 +648,7 @@ struct Run(u8, u8);
 struct Runs2(Run, Run);
 
 impl PositionTest for Byte {
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "a lane test must fold into its kernel's lane loop"
     )]
@@ -659,7 +659,7 @@ impl PositionTest for Byte {
 }
 
 impl PositionTest for Bytes2 {
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "a lane test must fold into its kernel's lane loop"
     )]
@@ -670,7 +670,7 @@ impl PositionTest for Bytes2 {
 }
 
 impl PositionTest for Run {
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "a lane test must fold into its kernel's lane loop"
     )]
@@ -681,7 +681,7 @@ impl PositionTest for Run {
 }
 
 impl PositionTest for Runs2 {
-    #[allow(
+    #[expect(
         clippy::inline_always,
         reason = "a lane test must fold into its kernel's lane loop"
     )]
@@ -693,7 +693,7 @@ impl PositionTest for Runs2 {
 
 /// The lanes of one chunk of a pair search: lane `i` is `0xFF` when `leads[i]`
 /// passes `lead` and `trails[i]` passes `trail`.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public pair search is one kernel: the lane loop must be inlined into it to \
               vectorize"
@@ -714,7 +714,7 @@ fn test_lanes<L: PositionTest, T: PositionTest>(
 
 /// The body of [`find_byte_pair`] and [`find_range_pair`]: the first offset
 /// `p` at which `bytes[p]` passes `lead` and `bytes[p + gap]` passes `trail`.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "each public pair search is one kernel: the body must be inlined into it so its \
               position tests fold in and the lane loops vectorize"
@@ -916,7 +916,7 @@ const SURROGATE_HI: u32 = 0xDFFF;
 const SCALAR_MAX: u32 = 0x0010_FFFF;
 
 /// The UTF-8 lead byte of the encoding of scalar `cp`.
-#[allow(
+#[expect(
     clippy::cast_possible_truncation,
     reason = "each arm shifts cp into a single byte first; u8::try_from is not const-callable"
 )]

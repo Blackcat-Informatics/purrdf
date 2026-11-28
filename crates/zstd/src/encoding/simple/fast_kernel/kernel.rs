@@ -222,9 +222,7 @@ unsafe fn match_found<const USE_CMOV: bool>(
         // the cmov-branchless path. Upstream zstd enforces the same
         // ordering with `__asm__("")` between its two checks
         // (`ZSTD_match4Found_cmov` lines 119-124).
-        #[allow(clippy::needless_bitwise_bool)]
-        let r = bytes_match & in_range;
-        r
+        bytes_match & in_range
     } else {
         // Upstream zstd branch variant (`ZSTD_match4Found_branch`): explicit
         // branch on the prefix filter. Faster when the branch is
@@ -1053,7 +1051,10 @@ pub(crate) fn compress_block_fast<const MLS: u32, const USE_CMOV: bool>(
 /// invalid) → main. Correctness is independent of table contents (every match
 /// byte-verified + bounds-guarded); `MIN_DICT_MATCH_LEN` gates short far dict
 /// matches that would fragment the offset-FSE alphabet.
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the match kernel takes distinct source ranges and caller-owned table state without rebuilding either"
+)]
 pub(crate) fn compress_block_fast_dict<const MLS: u32, const USE_CMOV: bool>(
     data: &[u8],
     block_start: usize,
@@ -1335,7 +1336,10 @@ pub(crate) fn compress_block_fast_dict<const MLS: u32, const USE_CMOV: bool>(
 /// and, for an input candidate, `cand_off + 4 <= block_end`. `dict` covers the
 /// `[0, dict_end)` prefix and `inp` covers `[0, block_end)`.
 #[inline(always)]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the match kernel takes distinct source ranges and caller-owned table state without rebuilding either"
+)]
 unsafe fn borrowed_candidate_len<C: Fn(*const u8, *const u8, usize) -> usize>(
     cand_abs: usize,
     cur_off: usize,
@@ -1392,7 +1396,10 @@ unsafe fn borrowed_candidate_len<C: Fn(*const u8, *const u8, usize) -> usize>(
 /// state after dict priming, and the dict-table fallback) through the 2-segment
 /// counter while keeping input candidates on the fast flat path.
 #[inline(always)]
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the match kernel takes distinct source ranges and caller-owned table state without rebuilding either"
+)]
 fn compress_block_fast_dict_borrowed_impl<
     const MLS: u32,
     const USE_CMOV: bool,
@@ -1598,9 +1605,7 @@ fn compress_block_fast_dict_borrowed_impl<
                     CMOV_DUMMY.as_ptr()
                 };
                 let bytes_match = unsafe { read32(inp_base.add(ip0)) == read32(mval_addr) };
-                #[allow(clippy::needless_bitwise_bool)]
-                let r = bytes_match & in_range;
-                r
+                bytes_match & in_range
             } else {
                 main_idx >= prefix_start_index
                     && unsafe {
@@ -1727,7 +1732,10 @@ fn compress_block_fast_dict_borrowed_impl<
 macro_rules! fast_dict_borrowed_wrapper {
     ($(#[$attr:meta])* $name:ident, $cpl:path) => {
         $(#[$attr])*
-        #[allow(clippy::too_many_arguments)]
+        #[expect(
+            clippy::too_many_arguments,
+            reason = "the match kernel takes distinct source ranges and caller-owned table state without rebuilding either"
+        )]
         unsafe fn $name<const MLS: u32, const USE_CMOV: bool>(
             inp: &[u8],
             dict: &[u8],
@@ -1790,7 +1798,10 @@ fast_dict_borrowed_wrapper!(
 /// Dispatch the borrowed dual-base dict kernel to the resolved per-tier SIMD
 /// wrapper. `kernel` is the matcher's once-resolved [`FastpathKernel`]; the
 /// scalar arm carries no `#[target_feature]` (generic word-at-a-time count).
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the match kernel takes distinct source ranges and caller-owned table state without rebuilding either"
+)]
 pub(crate) fn compress_block_fast_dict_borrowed<const MLS: u32, const USE_CMOV: bool>(
     inp: &[u8],
     dict: &[u8],
@@ -1804,10 +1815,12 @@ pub(crate) fn compress_block_fast_dict_borrowed<const MLS: u32, const USE_CMOV: 
     handle_sequence: impl for<'a> FnMut(Sequence<'a>),
     kernel: crate::encoding::fastpath::FastpathKernel,
 ) -> FastBlockResult {
-    // Used by the per-tier match arms below; on a target with no SIMD tier
-    // (e.g. wasm32 without simd128) only the scalar fallback compiles and the
-    // import is unused.
-    #[allow(unused_imports)]
+    #[cfg(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_endian = "little"),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    ))]
     use crate::encoding::fastpath::FastpathKernel;
     // The scalar fallback: generic word-at-a-time `count_forward` for the input
     // match extension, no SIMD umbrella.

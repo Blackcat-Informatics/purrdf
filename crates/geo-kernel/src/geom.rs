@@ -520,7 +520,7 @@ pub type Rings = Vec<CoordSeq>;
 // commonest geometry in the commonest corpus to move 384 bytes that the
 // coordinate itself already occupies either way. The 4x waste was the sequence
 // variants, and that is fixed; this residue is the size of the value.
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "the Point variant's size is a Coord's, which is four exact rationals; boxing it \
               would add an allocation to the commonest geometry to relocate bytes the value \

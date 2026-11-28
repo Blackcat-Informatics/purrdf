@@ -4900,7 +4900,7 @@ where
 
 /// The complete model or a semantic refusal with its admitted search evidence.
 #[derive(Debug)]
-#[allow(
+#[expect(
     clippy::large_enum_variant,
     reason = "a terminal result returned once per run keeps the completed model unboxed"
 )]

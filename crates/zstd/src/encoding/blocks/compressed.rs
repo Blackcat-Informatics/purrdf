@@ -1505,7 +1505,10 @@ impl SplitEstimator<'_> {
 }
 
 #[derive(Clone)]
-#[allow(clippy::large_enum_variant)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "the block emitter keeps its custom table inline without a second allocation"
+)]
 enum FseTableMode<'a> {
     Predefined(&'a FSETable),
     Encoded(FSETable),

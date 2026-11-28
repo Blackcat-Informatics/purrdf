@@ -1156,9 +1156,12 @@ fn native_pretty(value: &Value, policy: &mut ToolPolicy) -> Option<String> {
 ///
 /// It accepts `{"customer_id":"customer-17"}` and rejects a missing customer,
 /// an array in place of the string, or an undeclared member.
-#[expect(
-    clippy::result_large_err,
-    reason = "retain the native compiler cause without allocating while reporting refusal"
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::result_large_err,
+        reason = "retain the native compiler cause without allocating while reporting refusal"
+    )
 )]
 pub fn compile_tool_arguments(
     shapes: &Shapes,

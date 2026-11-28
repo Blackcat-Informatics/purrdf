@@ -51,17 +51,6 @@
 //!   table reproduced verbatim in [`gear_hash::GEAR_TAB`] to preserve
 //!   byte-for-byte split-point compatibility.
 
-// The LDM producer contains the gear hash, parameters, bucket table,
-// verify/extend search and aggregate driver. By distro-parity design (see the module docs
-// above), no `CompressionLevel` preset activates the producer —
-// `BtMatcher::ldm_producer` stays `None` without explicit caller opt-in.
-// Several `pub(crate)` accessors (`LDM_HASHLOG_MIN/MAX`,
-// `params::bounded`, `bucket_mask`) are therefore reachable only
-// via the unit test suite until the parameter API lands; the
-// `#![allow(dead_code)]` matches the same transitional marker in
-// `bt/mod.rs` introduced during Phase 1.
-#![allow(dead_code)]
-
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -129,12 +118,6 @@ impl LdmProducer {
             hash_table,
             splits_scratch: vec![0usize; LDM_BATCH_SIZE],
         }
-    }
-
-    /// Re-derive parameters from a `(window_log, strategy)` pair
-    /// using [`LdmParams::adjust_for`]. Convenience wrapper.
-    pub(crate) fn with_window_and_strategy(window_log: u32, strategy: u32) -> Self {
-        Self::new(LdmParams::adjust_for(window_log, strategy))
     }
 
     /// Heap bytes this producer owns: the LDM hash table and the split-scratch.
@@ -328,7 +311,7 @@ impl LdmProducer {
                     &self.hash_table,
                     hash_id,
                     checksum,
-                    FindBestMatchInputs {
+                    &FindBestMatchInputs {
                         live_history,
                         history_abs_start,
                         split_abs,

@@ -8,8 +8,6 @@
 //! Each encode case prints its compressed size once (`gzip-size …` lines), so
 //! a run records density beside throughput.
 
-#![allow(missing_docs)] // a bench target is not public API
-
 use std::hint::black_box;
 
 use purrdf_deflate::backend::Backend;

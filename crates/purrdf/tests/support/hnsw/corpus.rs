@@ -88,33 +88,36 @@
 
 // Included by `#[path]` into several test and bench binaries, each of which uses a different
 // subset. Matches the sibling `support/purremb.rs`.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{Result, VectorMatrix};
 
 /// The shape and geometry of a generated corpus.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct CorpusShape {
+pub(crate) struct CorpusShape {
     /// How many vectors.
-    pub rows: usize,
+    pub(crate) rows: usize,
     /// The ambient width.
-    pub dims: usize,
+    pub(crate) dims: usize,
     /// The latent dimension the structure actually lives in.
-    pub intrinsic: usize,
+    pub(crate) intrinsic: usize,
     /// How many clusters the latent structure carries.
-    pub clusters: usize,
+    pub(crate) clusters: usize,
     /// The intended cosine between a member and its centroid, in `[0, 1)`.
     ///
     /// Dimension-invariant by construction. A value near 1 makes tight clusters, a value
     /// near 0 makes the corpus formless; realistic embedding corpora sit well above 0.5.
-    pub within_cluster_cosine: f64,
+    pub(crate) within_cluster_cosine: f64,
 }
 
 impl CorpusShape {
     /// A corpus with the geometry of a Matryoshka embedding set at this width.
     #[must_use]
-    pub const fn embedding_like(rows: usize, dims: usize) -> Self {
+    pub(crate) const fn embedding_like(rows: usize, dims: usize) -> Self {
         Self {
             rows,
             dims,
@@ -133,7 +136,7 @@ impl CorpusShape {
 /// other, and the README's own narrowing example was therefore a command that fails. A
 /// variable with two vocabularies is a variable whose documented value is correct for
 /// whichever harness the writer happened to run.
-pub const LADDER: [(usize, usize); 4] = [
+pub(crate) const LADDER: [(usize, usize); 4] = [
     (5_000, 4_096),
     (50_000, 4_096),
     (200_000, 4_096),
@@ -153,7 +156,7 @@ pub const LADDER: [(usize, usize); 4] = [
 /// the declared ladder never contained. A knob that can widen a run is a knob that can hide
 /// a default that was never wide enough, and a knob whose one-way property lives only in a
 /// doc comment is not one-way.
-pub fn declared_scales() -> Vec<(usize, usize)> {
+pub(crate) fn declared_scales() -> Vec<(usize, usize)> {
     let Some(spec) = std::env::var_os("PURRDF_HNSW_BENCH_SCALES") else {
         return LADDER.to_vec();
     };
@@ -295,13 +298,13 @@ fn to_ambient(point: &[f64], projection: &[Vec<f64>], scale: &[f64], dims: usize
 /// This type is what makes the central claim gradeable: the same rows, plus which cluster each
 /// was drawn around, plus every centroid carried into the ambient space through the SAME
 /// projection and spectrum the rows went through.
-pub struct Structured {
+pub(crate) struct Structured {
     /// The corpus, identical to what [`embedding_like`] returns for the same arguments.
-    pub matrix: VectorMatrix,
+    pub(crate) matrix: VectorMatrix,
     /// The cluster each row was drawn around, by row index.
-    pub cluster: Vec<usize>,
+    pub(crate) cluster: Vec<usize>,
     /// Each cluster's centroid, in the ambient space, one per row.
-    pub centroids: VectorMatrix,
+    pub(crate) centroids: VectorMatrix,
 }
 
 /// Generate a corpus with the geometry described by `shape`.
@@ -315,7 +318,7 @@ pub struct Structured {
 ///
 /// Panics if `within_cluster_cosine` is not in `[0, 1)`, which is a caller error rather than
 /// a data condition.
-pub fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
+pub(crate) fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
     Ok(embedding_like_structured(shape, seed)?.matrix)
 }
 
@@ -333,7 +336,7 @@ pub fn embedding_like(shape: CorpusShape, seed: u64) -> Result<VectorMatrix> {
 /// # Panics
 ///
 /// As [`embedding_like`].
-pub fn embedding_like_structured(shape: CorpusShape, seed: u64) -> Result<Structured> {
+pub(crate) fn embedding_like_structured(shape: CorpusShape, seed: u64) -> Result<Structured> {
     assert!(
         (0.0..1.0).contains(&shape.within_cluster_cosine),
         "the intended within-cluster cosine must lie in [0, 1)"
@@ -411,7 +414,11 @@ pub fn embedding_like_structured(shape: CorpusShape, seed: u64) -> Result<Struct
 /// # Errors
 ///
 /// As [`embedding_like_structured`].
-pub fn latent_fixed_amplitude(shape: CorpusShape, sigma: f64, seed: u64) -> Result<Structured> {
+pub(crate) fn latent_fixed_amplitude(
+    shape: CorpusShape,
+    sigma: f64,
+    seed: u64,
+) -> Result<Structured> {
     let CorpusShape {
         rows,
         dims,
@@ -472,7 +479,7 @@ pub fn latent_fixed_amplitude(shape: CorpusShape, sigma: f64, seed: u64) -> Resu
 /// # Errors
 ///
 /// As [`embedding_like`].
-pub fn separated_manifolds(
+pub(crate) fn separated_manifolds(
     rows: usize,
     dims: usize,
     manifolds: usize,
@@ -510,7 +517,7 @@ pub fn separated_manifolds(
 /// # Errors
 ///
 /// As [`embedding_like`].
-pub fn extreme_but_finite(rows: usize, dims: usize, seed: u64) -> Result<VectorMatrix> {
+pub(crate) fn extreme_but_finite(rows: usize, dims: usize, seed: u64) -> Result<VectorMatrix> {
     // Large enough to stress accumulation, small enough that a squared-euclidean kernel
     // over `dims` components stays finite with room to spare.
     let large = f64::MAX.sqrt() / (dims.max(1) as f64) / 16.0;

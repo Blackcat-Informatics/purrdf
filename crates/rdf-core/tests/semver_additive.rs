@@ -26,6 +26,7 @@
 //! to `u64`. That one signature is pinned at its new width below; the other
 //! pre-existing field and variant shapes retain their 2.0.2 checks.
 
+#[expect(dead_code, reason = "this test uses one of the two shared fixtures")]
 #[path = "support/paged.rs"]
 mod paged;
 use paged::page;
@@ -58,7 +59,10 @@ fn two_page_dataset() -> (PagedDataset, Arc<dyn PageProvider>) {
 // names every 2.0.2 field explicitly rather than moving the value, so a renamed,
 // added, or removed field fails to compile here instead of being silently carried
 // through a `..extracted` or a bare move.
-#[allow(clippy::unnecessary_struct_initialization)]
+#[expect(
+    clippy::unnecessary_struct_initialization,
+    reason = "exhaustive construction names every field in the compatibility contract"
+)]
 /// Pins `PagePart`'s 2.0.2 field set (`translation`, `capabilities`, `quad_count`,
 /// `byte_len`) by both exhaustive construction and exhaustive destructure.
 fn pagepart_field_shape_is_pinned() {
@@ -281,8 +285,5 @@ fn pageddataset_key_signatures_are_pinned() {
     assert!(rebuilt.is_ok());
 }
 
-/// `PageFault` is not one of the four pinned structs/enums above, but it is the
-/// payload of `PagedFreezeError::Page` pinned in `describe_freeze_error`; confirm it
-/// still resolves as a type here too, so a reader can see the whole chain typechecks.
-#[allow(dead_code)]
-fn _page_fault_type_still_resolves(_f: PageFault) {}
+// Resolve the failure payload exported by the pinned PagedFreezeError::Page variant.
+const _: fn(PageFault) = |_| ();

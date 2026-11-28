@@ -2879,7 +2879,6 @@ impl DfastMatchGenerator {
         all(target_arch = "aarch64", target_endian = "little"),
         all(target_arch = "wasm32", target_feature = "simd128")
     )))]
-    #[allow(unused_unsafe)]
     fn start_matching_fast_loop_scalar<const USE_DICT: bool, const BORROWED: bool>(
         &mut self,
         current_abs_start: usize,

@@ -196,7 +196,7 @@ const DEDUP_CHUNK: usize = 4;
 /// compare on every target with vector compares. The chunk is four lanes rather than eight because the linear stage
 /// holds fewer than [`FrontierDedup::LINEAR_MAX`] ids, so a wider chunk would
 /// leave most frontiers entirely in the one-at-a-time tail.
-#[allow(
+#[expect(
     clippy::inline_always,
     reason = "the chunk loop must inline into the dedup probe so the probed id stays a \
               broadcast register and each chunk's compares pack"

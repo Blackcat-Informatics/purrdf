@@ -1775,7 +1775,10 @@ fn the_neighbour_count_stays_inside_the_guard_and_the_ending_says_which_bound_st
 /// second copy of `search`'s insides that would have to be kept in step by hand.
 // The manual composition mirrors `search`, including its single-task,
 // runtime-agnostic future; see the same allow on `search` itself.
-#[allow(clippy::future_not_send)]
+#[expect(
+    clippy::future_not_send,
+    reason = "the fixture awaits its operations on one task and retains local producer state"
+)]
 async fn manual_composition(
     registry: &PropertyFunctionRegistry<'static>,
     statistics: &NoStatistics,

@@ -200,9 +200,12 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
     ///
     /// # Errors
     /// Preserves original schema, description, version and compiler refusals.
-    #[expect(
-        clippy::result_large_err,
-        reason = "The refusal keeps its source owner inline"
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "The refusal keeps its source owner inline"
+        )
     )]
     pub fn compile_described(
         source: DatasetHandle,
@@ -225,9 +228,12 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
     ///
     /// # Errors
     /// Refuses incompatible sources, occupied identities and output failures.
-    #[expect(
-        clippy::result_large_err,
-        reason = "The refusal keeps its source and allocation owner"
+    #[cfg_attr(
+        target_pointer_width = "64",
+        expect(
+            clippy::result_large_err,
+            reason = "The refusal keeps its source and allocation owner"
+        )
     )]
     pub fn describe<O: Admission + Send + Sync + 'static>(
         &self,

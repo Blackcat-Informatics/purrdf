@@ -4,7 +4,6 @@
 // This bench is a plain `main`, but the workspace `missing_docs` lint applies to
 // its items just the same; the reporting helpers below are internal probes, not
 // API.
-#![allow(missing_docs)]
 
 //! Peak-allocation evidence for the fused frontier, in its own process so the
 //! tracking allocator's atomics skew no timed measurement.
@@ -210,7 +209,10 @@ struct LazyStream {
 
 // The trait's methods are `async`; this fixture's body is synchronous because it
 // mints its rows arithmetically.
-#[allow(clippy::unused_async_trait_impl)]
+#[expect(
+    clippy::unused_async_trait_impl,
+    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
+)]
 impl RankedStream for LazyStream {
     type Item = Term;
 

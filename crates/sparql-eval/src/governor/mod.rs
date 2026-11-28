@@ -1038,7 +1038,10 @@ impl GovernorState {
         // `try_update`, the non-deprecated name for this atomic, postdates the
         // workspace MSRV floor, so the original name is kept and its deprecation
         // suppressed at this one call site.
-        #[allow(deprecated)]
+        #[expect(
+            deprecated,
+            reason = "the replacement atomic method postdates the workspace minimum Rust version"
+        )]
         let previous = slot
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))
@@ -1353,7 +1356,10 @@ impl GovernorState {
         // `try_update`, the non-deprecated name for this atomic, postdates the
         // workspace MSRV floor, so the original name is kept and its deprecation
         // suppressed at this one call site.
-        #[allow(deprecated)]
+        #[expect(
+            deprecated,
+            reason = "the replacement atomic method postdates the workspace minimum Rust version"
+        )]
         let previous = slot
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))

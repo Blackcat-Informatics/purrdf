@@ -12,6 +12,10 @@
 //! executable exactly the way an operator invokes it, so every assertion here pins the shipped
 //! surface rather than a library call that merely resembles it.
 
+#[expect(
+    dead_code,
+    reason = "this test uses a subset of the shared lane fixture"
+)]
 mod support;
 
 use std::path::PathBuf;

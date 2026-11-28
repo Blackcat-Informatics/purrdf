@@ -108,7 +108,7 @@ enum State {
 }
 
 /// What the analysis of a scalar allows.
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "the reference emitter's per-scalar verdicts, one flag each"
 )]
@@ -273,7 +273,7 @@ fn analyze(text: &str) -> Analysis {
     analysis
 }
 
-#[allow(
+#[expect(
     clippy::struct_excessive_bools,
     reason = "the reference emitter's cursor state: independent flags it tests and sets one by one"
 )]

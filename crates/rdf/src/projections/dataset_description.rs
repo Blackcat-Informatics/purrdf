@@ -41,10 +41,6 @@ impl ConstructViewConfig {
     ///
     /// Rejects zero/non-portable limits, an oversized or malformed query, a query
     /// form other than CONSTRUCT, or a non-absolute caller base IRI.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "all independent resource and query policies are mandatory"
-    )]
     pub fn new(
         query: impl Into<String>,
         base_iri: Option<String>,
@@ -77,10 +73,6 @@ impl ConstructViewConfig {
     /// # Errors
     ///
     /// Same as [`Self::new`].
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "all independent resource and query policies are mandatory"
-    )]
     pub fn new_with_parser_options(
         query: impl Into<String>,
         base_iri: Option<String>,

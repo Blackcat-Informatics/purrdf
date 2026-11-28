@@ -404,9 +404,12 @@ pub(super) struct ParsedGroup {
 }
 
 /// What a finished production hands to the one it was nested in.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "production values stay inline; native buffers admit the exact Val layout before growth without allocating a separate box per value"
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "production values stay inline; native buffers admit the exact Val layout before growth without allocating a separate box per value"
+    )
 )]
 enum Val {
     /// An expression, with the aggregates it lifted (empty unless its sink lifts).
@@ -437,9 +440,12 @@ impl Val {
 }
 
 /// What the machine does next.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "the next machine step is an inline value; boxing Return would add a separate allocation outside the native frame-buffer layout"
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "the next machine step is an inline value; boxing Return would add a separate allocation outside the native frame-buffer layout"
+    )
 )]
 enum Step {
     /// Read an operand of the innermost expression.

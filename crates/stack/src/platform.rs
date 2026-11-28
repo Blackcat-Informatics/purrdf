@@ -50,6 +50,10 @@ pub(crate) fn stack_floor() -> Result<usize, FloorError> {
     // before returning. `pthread_self` cannot fail, and `pthread_getattr_np` /
     // `pthread_attr_getstack` only ever write through the pointers this function passes,
     // which all name locals it owns.
+    #[expect(
+        unsafe_code,
+        reason = "POSIX reports this thread's stack via out parameters"
+    )]
     unsafe {
         let mut attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
         let status = libc::pthread_attr_init(attr.as_mut_ptr());
@@ -95,6 +99,10 @@ pub(crate) fn stack_floor() -> Result<usize, FloorError> {
     // SAFETY: as the Linux/Android/NetBSD case above; `pthread_attr_get_np` is this
     // family's name for the same "attributes of an already-running thread" call
     // `pthread_getattr_np` is elsewhere, with the same output contract.
+    #[expect(
+        unsafe_code,
+        reason = "POSIX reports this thread's stack via out parameters"
+    )]
     unsafe {
         let mut attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
         let status = libc::pthread_attr_init(attr.as_mut_ptr());
@@ -140,6 +148,10 @@ pub(crate) fn stack_floor() -> Result<usize, FloorError> {
     // SAFETY: `info` is a plain-old-data struct `pthread_stackseg_np` writes wholesale
     // before this function reads any field of it, guarded by that call's own return value;
     // nothing else touches `info`.
+    #[expect(
+        unsafe_code,
+        reason = "OpenBSD writes the thread's stack segment via FFI"
+    )]
     unsafe {
         let mut info = MaybeUninit::<libc::stack_t>::uninit();
         let status = libc::pthread_stackseg_np(libc::pthread_self(), info.as_mut_ptr());
@@ -160,6 +172,10 @@ pub(crate) fn stack_floor() -> Result<usize, FloorError> {
     // SAFETY: both calls take the calling thread's own `pthread_t`, which `pthread_self`
     // always returns successfully, and return their result by value rather than writing
     // through a pointer, so there is nothing here for either call to leave uninitialized.
+    #[expect(
+        unsafe_code,
+        reason = "Darwin reports the current stack through pthread FFI"
+    )]
     unsafe {
         let thread = libc::pthread_self();
         let top = libc::pthread_get_stackaddr_np(thread) as usize;
@@ -176,6 +192,7 @@ pub(crate) fn stack_floor() -> Result<usize, FloorError> {
     // SAFETY: both out-parameters are plain `usize` locals this function owns and holds
     // for the whole call; `GetCurrentThreadStackLimits` writes through them and nothing
     // else, and reports the calling thread's own limits, so it cannot fail.
+    #[expect(unsafe_code, reason = "Windows writes the thread's limits through FFI")]
     unsafe {
         windows_sys::Win32::System::Threading::GetCurrentThreadStackLimits(
             &raw mut low,

@@ -4,7 +4,6 @@
 // This bench is a plain `main`, but the workspace `missing_docs` lint applies to
 // its items just the same; the reporting helpers below are internal probes, not
 // API.
-#![allow(missing_docs)]
 
 //! What one property-function invocation allocates, and where those allocations
 //! come from.

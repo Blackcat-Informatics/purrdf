@@ -3,10 +3,6 @@
 
 //! The page and operation-status fixtures the paged-dataset suites share.
 
-// Included by `#[path]` into several integration-test binaries, and no single binary uses
-// every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
-
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -15,7 +11,7 @@ use purrdf_core::{
 
 /// One frozen single-triple page in the default graph, `example.org`-scoped:
 /// `ex:{subject} ex:p ex:{object}`.
-pub fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
+pub(crate) fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let subject_iri = format!("http://example.org/{subject}");
     let object_iri = format!("http://example.org/{object}");
@@ -27,7 +23,7 @@ pub fn page(subject: &str, object: &str) -> Arc<RdfDataset> {
 }
 
 /// The evidence of an operation that must have completed.
-pub fn ready_evidence(
+pub(crate) fn ready_evidence(
     status: ViewOperationStatus<PagedQueryError, PagedQueryEvidence>,
 ) -> PagedQueryEvidence {
     match status {

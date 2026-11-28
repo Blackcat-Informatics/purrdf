@@ -6,20 +6,23 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![allow(dead_code, unreachable_pub)]
+#![expect(
+    dead_code,
+    reason = "each test or benchmark includes a different subset of this shared fixture"
+)]
 
-pub mod boundary_joins;
-pub mod fallible;
+pub(crate) mod boundary_joins;
+pub(crate) mod fallible;
 #[cfg(target_os = "linux")]
-pub mod governor_counts;
-pub mod governor_workloads;
-pub mod segmented;
-pub mod statement_claims;
+pub(crate) mod governor_counts;
+pub(crate) mod governor_workloads;
+pub(crate) mod segmented;
+pub(crate) mod statement_claims;
 
 /// Scan-default adapters preserve resident receipts and statistical inputs.
 /// Physical-access descriptors and metadata provenance identify the actual
 /// provider; neither difference may hide a changed count or execution receipt.
-pub fn assert_scan_explanation_matches_resident(
+pub(crate) fn assert_scan_explanation_matches_resident(
     actual: &purrdf_sparql_eval::QueryExplanation,
     resident: &str,
 ) {
@@ -72,27 +75,27 @@ static SUPPLIED_NOW: std::sync::LazyLock<purrdf_xsd::temporal::DateTime> =
 /// Options that supply the query time and the entropy seed, so a request reads no
 /// host clock or entropy: the evaluator imports neither, and a `wasm32` test binary
 /// installs no host source.
-pub fn supplied() -> QueryOptions<'static, 'static> {
+pub(crate) fn supplied() -> QueryOptions<'static, 'static> {
     QueryOptions::new()
         .with_now(&SUPPLIED_NOW)
         .with_entropy_seed(0)
 }
 
 /// A frozen dataset holding nothing.
-pub fn empty_dataset() -> Arc<RdfDataset> {
+pub(crate) fn empty_dataset() -> Arc<RdfDataset> {
     RdfDatasetBuilder::new().freeze().expect("an empty dataset")
 }
 
 /// A `SELECT` of the length of `?x{steps}`, where `?x0` is a `digits`-digit
 /// integer of sevens and each `?x{n}` squares `?x{n-1}`: a product chain whose
 /// operands double in length at every step.
-pub fn squaring_chain(digits: usize, steps: usize) -> String {
+pub(crate) fn squaring_chain(digits: usize, steps: usize) -> String {
     squaring_chain_from(&"7".repeat(digits), steps)
 }
 
 /// [`squaring_chain`] from the numeric literal `base`: `0.1` keeps a one-digit
 /// coefficient while its scale doubles at every step, `1.0` stays a machine word.
-pub fn squaring_chain_from(base: &str, steps: usize) -> String {
+pub(crate) fn squaring_chain_from(base: &str, steps: usize) -> String {
     let mut binds = format!("BIND({base} AS ?x0)");
     for step in 1..=steps {
         let previous = step - 1;
@@ -104,7 +107,7 @@ pub fn squaring_chain_from(base: &str, steps: usize) -> String {
 /// One result cell as `lexical^^local-name` with the XSD namespace dropped from the
 /// datatype (`5^^integer`), `-` when unbound, and any other term in its `Debug` form:
 /// the spelling the numeric suites compare cells in.
-pub fn numeric_cell(value: Option<&TermValue>) -> String {
+pub(crate) fn numeric_cell(value: Option<&TermValue>) -> String {
     match value {
         None => "-".to_owned(),
         Some(TermValue::Literal {
@@ -122,29 +125,31 @@ pub fn numeric_cell(value: Option<&TermValue>) -> String {
 }
 
 /// The namespace the local-name fixtures below mint their IRIs under.
-pub const EX: &str = "http://example.org/";
+pub(crate) const EX: &str = "http://example.org/";
 
 /// The fixture IRI `local` names under [`EX`].
-pub fn iri(local: &str) -> TermValue {
+pub(crate) fn iri(local: &str) -> TermValue {
     TermValue::iri(format!("{EX}{local}"))
 }
 
 /// Query options carrying `env`, the extension environment a call is admitted against.
-pub fn with_env<'options, 'providers>(
+pub(crate) fn with_env<'options, 'providers>(
     env: &'options ExtensionEnv<'providers>,
 ) -> QueryOptions<'options, 'providers> {
     QueryOptions::new().with_env(env)
 }
 
 /// An `ASK` over `pattern`, with no dataset clause, base or version.
-pub fn ask(pattern: GraphPattern) -> Query {
+pub(crate) fn ask(pattern: GraphPattern) -> Query {
     Query::ask(pattern)
 }
 
 // ── datasets ────────────────────────────────────────────────────────────────
 
 /// A dataset of `(subject, predicate, object)` local names under [`EX`].
-pub fn local_dataset<S, P, O>(triples: impl IntoIterator<Item = (S, P, O)>) -> Arc<RdfDataset>
+pub(crate) fn local_dataset<S, P, O>(
+    triples: impl IntoIterator<Item = (S, P, O)>,
+) -> Arc<RdfDataset>
 where
     S: AsRef<str>,
     P: AsRef<str>,
@@ -162,7 +167,7 @@ where
 
 /// `subject(i) predicate object(i)` for `i` in `0..count`: one edge per index on a single
 /// predicate.
-pub fn fan_out(
+pub(crate) fn fan_out(
     count: usize,
     predicate: &str,
     subject: impl Fn(usize) -> String,
@@ -179,7 +184,7 @@ pub fn fan_out(
 }
 
 /// `<s1> <p> 1` and `<s2> <p> 2`, the objects `xsd:integer` literals.
-pub fn two_integer_objects() -> Arc<RdfDataset> {
+pub(crate) fn two_integer_objects() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let p = builder.intern_iri(&format!("{EX}p")).unwrap();
     for n in 1..=2 {
@@ -196,7 +201,7 @@ pub fn two_integer_objects() -> Arc<RdfDataset> {
 }
 
 /// `ex:a`, `ex:b` and `ex:c`, each `ex:p ex:value`.
-pub fn three_subjects_one_value() -> Arc<RdfDataset> {
+pub(crate) fn three_subjects_one_value() -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let predicate = builder.intern_iri("http://example.org/p").unwrap();
     let value = builder.intern_iri("http://example.org/value").unwrap();
@@ -212,7 +217,7 @@ pub fn three_subjects_one_value() -> Arc<RdfDataset> {
 /// A skewed star: one hub linked to `N` leaves per predicate, for the `(name, N)` pairs
 /// given. The per-predicate cardinalities are deliberately uneven so the join order
 /// materially changes the intermediate-result sizes.
-pub fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
+pub(crate) fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let hub = b.intern_iri("http://ex/hub").unwrap();
     for &(name, count) in spec {
@@ -229,7 +234,7 @@ pub fn skewed_star(spec: &[(&str, usize)]) -> Arc<RdfDataset> {
 
 /// Evaluate `prefix` followed by `query_body` against `ds`, panicking with the query text
 /// on an error.
-pub fn run_prefixed(ds: &RdfDataset, prefix: &str, query_body: &str) -> SparqlResult {
+pub(crate) fn run_prefixed(ds: &RdfDataset, prefix: &str, query_body: &str) -> SparqlResult {
     let text = format!("{prefix}{query_body}");
     NativeSparqlEngine::new()
         .query_with_options_view(
@@ -247,7 +252,7 @@ pub fn run_prefixed(ds: &RdfDataset, prefix: &str, query_body: &str) -> SparqlRe
 /// `<https://example.org/d/unrelated> <https://example.org/d/p> <https://example.org/d/o>`:
 /// one row that no relation under test mentions, so a query's answers come from the
 /// relation and a solution exists to extend.
-pub fn unrelated_quad() -> Arc<RdfDataset> {
+pub(crate) fn unrelated_quad() -> Arc<RdfDataset> {
     purrdf_core::term_fixture::one_quad(
         "https://example.org/d/unrelated",
         "https://example.org/d/p",
@@ -257,11 +262,11 @@ pub fn unrelated_quad() -> Arc<RdfDataset> {
 }
 
 /// Borrowed variables and rows of a SELECT result.
-pub type SolutionsView<'a> = (&'a [String], &'a [Vec<Option<TermValue>>]);
+pub(crate) type SolutionsView<'a> = (&'a [String], &'a [Vec<Option<TermValue>>]);
 
 /// The shape name of a result, for a failure message that names the wrong shape
 /// without formatting the result's contents.
-pub trait ResultView: std::fmt::Debug {
+pub(crate) trait ResultView: std::fmt::Debug {
     fn solutions_view(&self) -> Option<SolutionsView<'_>>;
     fn graph_view(&self) -> Option<&RdfDataset>;
     fn boolean_view(&self) -> Option<bool>;
@@ -319,7 +324,7 @@ impl ResultView for purrdf_sparql_eval::RetainedSparqlResult {
 }
 
 /// The variables and rows of a SELECT result, panicking on any other shape.
-pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
+pub(crate) fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermValue>>>) {
     let (variables, rows) = result.solutions_view().expect("expected SELECT solutions");
     let copied = (variables.to_vec(), rows.to_vec());
     drop(result);
@@ -327,7 +332,7 @@ pub fn solutions(result: impl ResultView) -> (Vec<String>, Vec<Vec<Option<TermVa
 }
 
 /// The row count of a `SELECT` result.
-pub fn row_count(result: &impl ResultView) -> usize {
+pub(crate) fn row_count(result: &impl ResultView) -> usize {
     result
         .solutions_view()
         .expect("expected SELECT solutions")
@@ -336,14 +341,14 @@ pub fn row_count(result: &impl ResultView) -> usize {
 }
 
 /// The size of any result: its rows, its graph's quads, or `1` for a `true` `ASK`.
-pub fn result_size(result: &impl ResultView) -> usize {
+pub(crate) fn result_size(result: &impl ResultView) -> usize {
     result.output_size()
 }
 
 /// One result cell, rendered for comparison: `<iri>`, a literal's bare lexical form,
 /// `_:label`, the `Debug` form of a triple term, and `UNBOUND` — a distinct, assertable
 /// value — for an unbound cell.
-pub fn render_cell(value: Option<&TermValue>) -> String {
+pub(crate) fn render_cell(value: Option<&TermValue>) -> String {
     match value {
         None => "UNBOUND".to_owned(),
         Some(TermValue::Iri(iri)) => format!("<{iri}>"),
@@ -354,11 +359,14 @@ pub fn render_cell(value: Option<&TermValue>) -> String {
 }
 
 /// A solution keyed by variable name, each cell rendered.
-pub type Row = BTreeMap<String, String>;
+pub(crate) type Row = BTreeMap<String, String>;
 
 /// A `SELECT` result's rows as variable-name-keyed maps with each cell rendered by
 /// `render`, SORTED — the rows compare as a set, never by column or row position.
-pub fn sorted_rows(result: &impl ResultView, render: fn(Option<&TermValue>) -> String) -> Vec<Row> {
+pub(crate) fn sorted_rows(
+    result: &impl ResultView,
+    render: fn(Option<&TermValue>) -> String,
+) -> Vec<Row> {
     let (variables, rows) = result.solutions_view().expect("expected SELECT solutions");
     let mut out: Vec<Row> = rows
         .iter()
@@ -375,7 +383,7 @@ pub fn sorted_rows(result: &impl ResultView, render: fn(Option<&TermValue>) -> S
 }
 
 /// One expected row from `(variable, rendered-value)` pairs.
-pub fn row(pairs: &[(&str, &str)]) -> Row {
+pub(crate) fn row(pairs: &[(&str, &str)]) -> Row {
     pairs
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
@@ -390,7 +398,7 @@ pub fn row(pairs: &[(&str, &str)]) -> Row {
 /// It honours the latching contract — once it says `Some`, it says `Some` forever — while
 /// letting a test place the firing edge at a chosen poll.
 #[derive(Debug)]
-pub struct PollCountdown {
+pub(crate) struct PollCountdown {
     quiet: usize,
     polls: AtomicUsize,
     latched: AtomicBool,
@@ -398,7 +406,7 @@ pub struct PollCountdown {
 
 impl PollCountdown {
     /// A countdown that fires on poll `quiet + 1`.
-    pub fn new(quiet: usize) -> Arc<Self> {
+    pub(crate) fn new(quiet: usize) -> Arc<Self> {
         Arc::new(Self {
             quiet,
             polls: AtomicUsize::new(0),
@@ -407,7 +415,7 @@ impl PollCountdown {
     }
 
     /// Polls observed before the signal latched, including its firing poll.
-    pub fn polls(&self) -> usize {
+    pub(crate) fn polls(&self) -> usize {
         self.polls.load(Ordering::Relaxed)
     }
 }
@@ -427,7 +435,7 @@ impl StopSignal for PollCountdown {
 
 /// Run `body` with the default panic-hook stderr dump suppressed, for an EXPECTED, caught
 /// panic.
-pub fn without_panic_output<R>(body: impl FnOnce() -> R) -> R {
+pub(crate) fn without_panic_output<R>(body: impl FnOnce() -> R) -> R {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     let out = body();

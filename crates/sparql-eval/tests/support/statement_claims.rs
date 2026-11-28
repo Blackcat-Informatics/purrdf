@@ -8,7 +8,7 @@ use purrdf_sparql_eval::{ChargePoint, QueryExplanation};
 use std::sync::Arc;
 
 /// Every `bgp-candidate-quad` unit the ledger attributes to any node of `explanation`.
-pub fn candidate_quads(explanation: &QueryExplanation) -> u64 {
+pub(crate) fn candidate_quads(explanation: &QueryExplanation) -> u64 {
     explanation
         .ledger()
         .iter()
@@ -18,7 +18,7 @@ pub fn candidate_quads(explanation: &QueryExplanation) -> u64 {
 
 /// One population serves the small controls and the actual large execution.
 /// Matching keys stay fixed while unrelated claims and six annotations grow.
-pub fn dataset(population: usize) -> Arc<RdfDataset> {
+pub(crate) fn dataset(population: usize) -> Arc<RdfDataset> {
     use std::fmt::Write as _;
     let mut builder = RdfDatasetBuilder::new();
     let mut intern = |name: &str| {
@@ -69,7 +69,7 @@ pub fn dataset(population: usize) -> Arc<RdfDataset> {
     builder.freeze().unwrap()
 }
 
-pub const QUERIES: [(&str, u64); 2] = [
+pub(crate) const QUERIES: [(&str, u64); 2] = [
     (
         "SELECT ?r ?o WHERE { ?r <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <http://example.org/focus> <http://example.org/p> ?o )>> }",
         2,

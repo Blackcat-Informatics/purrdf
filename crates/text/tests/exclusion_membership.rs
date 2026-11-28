@@ -44,6 +44,7 @@ use purrdf_text::{
     TextIndexConfig, TextSearchRelation, explain, select,
 };
 
+#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/index.rs"]
 mod index_fixture;
 

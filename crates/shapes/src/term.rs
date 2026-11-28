@@ -1187,10 +1187,9 @@ impl Term {
     // No `since`: the version this deprecation first ships in is not knowable from
     // inside the commit that writes it, and a wrong `since` is a claim about a
     // release rather than a pointer to the supported route.
-    #[allow(
-        unknown_lints,
+    #[expect(
         clippy::deprecated_attributes_without_since,
-        reason = "first publication version is unassigned; older Clippy lacks this metadata lint"
+        reason = "the deprecation has not been published in a versioned release"
     )]
     #[deprecated(
         note = "resolve a Term through PreparedValidator::term_id, which answers the interned \

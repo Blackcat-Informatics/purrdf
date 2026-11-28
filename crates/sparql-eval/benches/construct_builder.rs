@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Typed CONSTRUCT publication versus an intermediate frozen result dataset.
-#![allow(missing_docs)]
 
 use purrdf_core::ir::import::DatasetImporter;
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult};

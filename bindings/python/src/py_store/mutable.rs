@@ -172,7 +172,7 @@ impl PyMutableDataset {
     /// them; that accounting is exactly why `Emit` must be named here rather than
     /// derived.
     #[pyo3(signature = (output=None, format=None, *, from_graph=None, jsonld_options=None, jsonld_context=None, yaml_schema_url=None, base=None))]
-    #[allow(
+    #[expect(
         clippy::too_many_arguments,
         reason = "Python dump names graph selection, the document base, and JSON-LD configuration explicitly"
     )]

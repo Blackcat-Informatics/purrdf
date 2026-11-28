@@ -24,12 +24,17 @@
 
 #![cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
 
+#[expect(
+    dead_code,
+    reason = "this test uses a subset of the shared stored-index fixtures"
+)]
 #[path = "support/hnsw/purremb.rs"]
 mod purremb;
 
 #[path = "support/hnsw/fixture.rs"]
 mod fixture;
-use fixture::{bits, knn_invoke, params};
+use fixture::{bits, knn_invoke};
+use purrdf_hnsw::fixture::params;
 use std::sync::Arc;
 
 use purrdf_core::DistanceMetric;

@@ -1,10 +1,6 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API, so the workspace `missing_docs` lint is
-// not asked of their items.
-#![allow(missing_docs)]
-
 //! The fused read taken on demand against the same read materialised, over **real**
 //! producers — and one governed per-candidate exclusion lookup, timed alone.
 //!
@@ -99,6 +95,10 @@ use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, Term
 use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use purrdf::{DistanceMetric, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 
+#[expect(
+    dead_code,
+    reason = "the on-demand benchmark uses only the rank stream subset of the shared multimodal fixture"
+)]
 #[path = "../tests/support/multimodal.rs"]
 mod multimodal;
 

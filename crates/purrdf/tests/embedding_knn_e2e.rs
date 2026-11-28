@@ -598,7 +598,7 @@ fn crowd() -> Vec<(String, Vec<f64>)> {
 }
 
 #[test]
-#[allow(
+#[expect(
     clippy::suboptimal_flops,
     reason = "the oracle must mirror PURREMB's arithmetic — a separate rounded multiply \
               and add, never a fused multiply-add. Contracting it here would make the \

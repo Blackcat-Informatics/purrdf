@@ -8,7 +8,7 @@
 //! into one block, and 17–32 bytes use sequential first/last block absorption.
 //! Longer strings retain independent compression lanes before absorption.
 
-use super::keys::{AES_FINAL_KEY, AES_LANE_INIT, AES_LANE_KEY, AES_MERGE_KEY};
+use super::keys::aes::{AES_FINAL_KEY, AES_LANE_INIT, AES_LANE_KEY, AES_MERGE_KEY};
 use crate::arch::Block;
 
 #[inline]
@@ -146,13 +146,19 @@ impl Engine {
 
     // Assembly inspection found this outlined at monomorphic string call
     // sites, forcing the otherwise register-only state through stack memory.
-    #[allow(clippy::inline_always)] // Preserve register state across the public Hasher wrapper.
+    #[expect(
+        clippy::inline_always,
+        reason = "preserve register state across the public Hasher wrapper"
+    )]
     #[inline(always)]
     pub(crate) fn bytes(&mut self, bytes: &[u8]) {
         super::infallible(self.try_bytes(bytes, &mut super::no_progress));
     }
 
-    #[allow(clippy::inline_always)] // Same native byte body for resident and fallible wrappers.
+    #[expect(
+        clippy::inline_always,
+        reason = "keep the byte body in the caller so the AES accumulator stays in registers"
+    )]
     #[inline(always)]
     pub(crate) fn try_bytes<E>(
         &mut self,

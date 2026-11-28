@@ -260,9 +260,12 @@ use crate::governor::soundness;
 /// The outcome of normalizing one `EXISTS`/`NOT EXISTS` inner pattern to Existential
 /// Normal Form (see the [module docs](self)).
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "normalization returns the original admitted tree inline; adding a box would introduce a separate allocation and change its owner layout"
+#[cfg_attr(
+    target_pointer_width = "64",
+    expect(
+        clippy::large_enum_variant,
+        reason = "normalization returns the original admitted tree inline; adding a box would introduce a separate allocation and change its owner layout"
+    )
 )]
 pub(crate) enum Enf {
     /// The normalized pattern: `exists(pattern, μ)` and `exists(original, μ)` agree
@@ -791,11 +794,14 @@ mod effect_free_gate_tests {
         }
     }
 
-    #[allow(
-        clippy::unnecessary_box_returns,
-        reason = "the helper builds `Box<GraphPattern>` child fields, and the lint's size \
-                  threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
-                  targets, where the same box is still the field's type"
+    #[cfg_attr(
+        target_pointer_width = "32",
+        expect(
+            clippy::unnecessary_box_returns,
+            reason = "the helper builds `Box<GraphPattern>` child fields, and the lint's size \
+                      threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+                      targets, where the same box is still the field's type"
+        )
     )]
     fn bx(p: GraphPattern) -> Child<GraphPattern> {
         Child::new(p)

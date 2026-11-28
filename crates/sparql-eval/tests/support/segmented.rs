@@ -10,17 +10,17 @@ use purrdf_core::{
 use std::sync::Arc;
 
 /// A two-pattern selective join whose answer is identical on both backends.
-pub const QUERY: &str = "SELECT ?label WHERE { <https://example.org/target> <https://example.org/p> ?label . <https://example.org/target> <https://example.org/q> ?label }";
+pub(crate) const QUERY: &str = "SELECT ?label WHERE { <https://example.org/target> <https://example.org/p> ?label . <https://example.org/target> <https://example.org/q> ?label }";
 /// Shared storage/operator ceiling for the small fixture.
-pub const CEILING: u64 = 8_000_000;
+pub(crate) const CEILING: u64 = 8_000_000;
 
 /// Build the sparse-cache correctness fixture.
-pub fn fixture() -> (SegmentedImage, Arc<RdfDataset>) {
+pub(crate) fn fixture() -> (SegmentedImage, Arc<RdfDataset>) {
     fixture_with_layout(512, 4)
 }
 
 /// Build the same RDF rows using explicit dictionary/block geometry.
-pub fn fixture_with_layout(
+pub(crate) fn fixture_with_layout(
     block_bytes: u32,
     records_per_block: u32,
 ) -> (SegmentedImage, Arc<RdfDataset>) {
@@ -71,19 +71,19 @@ pub fn fixture_with_layout(
 }
 
 /// Open a cold session with the sparse two-block cache used by correctness tests.
-pub fn open(image: &SegmentedImage, ceiling: u64) -> SegmentedSession {
+pub(crate) fn open(image: &SegmentedImage, ceiling: u64) -> SegmentedSession {
     open_with_cache(image, ceiling, 2)
 }
 
 /// The opening peak, including overlapping old/new reader buffers during growth.
 /// Query controls must still refuse at this independently measured ceiling.
-pub fn baseline_ceiling(image: &SegmentedImage) -> u64 {
+pub(crate) fn baseline_ceiling(image: &SegmentedImage) -> u64 {
     let source = open(image, CEILING);
     source.evidence().peak_bytes()
 }
 
 /// Open a session with explicit cache occupancy for hot/cold benchmark cases.
-pub fn open_with_cache(
+pub(crate) fn open_with_cache(
     image: &SegmentedImage,
     ceiling: u64,
     cache_blocks: u32,
@@ -93,7 +93,7 @@ pub fn open_with_cache(
 
 /// Explicit evidence capacity for computed-query matrices with many reverse lookups.
 /// This independent dimension does not change the physical live-byte ceiling.
-pub fn open_with_evidence(
+pub(crate) fn open_with_evidence(
     image: &SegmentedImage,
     ceiling: u64,
     cache_blocks: u32,

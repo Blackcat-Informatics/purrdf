@@ -222,7 +222,10 @@ fn fused(left: &[String], right: &[String]) -> Result<Vec<String>, Box<dyn Error
     Ok(sorted.into_iter().map(|(id, _)| id).collect())
 }
 // Host evaluation ratios and logarithmic discounts are not retrieval scores.
-#[allow(clippy::float_arithmetic, clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "host evaluation metrics report approximate ratios of ranked-document counts"
+)]
 fn metrics(ranking: &[String], grades: &BTreeMap<String, Grade>) -> [f64; 6] {
     let relevant = grades
         .values()
@@ -273,7 +276,10 @@ fn metrics(ranking: &[String], grades: &BTreeMap<String, Grade>) -> [f64; 6] {
         },
     ]
 }
-#[allow(clippy::float_arithmetic, clippy::cast_precision_loss)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "host evaluation metrics report approximate ratios of ranked-document counts"
+)]
 fn main() -> Result<(), Box<dyn Error>> {
     let values = std::env::args().skip(1).collect::<Vec<_>>();
     let arguments = arguments(&values)?;
@@ -517,7 +523,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::float_arithmetic)] // Hand-calculated metric oracle, not production scoring.
     fn bounded_grades_preserve_the_metric_law() {
         let grades = BTreeMap::from([
             ("direct".to_owned(), Grade::Direct),

@@ -299,9 +299,6 @@ impl Rat {
 
     /// Builds the exact value `mantissa / 10^scale`.
     #[must_use]
-    // Preserve the established owned constructor while sharing the exact
-    // reduction body with the explicitly borrowed reusable-storage entry.
-    #[allow(clippy::needless_pass_by_value)]
     pub fn from_decimal(mantissa: Int, scale: u32) -> Self {
         Self::wrap(Rational::from_scaled_integer(mantissa, scale))
     }

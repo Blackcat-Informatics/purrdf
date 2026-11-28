@@ -1324,11 +1324,10 @@ pub struct ReadSettlement {
 /// [`CandidateDomains::Unrestricted`] owes none and says
 /// [`RowBlock::Undeclared`], which is an absence rather than a claim. See this
 /// module's header for what the block buys and what it costs a producer.
-// The trait is consumed only by `FusionStream` in this crate; its futures are
-// awaited in the same task and never cross a thread boundary, so the `Send`
-// bound the lint wants to express would add nothing. Making it a required bound
-// would instead exclude legitimate single-threaded producers.
-#[allow(async_fn_in_trait)]
+#[expect(
+    async_fn_in_trait,
+    reason = "fusion polls each producer on one task and must admit single-threaded implementations"
+)]
 pub trait RankedStream {
     /// Whether a compiled score-first plan truncated this source's read depth.
     /// External streams have no compiled score-prefix license to report.
