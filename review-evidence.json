@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "head": "bfdd19e5141f1194e0171a0f9113c9d8636e9916",
+  "items": [
+    {
+      "id": "github:comment:IC_kwDOTKq-Ms8AAAABrzdrwA",
+      "kind": "comment",
+      "url": "https://github.com/Blackcat-Informatics/purrdf/pull/1649#issuecomment-7234612160",
+      "author": "coderabbitai",
+      "updated_at": "2026-11-28T05:20:52Z",
+      "state": null,
+      "commit": null,
+      "body_sha256": "0567c655c8d80f7c772a3175c1bd4aa83a61f0905a99fdf2b50b1d6ff1423c00",
+      "body_bytes": 3346,
+      "body_archived": false
+    }
+  ],
+  "coverage": {
+    "comments": "complete",
+    "reviews": "complete",
+    "inline_comments": "complete",
+    "threads": "complete"
+  },
+  "bodies": "kept on the forge; each item carries body_sha256 of the original"
+}

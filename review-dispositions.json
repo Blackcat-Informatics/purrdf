@@ -1,0 +1,16 @@
+{
+  "github:comment:IC_kwDOTKq-Ms8AAAABrzdrwA": {
+    "resolution": "acknowledged",
+    "reason": "This is a rate-limit notice, not a review or technical finding. The independent review of the exact applied code is recorded separately.",
+    "commit": null,
+    "reply_url": null,
+    "revision": {
+      "updated_at": "2026-11-28T05:20:52Z",
+      "state": null,
+      "commit": null,
+      "path": null,
+      "line": null,
+      "body_sha256": "0567c655c8d80f7c772a3175c1bd4aa83a61f0905a99fdf2b50b1d6ff1423c00"
+    }
+  }
+}
