@@ -9,8 +9,8 @@
 
 /* WARNING: generated file — edit crates/rdf-capi instead. */
 #define PURRDF_MAJOR 5
-#define PURRDF_MINOR 0
-#define PURRDF_PATCH 1
+#define PURRDF_MINOR 1
+#define PURRDF_PATCH 0
 
 
 #include <stdarg.h>
