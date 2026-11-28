@@ -13,7 +13,8 @@ use core::arch::x86_64::{
 
 use super::VectorKernels;
 use crate::kernels::{
-    HASH_BITS, HASH_MULTIPLIER, check_copy, hash_windows_portable, match_length_portable,
+    HASH_BITS, HASH_MULTIPLIER, check_copy, check_hash_windows, hash_windows_portable,
+    match_length_portable,
 };
 
 const _: () = assert!(HASH_BITS == 15, "the AVX2 hash shifts by 32 - 15");
@@ -173,10 +174,7 @@ unsafe fn prefix_avx2(a: *const u8, b: *const u8, whole: usize) -> usize {
 }
 
 fn hash_avx2(data: &[u8], start: usize, out: &mut [u32]) {
-    assert!(
-        start + out.len() + 3 <= data.len(),
-        "hash windows out of bounds"
-    );
+    check_hash_windows(data.len(), start, out.len());
     let mut i = 0;
     while i + 8 <= out.len() && start + i + 16 <= data.len() {
         // SAFETY: AVX2 confirmed by `avx2()`; the load reads
