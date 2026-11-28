@@ -22,6 +22,16 @@ set -euo pipefail
 staged=$(git diff --cached --name-only --diff-filter=ACMR)
 [ -n "$staged" ] || exit 0
 
+# Do not let inherited flags or a workspace wrapper replace the helper's
+# compiler settings.
+for name in RUSTFLAGS CARGO_ENCODED_RUSTFLAGS CARGO_BUILD_RUSTFLAGS \
+    RUSTC_WORKSPACE_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER; do
+    if [[ -v $name ]]; then
+        printf 'pre-commit: remove inherited %s before running this hook.\n' "$name" >&2
+        exit 1
+    fi
+done
+
 # Repository tooling and tests are Rust: the non-Rust ratchet in helper-census
 # (crates/helper-census/src/non_rust.rs; AGENTS.md states the rules) compares the
 # staged index with the merge-base of HEAD (and any MERGE_HEAD) and the
