@@ -34,8 +34,8 @@
 
 pub(crate) use purrdf_xsd::ieee::Binary64;
 use purrdf_xsd::ieee::Binary64Scope;
-#[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
-pub(crate) use purrdf_xsd::ieee::x87;
+#[cfg(all(test, target_arch = "x86", not(target_feature = "sse2")))]
+pub(super) use purrdf_xsd::ieee::x87;
 
 /// The binary64 operations under the reassociation licence, on the [`Binary64`] token.
 ///

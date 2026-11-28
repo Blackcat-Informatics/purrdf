@@ -62,10 +62,7 @@
 //! the home of the root's suites; `purrdf-sparql-conformance`, whose manifest
 //! reader resolves the workspace root; and `helper-census`, which scans it.
 
-// The wasm32 host's imports are `#[wasm_bindgen]` declarations, whose
-// expansion is `unsafe`; `host` is the one module allowed it, and only there.
-#![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
-#![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
+#![forbid(unsafe_code)]
 
 pub mod bench;
 pub mod error_capture;
@@ -73,10 +70,6 @@ pub mod exact;
 pub mod golden;
 pub mod harness;
 #[cfg(target_arch = "wasm32")]
-#[expect(
-    unsafe_code,
-    reason = "WebAssembly host imports expand to foreign calls"
-)]
 mod host;
 pub mod jsonschema_metaschemas;
 pub mod paths;
