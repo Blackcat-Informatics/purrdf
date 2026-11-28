@@ -258,7 +258,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-cdt"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-events",
  "purrdf-hash",
@@ -269,7 +269,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-core"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-cdt",
  "purrdf-deflate",
@@ -285,28 +285,28 @@ dependencies = [
 
 [[package]]
 name = "purrdf-deflate"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
 ]
 
 [[package]]
 name = "purrdf-ed25519"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
 ]
 
 [[package]]
 name = "purrdf-events"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
 ]
 
 [[package]]
 name = "purrdf-gts"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "aes-gcm",
  "purrdf-core",
@@ -331,11 +331,11 @@ dependencies = [
 
 [[package]]
 name = "purrdf-hash"
-version = "5.0.1"
+version = "5.1.0"
 
 [[package]]
 name = "purrdf-iri"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
@@ -343,14 +343,14 @@ dependencies = [
 
 [[package]]
 name = "purrdf-lex"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
 ]
 
 [[package]]
 name = "purrdf-stack"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "libc",
  "purrdf-hash",
@@ -359,7 +359,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-xsd"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",
@@ -367,7 +367,7 @@ dependencies = [
 
 [[package]]
 name = "purrdf-zstd"
-version = "5.0.1"
+version = "5.1.0"
 dependencies = [
  "purrdf-hash",
  "purrdf-lex",

@@ -318,7 +318,7 @@ LUBM_PUBLISHED_QUERIES: int = 14
 # publisher, so the inputs are certain even though the recorded output is our own
 # measurement of them.
 #
-# WatDiv 5.0.1 counts measured on frozen 10M, seed 0; Aluc et al., ISWC 2014, pp. 197-212.
+# WatDiv 5.1.0 counts measured on frozen 10M, seed 0; Aluc et al., ISWC 2014, pp. 197-212.
 WORKLOAD_PINS: dict[str, str] = {
     # sha256 over the normalised LUBM query set, at the default ontology namespace.
     "lubm.queries.sha256": (

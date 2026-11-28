@@ -8,7 +8,7 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ## [Unreleased]
 
-## [5.1.0]
+## [5.1.0] - 2026-11-28
 
 ### GTS and native interfaces
 
