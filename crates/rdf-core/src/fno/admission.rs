@@ -166,12 +166,9 @@ impl std::error::Error for FnoAdmissionError {
     }
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn iri<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -191,12 +188,9 @@ fn iri<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn text<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -223,12 +217,9 @@ fn text<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn optional_text<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -242,12 +233,9 @@ fn optional_text<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn same_text<S: Admission, C: Progress>(
     first: &TermValue,
@@ -394,12 +382,9 @@ enum Value<'a> {
 }
 
 impl Value<'_> {
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-        )
+    #[allow(
+        clippy::result_large_err,
+        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
     fn same<S: Admission, C: Progress>(
         self,
@@ -529,12 +514,9 @@ impl<'a> Node<'a> {
     }
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn insert<'a, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -564,12 +546,9 @@ fn insert<'a, S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn reference<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -590,12 +569,9 @@ fn reference<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 pub(super) fn validate<'a, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -808,12 +784,9 @@ pub(super) struct Shared {
     classes: OrderedTable<&'static str, ()>,
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn shared_facts<'a, S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -858,12 +831,9 @@ fn shared_facts<'a, S: Admission, C: Progress>(
     Ok(shared)
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn canonical_text<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -886,12 +856,9 @@ fn canonical_text<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 fn canonical_optional<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -903,16 +870,13 @@ fn canonical_optional<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[expect(
+#[allow(
     clippy::iter_with_drain,
     reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
 )]
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 pub(super) fn canonicalize<S: Admission, C: Progress>(
     context: &mut Context<S, C>,
@@ -1050,12 +1014,9 @@ pub(super) fn canonicalize<S: Admission, C: Progress>(
     Ok(())
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
-    )
+#[allow(
+    clippy::result_large_err,
+    reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
 pub(super) fn construct<S: Admission, C: Progress>(
     context: &mut Context<S, C>,

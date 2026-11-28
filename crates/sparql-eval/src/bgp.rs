@@ -737,6 +737,10 @@ pub(crate) struct BgpCursor<'a, I: ViewTermId, P> {
     kind: BgpCursorKind<'a, I, P>,
 }
 
+#[allow(
+    clippy::large_enum_variant,
+    reason = "both cursor kinds go into the same admitted producer owner"
+)]
 enum BgpCursorKind<'a, I: ViewTermId, P> {
     Indexed(IndexedBgpCursor<'a, I, P>),
     Subject {
@@ -3628,10 +3632,7 @@ fn bind_pos_admitted<D: DatasetView>(
 /// The walk itself lives in [`crate::statement_layer`], shared with the path-witness
 /// snapshot; all this adds is the pattern-shaped decision about whether the reifier table
 /// can contribute at all.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the virtual candidate scan keeps pattern cells, graph scope, and its admission context distinct"
-)]
+#[allow(clippy::too_many_arguments)]
 fn emit_virtual_candidates<D: DatasetView>(
     dataset: &D,
     cp: &CompiledPattern<D::Id>,
@@ -8192,7 +8193,7 @@ mod survey_tests {
         }
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the recursive reference keeps the two operand scopes explicit"
     )]

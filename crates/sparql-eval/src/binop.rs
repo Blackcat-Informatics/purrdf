@@ -216,10 +216,7 @@ pub(crate) fn eval_correlated<D: DatasetView + Sync>(
 ///
 /// As [`eval_correlated`].
 // Preserve the original correlated-call boundary at the specialized body.
-#[expect(
-    clippy::inline_always,
-    reason = "dependent evaluation specializes the substitution and consumer together"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 pub(crate) fn eval_substituted<D: DatasetView + Sync>(
     pattern: &GraphPattern,
@@ -486,10 +483,7 @@ pub(crate) fn merge_application_block<D: DatasetView + Sync>(
 }
 
 // Share the row loop without adding a helper call or frame to the native kernel.
-#[expect(
-    clippy::inline_always,
-    reason = "the row loop inlines the merge before admitting the resulting bindings"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn merge_application_row<I: ViewTermId>(
     left: &RetainedRow<I>,
@@ -987,12 +981,9 @@ pub(crate) struct ApplicationSequence<I: ViewTermId> {
     emitted: usize,
     row: Option<ApplicationRow<I>>,
 }
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::large_enum_variant,
-        reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
-    )
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline handoff preserves the driver admitted frame ownership without another allocation"
 )]
 pub(crate) enum ApplicationStart<I: ViewTermId> {
     Complete(Evaluated<I>),
@@ -3042,10 +3033,7 @@ pub(crate) enum MinusPartitionStep<I: ViewTermId> {
 }
 
 // Share the row loop without adding a helper call or frame to the native kernel.
-#[expect(
-    clippy::inline_always,
-    reason = "the consuming plan specializes its minus row and dataset types together"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 pub(crate) fn minus_rows<D: DatasetView + Sync>(
     l: SolutionSeq<D::Id>,
@@ -4274,10 +4262,7 @@ mod tests {
         fn poll(&self) -> Option<purrdf_core::StopCause> {
             // `try_update` (the non-deprecated name for this atomic) postdates the
             // workspace MSRV floor, so the original name is kept here.
-            #[expect(
-                deprecated,
-                reason = "the replacement atomic method postdates the workspace minimum Rust version"
-            )]
+            #[allow(deprecated)]
             let previous = self
                 .remaining
                 .fetch_update(

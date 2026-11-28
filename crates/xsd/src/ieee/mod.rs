@@ -119,6 +119,10 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+#[allow(
+    unsafe_code,
+    reason = "the thread-local floating control registers require inline assembly, with each read and write proving its own memory and register safety"
+)]
 pub mod control;
 pub mod dyadic;
 pub mod environment;
@@ -127,10 +131,11 @@ pub mod ratio;
 #[doc(hidden)]
 pub mod reference;
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
-#[expect(
+#[allow(
     unsafe_code,
     reason = "the x87 control word and the correctly rounded x87 sequences are inline \
-              assembly, with a safety argument on each operation"
+              assembly; this is the crate's only unsafe code, each block with its own \
+              safety argument"
 )]
 pub mod x87;
 
@@ -177,6 +182,11 @@ macro_rules! scope {
             )]
             #[cfg(not(all(target_arch = "x86", not(target_feature = "sse2"))))]
             #[inline(always)]
+            #[allow(
+                clippy::inline_always,
+                reason = "entered around every kernel call, including per-pair ones; on \
+                          every target but the x87 it must vanish entirely"
+            )]
             #[must_use]
             pub const fn enter() -> Self {
                 Self {
@@ -200,6 +210,14 @@ macro_rules! scope {
 
             /// The operations this scope makes correct.
             #[inline(always)]
+            #[allow(
+                clippy::inline_always,
+                reason = "a zero-sized token; it must never be a call"
+            )]
+            #[allow(
+                clippy::unused_self,
+                reason = "the receiver is the proof: the token borrows the scope"
+            )]
             #[must_use]
             pub const fn ops(&self) -> $token<'_> {
                 $token { scope: PhantomData }
@@ -285,6 +303,15 @@ macro_rules! op {
 
 /// Each method is the language operator on every target but the x87, where it is the
 /// correctly rounded x87 sequence described in the [module documentation](self).
+#[allow(
+    clippy::inline_always,
+    reason = "each method is one arithmetic instruction inside a kernel's inner loop, and \
+              must compile into every dispatch wrapper under that wrapper's features"
+)]
+#[allow(
+    clippy::unused_self,
+    reason = "the receiver is the proof that a `Binary64Scope` is alive"
+)]
 impl Binary64<'_> {
     op! {
         /// `a + b`, correctly rounded.
@@ -310,6 +337,14 @@ impl Binary64<'_> {
 
 /// Each method is the language operator on every target but the x87, where it is the
 /// correctly rounded x87 sequence described in the [module documentation](self).
+#[allow(
+    clippy::inline_always,
+    reason = "each method is one arithmetic instruction, and must compile to it"
+)]
+#[allow(
+    clippy::unused_self,
+    reason = "the receiver is the proof that a `Binary32Scope` is alive"
+)]
 impl Binary32<'_> {
     op! {
         /// `a + b`, correctly rounded.
@@ -338,6 +373,10 @@ macro_rules! once {
     ($(#[$attr:meta])* $name:ident = $scope:ident::$op:ident($($operand:ident),+) : $ty:ty) => {
         $(#[$attr])*
         #[inline(always)]
+        #[allow(
+            clippy::inline_always,
+            reason = "the bare operator on every target but the x87"
+        )]
         #[must_use]
         pub fn $name($($operand: $ty),+) -> $ty {
             let scope = $scope::enter();

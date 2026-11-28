@@ -427,10 +427,7 @@ impl ScriptedStream {
     }
 }
 
-#[expect(
-    clippy::unused_async_trait_impl,
-    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
-)]
+#[allow(clippy::unused_async_trait_impl)]
 impl RankedStream for ScriptedStream {
     type Item = Term;
 

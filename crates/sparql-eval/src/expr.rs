@@ -946,10 +946,7 @@ impl<'e, I: ViewTermId> ExtendSequence<'e, I> {
 }
 
 // Share the sequence loop without a second call boundary or native result copy.
-#[expect(
-    clippy::inline_always,
-    reason = "the filter setup specializes to the consuming pipeline and its expression context"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn begin_filter_sequence<'e, D: DatasetView + Sync>(
     node: &GraphPattern,
@@ -3243,12 +3240,9 @@ impl<I: ViewTermId> ExistsDecision<I> {
 }
 
 // Pending children are already held by the admitted row owner at the caller.
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::large_enum_variant,
-        reason = "avoid a second allocation for an EXISTS child"
-    )
+#[expect(
+    clippy::large_enum_variant,
+    reason = "avoid a second allocation for an EXISTS child"
 )]
 pub(crate) enum ExistsEntered<I: ViewTermId> {
     Complete(bool),
@@ -3915,6 +3909,10 @@ fn exists_prepared_decide<D: DatasetView + Sync>(
 
 /// Native restriction of a pure EXISTS relation; `None` keeps the ordinary
 /// definition/probe strategy for any expression or modifier boundary.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the EXISTS site and its row scope are independent borrowed inputs"
+)]
 fn exists_positive_seeded<D: DatasetView + Sync>(
     site: usize,
     normalized: &GraphPattern,
@@ -4597,14 +4595,11 @@ pub(crate) fn correlated_boolean(
 /// joined `VALUES` row cannot satisfy: an IRI or a literal as the constant it is,
 /// a blank node or a quoted triple through a one-row `VALUES` driving the call
 /// (see [`bind_row_into_call`]), so every term kind reaches the relation bound.
-#[cfg_attr(
-    target_pointer_width = "32",
-    expect(
-        clippy::unnecessary_box_returns,
-        reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
-                  lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
-                  32-bit targets such as wasm32, where the same box is still the field's type"
-    )
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
 )]
 ///
 /// # Errors
@@ -5050,6 +5045,12 @@ pub(crate) fn substitute_pattern_tracked_admitted<const PRESERVE: bool>(
 /// mapped to the identical source its wrapped child already resolves to — see
 /// [`SubstitutionSourceMap`]'s doc for why that, not leaving the wrapper unmapped, is the
 /// correct choice.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn substitute_pattern_impl<const PRESERVE: bool>(
     pattern: &GraphPattern,
     row: &SubstitutionRow,
@@ -5742,6 +5743,12 @@ fn demote_to_scaffolding(map: &mut Option<&mut SubstitutionTracking<'_>>, addres
 /// leaf that needs it — see [`SubstitutionRow`]'s doc: that per-leaf fan-out is `Arc`
 /// refcount traffic (both types store their text behind `Arc<str>`), not the per-term
 /// `String` allocation AGENTS.md's hot-path rule forbids.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn join_leaf_with_values(
     leaf: Box<GraphPattern>,
     leaf_vars: &VarSchema,
@@ -5798,6 +5805,12 @@ fn join_leaf_with_values(
 /// expression-bearing node that needs a term-only var, and the `(Variable, GroundTerm)`
 /// clone at each such site is `Arc` refcount traffic (see [`SubstitutionRow`]'s doc), not
 /// a `String` allocation.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the substituted tree is assembled into `Box<GraphPattern>` child fields, and the \
+              lint's size threshold is target-dependent: `GraphPattern` falls under it only on \
+              32-bit targets such as wasm32, where the same box is still the field's type"
+)]
 fn wrap_with_expr_term_only_values(
     node: Box<GraphPattern>,
     free: &FreeVars,
@@ -5834,6 +5847,12 @@ fn wrap_with_expr_term_only_values(
 /// is then a `Lateral`'s direct right operand, the position the evaluator drives per
 /// left row with that row's terms in hand. The call keeps its variable, so its column
 /// survives beside the driven value.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the result is stored as a `Box<GraphPattern>` child field, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets such as wasm32, where the same box is still the field's type"
+)]
 fn bind_row_into_call(
     call: &purrdf_sparql_algebra::PropertyFunctionCall,
     row: &SubstitutionRow,
@@ -5869,6 +5888,12 @@ fn bind_row_into_call(
 /// [`join_leaf_with_values`] maps its wrapper: `seed` is scaffolding, and the new
 /// node, not `node`, becomes `source`'s row-counting entry, because its output (not
 /// `node`'s, which lacks the driven column) is `source`'s true output for this row.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the result is stored as a `Box<GraphPattern>` child field, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets such as wasm32, where the same box is still the field's type"
+)]
 fn plant_mapped_driver(
     node: Box<GraphPattern>,
     seed: GraphPattern,
@@ -12085,10 +12110,7 @@ mod tests {
         // The braces below are SPARQL group-graph-pattern syntax, not a missed `format!`
         // call — clippy's `literal_string_with_formatting_args` false-positives on the
         // `{ :a }`/`{ ?s :q ?o }` shapes a `VALUES`/nested-group literal naturally spells.
-        #[expect(
-            clippy::literal_string_with_formatting_args,
-            reason = "the braces are part of the SPARQL grammar, not Rust interpolation variables"
-        )]
+        #[allow(clippy::literal_string_with_formatting_args)]
         let query = "PREFIX : <http://example.org/> \
                       SELECT ?outer WHERE { \
                         VALUES ?outer { :a } \
@@ -14066,7 +14088,7 @@ mod tests {
     /// Argument lists on which each built-in has a value, several where the answer for
     /// an unbound argument could depend on the others (an optional argument present or
     /// absent, a variadic function at two lengths).
-    // Keep the table's built-in cases together.
+    #[allow(clippy::too_many_lines)] // one table row per built-in, kept together
     fn strictness_samples(function: &Function) -> Vec<Vec<Expression>> {
         use purrdf_cdt::CdtFn;
         use purrdf_xsd::datatype::XSD_NS as XSD;

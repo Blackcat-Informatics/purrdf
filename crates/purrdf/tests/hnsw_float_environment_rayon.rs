@@ -32,11 +32,10 @@
 
 #[path = "support/hnsw/fixture.rs"]
 mod fixture;
-use fixture::{bits, is_ftz, seeded_matrix};
+use fixture::{bits, is_ftz, params, seeded_matrix};
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::Reassociated;
 use purrdf_core::distance::control;
-use purrdf_hnsw::fixture::params;
 use purrdf_hnsw::{HnswIndex, Ranked};
 
 /// Set FTZ on the calling thread for the rest of its life: called only from the global

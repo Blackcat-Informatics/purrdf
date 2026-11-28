@@ -17,7 +17,6 @@
 //! Both halves are executed: the relation that declares a shortfall is refused, and
 //! the same relation declaring nothing validates to a report.
 
-#[expect(dead_code, reason = "this test uses one of the two shared fixtures")]
 #[path = "support/relation.rs"]
 mod relation;
 

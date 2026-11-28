@@ -6,6 +6,8 @@
 //! and through every public entry point (the length switch included), and the
 //! 64-digit content-address readers. Report-only; not a gate.
 
+#![allow(missing_docs)] // a bench target is not public API
+
 use std::hint::black_box;
 
 use purrdf_hash::Backend as _;

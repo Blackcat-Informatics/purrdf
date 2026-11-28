@@ -121,10 +121,7 @@ mod tests {
     struct Plain {
         shown: u8,
         also: &'static str,
-        #[expect(
-            dead_code,
-            reason = "the test requires a field that Debug does not read"
-        )]
+        #[allow(dead_code, reason = "the elided field is never printed")]
         hidden: fn(),
     }
 
@@ -132,10 +129,7 @@ mod tests {
 
     struct Generic<T, F> {
         value: T,
-        #[expect(
-            dead_code,
-            reason = "the test requires a field that Debug does not read"
-        )]
+        #[allow(dead_code, reason = "the elided field is never printed")]
         run: F,
     }
 

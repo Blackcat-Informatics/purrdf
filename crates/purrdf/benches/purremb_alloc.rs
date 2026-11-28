@@ -16,7 +16,7 @@ use std::hint::black_box;
 use purrdf_alloc_probe::{CountingAllocator, Measurement, WholeProcessWindow};
 use purrdf_core::{EmbeddingView, verify_embedding};
 
-#[expect(
+#[allow(
     dead_code,
     reason = "the shared fixture module also exposes accessors used only by the timed process"
 )]

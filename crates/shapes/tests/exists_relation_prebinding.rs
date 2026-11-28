@@ -36,7 +36,6 @@
 //!
 //! Fixture IRIs are `example.org`; PurRDF mints none.
 
-#[expect(dead_code, reason = "this test uses one of the two shared fixtures")]
 #[path = "support/relation.rs"]
 mod relation;
 

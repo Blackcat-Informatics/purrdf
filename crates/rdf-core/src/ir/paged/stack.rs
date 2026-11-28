@@ -387,10 +387,9 @@ impl PagedStack {
     ///
     /// # Errors
     /// Invalid RDF or a failed lower membership read leaves the head unchanged.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the public writer consumes the caller's value before storing its canonical form"
-    )]
+    // Match the value-consuming mutation boundary; canonicalization replaces the
+    // supplied representation before ownership enters the head.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn insert(&mut self, row: QuadValues) -> Result<bool, PagedStackError> {
         let row = normalize_row(&row)?;
         if self.contains(&row)? {
@@ -420,10 +419,8 @@ impl PagedStack {
     ///
     /// # Errors
     /// Returns invalid RDF or source drift without changing the head.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "graph declaration shares the public writer's value-consuming boundary"
-    )]
+    // Declarations share the value-consuming writer boundary with insertion.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn declare_named_graph(&mut self, graph: TermValue) -> Result<bool, PagedStackError> {
         Self::check_sources(&self.layers)?;
         let mut builder = RdfDatasetBuilder::new();

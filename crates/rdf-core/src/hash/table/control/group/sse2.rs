@@ -24,10 +24,7 @@ pub(crate) const BITMASK_ITER_MASK: BitMaskWord = !0;
 pub(crate) struct Group(x86::__m128i);
 
 // Explicit constructors name the SIMD group represented by the intrinsic value.
-#[expect(
-    clippy::use_self,
-    reason = "the explicit tuple constructor names the SIMD group represented by the intrinsic result"
-)]
+#[expect(clippy::use_self)]
 impl Group {
     /// Number of bytes in the group.
     pub(crate) const WIDTH: usize = size_of::<Self>();
@@ -84,8 +81,7 @@ impl Group {
             //   note: _mm_movemask_epi8 returns a 16-bit mask in a i32, the
             //   upper 16-bits of the i32 are zeroed:
             clippy::cast_sign_loss,
-            clippy::cast_possible_truncation,
-            reason = "the byte cast keeps its bit pattern and movemask clears its upper sixteen bits"
+            clippy::cast_possible_truncation
         )]
         unsafe {
             let cmp = x86::_mm_cmpeq_epi8(self.0, x86::_mm_set1_epi8(tag.0 as i8));
@@ -109,8 +105,7 @@ impl Group {
             //   note: _mm_movemask_epi8 returns a 16-bit mask in a i32, the
             //   upper 16-bits of the i32 are zeroed:
             clippy::cast_sign_loss,
-            clippy::cast_possible_truncation,
-            reason = "movemask clears its upper sixteen bits so the cast preserves every mask bit"
+            clippy::cast_possible_truncation
         )]
         unsafe {
             // A tag is EMPTY or DELETED iff the high bit is set
@@ -138,8 +133,7 @@ impl Group {
         //   1111_1111 | 1000_0000 = 1111_1111
         //   0000_0000 | 1000_0000 = 1000_0000
         #[expect(
-            clippy::cast_possible_wrap,
-            reason = "the signed intrinsic argument preserves the deleted tag byte"
+            clippy::cast_possible_wrap, // tag: Tag::DELETED.0 as i8
         )]
         unsafe {
             let zero = x86::_mm_setzero_si128();

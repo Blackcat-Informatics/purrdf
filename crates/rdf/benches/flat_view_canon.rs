@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
 //! Owned vs. borrowed flat-assertion canonicalization, over five fixture shapes.
 //!
 //! `cargo bench -p purrdf-rdf --bench flat_view_canon`. Report-only; no winner is
@@ -70,7 +74,7 @@ use purrdf_rdf::{
 use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 #[path = "support/canon_load.rs"]
-#[expect(
+#[allow(
     dead_code,
     reason = "the shared fixture module also serves the allocation bench"
 )]

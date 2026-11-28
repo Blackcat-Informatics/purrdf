@@ -3,10 +3,6 @@
 
 //! Original HNSW refusal fields across the native and WASM public boundaries.
 
-#[expect(
-    dead_code,
-    reason = "this test uses a subset of the shared stored-index fixtures"
-)]
 #[path = "support/hnsw/purremb.rs"]
 mod purremb;
 

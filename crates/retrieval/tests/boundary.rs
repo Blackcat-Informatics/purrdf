@@ -190,10 +190,7 @@ impl ScriptedStream {
 // The trait's methods are `async`; this mock's body is synchronous because its
 // rows are pre-scripted. The keyword is required by the trait, not a signal
 // that the body awaits.
-#[expect(
-    clippy::unused_async_trait_impl,
-    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
-)]
+#[allow(clippy::unused_async_trait_impl)]
 impl RankedStream for ScriptedStream {
     type Item = Term;
 
@@ -1168,10 +1165,7 @@ struct LazyStream {
     item_at: ItemAt,
 }
 
-#[expect(
-    clippy::unused_async_trait_impl,
-    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
-)]
+#[allow(clippy::unused_async_trait_impl)]
 impl RankedStream for LazyStream {
     type Item = Term;
 
@@ -1634,6 +1628,7 @@ fn reporting_names_plan_and_profile() {
 // `future_not_send`: the crate's own `execute` carries this allow for the same
 // reason — the dataset is a caller-chosen type parameter, so the future's
 // `Send`-ness is the caller's to establish and is not required here.
+#[allow(clippy::future_not_send)]
 async fn execute_shape<
     'd,
     D: purrdf_core::DatasetView<ReadError = std::convert::Infallible> + Sync,
@@ -1646,6 +1641,7 @@ async fn execute_shape<
 }
 
 /// `fuse`'s shape, re-declared and delegated to; see [`execute_shape`].
+#[allow(clippy::future_not_send)]
 async fn fuse_shape<S, T>(
     streams: Vec<(Iri, S)>,
     profile: &FusionProfile,
@@ -1659,10 +1655,7 @@ where
 }
 
 /// `search`'s shape, re-declared and delegated to; see [`execute_shape`].
-#[expect(
-    clippy::future_not_send,
-    reason = "the fixture awaits its operations on one task and retains local producer state"
-)]
+#[allow(clippy::future_not_send)]
 async fn search_shape<S, D>(
     request: &RetrievalRequest,
     registry: &PropertyFunctionRegistry<'static>,

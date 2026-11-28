@@ -955,7 +955,7 @@ enum GovernedEntry<'a> {
 
 impl GovernedEntry<'_> {
     /// Run identical request inputs through the text, per-call prepared, or shared-state boundary.
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "the fixture preserves the paired receipts returned by each public entry"
     )]

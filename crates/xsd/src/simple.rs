@@ -241,7 +241,7 @@ const SPACE_RUNS: [(u8, u8); 1] = [(b' ', b' ')];
 /// `0x00`/`0xFF` bytes: the shape the compiler lowers to packed byte compares
 /// on every target that has them. Every facet byte is ASCII, so a lane can never
 /// match a byte of a multi-byte UTF-8 sequence.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
               in as constants and the lane compares vectorize"
@@ -256,7 +256,7 @@ fn class_lanes(chunk: &[u8; CHUNK], runs: &[(u8, u8)]) -> [u8; CHUNK] {
 }
 
 /// Whether any lane of `lanes` is set: a branch-free OR over the chunk.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the lane helpers must be inlined into the chunk loop so the class's runs fold \
               in as constants and the lane compares vectorize"
@@ -272,7 +272,7 @@ fn any_lane(lanes: &[u8; CHUNK]) -> bool {
 /// clean-chunk test — and the one chunk holding a hit is handed to
 /// [`first_replaced_lane`]. The bytes after the last whole chunk are tested one at
 /// a time.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the audited replace entry must retain this chunked SIMD precheck"
 )]

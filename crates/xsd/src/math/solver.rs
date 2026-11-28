@@ -183,6 +183,7 @@ impl FloatEnclosure {
 /// Complete certified operations used by mathematical solver formulas.
 /// Implementations may tighten proofs, but never substitute an approximate value
 /// for an enclosure. Every operation consumes explicit admission.
+#[allow(clippy::missing_errors_doc)] // The trait has one error contract: certified domain and resource refusal.
 pub trait CertifiedInterval: Clone {
     /// Exact ordered endpoint representation.
     type Bound: IntervalBound;

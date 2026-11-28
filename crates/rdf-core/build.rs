@@ -15,7 +15,7 @@
 use std::env;
 use std::process::Command;
 
-#[expect(
+#[allow(
     unreachable_pub,
     reason = "the module's public input type is the library's public API; in this script \
               it is private"

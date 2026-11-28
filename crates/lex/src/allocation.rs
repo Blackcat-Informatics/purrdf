@@ -10,12 +10,9 @@
 
 // Only these storage primitives manipulate their own freshly allocated blocks.
 // Scanners, parsers, and the admission/accounting body remain safe Rust.
-#[expect(unsafe_code, reason = "boxed owners manage freshly allocated storage")]
+#[allow(unsafe_code)]
 mod boxed;
-#[expect(
-    unsafe_code,
-    reason = "shared owners manage allocation and reference lifetimes"
-)]
+#[allow(unsafe_code)]
 pub mod shared;
 pub use boxed::{try_boxed, try_boxed_one};
 pub use shared::{Shared, SharedAllocError, SharedCloneError, SharedOwned, SharedText, SharedView};

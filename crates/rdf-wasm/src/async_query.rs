@@ -400,10 +400,10 @@ pub extern "C" fn purrdf_jspi_run(job: u32) -> u32 {
 /// Reached only through that `wasm32` export (and the native unit tests), so the native
 /// library build sees the whole runner as unused.
 #[cfg_attr(
-    all(not(target_arch = "wasm32"), not(test)),
-    expect(
+    not(target_arch = "wasm32"),
+    allow(
         dead_code,
-        reason = "the runner is reached from the wasm32 export and from native unit tests"
+        reason = "the JSPI runner is entered only through the wasm32 export"
     )
 )]
 fn run_job(id: u32) -> RunStatus {
@@ -3113,6 +3113,7 @@ impl AsyncJob {
     /// bytes, and close the exchange. `Finished` when no such exchange is open — its
     /// last waiter left, or it was already answered.
     #[wasm_bindgen(js_name = deliverExchangeBindings)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn deliver_exchange_bindings(
         #[wasm_bindgen(unchecked_param_type = "bigint")] exchange: JsValue,
         bytes: Vec<u8>,
@@ -3195,10 +3196,7 @@ impl AsyncJob {
     /// `"describe"` (or `"graph"`) — refuses any other result kind with the synchronous
     /// twin's message; `undefined` accepts any.
     #[wasm_bindgen(js_name = takeQueryResult)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn take_query_result(&self, expect: Option<String>) -> Result<QueryResult, JsValue> {
         let expected = match expect.as_deref() {
             None => None,
@@ -4076,10 +4074,7 @@ impl AsyncJobOptions {
     /// and an `Error` for a value it cannot honor; both carry the code
     /// `purrdf-wasm-options`.
     #[wasm_bindgen(js_name = fromJs)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn from_js(
         kind: AsyncOperationKind,
         options: JsValue,
@@ -4804,6 +4799,7 @@ impl AsyncJob {
     ///
     /// Options validated for another kind.
     #[wasm_bindgen(js_name = beginShacl)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn begin_shacl(
         options: &AsyncJobOptions,
         request: ShaclJobRequest,

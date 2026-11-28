@@ -11,7 +11,6 @@ use purrdf_text::{
 };
 use std::sync::Arc;
 
-#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/sparql.rs"]
 mod sparql_fixture;
 

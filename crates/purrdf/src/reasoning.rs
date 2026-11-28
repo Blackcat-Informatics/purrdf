@@ -748,7 +748,7 @@ fn close_lane<D: DatasetView>(
 /// [`GovernedUpdateOutcome`](purrdf_sparql_eval::GovernedUpdateOutcome) structurally carries
 /// no partial mutation.
 #[derive(Debug)]
-#[expect(
+#[allow(
     clippy::large_enum_variant,
     reason = "the large arm is the ORDINARY one — a GovernedOutcome plus the reasoning \
               certificate, both of which the caller then reads — and the small arm is the \

@@ -630,10 +630,7 @@ fn insert_single_text(
     }
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each projected member carries a separate validation policy and loss subject"
-)]
+#[allow(clippy::too_many_arguments)]
 fn insert_single_value(
     object: &mut Object,
     member: &str,

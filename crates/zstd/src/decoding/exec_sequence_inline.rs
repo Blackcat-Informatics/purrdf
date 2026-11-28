@@ -83,13 +83,24 @@ pub(crate) unsafe fn exec_sequence_bounded_copy(
 /// Textual expansion of the AVX2 `ZSTD_execSequence` body at the call
 /// site, fusing the match-copy into a per-tier sequence monolith. A
 /// `#[target_feature(avx2)]` function cannot be `#[inline(always)]`
-/// so this macro avoids the call boundary. Backend access goes through
+/// (compiler restriction),
+/// so the [`BufferBackend::exec_sequence_inline_avx2`]
+/// trait method stays a real CALL on the hot path; expanding the body via
+/// a macro removes that boundary (the reference `decompressSequences_bmi2`
+/// is one inlined monolith). Backend access goes through the inlinable
 /// accessors `cap` / `tail` / `inline_exec_base_ptr` / `inline_exec_commit`,
 /// so the macro stays generic over `B` while only the linear inline
 /// backends (`UserSliceBackend`, `FlatBuf`) ever reach it (gated on
 /// `SUPPORTS_INLINE_SEQUENCE_EXEC`). 32-byte ymm match-copy for
 /// `offset >= 32`; usable from any tier whose enclosing fn carries
-/// `target_feature(avx2,bmi2)`. Returns `Result<(), ExecuteSequencesError>`.
+/// `target_feature(avx2,bmi2)` (AVX2 and VBMI2). The trait method
+/// `exec_sequence_inline_avx2` remains the unit-tested reference spec for
+/// this body. Returns `Result<(), ExecuteSequencesError>`.
+//
+// Gated on `kernel_avx2` (implied by `kernel_vbmi2`) so the macro is absent
+// when its only consumers (`seq_decoder_avx2` / `seq_decoder_vbmi2`) are
+// compiled out — otherwise the `--no-default-features` build sees an unused
+// macro and trips `-D warnings`.
 #[cfg(target_arch = "x86_64")]
 macro_rules! exec_sequence_avx2_inline {
     ($buffer:expr, $lit_src:expr, $lit_length:expr, $offset:expr, $match_length:expr) => {{
@@ -383,6 +394,7 @@ pub(crate) mod x86 {
     /// non-overlapping for the no-overlap caller; target_feature(avx2)
     /// scope on caller.
     #[inline(always)]
+    #[allow(dead_code)]
     pub(crate) unsafe fn copy32_avx2(dst: *mut u8, src: *const u8) {
         unsafe {
             let v = _mm256_loadu_si256(src as *const __m256i);
@@ -401,6 +413,7 @@ pub(crate) mod x86 {
     /// Same as [`wildcopy_no_overlap`] plus caller in
     /// target_feature(avx2) scope.
     #[inline(always)]
+    #[allow(dead_code)]
     pub(crate) unsafe fn wildcopy_no_overlap_avx2(dst: *mut u8, src: *const u8, length: usize) {
         debug_assert!(length > 0);
         unsafe {

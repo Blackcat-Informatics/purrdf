@@ -1121,6 +1121,7 @@ impl FixedArcLine {
     /// the selected continuous line lift. Internal meridian pole jumps are
     /// included. Atlas cuts from endpoint pole frames remain separate terms.
     /// Both parameter endpoint enclosures must be ordered on this source line.
+    #[allow(clippy::too_many_arguments)] // Endpoint panel, reference and distinct pure scratch/governor capabilities.
     pub(crate) fn quadrilateral_area_in(
         &self,
         lower: &FixedInterval,

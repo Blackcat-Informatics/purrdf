@@ -28,6 +28,12 @@ use super::cost_model::HC_FORMAT_MINMATCH;
 
 use super::dfast::DfastMatchGenerator;
 
+// FAST_HASH_FILL_STEP test-only re-export was tied to the legacy
+// SuffixStore MatchGenerator's interleaved hash-fill stride. The
+// upstream zstd-shape Fast kernel walks ip0 with kSearchStrength step-skip
+// acceleration instead, so the constant has no consumer in the
+// remaining live test set today.
+
 use super::match_table::helpers::MIN_MATCH_LEN;
 
 use super::row::RowMatchGenerator;
@@ -604,6 +610,8 @@ impl MatchGeneratorDriver {
             super::strategy::BackendTag::Dfast => self.dfast_matcher_mut().clear_borrowed_window(),
             super::strategy::BackendTag::Row => self.row_matcher_mut().clear_borrowed_window(),
             super::strategy::BackendTag::HashChain => self.hc_matcher_mut().clear_borrowed_window(),
+            #[allow(unreachable_patterns)]
+            _ => {}
         }
         self.borrowed_pending = None;
     }
@@ -972,6 +980,7 @@ impl Matcher for MatchGeneratorDriver {
         self.reset_dict_attach_ok =
             dict_hint.is_none_or(|size| size <= MAX_FAST_ATTACH_DICT_REGION);
         let hinted = hint.is_some();
+        #[cfg_attr(not(test), allow(unused_mut))]
         let mut params = Self::level_params(level, hint);
         // Test-only: apply a parse×search override so the matrix can be
         // exercised without editing `LEVEL_TABLE`. Mutating `params` here

@@ -1498,7 +1498,7 @@ impl<'a> ExpressionReader<'a> {
         enforce_limit("OWL expression nodes", self.nodes, self.budget)
     }
 
-    #[expect(
+    #[allow(
         clippy::too_many_lines,
         reason = "one dispatch over the disjoint RDF encodings of OWL 2 Mapping Tables 12 and 13"
     )]
@@ -2213,7 +2213,7 @@ fn catalog_restrictions(
 // ── Surface derivation ──────────────────────────────────────────────────────
 
 /// Build the deterministic class/property relation for one request.
-#[expect(
+#[allow(
     clippy::too_many_lines,
     reason = "one pass over the sorted schema rows, dispatching each axiom kind"
 )]
@@ -3767,7 +3767,7 @@ fn nearest<'a>(
         .collect()
 }
 
-#[expect(
+#[allow(
     clippy::too_many_lines,
     reason = "one pass over the property × class cells, each decision kept beside its row"
 )]
@@ -4791,7 +4791,7 @@ type Fragments = BTreeMap<(String, Option<String>), Fragment>;
 /// owner's outcome has no row of its own for it: its row is its owner's,
 /// reached through the class hierarchy, so the manifest grows with the
 /// restrictions rather than with the depth.
-#[expect(
+#[allow(
     clippy::too_many_lines,
     reason = "one pass over every class's owned and inherited conjuncts"
 )]

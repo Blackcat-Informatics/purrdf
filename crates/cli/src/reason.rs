@@ -163,7 +163,7 @@ fn read_rule_set(path: &Path) -> Result<RuleSet, CliError> {
 }
 
 /// Run the `reason` subcommand.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the CLI dispatcher passes the command fields and shared sink configuration explicitly"
 )]

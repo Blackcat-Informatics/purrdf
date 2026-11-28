@@ -470,10 +470,7 @@ impl ForkShared {
     /// commit still decides the observable charge and trip.
     fn add_spend(total: &AtomicU64, amount: u64) -> u64 {
         // Keep the atomic available at the workspace MSRV; its newer name is not.
-        #[expect(
-            deprecated,
-            reason = "the replacement atomic method postdates the workspace minimum Rust version"
-        )]
+        #[allow(deprecated)]
         let previous = total
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(amount))
@@ -700,10 +697,7 @@ struct Committing {
 impl Committing {
     // Keep the stopped-chunk selection inside the ordered commit's caller,
     // without retaining a second post-join frame beside that caller.
-    #[expect(
-        clippy::inline_always,
-        reason = "the caller specializes the worker-ledger iterator and retains its accounting"
-    )]
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     fn of(chunks: impl IntoIterator<Item = WorkerLedger>) -> Self {
         let mut kept = Vec::new();
@@ -754,10 +748,7 @@ impl Committing {
 /// An error `admit_row` raises, or a read of the dataset an intern needs.
 // Ordered replay belongs in its existing post-join caller; an additional live
 // helper frame must not replace the caller's former inlined replay.
-#[expect(
-    clippy::inline_always,
-    reason = "the checkpoint folds the concrete row iterator and sink into its admission loop"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn commit_items<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
@@ -955,10 +946,7 @@ fn commit_items<D: DatasetView + Sync, R, S>(
 
 // Keep ordered mint-prefix replay in the commit caller, without a closure call
 // and live value frame at each growth/refusal checkpoint. This is the sole loop.
-#[expect(
-    clippy::inline_always,
-    reason = "the concrete workspace and row representation are reused by its hot caller"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn count_worker_mints_to<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
@@ -980,10 +968,7 @@ fn count_worker_mints_to<D: DatasetView + Sync>(
 /// an error the admission callback discovers returns at its own source row.
 // Preserve the caller's inlined output conversion and buffer reuse, including
 // the ungoverned path, without introducing another post-join live frame.
-#[expect(
-    clippy::inline_always,
-    reason = "the concrete row iterator and sink specialize together inside the admission loop"
-)]
+#[allow(clippy::inline_always)]
 #[inline(always)]
 fn admit_rows<D: DatasetView + Sync, R, S>(
     ctx: &mut EvalCtx<'_, D>,
@@ -1289,10 +1274,7 @@ impl RowCheckpoint {
     /// An allocation failure while admitting the replayed output.
     // Preserve the ordinary post-worker commit in its caller: an additional
     // live helper frame was observed in the contextual-sharing emission.
-    #[expect(
-        clippy::inline_always,
-        reason = "the caller keeps ordered row admission in the same monomorphized loop"
-    )]
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn commit_rows<D: DatasetView + Sync, R>(
         &self,
@@ -1317,10 +1299,7 @@ impl RowCheckpoint {
     /// [`Self::commit`] and retain the input needed for possible continuation.
     // Preserve the ordinary post-worker commit in its caller: an additional
     // live helper frame was observed in the contextual-sharing emission.
-    #[expect(
-        clippy::inline_always,
-        reason = "the caller retains specialization of its concrete sink at the commit boundary"
-    )]
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn commit_into<D: DatasetView + Sync, R, S>(
         &self,
@@ -1347,10 +1326,7 @@ impl RowCheckpoint {
     /// An error `admit_row` raises.
     // Preserve the ordinary post-worker commit in its caller: an additional
     // live helper frame was observed in the contextual-sharing emission.
-    #[expect(
-        clippy::inline_always,
-        reason = "the caller specializes the output sink and checkpoint accounting together"
-    )]
+    #[allow(clippy::inline_always)]
     #[inline(always)]
     pub(crate) fn commit<D: DatasetView + Sync, R, S>(
         &self,

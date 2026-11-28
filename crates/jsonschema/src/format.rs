@@ -348,10 +348,9 @@ mod tests {
     }
 
     #[test]
-    #[expect(
-        clippy::literal_string_with_formatting_args,
-        reason = "RFC 6570 templates use literal braces around variable names"
-    )]
+    // RFC 6570 templates spell their expressions `{name}`, which is not a
+    // format string here.
+    #[allow(clippy::literal_string_with_formatting_args)]
     fn each_format_refuses_its_invalid_case_and_accepts_the_neighbour() {
         for (format, invalid, valid) in [
             (

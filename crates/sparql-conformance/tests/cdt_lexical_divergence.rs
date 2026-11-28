@@ -467,7 +467,7 @@ fn the_grader_fires_on_each_extended_production() {
 // positional argument indices. Nothing here reaches a formatting macro — the
 // forms are compared as data — so the lint is reading map syntax as `{}`
 // syntax. Scoped to this one fixture rather than the module.
-#[expect(
+#[allow(
     clippy::literal_string_with_formatting_args,
     reason = "cdt:Map lexical forms, never formatted"
 )]

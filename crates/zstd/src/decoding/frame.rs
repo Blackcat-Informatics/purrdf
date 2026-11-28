@@ -50,7 +50,7 @@ pub(crate) fn read_frame_header_with_format(
 
     r.read_exact(&mut buf[0..1])
         .map_err(err::FrameDescriptorReadError)?;
-    let desc = FrameDescriptor::from_wire(buf[0])?;
+    let desc = FrameDescriptor(buf[0]);
 
     bytes_read += 1;
 
@@ -150,7 +150,7 @@ pub(crate) fn read_frame_header_from_slice(
     }
 
     let d = take(input, 1).ok_or_else(|| err::FrameDescriptorReadError(eof()))?;
-    let desc = FrameDescriptor::from_wire(d[0])?;
+    let desc = FrameDescriptor(d[0]);
     bytes_read += 1;
 
     let mut frame_header = FrameHeader {
@@ -267,6 +267,7 @@ impl FrameHeader {
     /// alone cannot distinguish the two; callers that need to know
     /// whether the value is actually a wire-format declaration (e.g.
     /// for post-decode size validation) should consult this method.
+    #[allow(dead_code)]
     pub(crate) fn fcs_declared(&self) -> bool {
         // `frame_content_size_bytes()` returns 0 only when FCS_flag=0
         // AND single_segment_flag=0 — exactly the "no FCS on the wire"
@@ -293,6 +294,13 @@ impl FrameHeader {
     /// this accessor reports the absence via `None` so callers
     /// don't conflate "missing byte on the wire" with "byte
     /// present and equal to 0".
+    ///
+    /// `frame` module is `pub(crate)`, so this method is reachable
+    /// only from in-crate validation paths (e.g. the `lsm` feature's
+    /// `expect_window_descriptor` setter); `allow(dead_code)` keeps
+    /// default builds warning-free when no in-crate caller invokes
+    /// it.
+    #[allow(dead_code)]
     pub(crate) fn window_descriptor(&self) -> Option<u8> {
         if self.descriptor.single_segment_flag() {
             None
@@ -307,14 +315,6 @@ impl FrameHeader {
 pub(crate) struct FrameDescriptor(pub u8);
 
 impl FrameDescriptor {
-    fn from_wire(descriptor: u8) -> Result<Self, FrameDescriptorError> {
-        // RFC 8878 §3.1.1.1.1.4 requires decoders to reject bit 3 when set.
-        if descriptor & 0x08 != 0 {
-            return Err(FrameDescriptorError::ReservedBitSet { descriptor });
-        }
-        Ok(Self(descriptor))
-    }
-
     /// Read the `Frame_Content_Size_flag` from the frame header descriptor.
     ///
     /// This is a 2 bit flag, specifying if the `Frame_Content_Size` field is present
@@ -333,6 +333,13 @@ impl FrameDescriptor {
     /// | 3 | 8 |
     pub(crate) fn frame_content_size_flag(&self) -> u8 {
         self.0 >> 6
+    }
+
+    /// This bit is reserved for some future feature, a compliant decoder **must ensure**
+    /// that this value is set to zero.
+    #[expect(dead_code)]
+    pub(crate) fn reserved_flag(&self) -> bool {
+        ((self.0 >> 3) & 0x1) == 1
     }
 
     /// If this flag is set, data must be regenerated within a single continuous memory segment.

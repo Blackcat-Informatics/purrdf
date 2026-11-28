@@ -20,7 +20,7 @@ use purrdf_iri::vocab::rdf::{FIRST, NIL, REST};
 use purrdf_lex::allocation::{Admission, OrderedTable, Resident, StorageError};
 use purrdf_lex::control::{ControlledError, Progress, Unmetered};
 
-#[expect(
+#[allow(
     clippy::large_enum_variant,
     reason = "Inline acquired semantic operands and original provider failures must survive refusal without allocating an error wrapper."
 )]
@@ -34,7 +34,7 @@ impl<R, E> From<super::construction::Failure<FnoReadError, E>> for ReadFailure<R
         Self::Construction(cause)
     }
 }
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
@@ -91,7 +91,7 @@ impl FnoCatalog {
     ///     &source, "urn:ontology", Resident, |_| Err("stopped"));
     /// assert!(matches!(refused, Err(ControlledError::Control("stopped"))));
     /// ```
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -172,7 +172,7 @@ impl FnoCatalog {
     }
 }
 
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
@@ -201,7 +201,7 @@ fn collect<T, D: DatasetView, S: Admission, C: Progress>(
     Ok(rows)
 }
 
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
@@ -264,11 +264,11 @@ fn import<D: DatasetView, S: Admission, C: Progress>(
     Ok(at)
 }
 
-#[expect(
+#[allow(
     clippy::iter_with_drain,
     reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
 )]
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
@@ -296,7 +296,7 @@ fn translate<I: ViewTermId, R, S: Admission, C: Progress>(
     Ok(rows)
 }
 
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
@@ -318,11 +318,11 @@ fn read<D: DatasetView, S: Admission, C: Progress>(
     result
 }
 
-#[expect(
+#[allow(
     clippy::iter_with_drain,
     reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
 )]
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
 )]
@@ -471,7 +471,7 @@ struct Reader<'a, 'm, R, S: Admission, C> {
 }
 
 impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -487,7 +487,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         };
         domain(self.context.refuse(FnoReadError::Statement { row, reason }))
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -506,11 +506,11 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         }
         Ok(values)
     }
-    #[expect(
+    #[allow(
         clippy::iter_with_drain,
         reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
     )]
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -536,7 +536,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             expected,
         }))
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -557,7 +557,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         }
         Ok(())
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -589,7 +589,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             Ok(None)
         }
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -602,7 +602,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             }
         }
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -620,7 +620,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             }
         }
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -640,7 +640,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         }
         Ok(value)
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -649,7 +649,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             .literal(subject, predicate, true)?
             .expect("required scalar was checked"))
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -673,7 +673,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         self.context.release(value)?;
         self.field(subject, predicate, Field::PlainString)
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -709,7 +709,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         self.context.release(value)?;
         self.field(subject, predicate, Field::Boolean)
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -727,7 +727,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         self.context.release(selector)?;
         Ok(subjects)
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -749,7 +749,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             self.field(subject, RDF_TYPE, Field::Role { class })
         }
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -760,7 +760,7 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             self.field(subject, RDF_TYPE, Field::Iri)
         }
     }
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -774,11 +774,11 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
             self.field(subject, RDF_TYPE, Field::Blank)
         }
     }
-    #[expect(
+    #[allow(
         clippy::iter_with_drain,
         reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
     )]
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]
@@ -895,11 +895,11 @@ impl<'a, R, S: Admission, C: Progress> Reader<'a, '_, R, S, C> {
         self.context.release(members)?;
         Ok(values)
     }
-    #[expect(
+    #[allow(
         clippy::iter_with_drain,
         reason = "Retain the original vector allocation until its explicit destruction and admitted-capacity refund."
     )]
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "Original owned refusal operands travel inline; allocating an error box could replace the first failure."
     )]

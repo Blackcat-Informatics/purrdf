@@ -219,7 +219,7 @@ impl PyQuadStore {
         xpath_regex=None, geo=None,
         division=None, now=None, entropy_seed=None,
     ))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "each engine-configuration axis is named explicitly at the call site"
     )]
@@ -263,7 +263,7 @@ impl PyQuadStore {
 
     /// Execute RDFLib contextual assignment semantics through the native compiler.
     #[pyo3(signature = (query, *, substitutions=None, extension_namespaces=None, property_fn_namespaces=None, standpoint_predicates=None, relations=None, relations_from_graph=None, path_relations=None, aggregate_namespace=None, xpath_regex=None, geo=None, division=None, now=None, entropy_seed=None, named_graphs=true, default_graph=None, default_union=false))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "each engine-configuration axis is named explicitly at the call site"
     )]
@@ -360,7 +360,7 @@ impl PyQuadStore {
         no_ceiling=false,
         cancel=None,
     ))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "each governed dimension is named explicitly at the call site; a bag \
                   argument would make an unset ceiling and a misspelt one look alike"
@@ -533,7 +533,7 @@ impl PyQuadStore {
         no_ceiling=false,
         cancel=None,
     ))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the regime plus each governed dimension is named explicitly at the host boundary"
     )]
@@ -729,7 +729,7 @@ impl PyQuadStore {
         division=None,
         now=None, entropy_seed=None,
     ))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "each engine-configuration axis is named explicitly at the call site"
     )]
@@ -852,7 +852,7 @@ impl PyQuadStore {
         no_ceiling=false,
         cancel=None,
     ))]
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "each governed dimension is named explicitly at the call site; a bag \
                   argument would make an unset ceiling and a misspelt one look alike"
@@ -1209,7 +1209,7 @@ fn collect_substitutions(
 }
 
 impl PyQuadStore {
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "shared named host configuration axes"
     )]

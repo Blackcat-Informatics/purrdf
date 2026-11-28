@@ -50,6 +50,8 @@
 //! wall-clock samples from a shared host and are disclosed as such; nothing here asserts a
 //! latency, and no gate runs it.
 
+#![allow(missing_docs)]
+
 #[path = "../tests/support/hnsw/fixture.rs"]
 mod fixture;
 use std::hint::black_box;

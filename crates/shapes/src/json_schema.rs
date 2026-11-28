@@ -6879,10 +6879,7 @@ impl LexicalConstraints<'_> {
     /// say: 1, 10–19, 100–199, … — form no finite union of the intervals and
     /// residue classes `minimum`, `maximum` and `multipleOf` state, so the loss
     /// is recorded.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "integer judgment reads distinct source facts and emits separate refusals and comments"
-    )]
+    #[allow(clippy::too_many_arguments)]
     fn judge_integers(
         &self,
         constraints: &[&Constraint],
@@ -7247,10 +7244,7 @@ fn numeric_datatypes() -> impl Iterator<Item = &'static str> {
 /// bound is judged exactly ([`temporal_bound_rejections`]); a bound that is
 /// neither numeric nor temporal, or an ill-typed one, compares with nothing, so
 /// every value violates it.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "each source bound is checked against separate output, refusal, and comment channels"
-)]
+#[allow(clippy::too_many_arguments)]
 fn compile_bounds(
     bounds: &[(Facet, &Term)],
     constraints: &[&Constraint],

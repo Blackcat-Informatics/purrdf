@@ -4,10 +4,7 @@
 /// Capability flags exposed by an RDF dataset/import boundary.
 // Each capability is an independent yes/no feature probe, not an encoded state
 // machine — a bit-flag set or enum rewrite would only obscure the public API.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the public fields are independent capability probes, not encoded states"
-)]
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfStoreCapabilities {
     /// Whether named graphs are representable. A dataset reports it when it carries

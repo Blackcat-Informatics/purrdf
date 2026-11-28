@@ -539,6 +539,52 @@ fn quad_key(quad: &RdfQuad) -> String {
     ])
 }
 
+// ── cross-crate constructors ──────────────────────────────────────────────────────
+
+/// Build a Python `Quad` object from a native [`RdfQuad`].
+///
+/// Cross-crate constructor for the engine crates that produce quads natively (the
+/// RL closure in `purrdf-logic`): they assemble a native `RdfQuad` and
+/// hand Python a live `purrdf.Quad` directly, so the closure result never makes
+/// a round-trip through an intermediate N-Triples string the Python side has to
+/// re-parse. The returned object is the same `PyQuad` the parser/SPARQL surface
+/// yields, so downstream code (rdflib adapters, comparators) treats it uniformly.
+#[allow(dead_code)]
+pub(super) fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> {
+    Ok(Py::new(
+        py,
+        PyQuad {
+            inner: quad.clone(),
+        },
+    )?
+    .into_any())
+}
+
+/// Build the live `purrdf.Quad` list for every (flattened) quad of a native
+/// [`RdfDataset`](crate::RdfDataset) — the cross-crate entry point for
+/// engine crates (e.g. `purrdf-logic`'s RL closure) that produce a
+/// frozen IR dataset and must hand Python live quad objects without naming any
+/// binding type themselves.
+///
+/// The dataset is flattened to the source-faithful flat quad stream (base quads plus
+/// the re-materialized RDF 1.2 statement layer), then each quad becomes a `PyQuad`.
+///
+/// # Errors
+///
+/// Returns a Python error if the dataset cannot be flattened into quads.
+#[allow(dead_code)]
+pub(super) fn dataset_quads_to_py(
+    py: Python<'_>,
+    dataset: &crate::RdfDataset,
+) -> PyResult<Vec<Py<PyAny>>> {
+    let quads = crate::flat_rdf_quads_from_dataset(dataset);
+    let mut out: Vec<Py<PyAny>> = Vec::with_capacity(quads.len());
+    for quad in &quads {
+        out.push(quad_to_py(py, quad)?);
+    }
+    Ok(out)
+}
+
 // ── Term ⇄ Python conversions ────────────────────────────────────────────────────
 
 pub(crate) fn term_to_py(py: Python<'_>, term: &RdfTerm) -> PyResult<Py<PyAny>> {

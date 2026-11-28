@@ -643,14 +643,8 @@ fn ingest_report_dict(py: Python<'_>, report: &IngestReport) -> PyResult<Py<PyDi
     named_graphs=None,
     base=None,
 ))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the binding receives each independent GTS input under its existing Python keyword"
-)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn gts_ingest_report(
     py: Python<'_>,
     base_data: &Bound<'_, PyBytes>,
@@ -707,10 +701,7 @@ fn gts_ingest_report(
 ///
 /// Every Python-side argument is converted to plain/owned Rust data BEFORE the GIL
 /// is released; the parse + snapshot-build + emit core runs detached.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the binding receives each independent GTS input under its existing Python keyword"
-)]
+#[allow(clippy::too_many_arguments)]
 fn compile_gts_core(
     py: Python<'_>,
     base_data: &Bound<'_, PyBytes>,
@@ -822,14 +813,8 @@ fn compile_gts_core(
     rsyncable_threshold=DEFAULT_RSYNCABLE_THRESHOLD,
     base=None,
 ))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the binding receives each independent GTS input under its existing Python keyword"
-)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn compile_gts_native(
     py: Python<'_>,
     base_data: &Bound<'_, PyBytes>,
@@ -911,14 +896,8 @@ fn compile_gts_native(
     rsyncable_threshold=DEFAULT_RSYNCABLE_THRESHOLD,
     base=None,
 ))]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the binding receives each independent GTS input under its existing Python keyword"
-)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn compile_gts_with_report(
     py: Python<'_>,
     base_data: &Bound<'_, PyBytes>,

@@ -64,10 +64,7 @@ fn rdf_gts_loss_matrix_json() -> String {
 /// the graph (canonical blank-node handling), so re-running is idempotent.
 #[pyfunction]
 #[pyo3(signature = (turtle_bytes, extra_prefixes=Vec::new()))]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn canonicalize_turtle(
     py: Python<'_>,
     turtle_bytes: &[u8],

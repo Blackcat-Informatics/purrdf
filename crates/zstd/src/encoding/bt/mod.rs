@@ -25,6 +25,8 @@
 //! Upstream zstd parity reference: `lib/compress/zstd_opt.c`,
 //! `ZSTD_compressBlock_opt_generic` and friends.
 
+#![allow(dead_code)]
+
 use alloc::vec::Vec;
 
 use super::cost_model::{HC_MAX_LIT, HcOptState, HcOptimalCostProfile};
@@ -35,7 +37,9 @@ use super::opt::types::{HcOptimalNode, HcOptimalPlanBuffers, HcOptimalSequence, 
 
 /// Maximum offset reachable by the HC3 short-match probe. Upstream zstd
 /// parity: keeps the 3-byte side table from emitting offsets that
-/// the main binary-tree and hash-chain paths would address more efficiently.
+/// the main BT/HC paths would address more efficiently. Used inside
+/// the `hash3_candidate_body!` macro that the kernel-specific
+/// variants below expand.
 pub(crate) const HC3_MAX_OFFSET: usize = 1 << 18;
 
 /// Binary-tree matcher state used by the `BtOpt` / `BtUltra` /
@@ -100,6 +104,14 @@ pub(crate) struct BtMatcher {
 }
 
 impl BtMatcher {
+    /// BT/HC hash MLS (minimum-length-segment) parameter. Upstream zstd
+    /// parity: even when `minMatch == 3` (btultra2), the main BT/HC
+    /// hash still goes through `ZSTD_hashPtr(…, mls)` which falls
+    /// back to the default `case 4` in
+    /// `zstd_compress_internal.h`. The 3-byte path is a separate HC3
+    /// side table only.
+    pub(crate) const HASH_MLS: usize = 4;
+
     /// Steady-state workspace budget for one boxed matcher: the inline
     /// payload (`HcOptState` cost tables, lit-price arrays) plus the
     /// retained scratch arenas at their growth bounds — node frontier and

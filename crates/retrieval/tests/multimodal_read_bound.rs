@@ -2606,10 +2606,7 @@ struct ScriptedStream {
 
 // The trait's methods are `async`; these bodies are synchronous because the rows
 // are pre-scripted. The keyword is required to implement the trait.
-#[expect(
-    clippy::unused_async_trait_impl,
-    reason = "the deterministic fixture implements the awaited stream contract without scheduling external work"
-)]
+#[allow(clippy::unused_async_trait_impl)]
 impl RankedStream for ScriptedStream {
     type Item = Term;
 

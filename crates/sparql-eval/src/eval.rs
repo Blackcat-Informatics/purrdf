@@ -131,10 +131,7 @@ pub(crate) fn admit_numeric_scratch(
 /// production mode).
 // Deliberate flag set: each bool is an independent opt-in measurement toggle, not a
 // state machine (see this type's own doc).
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the switches control independent execution choices"
-)]
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Copy)]
 pub struct EvalOptions {
     /// A pure cache-toggle for `crate::expr::exists`'s two per-evaluation memos —
@@ -6241,12 +6238,9 @@ struct QueryDriver<'a, 'ctx, 'd, D: DatasetView + Sync> {
     abort_on_drop: bool,
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::large_enum_variant,
-        reason = "inline row delivery avoids a new allocation on every continuation resume"
-    )
+#[expect(
+    clippy::large_enum_variant,
+    reason = "inline row delivery avoids a new allocation on every continuation resume"
 )]
 enum DriverResult<'a, I: ViewTermId> {
     Graph(Evaluated<I>),
@@ -13380,10 +13374,7 @@ mod tests {
         fn poll(&self) -> Option<purrdf_core::StopCause> {
             // `try_update` (the non-deprecated name for this atomic) postdates the
             // workspace MSRV floor, so the original name is kept here.
-            #[expect(
-                deprecated,
-                reason = "the replacement atomic method postdates the workspace minimum Rust version"
-            )]
+            #[allow(deprecated)]
             let previous = self
                 .remaining
                 .fetch_update(

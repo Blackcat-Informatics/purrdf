@@ -7,6 +7,10 @@
 //! The fixtures themselves (`shacl_lists.rs`, `shacl_temporal.rs`,
 //! `shacl_value_shapes.rs`) are only their shapes, base values and variants.
 
+// The module is included into more than one example binary, and no single binary
+// uses every helper; an unused-here helper is used there.
+#![allow(dead_code, unreachable_pub)]
+
 use std::error::Error;
 use std::fmt::Write as _;
 

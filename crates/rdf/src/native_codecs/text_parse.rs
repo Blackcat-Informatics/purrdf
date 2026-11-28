@@ -2050,12 +2050,9 @@ impl<'a, 'c, 'ctx, S: SpanCollector, A: Admission, C: Progress> DocParser<'a, 'c
     /// The supplied base already belongs to `context` for controlled execution.
     /// Initialization failures return that same account alongside the original
     /// failure, after all unpublished constructor locals have been destroyed.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "Initialization refusal returns the original context, base and cause without allocating an error carrier."
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "Initialization refusal returns the original context, base and cause without allocating an error carrier."
     )]
     fn new_in_context(
         text: &'a str,

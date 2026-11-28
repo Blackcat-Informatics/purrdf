@@ -845,7 +845,7 @@ pub fn validate_dataset_with_governors(
 /// # Errors
 /// A parse or import refusal as [`XPathValidationError::Shapes`], exactly as the
 /// compatibility entry refuses it; then everything [`validate_dataset`] refuses.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the compatibility entry's six inputs and the selected law's two"
 )]

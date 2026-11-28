@@ -100,6 +100,12 @@ use core::marker::PhantomData;
 use std::rc::Rc;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(
+    unsafe_code,
+    reason = "reading the current thread's stack bounds from the operating system; each \
+              block carries its own safety argument, and none of it compiles on wasm32, \
+              where the crate stays unsafe-free"
+)]
 mod platform;
 
 /// The stack a check requires to be left, in bytes: 128 KiB natively.

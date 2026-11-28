@@ -16,6 +16,10 @@
 //! No `#[target_feature]` attributes here: every function uses portable Rust
 //! and must compile on any supported target.
 
+#![allow(dead_code)]
+
+pub(crate) const KERNEL_TAG: &str = "scalar";
+
 /// Position of the first mismatching byte inside an 8-byte XOR diff. On
 /// little-endian targets the low byte corresponds to the lowest address, so
 /// `trailing_zeros / 8` is the index of the first non-equal byte.
@@ -83,14 +87,15 @@ pub(crate) unsafe fn common_prefix_len_ptr(lhs: *const u8, rhs: *const u8, max: 
     unsafe { common_prefix_len_scalar_ptr(lhs, rhs, 0, max) }
 }
 
-/// Count a match from the scalar binary-tree walker. Little-endian `aarch64`
-/// uses the NEON walker instead.
+/// `count_match_from_indices` mirror for the scalar variant — kept here so
+/// the variant module is a complete unit and BT-walk callers (Week 3a) can
+/// pick the per-kernel implementation by symbol resolution rather than by a
+/// branching dispatcher inside the hot loop.
 ///
 /// # Safety
 /// Caller-side BT-walk invariants ensure
 /// `candidate_idx + tail_limit ≤ concat.len()` and
 /// `current_idx + tail_limit ≤ concat.len()`.
-#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 #[inline(always)]
 pub(crate) unsafe fn count_match_from_indices(
     concat: &[u8],
@@ -117,12 +122,6 @@ pub(crate) unsafe fn count_match_from_indices(
 /// # Safety
 /// Both pointers are readable for `max` bytes. The selected vector callback
 /// upholds its ISA contract and returns the equal prefix it consumed.
-#[cfg(any(
-    target_arch = "x86",
-    target_arch = "x86_64",
-    all(target_arch = "aarch64", target_endian = "little"),
-    all(target_arch = "wasm32", target_feature = "simd128")
-))]
 #[inline(always)]
 pub(crate) unsafe fn common_prefix_len_with(
     lhs: *const u8,

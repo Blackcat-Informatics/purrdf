@@ -9,10 +9,7 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![expect(
-    dead_code,
-    reason = "each test or benchmark includes a different subset of this shared fixture"
-)]
+#![allow(dead_code, unreachable_pub)]
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -31,7 +28,7 @@ static MEASURE_LOCK: Mutex<()> = Mutex::new(());
 /// that would turn one real failure into a cascade of unrelated ones and bury the
 /// diagnosis; the lock guards a counter, not an invariant that a panic could have
 /// left half-written.
-pub(crate) fn measure_lock() -> MutexGuard<'static, ()> {
+pub fn measure_lock() -> MutexGuard<'static, ()> {
     MEASURE_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
@@ -40,7 +37,7 @@ pub(crate) fn measure_lock() -> MutexGuard<'static, ()> {
 /// The caller must isolate the entire process from unrelated allocation traffic
 /// through the serial runner and warm the operation first. A test-body lock
 /// alone cannot isolate concurrent runner traffic. This helper only brackets it.
-pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
+pub fn measure<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
     let window = WholeProcessWindow::open();
     let value = operation();
     (value, window.close())
@@ -58,7 +55,7 @@ pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, Measurement) {
 /// cannot. Any `k >= 2` satisfying `k * pushes_per_validation < 63` would do; the
 /// third execution is margin, not calibration, and no value of it can hide a
 /// per-focus-node term, because a term that is present is present in all three.
-const REPETITIONS: usize = 3;
+pub const REPETITIONS: usize = 3;
 
 /// At least two executions, or the property the constant is chosen for — that one
 /// of them must miss the block boundary — is not available at all.
@@ -86,7 +83,7 @@ const _: () = assert!(
 /// The value returned is the one produced by the execution the reported
 /// measurement came from, so a caller's assertions about the report and its
 /// assertions about the count describe the same run.
-pub(crate) fn measure_min<T>(mut operation: impl FnMut() -> T) -> (T, Measurement) {
+pub fn measure_min<T>(mut operation: impl FnMut() -> T) -> (T, Measurement) {
     let mut best: Option<(T, Measurement)> = None;
     for _ in 0..REPETITIONS {
         let (value, measured) = measure(&mut operation);
@@ -107,7 +104,7 @@ pub(crate) fn measure_min<T>(mut operation: impl FnMut() -> T) -> (T, Measuremen
 /// are, and a serial figure asserted under a parallel test name is the "green
 /// because it measured almost nothing" failure these instruments exist to avoid.
 /// That is a property of the host, so it is checked at run time.
-pub(crate) fn assert_parallel_path_is_reachable() {
+pub fn assert_parallel_path_is_reachable() {
     assert!(
         rayon::current_num_threads() > 1,
         "SHACL validation stays serial on a single-threaded rayon pool, so this host cannot \
@@ -175,7 +172,7 @@ impl<'ast> syn::visit::Visit<'ast> for TestFns {
 /// distinguishes "this test forgot to take the lock" from "this test never
 /// needed it", so the only place the distinction is visible is the source
 /// itself.
-pub(crate) fn tests_and_unlocked(source: &str) -> (usize, Vec<String>) {
+pub fn tests_and_unlocked(source: &str) -> (usize, Vec<String>) {
     let parsed = syn::parse_file(source)
         .unwrap_or_else(|error| panic!("this file must parse as Rust: {error}"));
     let mut collector = TestFns::default();

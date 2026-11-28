@@ -58,7 +58,6 @@ pub fn mxcsr() -> u32 {
     // SAFETY: `stmxcsr` stores the 32-bit MXCSR, and nothing else, to the address it is
     // given, which is a live, aligned, writable `u32` on this stack frame. It touches
     // no flag and no stack memory beyond that store.
-    #[expect(unsafe_code, reason = "reading MXCSR requires inline assembly")]
     unsafe {
         core::arch::asm!(
             "stmxcsr [{ptr}]",
@@ -78,7 +77,6 @@ pub fn set_mxcsr(value: u32) {
     // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32` on this stack frame, with
     // every reserved bit cleared, so the load cannot fault. The register is per-thread
     // and the instruction touches no flag and no memory other than the read.
-    #[expect(unsafe_code, reason = "writing MXCSR requires inline assembly")]
     unsafe {
         core::arch::asm!(
             "ldmxcsr [{ptr}]",
@@ -95,7 +93,6 @@ pub fn fpcr() -> u64 {
     let value: u64;
     // SAFETY: `mrs` of FPCR is readable at EL0 and only copies the register into a
     // general-purpose register; it reads no memory and changes no state.
-    #[expect(unsafe_code, reason = "reading FPCR requires inline assembly")]
     unsafe {
         core::arch::asm!(
             "mrs {value}, fpcr",
@@ -113,7 +110,6 @@ pub fn set_fpcr(value: u64) {
     // SAFETY: FPCR is writable at EL0 and per-thread; `msr` changes
     // no flag. Every value written is a saved register or a saved register with
     // documented control bits changed.
-    #[expect(unsafe_code, reason = "writing FPCR requires inline assembly")]
     unsafe {
         core::arch::asm!(
             "msr fpcr, {value}",

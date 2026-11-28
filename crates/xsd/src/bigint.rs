@@ -1079,7 +1079,7 @@ impl BigInt {
         Self::from_inline_i128(value)
     }
 
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "native digit preparation must retain its inline coefficient facts without expanding unrelated arithmetic callers"
     )]
@@ -1952,7 +1952,7 @@ impl BigInt {
     /// Checked native temporary/destination layout for decimal rendering.
     /// # Errors
     /// Refuses addressable byte overflow before any conversion allocation.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured prepared rendering must retain native magnitude bounds through the checked layout"
     )]
@@ -1990,7 +1990,7 @@ impl BigInt {
         self.prepare_decimal_digits_using(scratch)
     }
 
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "measured prepared render callers must keep native magnitude facts across this conversion"
     )]

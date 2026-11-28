@@ -139,7 +139,7 @@ use crate::{sink, source};
 /// closure; [`CliError::Runtime`] when a document cannot be read, is not UTF-8, does not
 /// parse, an `owl:imports` is unresolved, or the shapes graph declares a capability the
 /// product format cannot carry.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "existing command inputs plus explicit canonical request"
 )]

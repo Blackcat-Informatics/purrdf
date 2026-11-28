@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
 //! Time to refusal of runaway rule sets under the DEFAULT rule-evaluation limits
 //! (`purrdf_shapes::RuleOptions`: 16,384 term-generating rounds, and a generated-term
 //! budget of `max(65,536, 4 × N)`), and the completion time of the deep, terminating

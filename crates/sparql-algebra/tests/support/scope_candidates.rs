@@ -10,10 +10,7 @@
 //! meaning is research metadata rather than a proposed SPARQL vocabulary.
 
 // Each consumer uses a different subset of the shared research API.
-#![expect(
-    dead_code,
-    reason = "each test or benchmark includes a different subset of this shared fixture"
-)]
+#![allow(dead_code, unreachable_pub)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::mem::size_of;
@@ -30,7 +27,7 @@ const MAX_CLAUSES: usize = 4096;
 
 /// Semantic categories whose identity rules differ.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Category {
+pub enum Category {
     User,
     Existential,
     Witness,
@@ -40,7 +37,7 @@ pub(crate) enum Category {
 
 /// Where a binding acquired its identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Origin {
+pub enum Origin {
     SourceVariable,
     SourceBlank,
     PathTranslation,
@@ -50,20 +47,20 @@ pub(crate) enum Origin {
 
 /// Declaration carried by the explicit representation candidate.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Binder {
-    pub(crate) id: u32,
-    pub(crate) category: Category,
-    pub(crate) origin: Origin,
-    pub(crate) owner: u32,
+pub struct Binder {
+    pub id: u32,
+    pub category: Category,
+    pub origin: Origin,
+    pub owner: u32,
 }
 
 /// An encoded identity; raw blank spellings belong to an admitted source scope.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Identity {
-    pub(crate) name: String,
-    pub(crate) blank_scope: Option<u32>,
-    pub(crate) blank_category: Option<Category>,
-    pub(crate) hidden: bool,
+pub struct Identity {
+    pub name: String,
+    pub blank_scope: Option<u32>,
+    pub blank_category: Option<Category>,
+    pub hidden: bool,
 }
 
 impl Identity {
@@ -102,19 +99,19 @@ impl Identity {
 
 /// One actual source-site binding incidence.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct Atom {
-    pub(crate) site: u32,
-    pub(crate) object: bool,
-    pub(crate) identity: Identity,
-    pub(crate) region: u32,
-    pub(crate) binder: Option<Binder>,
-    pub(crate) template: bool,
-    pub(crate) ground: bool,
+pub struct Atom {
+    pub site: u32,
+    pub object: bool,
+    pub identity: Identity,
+    pub region: u32,
+    pub binder: Option<Binder>,
+    pub template: bool,
+    pub ground: bool,
 }
 
 /// Typed experiment diagnostics; a site and identity identify repair locations.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Diagnostic {
+pub enum Diagnostic {
     Admission(String),
     MissingDeclaration {
         site: u32,
@@ -160,24 +157,24 @@ pub(crate) enum Diagnostic {
 
 /// Recursive term families outside the certificate prototype's flat-term model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CompoundTerm {
+pub enum CompoundTerm {
     PatternTriple,
     GroundTriple,
 }
 
 /// Query heads whose observation rules are outside this prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum QueryForm {
+pub enum QueryForm {
     Ask,
     Describe,
 }
 
 /// Actual algebra plus explicit declarations and carrier correspondence.
 #[derive(Clone)]
-pub(crate) struct Evidence {
-    pub(crate) query: Query,
-    pub(crate) declarations: BTreeMap<Identity, Binder>,
-    pub(crate) aliases: BTreeMap<Identity, String>,
+pub struct Evidence {
+    pub query: Query,
+    pub declarations: BTreeMap<Identity, Binder>,
+    pub aliases: BTreeMap<Identity, String>,
 }
 
 #[derive(Clone, Default)]
@@ -191,7 +188,7 @@ struct Summary {
 
 /// A reusable, precondition-frozen binding-incidence contract.
 #[derive(Clone)]
-pub(crate) struct Contract {
+pub struct Contract {
     clauses: Vec<Vec<Atom>>,
     visible: Vec<Identity>,
     declarations: BTreeMap<Identity, Binder>,
@@ -244,7 +241,7 @@ fn body(query: &Query) -> &GraphPattern {
 }
 
 /// Prepare current encoded variable declarations; source scope provenance is supplied separately.
-pub(crate) fn declare_variables(query: &Query) -> BTreeMap<Identity, Binder> {
+pub fn declare_variables(query: &Query) -> BTreeMap<Identity, Binder> {
     let mut variables = BTreeSet::new();
     walk_pre_post(NodeRef::Pattern(query.pattern()), |visit, node| {
         if visit == Visit::Enter {
@@ -277,7 +274,7 @@ pub(crate) fn declare_variables(query: &Query) -> BTreeMap<Identity, Binder> {
 }
 
 /// A duplicate-arm path/UNION fixture with two independent generated witnesses.
-pub(crate) fn fixture() -> Evidence {
+pub fn fixture() -> Evidence {
     let a = edge(1, user("s"), witness("h"));
     let alternative = GraphPattern::union(
         GraphPattern::union(a.clone(), edge(2, user("s"), witness("h"))),
@@ -300,7 +297,7 @@ pub(crate) fn fixture() -> Evidence {
 /// Generate genuine positive-pattern shapes with independent width, branch-bag
 /// multiplicity and witness-junction dimensions. Source-site labels are assigned
 /// before any transformation and retained by all copies of a repeated arm.
-pub(crate) fn generated_fixture(
+pub fn generated_fixture(
     branches: u32,
     width: u32,
     junctions: u32,
@@ -352,7 +349,7 @@ pub(crate) fn generated_fixture(
 
 /// Whether the complete actual query is admitted by the identity-reencoding
 /// transform, independently of a fixture or mutation's name.
-pub(crate) fn supports_reencoding(evidence: &Evidence) -> bool {
+pub fn supports_reencoding(evidence: &Evidence) -> bool {
     if !matches!(evidence.query, Query::Select { .. }) {
         return false;
     }
@@ -375,7 +372,7 @@ pub(crate) fn supports_reencoding(evidence: &Evidence) -> bool {
 
 /// Configure independent repeated solution branches before freezing a contract.
 /// This also varies the number of concrete VALUES rows or template input rows.
-pub(crate) fn repeated_input(evidence: &Evidence, copies: usize) -> Evidence {
+pub fn repeated_input(evidence: &Evidence, copies: usize) -> Evidence {
     assert!(copies > 0);
     let repeated = (0..copies)
         .map(|_| body(&evidence.query).clone())
@@ -401,7 +398,7 @@ pub(crate) fn repeated_input(evidence: &Evidence, copies: usize) -> Evidence {
 
 /// A bijective representation-only renumbering, applicable to typed categories
 /// that have no hidden variable to alpha-rename, including template and VALUES blanks.
-pub(crate) fn renumber_binders(evidence: &Evidence, offset: u32) -> Evidence {
+pub fn renumber_binders(evidence: &Evidence, offset: u32) -> Evidence {
     let mut out = evidence.clone();
     for binder in out.declarations.values_mut() {
         binder.id = binder
@@ -785,7 +782,7 @@ fn visible(query: &Query) -> Vec<Identity> {
 }
 
 /// What actual current admission proves, without any candidate metadata.
-pub(crate) fn existing(evidence: &Evidence) -> Result<(), Diagnostic> {
+pub fn existing(evidence: &Evidence) -> Result<(), Diagnostic> {
     evidence
         .query
         .validate_hidden_variables()
@@ -876,14 +873,14 @@ fn check_atoms(summary: &Summary, evidence: &Evidence) -> Result<(), Diagnostic>
 }
 
 /// Structural checking of the altered graph against its typed declarations.
-pub(crate) fn explicit(evidence: &Evidence) -> Result<(), Diagnostic> {
+pub fn explicit(evidence: &Evidence) -> Result<(), Diagnostic> {
     existing(evidence)?;
     check_atoms(&summary(evidence), evidence)
 }
 
 impl Contract {
     /// Freeze original declarations, source-site partitions, branch bags and schema.
-    pub(crate) fn prepare(evidence: &Evidence) -> Result<Self, Diagnostic> {
+    pub fn prepare(evidence: &Evidence) -> Result<Self, Diagnostic> {
         existing(evidence)?;
         let mut summary = summary(evidence);
         check_atoms(&summary, evidence)?;
@@ -896,7 +893,7 @@ impl Contract {
     }
 
     /// Check actual output with an explicit one-to-one identity correspondence.
-    pub(crate) fn check(
+    pub fn check(
         &self,
         evidence: &Evidence,
         correspondence: &BTreeMap<Identity, Identity>,
@@ -951,7 +948,7 @@ impl Contract {
     }
 
     /// Retained payload accounting; BTreeMap allocator/node overhead is separate.
-    pub(crate) fn retained_payload_bytes(&self) -> usize {
+    pub fn retained_payload_bytes(&self) -> usize {
         size_of::<Self>()
             + self.clauses.capacity() * size_of::<Vec<Atom>>()
             + self
@@ -989,7 +986,7 @@ fn canonicalize(clauses: &mut [Vec<Atom>]) {
 }
 
 /// Identity substitution using the authoritative serializer/reparser boundary.
-pub(crate) fn carrier(evidence: &Evidence) -> (Evidence, BTreeMap<Identity, Identity>) {
+pub fn carrier(evidence: &Evidence) -> (Evidence, BTreeMap<Identity, Identity>) {
     let rendered = pattern_to_select_query(evidence.query.pattern());
     let query = SparqlParser::new()
         .parse_query(&rendered)
@@ -1031,7 +1028,7 @@ pub(crate) fn carrier(evidence: &Evidence) -> (Evidence, BTreeMap<Identity, Iden
 }
 
 /// Legal reassociation of the same generated binding incidences.
-pub(crate) fn reassociate(evidence: &Evidence) -> Evidence {
+pub fn reassociate(evidence: &Evidence) -> Evidence {
     let GraphPattern::Join { left, right } = body(&evidence.query) else {
         panic!("fixture join");
     };
@@ -1051,7 +1048,7 @@ pub(crate) fn reassociate(evidence: &Evidence) -> Evidence {
 }
 
 /// Distribute a join across all UNION arms, retaining repeated arms.
-pub(crate) fn distribute(evidence: &Evidence) -> Evidence {
+pub fn distribute(evidence: &Evidence) -> Evidence {
     let GraphPattern::Join { left, right } = body(&evidence.query) else {
         panic!("fixture join");
     };
@@ -1111,7 +1108,7 @@ fn rewrite(evidence: &Evidence, edit: impl Fn(&TriplePattern) -> TriplePattern) 
 }
 
 /// A consistent bijective alpha-renaming, leaving caller-visible names intact.
-pub(crate) fn rename(evidence: &Evidence, suffix: u32) -> (Evidence, BTreeMap<Identity, Identity>) {
+pub fn rename(evidence: &Evidence, suffix: u32) -> (Evidence, BTreeMap<Identity, Identity>) {
     let mut correspondence = BTreeMap::new();
     for identity in evidence
         .declarations
@@ -1151,13 +1148,13 @@ pub(crate) fn rename(evidence: &Evidence, suffix: u32) -> (Evidence, BTreeMap<Id
 }
 
 /// One comparison row: fixture construction names never steer detectors.
-pub(crate) struct Case {
-    pub(crate) name: &'static str,
-    pub(crate) before: Evidence,
-    pub(crate) after: Evidence,
-    pub(crate) correspondence: BTreeMap<Identity, Identity>,
-    pub(crate) legal: bool,
-    pub(crate) claim: &'static str,
+pub struct Case {
+    pub name: &'static str,
+    pub before: Evidence,
+    pub after: Evidence,
+    pub correspondence: BTreeMap<Identity, Identity>,
+    pub legal: bool,
+    pub claim: &'static str,
 }
 
 fn case(
@@ -1178,7 +1175,7 @@ fn case(
 }
 
 /// Complete named mutation/control corpus over the compared input contracts.
-pub(crate) fn cases() -> Vec<Case> {
+pub fn cases() -> Vec<Case> {
     let base = fixture();
     let mut cases = vec![case(
         "generated_union_witness",
@@ -1767,7 +1764,7 @@ fn dataset_fixture() -> Evidence {
 /// Legal raw RDF 1.2 inputs requiring recursive term-position evidence absent
 /// from this bounded certificate prototype. They are refused explicitly rather
 /// than silently losing the incidences contained inside a triple term.
-pub(crate) fn unsupported_terms() -> Vec<(&'static str, Evidence)> {
+pub fn unsupported_terms() -> Vec<(&'static str, Evidence)> {
     let query = select(edge(
         1,
         TermPattern::Triple(
@@ -1819,7 +1816,7 @@ pub(crate) fn unsupported_terms() -> Vec<(&'static str, Evidence)> {
 /// Before/after deletion of an inner projection that separates an ordinary user
 /// binding from a same-spelling sibling. The predecessor is outside the bounded
 /// contract's proof domain, so it cannot supply a certificate for the deletion.
-pub(crate) fn projection_boundary() -> (Evidence, Evidence) {
+pub fn projection_boundary() -> (Evidence, Evidence) {
     let inner = edge(1, user("s"), user("x"));
     let sibling = edge(2, user("x"), user("o"));
     let query = select(join(
@@ -1841,7 +1838,7 @@ pub(crate) fn projection_boundary() -> (Evidence, Evidence) {
 
 /// Variable graph names add incidences absent from the flat source-triple model.
 /// Both the original and altered graph binding explicitly require richer evidence.
-pub(crate) fn graph_name_boundary() -> (Evidence, Evidence) {
+pub fn graph_name_boundary() -> (Evidence, Evidence) {
     let make = |name| {
         let query = select(join(
             GraphPattern::Graph {
@@ -1862,7 +1859,7 @@ pub(crate) fn graph_name_boundary() -> (Evidence, Evidence) {
 /// Exact source copies across independent GRAPH owners need more than the
 /// minimum source-site owner key. Their merger changes the raw binding partition
 /// even when every copied source field is coherent, so preparation is refused.
-pub(crate) fn raw_owner_boundary() -> (Evidence, Evidence) {
+pub fn raw_owner_boundary() -> (Evidence, Evidence) {
     let triple = edge(1, user("s"), TermPattern::BlankNode(BlankNode::new("same")));
     let graph = |inner: GraphPattern| GraphPattern::Graph {
         name: NamedNodePattern::NamedNode(
@@ -1893,7 +1890,7 @@ pub(crate) fn raw_owner_boundary() -> (Evidence, Evidence) {
 
 /// A repeated source identifier cannot describe different original fields.
 /// This is provenance admission, not evidence that an optimizer was incorrect.
-pub(crate) fn contradictory_source_boundary() -> Evidence {
+pub fn contradictory_source_boundary() -> Evidence {
     let query = select(join(
         edge(1, user("s"), user("x")),
         edge(1, user("x"), user("o")),
@@ -1907,7 +1904,7 @@ pub(crate) fn contradictory_source_boundary() -> Evidence {
 
 /// Template graph positions require their own output-binding incidence, absent
 /// from this category-only CONSTRUCT experiment. Both names are bound inputs.
-pub(crate) fn template_graph_boundary() -> (Evidence, Evidence) {
+pub fn template_graph_boundary() -> (Evidence, Evidence) {
     let mut before = template_fixture();
     let Query::Construct { template, .. } = &mut before.query else {
         unreachable!();
@@ -1923,7 +1920,7 @@ pub(crate) fn template_graph_boundary() -> (Evidence, Evidence) {
 
 /// A variable predicate cannot provide the experiment's stable named source
 /// site, so preparation already refuses it rather than erasing that incidence.
-pub(crate) fn template_predicate_boundary() -> (Evidence, Evidence) {
+pub fn template_predicate_boundary() -> (Evidence, Evidence) {
     let mut before = template_fixture();
     let Query::Construct { template, .. } = &mut before.query else {
         unreachable!();
@@ -1938,7 +1935,7 @@ pub(crate) fn template_predicate_boundary() -> (Evidence, Evidence) {
 }
 
 /// DESCRIBE heads observe binding targets outside the SELECT/CONSTRUCT model.
-pub(crate) fn describe_boundary() -> (Evidence, Evidence) {
+pub fn describe_boundary() -> (Evidence, Evidence) {
     let query = Query::Describe {
         pattern: edge(1, user("s"), user("o")),
         targets: vec![NamedNodePattern::Variable(Variable::new("s"))],
@@ -1960,7 +1957,7 @@ pub(crate) fn describe_boundary() -> (Evidence, Evidence) {
 }
 
 /// ASK observer semantics are outside the SELECT/CONSTRUCT certificate.
-pub(crate) fn ask_boundary() -> Evidence {
+pub fn ask_boundary() -> Evidence {
     let query = Query::Ask {
         pattern: edge(1, user("s"), user("o")),
         dataset: QueryDataset::default(),
@@ -1975,7 +1972,7 @@ pub(crate) fn ask_boundary() -> Evidence {
 }
 
 /// Unavailable-proof inputs, separated from supported intentional hazard counts.
-pub(crate) fn proof_boundaries() -> Vec<(&'static str, Evidence)> {
+pub fn proof_boundaries() -> Vec<(&'static str, Evidence)> {
     let mut inputs = unsupported_terms();
     inputs.push(("ordinary_inner_projection_scope", projection_boundary().0));
     let (before, after) = graph_name_boundary();
@@ -2002,7 +1999,7 @@ pub(crate) fn proof_boundaries() -> Vec<(&'static str, Evidence)> {
 }
 
 /// Measured shapes: a small query, rich branch/width cases and deep borrowed walks.
-pub(crate) fn measured_inputs() -> Vec<(String, Evidence)> {
+pub fn measured_inputs() -> Vec<(String, Evidence)> {
     let mut inputs = vec![("representative".to_owned(), fixture())];
     let wide = (1..=256)
         .map(|site| edge(site, user("s"), witness("h")))
@@ -2060,7 +2057,7 @@ pub(crate) fn measured_inputs() -> Vec<(String, Evidence)> {
 }
 
 /// Measured layouts, rather than claims about hypothetical representation sizes.
-pub(crate) fn layouts() -> [(&'static str, usize); 6] {
+pub fn layouts() -> [(&'static str, usize); 6] {
     [
         ("Variable", size_of::<Variable>()),
         ("Binder", size_of::<Binder>()),

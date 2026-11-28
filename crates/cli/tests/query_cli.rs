@@ -29,8 +29,7 @@
 //! syntax to drive the overlay/projection path.)
 
 mod support;
-use purrdf_testkit::text::stdout_utf8 as stdout;
-use support::{purrdf, run, stderr, write_file};
+use support::{purrdf, run, stderr, stdout_utf8 as stdout, write_file};
 
 use std::process::{Output, Stdio};
 

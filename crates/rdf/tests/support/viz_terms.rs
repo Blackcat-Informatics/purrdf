@@ -3,12 +3,16 @@
 
 //! The example-namespace terms the visualization tests, bench and samples draw.
 
+// The module is included into more than one target, and no single target uses every
+// helper; an unused-here helper is used there.
+#![allow(dead_code, unreachable_pub)]
+
 use purrdf_rdf::TermValue;
 
 /// The test-fixture namespace every visualized term sits under.
-pub(crate) const EX: &str = "https://example.org/";
+pub const EX: &str = "https://example.org/";
 
 /// The IRI `EX` + `local`.
-pub(crate) fn iri(local: &str) -> TermValue {
+pub fn iri(local: &str) -> TermValue {
     TermValue::Iri(format!("{EX}{local}"))
 }

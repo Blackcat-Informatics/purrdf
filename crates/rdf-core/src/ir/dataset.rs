@@ -736,7 +736,7 @@ impl QuadKey {
 
     /// The non-zero bits of `row`'s fields where the pattern binds them
     /// differently: zero exactly when `row` matches.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the per-row test must inline into the eight-row chunk loop so its words \
                   stay in registers and the chunk's compares pack"
@@ -772,7 +772,7 @@ impl QuadKey {
     /// caller changed how LLVM compiled this crate's `QuadMatches::next`, whose
     /// packed vector ops fell from 73 to 8 on x86_64; forced inline, both loops
     /// carry the packed kernel.
-    #[expect(
+    #[allow(
         clippy::inline_always,
         reason = "the chunk kernel must inline into each scan loop: with two callers and a \
                   plain #[inline], the iterator's compiled loop lost its packed compares"
@@ -1079,10 +1079,7 @@ impl RdfDataset {
     /// validation.
     ///
     /// [`RdfDatasetBuilder::freeze`]: super::builder::RdfDatasetBuilder::freeze
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the frozen dataset takes ownership of independent RDF relation tables and their admission state"
-    )]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_parts<S: purrdf_lex::allocation::Admission + ?Sized>(
         dictionary: super::frozen_terms::FrozenTerms,
         quads: Box<[QuadRow]>,

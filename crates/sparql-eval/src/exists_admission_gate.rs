@@ -105,14 +105,11 @@ fn bgp1(s: TermPattern, iri: &str, o: TermPattern) -> GraphPattern {
     bgp(vec![triple(s, iri, o)])
 }
 
-#[cfg_attr(
-    target_pointer_width = "32",
-    expect(
-        clippy::unnecessary_box_returns,
-        reason = "the helper builds `Box<GraphPattern>` child fields, and the lint's size \
-                  threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
-                  targets, where the same box is still the field's type"
-    )
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the helper builds `Box<GraphPattern>` child fields, and the lint's size \
+              threshold is target-dependent: `GraphPattern` falls under it only on 32-bit \
+              targets, where the same box is still the field's type"
 )]
 fn bx(p: GraphPattern) -> Child<GraphPattern> {
     Child::new(p)

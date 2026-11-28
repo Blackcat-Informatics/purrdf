@@ -566,6 +566,10 @@ impl OkfLinkSection {
     ///
     /// Returns a configuration error for an empty predicate set, relative predicate,
     /// or empty/multiline heading/relation label.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "each mandatory link-rendering axis is independent caller policy"
+    )]
     pub fn new(
         heading: Option<String>,
         predicates: BTreeSet<String>,
@@ -723,7 +727,7 @@ impl OkfGenerationConfig {
     /// Returns a configuration error for missing/duplicate/unsafe categories,
     /// invalid nested mappings, contradictory or non-portable bounds, or an artifact
     /// budget that cannot contain the declared maximum concept/category indexes.
-    #[expect(
+    #[allow(
         clippy::too_many_arguments,
         reason = "the constructor requires every independent semantic and resource policy"
     )]

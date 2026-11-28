@@ -659,8 +659,11 @@ fn register() -> Result<(), FloatEnvironmentError> {
 }
 
 /// A target with no control register this build reads: the probe alone decides.
-/// All register checks share one signature so their caller is target-independent.
 #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "x86")))]
+#[allow(
+    clippy::unnecessary_wraps,
+    reason = "one signature across targets, so `check` is written once"
+)]
 const fn register() -> Result<(), FloatEnvironmentError> {
     Ok(())
 }
@@ -753,7 +756,7 @@ mod tests {
     }
 
     #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]
-    #[expect(
+    #[allow(
         unsafe_code,
         reason = "the test alters only its own x87 precision and restores the saved word before either scope drops"
     )]

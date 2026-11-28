@@ -542,10 +542,7 @@ impl Dataset {
     /// `rememberEmptyGraphs` selects the dataset's named-graph lifetime exactly as the
     /// constructor's does; omitted, it is the default, remembered empty graphs.
     #[wasm_bindgen(js_name = parse)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn parse(
         input: &str,
         format: &str,
@@ -621,10 +618,7 @@ impl Dataset {
     /// it cannot carry. For a star-capable target the two lanes are byte-identical; for
     /// those three they are not, and the difference is exactly the counted loss.
     #[wasm_bindgen(js_name = serialize)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize(&self, format: &str, base: Option<String>) -> Result<String, JsValue> {
         let frozen = self.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let native = classify(format).map_err(|e| diag_to_err(&e))?;
@@ -664,10 +658,7 @@ impl Dataset {
     /// The bytes are identical to [`serialize`](Self::serialize); only the delivery
     /// differs.
     #[wasm_bindgen(js_name = serializeToSink)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize_to_sink(
         &self,
         format: &str,
@@ -729,10 +720,7 @@ impl Dataset {
     /// absolute IRI throws whatever the target format is; omitting it emits absolute
     /// IRIs. No base is ever fabricated.
     #[wasm_bindgen(js_name = serializeWithLoss)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize_with_loss(
         &self,
         format: &str,
@@ -765,10 +753,7 @@ impl Dataset {
     /// compacted against it. A base the caller's own context already declares wins,
     /// matching the ingress precedence. A base that is not an absolute IRI throws.
     #[wasm_bindgen(js_name = serializeConfigured)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize_configured(
         &self,
         format: &str,
@@ -783,10 +768,7 @@ impl Dataset {
     /// `base` is the document base, honored exactly as in
     /// [`serializeConfigured`](Self::serialize_configured).
     #[wasm_bindgen(js_name = serializeWithContext)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn serialize_with_context(
         &self,
         format: &str,
@@ -1010,6 +992,7 @@ impl Dataset {
 
     /// `visualModelJson(optionsJson?)` -> the renderer-neutral RDF 1.2 model as JSON.
     #[wasm_bindgen(js_name = visualModelJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn visual_model_json(&self, options_json: Option<String>) -> Result<String, JsValue> {
         let (spec, _) = VisualOptions::parse(options_json)?.into_engine_options()?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
@@ -1020,6 +1003,7 @@ impl Dataset {
 
     /// `visualExportJson(optionsJson?)` -> model, scene, geometry, and index as JSON.
     #[wasm_bindgen(js_name = visualExportJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn visual_export_json(&self, options_json: Option<String>) -> Result<String, JsValue> {
         let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
@@ -1030,6 +1014,7 @@ impl Dataset {
 
     /// `visualSvgJson(optionsJson?)` -> deterministic SVG and its complete export.
     #[wasm_bindgen(js_name = visualSvgJson)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn visual_svg_json(&self, options_json: Option<String>) -> Result<String, JsValue> {
         let (spec, options) = VisualOptions::parse(options_json)?.into_engine_options()?;
         let frozen = self.inner.freeze().map_err(|error| diag_to_err(&error))?;
@@ -1042,10 +1027,7 @@ impl Dataset {
     /// quads. An omitted (`undefined`) position is a wildcard; `defaultGraph()` matches
     /// only the default graph, a named node matches that graph.
     #[wasm_bindgen(js_name = match)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn match_pattern(
         &self,
         subject: Option<Term>,

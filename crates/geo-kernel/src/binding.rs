@@ -1033,7 +1033,7 @@ impl GeoProfile {
             .map_err(CarrierResolutionFailure::resident)
     }
 
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "The pre-admission refusal borrows original bindings and carries exact endpoint identities inline; boxing it would allocate before its caller admits the diagnostic"
     )]
@@ -1244,7 +1244,7 @@ impl GeoProfile {
             .map_err(CarrierResolutionFailure::resident)
     }
 
-    #[expect(
+    #[allow(
         clippy::result_large_err,
         reason = "The pre-admission refusal borrows original bindings and carries exact endpoint identities inline; boxing it would allocate before its caller admits the diagnostic"
     )]
@@ -2059,7 +2059,7 @@ impl LinearUnitBinding {
     }
 }
 
-#[expect(
+#[allow(
     clippy::result_large_err,
     reason = "Original endpoint identities remain on the stack until the caller admits their owned diagnostic; a box here would create an unpriced allocation"
 )]

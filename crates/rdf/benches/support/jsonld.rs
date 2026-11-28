@@ -68,6 +68,10 @@ pub(crate) fn build_dataset(rows: usize) -> Arc<RdfDataset> {
     builder.freeze().expect("deterministic JSON-LD fixture")
 }
 
+#[allow(
+    dead_code,
+    reason = "native_codecs uses this shared fixture; jsonld_alloc does not"
+)]
 pub(crate) fn build_many_namespace_dataset(
     namespace_count: usize,
     iris_per_namespace: usize,
@@ -86,6 +90,10 @@ pub(crate) fn build_many_namespace_dataset(
     builder.freeze().expect("many-namespace JSON-LD fixture")
 }
 
+#[allow(
+    dead_code,
+    reason = "native_codecs uses these shared fixtures; jsonld_alloc does not"
+)]
 pub(crate) fn build_many_named_graph_dataset(graph_count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let predicate = builder
@@ -108,6 +116,10 @@ pub(crate) fn build_many_named_graph_dataset(graph_count: usize) -> Arc<RdfDatas
     builder.freeze().expect("many-graph JSON-LD fixture")
 }
 
+#[allow(
+    dead_code,
+    reason = "native_codecs uses these shared fixtures; jsonld_alloc does not"
+)]
 pub(crate) fn build_multivalue_dataset(value_count: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let subject = builder.intern_iri("https://bench.example/subject").unwrap();

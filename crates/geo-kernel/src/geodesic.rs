@@ -299,6 +299,7 @@ impl PreparedGeodesic {
         self.within_physical_observed(center, point, threshold, context, Some(observer), None)
     }
 
+    #[allow(clippy::too_many_arguments)] // Exact inputs and optional original-source cache/observer capabilities.
     fn within_physical_observed(
         &self,
         center: &LonLat,
@@ -367,6 +368,7 @@ impl PreparedGeodesic {
         self.compute_point_cached(a, b, context, physical_threshold, observer, None)
     }
 
+    #[allow(clippy::too_many_arguments)] // Exact endpoints, comparator, optional preparation and admission.
     fn compute_point_cached(
         &self,
         a: &LonLat,
@@ -400,6 +402,7 @@ impl PreparedGeodesic {
         Ok((result, proof))
     }
 
+    #[allow(clippy::too_many_arguments)] // Original source plus its optional immutable proof preparation.
     fn compute_goal_cached(
         &self,
         a: &LonLat,
@@ -742,10 +745,7 @@ const ENCLOSURE_WORKSPACE: usize = 1 << 20;
 ///
 /// Refuses operational exhaustion and unresolved rounding; antipodal points are
 /// valid and retain the same true-shortest-distance contract.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "owned convenience API; prepared methods borrow inputs"
-)]
+#[allow(clippy::needless_pass_by_value)] // Owned convenience API; prepared methods borrow inputs.
 pub fn distance(a: LonLat, b: LonLat) -> Result<MetricEstimate, GeoError> {
     let (prepared, mut context) = native_wgs84()?;
     prepared.distance(&a, &b, &mut context)
@@ -797,10 +797,7 @@ fn native(reference: &GeographicReference) -> Result<&'static NativePreparation,
 ///
 /// Finite negative thresholds return false. Other inputs use the distance law's
 /// numerical and operational refusals.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "owned convenience API; prepared methods borrow inputs"
-)]
+#[allow(clippy::needless_pass_by_value)] // Owned convenience API; prepared methods borrow inputs.
 pub fn within(center: LonLat, point: LonLat, threshold: XsdDoubleMetres) -> Result<bool, GeoError> {
     let (prepared, mut context) = native_wgs84()?;
     if threshold.is_negative() {
@@ -816,10 +813,7 @@ pub fn within(center: LonLat, point: LonLat, threshold: XsdDoubleMetres) -> Resu
 /// # Errors
 ///
 /// Refuses an undecidable threshold boundary and the ordinary numerical limits.
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "owned convenience API; prepared methods borrow inputs"
-)]
+#[allow(clippy::needless_pass_by_value)] // Owned convenience API; prepared methods borrow inputs.
 pub fn within_physical(center: LonLat, point: LonLat, threshold: Metres) -> Result<bool, GeoError> {
     let (prepared, mut context) = native_wgs84()?;
     prepared.within_physical(&center, &point, &threshold, &mut context)
@@ -899,10 +893,7 @@ impl CanonicalPair {
 
 // These independent exact symmetry and conditioning predicates select
 // mathematical reductions; none represents an operational state machine.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the symmetry and conditioning predicates are independent"
-)]
+#[allow(clippy::struct_excessive_bools)]
 struct SpherePair<I: CertifiedInterval = FixedInterval> {
     sin1: I,
     cos1: I,
@@ -2074,10 +2065,7 @@ fn solve_source_distance_with<I: point::PointInterval>(
 // On the exact opposite-latitude branch with alpha>=pi/2, u=cos²(alpha)
 // removes the vanishing azimuth derivative at the cut-locus vertex. The
 // complete pi-period auxiliary integral is independent of its starting phase.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "one exact symmetry reduction of the shared inverse problem"
-)]
+#[allow(clippy::too_many_arguments)] // One exact symmetry reduction of the shared inverse problem.
 fn symmetric_vertex_solution<I: CertifiedInterval>(
     pair: &CanonicalPair,
     reference: &GeographicReference,
@@ -2495,10 +2483,7 @@ struct Hybrid<I: CertifiedInterval> {
 
 // Keep the analytic parameters and the separate observer/scratch capabilities
 // explicit at this private mathematical boundary.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "analytic inputs and separate observer and scratch capabilities stay explicit"
-)]
+#[allow(clippy::too_many_arguments)]
 fn hybrid<I: CertifiedInterval>(
     sphere: &SpherePair<I>,
     alpha: &I,
@@ -2524,10 +2509,7 @@ fn hybrid<I: CertifiedInterval>(
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "original line formula with either exact cardinal or enclosed trigonometry"
-)]
+#[allow(clippy::too_many_arguments)] // Original line formula with either exact cardinal or enclosed trigonometry.
 fn hybrid_with_trig<I: CertifiedInterval>(
     sphere: &SpherePair<I>,
     alpha: &I,
@@ -2767,6 +2749,7 @@ impl<I: CertifiedInterval> IntegralCoefficients<I> {
 
     // Endpoint positions and their correlated difference are separate proof
     // inputs to this one sine-power integral recurrence.
+    #[allow(clippy::too_many_arguments)]
     fn evaluate_delta_with(
         &self,
         sigma1: &I,
@@ -2802,10 +2785,7 @@ impl<I: CertifiedInterval> IntegralCoefficients<I> {
         )
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "one recurrence with either certified or exact endpoint trigonometry"
-    )]
+    #[allow(clippy::too_many_arguments)] // One recurrence with either certified or exact endpoint trigonometry.
     fn evaluate_trig_delta_with(
         &self,
         sigma1: &I,

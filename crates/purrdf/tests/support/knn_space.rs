@@ -8,6 +8,10 @@
 //! a family contract declared with the [`FX`] fixture identities, and the space opened
 //! over the encoded artifact.
 
+// The module is included into more than one integration-test binary, and no single binary
+// uses every helper; an unused-here helper is used there.
+#![allow(dead_code, unreachable_pub)]
+
 use std::fmt::Display;
 
 use purrdf::{
@@ -20,14 +24,14 @@ use purrdf_core::purremb_fixture::Identities;
 use purrdf_sparql_eval::{EmbeddingSpace, KnnGuard};
 
 /// The fixture's data namespace.
-pub(crate) const EX: &str = "https://example.org/d/";
+pub const EX: &str = "https://example.org/d/";
 
 /// The fixture identities the family contract is declared with.
-pub(crate) const FX: Identities = Identities::at("https://example.org/");
+pub const FX: Identities = Identities::at("https://example.org/");
 
 /// Encode `rows` as a sealed PURREMB artifact under `metric` and open it as a queryable
 /// space.
-pub(crate) fn space<L: Display>(rows: &[(L, Vec<f64>)], metric: DistanceMetric) -> EmbeddingSpace {
+pub fn space<L: Display>(rows: &[(L, Vec<f64>)], metric: DistanceMetric) -> EmbeddingSpace {
     let dimension = u32::try_from(rows[0].1.len()).expect("small");
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
     let (source, _) = CertifiedEmbeddingSource::from_dataset(

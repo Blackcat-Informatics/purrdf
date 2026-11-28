@@ -1232,6 +1232,17 @@ impl purrdf_xsd::math::RootStorage2 for NativeRootStorage<'_, '_, '_> {
 // Original systems all carry WorkProgress. This native trait adapter shares
 // that one storage callback without repeating a buffer/allocation body.
 macro_rules! native_root_storage {
+    () => {
+        fn with_storage<T>(
+            &mut self,
+            resident_bytes: usize,
+            make: impl FnOnce(
+                &mut purrdf_lex::allocation::Memory<'_, dyn purrdf_lex::allocation::Admission + '_>,
+            ) -> Result<T, purrdf_lex::allocation::StorageError>,
+        ) -> Result<T, purrdf_lex::allocation::StorageError> {
+            self.progress.with_storage(resident_bytes, make)
+        }
+    };
     (cell) => {
         fn with_storage<T>(
             &mut self,

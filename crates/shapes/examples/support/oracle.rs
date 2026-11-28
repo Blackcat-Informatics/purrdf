@@ -5,6 +5,10 @@
 //! schema-import configuration, a hand-written schema wrapped as a compiled one,
 //! and the loss-ledger lookup. Every including binary declares `json_model`.
 
+// The module is included into more than one example binary, and no single binary
+// uses every helper; an unused-here helper is used there.
+#![allow(dead_code, unreachable_pub)]
+
 use std::error::Error;
 
 use purrdf_rdf::loss::LossLedger;

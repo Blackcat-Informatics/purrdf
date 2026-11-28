@@ -86,7 +86,7 @@ pub(crate) fn decode_literals_zerocopy<'a>(
                 bytes_used: section.regenerated_size,
             })
         }
-        LiteralsSectionType::Rle => {
+        LiteralsSectionType::RLE => {
             // RLE expands one byte to N — has to write into target.
             // Need at least one source byte (the fill byte).
             if source.is_empty() {

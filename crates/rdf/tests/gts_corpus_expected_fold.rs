@@ -36,10 +36,6 @@ use purrdf_rdf::gts_dict_vectors::{
 };
 use purrdf_rdf::{datasets_isomorphic, parse_dataset};
 
-#[expect(
-    dead_code,
-    reason = "this vector suite uses a subset of the shared readers"
-)]
 #[path = "support/vectors.rs"]
 mod vectors;
 use vectors::vectors_dir;

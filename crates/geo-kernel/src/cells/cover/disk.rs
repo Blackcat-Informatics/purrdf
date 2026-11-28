@@ -466,15 +466,9 @@ fn angle(
 /// One face-chart vector component written over the common warp denominator.
 fn integer(value: i128) -> Result<FloatInterval, MathError> {
     // Conversion to the nearest binary64; inexact conversions are widened.
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "conversion rounds to binary64 and the subsequent enclosure widens inexact results"
-    )]
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
     let rounded = value as f64;
-    #[expect(
-        clippy::cast_possible_truncation,
-        reason = "the round trip checks whether the integer was representable in binary64"
-    )]
+    #[allow(clippy::cast_possible_truncation)]
     if rounded as i128 == value {
         return FloatInterval::point(rounded);
     }

@@ -145,6 +145,11 @@ impl Default for DeclaredSchedule {
 
 /// What a rule derives, and from what.
 #[derive(Debug, Clone)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "one rule per variant instance, built once per evaluation; boxing would \
+              obscure the 1:1 mapping with the two rule languages"
+)]
 pub enum IrRuleBody<'a> {
     /// A SPARQL 1.2 RL rule: head templates over a sequence of rule elements.
     Elements(ElementRule),

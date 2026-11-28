@@ -7,10 +7,7 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![expect(
-    dead_code,
-    reason = "each test or benchmark includes a different subset of this shared fixture"
-)]
+#![allow(dead_code, unreachable_pub)]
 
 use purrdf_retrieval::fixture::PRECISION_12;
 use std::collections::BTreeMap;
@@ -31,7 +28,7 @@ use purrdf_retrieval::{
 /// # Panics
 ///
 /// When the future pends: the fixture streams are synchronous and never do.
-pub(crate) fn ready<F: Future>(future: F) -> F::Output {
+pub fn ready<F: Future>(future: F) -> F::Output {
     let mut context = Context::from_waker(Waker::noop());
     let mut future = std::pin::pin!(future);
     match future.as_mut().poll(&mut context) {
@@ -41,7 +38,7 @@ pub(crate) fn ready<F: Future>(future: F) -> F::Output {
 }
 
 /// The fixture stratum `http://example.org/stratum/{suffix}`.
-pub(crate) fn stratum(suffix: &str) -> Iri {
+pub fn stratum(suffix: &str) -> Iri {
     Iri::parse(&format!("http://example.org/stratum/{suffix}")).expect("fixture IRIs are valid")
 }
 
@@ -49,7 +46,7 @@ pub(crate) fn stratum(suffix: &str) -> Iri {
 ///
 /// There is no contribution-maximum argument to pass: the profile derives it
 /// from `weights`, because a candidate may surface at most once per stratum.
-pub(crate) fn profile(weights: &[(&str, Score)], k: u32) -> FusionProfile {
+pub fn profile(weights: &[(&str, Score)], k: u32) -> FusionProfile {
     let map: BTreeMap<Iri, Score> = weights
         .iter()
         .map(|(name, weight)| (stratum(name), *weight))
@@ -64,7 +61,7 @@ pub(crate) fn profile(weights: &[(&str, Score)], k: u32) -> FusionProfile {
 /// different promises. The contiguous, ascending ranks these streams emit are
 /// not part of it — that law holds for every stream and is checked rank by rank
 /// rather than declared.
-pub(crate) fn unique_items() -> StreamContract {
+pub fn unique_items() -> StreamContract {
     StreamContract::new(
         purrdf_sparql_eval::RankLaw::Ordinal,
         DuplicatePolicy::Unique,
@@ -81,7 +78,7 @@ pub(crate) fn unique_items() -> StreamContract {
 /// block and the frontier holds the candidates of at most a couple of blocks at
 /// any moment. It is the disagreement window, and it is what the frontier's size
 /// is proportional to — not the stream length, which is the claim.
-pub(crate) const DISAGREEMENT_BLOCK: u64 = 4;
+pub const DISAGREEMENT_BLOCK: u64 = 4;
 
 /// The candidate one stratum emits at 1-based `rank`.
 ///
@@ -92,7 +89,7 @@ pub(crate) const DISAGREEMENT_BLOCK: u64 = 4;
 /// makes the frontier hold candidates awaiting confirmation rather than sit
 /// empty. A single-stratum fixture proves nothing here: with one stream there is
 /// nothing to await, and the frontier never holds anything at all.
-pub(crate) fn permuted_index(stream: usize, rank: u64) -> u64 {
+pub fn permuted_index(stream: usize, rank: u64) -> u64 {
     let index = rank - 1;
     let block = index / DISAGREEMENT_BLOCK;
     let offset = index % DISAGREEMENT_BLOCK;
@@ -106,7 +103,7 @@ pub(crate) fn permuted_index(stream: usize, rank: u64) -> u64 {
 
 /// Render a fusion result as deterministic text: rows by rank, then statuses by
 /// stratum, then the profile identity. Nothing here depends on a `HashMap`.
-pub(crate) fn render(result: &FusionResult<Term>) -> String {
+pub fn render(result: &FusionResult<Term>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     for row in &result.rows {

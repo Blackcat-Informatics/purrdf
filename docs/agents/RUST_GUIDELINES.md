@@ -178,13 +178,6 @@ exit status and state the exact executed scope and remaining acceptance.
 
 ## Compiler and profile contracts
 
-`make clippy` checks production library and binary targets. `make clippy-all`
-checks all targets, including the independent preserve-order consumer.
-Both local and hosted gates run these targets and deny warnings. Fix findings
-in the code. If a lint would require breaking a contract or obscuring correct
-behavior, use `#[expect(lint, reason = "...")]` on the smallest affected item
-and state the contract or behavior the exception preserves.
-
 Development and ordinary CI use the floating `nightly` channel declared in
 [rust-toolchain.toml](../../rust-toolchain.toml). Keep shipping source free of
 nightly-only language features. Stable functional release builds and the stable

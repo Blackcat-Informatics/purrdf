@@ -20,10 +20,7 @@ use crate::xsd_regex::scan::{Scanner, Token};
 
 #[derive(Debug, Clone, Copy)]
 // These are the independently combinable XPath flags, not exclusive states.
-#[expect(
-    clippy::struct_excessive_bools,
-    reason = "the XPath flags can be set independently"
-)]
+#[allow(clippy::struct_excessive_bools)]
 pub(super) struct Modes {
     pub insensitive: bool,
     pub dot_all: bool,

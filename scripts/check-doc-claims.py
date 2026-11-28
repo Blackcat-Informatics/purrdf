@@ -4877,8 +4877,9 @@ def rl_matrix_agreement_claim(
 # quantity.
 _CHANGE_PATH_PINS = ("FOCUS_NODES", "SEAM_FOCUS_NODES", "BIND_ALLOC_CONST", "REPETITIONS")
 
-# `REPETITIONS` is private to the shared measured-region support module.
-# Every other pin is a private `const` in the change-path test.
+# `REPETITIONS` is shared by every allocation suite, so it lives in the measured-region
+# support module they all include rather than in `change_path_alloc.rs`; it is a
+# `pub const` there. Every other pin is a private `const` in the change-path test.
 _MEASURED_SUPPORT = _REPO / "crates" / "shapes" / "tests" / "support" / "measured.rs"
 _CHANGE_PATH_PIN_SOURCES: dict[str, Path] = {"REPETITIONS": _MEASURED_SUPPORT}
 

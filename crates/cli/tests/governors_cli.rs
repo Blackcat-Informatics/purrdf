@@ -31,8 +31,7 @@
 //! governs a SELECT whose pattern matches through a triple term.
 
 mod support;
-use purrdf_testkit::text::{stderr_utf8 as stderr, stdout_utf8 as stdout};
-use support::{code, run, write_file};
+use support::{code, run, stderr_utf8 as stderr, stdout_utf8 as stdout, write_file};
 
 use std::fmt::Write as _;
 

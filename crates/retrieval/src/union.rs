@@ -649,12 +649,9 @@ async fn settle_admission_failure(
     }
 }
 
-#[cfg_attr(
-    target_pointer_width = "64",
-    expect(
-        clippy::result_large_err,
-        reason = "depth verification retains existing identifiers and native first refusal; failure cannot allocate a replacement owner"
-    )
+#[expect(
+    clippy::result_large_err,
+    reason = "depth verification retains existing identifiers and native first refusal; failure cannot allocate a replacement owner"
 )]
 fn check_execution(
     execution: &CandidateExecutionResult<'_>,

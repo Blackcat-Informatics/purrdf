@@ -149,7 +149,7 @@ pub(crate) mod x86 {
         for (k, chunk) in chunks.iter().enumerate() {
             // SAFETY: `chunk` is a `&[u8; 16]`, so the pointer is valid for a
             // sixteen-byte read, and `loadu` has no alignment requirement.
-            #[expect(
+            #[allow(
                 clippy::cast_ptr_alignment,
                 reason = "`_mm_loadu_si128` is the unaligned load; the pointer type is its signature's"
             )]
@@ -185,7 +185,7 @@ pub(crate) mod x86 {
         for (k, chunk) in chunks.iter().enumerate() {
             // SAFETY: `chunk` is a `&[u8; 32]`, so the pointer is valid for a
             // thirty-two-byte read, and `loadu` has no alignment requirement.
-            #[expect(
+            #[allow(
                 clippy::cast_ptr_alignment,
                 reason = "`_mm256_loadu_si256` is the unaligned load; the pointer type is its signature's"
             )]

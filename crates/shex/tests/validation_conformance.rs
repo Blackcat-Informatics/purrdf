@@ -24,10 +24,6 @@
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
-#[expect(
-    dead_code,
-    reason = "this suite reads a subset of the shared ShEx conformance corpus"
-)]
 #[path = "support/corpus.rs"]
 mod corpus;
 

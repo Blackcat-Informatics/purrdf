@@ -3,6 +3,9 @@
 
 //! Report-only latency measurements; allocation probes run in a separate process.
 
+// `bench_group!` emits a public entry point in a non-library benchmark target.
+#![allow(missing_docs)]
+
 use purrdf_json::{SourceDocument, analyze, decode_document, encode, project};
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 use std::hint::black_box;

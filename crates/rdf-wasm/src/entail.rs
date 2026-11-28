@@ -125,7 +125,7 @@ impl From<BoundaryClosure> for RegimeClosure {
 ///
 /// Retains the native service error until the export attaches request evidence.
 /// This twin remains callable in native Rust without invoking JavaScript imports.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the pointer-free twin of `entailMaterialize`, taking its arguments one for one"
 )]
@@ -196,11 +196,8 @@ pub(crate) fn materialize_impl(
 /// (the message names the accepted set), if `program` is wrong for the regime, on an
 /// import-table refusal, or if the run passes an evaluation limit.
 #[wasm_bindgen(js_name = entailMaterialize)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned arrays"
-)]
-#[expect(
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned arrays
+#[allow(
     clippy::too_many_arguments,
     reason = "the document, the regime's program, the import table and each limit are named \
               explicitly at the boundary, in the order every other host takes them"
@@ -521,14 +518,8 @@ pub(crate) fn consistency_impl(
 /// Throws if `document` fails to parse, on an import-table refusal, or if the reverse
 /// mapping fails.
 #[wasm_bindgen(js_name = entailConsistency)]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned arrays"
-)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "existing service inputs plus explicit canonical controls"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned arrays
+#[allow(clippy::too_many_arguments)] // existing service inputs plus explicit canonical controls
 pub fn entail_consistency(
     document: &str,
     import_iris: Vec<String>,
@@ -1004,15 +995,12 @@ pub(crate) fn certain_answers_impl(
 /// the table does not resolve and the premise does not hold, and on an inconsistent premise — whose refusal carries the
 /// full report.
 #[wasm_bindgen(js_name = entailCertainAnswers)]
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly at \
               the boundary, in the order every other host takes them"
 )]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_certain_answers(
     regime: &str,
     document: &str,
@@ -1078,15 +1066,12 @@ pub(crate) fn graph_entails_impl(
 ///
 /// Throws as [`entail_certain_answers`].
 #[wasm_bindgen(js_name = entailGraphEntails)]
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly at \
               the boundary, in the order every other host takes them"
 )]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_graph_entails(
     regime: &str,
     premise: &str,
@@ -1145,15 +1130,12 @@ pub(crate) fn verify_entailment_impl(
 ///
 /// Throws as [`entail_certain_answers`].
 #[wasm_bindgen(js_name = entailVerifyEntailment)]
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the question, the import table and each evaluation limit are named explicitly at \
               the boundary, in the order every other host takes them"
 )]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "binding ABI receives owned values"
-)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_verify_entailment(
     regime: &str,
     premise: &str,
@@ -1275,10 +1257,7 @@ pub(crate) fn check_proof_impl(
 /// Throws for a proof document that says `availability not-recorded` — an answer nobody asked
 /// to record is never presented as a verified one — and for every other rejection.
 #[wasm_bindgen(js_name = entailCheckProof)]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "existing service inputs plus explicit canonical controls"
-)]
+#[allow(clippy::too_many_arguments)] // existing service inputs plus explicit canonical controls
 #[expect(
     clippy::needless_pass_by_value,
     reason = "wasm-bindgen requires owned optional exported-class handles; optional references have no ABI conversion"

@@ -64,6 +64,20 @@ pub(crate) struct LdmParams {
 }
 
 impl LdmParams {
+    /// Derive a complete parameter set from caller-supplied
+    /// `window_log` + `strategy` using upstream zstd `ZSTD_ldm_adjustParameters`
+    /// (`zstd_ldm.c:135`). Strategy is the upstream zstd 1..=9 enum ordinal
+    /// (fast=1 .. btultra2=9).
+    ///
+    /// Returns a fully-initialised `LdmParams` with no zero fields.
+    pub(crate) fn adjust_for(window_log: u32, strategy: u32) -> Self {
+        Self {
+            window_log,
+            ..Self::default()
+        }
+        .derive(strategy)
+    }
+
     /// Upstream zstd `ZSTD_ldm_adjustParameters` derivation over a (possibly
     /// caller-seeded) parameter set: fill every zero-valued knob from
     /// `window_log` / `strategy`, leaving non-zero fields untouched.
@@ -72,7 +86,8 @@ impl LdmParams {
     /// the caller seeds the knobs it wants to pin (the rest stay zero),
     /// and `derive` completes the set with upstream zstd cross-field
     /// consistency (e.g. `hash_rate_log = window_log - hash_log` when a
-    /// caller pins `hash_log`).
+    /// caller pins `hash_log`). Calling `adjust_for` and then clobbering
+    /// fields afterwards would break that consistency.
     pub(crate) fn derive(self, strategy: u32) -> Self {
         // Runtime `assert!` (not `debug_assert!`) — the body uses
         // raw `LDM_HASH_RLOG - (strategy / 3)`, which underflows
@@ -132,6 +147,16 @@ impl LdmParams {
         }
 
         params
+    }
+
+    /// Hash-table size in entries: `1 << hash_log`.
+    pub(crate) const fn hash_table_entries(&self) -> usize {
+        1usize << self.hash_log
+    }
+
+    /// Per-bucket slot count: `1 << bucket_size_log`.
+    pub(crate) const fn bucket_slots(&self) -> usize {
+        1usize << self.bucket_size_log
     }
 }
 

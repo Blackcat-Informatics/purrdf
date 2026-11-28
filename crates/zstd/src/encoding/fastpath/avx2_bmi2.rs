@@ -16,6 +16,7 @@
 //! x86 CPUs, ~2013+).
 
 #![cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#![allow(dead_code)]
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{__m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8};
@@ -23,6 +24,8 @@ use core::arch::x86::{__m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_mov
 use core::arch::x86_64::{__m256i, _mm256_cmpeq_epi8, _mm256_loadu_si256, _mm256_movemask_epi8};
 
 use super::scalar;
+
+pub(crate) const KERNEL_TAG: &str = "avx2_bmi2";
 
 /// AVX2+BMI2 variant of `hash_mix_u64`. AVX2 itself doesn't include the
 /// CRC32 instruction (`_mm_crc32_u64` lives under SSE4.2); every shipping
@@ -34,8 +37,11 @@ use super::scalar;
 #[target_feature(enable = "avx2,bmi2,sse4.2")]
 #[inline]
 pub(crate) unsafe fn hash_mix_u64(value: u64) -> u64 {
-    use core::arch::x86_64::_mm_crc32_u64;
-    let crc = _mm_crc32_u64(0, value);
+    let crc = unsafe {
+        #[cfg(target_arch = "x86_64")]
+        use core::arch::x86_64::_mm_crc32_u64;
+        _mm_crc32_u64(0, value)
+    };
     ((crc << 32) ^ value.rotate_left(13)).wrapping_mul(scalar::HASH_MIX_PRIME)
 }
 
@@ -58,8 +64,8 @@ pub(crate) unsafe fn prefix_len_simd(lhs: *const u8, rhs: *const u8, max: usize)
     while off + 32 <= max {
         let a: __m256i = unsafe { _mm256_loadu_si256(lhs.add(off).cast::<__m256i>()) };
         let b: __m256i = unsafe { _mm256_loadu_si256(rhs.add(off).cast::<__m256i>()) };
-        let eq = _mm256_cmpeq_epi8(a, b);
-        let mask = _mm256_movemask_epi8(eq) as u32;
+        let eq = unsafe { _mm256_cmpeq_epi8(a, b) };
+        let mask = unsafe { _mm256_movemask_epi8(eq) } as u32;
         if mask != u32::MAX {
             return off + (!mask).trailing_zeros() as usize;
         }

@@ -44,7 +44,6 @@ const KIND: &str = "http://example.org/kind";
 // The datatype `?rank` comes back as.
 use purrdf_core::datatype::XSD_INTEGER as INTEGER;
 
-#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/sparql.rs"]
 mod sparql;
 

@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
+#![allow(missing_docs)]
+
 //! One-path GTS ingestion, measured three ways through to emitted bytes.
 //!
 //! `cargo bench -p purrdf-rdf --bench gts_ingest`. Report-only; it asserts no

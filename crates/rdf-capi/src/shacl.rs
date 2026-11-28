@@ -469,7 +469,7 @@ impl RecursionRequest {
 }
 
 /// Shared implementation of the whole-graph validation entry points.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -588,7 +588,7 @@ pub enum PurrdfShaclChangeScopeKind {
 ///
 /// The expand-then-validate sequence lives in
 /// [`validate_changes_to_sarif_string`]; this only adds the C-ABI byte framing.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the change path's three documents, the shapes document's two IRIs, the two \
               validation parameters and the import table are each an independent input"
@@ -854,7 +854,7 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif_with_recursion(
 }
 
 /// Shared implementation of the change-validation entry points.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -959,7 +959,7 @@ unsafe fn validate_changes_entry(
 /// The parse→entail→serialize sequence lives in [`entail_to_ntriples_with_coordinates`],
 /// under the caller's dated XPath law or (`None`) the compatibility regular expressions;
 /// the exported symbols only add the C-ABI buffer framing.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entailment inputs, passed through to the shared native request"
 )]
@@ -1235,7 +1235,7 @@ unsafe fn rule_limits(limits: [*const u64; 4]) -> RuleLimits {
 /// The one body of [`purrdf_shacl_entail_to_ntriples`] and
 /// [`purrdf_shacl_entail_to_ntriples_xpath_regex`]. `regex_profile` is null for the entry
 /// point that has no such parameter.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -1517,7 +1517,7 @@ pub unsafe extern "C" fn purrdf_shacl_apply_rules_xpath_regex(
 /// `shapes_base_iri`, `shapes_graph_iri`, `srl`, `srl_base_iri`; `outputs` is
 /// `out_inferred`, `out_proof`, `out_diagnostics`. `regex_profile` is null for the entry
 /// point that has no such parameter.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -1701,7 +1701,7 @@ pub unsafe extern "C" fn purrdf_shacl_check_rules(
 /// bindings, and the output is one N-Triples 1.2 term per line, beside the shapes graph's
 /// mandatory diagnostics. `regex` is the caller's dated XPath law, or `None` for the
 /// compatibility regular expressions.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "one argument per request input, and the selected law"
 )]
@@ -1880,7 +1880,7 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr_xpath_regex(
 /// `shapes_base_iri`, `data_nt`, `focus`; `selectors` is `expr`, `expr_at`,
 /// `expr_turtle`; `outputs` is `out_terms`, `out_diagnostics`. `regex_profile` is null for
 /// the entry point that has no such parameter.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -2215,7 +2215,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_encode_with_recursion(
     }
 }
 
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -2474,7 +2474,7 @@ pub unsafe extern "C" fn purrdf_shapes_product_validate_with_recursion(
 /// or without an expected identity (`expect_identity` is `None` for the entry points
 /// that take none), and under the compatibility regular expressions (null
 /// `regex_profile`) or a dated XPath law.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]

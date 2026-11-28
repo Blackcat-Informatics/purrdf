@@ -1464,10 +1464,7 @@ impl QueryEngine {
     ///
     /// A value that is neither `"keep"` nor `"merge"`; the mode is left as it was.
     #[wasm_bindgen(setter = blankScope)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn set_blank_scope(&self, mode: String) -> Result<(), JsValue> {
         let parsed =
             BlankScopeMode::parse(&mode).map_err(|message| coded_error(&message, OPTIONS_CODE))?;
@@ -1502,10 +1499,7 @@ impl QueryEngine {
     ///
     /// Text in none of those forms; the policy is left as it was.
     #[wasm_bindgen(setter = divisionPolicy)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn set_division_policy(&self, policy: String) -> Result<(), JsValue> {
         self.set_division(&policy)
             .map_err(|message| coded_error(&message, OPTIONS_CODE))
@@ -1519,10 +1513,7 @@ impl QueryEngine {
 
     /// Run any SPARQL query and return a typed raw wasm result wrapper.
     #[wasm_bindgen(js_name = query)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(
         &self,
         dataset: &Dataset,
@@ -1544,10 +1535,7 @@ impl QueryEngine {
 
     /// Run a SELECT query and return typed rows.
     #[wasm_bindgen(js_name = select)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn select(
         &self,
         dataset: &Dataset,
@@ -1575,10 +1563,7 @@ impl QueryEngine {
 
     /// Run an ASK query and return the boolean result.
     #[wasm_bindgen(js_name = ask)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn ask(
         &self,
         dataset: &Dataset,
@@ -1606,10 +1591,7 @@ impl QueryEngine {
 
     /// Run a CONSTRUCT query and return its result dataset.
     #[wasm_bindgen(js_name = construct)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn construct(
         &self,
         dataset: &Dataset,
@@ -1630,10 +1612,7 @@ impl QueryEngine {
 
     /// Run a DESCRIBE query and return its result dataset.
     #[wasm_bindgen(js_name = describe)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn describe(
         &self,
         dataset: &Dataset,
@@ -1654,10 +1633,7 @@ impl QueryEngine {
 
     /// Apply a SPARQL UPDATE atomically to the supplied dataset.
     #[wasm_bindgen(js_name = update)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn update(
         &self,
         dataset: &mut Dataset,
@@ -1709,11 +1685,8 @@ impl QueryEngine {
     /// A parse/evaluation failure, an unsupported format, or exactly one of
     /// `provenance_prefix`/`provenance_iri` supplied without the other.
     #[wasm_bindgen(js_name = queryRaw)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
-    #[expect(
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
         clippy::too_many_arguments,
         reason = "each parameter is a distinct, independently-named input at the wasm boundary"
     )]
@@ -1745,11 +1718,8 @@ impl QueryEngine {
 
     /// Serialize a CONSTRUCT/DESCRIBE result with configured JSON-LD/YAML-LD.
     #[wasm_bindgen(js_name = queryRawConfigured)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
-    #[expect(
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
         clippy::too_many_arguments,
         reason = "independently named inputs at the wasm boundary"
     )]
@@ -1805,11 +1775,8 @@ impl QueryEngine {
     ///
     /// A parse or evaluation failure, and a negative ceiling. A governor trip is neither.
     #[wasm_bindgen(js_name = queryGoverned)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
-    #[expect(
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
         clippy::too_many_arguments,
         reason = "each governed dimension is named explicitly at the boundary; a bag \
                   argument would make an unset ceiling and a misspelt one look alike, \
@@ -1896,11 +1863,8 @@ impl QueryEngine {
     /// entailment failure, or malformed ceiling. A governor trip is returned in
     /// [`EntailmentQueryOutcome`].
     #[wasm_bindgen(js_name = queryEntailmentGoverned)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
-    #[expect(
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
         clippy::too_many_arguments,
         reason = "the regime plus each governed dimension is named explicitly at the boundary"
     )]
@@ -1994,11 +1958,8 @@ impl QueryEngine {
     /// A parse or evaluation failure, a negative ceiling, and `max_answers`. A governor
     /// trip is none of these.
     #[wasm_bindgen(js_name = updateGoverned)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
-    #[expect(
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
         clippy::too_many_arguments,
         reason = "each governed dimension is named explicitly at the boundary; a bag \
                   argument would make an unset ceiling and a misspelt one look alike, \
@@ -2073,10 +2034,7 @@ impl QueryEngine {
     ///
     /// A parse or evaluation failure.
     #[wasm_bindgen(js_name = explainQuery)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn explain_query(
         &self,
         dataset: &Dataset,
@@ -2099,11 +2057,8 @@ impl QueryEngine {
 
     /// Serialize a CONSTRUCT/DESCRIBE result with a reusable compiled context.
     #[wasm_bindgen(js_name = queryRawWithContext)]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "binding ABI receives owned values"
-    )]
-    #[expect(
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+    #[allow(
         clippy::too_many_arguments,
         reason = "each parameter is a distinct, independently-named input at the wasm boundary"
     )]
@@ -2349,6 +2304,7 @@ impl Dataset {
     /// It runs on a fresh `QueryEngine`, so under the default division policy
     /// (`"exact-or-18:half-even"`); set `divisionPolicy` on a `QueryEngine` for another.
     #[wasm_bindgen(js_name = query)]
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn query(
         &self,
         sparql: &str,

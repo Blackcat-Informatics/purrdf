@@ -31,10 +31,6 @@ use purrdf_rdf::{
     flat_rdf_quads_from_dataset, parse_dataset,
 };
 
-#[expect(
-    dead_code,
-    reason = "this test uses one of the two shared blank identity fixtures"
-)]
 #[path = "support/blank_identity.rs"]
 mod blank_identity;
 use blank_identity::composite_over;

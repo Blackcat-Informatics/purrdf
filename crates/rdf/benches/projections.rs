@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+#![allow(missing_docs)]
+
 //! Graph, tabular, and research-object carrier benchmarks over deterministic fixed datasets.
 
 use std::collections::{BTreeMap, BTreeSet};

@@ -5,14 +5,13 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![expect(
-    dead_code,
-    reason = "each integration-test command uses only the necessary transports and assertions"
-)]
+#![allow(dead_code, unused_imports)]
 
 use std::io::{ErrorKind, Write as _};
 use std::path::Path;
 use std::process::{Command, Output, Stdio};
+
+pub(super) use purrdf_testkit::text::{stderr_utf8, stdout_utf8};
 
 /// A `Command` for the built `purrdf` binary.
 pub(super) fn purrdf() -> Command {

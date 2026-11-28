@@ -27,8 +27,7 @@
 //!   (`purrdf convert … --loss-ledger`), and both positions produce the same ledger.
 
 mod support;
-use purrdf_testkit::text::stdout_utf8 as stdout;
-use support::{path, run, stderr, write_file};
+use support::{path, run, stderr, stdout_utf8 as stdout, write_file};
 
 /// SEED C — a star-free base quad + one reifier (`rdf:reifies` a quoted triple) +
 /// one annotation on that reifier. Serializing it to a star-INcapable target

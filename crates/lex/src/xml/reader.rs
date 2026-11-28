@@ -634,7 +634,7 @@ impl<'a> Reader<'a> {
     ///
     /// [`XmlError`] at the first well-formedness or namespace violation, or
     /// the first limit exceeded. The reader is not usable after an error.
-    #[expect(
+    #[allow(
         clippy::should_implement_trait,
         reason = "each event borrows the reader until the next call, which `Iterator` cannot express"
     )]

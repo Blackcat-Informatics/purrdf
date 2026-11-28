@@ -7,27 +7,24 @@
 
 // The module is included into more than one integration-test binary, and no single binary
 // uses every helper; an unused-here helper is used there.
-#![expect(
-    dead_code,
-    reason = "each test or benchmark includes a different subset of this shared fixture"
-)]
+#![allow(dead_code, unreachable_pub)]
 
 use purrdf_sparql_algebra::{
     GraphPattern, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
 };
 
 /// `<http://example.org/{local}>`.
-pub(crate) fn example(local: &str) -> NamedNode {
+pub fn example(local: &str) -> NamedNode {
     NamedNode::new_unchecked(format!("http://example.org/{local}"))
 }
 
 /// The variable `?{name}`.
-pub(crate) fn var(name: &str) -> Variable {
+pub fn var(name: &str) -> Variable {
     Variable::new(name)
 }
 
 /// The basic graph pattern of the one triple `?subject <predicate> ?object`.
-pub(crate) fn triple_bgp(subject: &str, predicate: NamedNode, object: &str) -> GraphPattern {
+pub fn triple_bgp(subject: &str, predicate: NamedNode, object: &str) -> GraphPattern {
     GraphPattern::Bgp {
         patterns: vec![TriplePattern {
             subject: TermPattern::Variable(var(subject)),
@@ -39,7 +36,7 @@ pub(crate) fn triple_bgp(subject: &str, predicate: NamedNode, object: &str) -> G
 
 /// A parsed query's `WHERE` body: the pattern under its projection, or the
 /// pattern itself when there is none.
-pub(crate) fn where_body(pattern: &GraphPattern) -> GraphPattern {
+pub fn where_body(pattern: &GraphPattern) -> GraphPattern {
     match pattern {
         GraphPattern::Project { inner, .. } | GraphPattern::ProjectStar { inner, .. } => {
             (**inner).clone()

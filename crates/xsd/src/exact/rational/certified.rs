@@ -333,10 +333,9 @@ impl Rational {
 
     /// Builds the exact value `mantissa / 10^scale`.
     #[must_use]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "the public constructor takes ownership and shares reduction with the borrowed entry"
-    )]
+    // Preserve the established owned constructor while sharing the exact
+    // reduction body with the explicitly borrowed reusable-storage entry.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_scaled_integer(mantissa: Int, scale: u32) -> Self {
         Self::from_decimal_using(&mantissa, scale, &Unbounded).expect("unbounded integer storage")
     }

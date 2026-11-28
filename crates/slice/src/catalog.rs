@@ -653,10 +653,7 @@ fn compute_semantic_digest(
 }
 
 // Artifact classification is deliberately byte-exact on lowercase extensions.
-#[expect(
-    clippy::case_sensitive_file_extension_comparisons,
-    reason = "artifact classification recognizes only lowercase RDF extensions"
-)]
+#[allow(clippy::case_sensitive_file_extension_comparisons)]
 fn is_rdf_file(path: &str) -> bool {
     path.ends_with(".ttl") || path.ends_with(".nt") || path.ends_with(".nq")
 }

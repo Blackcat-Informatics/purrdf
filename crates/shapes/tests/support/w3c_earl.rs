@@ -9,7 +9,9 @@
 //! The kit renders EARL from a [`Report`]; everything specific to the W3C suites
 //! (the DOAP and FOAF descriptions, the `urn:x-shacl-test:` keys, the two output
 //! files) is here, in test code, because PurRDF mints and ships no vocabulary of its
-//! own. Both W3C harnesses use this writer.
+//! own. Included by both W3C harnesses; the 2017 harness uses a subset.
+
+#![allow(dead_code, unreachable_pub)]
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -24,23 +26,23 @@ use purrdf_iri::vocab::{earl, rdf};
 // ── The environment ───────────────────────────────────────────────────────────
 
 /// The directory the reports are written under.
-pub(crate) const DIR_VAR: &str = "PURRDF_W3C_EARL_DIR";
+pub const DIR_VAR: &str = "PURRDF_W3C_EARL_DIR";
 /// The 40-hex PurRDF commit the reports are generated for.
-pub(crate) const COMMIT_VAR: &str = "PURRDF_W3C_EARL_COMMIT";
+pub const COMMIT_VAR: &str = "PURRDF_W3C_EARL_COMMIT";
 
 /// A commit stand-in for in-memory generation, which writes nothing.
-pub(crate) const SAMPLE_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+pub const SAMPLE_COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 /// Where to write the reports, and for which PurRDF commit: both variables,
 /// parsed once.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct EarlConfig {
-    pub(crate) dir: PathBuf,
-    pub(crate) commit: String,
+pub struct EarlConfig {
+    pub dir: PathBuf,
+    pub commit: String,
 }
 
 /// Whether `commit` is a full lowercase hexadecimal git object name.
-pub(crate) fn is_full_commit(commit: &str) -> bool {
+pub fn is_full_commit(commit: &str) -> bool {
     commit.len() == 40
         && commit
             .bytes()
@@ -49,7 +51,7 @@ pub(crate) fn is_full_commit(commit: &str) -> bool {
 
 /// Parse the two settings. Neither set means no reports are written; either one
 /// alone, an empty directory or a commit that is not 40 hex digits is an error.
-pub(crate) fn parse_config(
+pub fn parse_config(
     dir: Option<OsString>,
     commit: Option<OsString>,
 ) -> Result<Option<EarlConfig>, String> {
@@ -78,7 +80,7 @@ pub(crate) fn parse_config(
 }
 
 /// The environment's configuration, read and parsed once per harness binary.
-pub(crate) fn config() -> &'static Result<Option<EarlConfig>, String> {
+pub fn config() -> &'static Result<Option<EarlConfig>, String> {
     static CONFIG: std::sync::OnceLock<Result<Option<EarlConfig>, String>> =
         std::sync::OnceLock::new();
     CONFIG.get_or_init(|| parse_config(std::env::var_os(DIR_VAR), std::env::var_os(COMMIT_VAR)))
@@ -86,11 +88,11 @@ pub(crate) fn config() -> &'static Result<Option<EarlConfig>, String> {
 
 // ── The subject and the assertor ──────────────────────────────────────────────
 
-pub(crate) const SUBJECT_IRI: &str = "https://github.com/Blackcat-Informatics/purrdf";
-pub(crate) const BUG_DATABASE_IRI: &str = "https://github.com/Blackcat-Informatics/purrdf/issues";
-pub(crate) const DEVELOPER_IRI: &str = "https://github.com/paudley";
-pub(crate) const ASSERTOR_IRI: &str = DEVELOPER_IRI;
-pub(crate) const ASSERTOR_NAME: &str = "Patrick Audley";
+pub const SUBJECT_IRI: &str = "https://github.com/Blackcat-Informatics/purrdf";
+pub const BUG_DATABASE_IRI: &str = "https://github.com/Blackcat-Informatics/purrdf/issues";
+pub const DEVELOPER_IRI: &str = "https://github.com/paudley";
+pub const ASSERTOR_IRI: &str = DEVELOPER_IRI;
+pub const ASSERTOR_NAME: &str = "Patrick Audley";
 
 const DOAP_NS: &str = "http://usefulinc.com/ns/doap#";
 const FOAF_NS: &str = "http://xmlns.com/foaf/0.1/";
@@ -101,20 +103,20 @@ fn doap(local: &str) -> String {
 
 /// One of the two suites a report covers.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Suite {
+pub struct Suite {
     /// The report's file name under the output directory.
-    pub(crate) file_name: &'static str,
+    pub file_name: &'static str,
     /// The full commit of `w3c/data-shapes` the vendored suite was taken from.
-    pub(crate) commit: &'static str,
+    pub commit: &'static str,
     /// The profile name written on each record.
-    pub(crate) profile: &'static str,
+    pub profile: &'static str,
     /// The SHACL semantic-law identifier the suite is graded under
     /// (`ShaclProfile::id`), named in the subject's description.
-    pub(crate) law: &'static str,
+    pub law: &'static str,
 }
 
 /// The `earl:TestSubject`: PurRDF, as a DOAP project, naming the build.
-pub(crate) fn subject(purrdf_commit: &str, suite: &Suite) -> SubjectDescription {
+pub fn subject(purrdf_commit: &str, suite: &Suite) -> SubjectDescription {
     let text = |value: String| DescriptionTerm::Text(value);
     let iri = |value: &str| DescriptionTerm::Iri(value.to_owned());
     SubjectDescription::new(
@@ -154,7 +156,7 @@ fn description(purrdf_commit: &str, suite: &Suite) -> String {
 }
 
 /// The `earl:Assertor`, named through `foaf:name`.
-pub(crate) fn assertor() -> AssertorDescription {
+pub fn assertor() -> AssertorDescription {
     AssertorDescription::new(
         ASSERTOR_IRI,
         vec![earl::ASSERTOR.to_owned()],
@@ -171,7 +173,7 @@ const KEY_SCHEME: &str = "urn:x-shacl-test:";
 
 /// The test IRI an EARL assertion names for the entry `id`, an entry path relative
 /// to the suite's `tests/` root, in the Working Group reports page's key scheme.
-pub(crate) fn test_iri(id: &str) -> String {
+pub fn test_iri(id: &str) -> String {
     format!("{KEY_SCHEME}/{id}")
 }
 
@@ -179,7 +181,7 @@ pub(crate) fn test_iri(id: &str) -> String {
 /// of a test case, in the `urn:x-shacl-test:` form or as a URL under the tests
 /// folder `tests_base`, to its path relative to that folder. Any other IRI maps to
 /// the path after its last `/tests/`, else to itself.
-pub(crate) fn test_key(iri: &str, tests_base: &str) -> String {
+pub fn test_key(iri: &str, tests_base: &str) -> String {
     if let Some(rest) = iri.strip_prefix(KEY_SCHEME) {
         return rest.trim_start_matches('/').to_owned();
     }
@@ -196,7 +198,7 @@ pub(crate) fn test_key(iri: &str, tests_base: &str) -> String {
 
 /// How one in-scope entry counts on the scoreboard.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Class {
+pub enum Class {
     Passed,
     SpecContradicted,
     Xfailed,
@@ -206,7 +208,7 @@ pub(crate) enum Class {
 /// `SPEC_CONTRADICTED` entry is graded against the unamended expectation and must
 /// fail; an entry that passes (XPASS) is refused, as is a failure that no ledger
 /// names, an entry in both ledgers and a ledgered entry that passes.
-pub(crate) fn classify(
+pub fn classify(
     id: &str,
     result: &Result<(), String>,
     xfail: Option<&str>,
@@ -232,7 +234,7 @@ pub(crate) fn classify(
 
 /// Check a `SPEC_CONTRADICTED` table: its length is the pinned count, each id occurs
 /// once and names a discovered entry (`known`), and each rationale is non-empty.
-pub(crate) fn check_spec_table(
+pub fn check_spec_table(
     table: &[(&str, &str)],
     pinned: usize,
     known: impl Fn(&str) -> bool,
@@ -262,13 +264,13 @@ pub(crate) fn check_spec_table(
 
 /// One in-scope entry as the report sees it.
 #[derive(Debug, Clone, Copy)]
-pub(crate) struct Entry<'a> {
+pub struct Entry<'a> {
     /// The entry path relative to the suite's `tests/` root.
-    pub(crate) id: &'a str,
+    pub id: &'a str,
     /// The harness's grade against the unamended expectation.
-    pub(crate) result: &'a Result<(), String>,
+    pub result: &'a Result<(), String>,
     /// The `SPEC_CONTRADICTED` rationale, if the entry is in the table.
-    pub(crate) rationale: Option<&'a str>,
+    pub rationale: Option<&'a str>,
 }
 
 /// The record of one graded entry: expected `Compared`; observed `Compared` when
@@ -276,7 +278,7 @@ pub(crate) struct Entry<'a> {
 /// not. An entry that expects `sht:Failure` takes the same route: the harness
 /// grade already says whether the engine refused as required, and the suites name
 /// no stable rejection reason to grade it by.
-pub(crate) fn record(profile: &str, id: &str, result: &Result<(), String>) -> Record {
+pub fn record(profile: &str, id: &str, result: &Result<(), String>) -> Record {
     let (kind, message) = match result {
         Ok(()) => (OutcomeKind::Compared, String::new()),
         Err(error) => (OutcomeKind::Mismatch, error.clone()),
@@ -304,7 +306,7 @@ pub(crate) fn record(profile: &str, id: &str, result: &Result<(), String>) -> Re
 /// so a record with any other category is a bug here, and a `SPEC_CONTRADICTED`
 /// rationale on a passing entry is refused. `earl:info` carries the rationale text
 /// only, never a machine path or an engine error.
-pub(crate) fn report(suite: &Suite, purrdf_commit: &str, entries: &[Entry<'_>]) -> Report {
+pub fn report(suite: &Suite, purrdf_commit: &str, entries: &[Entry<'_>]) -> Report {
     let records = entries
         .iter()
         .map(|entry| {
@@ -336,13 +338,13 @@ pub(crate) fn report(suite: &Suite, purrdf_commit: &str, entries: &[Entry<'_>]) 
 
 /// The report of `entries` for the sample commit, serialized: what a harness
 /// compares against, without writing a file.
-pub(crate) fn sample_bytes(suite: &Suite, entries: &[Entry<'_>]) -> Vec<u8> {
+pub fn sample_bytes(suite: &Suite, entries: &[Entry<'_>]) -> Vec<u8> {
     earl_bytes(&report(suite, SAMPLE_COMMIT, entries)).expect("the report renders")
 }
 
 /// The report as sorted N-Triples, one statement per line. N-Triples is valid
 /// Turtle, and the reports page lists `*.ttl`.
-pub(crate) fn earl_bytes(report: &Report) -> Result<Vec<u8>, String> {
+pub fn earl_bytes(report: &Report) -> Result<Vec<u8>, String> {
     let dataset = to_earl(report).map_err(|error| error.to_string())?;
     let bytes = purrdf_rdf::serialize_dataset(
         dataset.as_ref(),
@@ -361,7 +363,7 @@ pub(crate) fn earl_bytes(report: &Report) -> Result<Vec<u8>, String> {
 }
 
 /// Write `bytes` as `file_name` under `dir`, creating `dir`; any failure is an error.
-pub(crate) fn write_report(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
+pub fn write_report(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
     let path = dir.join(file_name);
     std::fs::write(&path, bytes).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -372,19 +374,19 @@ pub(crate) fn write_report(dir: &Path, file_name: &str, bytes: &[u8]) -> Result<
 
 /// One statement of a written report, each term in its N-Triples spelling.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Statement {
-    pub(crate) s: String,
-    pub(crate) p: String,
-    pub(crate) o: String,
+pub struct Statement {
+    pub s: String,
+    pub p: String,
+    pub o: String,
 }
 
 /// An N-Triples term in angle brackets, as written.
-pub(crate) fn angle(iri: &str) -> String {
+pub fn angle(iri: &str) -> String {
     format!("<{iri}>")
 }
 
 /// A plain N-Triples string literal, as written for ordinary ASCII text.
-pub(crate) fn literal(text: &str) -> String {
+pub fn literal(text: &str) -> String {
     let mut out = String::from("\"");
     for ch in text.chars() {
         match ch {
@@ -400,7 +402,7 @@ pub(crate) fn literal(text: &str) -> String {
 }
 
 /// Parse a written report, one statement per line.
-pub(crate) fn statements(bytes: &[u8]) -> Result<Vec<Statement>, String> {
+pub fn statements(bytes: &[u8]) -> Result<Vec<Statement>, String> {
     let text = std::str::from_utf8(bytes).map_err(|error| error.to_string())?;
     text.lines()
         .map(|line| {
@@ -422,14 +424,14 @@ pub(crate) fn statements(bytes: &[u8]) -> Result<Vec<Statement>, String> {
 
 /// One assertion of a written report.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Assertion {
+pub struct Assertion {
     /// The outcome IRI.
-    pub(crate) outcome: String,
-    pub(crate) mode: String,
-    pub(crate) assertor: String,
-    pub(crate) subject: String,
+    pub outcome: String,
+    pub mode: String,
+    pub assertor: String,
+    pub subject: String,
     /// The `earl:info` object of the assertion's result as written, when present.
-    pub(crate) info: Option<String>,
+    pub info: Option<String>,
 }
 
 fn unangle(term: &str) -> Result<&str, String> {
@@ -441,7 +443,7 @@ fn unangle(term: &str) -> Result<&str, String> {
 /// The assertions of a written report by test IRI. Every assertion must name exactly
 /// one test, subject, assertor, mode and result, the result exactly one outcome; two
 /// assertions about one test are refused.
-pub(crate) fn assertions(statements: &[Statement]) -> Result<BTreeMap<String, Assertion>, String> {
+pub fn assertions(statements: &[Statement]) -> Result<BTreeMap<String, Assertion>, String> {
     let ty = angle(rdf::TYPE);
     let one = |subject: &str, predicate: &str| -> Result<String, String> {
         let mut values = statements
@@ -485,7 +487,7 @@ pub(crate) fn assertions(statements: &[Statement]) -> Result<BTreeMap<String, As
 }
 
 /// The assertions of a written report by entry key (see [`test_key`]).
-pub(crate) fn assertions_by_key(bytes: &[u8]) -> Result<BTreeMap<String, Assertion>, String> {
+pub fn assertions_by_key(bytes: &[u8]) -> Result<BTreeMap<String, Assertion>, String> {
     let by_iri = assertions(&statements(bytes)?)?;
     let mut out = BTreeMap::new();
     for (iri, assertion) in by_iri {
@@ -501,7 +503,7 @@ pub(crate) fn assertions_by_key(bytes: &[u8]) -> Result<BTreeMap<String, Asserti
 /// spelled out here independently of [`subject`] and [`assertor`]: every
 /// `earl:subject` is the PurRDF project resource and every `earl:assertedBy` is the
 /// assertor, each described once.
-pub(crate) fn check_descriptions(
+pub fn check_descriptions(
     bytes: &[u8],
     purrdf_commit: &str,
     suite_commit: &str,
@@ -590,14 +592,14 @@ pub(crate) fn check_descriptions(
 
 /// Every predicate a written report uses, which must be a known EARL, RDF, DOAP or
 /// FOAF term: in particular no date or time predicate.
-pub(crate) fn predicates(bytes: &[u8]) -> Result<BTreeSet<String>, String> {
+pub fn predicates(bytes: &[u8]) -> Result<BTreeSet<String>, String> {
     Ok(statements(bytes)?.into_iter().map(|t| t.p).collect())
 }
 
 // ── Agreement with the scoreboard ─────────────────────────────────────────────
 
 /// The counts of an EARL-scope scoreboard line, `LABEL: passed P, FAILED_LABEL F of N`.
-pub(crate) fn parse_scope_line(
+pub fn parse_scope_line(
     line: &str,
     label: &str,
     failed_label: &str,
@@ -624,7 +626,7 @@ pub(crate) fn parse_scope_line(
 /// computed from the match arms before any report existed) with the PRINTED
 /// EARL-scope line and the SERIALIZED report: the same entries, the same outcome for
 /// each, and the same totals in all three.
-pub(crate) fn agree(
+pub fn agree(
     serialized: &[u8],
     printed: &str,
     label: &str,
@@ -682,7 +684,7 @@ pub(crate) fn agree(
 // ── Mutations of a written report ─────────────────────────────────────────────
 
 /// The report with the first `earl:passed` outcome turned into `earl:failed`.
-pub(crate) fn mutate_flip(bytes: &[u8]) -> Vec<u8> {
+pub fn mutate_flip(bytes: &[u8]) -> Vec<u8> {
     let from = format!("{} {} .", angle(earl::OUTCOME), angle(earl::PASSED));
     let to = format!("{} {} .", angle(earl::OUTCOME), angle(earl::FAILED));
     let text = String::from_utf8(bytes.to_vec()).expect("a report is UTF-8");
@@ -691,7 +693,7 @@ pub(crate) fn mutate_flip(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// The report without its first assertion and that assertion's result.
-pub(crate) fn mutate_remove(bytes: &[u8]) -> Vec<u8> {
+pub fn mutate_remove(bytes: &[u8]) -> Vec<u8> {
     let all = statements(bytes).expect("a report parses");
     let first = all
         .iter()
@@ -719,7 +721,7 @@ pub(crate) fn mutate_remove(bytes: &[u8]) -> Vec<u8> {
 }
 
 /// The report with one more passing assertion, about a test it does not name.
-pub(crate) fn mutate_add(bytes: &[u8]) -> Vec<u8> {
+pub fn mutate_add(bytes: &[u8]) -> Vec<u8> {
     let mut text = String::from_utf8(bytes.to_vec()).expect("a report is UTF-8");
     let (a, r) = ("_:extraAssertion", "_:extraResult");
     let ty = angle(rdf::TYPE);
@@ -743,7 +745,7 @@ pub(crate) fn mutate_add(bytes: &[u8]) -> Vec<u8> {
 /// The environment parsing: neither setting writes nothing, both valid settings
 /// configure, and each way of getting it wrong is refused (each beside the valid
 /// neighbour it differs from).
-pub(crate) fn check_config_parsing() {
+pub fn check_config_parsing() {
     let os = |text: &str| Some(OsString::from(text));
     assert_eq!(parse_config(None, None), Ok(None));
     assert_eq!(
@@ -773,7 +775,7 @@ pub(crate) fn check_config_parsing() {
 
 /// Writing: a report lands under the directory it is given, and a failure to
 /// write is an error, not a skipped file.
-pub(crate) fn check_write_errors() {
+pub fn check_write_errors() {
     let scratch = purrdf_testkit::temp_dir!().expect("a scratch directory");
     let written = write_report(&scratch.path().join("nested"), "report.ttl", b"x\n")
         .expect("a writable directory is written to");
@@ -792,7 +794,7 @@ pub(crate) fn check_write_errors() {
 
 /// The key port, branch by branch: the page's own URN form, a URL under the tests
 /// folder, a foreign URL with a `/tests/` segment, and an IRI it leaves alone.
-pub(crate) fn check_test_key() {
+pub fn check_test_key() {
     let base = "file:///x/vectors/shacl12/tests/";
     assert_eq!(
         test_key("urn:x-shacl-test:/core/node/in-003", base),
@@ -820,7 +822,7 @@ pub(crate) fn check_test_key() {
 /// The mapping from a harness grade to a record, and from records to outcomes:
 /// a pass is `Compared` against `Compared`, a failure is a `Mismatch` carrying the
 /// error text, and neither is ever `cantTell` or `untested`.
-pub(crate) fn check_record_mapping(suite: &Suite) {
+pub fn check_record_mapping(suite: &Suite) {
     let pass = record(suite.profile, "core/node/in-001", &Ok(()));
     assert!(pass.passed);
     assert_eq!(pass.expected.kind, OutcomeKind::Compared);
@@ -868,7 +870,7 @@ pub(crate) fn check_record_mapping(suite: &Suite) {
 }
 
 /// The ledger classification, each refusal beside the neighbouring accepted case.
-pub(crate) fn check_classification() {
+pub fn check_classification() {
     let ok: Result<(), String> = Ok(());
     let err: Result<(), String> = Err("boom".to_owned());
     assert_eq!(classify("a", &ok, None, None), Ok(Class::Passed));
@@ -924,7 +926,7 @@ pub(crate) fn check_classification() {
 /// The scoreboard-agreement check passes on the real report and fails on each of
 /// three mutations of the serialized report alone: one outcome flipped, one
 /// assertion removed, one assertion added.
-pub(crate) fn check_agreement_and_mutations(
+pub fn check_agreement_and_mutations(
     serialized: &[u8],
     printed: &str,
     label: &str,

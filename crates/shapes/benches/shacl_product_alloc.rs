@@ -1,6 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
+// This bench is a plain `main`, but the workspace `missing_docs` lint applies to its
+// items just the same; the reporting helpers below are internal probes, not API.
+#![allow(missing_docs)]
+
 //! Allocation and peak-memory evidence for the SHACL prepared-shapes product,
 //! phase by phase.
 //!

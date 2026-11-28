@@ -15,9 +15,6 @@ impl StructuredError for crate::decoding::errors::FrameDescriptorError {
     InvalidFrameContentSizeFlag { got } => "zstd-frame-descriptor-invalid-frame-content-size-flag" {
     "got" => Unsigned(u128::from(*got)),
     },
-    ReservedBitSet { descriptor } => "zstd-frame-descriptor-reserved-bit-set" {
-    "descriptor" => Unsigned(u128::from(*descriptor)),
-    },
     }
 }
 

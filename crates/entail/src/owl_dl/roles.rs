@@ -253,10 +253,7 @@ impl RoleHierarchyError {
                 }
             }
             // These placeholders belong to the validated diagnostic template language.
-            #[expect(
-                clippy::literal_string_with_formatting_args,
-                reason = "the validated diagnostic template language interprets the braces"
-            )]
+            #[allow(clippy::literal_string_with_formatting_args)]
             let template = if terms[1].is_some() {
                 "{classification}; original lower {first}, upper {second}"
             } else {

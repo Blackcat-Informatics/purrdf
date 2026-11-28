@@ -22,7 +22,6 @@ use crate::blocks::sequence_section::{
 };
 use crate::common::MAX_BLOCK_SIZE;
 use crate::decoding::errors::{DecodeSequenceError, DecompressBlockError, ExecuteSequencesError};
-#[cfg(target_arch = "aarch64")]
 use crate::decoding::sequence_execution::do_offset_history;
 use crate::fse::SeqFSEDecoder;
 
@@ -91,7 +90,9 @@ pub(crate) struct SeqStreamSetup<'src, 'fse, K: crate::cpu_kernel::CpuKernel> {
     pub(crate) use_long_pipeline: bool,
 }
 
-/// Shared cold preamble for every CPU-tier sequence decoder.
+/// Shared cold preamble for every CPU-tier sequence decoder (the
+/// `K`-generic [`decode_and_execute_sequences_impl`] and the per-tier
+/// x86 monoliths in `seq_decoder_{scalar,bmi2,avx2,vbmi2}`).
 ///
 /// Consumes the one-shot `ddict_is_cold` flag, rebuilds the FSE tables
 /// if the block's mode bytes call for it, skips the start-of-stream
@@ -356,9 +357,17 @@ pub(crate) fn decode_and_execute_sequences<'fse, B: super::buffer_backend::Buffe
     }
 }
 
-// The NEON and SVE dispatch arms share this sequence loop.
-#[cfg(target_arch = "aarch64")]
-fn decode_and_execute_sequences_impl<
+// Per-tier x86 trampolines (`decode_and_execute_sequences_{bmi2,avx2,vbmi2}`)
+// live in `seq_decoder_bmi2.rs` / `seq_decoder_avx2.rs` /
+// `seq_decoder_vbmi2.rs`. Each owns its `#[target_feature]` attribute
+// and is called from the dispatch matcher above.
+
+// `dead_code` on x86_64 production: the per-kernel monoliths bypass
+// this shared body. Live on aarch64 (Neon/Sve dispatch arms) and on
+// every test build. Allowed because the function is conditionally
+// reachable per build configuration.
+#[allow(dead_code)]
+pub(crate) fn decode_and_execute_sequences_impl<
     'fse,
     B: super::buffer_backend::BufferBackend,
     K: crate::cpu_kernel::CpuKernel,
@@ -626,13 +635,23 @@ fn decode_and_execute_sequences_impl<
 }
 
 /// Pipelined sequence-decode + execute loop (long-block hot path).
-/// The caller restores the buffer and offset history on failure. This loop
-/// commits the new history only after draining the lookahead queue.
-#[cfg(target_arch = "aarch64")]
-#[expect(
-    clippy::too_many_arguments,
-    reason = "keep independent bit readers, decode state and output cursors in the loop's call interface"
-)]
+/// Extracted from `decode_and_execute_sequences` so it can be wrapped
+/// with `#[target_feature]` in a follow-up commit — that wrapper is
+/// what lets `peek_bits_triple`'s `extract_triple_pext` call inline
+/// through the now-target_feature-scoped caller, eliminating the
+/// `(u64,u64,u64)` sret ABI boundary that perf annotate attributed
+/// ~19.96% of its own samples to (and ~3.95% of total decode time).
+///
+/// Caller (`decode_and_execute_sequences`) owns the rollback on Err:
+/// on Err, the buffer-checkpoint restore and `*offset_hist = saved`
+/// fire at the call site, NOT inside this fn. This fn only commits
+/// `*offset_hist = shadow_hist` on the success-tail (after the drain
+/// loop), matching the legacy IIFE contract.
+///
+/// 13 parameters: the closure capture set the IIFE used implicitly.
+/// Grouping into a struct would push pressure off the argument
+/// registers and onto memory loads, undoing the extraction's win.
+#[allow(clippy::too_many_arguments, dead_code)]
 fn run_pipelined_sequence_loop<
     B: super::buffer_backend::BufferBackend,
     K: crate::cpu_kernel::CpuKernel,
@@ -770,8 +789,8 @@ pub(crate) struct ExecSeq {
 /// the post-resolve contract (raw `Sequence.of` is dead; only
 /// `actual_offset` reaches the executor) is visible at one site.
 #[inline(always)]
-#[cfg(target_arch = "aarch64")]
-fn execute_one_sequence_pipelined_resolved<B: super::buffer_backend::BufferBackend>(
+#[allow(dead_code)] // live on aarch64 + tests only; see decode_and_execute_sequences_impl
+pub(crate) fn execute_one_sequence_pipelined_resolved<B: super::buffer_backend::BufferBackend>(
     buffer: &mut super::decode_buffer::DecodeBuffer<B>,
     dict: Option<&crate::decoding::dictionary::Dictionary>,
     literals: &[u8],
@@ -794,6 +813,169 @@ fn execute_one_sequence_pipelined_resolved<B: super::buffer_backend::BufferBacke
     )
 }
 
+/// BMI2-tier trivial unsafe wrapper. Today delegates to the K-agnostic
+/// `execute_one_sequence_pipelined`; future Phase 4 commits replace the
+/// body with a BMI2-specific match-copy path (no AVX2 chunks; SSE2
+/// 16-byte direct via `wildcopy_no_overlap`). Exists now so the macro
+/// expansion can call `$exec_one_fn` uniformly via `unsafe { ... }`
+/// across all tiers.
+///
+/// # Safety
+/// Same as `execute_one_sequence_pipelined` (currently safe; wrapping
+/// in `unsafe fn` for macro uniformity).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "bmi2")]
+#[inline]
+#[allow(dead_code)] // vestigial pre-R12 macro-dispatch helper; per-kernel monoliths now go through seq_decoder_bmi2 directly
+pub(crate) unsafe fn execute_one_sequence_pipelined_bmi2<
+    B: super::buffer_backend::BufferBackend,
+>(
+    buffer: &mut super::decode_buffer::DecodeBuffer<B>,
+    dict: Option<&crate::decoding::dictionary::Dictionary>,
+    literals: &[u8],
+    lit_cur: &mut usize,
+    lit_len: usize,
+    seq: Sequence,
+    resolved_offset: u32,
+) -> Result<(), DecompressBlockError> {
+    execute_one_sequence_pipelined(
+        buffer,
+        dict,
+        literals,
+        lit_cur,
+        lit_len,
+        seq,
+        resolved_offset,
+    )
+}
+
+/// BMI2-tier ExecSeq-unpack wrapper. Delegates to safe K-agnostic
+/// resolver. See [`execute_one_sequence_pipelined_bmi2`] for the
+/// Phase 4 plan.
+///
+/// # Safety
+/// Caller must be in `#[target_feature(enable = "bmi2")]` scope.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "bmi2")]
+#[inline]
+#[allow(dead_code)] // vestigial pre-R12 macro-dispatch helper
+pub(crate) unsafe fn execute_one_sequence_pipelined_resolved_bmi2<
+    B: super::buffer_backend::BufferBackend,
+>(
+    buffer: &mut super::decode_buffer::DecodeBuffer<B>,
+    dict: Option<&crate::decoding::dictionary::Dictionary>,
+    literals: &[u8],
+    lit_cur: &mut usize,
+    lit_len: usize,
+    exec_seq: ExecSeq,
+) -> Result<(), DecompressBlockError> {
+    execute_one_sequence_pipelined_resolved(buffer, dict, literals, lit_cur, lit_len, exec_seq)
+}
+
+/// VBMI2-tier exec wrapper. Currently delegates via the AVX2 variant
+/// (VBMI2 hardware always has AVX2 + BMI2, so the AVX2-tier match-copy
+/// divergence applies). Future commits may add VBMI2-specific match
+/// paths (e.g. AVX-512 64-byte zmm wildcopy) but those require
+/// architectural buffer-slack changes (WILDCOPY_OVERLENGTH → 64).
+///
+/// # Safety
+/// Caller must be in the full VBMI2 target_feature set; VBMI2 implies
+/// AVX2+BMI2 per `select_x86_kernel` precedence.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "bmi2,avx2,avx512vbmi2,avx512f,avx512vl,avx512bw")]
+#[inline]
+#[allow(dead_code)] // vestigial pre-R12 macro-dispatch helper
+pub(crate) unsafe fn execute_one_sequence_pipelined_vbmi2<
+    B: super::buffer_backend::BufferBackend,
+>(
+    buffer: &mut super::decode_buffer::DecodeBuffer<B>,
+    dict: Option<&crate::decoding::dictionary::Dictionary>,
+    literals: &[u8],
+    lit_cur: &mut usize,
+    lit_len: usize,
+    seq: Sequence,
+    resolved_offset: u32,
+) -> Result<(), DecompressBlockError> {
+    // SAFETY: VBMI2 implies AVX2+BMI2; the AVX2 variant's
+    // target_feature scope is a subset of ours.
+    unsafe {
+        execute_one_sequence_pipelined_avx2(
+            buffer,
+            dict,
+            literals,
+            lit_cur,
+            lit_len,
+            seq,
+            resolved_offset,
+        )
+    }
+}
+
+/// VBMI2-tier ExecSeq-unpack wrapper. Delegates to AVX2 variant.
+///
+/// # Safety
+/// Caller must be in VBMI2 target_feature scope.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "bmi2,avx2,avx512vbmi2,avx512f,avx512vl,avx512bw")]
+#[inline]
+#[allow(dead_code)] // vestigial pre-R12 macro-dispatch helper
+pub(crate) unsafe fn execute_one_sequence_pipelined_resolved_vbmi2<
+    B: super::buffer_backend::BufferBackend,
+>(
+    buffer: &mut super::decode_buffer::DecodeBuffer<B>,
+    dict: Option<&crate::decoding::dictionary::Dictionary>,
+    literals: &[u8],
+    lit_cur: &mut usize,
+    lit_len: usize,
+    exec_seq: ExecSeq,
+) -> Result<(), DecompressBlockError> {
+    // SAFETY: VBMI2 ⊇ AVX2+BMI2.
+    unsafe {
+        execute_one_sequence_pipelined_resolved_avx2(
+            buffer, dict, literals, lit_cur, lit_len, exec_seq,
+        )
+    }
+}
+
+/// AVX2-tier ExecSeq-unpack wrapper. Same shape as
+/// [`execute_one_sequence_pipelined_resolved`] but routes the call to
+/// [`execute_one_sequence_pipelined_avx2`] (32-byte ymm match-copy
+/// wildcopy via `BufferBackend::exec_sequence_inline_avx2`).
+///
+/// # Safety
+/// Caller MUST be in `#[target_feature(enable = "avx2,bmi2")]` scope.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,bmi2")]
+#[inline]
+#[allow(dead_code)] // vestigial pre-R12 macro-dispatch helper
+pub(crate) unsafe fn execute_one_sequence_pipelined_resolved_avx2<
+    B: super::buffer_backend::BufferBackend,
+>(
+    buffer: &mut super::decode_buffer::DecodeBuffer<B>,
+    dict: Option<&crate::decoding::dictionary::Dictionary>,
+    literals: &[u8],
+    lit_cur: &mut usize,
+    lit_len: usize,
+    exec_seq: ExecSeq,
+) -> Result<(), DecompressBlockError> {
+    // SAFETY: same target_feature scope as the callee.
+    unsafe {
+        execute_one_sequence_pipelined_avx2(
+            buffer,
+            dict,
+            literals,
+            lit_cur,
+            lit_len,
+            Sequence {
+                ll: exec_seq.ll,
+                ml: exec_seq.ml,
+                of: 0,
+            },
+            exec_seq.actual_offset,
+        )
+    }
+}
+
 /// Pipelined-path executor variant: takes the offset already resolved
 /// by the decode-ahead `shadow_hist` walk, so `do_offset_history` is
 /// NOT called here (caller mutated only the shadow). Routes the match
@@ -805,6 +987,7 @@ fn execute_one_sequence_pipelined_resolved<B: super::buffer_backend::BufferBacke
 /// `match_length` exceeds the upfront `reserve(MAX_BLOCK_SIZE)`
 /// headroom.
 #[inline(always)]
+#[allow(dead_code)] // live on aarch64 + tests only; see decode_and_execute_sequences_impl
 pub(crate) fn execute_one_sequence_pipelined<B: super::buffer_backend::BufferBackend>(
     buffer: &mut super::decode_buffer::DecodeBuffer<B>,
     dict: Option<&crate::decoding::dictionary::Dictionary>,
@@ -970,12 +1153,107 @@ pub(crate) fn execute_one_sequence_pipelined<B: super::buffer_backend::BufferBac
     Ok(())
 }
 
+/// AVX2-tier variant of [`execute_one_sequence_pipelined`]. Differs at
+/// exactly one site: the match-copy inline path routes to
+/// `BufferBackend::exec_sequence_inline_avx2` (32-byte ymm wildcopy on
+/// the no-overlap match path) instead of the SSE2 16-byte default.
+///
+/// # Safety
+/// Caller MUST be in `#[target_feature(enable = "avx2,bmi2")]` scope
+/// AND have verified the runtime CPU advertises both features (the
+/// dispatcher in `decode_and_execute_sequences` gates this on
+/// `detect_cpu_kernel() == Avx2`).
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,bmi2")]
+#[inline]
+#[allow(dead_code)] // vestigial pre-R12 macro-dispatch helper
+pub(crate) unsafe fn execute_one_sequence_pipelined_avx2<
+    B: super::buffer_backend::BufferBackend,
+>(
+    buffer: &mut super::decode_buffer::DecodeBuffer<B>,
+    dict: Option<&crate::decoding::dictionary::Dictionary>,
+    literals: &[u8],
+    lit_cur: &mut usize,
+    lit_len: usize,
+    seq: Sequence,
+    resolved_offset: u32,
+) -> Result<(), DecompressBlockError> {
+    let lit_cur_before = *lit_cur;
+    let high = lit_cur_before
+        .checked_add(seq.ll as usize)
+        .filter(|&h| h <= lit_len)
+        .ok_or(ExecuteSequencesError::NotEnoughBytesForSequence {
+            wanted: lit_cur_before.saturating_add(seq.ll as usize),
+            have: lit_len,
+        })?;
+    // SAFETY: high <= lit_len, lit_cur_before <= high (checked above).
+    let lits = unsafe { literals.get_unchecked(lit_cur_before..high) };
+    *lit_cur = high;
+
+    if resolved_offset == 0 {
+        return Err(ExecuteSequencesError::ZeroOffset.into());
+    }
+
+    // Same gate as the SSE2 default — 16-byte literal slack bound
+    // unchanged because the AVX2 override keeps the SSE2 16-byte
+    // literal copy (the divergence is on match-copy only, see
+    // `UserSliceBackend::exec_sequence_inline_avx2`).
+    let inline_path_safe = B::SUPPORTS_INLINE_SEQUENCE_EXEC
+        && buffer.buffer_mut().inline_exec_ok(
+            seq.ll as usize,
+            seq.ml as usize,
+            resolved_offset as usize,
+        )
+        && lit_cur_before.checked_add(16).is_some_and(|b| b <= lit_len)
+        && (seq.ll as usize <= 16
+            || lit_cur_before
+                .checked_add((seq.ll as usize).next_multiple_of(16))
+                .is_some_and(|b| b <= lit_len));
+    if inline_path_safe {
+        let buf_len = buffer.len();
+        let offset = resolved_offset as usize;
+        let prefix_end = buf_len.checked_add(lits.len()).filter(|end| offset <= *end);
+        if prefix_end.is_none() {
+            buffer.try_push(lits).map_err(ExecuteSequencesError::from)?;
+            buffer
+                .repeat_lookahead_prefetched(dict, offset, seq.ml as usize)
+                .map_err(ExecuteSequencesError::from)?;
+            return Ok(());
+        }
+        // SAFETY: lit_cur_before + 16 <= lit_len so parent-slice read
+        // of 16 bytes from lit_src is in-bounds. Offset prefix-resident
+        // per the prefix_end check above. exec_sequence_inline_avx2
+        // requires target_feature(avx2) which the enclosing fn carries.
+        let lit_src = unsafe { literals.as_ptr().add(lit_cur_before) };
+        unsafe {
+            buffer
+                .buffer_mut()
+                .exec_sequence_inline_avx2(lit_src, seq.ll as usize, offset, seq.ml as usize)
+                .map_err(DecompressBlockError::ExecuteSequencesError)?;
+        }
+        // Inline path bypasses the wrapper's output counter; keep it current for
+        // backends that read it (Ring/Flat). Const-folded away for UserSlice.
+        if B::INLINE_EXEC_MAINTAINS_OUTPUT_COUNTER {
+            buffer.advance_output_counter((seq.ll + seq.ml) as u64);
+        }
+        return Ok(());
+    }
+
+    // Fallback: legacy push + repeat chain (K-agnostic, real CALL
+    // through the target_feature boundary). Same as the SSE2 default.
+    buffer.try_push(lits).map_err(ExecuteSequencesError::from)?;
+    buffer
+        .repeat_lookahead_prefetched(dict, resolved_offset as usize, seq.ml as usize)
+        .map_err(ExecuteSequencesError::from)?;
+    Ok(())
+}
+
 /// Per-sequence decode helper used by `decode_and_execute_sequences`.
 /// Identical to the inner `decode_one_sequence` of
 /// `decode_sequences_without_rle` — separate copy because Rust does not
 /// let us share a private fn-item across two outer functions cleanly.
 #[inline(always)]
-#[cfg(target_arch = "aarch64")]
+#[allow(dead_code)] // live on aarch64 + tests only; see decode_and_execute_sequences_impl
 fn decode_one_sequence_inline<K: crate::cpu_kernel::CpuKernel>(
     ll_dec: &mut SeqFSEDecoder<'_>,
     ml_dec: &mut SeqFSEDecoder<'_>,
@@ -1161,7 +1439,7 @@ pub(crate) fn maybe_update_fse_tables(
             vprintln!("Updating ll table");
             vprintln!("Used bytes: {}", bytes);
         }
-        ModeType::Rle => {
+        ModeType::RLE => {
             vprintln!("Use RLE ll table");
             if source.is_empty() {
                 return Err(DecodeSequenceError::MissingByteForRleLlTable);
@@ -1212,7 +1490,7 @@ pub(crate) fn maybe_update_fse_tables(
             bytes_read += bytes;
             scratch.offsets_long_share = compute_offsets_long_share(&scratch.offsets);
         }
-        ModeType::Rle => {
+        ModeType::RLE => {
             vprintln!("Use RLE of table");
             if of_source.is_empty() {
                 return Err(DecodeSequenceError::MissingByteForRleOfTable);
@@ -1263,7 +1541,7 @@ pub(crate) fn maybe_update_fse_tables(
             vprintln!("Updating ml table");
             vprintln!("Used bytes: {}", bytes);
         }
-        ModeType::Rle => {
+        ModeType::RLE => {
             vprintln!("Use RLE ml table");
             if ml_source.is_empty() {
                 return Err(DecodeSequenceError::MissingByteForRleMlTable);

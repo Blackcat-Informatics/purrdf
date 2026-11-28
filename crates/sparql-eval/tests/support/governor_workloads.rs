@@ -16,15 +16,15 @@ use purrdf_xsd::bigint::BigInt;
 use purrdf_xsd::datatype::{XSD_DECIMAL, XSD_INTEGER};
 
 /// The fixtures' caller-selected namespace.
-pub(crate) const EX: &str = "https://example.org/";
+pub const EX: &str = "https://example.org/";
 /// Numeric input rows.
-pub(crate) const NUMERIC_ROWS: usize = 20_000;
+pub const NUMERIC_ROWS: usize = 20_000;
 /// Exact SUM groups.
-pub(crate) const GROUPS: usize = 5_000;
+pub const GROUPS: usize = 5_000;
 /// Row-loop input rows, beyond the evaluator's parallel threshold.
-pub(crate) const LOOP_ROWS: usize = 16_384;
+pub const LOOP_ROWS: usize = 16_384;
 /// The original exact grouped expression.
-pub(crate) const GROUPED: &str = "PREFIX ex: <https://example.org/> SELECT ?g (SUM(?b * ?b) AS ?t) \
+pub const GROUPED: &str = "PREFIX ex: <https://example.org/> SELECT ?g (SUM(?b * ?b) AS ?t) \
                        WHERE { ?s ex:b ?b ; ex:g ?g } GROUP BY ?g";
 
 fn big_lexical(n: usize) -> String {
@@ -33,7 +33,7 @@ fn big_lexical(n: usize) -> String {
 }
 
 /// Per row `n`: an integer, a four-place decimal, a forty-digit integer and a group.
-pub(crate) fn numeric_dataset() -> Arc<RdfDataset> {
+pub fn numeric_dataset() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
     let p_i = b.intern_iri(&format!("{EX}i")).unwrap();
     let p_d = b.intern_iri(&format!("{EX}d")).unwrap();
@@ -66,7 +66,7 @@ pub(crate) fn numeric_dataset() -> Arc<RdfDataset> {
 }
 
 /// Per subject `i`: its integer modulo 100 and one three-element composite list.
-pub(crate) fn loop_dataset(rows: usize) -> Arc<RdfDataset> {
+pub fn loop_dataset(rows: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
     let v = builder.intern_iri(&format!("{EX}v")).unwrap();
     let list = builder.intern_iri(&format!("{EX}list")).unwrap();
@@ -85,7 +85,7 @@ pub(crate) fn loop_dataset(rows: usize) -> Arc<RdfDataset> {
 }
 
 /// The original `(shape, public prepared query text, expected row count)` lanes.
-pub(crate) const LOOP_QUERIES: &[(&str, &str, usize)] = &[
+pub const LOOP_QUERIES: &[(&str, &str, usize)] = &[
     (
         "filter",
         "SELECT ?s WHERE { ?s <https://example.org/v> ?v FILTER(?v >= 10) }",
@@ -104,11 +104,11 @@ pub(crate) const LOOP_QUERIES: &[(&str, &str, usize)] = &[
 ];
 
 /// Exact term identity over the existing row-loop fixture.
-pub(crate) const SAME_TERM: &str =
+pub const SAME_TERM: &str =
     "SELECT ?s WHERE { ?s <https://example.org/v> ?v FILTER(sameTerm(?v, 7)) }";
 
 /// Original row governors; each configured lane owns a never-cancelled signal.
-pub(crate) fn loop_governors() -> [(&'static str, Option<QueryGovernors>); 3] {
+pub fn loop_governors() -> [(&'static str, Option<QueryGovernors>); 3] {
     let stop = || Arc::new(CancellationFlag::new()) as Arc<dyn purrdf_sparql_eval::StopSignal>;
     [
         ("ungoverned", None),
@@ -128,7 +128,7 @@ pub(crate) fn loop_governors() -> [(&'static str, Option<QueryGovernors>); 3] {
 }
 
 /// All original group cells, canonicalized only outside measurement.
-pub(crate) fn grouped_answer(
+pub fn grouped_answer(
     engine: &NativeSparqlEngine,
     ds: &Arc<RdfDataset>,
     governors: Option<&QueryGovernors>,
@@ -160,14 +160,14 @@ pub(crate) fn grouped_answer(
 
 /// A complete typed bag oracle built outside the query measurement window.
 #[derive(Debug)]
-pub(crate) struct AnswerGuard {
+pub struct AnswerGuard {
     variables: Vec<String>,
     rows: Vec<SolutionRow>,
 }
 
 impl AnswerGuard {
     /// Every forty-digit square summed into its actual group with the shared BigInt home.
-    pub(crate) fn grouped() -> Self {
+    pub fn grouped() -> Self {
         let mut totals = vec![BigInt::zero(); GROUPS];
         for n in 0..NUMERIC_ROWS {
             let value = BigInt::from_digits(&big_lexical(n)).expect("fixture integer");
@@ -190,7 +190,7 @@ impl AnswerGuard {
     }
 
     /// Every original row subject and BIND value, including datatype and bag multiplicity.
-    pub(crate) fn row_loop(shape: &str) -> Self {
+    pub fn row_loop(shape: &str) -> Self {
         assert!(
             matches!(shape, "filter" | "bind" | "same_term"),
             "unsupported count shape {shape}"
@@ -223,7 +223,7 @@ impl AnswerGuard {
     }
 
     /// Assert the full typed bag, after counters and allocation windows close.
-    pub(crate) fn check(&self, result: &SparqlResult) {
+    pub fn check(&self, result: &SparqlResult) {
         let SparqlResult::Solutions {
             variables, rows, ..
         } = result
@@ -240,7 +240,7 @@ impl AnswerGuard {
     }
 
     /// Frozen typed-answer identity, shared by all compiled source projections.
-    pub(crate) fn signature(&self) -> String {
+    pub fn signature(&self) -> String {
         let hash =
             purrdf_hash::blake3::hash(format!("{:?}:{:?}", self.variables, self.rows).as_bytes());
         purrdf_hash::hex::encode(hash.as_bytes())

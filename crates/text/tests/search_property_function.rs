@@ -154,7 +154,6 @@ mod sparql;
 
 use sparql::{answer, solutions, subject, typed};
 
-#[expect(dead_code, reason = "this target uses a subset of the shared fixtures")]
 #[path = "support/index.rs"]
 mod index_fixture;
 

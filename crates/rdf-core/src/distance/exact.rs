@@ -30,7 +30,7 @@ pub(crate) const CHECKPOINT_CHUNKS: usize = 4;
 
 /// The fixed pairwise tree over the sixteen lanes: `(l, l+8)`, `(l, l+4)`,
 /// `(l, l+2)`, then `(0, 1)`.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -44,12 +44,16 @@ pub(crate) fn tree(ops: Binary64<'_>, lanes: &[f64; LANES]) -> f64 {
 }
 
 /// `sum(a[i] · b[i])` under the exact law, over the operands' common prefix.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
 )]
-// Multiply and add round separately, regardless of the target’s FMA support.
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "the multiply and the add are deliberately separate roundings: a fused \
+              multiply-add would make the bits depend on the target's FMA support"
+)]
 #[inline(always)]
 pub(crate) fn dot<A: Scalar, B: Scalar>(ops: Binary64<'_>, a: &[A], b: &[B]) -> f64 {
     let len = a.len().min(b.len());
@@ -79,12 +83,16 @@ pub(crate) fn dot<A: Scalar, B: Scalar>(ops: Binary64<'_>, a: &[A], b: &[B]) -> 
 /// checkpoint, so an overflow is reported as an overflow even under a bound an infinity
 /// would meet. A distance that is not abandoned is bit-identical to the full fold, because
 /// the checkpoints only read the lanes.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
 )]
-// Multiply and add round separately, regardless of the target’s FMA support.
+#[allow(
+    clippy::suboptimal_flops,
+    reason = "the multiply and the add are deliberately separate roundings: a fused \
+              multiply-add would make the bits depend on the target's FMA support"
+)]
 #[inline(always)]
 pub(crate) fn squared_euclidean_bounded<A: Scalar, B: Scalar>(
     ops: Binary64<'_>,
@@ -137,7 +145,7 @@ pub(crate) fn squared_euclidean_bounded<A: Scalar, B: Scalar>(
 /// Literally the bounded fold with a bound no finite sum can meet, so there is one
 /// squared-Euclidean body and the bounded form cannot drift from the full one. An
 /// overflow retains the original value at the refusal checkpoint.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -156,7 +164,7 @@ pub(crate) fn squared_euclidean<A: Scalar, B: Scalar>(
 }
 
 /// The finished distance under `measure`, retaining a non-finite refusal.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -180,7 +188,7 @@ pub(crate) fn distance<A: Scalar, B: Scalar>(
 
 /// PURREMB's cosine distance from a finished dot product: one product, one quotient,
 /// one subtraction, each rounded on its own.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -193,7 +201,7 @@ pub(crate) fn cosine(ops: Binary64<'_>, dot: f64, a_norm: f64, b_norm: f64) -> f
 }
 
 /// [`distance`], permitted to stop once the answer cannot clear `bound`.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -219,7 +227,7 @@ pub(crate) fn distance_bounded<A: Scalar, B: Scalar>(
 }
 
 /// A finished value, retaining the original bits when it is not finite.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -239,7 +247,7 @@ pub(crate) fn finite(value: f64) -> Result<f64, NonFinite> {
 ///
 /// The measure is matched once, outside the row loop, so the loop over rows is one
 /// monomorphic kernel per measure with no dispatch inside it.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"
@@ -293,7 +301,7 @@ pub(crate) fn distances<Q: Scalar, T: Scalar>(
 }
 
 /// The rows named by `ids` against `query`, in `ids` order.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the law's single body must be inlined into every dispatch wrapper so each \
               wrapper compiles it under its own target features"

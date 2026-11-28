@@ -638,7 +638,7 @@ pub unsafe extern "C" fn purrdf_query_xpath_regex(
 
 /// The one body of [`purrdf_query`] and [`purrdf_query_xpath_regex`]. `regex_profile`
 /// is null for the entry point that has no such parameter.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -881,7 +881,7 @@ pub unsafe extern "C" fn purrdf_query_json_xpath_regex(
 }
 
 /// The one body of [`purrdf_query_json`] and [`purrdf_query_json_xpath_regex`].
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -1071,7 +1071,7 @@ pub unsafe extern "C" fn purrdf_query_governed_xpath_regex(
 }
 
 /// The one body of [`purrdf_query_governed`] and [`purrdf_query_governed_xpath_regex`].
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -1357,7 +1357,7 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed_xpath_regex(
 
 /// The one body of [`purrdf_query_entailment_governed`] and
 /// [`purrdf_query_entailment_governed_xpath_regex`].
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]
@@ -1676,7 +1676,7 @@ pub unsafe extern "C" fn purrdf_update_governed_xpath_regex(
 }
 
 /// The shared body of the governed UPDATE entry points, including geographic selection.
-#[expect(
+#[allow(
     clippy::too_many_arguments,
     reason = "the C entry points' inputs and outputs, passed through unchanged"
 )]

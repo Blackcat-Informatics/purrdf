@@ -49,10 +49,6 @@ use purrdf_rdf::{
     SkosConfig, SkosGraphSelection, SkosSourceRoles, SkosTargetRoles,
 };
 
-#[expect(
-    dead_code,
-    reason = "this target uses a subset of the shared projection configuration fixtures"
-)]
 #[path = "support/projection_configs.rs"]
 mod projection_configs;
 use projection_configs::{

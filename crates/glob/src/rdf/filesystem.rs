@@ -84,12 +84,9 @@ impl<'v, S: Admission> PreparedPlan<'v, S> {
     ///
     /// # Errors
     /// Refuses incompatible plans and any source, work or storage failure.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "The refusal retains original diagnostic and allocation owners inline"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "The refusal retains original diagnostic and allocation owners inline"
     )]
     pub fn execute_files<T: Source, W: Admission>(
         self,
@@ -135,12 +132,9 @@ impl<S: Admission, W: Admission> FileExecution<'_, S, W> {
     ///
     /// # Errors
     /// Refuses invalid or conflicting projection metadata and any native output failure.
-    #[cfg_attr(
-        target_pointer_width = "64",
-        expect(
-            clippy::result_large_err,
-            reason = "The refusal retains original RDF and allocation owners inline"
-        )
+    #[expect(
+        clippy::result_large_err,
+        reason = "The refusal retains original RDF and allocation owners inline"
     )]
     pub fn export<O: Admission + Send + Sync + 'static>(
         self,

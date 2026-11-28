@@ -48,8 +48,8 @@ use crate::io::{Error, Read};
 pub(crate) const WILDCOPY_OVERLENGTH: usize = 32;
 
 /// Single-compare output-capacity guard for the inline sequence-exec hot
-/// path, shared by the inlined kernels and [`BufferBackend::exec_sequence_inline`]
-/// implementations so the per-sequence bounds check has
+/// path, shared by every [`BufferBackend::exec_sequence_inline`] /
+/// `exec_sequence_inline_avx2` override so the per-sequence bounds check has
 /// one implementation instead of a duplicated `checked_add` chain.
 ///
 /// Returns `lit_length + match_length` when the literal+match write plus
@@ -181,13 +181,14 @@ pub(crate) trait BufferBackend: Sized {
     ///   (see `FrameDecoder::run_direct_decode`'s post-block FCS
     ///   check). Hash is likewise deferred to the post-block
     ///   full-slice pass in `FrameDecoder::decode_all`.
+    #[allow(unused_variables, unused_mut)]
     #[inline(always)]
     unsafe fn exec_sequence_inline(
         &mut self,
-        _lit_src: *const u8,
-        _lit_length: usize,
-        _offset: usize,
-        _match_length: usize,
+        lit_src: *const u8,
+        lit_length: usize,
+        offset: usize,
+        match_length: usize,
     ) -> Result<(), super::errors::ExecuteSequencesError> {
         // Default body is statically unreachable when the dispatch
         // site honours `SUPPORTS_INLINE_SEQUENCE_EXEC`. Backends that
@@ -199,14 +200,81 @@ pub(crate) trait BufferBackend: Sized {
         );
     }
 
-    /// Base pointer used by the x86_64 inlined sequence kernels. The caller
-    /// must check that the backend's output and match source are contiguous.
+    /// AVX2-tier variant of [`Self::exec_sequence_inline`]. Same
+    /// contract but the **no-overlap match-copy** path (`offset >= 32`)
+    /// emits 32-byte ymm stores via `wildcopy_no_overlap_avx2`. Invoked only from
+    /// `execute_one_sequence_pipelined_avx2` which is itself
+    /// `#[target_feature(enable = "avx2,bmi2")]`.
+    ///
+    /// **Literal copy stays on SSE2 16-byte** (`copy16` +
+    /// `wildcopy_no_overlap`) — the inline-path slack gate in
+    /// `execute_one_sequence_pipelined_avx2` is built around the
+    /// 16-byte literal over-read bound from the SSE2 default; widening
+    /// to 32-byte AVX2 stores on literals would require tightening
+    /// that gate to `lit_cur_before + 32 <= lit_len`, rejecting more
+    /// near-end-of-block sequences from the inline fast path. The
+    /// AVX2 divergence is therefore confined to the match-copy side,
+    /// where the per-block `reserve(MAX_BLOCK_SIZE)` plus the
+    /// `WILDCOPY_OVERLENGTH = 32` slack on `UserSliceBackend`
+    /// accommodates the 31-byte ymm overshoot without changing the
+    /// caller-side contract.
+    ///
+    /// Match-copy WILDCOPY overshoot at destination grows from 15 to
+    /// 31 bytes for the AVX2 path (32-byte stride overshoots up to 31
+    /// bytes past `tail + total`); the override raises
+    /// `MAX_WILDCOPY_OVERSHOOT` accordingly.
+    ///
+    /// Default impl is `unreachable!`. The x86_64 backends override:
+    /// `UserSliceBackend` (direct-decode path, fixed slice with
+    /// `WILDCOPY_OVERLENGTH` slack) and `FlatBuf` (single-segment
+    /// frames, Vec-backed with `with_capacity(+ WILDCOPY_OVERLENGTH)`
+    /// slack). Both gate via `SUPPORTS_INLINE_SEQUENCE_EXEC`; runtime
+    /// CPU AVX2 presence is gated at the dispatcher in
+    /// `sequence_section_decoder::decode_and_execute_sequences` via
+    /// `detect_cpu_kernel() == Avx2`. `RingBuffer` does NOT override
+    /// — multi-segment frames still go through the layered
+    /// `repeat()` chain that handles wrap correctly.
+    ///
+    /// # Safety
+    /// Same preconditions as [`Self::exec_sequence_inline`] plus:
+    /// caller MUST be in `#[target_feature(enable = "avx2,bmi2")]`
+    /// scope (the only call site is the AVX2-tier execute path which
+    /// satisfies this), and the destination slack at the writable
+    /// tail MUST be ≥ 31 bytes past `tail + total` (upstream zstd's 16-byte
+    /// SIMD-copy overshoot bound doubles for 32-byte ymm stride).
+    #[allow(unused_variables, unused_mut, dead_code)]
+    #[inline(always)]
+    unsafe fn exec_sequence_inline_avx2(
+        &mut self,
+        lit_src: *const u8,
+        lit_length: usize,
+        offset: usize,
+        match_length: usize,
+    ) -> Result<(), super::errors::ExecuteSequencesError> {
+        unreachable!(
+            "exec_sequence_inline_avx2 called on backend that did not override the default \
+             (UserSliceBackend and FlatBuf override on x86_64)"
+        );
+    }
+
+    /// Base pointer of the contiguous output region, for the inline
+    /// match-copy macro `exec_sequence_avx2_inline!` (which expands the
+    /// AVX2 `ZSTD_execSequence` body textually at the sequence-loop call
+    /// site so it fuses into the per-tier monolith — `#[target_feature]`
+    /// functions cannot be `#[inline(always)]`
+    /// (compiler restriction). Only valid
+    /// when [`Self::SUPPORTS_INLINE_SEQUENCE_EXEC`]; the linear backends
+    /// (`UserSliceBackend`, `FlatBuf`) override, `RingBuffer` never reaches
+    /// it (gated, wrap-aware fallback).
     ///
     /// # Safety
     /// Caller must hold the macro's preconditions (inline path gated on
     /// `SUPPORTS_INLINE_SEQUENCE_EXEC` + capacity validated by
     /// `sequence_output_fits`).
-    #[cfg(target_arch = "x86_64")]
+    // Only reached from the x86_64 AVX2 macro; dead on other targets
+    // (i686/aarch64 use the scalar/NEON exec paths), same as
+    // `exec_sequence_inline_avx2` above.
+    #[allow(dead_code)]
     #[inline(always)]
     unsafe fn inline_exec_base_ptr(&mut self) -> *mut u8 {
         unreachable!("inline_exec_base_ptr on a backend without inline-sequence support")
@@ -221,7 +289,7 @@ pub(crate) trait BufferBackend: Sized {
     /// # Safety
     /// `new_tail` bytes `[0, new_tail)` must be initialised (the macro just
     /// wrote `[tail, new_tail)`); `new_tail <= capacity`.
-    #[cfg(target_arch = "x86_64")]
+    #[allow(dead_code)]
     #[inline(always)]
     unsafe fn inline_exec_commit(&mut self, _new_tail: usize) {
         unreachable!("inline_exec_commit on a backend without inline-sequence support")
@@ -245,8 +313,9 @@ pub(crate) trait BufferBackend: Sized {
     /// path only when this returns `false`. `offset` is the resolved match
     /// offset (post-repcode), needed by the ring to verify the match source is
     /// contiguous; linear backends ignore it.
+    #[allow(unused_variables)]
     #[inline(always)]
-    fn inline_exec_ok(&self, _lit_length: usize, _match_length: usize, _offset: usize) -> bool {
+    fn inline_exec_ok(&self, lit_length: usize, match_length: usize, offset: usize) -> bool {
         true
     }
 
@@ -428,15 +497,108 @@ pub(crate) trait BufferBackend: Sized {
         self.extend_and_fill(fill_with, fill_length);
         Ok(())
     }
+
+    /// Fallible variant of [`Self::extend_from_within_unchecked`].
+    /// Validates `start + len <= self.len()` (source bound) and then
+    /// `reserve(len)` to grow capacity for the write. The default
+    /// impl deliberately omits a linear `tail + len <= cap` check
+    /// because `RingBuffer::tail` is a modular wrap-index where
+    /// `tail + len > cap` is normal mid-stream (the write straddles
+    /// the wrap point). Fixed-capacity backends (`UserSliceBackend`)
+    /// override with an explicit linear capacity check that DOES
+    /// validate `tail + len <= cap`. On `Err` the backend state is
+    /// untouched.
+    ///
+    /// Unlike the unsafe variant, this is a SAFE entry point: the
+    /// bounds check moves into the method, so callers don't need to
+    /// satisfy the `Self::extend_from_within_unchecked` safety
+    /// contract at the call site.
+    ///
+    /// NOTE: Retained for the SAFE-surface test matrix and as the
+    /// wrap-aware reference impl; not called on production paths
+    /// (hence `#[allow(dead_code)]`). The Compressed-block direct path
+    /// is already DoS-safe WITHOUT this method: its match-repeat copies
+    /// go through `DecodeBuffer::repeat_lookahead_prefetched`, which
+    /// pre-checks capacity via [`Self::try_reserve`] before the
+    /// unchecked wildcopy, and its literal+match sequence copies go
+    /// through `exec_sequence_inline` (returns `Result`). RLE/Raw use
+    /// `try_extend_and_fill` / `try_extend`. So every adversarial
+    /// overshoot already surfaces as a structured error.
+    #[allow(dead_code)]
+    fn try_extend_from_within(&mut self, start: usize, len: usize) -> Result<(), BackendOverflow> {
+        // Default impl: a SAFE method must NOT delegate to the
+        // unsafe variant without validating its safety contract.
+        // Validate the source range (`start + len <= self.len()`),
+        // then `reserve(len)` to guarantee destination capacity
+        // (growable-backend invariant — see the linear vs wrap-aware
+        // discussion below). NO eager `tail + len <= cap` check
+        // because `RingBuffer::tail` is a modular wrap-index where
+        // `tail + len > cap` is normal mid-stream. Fixed-capacity
+        // backends (`UserSliceBackend`) override with their own
+        // wrap-unaware linear capacity check.
+        let tail = self.tail();
+        let capacity = self.cap();
+        let src_end = start.checked_add(len).ok_or(BackendOverflow {
+            tail,
+            requested: len,
+            capacity,
+        })?;
+        if src_end > self.len() {
+            return Err(BackendOverflow {
+                tail,
+                requested: len,
+                capacity,
+            });
+        }
+        // Growth + linear destination bound:
+        //
+        // `reserve(len)` is the growable-backend invariant — after
+        // it returns, the backend has room for `len` more bytes.
+        // For `FlatBuf` that's a linear `Vec::reserve`; for
+        // `RingBuffer` it's a wrap-aware grow that maintains the
+        // ring invariant. EITHER way, the only check needed by the
+        // default impl is the `start + len` source bound above —
+        // capacity for the write is guaranteed by `reserve`.
+        //
+        // We deliberately do NOT add a `tail + len <= cap` check
+        // here: `RingBuffer::tail` is a modular index that wraps,
+        // so a `tail + len > cap` situation is normal mid-stream
+        // (the write straddles the wrap and lands at the head end).
+        // An eager linear check would reject valid wrap writes and
+        // return `Err(BackendOverflow)` on inputs the underlying
+        // `extend_from_within_unchecked` would handle correctly.
+        // Fixed-capacity backends (`UserSliceBackend`) override
+        // `try_extend_from_within` with their own non-wrap-aware
+        // capacity check.
+        self.reserve(len);
+        // SAFETY: source bound `start + len <= self.len()` checked
+        // above; destination capacity guaranteed by the just-called
+        // `reserve(len)`, both linear (FlatBuf) and wrap-aware
+        // (RingBuffer). Wrap-unaware fixed-capacity backends
+        // override this method.
+        unsafe { self.extend_from_within_unchecked(start, len) };
+        Ok(())
+    }
 }
 
 /// Backend write failed. Surfaced only by fallible `try_*` methods
 /// on fixed-capacity backends (`UserSliceBackend`); growable backends
 /// (`FlatBuf`, `RingBuffer`) never produce this — they grow instead.
 ///
-/// Returns the write position, requested length, and capacity when a write
-/// would exceed the output slice or its extent cannot be represented.
-/// The decoder converts this into one of two
+/// Covers three distinct failure modes on `UserSliceBackend`:
+/// 1. **Destination capacity overshoot** — `tail + len > slice.len()`:
+///    the new tail would exceed the caller's output slice.
+/// 2. **Arithmetic overflow** — `tail.checked_add(len)` overflowed
+///    (or `head.checked_add(start)` in `try_extend_from_within`):
+///    adversarial `len` near `usize::MAX` triggers the wrap-guard
+///    `ok_or` branch.
+/// 3. **Source-range violation** (`try_extend_from_within` only) —
+///    `abs_end > self.tail`: the requested match-copy source range
+///    extends past the live region.
+///
+/// All three modes return the same struct shape so the caller doesn't
+/// need to discriminate; `tail` / `requested` / `capacity` carry the
+/// diagnostic context. The decoder converts this into one of two
 /// structured variants on the way out of `FrameDecoder`:
 /// `ExecuteSequencesError::OutputBufferOverflow` (literal-push and
 /// upstream zstd-inline paths inside the sequence executor) or

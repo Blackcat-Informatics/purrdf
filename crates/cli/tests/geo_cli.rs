@@ -4,8 +4,7 @@
 //! Real binary requests and explicit query profiles use the shared Rust boundary.
 
 mod support;
-use purrdf_testkit::text::stdout_utf8;
-use support::{pipe, run, stderr, write_file};
+use support::{pipe, run, stderr, stdout_utf8, write_file};
 
 const DISTANCE: &str = r#"{"version":1,"operation":"distance","a":{"longitude":"0","latitude":"0"},"b":{"longitude":"1","latitude":"0"}}"#;
 

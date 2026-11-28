@@ -51,7 +51,7 @@ impl Clone for RdfTriple {
 }
 
 /// Direct child calls are literally 4 -> 3 -> 2 -> 1 -> 0, then the existing heap fold.
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the fixed compile-time depth removes the prewalk and recursive derive dispatch"
 )]
@@ -73,7 +73,7 @@ fn clone_at_depth<const DEPTH: u8>(triple: &RdfTriple) -> RdfTriple {
     }
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "only the literal bounded instantiations call each other before the heap fold"
 )]
@@ -174,7 +174,7 @@ fn eq_root(a: &RdfTriple, b: &RdfTriple) -> bool {
     eq_at_depth::<DIRECT_LEVELS>(a, b)
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the fixed compile-time depth removes the prewalk and recursive derive dispatch"
 )]
@@ -189,7 +189,7 @@ fn eq_at_depth<const DEPTH: u8>(a: &RdfTriple, b: &RdfTriple) -> bool {
     triple_fields_eq(a, b) && eq_child(&a.subject, &b.subject) && eq_child(&a.object, &b.object)
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "only the literal bounded instantiations call each other before the heap walk"
 )]
@@ -279,7 +279,7 @@ fn hash_root<H: Hasher>(triple: &RdfTriple, state: &mut H) {
     hash_at_depth::<DIRECT_LEVELS, H>(triple, state);
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "the fixed compile-time depth removes the prewalk and recursive derive dispatch"
 )]
@@ -298,7 +298,7 @@ fn hash_at_depth<const DEPTH: u8, H: Hasher>(triple: &RdfTriple, state: &mut H) 
     });
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "only the literal bounded instantiations call each other before the heap walk"
 )]
@@ -617,7 +617,7 @@ fn drop_children<const LEVELS: u8>(triple: &mut RdfTriple) {
     }
 }
 
-#[expect(
+#[allow(
     clippy::inline_always,
     reason = "only the literal bounded instantiations call each other before the heap walk"
 )]
