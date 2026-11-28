@@ -643,6 +643,8 @@ contracts and the implemented surfaces above are the basis for that growth.
   [canonical labelling of blank nodes](./docs/design/purrdf-canonical-labelling.md),
   [storage contracts](./crates/rdf-core/STORAGE.md) and
   [release process](./docs/RELEASE.md).
+- [Shared job homes](./docs/SHARED-JOB-HOMES.md) lists the owner and entry
+  points for each job in the helper ledger.
 
 ```sh
 make metadata      # regenerate and verify projections and license bundles

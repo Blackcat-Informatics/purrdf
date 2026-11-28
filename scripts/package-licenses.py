@@ -177,7 +177,7 @@ def add_runtime(path: Path, profile: str) -> None:
 
 def metadata() -> dict:
     result = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1", "--offline"],
+        ["cargo", "metadata", "--locked", "--format-version", "1"],
         cwd=ROOT,
         capture_output=True,
         text=True,

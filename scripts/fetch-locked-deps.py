@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-"""Populate all-platform inputs for the subsequent offline dependency audit."""
+"""Fetch the locked dependency sources for the dependency and license audits."""
 
 import subprocess
 from pathlib import Path

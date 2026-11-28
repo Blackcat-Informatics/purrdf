@@ -85,7 +85,7 @@ done
 
 metadata_json="$(mktemp)"
 trap 'rm -f "${metadata_json}" "${CRATES_IO_BODY:-}"' EXIT
-(cd "${repo}" && cargo metadata --no-deps --format-version 1) > "${metadata_json}"
+(cd "${repo}" && cargo metadata --no-deps --locked --format-version 1) > "${metadata_json}"
 if [[ -z "${VERSION}" ]]; then
   if [[ "$mode" == "self-test" ]]; then
     VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["packages"][0]["version"])' "${metadata_json}")"

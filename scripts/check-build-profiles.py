@@ -107,7 +107,7 @@ def member_ids(repo: Path) -> set[str]:
     its id as a bare ``path+file://...#1.1.0`` with no package name in it at all,
     and a name-matching gate would silently stop covering it.
     """
-    out = _cargo(["metadata", "--no-deps", "--format-version", "1"], repo)
+    out = _cargo(["metadata", "--no-deps", "--locked", "--format-version", "1"], repo)
     packages = field(json.loads(out), "packages", "cargo metadata")
     return {field(p, "id", "cargo metadata package") for p in packages}
 

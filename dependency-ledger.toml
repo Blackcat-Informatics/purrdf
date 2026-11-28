@@ -151,7 +151,7 @@ csv = [
 # Every external (non-workspace) package in every committed Cargo.lock, with
 # why it stays. `category` and `reason` (and `duplicate_reason`, required when
 # a name resolves at more than one version) are authored; `metrics` is computed
-# from `cargo metadata --locked --offline` and must match it exactly. This
+# from `cargo metadata --locked` and must match it exactly. This
 # section is re-rendered by --update-metrics, so a comment written here is
 # lost: put the rationale in `reason`.
 #

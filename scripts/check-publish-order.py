@@ -7,7 +7,7 @@
 publish order; the release workflow, the token bootstrap and the crates.io
 preflight all source it. `cargo publish` cannot be undone, so the order has to
 be right before it runs, and "right" is four checks this script makes from the
-workspace's own dependency graph (`cargo metadata`, offline):
+workspace's declared member dependencies (`cargo metadata --no-deps --locked`):
 
   1. The release set is EXACTLY the publishable workspace members — every
      member without `publish = false`, and nothing else. A publishable crate
@@ -60,7 +60,7 @@ def load_lists() -> tuple[list[str], list[str]]:
 def load_graph() -> tuple[set[str], dict[str, set[str]], dict[str, set[str]]]:
     """(publishable members, normal deps, dev deps) among workspace members."""
     proc = subprocess.run(
-        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"],
+        ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked"],
         capture_output=True,
         text=True,
         check=False,

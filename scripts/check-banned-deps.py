@@ -47,7 +47,7 @@ entry with a category — ``spec-codec``, ``crypto``, ``runtime``, ``oracle``,
 ``bench`` or ``binding`` for a direct dependency of a workspace member,
 ``transitive:<direct>`` for a package only reached through that direct
 dependency — a one-line ``reason``, and a ``metrics`` table computed from
-``cargo metadata --locked --offline`` (never the network):
+``cargo metadata --locked``:
 
 * ``direct`` — a workspace member names it directly, on any edge kind;
 * ``exclusive_closure`` — for a direct dependency, how many external packages
@@ -673,7 +673,7 @@ PACKAGES_PREAMBLE = """\
 # Every external (non-workspace) package in every committed Cargo.lock, with
 # why it stays. `category` and `reason` (and `duplicate_reason`, required when
 # a name resolves at more than one version) are authored; `metrics` is computed
-# from `cargo metadata --locked --offline` and must match it exactly. This
+# from `cargo metadata --locked` and must match it exactly. This
 # section is re-rendered by --update-metrics, so a comment written here is
 # lost: put the rationale in `reason`.
 #
@@ -917,12 +917,11 @@ def merge_facts(
 
 
 def cargo_metadata(manifest: Path, platform: str | None = None) -> dict:
-    """``cargo metadata --locked --offline`` for one workspace root."""
+    """``cargo metadata --locked`` for one workspace root."""
     command = [
         "cargo",
         "metadata",
         "--locked",
-        "--offline",
         "--format-version",
         "1",
         "--manifest-path",

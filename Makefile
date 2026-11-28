@@ -41,7 +41,7 @@ MAKEFLAGS += --no-print-directory
 # host/workspace configuration. An explicit environment or command-line value
 # bypasses discovery.
 ifeq ($(origin CARGO_TARGET_DIR), undefined)
-CARGO_TARGET_DIR := $(shell cargo metadata --no-deps --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)
+CARGO_TARGET_DIR := $(shell cargo metadata --no-deps --locked --format-version 1 2>/dev/null | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)
 endif
 ifeq ($(strip $(CARGO_TARGET_DIR)),)
 $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo metadata and python3 are available)
@@ -78,10 +78,20 @@ help: ## Show this help.
 	@grep -E '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-18s %s\n", $$1, $$2}'
 
 metadata: ## Regenerate + verify workspace metadata and generated artifacts.
-	cargo metadata --no-deps --format-version 1 >/dev/null
+	cargo metadata --no-deps --format-version 1 --locked >/dev/null
 	bash scripts/check-generated.sh --write
+	$(MAKE) write-shared-job-homes
 	$(MAKE) check-sssom-corpus
 	$(MAKE) license-bundles
+
+SHARED_JOB_HOMES := docs/SHARED-JOB-HOMES.md
+
+.PHONY: write-shared-job-homes check-shared-job-homes
+write-shared-job-homes: ## Regenerate the reference from the shared-job ledger.
+	cargo run -q --locked -p helper-census -- --write-job-homes $(SHARED_JOB_HOMES)
+
+check-shared-job-homes: ## Refuse a stale shared-job reference.
+	cargo run -q --locked -p helper-census -- --check-job-homes $(SHARED_JOB_HOMES)
 
 .PHONY: check-sssom-corpus
 check-sssom-corpus: ## Parse and validate the committed accessibility mappings.
@@ -148,6 +158,7 @@ workspace-gate: ## Run the compiler and hygiene checks behind the hosted `worksp
 	python3 scripts/check-hash-domains.py
 	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
+	$(MAKE) check-shared-job-homes
 	python3 scripts/check-issue-refs.py
 	python3 scripts/check-brand-casing.py
 	python3 scripts/check-spec-attribution.py --self-test
@@ -318,7 +329,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
 doc: ## Build docs for the 40 publishable crates with rustdoc warnings denied.
-	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
+	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli --locked
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
 	@set -eu; \
@@ -500,10 +511,10 @@ miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT p
 	@# Tree Borrows, strict provenance (no integer-to-pointer casts), and a
 	@# 32-bit target, where `usize` arithmetic and layout differ.
 	@# Select the unsafe storage module, not unrelated semantic test names.
-	cargo miri test -p purrdf-core --lib small::tests::
-	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core --lib small::tests::
-	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core --lib small::tests::
-	cargo miri test -p purrdf-core --lib small::tests:: --target i686-unknown-linux-gnu
+	cargo miri test --locked -p purrdf-core --lib small::tests::
+	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test --locked -p purrdf-core --lib small::tests::
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-core --lib small::tests::
+	cargo miri test --locked -p purrdf-core --lib small::tests:: --target i686-unknown-linux-gnu
 	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
 	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
 	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash-conformance --test blake3 streaming_boundary_answers
@@ -550,7 +561,7 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py
 
 rdf-core-hygiene: ## Prove the kernel ring-fence: no PyO3 in purrdf-core; the root and the ring-fenced crates depend only on what layers.toml lists.
-	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
+	@tree=$$(cargo tree --locked --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
 	if echo "$$tree" | grep -q 'pyo3 v'; then \
 		echo "FAIL: purrdf-core pulls PyO3 as a NORMAL dependency"; \
 		echo "$$tree" | grep 'pyo3 v'; exit 1; \

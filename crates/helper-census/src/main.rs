@@ -22,6 +22,7 @@ mod asm_reports;
 mod capacity;
 mod census;
 mod glossary;
+mod job_homes;
 mod layout;
 mod ledger;
 mod non_rust;
@@ -65,6 +66,11 @@ Modes:
   --merge-asm-reports validate reports against source/manifest/producer receipts
                      using a JSON request read from stdin
   --dump-ledger      print the parsed ledger as JSON
+  --job-homes        print the shared-job reference as Markdown
+  --write-job-homes FILE
+                     regenerate the shared-job reference
+  --check-job-homes FILE
+                     refuse an out-of-date shared-job reference
   --self-test        run the seeded fixtures and exit
   --no-features      refuse Cargo features except the empty cargo-c marker,
                      and feature predicates in Rust cfg invocations
@@ -102,6 +108,7 @@ enum Mode {
     Index,
     AsmReports,
     DumpLedger,
+    JobHomes(job_homes::Output),
     SelfTest,
     NoFeatures,
     PythonBindingTests,
@@ -169,6 +176,20 @@ fn parse_arguments(mut args: impl Iterator<Item = String>) -> Result<Arguments, 
             "--index" => set(Mode::Index, &mut mode)?,
             "--merge-asm-reports" => set(Mode::AsmReports, &mut mode)?,
             "--dump-ledger" => set(Mode::DumpLedger, &mut mode)?,
+            "--job-homes" => set(Mode::JobHomes(job_homes::Output::Stdout), &mut mode)?,
+            "--write-job-homes" | "--check-job-homes" => {
+                let path = args
+                    .next()
+                    .filter(|path| !path.starts_with("--"))
+                    .ok_or_else(|| format!("{arg} needs a file"))?
+                    .into();
+                let output = if arg == "--write-job-homes" {
+                    job_homes::Output::Write(path)
+                } else {
+                    job_homes::Output::Check(path)
+                };
+                set(Mode::JobHomes(output), &mut mode)?;
+            }
             "--self-test" => set(Mode::SelfTest, &mut mode)?,
             "--no-features" => set(Mode::NoFeatures, &mut mode)?,
             "--python-binding-tests" => set(Mode::PythonBindingTests, &mut mode)?,
@@ -289,6 +310,10 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         println!("{}", toml::Value::Table(ledger.document).to_json());
         return Ok(ExitCode::SUCCESS);
     }
+    if let Mode::JobHomes(output) = &arguments.mode {
+        job_homes::run(&root, &ledger.jobs, output)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     let workspace = Workspace::walk(&Disk { root: root.clone() });
     if !workspace.errors.is_empty() && arguments.mode != Mode::Index {
         return Err(format!(
@@ -352,6 +377,7 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
         }
         Mode::Index => println!("{}", census::index(&workspace, &ledger)),
         Mode::DumpLedger
+        | Mode::JobHomes(_)
         | Mode::AsmReports
         | Mode::SelfTest
         | Mode::NonRustRatchet
